@@ -5,14 +5,18 @@
 // Privacy: Permission = "Not required"; Data sale = "does not qualify as data sale"
 // (first-party endpoint, no third-party sharing).
 //
-// Emits the three storefront signals the backend can't see on its own:
-//   product_viewed         → product_viewed     (the browse-abandonment trigger; the
-//                                                backend keeps it ATTACH-ONLY — views
-//                                                from unknown browsers are dropped)
-//   product_added_to_cart → add_to_cart        (top-of-funnel, usually anonymous)
-//   checkout_started       → checkout_started   (the abandoned-cart journey trigger)
-// clientId is always sent as a weak browser-session key so an anonymous add_to_cart
-// can later merge into the known profile when the same browser checks out with an email.
+// Emits the storefront signals the backend can't see on its own:
+//   product_viewed            → product_viewed      (browse-abandonment trigger)
+//   collection_viewed         → collection_viewed   (category affinity)
+//   search_submitted          → search_submitted    (highest-intent signal + zero-result insight)
+//   cart_viewed               → cart_viewed         (the funnel step between add and checkout)
+//   product_removed_from_cart → cart_item_removed   (price-hesitation signal)
+//   product_added_to_cart     → add_to_cart         (top-of-funnel, usually anonymous)
+//   checkout_started          → checkout_started    (the abandoned-cart journey trigger)
+// The browse-class events (everything except add_to_cart / checkout_started) are kept
+// ATTACH-ONLY server-side: an unknown browser's events are dropped, never minted into a
+// profile. clientId is always sent as a weak browser-session key so an anonymous
+// add_to_cart can later merge into the known profile when the browser checks out.
 
 var ENDPOINT = "https://commsops.afshaan.workers.dev/pixel";
 var PIXEL_TOKEN = "__PIXEL_TOKEN__";
@@ -96,6 +100,69 @@ analytics.subscribe("product_added_to_cart", function (event) {
   var prod = m.product || {};
   var cost = (line.cost && line.cost.totalAmount) || {};
   post("add_to_cart", {
+    cart_id: cartKey(),
+    properties: {
+      cart_id: cartKey(),
+      product_title: prod.title || m.title || null,
+      variant_id: m.id || null,
+      sku: m.sku || null,
+      quantity: num(line.quantity),
+      price: num(cost.amount)
+    }
+  }, event);
+});
+
+// Category affinity. Collection handle derived from the page URL (/collections/<handle>).
+analytics.subscribe("collection_viewed", function (event) {
+  var coll = (event.data && event.data.collection) || {};
+  var href = null;
+  try { href = event.context.document.location.href || null; } catch (e) {}
+  var handle = null;
+  if (href) {
+    var mm = String(href).split("?")[0].match(/\/collections\/([^\/]+)/);
+    if (mm) handle = mm[1];
+  }
+  post("collection_viewed", {
+    properties: {
+      collection_id: coll.id || null,
+      collection_title: coll.title || null,
+      collection_handle: handle
+    }
+  }, event);
+});
+
+// On-site search — the highest-intent signal there is, plus zero-result insight.
+analytics.subscribe("search_submitted", function (event) {
+  var sr = (event.data && event.data.searchResult) || {};
+  post("search_submitted", {
+    properties: {
+      query: sr.query || null,
+      result_count: (sr.productVariants && sr.productVariants.length) || 0
+    }
+  }, event);
+});
+
+// The funnel step between add-to-cart and checkout.
+analytics.subscribe("cart_viewed", function (event) {
+  var cart = (event.data && event.data.cart) || {};
+  var cost = (cart.cost && cart.cost.totalAmount) || {};
+  post("cart_viewed", {
+    cart_id: cart.id || cartKey(),
+    properties: {
+      cart_id: cart.id || cartKey(),
+      total: num(cost.amount),
+      item_count: num(cart.totalQuantity)
+    }
+  }, event);
+});
+
+// A removal right after an add reads as price hesitation — cart intelligence.
+analytics.subscribe("product_removed_from_cart", function (event) {
+  var line = (event.data && event.data.cartLine) || {};
+  var m = line.merchandise || {};
+  var prod = m.product || {};
+  var cost = (line.cost && line.cost.totalAmount) || {};
+  post("cart_item_removed", {
     cart_id: cartKey(),
     properties: {
       cart_id: cartKey(),

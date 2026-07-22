@@ -77,14 +77,21 @@ async function handleShopifyWebhook(env, request) {
 // + an event-type allowlist. Worst case a forged cart event = one spurious
 // abandoned-cart email, itself behind the send gate + TEST MODE. Accepts ONLY the
 // two storefront signals the backend can't otherwise see.
+// What the low-trust /pixel route accepts. add_to_cart + checkout_started may MINT a
+// web_session profile (they are the identity anchor points); everything else is
+// browse-class and ATTACH-ONLY (see the guard below).
+const PIXEL_EVENTS = new Set(['add_to_cart', 'checkout_started', 'product_viewed',
+  'collection_viewed', 'search_submitted', 'cart_viewed', 'cart_item_removed']);
+const ATTACH_ONLY_EVENTS = new Set(['product_viewed', 'collection_viewed',
+  'search_submitted', 'cart_viewed', 'cart_item_removed']);
+
 async function handlePixel(env, request) {
   if (!env.PIXEL_TOKEN) return { ok: false, error: 'pixel_unconfigured', status: 503 };
   let body; try { body = await request.json(); } catch { return { ok: false, error: 'bad_json', status: 400 }; }
   if (!body || body.token !== env.PIXEL_TOKEN) return { ok: false, error: 'unauthorised', status: 401 };
 
   const name = body.event;
-  if (name !== 'add_to_cart' && name !== 'checkout_started' && name !== 'product_viewed')
-    return { ok: false, error: 'unsupported_event', status: 400 };
+  if (!PIXEL_EVENTS.has(name)) return { ok: false, error: 'unsupported_event', status: 400 };
 
   const idents = [];
   if (body.email) idents.push({ type: 'email', value: String(body.email).toLowerCase().trim(), is_verified: false });
@@ -115,13 +122,13 @@ async function handlePixel(env, request) {
   if (body.cart_id) idents.push({ type: 'cart_id', value: String(body.cart_id), is_verified: false });
   if (!idents.length) return { ok: true, skipped: 'no_identifier' };
 
-  // product_viewed is ATTACH-ONLY: it fires on EVERY product page view — an order of
-  // magnitude above add_to_cart — and a view from a browser we have never seen can
-  // never be messaged anyway. Minting a profile per anonymous view would bloat the
+  // Browse-class events are ATTACH-ONLY: they fire on ordinary browsing — an order of
+  // magnitude above add_to_cart — and a browser we have never seen can never be
+  // messaged anyway. Minting a profile per anonymous view/search would bloat the
   // substrate (and enrol phantom browsers into browse-abandonment) for zero reach.
   // So: only ingest when SOME identifier already exists. Fail-closed on a lookup
   // error — a lost view is cheap, a junk profile is forever.
-  if (name === 'product_viewed') {
+  if (ATTACH_ONLY_EVENTS.has(name)) {
     const ors = idents.map((i) => `and(type.eq.${i.type},value.eq.${A.enc(i.value)})`).join(',');
     const known = await A.sbComms(`/rest/v1/identifiers?or=(${ors})&select=profile_id&limit=1`, env);
     if (!(known.ok && known.data?.length)) return { ok: true, skipped: 'anonymous_view' };

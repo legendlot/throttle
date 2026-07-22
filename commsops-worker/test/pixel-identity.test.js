@@ -141,6 +141,18 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     assert.deepEqual(types(cap.identifiers), ['web_session']);
   });
 
+  await t('all browse-class events share the attach-only guard; unknown ones 400', async () => {
+    for (const ev of ['collection_viewed', 'search_submitted', 'cart_viewed', 'cart_item_removed']) {
+      const cap = {}; const restore = stubDb(cap);
+      const r = await handlePixel(ENV, req({ token: 'tok', event: ev, client_id: 'cid-anon' }));
+      restore();
+      assert.equal(r.skipped, 'anonymous_view', `${ev} should be attach-only`);
+      assert.equal(cap.identifiers, undefined, `${ev} must not resolve identity when unknown`);
+    }
+    const r = await handlePixel(ENV, req({ token: 'tok', event: 'page_viewed', client_id: 'x' }));
+    assert.equal(r.error, 'unsupported_event');
+  });
+
   await t('product_viewed lookup ERROR fails closed (dropped, not minted)', async () => {
     const cap = {}; const restore = stubDb(cap);
     const stubbed = A.sbComms;
