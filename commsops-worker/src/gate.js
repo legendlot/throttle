@@ -62,11 +62,13 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
   if (settings.test_mode !== false && !testModeAllows(to, settings.test_mode_allow))
     return { pass: false, reason: 'test_mode_blocked' };
 
-  // 1. suppression — overrides everything
+  // 1. suppression — overrides everything. FAIL CLOSED: an unreadable suppression list is a
+  //    blocked send, not a free pass (review 2026-07-21 H1 — the one gate that must never fail open).
   if (to) {
     const sup = await A.sbComms(
       `/rest/v1/suppressions?channel=eq.${A.enc(channel)}&value=eq.${A.enc(to)}&select=id&limit=1`, env);
-    if (sup.ok && sup.data?.[0]) return { pass: false, reason: 'suppressed' };
+    if (!sup.ok) return { pass: false, reason: 'gate_error:suppression' };
+    if (sup.data?.[0]) return { pass: false, reason: 'suppressed' };
   }
 
   const isMarketing = purpose === 'marketing';
@@ -82,7 +84,8 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
       const cnt = await A.sbComms(
         `/rest/v1/messages?profile_id=eq.${A.enc(profileId)}&purpose=eq.marketing` +
         `&status=in.(sent,delivered,opened,clicked)&queued_at=gte.${A.enc(since)}&select=id`, env);
-      if (cnt.ok && Array.isArray(cnt.data) && cnt.data.length >= Number(s.frequency_cap_per_day || 3))
+      if (!cnt.ok || !Array.isArray(cnt.data)) return { pass: false, reason: 'gate_error:freq_cap' };
+      if (cnt.data.length >= Number(s.frequency_cap_per_day || 3))
         return { pass: false, reason: 'freq_cap' };
     }
     // 4. quiet hours (defer, don't drop — surfaced as a skip reason in v1)
