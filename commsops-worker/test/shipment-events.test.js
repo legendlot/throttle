@@ -8,7 +8,7 @@
 const Module = require('module');
 const path = require('path').join(__dirname, '..', 'src') + '/';
 
-const state = { rows: [], settings: [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }], patched: [], ingested: [], orderPlaced: true };
+const state = { rows: [], settings: [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }], patched: [], ingested: [], orderPlaced: true, eventsOk: true };
 const orig = Module._load;
 Module._load = function (req, parent, isMain) {
   if (req === './auth.js') return {
@@ -22,6 +22,8 @@ Module._load = function (req, parent, isMain) {
     },
     sbComms: async (url) => {
       if (url.startsWith('/rest/v1/settings')) return { ok: true, data: state.settings };
+      // order_placed lookup — H11: a transient read failure must NOT be treated as "no profile".
+      if (!state.eventsOk) return { ok: false, status: 500 };
       return { ok: true, data: state.orderPlaced ? [{ profile_id: 'p1' }] : [] };
     },
   };
@@ -35,8 +37,9 @@ const ingest = async (env, ev) => { state.ingested.push(ev); return { ok: true }
 const row = (o) => Object.assign({
   id: 'r1', uniware_package_code: 'SP/1', shopify_order_id: '123', shopify_order_name: '#LOT1',
   lifecycle: 'delivered', emitted_lifecycles: [], delivered_at: null, uniware_updated_at: null,
+  first_seen_at: '2026-07-01T00:00:00Z',
 }, o);
-const reset = () => { state.rows = []; state.patched = []; state.ingested = []; state.orderPlaced = true; state.settings = [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }]; };
+const reset = () => { state.rows = []; state.patched = []; state.ingested = []; state.orderPlaced = true; state.eventsOk = true; state.settings = [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }]; };
 
 (async () => {
   // The regression that caused this work.
@@ -88,6 +91,39 @@ const reset = () => { state.rows = []; state.patched = []; state.ingested = []; 
   state.rows = [row({ delivered_at: '2026-07-26T09:00:00Z', uniware_updated_at: '2026-07-26T09:00:00Z' })];
   r = await SE.emitShipmentEvents({}, ingest);
   ok(state.ingested.length === 0 && r.unresolved === 1 && state.patched.length === 1, 'in-scope row with no profile is marked emitted to drain the queue');
+
+  // H11 — fail-closed + grace-window regression tests.
+
+  // 1. A transient failure reading order_placed must retry next tick, never terminally cancel.
+  reset();
+  state.eventsOk = false;
+  state.rows = [row({ delivered_at: '2026-07-26T09:00:00Z', uniware_updated_at: '2026-07-26T09:00:00Z' })];
+  r = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && state.patched.length === 0 && r.failed === 1,
+    'order_placed lookup FAILURE → parcel retried next tick, NOT marked emitted');
+
+  // 2. A young parcel (< 24h old) with no order_placed yet is likely just ahead of the Shopify
+  // webhook (same-day ship) — must not be permanently written off.
+  reset();
+  state.orderPlaced = false;
+  state.rows = [row({
+    delivered_at: '2026-07-26T09:00:00Z', uniware_updated_at: '2026-07-26T09:00:00Z',
+    first_seen_at: new Date().toISOString(),
+  })];
+  r = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && state.patched.length === 0 && r.unresolved === 1,
+    'young parcel with no order_placed yet → NOT marked emitted (grace <24h)');
+
+  // 3. An old parcel (> 24h) with no order_placed is genuinely pre-Relay — drain as before.
+  reset();
+  state.orderPlaced = false;
+  state.rows = [row({
+    delivered_at: '2026-07-26T09:00:00Z', uniware_updated_at: '2026-07-26T09:00:00Z',
+    first_seen_at: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
+  })];
+  r = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && state.patched.length === 1 && r.unresolved === 1,
+    'old parcel (>24h) with no order_placed → marked emitted (pre-Relay order)');
 
   console.log(fail ? `\n${fail} FAILED` : '\nall passed');
   process.exit(fail ? 1 : 0);

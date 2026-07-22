@@ -64,7 +64,7 @@ async function emitShipmentEvents(env, ingest) {
   const q = `/rest/v1/ecom_shipments?lifecycle=in.(${want.join(',')})&shopify_order_id=not.is.null`
     + `&uniware_updated_at=gte.${encodeURIComponent(new Date(fromMs).toISOString())}`
     + `&select=id,uniware_package_code,shopify_order_name,shopify_order_id,lifecycle,courier,`
-    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,uniware_updated_at`
+    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,uniware_updated_at,first_seen_at`
     + `&order=uniware_updated_at.desc.nullslast&limit=300`;
   const r = await sbPublic(q, env);
   if (!r.ok) return { ok: false, error: `select_failed_${r.status}` };
@@ -90,10 +90,20 @@ async function emitShipmentEvents(env, ingest) {
     const ev = await A.sbComms(
       `/rest/v1/events?name=eq.order_placed&properties->>shopify_order_id=eq.${A.enc(s.shopify_order_id)}`
       + `&select=profile_id&limit=1`, env);
-    const profileId = (ev.ok && ev.data?.[0]?.profile_id) || null;
-    // No profile means the order predates Relay's Shopify feed. Nothing to message, and
-    // re-checking it every tick is waste — mark it done so the queue drains.
+    if (!ev.ok) { failed++; continue; }          // transient read error → retry next tick (review H11)
+    const profileId = ev.data?.[0]?.profile_id || null;
+    // No profile means either (a) the order predates Relay's Shopify feed, or (b) this parcel
+    // is simply ahead of the Shopify order_placed webhook (same-day ship + retry backoff).
+    // (a) should drain via markEmitted; (b) must NOT be written off — a same-day-ship customer's
+    // delivered/rto message would be permanently cancelled by a race that resolves itself in
+    // minutes (review H11). Use a 24h grace window on first_seen_at to tell them apart.
     if (!profileId) {
+      // first_seen_at is NOT NULL with a DEFAULT now() (verified live: 0 nulls across 19,406
+      // rows) — the `|| 0` fallback below is defensive only, and if it ever did fire, treating
+      // an unknown birth as epoch-0 (i.e. always "old") would be the wrong direction for a
+      // terminal, message-cancelling action. Kept as-is only because the column cannot be null.
+      const born = new Date(s.first_seen_at || 0).getTime();
+      if (Date.now() - born < 24 * 3600 * 1000) { unresolved++; continue; }
       unresolved++;
       await markEmitted(env, s);
       continue;
