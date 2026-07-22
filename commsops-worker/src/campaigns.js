@@ -74,17 +74,29 @@ async function processQueueMessage(env, body) {
     body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
       p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG }),
   });
-  const recs = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  // An RPC failure is NOT "fan-out complete" (review C2): throw → Queues redeliver this page →
+  // after max retries it DLQs with an alert. Only a genuine short page may finish the campaign.
+  if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
+  const recs = Array.isArray(r.data) ? r.data : [];
 
+  let pageErrors = 0;
   for (const rec of recs) {
     if (!rec.address) continue;
-    await send(env, {
-      channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
-      templateId: camp.template_id, constants: camp.vars || {},
-      tracking: { campaign: camp.name },
-      source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
-    });
+    try {
+      await send(env, {
+        channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
+        templateId: camp.template_id, constants: camp.vars || {},
+        tracking: { campaign: camp.name },
+        source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
+      });
+    } catch (e) {
+      // One bad recipient must not poison the page (review H3). The dedup row (Task 1) lets a
+      // later manual replay retry this profile; the rest of the audience continues now.
+      pageErrors++;
+      console.log('campaign_recipient_error', campaignId, rec.profile_id, e?.message || String(e));
+    }
   }
+  if (pageErrors) console.log('campaign_page_errors', campaignId, pageErrors);
 
   if (recs.length === SENDS_PER_MSG) {
     // more remain → continue from the last profile_id
