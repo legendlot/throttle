@@ -24,26 +24,30 @@ const nowIso = () => new Date().toISOString();
 const rand = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : `${Date.now()}${Math.round(Math.random() * 1e9)}`);
 
 // Pure sender selection over the channel's active senders (passed oldest-first).
-// Priority: explicit senderId pin → exact purpose match → 'all'/wildcard sender →
-// single-sender fallback → null. Returning null (no_active_sender) is deliberate when
-// there are MULTIPLE active senders and none matches: refuse rather than silently pick
-// the oldest (the pre-fix bug that would route txn/support sends out the wrong number).
-// 'all' is the wildcard purpose the live email sender uses; null/'' treated the same.
+// Priority: WABA scope → explicit senderId pin (within that scope) → exact purpose match →
+// 'all'/wildcard sender → single-sender fallback → null. Returning null (no_active_sender) is
+// deliberate when there are MULTIPLE active senders and none matches: refuse rather than
+// silently pick the oldest (the pre-fix bug that would route txn/support sends out the wrong
+// number). 'all' is the wildcard purpose the live email sender uses; null/'' treated the same.
 function pickSender(rows, { purpose, senderId, wabaId } = {}) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  if (senderId) return rows.find((s) => s.id === senderId) || null;   // explicit pin (null if not active on channel)
+  const channelCount = rows.length;              // pre-filter count — fallback is judged on THIS
 
   // WhatsApp templates are WABA-SCOPED: a template approved on WABA A simply does not exist
   // on WABA B, so sending it from a number on B is rejected by Meta as an unknown template.
-  // When the template names its WABA, that constraint outranks purpose — and if no sender sits
-  // on that WABA we return null rather than silently sending from the wrong number, because a
-  // clear 'no sender for this template's WABA' beats a confusing rejection from Meta.
-  // (Harmless while one WA sender exists; load-bearing the moment there are three.)
+  // This outranks EVERYTHING including an explicit senderId pin (review H5 part 1) — a stale
+  // pin naming a sender on the wrong WABA would otherwise POST a template Meta doesn't have
+  // there. Compare as strings (review H5 part 4): the waba_id lives in two independently
+  // authored jsonb blobs (sender_identities.metadata, templates.content) and a number-vs-string
+  // mismatch in either must not zero out the sender set via strict ===.
   if (wabaId) {
-    const onWaba = rows.filter((s) => s.metadata && s.metadata.waba_id === wabaId);
+    const key = String(wabaId);
+    const onWaba = rows.filter((s) => String(s.metadata?.waba_id ?? '') === key);
     if (!onWaba.length) return null;
     rows = onWaba;
   }
+
+  if (senderId) return rows.find((s) => s.id === senderId) || null;   // pin, WITHIN the WABA scope
 
   const isWild = (p) => p == null || p === '' || p === 'all';
   if (purpose) {
@@ -52,7 +56,10 @@ function pickSender(rows, { purpose, senderId, wabaId } = {}) {
   }
   const wild = rows.find((s) => isWild(s.purpose));
   if (wild) return wild;                                              // oldest wildcard sender
-  return rows.length === 1 ? rows[0] : null;                          // unambiguous single sender, else refuse
+  // Fallback only when the CHANNEL genuinely has one sender — a WABA-narrowed single row is
+  // NOT unambiguous, it's a mis-pinned/mis-purposed template about to leave the wrong number
+  // (review H5 part 2: the old code judged this on the POST-filter count).
+  return channelCount === 1 ? rows[0] : null;
 }
 
 // Route to the right sender for (channel, purpose), honoring an explicit opts.senderId.

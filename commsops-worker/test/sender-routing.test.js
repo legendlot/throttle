@@ -87,11 +87,15 @@ t('no active senders → null', () => {
 // B is rejected by Meta as an unknown template, so the template's WABA must outrank purpose.
 const W = (id, purpose, waba) => ({ id, purpose, status: 'active', metadata: { waba_id: waba } });
 
-t('WA: template WABA wins over purpose', () => {
+t('WA: WABA-narrowed single sender with the WRONG purpose now refuses (H5 part 2 — was a mis-route)', () => {
   const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
-  // a marketing-purpose send whose template lives on B must NOT go out of the marketing number
-  assert.equal(pickSender(rows, { purpose: 'marketing', wabaId: 'B' })?.id, 'txn');
-  assert.equal(pickSender(rows, { purpose: 'transactional', wabaId: 'A' })?.id, 'mkt');
+  // CHANGED (review H5 part 2): WABA-scoping narrows each case to one candidate row, but that
+  // row's purpose doesn't match the template's — this used to fall back to it anyway because the
+  // old fallback fired on the POST-filter count (1). The fix judges the fallback on the channel's
+  // PRE-filter count (2 senders exist), so an unmatched purpose now refuses instead of routing a
+  // marketing template out the transactional number (or vice versa).
+  assert.equal(pickSender(rows, { purpose: 'marketing', wabaId: 'B' }), null);
+  assert.equal(pickSender(rows, { purpose: 'transactional', wabaId: 'A' }), null);
 });
 
 t('WA: no sender on the template\'s WABA refuses rather than mis-routing', () => {
@@ -109,9 +113,19 @@ t('WA: no wabaId (email, or a template with none) keeps the old purpose routing'
   assert.equal(pickSender(rows, { purpose: 'transactional' })?.id, 'txn');
 });
 
-t('WA: explicit senderId still overrides the WABA filter', () => {
+t('WA: senderId pin on the WRONG WABA now refuses (H5 part 1 — was a mis-route)', () => {
   const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
-  assert.equal(pickSender(rows, { senderId: 'mkt', wabaId: 'B' })?.id, 'mkt');
+  // CHANGED (review H5 part 1): a pin used to bypass WABA scoping entirely. mkt lives on WABA A;
+  // pinning it while the template is scoped to WABA B must now refuse rather than silently POST
+  // a template Meta doesn't have on mkt's number (a per-send 132001 failure). WABA scoping now
+  // outranks the pin — see the still-passing "purpose still decides WITHIN the right WABA" case
+  // below for the pin-within-scope path this doesn't touch.
+  assert.equal(pickSender(rows, { senderId: 'mkt', wabaId: 'B' }), null);
+});
+
+t('WA: senderId pin WITHIN the right WABA still wins over purpose', () => {
+  const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
+  assert.equal(pickSender(rows, { senderId: 'txn', wabaId: 'B' })?.id, 'txn');
 });
 
 
