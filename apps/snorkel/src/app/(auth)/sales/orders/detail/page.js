@@ -40,6 +40,8 @@ function OrderDetailInner() {
   const [partners, setPartners] = useState([]);
   const [channels, setChannels] = useState([]);
   const [pay, setPay] = useState({ open: false, amount: '', received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' });
+  // Metadata-only edit for CONFIRMED un-invoiced orders (S229): date / PO ref / expected dispatch / notes.
+  const [metaEdit, setMetaEdit] = useState(null);   // null | { order_date, partner_po_ref, expected_dispatch_date, notes }
   const [creditNotes, setCreditNotes] = useState([]);
 
   const canManage = !!perms?.sales_order_manage;
@@ -132,6 +134,32 @@ function OrderDetailInner() {
   }
 
   async function startEdit() { await loadFormMasters(); setEditing(true); }
+  function startMetaEdit() {
+    setMetaEdit({
+      order_date: o.order_date || '',
+      partner_po_ref: o.partner_po_ref || '',
+      expected_dispatch_date: o.expected_dispatch_date || '',
+      notes: o.notes || '',
+    });
+  }
+  async function saveMetaEdit() {
+    if (!metaEdit?.order_date) { showToast('Order date is required', 'error'); return; }
+    setBusy(true);
+    try {
+      const res = await workerFetch('updateSalesOrder', { data: {
+        id,
+        order_date: metaEdit.order_date,
+        partner_po_ref: metaEdit.partner_po_ref,
+        expected_dispatch_date: metaEdit.expected_dispatch_date,
+        notes: metaEdit.notes,
+      } }, session);
+      if (!res.ok) throw new Error(res.error || 'Update failed');
+      showToast('Order details updated', 'success');
+      setMetaEdit(null);
+      await load();
+    } catch (e) { showToast(e.message || 'Update failed', 'error'); }
+    finally { setBusy(false); }
+  }
   async function saveEdit(d) {
     setBusy(true);
     try {
@@ -168,12 +196,49 @@ function OrderDetailInner() {
           <StatusBadge label={orderStatusLabel(o.status)} tone={ORDER_STATUS_TONES[o.status] || 'gray'} />
           <button style={btnSecondary} onClick={() => router.push('/sales/orders')}>← Back</button>
           {isDraft && canManage && <button style={btnSecondary} onClick={startEdit} disabled={busy}>Edit</button>}
+          {isConfirmed && canManage && !o.invoice_generated && <button style={btnSecondary} onClick={startMetaEdit} disabled={busy}>Edit details</button>}
           {isDraft && canConfirm && <button style={btnPrimary} onClick={confirm} disabled={busy}>Confirm → Dispatch</button>}
           {isConfirmed && canManage && !o.invoice_generated && <button style={btnPrimary} onClick={genInvoice} disabled={busy}>Generate Invoice</button>}
           {o.invoice_generated && <button style={btnSecondary} onClick={() => router.push(`/sales/orders/invoice?id=${encodeURIComponent(id)}`)}>🖶 Invoice</button>}
           {(isDraft || isConfirmed) && canManage && <button style={btnDanger} onClick={cancel} disabled={busy}>Cancel</button>}
         </div>
       </div>
+
+      {/* Metadata-only edit (confirmed, un-invoiced): date / PO ref / expected dispatch / notes */}
+      {metaEdit && (
+        <div style={{ ...panelStyle, marginBottom: 14 }}>
+          <div style={panelHeaderStyle}>Edit details</div>
+          <div style={{ ...panelBodyStyle, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, alignItems: 'end' }}>
+            <div>
+              <div style={labelStyle}>Order date *</div>
+              <input type="date" style={inputStyle} value={metaEdit.order_date}
+                onChange={e => setMetaEdit(m => ({ ...m, order_date: e.target.value }))} />
+            </div>
+            <div>
+              <div style={labelStyle}>Partner PO ref</div>
+              <input style={inputStyle} value={metaEdit.partner_po_ref} placeholder="e.g. Blinkit PO no."
+                onChange={e => setMetaEdit(m => ({ ...m, partner_po_ref: e.target.value }))} />
+            </div>
+            <div>
+              <div style={labelStyle}>Expected dispatch</div>
+              <input type="date" style={inputStyle} value={metaEdit.expected_dispatch_date}
+                onChange={e => setMetaEdit(m => ({ ...m, expected_dispatch_date: e.target.value }))} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={btnPrimary} onClick={saveMetaEdit} disabled={busy}>Save</button>
+              <button style={btnSecondary} onClick={() => setMetaEdit(null)} disabled={busy}>Cancel</button>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={labelStyle}>Notes</div>
+              <input style={inputStyle} value={metaEdit.notes}
+                onChange={e => setMetaEdit(m => ({ ...m, notes: e.target.value }))} />
+            </div>
+          </div>
+          <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--t3)' }}>
+            Items, channel, warehouse and credit terms are locked after confirmation.
+          </div>
+        </div>
+      )}
 
       {/* Fulfilment + invoice + payment summary */}
       <div style={panelStyle}>

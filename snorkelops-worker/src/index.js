@@ -2340,13 +2340,29 @@ export default {
             if (!d.id) return err('id required');
             const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=status,invoice_generated&limit=1`);
             if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
-            if (cur.data[0].status !== 'draft' || cur.data[0].invoice_generated)
-              return err('Only draft, un-invoiced orders can be edited', 422);
+            const curO = cur.data[0];
+            if (curO.invoice_generated) return err('Invoiced orders cannot be edited', 422);
+            const isDraftEdit = curO.status === 'draft';
+            // S229 (Afshaan): CONFIRMED un-invoiced orders allow METADATA-ONLY edits
+            // (order_date / partner_po_ref / expected_dispatch_date / notes) — a date
+            // correction pre-invoice is legitimate (Tanya's Blinkit SOs). Lines, channel,
+            // warehouse and credit terms stay locked post-confirm (they drive fulfilment,
+            // Odo staging and collections).
+            if (!isDraftEdit && curO.status !== 'confirmed')
+              return err('Only draft or confirmed (un-invoiced) orders can be edited', 422);
+            if (!isDraftEdit) {
+              if (Array.isArray(d.lines)) return err('Lines are locked after confirmation', 422);
+              const blocked = ['channel_key','destination_warehouse','credit_days'].filter(f => d[f] !== undefined);
+              if (blocked.length) return err(`Locked after confirmation: ${blocked.join(', ')}`, 422);
+            }
             const updates = { updated_at: new Date().toISOString() };
-            ['channel_key','order_date','partner_po_ref','expected_dispatch_date','destination_warehouse','notes'].forEach(f => {
+            const editable = isDraftEdit
+              ? ['channel_key','order_date','partner_po_ref','expected_dispatch_date','destination_warehouse','notes']
+              : ['order_date','partner_po_ref','expected_dispatch_date','notes'];
+            editable.forEach(f => {
               if (d[f] !== undefined) updates[f] = d[f] || null;
             });
-            if (d.credit_days !== undefined) updates.credit_days = Math.round(Number(d.credit_days) || 0);
+            if (isDraftEdit && d.credit_days !== undefined) updates.credit_days = Math.round(Number(d.credit_days) || 0);
             if (Array.isArray(d.lines)) {
               const lines = d.lines.map(computeSalesLine);
               updates.subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
