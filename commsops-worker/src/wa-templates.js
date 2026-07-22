@@ -238,7 +238,11 @@ async function waSyncTemplateStatus(env, body) {
       data = await res.json().catch(() => ({}));
       if (!res.ok) { synced.push({ id: t.id, meta_name: name, status: null, waba_id: wabaId, error: data?.error?.message || `http_${res.status}` }); continue; }
     } catch (e) { synced.push({ id: t.id, meta_name: name, status: null, waba_id: wabaId, error: String(e?.message || e) }); continue; }
-    const hit = (data?.data || []).find((x) => x.name === name) || data?.data?.[0] || null;
+    // Exact name + language match ONLY (review M10) — the `|| data?.data?.[0]` fallback used to
+    // adopt an UNRELATED template's status when the name lookup came up empty (e.g. a stale
+    // meta_name, or a template not yet propagated), silently corrupting approval_status.
+    const hit = (data?.data || []).find((x) => x.name === name
+      && (!t.content?.language || x.language === (t.content.language || t.language || 'en'))) || null;
     const status = hit?.status || null;
     if (status && status !== t.approval_status) {
       await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(t.id)}`, env, {

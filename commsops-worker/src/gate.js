@@ -111,7 +111,8 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
   // invalid address, cap). Atomic per-IST-day via the consume_send_budget() RPC.
   if (isMarketing) {
     const b = await A.sbComms('/rest/v1/rpc/consume_send_budget', env, { method: 'POST', body: '{}' });
-    if (!(b.ok && b.data === true)) return { pass: false, reason: 'budget_exhausted' };
+    if (!b.ok) return { pass: false, reason: 'gate_error:budget' };      // don't misdiagnose a 500 as "cap hit"
+    if (b.data !== true) return { pass: false, reason: 'budget_exhausted' };
   }
 
   return { pass: true, reason: null };

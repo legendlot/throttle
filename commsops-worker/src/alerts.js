@@ -8,12 +8,13 @@ async function alert(env, message) {
     return false;
   }
   try {
-    await fetch(env.SLACK_WEBHOOK_ALERTS, {
+    const res = await fetch(env.SLACK_WEBHOOK_ALERTS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: message }),
     });
-    return true;
+    if (!res.ok) console.log('alert_delivery_failed', res.status);   // dead webhook must not be silent
+    return res.ok;
   } catch (e) {
     console.error('[Slack:alerts] Failed to send:', e.message);
     return false;

@@ -94,11 +94,30 @@ async function unsubscribeUrl(env, profileId, channel) {
     `&purpose=eq.marketing&select=id,unsubscribe_token&order=captured_at.desc&limit=1`, env);
   let row = r.ok ? r.data?.[0] : null;
   let token = row?.unsubscribe_token;
+  // review H6: the PATCH result used to be unchecked, so a failed persist still embedded the
+  // (unsaved) token in the email — a dead one-click unsubscribe link. Now: PATCH is conditional
+  // on the token still being null (`unsubscribe_token=is.null`) so two concurrent sends minting
+  // at once can't clobber each other; a PATCH failure fails closed (no dead links in live mail);
+  // and losing the mint race (0 rows updated) adopts the winner's token so THIS email's link
+  // still resolves, rather than silently going out linkless.
   if (row && !token) {
     token = rand();
-    await A.sbComms(`/rest/v1/consent?id=eq.${A.enc(row.id)}`, env,
-      { method: 'PATCH', body: JSON.stringify({ unsubscribe_token: token }) });
+    const w = await A.sbComms(
+      `/rest/v1/consent?id=eq.${A.enc(row.id)}&unsubscribe_token=is.null`, env,
+      { method: 'PATCH', headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({ unsubscribe_token: token }) });
+    if (!w.ok) return null;                                   // fail closed: no dead links in live mail
+    if (!Array.isArray(w.data) || w.data.length === 0) {
+      // lost a mint race — adopt the winner's token so THIS email's link resolves
+      const re = await A.sbComms(`/rest/v1/consent?id=eq.${A.enc(row.id)}&select=unsubscribe_token&limit=1`, env);
+      token = (re.ok && re.data?.[0]?.unsubscribe_token) || null;
+      if (!token) return null;
+    }
   }
+  // No row at all (profile has never captured marketing consent on this channel) — unchanged
+  // posture: return null and let the caller degrade gracefully (send.js:189-190 only sets
+  // sys.unsubscribe_url when truthy; it never crashes on null). This function's job is to make
+  // the MINTING step race-safe/fail-closed, not to change what happens when there's no row.
   if (!token) return null;
   const base = (env.SUPABASE_URL && 'https://commsops.afshaan.workers.dev') || 'https://commsops.afshaan.workers.dev';
   return `${base}/unsubscribe?token=${token}`;
