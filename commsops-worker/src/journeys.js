@@ -141,8 +141,15 @@ async function saveJourney(env, body, userId) {
     const cur = await A.sbComms(
       `/rest/v1/journey_versions?journey_id=eq.${A.enc(journeyId)}&select=version&order=version.desc&limit=1`, env);
     const nextV = Number(cur.data?.[0]?.version || 0) + 1;
-    await A.sbComms('/rest/v1/journey_versions', env, {
-      method: 'POST', body: JSON.stringify({ journey_id: journeyId, version: nextV, definition, created_by: userId }) });
+    const ins = await A.sbComms('/rest/v1/journey_versions', env, {
+      method: 'POST', headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ journey_id: journeyId, version: nextV, definition, created_by: userId }) });
+    // Verify the version actually landed BEFORE bumping active_version — a failed/empty
+    // insert here previously fell through silently, leaving active_version pointing at a
+    // version row that was never written (review H13). A blank canvas / a crashed enrol()
+    // pinned to that phantom version is the failure mode this closes.
+    if (!ins.ok || !ins.data?.[0])
+      return { ok: false, error: 'version_insert_failed' };   // never point active_version at a ghost (review H13)
     await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}`, env,
       { method: 'PATCH', body: JSON.stringify({ active_version: nextV, updated_at: nowIso() }) });
   }
