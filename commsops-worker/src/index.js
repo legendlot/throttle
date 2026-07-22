@@ -427,9 +427,17 @@ async function handlePost(body, auth, env) {
       const row = { name, channel: channel || 'email', purpose: purpose || 'marketing',
         segment_id: segment_id || null, template_id: template_id || null, vars: vars || {},
         scheduled_at: scheduled_at || null, updated_at: nowIso() };
+      // Setting a schedule ARMS the cron to send with no further human action — that is
+      // activation, and requires send_activate (review H7: build → schedule → auto-approve →
+      // cron = customer sends on campaign_build alone).
+      if (row.scheduled_at && !A.canActivate(auth.permissions))
+        return err('send_activate_required_to_schedule', 403);
       const r = id
-        ? await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(id)}`, env, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
+        ? await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(id)}&status=eq.draft`, env,
+            { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
         : await A.sbComms('/rest/v1/campaigns', env, { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...row, status: 'draft', created_by: auth.userId }) });
+      if (id && r.ok && Array.isArray(r.data) && r.data.length === 0)
+        return err('not_editable_after_submit', 400);   // post-draft campaigns are immutable via save
       return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
     }
     // Send the campaign's template to a few named addresses — no segment, no approval, no
