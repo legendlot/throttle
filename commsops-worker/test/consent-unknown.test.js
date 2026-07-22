@@ -27,7 +27,9 @@ const ENV = { SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' };
 const orig = A.sbComms;
 
 // Stub: GET (latestConsent lookup) returns `latestState`; POST (the actual consent write)
-// records that it was called and returns ok.
+// records that it was called and returns ok. Pass latestState = 'READ_FAIL' to simulate
+// the underlying read itself failing (r.ok:false) — distinct from latestState = null
+// (read succeeds, genuinely no prior row).
 function stub(latestState) {
   let posted = false;
   let postedBody = null;
@@ -38,7 +40,8 @@ function stub(latestState) {
         postedBody = JSON.parse(opts.body);
         return { ok: true, status: 201, data: [postedBody] };
       }
-      // GET (latestConsent)
+      // GET (latestConsent / _latestConsentRaw)
+      if (latestState === 'READ_FAIL') return { ok: false, status: 500, data: null };
       if (latestState === null) return { ok: true, status: 200, data: [] };
       return { ok: true, status: 200, data: [{ state: latestState, captured_at: '2026-07-20T00:00:00Z' }] };
     }
@@ -93,6 +96,19 @@ function stub(latestState) {
     assert.equal(spy.wasPosted(), true);
     assert.equal(r.ok, true);
     assert.equal(spy.getBody().state, 'opted_in');
+  });
+
+  // Review follow-up (2026-07-22): a failed latest-row read must NOT be treated as
+  // "no prior row" — that would fail OPEN and let an unknown land above a known row on
+  // a transient DB error. Skipping is always safe (unknown rows are never load-bearing;
+  // the next successful delivery re-attempts).
+  await t('latest-row read FAILS -> unknown write is SKIPPED (fails closed, not open)', async () => {
+    const spy = stub('READ_FAIL');
+    const r = await recordConsent(ENV, { profile_id: 'P7', channel: 'email', purpose: 'marketing', state: 'unknown', source: 'shopify_webhook' });
+    A.sbComms = orig;
+    assert.equal(spy.wasPosted(), false, 'a failed read must not be treated as "safe to write"');
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, 'unknown_no_override_read_failed');
   });
 
   await t('opted_out always writes (even over a known opted_in)', async () => {
