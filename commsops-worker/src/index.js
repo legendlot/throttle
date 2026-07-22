@@ -596,6 +596,18 @@ async function handlePost(body, auth, env) {
 //    claim in startCampaign guards against a concurrent manual send), and
 // 2) watch recent real-send outcomes for a bounce/failure spike, alerting ≤1/hour.
 async function runScheduled(env) {
+  // Single-flight: crons can overlap when a tick runs long. Claim via conditional PATCH on a
+  // lock column; a tick that can't claim exits (the work is all sweep-shaped — next tick catches up).
+  const lockCutoff = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+  const claim = await A.sbComms(
+    `/rest/v1/settings?id=eq.1&or=(cron_lock_at.is.null,cron_lock_at.lt.${A.enc(lockCutoff)})`, env,
+    { method: 'PATCH', headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ cron_lock_at: new Date().toISOString() }) });
+  if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0) {
+    console.log('cron_skipped_overlap');
+    return;
+  }
+
   // 0. courier lifecycle → substrate events (delivered / RTO journey triggers). PULLED from
   // public.ecom_shipments, which odoops fills from Uniware. Best-effort: never break the
   // campaign scheduler below.
