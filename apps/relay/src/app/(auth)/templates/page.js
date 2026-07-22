@@ -26,7 +26,7 @@ function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
-    wa: { meta_name: '', category: 'MARKETING', header: '', body: '', footer: '', buttons: [], mapping: [] },
+    wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', body: '', footer: '', buttons: [], mapping: [] },
     approval_status: null, provider_template_id: null,
   };
 }
@@ -74,6 +74,7 @@ export default function TemplatesPage() {
       variables: Array.isArray(r.variables) ? r.variables : [],
       wa: {
         meta_name: c.meta_name || '', category: c.category || 'MARKETING',
+        waba_id: c.waba_id || '',
         header: c.header || '', body: c.body || '', footer: c.footer || '',
         buttons: Array.isArray(c.buttons) ? c.buttons : [],
         mapping: Array.isArray(c.mapping) ? c.mapping : [],
@@ -114,6 +115,7 @@ export default function TemplatesPage() {
       if (w.header) content.header = w.header;
       if (w.footer) content.footer = w.footer;
       if ((w.buttons || []).length) content.buttons = w.buttons;
+      if (w.waba_id) content.waba_id = w.waba_id;
     } else if (edRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
@@ -265,7 +267,7 @@ export default function TemplatesPage() {
         </Panel>
 
         {t.channel === 'whatsapp' ? (
-          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit} />
+          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit} locked={!!t.provider_template_id} />
         ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
