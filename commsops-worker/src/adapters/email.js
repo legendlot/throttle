@@ -17,12 +17,20 @@ async function send(rendered, env) {
       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
     };
   }
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
+  let res, data;
+  try {
+    res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    // A network failure must surface as a failed RESULT — a throw here escapes send() with no
+    // messages row and (pre-Task-1) a permanently burned dedup key (review H2).
+    return { provider_message_id: null, status: 'failed',
+             reason: `resend_network:${String(e?.message || e).slice(0, 140)}`, raw: null };
+  }
   return {
     provider_message_id: data?.id || null,
     status: res.ok ? 'sent' : 'failed',
