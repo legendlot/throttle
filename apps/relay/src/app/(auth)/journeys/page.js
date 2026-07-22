@@ -6,7 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/components/ui.js';
-import { fmtDate } from '@/components/format.js';
+import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 
@@ -27,6 +27,10 @@ function branchLabel(key) {
   return key.replace(/^branch_/, '');
 }
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
+
+// A null rate is "never ran", which is NOT the same as 0% — render an em dash so a
+// draft journey never reads as a 0% result (same convention as the campaigns list).
+const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
 
 // Four statuses, but only one question anyone actually asks: is this sending right now?
 // ON is exactly `active` — the same value the worker's trigger matcher gates on — so the switch
@@ -85,6 +89,7 @@ export default function JourneysPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
+  const [overview, setOverview] = useState({});   // journey_id → journey_stats_list row (campaign-style analytics)
   const [templates, setTemplates] = useState([]);
   const [segments, setSegments] = useState([]);
   const [eventDefs, setEventDefs] = useState([]);
@@ -127,7 +132,7 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp, sg, ev, st] = await Promise.all([
+      const [js, tp, sg, ev, st, ov] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
         garageFetch('getSegments', {}, session),
@@ -137,12 +142,16 @@ export default function JourneysPage() {
         // Non-fatal (review M12): a failed/denied fetch leaves settings null, which the banner
         // and the activate confirm below both read as "test mode unknown" and default to safe copy.
         garageFetch('getRelaySettings', {}, session).catch(() => null),
+        // ONE set-based call for every journey's metrics — never per-row funnel calls.
+        // Non-fatal: the list still renders (with — in the metric columns) if analytics fail.
+        garageFetch('getJourneysOverview', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setEventDefs(Array.isArray(ev) && ev.length ? ev : EVENT_SUGGEST.map((name) => ({ name, description: null })));
       setSettings(st || null);
+      setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
     } catch (e) { showToast(e.message || 'Failed to load journeys', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -567,11 +576,23 @@ export default function JourneysPage() {
                 );
               })()}>
               <table className="dt">
-                <thead><tr><th style={{ width: 92 }}>On / Off</th><th>Name</th><th>Status</th><th className="num">Version</th><th>Trigger</th><th>Re-enrolment</th><th>Updated</th></tr></thead>
+                {/* Campaign-parity analytics columns (journey_stats_list) + journey-native
+                    Enrolled/Conv. Version + re-enrolment moved off the list — they live in the
+                    editor; the list's job is "is it on, is it working, what is it worth". */}
+                <thead><tr>
+                  <th style={{ width: 92 }}>On / Off</th><th>Name</th><th>Status</th>
+                  <th className="num">Enrolled</th><th className="num">Conv</th>
+                  <th className="num">Revenue</th><th className="num">Cost</th>
+                  <th className="num">Sent</th><th className="num">Delivered</th>
+                  <th className="num">Read</th><th className="num">Click</th>
+                  <th className="num">Fail</th><th className="num">Skipped</th>
+                  <th>Last activity</th>
+                </tr></thead>
                 <tbody>
                   {rows.map((r) => {
                     const g = toggleGuard(r, canActivate);
                     const on = isOn(r.status);
+                    const o = overview[r.id] || null;
                     return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>
                       {/* stopPropagation lives in Switch — the row opens the editor, the switch must not. */}
@@ -592,13 +613,37 @@ export default function JourneysPage() {
                           </span>
                         </span>
                       </td>
-                      <td><GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}</td>
+                      <td>
+                        <GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}
+                        <div className="mono dim" style={{ fontSize: 11 }}>{triggerSummary(r.trigger, segments)} · v{r.active_version ?? '—'}</div>
+                      </td>
                       {/* Kept alongside the switch: ON/OFF is the answer, but draft-vs-paused-vs-archived still matters. */}
                       <td><Badge label={r.status || 'draft'} tone={STATUS_TONE[r.status] || 'gray'} /></td>
-                      <td className="num mono dim">{r.active_version ?? '—'}</td>
-                      <td className="dim">{triggerSummary(r.trigger, segments)}</td>
-                      <td className="dim">{r.reenrolment || '—'}</td>
-                      <td className="mono dim">{fmtDate(r.updated_at)}</td>
+                      <td className="num mono" title={o ? `${o.enrolled} lifetime · ${o.in_flight} in flight · ${o.completed} completed` : undefined}>
+                        {o ? o.enrolled_30d : '—'}
+                        {o?.in_flight > 0 && <div className="dim" style={{ fontSize: 10 }}>{o.in_flight} in flight</div>}
+                      </td>
+                      {/* Conv = purchase-exits ÷ enrolled — the journey's own goal signal (a
+                          purchase-exit can fire WITHOUT a message ever sending). */}
+                      <td className="num mono" title={o ? `${o.purchased_exits} purchase-exit(s) of ${o.enrolled} enrolled` : undefined}>{rate(o?.conversion_rate)}</td>
+                      <td className="num mono">{o?.attributed_revenue ? inr(o.attributed_revenue) : '—'}</td>
+                      <td className="num mono">
+                        {o && Number(o.cost_inr) > 0 ? inr(o.cost_inr) : '—'}
+                        {/* An unpriced send is NOT a free one — say so rather than let a small
+                            ₹ figure read as the whole spend. */}
+                        {o?.unpriced > 0 && (
+                          <div className="dim" style={{ fontSize: 10 }} title={`${o.unpriced} sent message(s) have no rate card entry — spend is understated`}>
+                            +{o.unpriced} unpriced
+                          </div>
+                        )}
+                      </td>
+                      <td className="num mono dim" title={o?.by_channel ? Object.entries(o.by_channel).map(([c, v]) => `${c}: ${v.sent}`).join(' · ') : undefined}>{o ? o.sent : '—'}</td>
+                      <td className="num mono dim">{o ? o.delivered : '—'}</td>
+                      <td className="num mono">{rate(o?.read_rate)}</td>
+                      <td className="num mono">{rate(o?.click_rate)}</td>
+                      <td className="num mono">{rate(o?.fail_rate)}</td>
+                      <td className="num mono">{rate(o?.skip_rate)}</td>
+                      <td className="mono dim">{o?.at ? fmtDate(o.at) : fmtDate(r.updated_at)}</td>
                     </tr>
                     );
                   })}

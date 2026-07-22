@@ -171,6 +171,15 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
+    case 'getJourneysOverview': {    // journey analytics list — the campaigns-overview twin (S230)
+      const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
+      const off = Number(url.searchParams.get('offset') || 0);
+      // ONE set-based RPC for every journey — never per-journey funnel calls in a loop.
+      const r = await A.sbComms('/rest/v1/rpc/journey_stats_list', env,
+        { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
     case 'getCampaignStats': {
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
       const r = await A.sbComms('/rest/v1/rpc/campaign_stats', env,
