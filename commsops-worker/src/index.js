@@ -493,7 +493,22 @@ async function handlePost(body, auth, env) {
     }
 
     // ── M7: journeys ──
-    case 'saveJourney': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+    case 'saveJourney': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      // H8 bypass: saveJourney's `status` field round-trips the journey's CURRENT status on
+      // every edit (the UI resends status:'active' when a builder edits an already-active
+      // journey's steps) — a blanket "status==='active' needs send_activate" check would break
+      // that. Gate the TRANSITION instead: only require send_activate when this save would
+      // actually flip a non-active (or brand-new) journey INTO active. A caller with only
+      // campaign_build could otherwise call saveJourney directly to activate, skipping
+      // setJourneyStatus's gate entirely.
+      if (body.status === 'active' && !A.canActivate(auth.permissions)) {
+        const cur = body.id
+          ? await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(body.id)}&select=status&limit=1`, env)
+          : null;
+        const curStatus = (cur?.ok && cur.data?.[0]?.status) || null;
+        if (curStatus !== 'active') return err('send_activate_required_to_activate', 403);
+      }
       const r = await J.saveJourney(env, body, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400); }
     case 'compileJourney':
