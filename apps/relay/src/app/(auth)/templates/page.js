@@ -132,7 +132,8 @@ export default function TemplatesPage() {
     const payload = buildPayload();
     if (t.channel === 'email') {
       if (t.purpose === 'marketing' && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
-        showToast('Marketing emails should include {unsubscribe_url} in the footer', 'error');
+        showToast('Marketing emails must include {unsubscribe_url} — add the merge tag before saving.', 'error');
+        return;
       }
       const stray = findUndeclaredTokens(
         [payload.content.subject, payload.content.html_body, payload.content.text_body],
