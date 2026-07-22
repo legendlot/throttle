@@ -41,6 +41,12 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState(false);
   const edRef = useRef(null);
   const [editorKey, setEditorKey] = useState('new');
+  // M13 — a template with html_body but no design_json opens the visual editor onto a
+  // BLANK scaffold (EmailEditor.js only loads initialDesign when it's non-empty; otherwise
+  // it sets BLANK_MJML). Saving from there calls edRef.export() on that blank canvas,
+  // silently replacing the real hand-authored HTML with the empty scaffold. There was no
+  // existing guard against this — startEdit/save never checked for design_json presence.
+  const [htmlOnly, setHtmlOnly] = useState(false);
 
   // test-send state
   const [testTo, setTestTo] = useState('');
@@ -63,7 +69,7 @@ export default function TemplatesPage() {
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  function startNew() { setT(emptyTemplate()); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
+  function startNew() { setT(emptyTemplate()); setHtmlOnly(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
   function startEdit(r) {
     const c = r.content || {};
     setT({
@@ -82,6 +88,9 @@ export default function TemplatesPage() {
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
     });
+    // M13 — flag templates authored outside the visual editor (html_body present, no
+    // design_json) so save() can warn before the canvas's blank scaffold overwrites it.
+    setHtmlOnly((r.channel || 'email') === 'email' && !!(c.html_body || c.html) && !c.design_json);
     resetTest();
     setEditorKey('t-' + r.id);
     setView('form');
@@ -131,6 +140,15 @@ export default function TemplatesPage() {
   async function save() {
     if (!t.name.trim()) { showToast('Name required', 'error'); return; }
     if (t.channel === 'email' && !edRef.current) { showToast('Editor still loading — try again in a moment', 'error'); return; }
+    // M13 — this template's real content is html_body with no design_json; the mounted
+    // visual editor is sitting on the BLANK scaffold (EmailEditor.js never loaded the real
+    // HTML into it), so buildPayload()'s export() below would silently replace the
+    // hand-authored HTML with that empty canvas. Confirm before it's irreversible.
+    if (t.channel === 'email' && htmlOnly && edRef.current) {
+      if (!window.confirm(
+        'This template was authored outside the visual editor. Saving will REPLACE its HTML with the canvas content. Continue?'
+      )) return;
+    }
     const payload = buildPayload();
     if (t.channel === 'email') {
       if (t.purpose === 'marketing' && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
@@ -151,6 +169,9 @@ export default function TemplatesPage() {
       const r = await workerFetch('saveTemplate', payload, session);
       const saved = r?.data;
       set('design_json', payload.content.design_json || null);
+      // Whatever happened (user confirmed the overwrite, or this was never html-only), the
+      // saved content now carries the editor's real design_json — no longer html-only.
+      if (t.channel === 'email') setHtmlOnly(false);
       showToast(t.id ? 'Template saved (new version)' : 'Template created', 'success');
       if (saved?.id && !t.id) set('id', saved.id);
       load();

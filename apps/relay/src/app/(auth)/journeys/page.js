@@ -95,6 +95,8 @@ export default function JourneysPage() {
   const [togglingId, setTogglingId] = useState(null);
   const [compileErrors, setCompileErrors] = useState(null);
   const [funnel, setFunnel] = useState(null);
+  // M15 — a failed funnel fetch must not render as "no enrolments yet" (a real empty state).
+  const [funnelError, setFunnelError] = useState(false);
   // canvas state — page-owned so save/drawer/canvas share one source of truth
   const [nodes, setNodesRaw] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -115,9 +117,10 @@ export default function JourneysPage() {
   }), []);
 
   const loadFunnel = useCallback(async (id) => {
-    if (!id) { setFunnel(null); return; }
+    if (!id) { setFunnel(null); setFunnelError(false); return; }
+    setFunnelError(false);
     try { const f = await garageFetch('getJourneyFunnel', { id }, session); setFunnel(f || null); }
-    catch { /* non-fatal */ }
+    catch { setFunnelError(true); }
   }, [session]);
 
   const load = useCallback(async () => {
@@ -499,7 +502,14 @@ export default function JourneysPage() {
 
         {j.id && (
           <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad>
-            {!funnel || funnel.total_enrolments === 0 ? (
+            {funnelError ? (
+              <>
+                <EmptyState icon="info" title="Funnel unavailable — retry" hint="Could not load enrolment funnel data." />
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
+                  <Btn onClick={() => loadFunnel(j.id)}>Retry</Btn>
+                </div>
+              </>
+            ) : !funnel || funnel.total_enrolments === 0 ? (
               <EmptyState icon="git-branch" title="No enrolments yet" hint="Once profiles enrol, each step shows how many entered and how they branched — e.g. a wait-for-response gate's responded vs timeout vs exit counts (across all versions)." />
             ) : (
               <>

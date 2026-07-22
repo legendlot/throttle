@@ -6,8 +6,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { BarChart3 } from 'lucide-react';
-import { PageHead, Panel, Kpi, Badge, EmptyState } from '@/components/ui.js';
+import { BarChart3, RefreshCw } from 'lucide-react';
+import { PageHead, Panel, Kpi, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inr } from '@/components/format.js';
 
 const WINDOWS = [7, 30, 90];
@@ -51,16 +51,21 @@ export default function AnalyticsPage() {
   const [health, setHealth] = useState([]);
   const [camps, setCamps] = useState([]);
   const [journeys, setJourneys] = useState([]);
+  // M15 — a failed RPC must not render as a fake zero. One flag for the whole data
+  // domain (overview/health/campaigns/journeys load together); render an explicit
+  // "unavailable" state instead of ₹0/empty rows when any of them fails.
+  const [statsError, setStatsError] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
+    setStatsError(false);
     try {
       const [ov, hl, cs, js] = await Promise.all([
-        garageFetch('getSendsOverview', { days }, session),
-        garageFetch('getDeliverabilityHealth', { days }, session),
-        garageFetch('getCampaigns', {}, session),
-        garageFetch('getJourneys', {}, session),
+        garageFetch('getSendsOverview', { days }, session).catch(() => { setStatsError(true); return null; }),
+        garageFetch('getDeliverabilityHealth', { days }, session).catch(() => { setStatsError(true); return null; }),
+        garageFetch('getCampaigns', {}, session).catch(() => { setStatsError(true); return null; }),
+        garageFetch('getJourneys', {}, session).catch(() => { setStatsError(true); return null; }),
       ]);
       setOverview(Array.isArray(ov) ? ov : []);
       setHealth(Array.isArray(hl) ? hl : []);
@@ -86,7 +91,7 @@ export default function AnalyticsPage() {
         } catch { return { ...c, stats: {}, attr: {} }; }
       }));
       setCamps(enriched);
-    } catch (e) { showToast(e.message || 'Failed to load analytics', 'error'); }
+    } catch (e) { setStatsError(true); showToast(e.message || 'Failed to load analytics', 'error'); }
     finally { setLoading(false); }
   }, [session, days, showToast]);
   useEffect(() => { load(); }, [load]);
@@ -123,7 +128,15 @@ export default function AnalyticsPage() {
     <div className="pg">
       <PageHead title="Analytics" sub="Delivery, engagement, and attribution across channels." actions={winPicker} />
 
-      {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div> : (
+      {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        : statsError ? (
+          <Panel pad>
+            <EmptyState icon="info" title="Analytics unavailable — retry" hint="Could not load one or more analytics sources. Numbers below would be misleading, so nothing is shown instead of fake zeros." />
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
+              <Btn onClick={load}><RefreshCw size={14} /> Retry</Btn>
+            </div>
+          </Panel>
+        ) : (
         <>
           <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
             <Kpi label={`Sent · ${days}d`} value={totals.sent} tone="gray" sub="messages handed to provider" />
@@ -260,3 +273,4 @@ export default function AnalyticsPage() {
     </div>
   );
 }
+
