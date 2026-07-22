@@ -35,9 +35,13 @@ const isOn = (s) => s === 'active';
 // Turning OFF goes to `paused`, never `draft`: draft means "never been live", pausing a live
 // journey must stay distinguishable from one that was never launched. `archived` is a deliberate
 // retirement and is not re-armable from a list switch — reopen the journey to bring it back.
-function toggleGuard(r) {
+// Turning ON is live customer automation → needs send_activate (review H8), same as the worker's
+// setJourneyStatus gate; turning OFF stays on campaign_build only, so `canActivate` only enters
+// the check for the direction that matters.
+function toggleGuard(r, canActivate) {
   if (r.status === 'archived') return { can: false, why: 'Archived — open the journey to restore it' };
   if (!isOn(r.status) && r.active_version == null) return { can: false, why: 'No published version yet — open and save one first' };
+  if (!isOn(r.status) && !canActivate) return { can: false, why: 'Turning on needs the send/activate permission' };
   return { can: true, why: isOn(r.status) ? 'Sending — click to pause' : 'Paused — click to start sending' };
 }
 const REENROL = [
@@ -100,6 +104,7 @@ export default function JourneysPage() {
   const [settings, setSettings] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
+  const canActivate = !perms || perms.send_activate;
 
   // the trigger node must survive any change set (Backspace-delete guard)
   const setNodes = useCallback((updater) => setNodesRaw((prev) => {
@@ -152,7 +157,7 @@ export default function JourneysPage() {
   // List-level on/off. Optimistic so the switch feels instant, reverted on failure — a control
   // that lies about whether a journey is sending is worse than a slow one.
   async function toggleRow(r, next) {
-    const g = toggleGuard(r);
+    const g = toggleGuard(r, canActivate);
     if (!g.can) { showToast(g.why, 'error'); return; }
     // Turning ON starts real customer messages; turning OFF is the safe direction and needs no
     // ceremony. Asymmetric on purpose.
@@ -336,10 +341,12 @@ export default function JourneysPage() {
               <span style={{ display: 'inline-flex', gap: 7, alignItems: 'center', marginRight: 2 }}>
                 <Switch
                   checked={isOn(j.status)} busy={busy}
-                  disabled={!canBuild || j.status === 'archived' || (!isOn(j.status) && j.active_version == null)}
+                  disabled={!canBuild || j.status === 'archived' || (!isOn(j.status) && j.active_version == null)
+                    || (!isOn(j.status) && !canActivate)}
                   label={`${isOn(j.status) ? 'Turn off' : 'Turn on'} this journey`}
                   title={j.status === 'archived' ? 'Archived'
                     : (!isOn(j.status) && j.active_version == null) ? 'Save a version before turning it on'
+                    : (!isOn(j.status) && !canActivate) ? 'Turning on needs the send/activate permission'
                     : isOn(j.status) ? 'Sending — click to pause' : 'Paused — click to start sending'}
                   onChange={(next) => setStatus(next ? 'active' : 'paused')}
                 />
@@ -553,7 +560,7 @@ export default function JourneysPage() {
                 <thead><tr><th style={{ width: 92 }}>On / Off</th><th>Name</th><th>Status</th><th className="num">Version</th><th>Trigger</th><th>Re-enrolment</th><th>Updated</th></tr></thead>
                 <tbody>
                   {rows.map((r) => {
-                    const g = toggleGuard(r);
+                    const g = toggleGuard(r, canActivate);
                     const on = isOn(r.status);
                     return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>

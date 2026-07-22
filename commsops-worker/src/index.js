@@ -491,7 +491,11 @@ async function handlePost(body, auth, env) {
       return r.ok ? ok(r) : err(r.error, 400); }
     case 'compileJourney':
       return ok(await J.compile(env, body.definition, body));
-    case 'setJourneyStatus': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+    case 'setJourneyStatus': {
+      // Activating = live customer automation → send_activate, matching what the roles UI
+      // has promised all along (review H8). Drafting/pausing stays campaign_build.
+      const gate = body.status === 'active' ? A.canActivate : A.canBuild;
+      if (!gate(auth.permissions)) return err('forbidden', 403);
       const r = await J.setJourneyStatus(env, body.id, body.status);
       return r.ok ? ok(r) : err(r.error, 400); }
 
