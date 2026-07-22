@@ -16,6 +16,13 @@ const { ingest } = require('./ingest.js');
 const { detectOptOut, applyOptOut } = require('./optout.js');
 const AL = require('./alerts.js');
 
+// Canonical message status is monotonic — an out-of-order webhook must never regress it
+// (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
+// duplicated in webhooks.js (the Resend status handler): the two files share no util
+// module and this guard is tiny enough not to warrant one.
+const STATUS_RANK = { queued: 0, sent: 1, delivered: 2, opened: 3, clicked: 4, bounced: 9, failed: 9, suppressed: 9, skipped: 9 };
+const isUpgrade = (from, to) => (STATUS_RANK[to] ?? 0) >= (STATUS_RANK[from] ?? 0) || (STATUS_RANK[to] ?? 0) >= 9;
+
 // ── signature ──
 function hexHmacKey(secret) {
   return crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
@@ -73,10 +80,11 @@ async function handleStatuses(env, payload) {
     if (!u.provider_message_id) continue;
     const m = await A.sbComms(
       `/rest/v1/messages?provider=eq.whatsapp&provider_message_id=eq.${A.enc(u.provider_message_id)}` +
-      `&select=id,profile_id,channel,to_address&limit=1`, env);
+      `&select=id,profile_id,channel,to_address,status&limit=1`, env);
     const msg = m.ok ? m.data?.[0] : null;
     if (msg && u.canonical_status) {
       const patch = { status: u.canonical_status, provider_status: u.canonical_status };
+      if (!isUpgrade(msg.status, u.canonical_status)) delete patch.status;   // late 'delivered' after 'read' keeps opened (review M6)
       if (u.canonical_status === 'delivered') patch.delivered_at = u.at;
       if (u.canonical_status === 'opened') patch.read_at = u.at;    // WA 'read' → our canonical 'opened'
       if (u.reason) patch.reason = u.reason;

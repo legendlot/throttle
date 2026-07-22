@@ -3,6 +3,13 @@ const A = require('./auth.js');
 const emailAdapter = require('./adapters/email.js');
 const { applyOptOut } = require('./optout.js');
 
+// Canonical message status is monotonic — an out-of-order webhook must never regress it
+// (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
+// duplicated in wa-webhooks.js: the two files share no util module and this guard is
+// tiny enough not to warrant one.
+const STATUS_RANK = { queued: 0, sent: 1, delivered: 2, opened: 3, clicked: 4, bounced: 9, failed: 9, suppressed: 9, skipped: 9 };
+const isUpgrade = (from, to) => (STATUS_RANK[to] ?? 0) >= (STATUS_RANK[from] ?? 0) || (STATUS_RANK[to] ?? 0) >= 9;
+
 // ── svix signature verification (Resend uses svix) ──
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -40,11 +47,12 @@ async function handleResendWebhook(env, request) {
     if (!u.provider_message_id) continue;
     // find the message
     const m = await A.sbComms(
-      `/rest/v1/messages?provider=eq.resend&provider_message_id=eq.${A.enc(u.provider_message_id)}&select=id,profile_id,channel,to_address&limit=1`, env);
+      `/rest/v1/messages?provider=eq.resend&provider_message_id=eq.${A.enc(u.provider_message_id)}&select=id,profile_id,channel,to_address,status&limit=1`, env);
     const msg = m.ok ? m.data?.[0] : null;
     // update status + timestamp
     if (msg && u.canonical_status) {
       const patch = { status: u.canonical_status, provider_status: payload.type };
+      if (!isUpgrade(msg.status, u.canonical_status)) delete patch.status;   // late 'delivered' after 'read' keeps opened (review M6)
       if (u.canonical_status === 'delivered') patch.delivered_at = u.at;
       if (u.canonical_status === 'opened') patch.read_at = u.at;
       await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
