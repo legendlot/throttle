@@ -54,6 +54,10 @@ export default function TemplatesPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // WS review follow-up: submitToMeta must never submit content the saved row doesn't have
+  // yet (an uploaded-but-unsaved image lints clean in memory but ships headerless from the
+  // DB row Meta actually reads). Set on any WA editor change, cleared on load/save.
+  const [waDirty, setWaDirty] = useState(false);
 
   const canEdit = !perms || perms.template_manage;
   const canTest = !perms || perms.campaign_build;
@@ -69,7 +73,7 @@ export default function TemplatesPage() {
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  function startNew() { setT(emptyTemplate()); setHtmlOnly(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
+  function startNew() { setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
   function startEdit(r) {
     const c = r.content || {};
     setT({
@@ -92,6 +96,7 @@ export default function TemplatesPage() {
     // M13 — flag templates authored outside the visual editor (html_body present, no
     // design_json) so save() can warn before the canvas's blank scaffold overwrites it.
     setHtmlOnly((r.channel || 'email') === 'email' && !!(c.html_body || c.html) && !c.design_json);
+    setWaDirty(false);
     resetTest();
     setEditorKey('t-' + r.id);
     setView('form');
@@ -165,6 +170,21 @@ export default function TemplatesPage() {
       )) return;
     }
     const payload = buildPayload();
+    // WS review follow-up: without this, a live/APPROVED template could be saved with
+    // header_format:'IMAGE' + an empty header_media_url (e.g. Image -> Text -> Image, which
+    // clears the url but keeps the format) — every subsequent SEND of that row then hard-fails
+    // render.js's media_header_missing_url guard. Targeted rule only (not the full
+    // validateWaTemplate lint, which also demands meta_name/body/waba_id/mapping — those stay
+    // save-time-optional so an in-progress draft can still be saved; Submit still runs the
+    // full lint). Mirrors the email branch's M14 unsubscribe-guard pattern: a single narrow
+    // check blocked with a toast, not a full pre-submit validation gate.
+    if (t.channel === 'whatsapp') {
+      const hc = payload.content;
+      if (String(hc.header_format || '').toUpperCase() === 'IMAGE' && !hc.header_media_url) {
+        showToast('Upload the header image before saving (or switch the header type away from Image).', 'error');
+        return;
+      }
+    }
     if (t.channel === 'email') {
       if (t.purpose === 'marketing' && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
         showToast('Marketing emails must include {unsubscribe_url} — add the merge tag before saving.', 'error');
@@ -187,6 +207,7 @@ export default function TemplatesPage() {
       // Whatever happened (user confirmed the overwrite, or this was never html-only), the
       // saved content now carries the editor's real design_json — no longer html-only.
       if (t.channel === 'email') setHtmlOnly(false);
+      setWaDirty(false);
       showToast(t.id ? 'Template saved (new version)' : 'Template created', 'success');
       if (saved?.id && !t.id) set('id', saved.id);
       load();
@@ -221,6 +242,11 @@ export default function TemplatesPage() {
   // Account — an outward-facing, non-instant action, so it always confirms first.
   async function submitToMeta() {
     if (!t.id) { showToast('Save the template first', 'error'); return; }
+    // WS review follow-up: waSubmitTemplate reads the SAVED row, not the in-memory editor
+    // state this lint below inspects — an uploaded-but-unsaved image (or any other unsaved
+    // edit) would lint clean here yet submit whatever is actually in the DB (e.g. headerless,
+    // or the previous version). Block on any unsaved change instead of letting the two diverge.
+    if (waDirty) { showToast('Save the template before submitting to Meta', 'error'); return; }
     const errs = validateWaTemplate(buildPayload().content, t.variables.map((v) => v.token));
     if (errs.length) { showToast(`Fix ${errs.length} issue${errs.length === 1 ? '' : 's'} before submitting`, 'error'); return; }
     if (!window.confirm(
@@ -303,7 +329,7 @@ export default function TemplatesPage() {
         </Panel>
 
         {t.channel === 'whatsapp' ? (
-          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit}
+          <WaEditor wa={t.wa} setWa={(w) => { set('wa', w); setWaDirty(true); }} variables={t.variables} disabled={saving || !canEdit}
           locked={!!t.provider_template_id} session={session} />
         ) : (
         <Panel title="Content" pad
