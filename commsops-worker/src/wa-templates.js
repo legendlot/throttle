@@ -421,8 +421,80 @@ async function waSubscribeApp(env, wabaId) {
               : { ok: false, waba_id: wabaId, status: r.status, error: j?.error?.message || `http_${r.status}` };
 }
 
+// waMigrateNumber(env, {op, ...}) — the 4-call BSP→own-WABA number migration (Meta's documented
+// flow, cutover runbook). Each op is a thin wrapper over ONE Graph call. State-changing and
+// IRREVERSIBLE past `start` (Meta detaches the number from its current BSP the moment the
+// migrate-in call succeeds) — this is why it is a separate token-gated internal route, called
+// deliberately step by step during the live migration, never looped or automated.
+//
+//   start        {destWabaId, cc, phoneNumber} → POST /{destWabaId}/phone_numbers
+//                  {cc, phone_number, migrate_phone_number:true}
+//                  Returns the NEW phone_number_id (Meta's `id`) — the id every later op needs.
+//   request_code {phoneNumberId, method}        → POST /{phoneNumberId}/request_code
+//                  {code_method: SMS|VOICE, language:'en_US'}
+//   verify       {phoneNumberId, code}          → POST /{phoneNumberId}/verify_code {code}
+//   register     {phoneNumberId, pin}           → POST /{phoneNumberId}/register
+//                  {messaging_product:'whatsapp', pin} — Meta REQUIRES a 6-digit pin to
+//                  (re)enable two-step verification on registration. This pin becomes the
+//                  number's NEW two-step PIN going forward — record whatever is actually sent
+//                  (real callers should supply one; '000000' is only a same-day placeholder
+//                  default, matching the Scanner Attendance throwaway-PIN convention).
+//
+// Every op returns the raw Graph response spread onto {ok:true, ...} on success, or
+// {ok:false, error, code, details} on a non-2xx / network failure — never throws, and never
+// swallows Meta's error surface, because a live migration's failure modes (error 133xxx class:
+// already-migrating, two-step-enabled-on-source, wrong-cc, etc.) are diagnosed from that detail.
+async function waMigrateNumber(env, body) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const op = body?.op;
+  const post = async (path, graphBody) => {
+    let res, data;
+    try {
+      res = await fetch(`${graphBase(env)}${path}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(graphBody),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) { return { ok: false, error: `graph_network:${e?.message || e}` }; }
+    if (!res.ok) {
+      return { ok: false, error: data?.error?.message || `http_${res.status}`,
+               code: data?.error?.code, details: data?.error };
+    }
+    return { ok: true, ...data };
+  };
+
+  switch (op) {
+    case 'start': {
+      const { destWabaId, cc, phoneNumber } = body;
+      if (!destWabaId || !cc || !phoneNumber) return { ok: false, error: 'missing_params' };
+      return post(`/${encodeURIComponent(destWabaId)}/phone_numbers`,
+        { cc, phone_number: phoneNumber, migrate_phone_number: true });
+    }
+    case 'request_code': {
+      const { phoneNumberId, method } = body;
+      if (!phoneNumberId) return { ok: false, error: 'missing_params' };
+      return post(`/${encodeURIComponent(phoneNumberId)}/request_code`,
+        { code_method: method === 'voice' ? 'VOICE' : 'SMS', language: 'en_US' });
+    }
+    case 'verify': {
+      const { phoneNumberId, code } = body;
+      if (!phoneNumberId || code == null) return { ok: false, error: 'missing_params' };
+      return post(`/${encodeURIComponent(phoneNumberId)}/verify_code`, { code: String(code) });
+    }
+    case 'register': {
+      const { phoneNumberId, pin } = body;
+      if (!phoneNumberId) return { ok: false, error: 'missing_params' };
+      return post(`/${encodeURIComponent(phoneNumberId)}/register`,
+        { messaging_product: 'whatsapp', pin: String(pin ?? '000000') });
+    }
+    default:
+      return { ok: false, error: 'unknown_op' };
+  }
+}
+
 module.exports = {
   waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia, waAccountInfo,
-  waTokenScopes, waSubscribeApp,
+  waTokenScopes, waSubscribeApp, waMigrateNumber,
   buildComponents, categoryFor, wabaFor,
 };

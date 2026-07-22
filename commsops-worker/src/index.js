@@ -880,6 +880,19 @@ export default {
       const r = await WATPL.waSubscribeApp(env, b.wabaId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    // BSP→own-WABA number migration — the 4-call cutover flow (start/request_code/verify/register).
+    // Same WA_SYNC_TOKEN bearer gate. State-changing and irreversible past `start` — see the
+    // waMigrateNumber header comment. Errors preserve Meta's code/details (not just err()'s
+    // plain message) because a live migration needs the full error surface to diagnose.
+    if (url.pathname === '/internal/wa-migrate-number' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const r = await WATPL.waMigrateNumber(env, b);
+      return r.ok ? ok(r) : json({ ok: false, error: r.error, code: r.code, details: r.details }, 400);
+    }
     // `/templates` UI calls, reachable with the WA_SYNC_TOKEN instead of a Google-login JWT so
     // a bulk authoring run isn't gated on an interactive browser session. Writes only to
     // comms.templates + Meta's template catalog; it can send nothing.
