@@ -38,8 +38,11 @@ async function verifyJWT(authHeader, env) {
   const profile = (profRes.ok && profRes.data?.[0]) || null;
   if (!profile || !profile.active) return null;
 
+  // order=assigned_at.desc — a user with two active role grants gets the NEWEST one
+  // deterministically, instead of whatever order Postgres happened to return (review M7).
   const urRes = await sbStore(
-    `/rest/v1/relayops_user_roles?user_id=eq.${user.id}&active=eq.true&select=role_key&limit=1`, env);
+    `/rest/v1/relayops_user_roles?user_id=eq.${user.id}&active=eq.true` +
+    `&select=role_key&order=assigned_at.desc&limit=1`, env);
   const roleKey = (urRes.ok && urRes.data?.[0]?.role_key) || null;
   // No auto-login from the legendoftoys.com domain: a valid Google/Supabase
   // session is NOT enough — access requires an explicit, active Relay role

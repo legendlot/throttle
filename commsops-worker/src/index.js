@@ -41,7 +41,10 @@ async function handleGet(url, auth, env) {
                   relayRole: auth.relayRole, permissions: auth.permissions });
 
     case 'getRoles': {                 // role builder — list (M2)
-      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      // Listing is read-only and feeds the /admin/users grant flow, which only needs
+      // relay_admin (saveRole — actually EDITING a role's permission set — stays
+      // super_admin-gated below; verified untouched). Review M11.
+      if (!A.canAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await A.sbStore('/rest/v1/relayops_roles?select=*&order=role_key.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
