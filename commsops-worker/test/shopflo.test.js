@@ -178,6 +178,33 @@ t('mapCheckoutAbandoned carries product_names_short + total_display', () => {
   assert.equal(e.properties.total_display, '₹2,398');
 });
 
+// ── v3 image-header slots: button suffix + payload image ──
+t('checkoutUrlSuffix strips the fixed Shopflo base', () => {
+  assert.equal(
+    FLO.checkoutUrlSuffix('https://checkout.shopflo.co/stable/?tokenId=abc&checkout_type=ABANDONED'),
+    '?tokenId=abc&checkout_type=ABANDONED');
+});
+t('checkoutUrlSuffix null on foreign/absent URL (fail-loud path)', () => {
+  assert.equal(FLO.checkoutUrlSuffix('https://elsewhere.example/x'), null);
+  assert.equal(FLO.checkoutUrlSuffix(null), null);
+  assert.equal(FLO.checkoutUrlSuffix('https://checkout.shopflo.co/stable/'), null);
+});
+t('payloadImageUrl scans line_items + cart_product_images shapes', () => {
+  assert.equal(FLO.payloadImageUrl({ line_items: [{ image_url: 'https://cdn.x/a.webp' }] }), 'https://cdn.x/a.webp');
+  assert.equal(FLO.payloadImageUrl({ line_items: [{ image: { src: 'https://cdn.x/b.webp' } }] }), 'https://cdn.x/b.webp');
+  assert.equal(FLO.payloadImageUrl({ cart_product_images: ['https://cdn.x/c.webp'] }), 'https://cdn.x/c.webp');
+  assert.equal(FLO.payloadImageUrl({ line_items: [{ image: 'not-a-url' }] }), null);
+  assert.equal(FLO.payloadImageUrl({}), null);
+});
+t('mapCheckoutAbandoned carries checkout_url_suffix (null when base differs)', () => {
+  const e = FLO.mapCheckoutAbandoned(CHECKOUT_ABANDONED);
+  // fixture's checkout_url is the doc shape (not /stable/) → suffix null by design
+  assert.equal(e.properties.checkout_url_suffix, null);
+  const b2 = { ...CHECKOUT_ABANDONED, note_attributes: [{ name: 'shopflo_checkout_url', value: 'https://checkout.shopflo.co/stable/?tokenId=t1&checkout_type=ABANDONED' }] };
+  const e2 = FLO.mapCheckoutAbandoned(b2);
+  assert.equal(e2.properties.checkout_url_suffix, '?tokenId=t1&checkout_type=ABANDONED');
+});
+
 // ── display name (Shop Pass identity → profile greeting backfill) ──
 t('displayName prefers FIRST name (Shopify-mapper parity: first || full)', () => {
   assert.equal(FLO.displayName(CHECKOUT_ABANDONED), 'Riya');

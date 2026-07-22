@@ -43,6 +43,38 @@ async function capture(env, request, body) {
   }).catch((e) => { console.log('shopflo_capture_error', e?.message || String(e)); });
 }
 
+// The cart product's image for the v3 WA image-header slot. Cache-first
+// (comms.product_images, keyed on the exact Shopify title Shopflo sends); a miss
+// re-pulls the PUBLIC storefront catalog (products.json, ~31 products, no admin scope)
+// and upserts every row — so a brand-new product self-heals the whole cache. Returns
+// null on any failure: the template's static creative is the render-time fallback, a
+// missing image must never fail the webhook.
+const STOREFRONT_CATALOG_URL = 'https://www.legendoftoys.com/products.json?limit=250';
+async function resolveProductImage(env, namesCsv) {
+  const title = String(namesCsv || '').split(',')[0].trim();
+  if (!title) return null;
+  try {
+    const r = await A.sbComms(`/rest/v1/product_images?title=eq.${A.enc(title)}&select=image_url&limit=1`, env);
+    if (r.ok && r.data?.[0]?.image_url) return r.data[0].image_url;
+    const res = await fetch(STOREFRONT_CATALOG_URL);
+    if (!res.ok) return null;
+    const cat = await res.json();
+    const rows = (Array.isArray(cat.products) ? cat.products : [])
+      .filter((p) => p && p.title && p.images?.[0]?.src)
+      .map((p) => ({ title: p.title, image_url: p.images[0].src, updated_at: new Date().toISOString() }));
+    if (rows.length) {
+      await A.sbComms('/rest/v1/product_images?on_conflict=title', env, {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' }, body: JSON.stringify(rows),
+      });
+    }
+    const hit = rows.find((x) => x.title === title);
+    return hit ? hit.image_url : null;
+  } catch (e) {
+    console.log('product_image_resolve_error', e?.message || String(e));
+    return null;
+  }
+}
+
 async function handleShopfloWebhook(env, request) {
   if (!env.SHOPFLO_WEBHOOK_TOKEN) return { ok: false, error: 'shopflo_unconfigured', status: 503 };
   if (!tokenOk(env, request)) return { ok: false, error: 'unauthorised', status: 401 };
@@ -63,6 +95,13 @@ async function handleShopfloWebhook(env, request) {
   try {
     const envlp = spec.map(body);
     if (!envlp) return { ok: true, event: evName, skipped: 'no_identifier' };
+
+    // v3 image-header enrichment — attach the cart product's image BEFORE ingest so the
+    // event row (what the journey's send step binds from) carries it. Payload-supplied
+    // image wins; catalog-cache lookup fills the gap. Best-effort by design.
+    if (spec.event === 'checkout_abandoned' && envlp.properties && !envlp.properties.product_image_url) {
+      envlp.properties.product_image_url = await resolveProductImage(env, envlp.properties.product_names);
+    }
 
     const r = await ingest(env, envlp);
     if (!r.ok) {

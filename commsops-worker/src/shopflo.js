@@ -118,6 +118,32 @@ function toIso(v) {
   return isNaN(d.getTime()) ? s : d.toISOString();
 }
 
+// The Shopflo checkout resume URL's fixed prefix. Meta URL buttons allow ONE trailing
+// {{1}} on a static base, so the cart template's "Complete Purchase" button is
+// `<base>{{1}}` and the send binds only the suffix. A checkout_url off this base yields
+// null → the send-time variable is deliberately UNRESOLVED (no fallback) → the send
+// fails loud and the journey health alert fires — the correct behaviour if Shopflo ever
+// changes its URL shape (a silent homepage button would be worse).
+const SHOPFLO_CHECKOUT_BASE = 'https://checkout.shopflo.co/stable/';
+function checkoutUrlSuffix(url) {
+  const s = String(url || '');
+  if (!s.startsWith(SHOPFLO_CHECKOUT_BASE)) return null;
+  return s.slice(SHOPFLO_CHECKOUT_BASE.length) || null;
+}
+
+// Best-effort product image from the payload itself (the doc doesn't promise one; scan
+// the plausible spots). The handler falls back to the comms.product_images catalog cache.
+function payloadImageUrl(body) {
+  const li = Array.isArray(body?.line_items) ? body.line_items[0] : null;
+  const cands = [li?.image_url, li?.image, li?.featured_image, li?.product_image,
+    Array.isArray(body?.cart_product_images) ? body.cart_product_images[0] : null];
+  for (const c of cands) {
+    const s = typeof c === 'string' ? c : (c && typeof c === 'object' ? c.src : null);
+    if (s && /^https?:\/\//.test(s)) return s;
+  }
+  return null;
+}
+
 // checkout_abandoned → the abandoned-cart signal (event name `checkout_abandoned`,
 // already a registered event def). checkout_url is threaded so the recovery journey
 // can deep-link back into the Shopflo checkout.
@@ -142,10 +168,15 @@ function mapCheckoutAbandoned(body) {
     total_tax: num(body.total_tax),
     line_item_count: Array.isArray(body.line_items) ? body.line_items.length : null,
     product_names: body.cart_product_names || null,
-    // Display-ready derivations for template slots (the cart-contents WA template v2
-    // binds these; raw product_names/total_price stay for analytics):
+    // Display-ready derivations for template slots (the cart-contents WA templates
+    // bind these; raw product_names/total_price stay for analytics):
     product_names_short: shortNames(body.cart_product_names),
     total_display: inrGroup(body.total_price) != null ? `₹${inrGroup(body.total_price)}` : null,
+    // v3 image-header template slots: the CTA button suffix + (if the payload carries
+    // one) the cart product's image. The handler backfills product_image_url from the
+    // comms.product_images catalog cache when the payload has none.
+    checkout_url_suffix: checkoutUrlSuffix(checkoutUrl),
+    product_image_url: payloadImageUrl(body),
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
@@ -240,5 +271,6 @@ function consentRowsFrom(body, capturedAt) {
 
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames,
+  checkoutUrlSuffix, payloadImageUrl, SHOPFLO_CHECKOUT_BASE,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };
