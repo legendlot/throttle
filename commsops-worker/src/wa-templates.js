@@ -233,7 +233,7 @@ async function waSyncTemplateStatus(env, body) {
     try {
       const res = await fetch(
         `${graphBase(env)}/${encodeURIComponent(wabaId)}/message_templates`
-        + `?name=${encodeURIComponent(name)}&fields=name,status,category,rejected_reason`,
+        + `?name=${encodeURIComponent(name)}&fields=name,language,status,category,rejected_reason`,
         { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
       data = await res.json().catch(() => ({}));
       if (!res.ok) { synced.push({ id: t.id, meta_name: name, status: null, waba_id: wabaId, error: data?.error?.message || `http_${res.status}` }); continue; }
