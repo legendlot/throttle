@@ -54,6 +54,38 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
     assert.ok(!!heartbeatPatch.body.updated_at, 'heartbeat PATCH body must carry updated_at');
   });
 
+  await t('auto-approved campaign whose dynamic segment outgrew the threshold is sent back for approval, not fanned out (review M2)', async () => {
+    const APPROVED_CAMP = { id: 'C2', status: 'approved', approved_by: null, segment_id: 'S', template_id: 'T',
+      channel: 'email', purpose: 'marketing', name: 'y', vars: {} };
+    let claimPatchCalled = false;
+    let pendingPatchBody = null;
+    let queuedSend = false;
+    A.sbComms = async (path, env, opts = {}) => {
+      if (path.includes('/campaigns?id=eq.C2') && (!opts.method || opts.method === 'GET')) return { ok: true, data: [APPROVED_CAMP] };
+      if (path.includes('/rpc/materialize_segment')) return { ok: true, data: null };
+      if (path.includes('/segments?id=eq.')) return { ok: true, data: [{ definition: {} }] };
+      if (path.includes('/rpc/preview_segment')) return { ok: true, data: [{ total: 40000, reachable: 40000 }] };
+      if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{ approval_required_marketing: true, approval_audience_threshold: 500 }] };
+      // The atomic sending-claim PATCH filters on status=in.(approved,scheduled) — that must never fire.
+      if (path.includes('/campaigns?id=eq.C2') && path.includes('status=in.') && opts.method === 'PATCH') {
+        claimPatchCalled = true; return { ok: true, data: [APPROVED_CAMP] };
+      }
+      // The M2 fix PATCHes the campaign straight to pending_approval instead.
+      if (path.includes('/campaigns?id=eq.C2') && opts.method === 'PATCH') {
+        pendingPatchBody = JSON.parse(opts.body); return { ok: true, data: [APPROVED_CAMP] };
+      }
+      return { ok: true, data: [] };
+    };
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async () => { queuedSend = true; } } }, 'C2', 'scheduler');
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'audience_grew_needs_approval');
+    assert.ok(!claimPatchCalled, 'must NOT claim/flip to sending — the atomic-claim PATCH must never fire');
+    assert.ok(!queuedSend, 'must NOT enqueue a fan-out message');
+    assert.ok(pendingPatchBody, 'must PATCH the campaign');
+    assert.equal(pendingPatchBody.status, 'pending_approval');
+    assert.equal(pendingPatchBody.audience_snapshot, 40000);
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

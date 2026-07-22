@@ -49,6 +49,15 @@ async function startCampaign(env, id, sentBy) {
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
 
   const { reachable } = await reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
+
+  // Approval was judged on the SUBMIT-time audience; a dynamic segment may have grown past the
+  // threshold since. A human-approved campaign (approved_by set) stands; an auto-approved one
+  // that outgrew the threshold goes back for eyes (review M2).
+  if (!camp.approved_by && await needsApproval(env, camp, reachable)) {
+    await setStatus(env, id, { status: 'pending_approval', audience_snapshot: reachable });
+    return { ok: false, error: 'audience_grew_needs_approval' };
+  }
+
   // Atomic claim (M9): flip approved/scheduled → sending ONLY if still approved/scheduled,
   // so the M9 scheduler sweep and a concurrent manual "Send now" can't both fan out the same
   // campaign. sbComms defaults to Prefer: return=representation → an empty array means another
