@@ -84,14 +84,23 @@ export function validateWaTemplate(content, declaredTokens = []) {
   }
   if (!c.waba_id) errs.push('Pick the WhatsApp Business Account to author on — templates cannot be moved between accounts later.');
 
+  const mediaHeader = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat);
   for (const comp of ['header', 'body']) {
+    const slots = mapping.filter((m) => (m.component || 'body') === comp);
+    // A MEDIA header carries no text and no {{n}} — its (optional, single) mapping slot
+    // supplies the per-message asset LINK at send time (render.js takes the slot's value,
+    // falling back to the template's static header_media_url). The text↔slot cross-check
+    // below therefore does not apply; cap it at one slot instead.
+    if (comp === 'header' && mediaHeader) {
+      if (slots.length > 1) errs.push('A media header takes at most one mapped slot (the per-message asset link).');
+      continue;
+    }
     const nums = placeholdersIn(c[comp]);
     const seqErr = sequenceError(comp, nums);
     if (seqErr) errs.push(seqErr);
     // Header supports exactly one text parameter.
     if (comp === 'header' && nums.length > 1) errs.push('Header supports at most one {{1}} placeholder.');
 
-    const slots = mapping.filter((m) => (m.component || 'body') === comp);
     const slotPos = [...new Set(slots.map((s) => Number(s.pos)))].sort((a, b) => a - b);
     for (const n of nums) if (!slotPos.includes(n)) errs.push(`${comp} {{${n}}} has no mapped variable.`);
     for (const n of slotPos) if (!nums.includes(n)) errs.push(`${comp} mapping has slot ${n} but the text has no {{${n}}}.`);
