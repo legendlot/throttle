@@ -89,7 +89,13 @@ analytics.subscribe("product_viewed", function (event) {
       currency: price.currencyCode || null,
       product_handle: handle,
       product_url: path ? ("https://www.legendoftoys.com" + path) : null,
-      product_image_url: (v.image && v.image.src) || null
+      // image.src is often protocol-relative (//cdn…) — the server normalizes it too,
+      // but absolute-ize here so future pastes are self-sufficient.
+      product_image_url: (function () {
+        var s = (v.image && v.image.src) || null;
+        if (s && s.indexOf("//") === 0) s = "https:" + s;
+        return s;
+      })()
     }
   }, event);
 });

@@ -153,6 +153,21 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     assert.equal(r.error, 'unsupported_event');
   });
 
+  await t('protocol-relative product_image_url is normalized to https (WA header needs absolute)', async () => {
+    const cap = {}; const restore = stubDb(cap);
+    const stubbed = A.sbComms;
+    let ingestedProps = null;
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/identifiers?or=')) return { ok: true, data: [{ profile_id: 'p1' }] };
+      if (path.startsWith('/rest/v1/events') && init?.method === 'POST') ingestedProps = JSON.parse(init.body).properties;
+      return stubbed(path, env, init);
+    };
+    await handlePixel(ENV, req({ token: 'tok', event: 'product_viewed', client_id: 'cid-known',
+      properties: { product_name: 'X', product_handle: 'x', product_image_url: '//www.legendoftoys.com/cdn/shop/files/x.webp' } }));
+    restore();
+    assert.equal(ingestedProps?.product_image_url, 'https://www.legendoftoys.com/cdn/shop/files/x.webp');
+  });
+
   await t('product_viewed lookup ERROR fails closed (dropped, not minted)', async () => {
     const cap = {}; const restore = stubDb(cap);
     const stubbed = A.sbComms;

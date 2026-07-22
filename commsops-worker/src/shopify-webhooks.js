@@ -135,6 +135,11 @@ async function handlePixel(env, request) {
   }
 
   const props = { ...(body.properties || {}), source_surface: 'web_pixel' };
+  // Shopify's image.src is often PROTOCOL-RELATIVE (//cdn.shopify.com/…) — live-verified
+  // 2026-07-23 on the first real product_viewed. Meta's WA media header requires an
+  // absolute https URL, so normalize here (server-side, so the pasted pixel needn't change).
+  if (typeof props.product_image_url === 'string' && props.product_image_url.startsWith('//'))
+    props.product_image_url = 'https:' + props.product_image_url;
   // dedup a pixel checkout_started against the webhook's (same checkout token)
   const tok = body.checkout_token || props.checkout_token;
   const idem = (name === 'checkout_started' && tok) ? `shopify:checkout_started:${tok}` : null;
