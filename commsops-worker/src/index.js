@@ -326,12 +326,15 @@ async function handlePost(body, auth, env) {
       if (id) {
         const cur = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=version,content&limit=1`, env);
         const v = (cur.ok && Number(cur.data?.[0]?.version)) || 1;
-        // The UI rebuilds `content` from form state and historically DROPPED worker-owned keys
-        // (waba_id pin, header_handle) — which silently re-routes sync/sends to the wrong WABA
-        // (review C4/M8). Carry them over unless explicitly sent.
+        // The UI rebuilds `content` from form state and historically DROPPED worker-owned /
+        // UI-omitted keys (waba_id pin, header_handle, header_format, header_media_url) —
+        // which silently re-routes sync/sends to the wrong WABA or collapses a media header
+        // to TEXT (review C4/M8). Carry them over unless explicitly sent. `header` itself is
+        // UI-emitted (WaEditor's Header input, apps/relay .../templates/page.js buildPayload)
+        // so it is NOT in this list — an intentional clear must go through.
         const prev = (cur.ok && cur.data?.[0]?.content) || {};
         const mergedContent = { ...(content || {}) };
-        for (const k of ['waba_id', 'header_handle']) {
+        for (const k of ['waba_id', 'header_handle', 'header_format', 'header_media_url']) {
           if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
         }
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
