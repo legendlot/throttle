@@ -666,6 +666,9 @@ export default {
       const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
       if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
       const body = await request.json().catch(() => ({}));
+      // The internal gateway must never GUESS intent: an omitted purpose used to default to
+      // 'marketing', silently withholding support replies behind consent/quiet-hours (review M1).
+      if (!body.purpose) return err('purpose_required', 400);
       const r = await send(env, body);
       return ok(r);
     }

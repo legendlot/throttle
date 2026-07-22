@@ -95,6 +95,9 @@ export default function JourneysPage() {
   const [nodes, setNodesRaw] = useState([]);
   const [edges, setEdges] = useState([]);
   const [selected, setSelected] = useState(null);
+  // Live test-mode flag (review M12) — undefined while unloaded/unreachable, which the banner
+  // and activate confirm below both treat as "unknown → assume test mode is still ON" (fail safe).
+  const [settings, setSettings] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
 
@@ -116,18 +119,22 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp, sg, ev] = await Promise.all([
+      const [js, tp, sg, ev, st] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
         garageFetch('getSegments', {}, session),
         // Registry-backed trigger picker. Non-fatal: fall back to EVENT_SUGGEST rather
         // than failing the whole page load over a suggestion list.
         garageFetch('getEventDefinitions', {}, session).catch(() => null),
+        // Non-fatal (review M12): a failed/denied fetch leaves settings null, which the banner
+        // and the activate confirm below both read as "test mode unknown" and default to safe copy.
+        garageFetch('getRelaySettings', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setEventDefs(Array.isArray(ev) && ev.length ? ev : EVENT_SUGGEST.map((name) => ({ name, description: null })));
+      setSettings(st || null);
     } catch (e) { showToast(e.message || 'Failed to load journeys', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -149,7 +156,12 @@ export default function JourneysPage() {
     if (!g.can) { showToast(g.why, 'error'); return; }
     // Turning ON starts real customer messages; turning OFF is the safe direction and needs no
     // ceremony. Asymmetric on purpose.
+    // Read the live flag, not a hardcoded assumption (review M12) — unknown/unloaded settings
+    // (fetch failed or still loading) fall through to the safe, more-alarming copy.
     if (next && !window.confirm(
+      (settings?.test_mode === false
+        ? `⚠️ TEST MODE IS OFF — this WILL enrol and message real customers.\n\n`
+        : `INTERNAL TEST GATE — sends off the allowlist are blocked.\n\n`) +
       `Turn ON "${r.name}"?\n\nIt will start enrolling customers on every ${triggerSummary(r.trigger, segments)} and sending messages.`
     )) return;
     setTogglingId(r.id);
@@ -302,7 +314,9 @@ export default function JourneysPage() {
 
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
-  const gateBanner = (
+  // Read live (review M12): render ONLY while test mode is on or unknown (settings still
+  // loading, or the fetch failed) — never hardcoded, and unknown fails toward showing it.
+  const gateBanner = settings?.test_mode === false ? null : (
     <div className="info-bar" style={{ background: 'rgba(242,205,26,.07)', borderColor: 'var(--accent-bd)' }}>
       <AlertTriangle size={16} style={{ color: 'var(--accent)' }} />
       <span><strong>Internal testing only.</strong> Relay must not send to real customers until sign-off. Validate with an internal-staff segment first.</span>

@@ -127,6 +127,9 @@ export default function CampaignsPage() {
   const [testTo, setTestTo] = useState('');
   const [testBusy, setTestBusy] = useState(false);
   const [testResults, setTestResults] = useState(null);
+  // Live test-mode flag (review M12) — undefined while unloaded/unreachable, which the banner
+  // and confirm text below both treat as "unknown → assume test mode is still ON" (fail safe).
+  const [settings, setSettings] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
   const canApprove = !perms || perms.approve;
@@ -136,18 +139,22 @@ export default function CampaignsPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [cs, sg, tp, ov] = await Promise.all([
+      const [cs, sg, tp, ov, st] = await Promise.all([
         garageFetch('getCampaigns', {}, session),
         garageFetch('getSegments', {}, session),
         garageFetch('getTemplates', {}, session),
         // ONE set-based call for every campaign's metrics — never per-row getCampaignStats.
         // Non-fatal: the list still renders (with — in the metric columns) if analytics fail.
         garageFetch('getCampaignsOverview', {}, session).catch(() => null),
+        // Non-fatal (review M12): a failed/denied fetch leaves settings null, which the banner
+        // and sendNow() confirm both read as "test mode unknown" and default to the SAFE copy.
+        garageFetch('getRelaySettings', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(cs) ? cs : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
+      setSettings(st || null);
     } catch (e) { showToast(e.message || 'Failed to load campaigns', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -302,7 +309,13 @@ export default function CampaignsPage() {
   }
   async function sendNow() {
     const seg = segments.find((s) => s.id === c.segment_id);
-    if (!window.confirm(`INTERNAL TEST GATE — no customer sends are authorized yet.\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real emails to everyone reachable in the segment.`)) return;
+    // Read the live flag, not a hardcoded assumption (review M12) — the day test_mode goes OFF,
+    // a stale "internal test gate" confirm would lie in the dangerous direction. Unknown/unloaded
+    // settings (fetch failed or still loading) fall through to the safe, more-alarming copy.
+    const gateLine = settings?.test_mode === false
+      ? '⚠️ TEST MODE IS OFF — this WILL send to real customers.'
+      : 'INTERNAL TEST GATE — sends off the allowlist are blocked.';
+    if (!window.confirm(`${gateLine}\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real emails to everyone reachable in the segment.`)) return;
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
@@ -314,7 +327,9 @@ export default function CampaignsPage() {
 
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
-  const gateBanner = (
+  // Read live (review M12): render ONLY while test mode is on or unknown (settings still
+  // loading, or the fetch failed) — never hardcoded, and unknown fails toward showing it.
+  const gateBanner = settings?.test_mode === false ? null : (
     <div className="info-bar" style={{ background: 'rgba(242,205,26,.07)', borderColor: 'var(--accent-bd)' }}>
       <AlertTriangle size={16} style={{ color: 'var(--accent)' }} />
       <span><strong>Internal testing only.</strong> Relay must not send to real customers until sign-off. Validate with an internal-staff segment first.</span>
