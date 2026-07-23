@@ -956,6 +956,22 @@ export default {
       const r = await WATPL.waTokenScopes(env);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    // Which Shopify app do OUR creds belong to, and what can it do? (Read-only.) The
+    // SHOPIFY_CLIENT_ID secret was set without recording which Dev-Dashboard app it came
+    // from, and the J3 write_orders release+reinstall must target that exact app — this
+    // answers both the identity and the current scope grant (the post-reinstall check).
+    if (url.pathname === '/internal/shopify-app-info' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      try {
+        const d = await SHOP.shopifyGraphQL(env,
+          `{ currentAppInstallation { app { title handle apiKey } accessScopes { handle } } }`);
+        const inst = d?.currentAppInstallation || {};
+        return ok({ app: inst.app || null, scopes: (inst.accessScopes || []).map((s) => s.handle).sort() });
+      } catch (e) { return err(String(e?.message || e), 400); }
+    }
     // Subscribe this app to ONE named WABA. State-changing: it also turns on webhook delivery
     // for that WABA, so on an inbound-carrying number it can put two systems in the same
     // conversation. Deliberately one id per call.
