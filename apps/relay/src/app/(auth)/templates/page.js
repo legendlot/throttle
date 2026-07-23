@@ -267,6 +267,10 @@ export default function TemplatesPage() {
       const payload = buildPayload();
       const r = await workerFetch('sendTest', {
         channel: t.channel, to: composeTestTo(),
+        // purpose drives sender ROUTING (purpose-match within the template's WABA) — without
+        // it a marketing template can't route out the marketing number. Gates stay bypassed
+        // via isTest server-side.
+        purpose: t.purpose,
         template: { content: payload.content, variables: payload.variables },
         constants: vals, recipient: vals,
       }, session);

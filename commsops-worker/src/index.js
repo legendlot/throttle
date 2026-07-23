@@ -428,7 +428,16 @@ async function handlePost(body, auth, env) {
       if (!(await G.testRecipientAllowed(env, body.to)))
         return err('test_sends_are_internal_only', 403);
       const r = await send(env, {
-        channel: body.channel || 'email', purpose: 'transactional', isTest: true,
+        // Route with the template's REAL purpose: pickSender purpose-matches within the
+        // template's WABA, so the old hardcoded 'transactional' could never route a
+        // marketing-pinned template out the marketing number (surfaced S232 as a
+        // misleading no_sender_on_waba on every UI test of a live marketing template).
+        // Gating is unaffected — isTest already bypasses the marketing gates (gate.js
+        // isMarketing = purpose==='marketing' && !isTest) and hard-locks recipients to
+        // the test union either way.
+        channel: body.channel || 'email',
+        purpose: ['marketing', 'utility', 'transactional'].includes(body.purpose) ? body.purpose : 'transactional',
+        isTest: true,
         to: body.to, templateId: body.templateId || null, template: body.template || null,
         profileId: body.profileId || null, constants: body.constants || {},
         // Test values double as the trigger-event context so EVENT-sourced variables
