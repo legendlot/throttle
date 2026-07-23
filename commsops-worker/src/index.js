@@ -88,6 +88,28 @@ async function handleGet(url, auth, env) {
       const r = await A.sbComms('/rest/v1/sender_identities?select=*&order=channel.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
+    case 'getEventFeed': {
+      // Activity page (S232) — the Shopflo abandoned-checkout list over our own events,
+      // plus messaged/recovered. Event name is allow-listed: this is a PII feed (same
+      // relay_view exposure class as Contacts), not an arbitrary event browser.
+      const MONITORABLE = new Set(['checkout_abandoned', 'checkout_started', 'add_to_cart',
+        'product_viewed', 'order_placed', 'order_cancelled']);
+      const ev = url.searchParams.get('event') || 'checkout_abandoned';
+      if (!MONITORABLE.has(ev)) return err('event_not_monitorable', 400);
+      const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+      if (!from || !to || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to)))
+        return err('from_to_required', 400);
+      const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 200);
+      const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
+      const [rows, stats] = await Promise.all([
+        A.sbComms('/rest/v1/rpc/event_feed', env, { method: 'POST',
+          body: JSON.stringify({ p_event: ev, p_from: from, p_to: to, p_limit: limit, p_offset: offset }) }),
+        offset === 0 ? A.sbComms('/rest/v1/rpc/event_feed_stats', env, { method: 'POST',
+          body: JSON.stringify({ p_event: ev, p_from: from, p_to: to }) }) : Promise.resolve({ ok: true, data: null }),
+      ]);
+      if (!rows.ok) return err('db_error', 500);
+      return ok({ rows: rows.data || [], stats: stats.ok ? stats.data : null });
+    }
 
     case 'getProfiles': {              // contacts list (M3; +consent S231)
       // Set-based RPC — same rows as the old table read PLUS each profile's

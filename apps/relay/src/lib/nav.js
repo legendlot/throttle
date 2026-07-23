@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
-  Shield, Users, SlidersHorizontal, AtSign, Cable,
+  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -21,6 +21,7 @@ export const NAV_GROUPS = [
   {
     id: 'audience', label: 'Audience',
     items: [
+      { id: 'activity', label: 'Activity', route: '/activity', icon: Activity, requires: 'relay_view' },
       { id: 'segments', label: 'Segments', route: '/segments', icon: Filter,  requires: 'relay_view' },
       { id: 'contacts', label: 'Contacts', route: '/contacts', icon: Contact, requires: 'relay_view' },
     ],
