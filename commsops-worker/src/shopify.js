@@ -221,6 +221,15 @@ function mapOrderEvent(o, name) {
     currency: o.currency || o.currency_code || null,
     financial_status: o.financial_status || null,
     fulfillment_status: o.fulfillment_status || null,
+    // COD discriminator for the J3 COD→prepaid trigger (2026-07-23). financial_status='pending'
+    // ⇔ COD held 1,802/1,802 on live data, but the gateway name makes it explicit: Shopify
+    // sends payment_gateway_names (array, e.g. ["Cash on Delivery (COD)"]). is_cod derives
+    // here so the journey filter stays a simple equality, robust to gateway renames upstream
+    // of the trigger. Forward-only — J3 is forward-only anyway.
+    payment_gateway_names: Array.isArray(o.payment_gateway_names) ? o.payment_gateway_names : null,
+    is_cod: Array.isArray(o.payment_gateway_names)
+      ? o.payment_gateway_names.some((g) => /cash on delivery|\bcod\b/i.test(String(g)))
+      : (o.financial_status === 'pending' ? true : null),
     line_item_count: Array.isArray(o.line_items) ? o.line_items.length : null,
     // ── message-copy bindings (these were being dropped, leaving WA/email templates to
     //    fall back to generic values): {items}, {order_url}, {tracking_url}.

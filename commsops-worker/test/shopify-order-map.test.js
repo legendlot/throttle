@@ -89,6 +89,30 @@ t('still returns null without a resolvable identifier', () => {
   assert.equal(mapOrderEvent({ id: 1, line_items: [] }, 'order_placed'), null);
 });
 
+// COD discriminator (J3 trigger). Gateway name is authoritative; financial_status='pending'
+// is the fallback (measured ⇔ COD on live data); an explicit prepaid gateway wins over pending.
+t('is_cod=true from a COD gateway name', () => {
+  const e = mapOrderEvent({ ...base, payment_gateway_names: ['Cash on Delivery (COD)'], financial_status: 'pending' }, 'order_placed');
+  assert.equal(e.properties.is_cod, true);
+  assert.deepEqual(e.properties.payment_gateway_names, ['Cash on Delivery (COD)']);
+});
+
+t('is_cod=false for a prepaid gateway even while pending', () => {
+  const e = mapOrderEvent({ ...base, payment_gateway_names: ['Cashfree Payments'], financial_status: 'pending' }, 'order_placed');
+  assert.equal(e.properties.is_cod, false);
+});
+
+t('is_cod falls back to financial_status=pending when gateways are absent', () => {
+  const e = mapOrderEvent({ ...base, financial_status: 'pending' }, 'order_placed');
+  assert.equal(e.properties.is_cod, true);
+  assert.equal(e.properties.payment_gateway_names, null);
+});
+
+t('is_cod=null when neither signal exists (never a false negative)', () => {
+  const e = mapOrderEvent({ ...base, financial_status: 'paid' }, 'order_placed');
+  assert.equal(e.properties.is_cod, null);
+});
+
 t('existing fields are unchanged (regression)', () => {
   const e = mapOrderEvent(base, 'order_placed');
   assert.equal(e.properties.shopify_order_id, '6289680760884');
