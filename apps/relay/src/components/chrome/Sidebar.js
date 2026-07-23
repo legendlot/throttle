@@ -39,12 +39,11 @@ export function Sidebar({
       {/* whole header toggles collapse (§4) */}
       <div className="sb-head" onClick={onToggle} title="Collapse / expand sidebar">
         <div className="sb-brand">
-          {/* The real Relay mark (baton hand-off) — same asset as the favicon +
-              login page, NOT the prototype's generic bolt glyph. The SVG carries
-              its own yellow rounded tile, so the mark container stays unstyled
-              and the image oversizes slightly to compensate for the tile's
-              internal padding (rect 38/48 of the viewBox). */}
-          <div className="sb-mark"><img src="/favicon.svg" alt="Relay" style={{ width: 42, height: 42, margin: -4, display: 'block' }} /></div>
+          {/* The Relay brand mark (Orchestration Hub pack, public/brand/relay/) —
+              yellow tile + ink hub-and-spokes, same asset family as the favicon +
+              login page. The SVG tile fills its whole viewBox (no internal
+              padding), so it renders at the slot size exactly. */}
+          <div className="sb-mark"><img src="/brand/relay/relay-icon.svg" alt="Relay" style={{ width: 34, height: 34, display: 'block' }} /></div>
           {!collapsed && (
             <span className="sb-word-wrap">
               <span className="sb-word">RELAY</span>

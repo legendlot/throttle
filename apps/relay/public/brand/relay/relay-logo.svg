@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 108" role="img" aria-label="Relay">
+  
+  <g transform="translate(14 14)"><rect width="80" height="80" rx="20" fill="#F2CD1A"></rect><g transform="translate(4 4) scale(0.72)">  <g fill="#17140a" stroke="#17140a">
+    <path d="M26 50 L74 20 M26 50 L82 50 M26 50 L74 80" fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"></path>
+    <circle cx="26" cy="50" r="11" stroke="none"></circle>
+    <circle cx="74" cy="20" r="7.5" stroke="none"></circle>
+    <circle cx="82" cy="50" r="7.5" stroke="none"></circle>
+    <circle cx="74" cy="80" r="7.5" stroke="none"></circle>
+  </g></g></g>
+  <text x="112" y="60" font-family="&#39;Space Grotesk&#39;,&#39;Segoe UI&#39;,sans-serif" font-weight="700" font-size="52" letter-spacing="-1" fill="#f4f5f6">Relay</text>
+  <text x="114" y="84" font-family="&#39;JetBrains Mono&#39;,monospace" font-weight="500" font-size="12" letter-spacing="4.2" fill="#6f747b">CONTROL TOWER</text>
+</svg>

@@ -23,7 +23,7 @@ export default function LoginPage() {
       margin: 0, padding: 0, overflow: 'hidden', zIndex: 1,
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 360, padding: '0 20px' }}>
-        <img src="/favicon.svg" alt="Relay" style={{ height: 64, width: 64, marginBottom: 24, borderRadius: 14 }} />
+        <img src="/brand/relay/relay-icon.svg" alt="Relay" style={{ height: 64, width: 64, marginBottom: 24 }} />
 
         <div style={{
           fontFamily: COND, fontWeight: 900, fontSize: 36,
