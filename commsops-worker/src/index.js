@@ -89,11 +89,14 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
-    case 'getProfiles': {              // contacts list (M3)
-      const limit = url.searchParams.get('limit') || '100';
-      const r = await A.sbComms(
-        `/rest/v1/profiles?select=id,display_name,locale,city,attributes,created_at` +
-        `&order=created_at.desc&limit=${A.enc(limit)}`, env);
+    case 'getProfiles': {              // contacts list (M3; +consent S231)
+      // Set-based RPC — same rows as the old table read PLUS each profile's
+      // effective marketing-consent per channel ({channel: state}), for the
+      // COMMAND contacts-list consent pill (§9 read extension). Additive:
+      // every previous field is unchanged.
+      const limit = Number(url.searchParams.get('limit')) || 100;
+      const r = await A.sbComms('/rest/v1/rpc/profiles_list', env,
+        { method: 'POST', body: JSON.stringify({ p_limit: limit }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
     case 'getProfile': {               // contact detail: identifiers + consent + recent events (M3)
@@ -120,8 +123,13 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
-    case 'getSegments': {              // M6
-      const r = await A.sbComms('/rest/v1/segments?select=*&order=updated_at.desc', env);
+    case 'getSegments': {              // M6 (+member_count S231)
+      // Set-based RPC — segments PLUS the current comms.segment_members count
+      // per segment (§9 read extension for the COMMAND list). For dynamic
+      // segments the count is as-of-last-materialize (PATTERN-176) — the UI
+      // labels it so. Additive: every previous field is unchanged.
+      const r = await A.sbComms('/rest/v1/rpc/segments_list', env,
+        { method: 'POST', body: JSON.stringify({}) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
     case 'getSegment': {

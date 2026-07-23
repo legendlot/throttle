@@ -277,16 +277,25 @@ export default function ContactsPage() {
           ? <Panel><EmptyState icon="inbox" title="No contacts yet" hint="Profiles arrive via ingestion (Shopify / internal events). Once seeded they appear here." /></Panel>
           : (
             <Panel title="Contacts" count={rows.length}>
-              {/* §7.5 — initials avatar + the prototype column set. (The Consent pill needs a
-                  consent state on the getProfiles list payload — a §9 read extension — so it
-                  is deliberately absent here; consent lives on the contact detail.) */}
+              {/* §7.5 — initials avatar + the prototype column set incl. the Consent pill
+                  (backed by the S231 §9 read extension: getProfiles now returns each
+                  profile's effective MARKETING consent per channel as {channel: state}).
+                  Pill = any channel opted_in → opted_in; else any opted_out → opted_out;
+                  else unknown. The per-channel detail rides in the tooltip; the full
+                  ledger stays on the contact detail. */}
               <table className="dt">
-                <thead><tr><th>Name</th><th>City</th><th>Locale</th><th className="num">Orders</th><th className="num">Lifetime ₹</th><th>Added</th></tr></thead>
+                <thead><tr><th>Name</th><th>City</th><th>Consent</th><th className="num">Orders</th><th className="num">Lifetime ₹</th><th>Added</th></tr></thead>
                 <tbody>
                   {rows.map((r) => {
                     const a = r.attributes || {};
                     const initials = String(r.display_name || '')
                       .split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+                    const consent = r.consent || {};
+                    const states = Object.values(consent);
+                    const eff = states.includes('opted_in') ? 'opted_in'
+                      : states.includes('opted_out') ? 'opted_out' : 'unknown';
+                    const detail = Object.entries(consent).map(([ch, st]) => `${ch}: ${st}`).join(' · ')
+                      || 'no marketing consent recorded';
                     return (
                       <tr key={r.id} className="row-click" onClick={() => open(r)}>
                         <td>
@@ -303,7 +312,9 @@ export default function ContactsPage() {
                           </span>
                         </td>
                         <td className="dim" style={{ fontSize: 12.5 }}>{r.city || '—'}</td>
-                        <td className="dim" style={{ fontSize: 12.5 }}>{r.locale || '—'}</td>
+                        <td title={`Marketing consent — ${detail}`}>
+                          <Badge label={eff} tone={STATE_TONE[eff] || 'gray'} dot />
+                        </td>
                         <td className="num mono dim">{a.lifetime_orders ?? '—'}</td>
                         <td className="num mono">{a.lifetime_value != null ? Number(a.lifetime_value).toLocaleString('en-IN') : <span className="dim">—</span>}</td>
                         <td className="mono dim">{fmtDate(r.created_at)}</td>

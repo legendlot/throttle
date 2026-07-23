@@ -267,8 +267,13 @@ export default function SegmentsPage() {
           ? <Panel><EmptyState icon="users" title="No segments yet" hint="Build your first audience to target a campaign." /></Panel>
           : (
             <Panel title="Segments" count={rows.length}>
+              {/* Members column backed by the S231 §9 read extension (getSegments now
+                  returns member_count from comms.segment_members). For DYNAMIC segments
+                  it counts the last materialized set (PATTERN-176) — a rule edited since
+                  the last refresh isn't recounted until "Refresh members" runs, hence
+                  the as-of-last-refresh tooltip. */}
               <table className="dt">
-                <thead><tr><th>Name</th><th>Kind</th><th>Conditions</th><th>Updated</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Kind</th><th>Conditions</th><th className="num">Members</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
                   {rows.map((r) => {
                     const p = parseDef(r.definition);
@@ -282,6 +287,10 @@ export default function SegmentsPage() {
                         </td>
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
                         <td className="dim">{r.kind === 'static' ? '—' : (p.rows.length === 0 ? 'everyone' : `${p.rows.length} · match ${p.group}`)}</td>
+                        <td className="num mono"
+                          title={r.kind === 'dynamic' ? 'As of the last refresh — open the segment and Refresh members to recount' : undefined}>
+                          {r.member_count != null ? Number(r.member_count).toLocaleString('en-IN') : '—'}
+                        </td>
                         <td className="mono dim">{fmtDate(r.updated_at)}</td>
                         <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
                       </tr>
