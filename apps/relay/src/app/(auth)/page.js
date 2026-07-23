@@ -26,7 +26,7 @@ function ChIcon({ channel, size = 19 }) {
 }
 const CH_TONE = {
   whatsapp: { fg: '#25D366', bg: 'rgba(37,211,102,.13)' },
-  email:    { fg: 'var(--t2)', bg: 'rgba(255,255,255,.06)' },
+  email:    { fg: 'var(--em, #a78bfa)', bg: 'rgba(167,139,250,.13)' },
 };
 
 // Derived activity feed — synthesized from campaign rows (no activity RPC

@@ -18,7 +18,7 @@ const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
 function ChannelIcon({ channel }) {
   const c = String(channel || '').toLowerCase();
   if (c === 'whatsapp') return <MessageCircle size={13} style={{ color: 'var(--wa, #25D366)' }} aria-label="WhatsApp" />;
-  if (c === 'email') return <Mail size={13} style={{ color: 'var(--text-3)' }} aria-label="Email" />;
+  if (c === 'email') return <Mail size={13} style={{ color: 'var(--em, #a78bfa)' }} aria-label="Email" />;
   return <Send size={13} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
 }
 
@@ -27,7 +27,7 @@ function ChannelChip({ channel }) {
   const c = String(channel || '').toLowerCase();
   const map = {
     whatsapp: { short: 'WA', fg: 'var(--wa, #25D366)', bg: 'rgba(37,211,102,.13)' },
-    email:    { short: 'EM', fg: 'var(--t2)', bg: 'rgba(255,255,255,.06)' },
+    email:    { short: 'EM', fg: 'var(--em, #a78bfa)', bg: 'rgba(167,139,250,.13)' },
     sms:      { short: 'SM', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
   };
   const m = map[c] || { short: (c || '?').slice(0, 2).toUpperCase(), fg: 'var(--t3)', bg: 'rgba(255,255,255,.06)' };

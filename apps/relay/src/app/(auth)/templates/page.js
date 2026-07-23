@@ -504,7 +504,8 @@ export default function TemplatesPage() {
                       {/* Channel glyph + label (§7.6) — WA green, email neutral. */}
                       <td>
                         <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5,
-                          color: r.channel === 'whatsapp' ? 'var(--wa, #25D366)' : 'var(--t2)' }}>
+                          color: r.channel === 'whatsapp' ? 'var(--wa, #25D366)'
+                            : r.channel === 'email' ? 'var(--em, #a78bfa)' : 'var(--t2)' }}>
                           {r.channel === 'whatsapp' ? <MessageCircle size={14} /> : <Mail size={14} />}
                           {r.channel === 'whatsapp' ? 'WhatsApp' : (r.channel === 'email' ? 'Email' : r.channel)}
                         </span>

@@ -46,6 +46,7 @@
   --red:    #f87171;
   --gray:   #9aa0aa;
   --wa:     #25D366;   /* WhatsApp brand green — channel glyphs only */
+  --em:     #a78bfa;   /* Email channel violet — channel glyphs only (WA green / SMS blue / EM violet) */
 
   /* ── Radius (§3.2) ───────────────────────────────────────── */
   --r-sm:   6px;      /* pills */
