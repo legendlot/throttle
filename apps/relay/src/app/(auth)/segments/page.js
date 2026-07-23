@@ -6,6 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
+import { useNewParam } from '@/lib/useNewParam.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -80,14 +81,8 @@ export default function SegmentsPage() {
   useEffect(() => { load(); }, [load]);
 
   function startNew() { setSeg(emptySeg()); setPv(null); setView('form'); }
-  // ⌘K "New segment" deep-link (?new=1) — read once on mount, then clean the URL.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (new URLSearchParams(window.location.search).get('new') === '1') {
-      setSeg(emptySeg()); setPv(null); setView('form');
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-  }, []);
+  // ⌘K "New segment" — cross-screen ?new=1 + same-screen relay:new event.
+  useNewParam(canEdit, startNew);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
     setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, rows: parsed.rows, member_count: null });

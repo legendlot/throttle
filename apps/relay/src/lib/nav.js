@@ -59,14 +59,20 @@ export function filterNavByPerms(groups, perms) {
 }
 
 // Breadcrumb map (top context bar): GROUP / SCREEN in mono uppercase.
+// Longest-prefix wins — the SAME rule as chrome/navMatch.js matchActive, so the
+// breadcrumb and the sidebar active item can never disagree on a nested route.
 export function crumbFor(groups, pathname) {
+  let best = null, bestLen = -1;
   for (const g of groups) {
     const items = g.flat ? [{ route: g.route, label: g.label }] : (g.items || []);
     for (const it of items) {
-      if (pathname === it.route || (it.route !== '/' && pathname.startsWith(it.route + '/')) || (it.route === '/' && pathname === '/')) {
-        return { group: g.flat ? 'HOME' : g.label.toUpperCase(), page: it.label.toUpperCase() };
+      if (!it.route) continue;
+      const hit = pathname === it.route || (it.route !== '/' && pathname.startsWith(it.route + '/'));
+      if (hit && it.route.length > bestLen) {
+        best = { group: g.flat ? 'HOME' : g.label.toUpperCase(), page: it.label.toUpperCase() };
+        bestLen = it.route.length;
       }
     }
   }
-  return { group: 'RELAY', page: '' };
+  return best || { group: 'RELAY', page: '' };
 }

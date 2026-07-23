@@ -61,9 +61,12 @@ export default function OverviewPage() {
   const [journeyOv, setJourneyOv] = useState([]);
   const [settings, setSettings] = useState(null);
 
-  const load = useCallback(async () => {
+  // `silent` (the 15s sending-poll) refreshes data WITHOUT flipping the whole
+  // page to a spinner — load() used to setLoading(true) on every tick, blanking
+  // the Control tower mid-send every 15 seconds (hostile-review fix).
+  const load = useCallback(async (silent = false) => {
     if (!session) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const [ov, hl, cs, co, jo, st] = await Promise.all([
         garageFetch('getSendsOverview', { days: 7 }, session).catch(() => null),
@@ -80,16 +83,17 @@ export default function OverviewPage() {
       setCampOv(Array.isArray(co) ? Object.fromEntries(co.map((o) => [o.id, o])) : {});
       setJourneyOv(Array.isArray(jo) ? jo : []);
       setSettings(st || null);
-    } catch (e) { showToast(e.message || 'Failed to load overview', 'error'); }
-    finally { setLoading(false); }
+    } catch (e) { if (!silent) showToast(e.message || 'Failed to load overview', 'error'); }
+    finally { if (!silent) setLoading(false); }
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  // While a broadcast is fanning out, keep the "Sending now" card live.
+  // While a broadcast is fanning out, keep the "Sending now" card live —
+  // silently: no spinner swap, no toast on a transient blip.
   const anySending = campaigns.some((c) => c.status === 'sending');
   useEffect(() => {
     if (!anySending) return undefined;
-    const t = setInterval(load, 15_000);
+    const t = setInterval(() => load(true), 15_000);
     return () => clearInterval(t);
   }, [anySending, load]);
 
@@ -140,8 +144,10 @@ export default function OverviewPage() {
     { label: 'Sent · 7d', value: totals.sent.toLocaleString('en-IN'), delta: `${totals.delivered.toLocaleString('en-IN')} delivered`, lead: true },
     { label: 'Delivery', value: pctS(totals.delivered, totals.sent), delta: 'of sent' },
     { label: 'Read rate', value: pctS(totals.opened, totals.delivered), delta: 'of delivered' },
-    { label: 'Attr. revenue', value: inr(revenue), delta: 'last-touch · campaigns + journeys' },
-    { label: 'Blended ROI', value: roi == null ? '—' : `${roi.toFixed(1)}×`, delta: 'rev ÷ spend', color: roi != null ? 'var(--accent)' : undefined },
+    // Revenue/ROI come from campaign_stats_list + journey_stats_list, which have
+    // no window param — they are ALL-TIME figures and must not read as 7d.
+    { label: 'Attr. revenue', value: revenue ? inr(revenue) : '—', delta: 'last-touch · all time' },
+    { label: 'Blended ROI', value: roi == null ? '—' : `${roi.toFixed(1)}×`, delta: 'rev ÷ spend · all time', color: roi != null ? 'var(--accent)' : undefined },
   ];
 
   return (

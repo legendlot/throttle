@@ -9,6 +9,7 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/com
 import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
+import { useNewParam } from '@/lib/useNewParam.js';
 
 // React Flow touches window — client-only.
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -200,17 +201,8 @@ export default function JourneysPage() {
     seedCanvas({ trigger: { type: 'event', name: 'checkout_started' } }, null);
     setView('form');
   }
-  // ⌘K "New journey" deep-link (?new=1) — read once on mount, then clean the URL.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (new URLSearchParams(window.location.search).get('new') === '1') {
-      setJ(emptyJourney()); setCompileErrors(null); setFunnel(null);
-      seedCanvas({ trigger: { type: 'event', name: 'checkout_started' } }, null);
-      setView('form');
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ⌘K "New journey" — cross-screen ?new=1 + same-screen relay:new event.
+  useNewParam(canBuild, startNew);
 
   async function open(r) {
     setCompileErrors(null); setFunnel(null);

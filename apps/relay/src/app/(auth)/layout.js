@@ -54,8 +54,11 @@ function AuthLayoutInner({ children }) {
   }, []);
 
   // Poll for an in-flight send (light: one list call; progress only when live).
+  // Gated on relay_view — commsops blanket-gates every GET on it, so polling
+  // without the perm is a guaranteed 403 per minute (hostile-review fix).
+  const canView = !perms || perms.relay_view;
   useEffect(() => {
-    if (!session) return undefined;
+    if (!session || !canView) return undefined;
     let dead = false;
     async function tick() {
       try {
@@ -71,12 +74,13 @@ function AuthLayoutInner({ children }) {
           if (o) { sent = Number(o.sent || 0); total = Number(o.total || total); }
         } catch { /* progress optional */ }
         if (!dead) setOnair({ id: c.id, name: c.name, sent, total });
-      } catch { if (!dead) setOnair(null); }
+      } catch { /* transient failure — keep the last known rail rather than
+                  dropping it mid-send; the next successful tick corrects it */ }
     }
     tick();
     const t = setInterval(tick, ONAIR_POLL_MS);
     return () => { dead = true; clearInterval(t); };
-  }, [session]);
+  }, [session, canView]);
 
   const navGroups = useMemo(() => filterNavByPerms(NAV_GROUPS, perms || {}), [perms]);
 
@@ -116,6 +120,7 @@ function AuthLayoutInner({ children }) {
         onNav={onNav}
         session={session}
         perms={perms}
+        pathname={pathname}
       />
     </div>
   );

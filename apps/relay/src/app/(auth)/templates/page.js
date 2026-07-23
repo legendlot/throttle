@@ -10,6 +10,7 @@ import { fmtDate } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor from '@/components/wa-editor/WaEditor.js';
 import { validateWaTemplate } from '@/components/wa-editor/waTemplate.js';
+import { useNewParam } from '@/lib/useNewParam.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -75,16 +76,8 @@ export default function TemplatesPage() {
   useEffect(() => { load(); }, [load]);
 
   function startNew() { setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
-  // ⌘K "New template" deep-link (?new=1) — read once on mount, then clean the URL.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (new URLSearchParams(window.location.search).get('new') === '1') {
-      setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest();
-      setEditorKey('new-' + Date.now()); setView('form');
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
+  useNewParam(canEdit, startNew);
   function startEdit(r) {
     const c = r.content || {};
     setT({

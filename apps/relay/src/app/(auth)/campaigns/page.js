@@ -7,6 +7,7 @@ import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mai
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
+import { useNewParam } from '@/lib/useNewParam.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -182,14 +183,8 @@ export default function CampaignsPage() {
     };
   }
   function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
-  // ⌘K "New campaign" deep-link (?new=1) — read once on mount, then clean the URL.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (new URLSearchParams(window.location.search).get('new') === '1') {
-      setC(emptyCampaign()); setStats(null); setAttr(null); setView('form');
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-  }, []);
+  // ⌘K "New campaign" — cross-screen ?new=1 + same-screen relay:new event.
+  useNewParam(canBuild, startNew);
   // Per-campaign performance (M8) — only meaningful once the campaign has sent.
   const loadStats = useCallback(async (id, status) => {
     if (!id || !['sending', 'sent'].includes(status)) { setStats(null); setAttr(null); return; }
@@ -593,6 +588,10 @@ export default function CampaignsPage() {
     ];
   })();
 
+  // The CSV exports the tab-filtered set — disable on THAT set, not the full list
+  // (an empty Scheduled tab must not offer a header-only export).
+  const shownCount = tab === 'all' ? rows.length : rows.filter((r) => tabOf(r) === tab).length;
+
   return (
     <div className="pg">
       <PageHead title="Campaigns" sub="One-shot broadcasts. Build a draft, submit for approval, then send."
@@ -601,7 +600,7 @@ export default function CampaignsPage() {
             <Btn onClick={() => {
               const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
               downloadCampaignsCsv(shown, overview, tab);
-            }} disabled={!rows.length}><Download size={13} /> CSV</Btn>
+            }} disabled={!shownCount}><Download size={13} /> CSV</Btn>
             {canBuild && <Btn kind="primary" onClick={startNew}><Plus size={14} /> New campaign</Btn>}
           </>
         } />

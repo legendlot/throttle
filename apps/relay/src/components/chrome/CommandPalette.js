@@ -25,29 +25,43 @@ function fuzzy(hay, q) {
   return true;
 }
 
-export function CommandPalette({ open, onClose, groups, onNav, session, perms }) {
+// Does the current pathname sit on this route already? (trailingSlash-safe)
+function onRoute(route, pathname) {
+  const base = route.split('?')[0].replace(/\/$/, '') || '/';
+  const here = String(pathname || '').replace(/\/$/, '') || '/';
+  return base === here;
+}
+
+export function CommandPalette({ open, onClose, groups, onNav, session, perms, pathname }) {
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
   const [entities, setEntities] = useState({ campaigns: [], journeys: [], segments: [], templates: [] });
   const inputRef = useRef(null);
+  const bodyRef = useRef(null);
   const cacheRef = useRef({ at: 0 });
+
+  // The blanket GET gate on commsops is relay_view — without it every entity
+  // fetch is a guaranteed 403, so don't make them (hostile-review fix).
+  const canView = !perms || perms.relay_view;
 
   // Lazy entity load on open (cached briefly so re-opening is instant).
   useEffect(() => {
-    if (!open || !session) return;
+    if (!open || !session || !canView) return undefined;
     setQ(''); setSel(0);
     setTimeout(() => inputRef.current && inputRef.current.focus(), 10);
-    if (Date.now() - cacheRef.current.at < ENTITY_TTL_MS) return;
+    if (Date.now() - cacheRef.current.at < ENTITY_TTL_MS) return undefined;
     let dead = false;
     (async () => {
       const [cs, js, sg, tp] = await Promise.all([
-        garageFetch('getCampaigns', {}, session).catch(() => []),
-        garageFetch('getJourneys', {}, session).catch(() => []),
-        garageFetch('getSegments', {}, session).catch(() => []),
-        garageFetch('getTemplates', {}, session).catch(() => []),
+        garageFetch('getCampaigns', {}, session).catch(() => null),
+        garageFetch('getJourneys', {}, session).catch(() => null),
+        garageFetch('getSegments', {}, session).catch(() => null),
+        garageFetch('getTemplates', {}, session).catch(() => null),
       ]);
       if (dead) return;
-      cacheRef.current.at = Date.now();
+      // Only cache a fully-successful load — a transient blip must not pin
+      // "no results" for the TTL (hostile-review fix).
+      if ([cs, js, sg, tp].every(Array.isArray)) cacheRef.current.at = Date.now();
       setEntities({
         campaigns: Array.isArray(cs) ? cs : [],
         journeys: Array.isArray(js) ? js : [],
@@ -56,7 +70,7 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms })
       });
     })();
     return () => { dead = true; };
-  }, [open, session]);
+  }, [open, session, canView]);
 
   // Screens from the (already perm-filtered) nav groups.
   const screens = useMemo(() => {
@@ -95,15 +109,22 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms })
   const go = useCallback((row) => {
     if (!row) return;
     onClose();
+    // A same-screen `?new=1` push wouldn't remount the page (App Router keeps
+    // the component when only the query changes), so the mount-only consumer
+    // never fires — dispatch the event the pages subscribe to instead.
+    if (row.route.includes('?new=1') && onRoute(row.route, pathname)) {
+      window.dispatchEvent(new CustomEvent('relay:new'));
+      return;
+    }
     onNav(row.route);
-  }, [onClose, onNav]);
+  }, [onClose, onNav, pathname]);
 
   // Keyboard: arrows move, enter goes, esc closes.
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => Math.min(s + 1, rows.length - 1)); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => Math.min(s + 1, Math.max(rows.length - 1, 0))); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
       else if (e.key === 'Enter') { e.preventDefault(); go(rows[sel]); }
     };
@@ -112,6 +133,13 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms })
   }, [open, rows, sel, go, onClose]);
 
   useEffect(() => { setSel(0); }, [q]);
+
+  // Keep the keyboard selection visible inside the scrolling body.
+  useEffect(() => {
+    if (!open || !bodyRef.current) return;
+    const el = bodyRef.current.querySelector('.ck-row.sel');
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }, [sel, open]);
 
   if (!open) return null;
 
@@ -133,7 +161,7 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms })
             placeholder="Search screens, campaigns, journeys, segments, templates…" />
           <kbd className="ck-esc">esc</kbd>
         </div>
-        <div className="ck-body">
+        <div className="ck-body" ref={bodyRef}>
           {rows.length === 0 && (
             <div className="ck-empty"><SearchX size={17} style={{ color: 'var(--t4)' }} /> Nothing matches “{q}”.</div>
           )}
