@@ -113,8 +113,13 @@ t('is_cod falls back to financial_status=pending when gateways are absent', () =
   assert.equal(e.properties.payment_gateway_names, null);
 });
 
-t('is_cod=null when neither signal exists (never a false negative)', () => {
+t('is_cod=false when paid with no gateway list (financial_status IS a signal)', () => {
   const e = mapOrderEvent({ ...base, financial_status: 'paid' }, 'order_placed');
+  assert.equal(e.properties.is_cod, false);
+});
+
+t('is_cod=null only when BOTH signals are absent', () => {
+  const e = mapOrderEvent(base, 'order_placed');   // base has no financial_status, no gateways
   assert.equal(e.properties.is_cod, null);
 });
 
