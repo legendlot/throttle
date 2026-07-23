@@ -29,7 +29,7 @@ const fmtIst = (iso) => {
 };
 const fmtVal = (v, cur) => (v == null || v === '' ? '—' : `${cur === 'INR' || !cur ? '₹' : cur + ' '}${Number(v).toLocaleString('en-IN')}`);
 
-const MSG_TONE = { delivered: 'green', read: 'green', sent: 'yellow', queued: 'yellow', failed: 'red', skipped: 'gray', suppressed: 'gray' };
+const MSG_TONE = { delivered: 'green', read: 'green', opened: 'green', sent: 'yellow', queued: 'yellow', failed: 'red', skipped: 'gray', suppressed: 'gray' };
 
 function csvCell(v) {
   const s = v == null ? '' : String(v);
@@ -39,11 +39,11 @@ function csvCell(v) {
 // CSV and a shared screenshot can never disagree. Same discipline as the campaigns export.
 function downloadActivityCsv(rows, event, preset) {
   const header = ['When (IST)', 'Customer', 'Phone', 'Email', 'Items', 'Value', 'Currency',
-    'Message', 'Recovered', 'Checkout URL', 'Profile ID'];
+    'Message', 'Message reason', 'Recovered', 'Checkout URL', 'Profile ID'];
   const body = rows.map((r) => [
     fmtIst(r.occurred_at), r.display_name || 'anonymous', r.phone || '', r.email || '',
     r.item || '', r.value ?? '', r.currency || '',
-    r.msg_status || '', r.recovered ? 'yes' : 'no', r.checkout_url || '', r.profile_id || '',
+    r.msg_status || '', r.msg_reason || '', r.recovered ? 'yes' : 'no', r.checkout_url || '', r.profile_id || '',
   ]);
   const csv = [header, ...body].map((r) => r.map(csvCell).join(',')).join('\r\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -151,7 +151,9 @@ export default function ActivityPage() {
                       <td className="dim" style={{ fontSize: 12.5, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.item || ''}>{r.item || '—'}</td>
                       <td className="mono">{fmtVal(r.value, r.currency)}</td>
                       <td>{r.msg_status
-                        ? <Badge label={r.msg_status} tone={MSG_TONE[r.msg_status] || 'gray'} />
+                        ? <span title={r.msg_reason || ''} style={r.msg_reason ? { cursor: 'help' } : undefined}>
+                            <Badge label={r.msg_status} tone={MSG_TONE[r.msg_status] || 'gray'} />
+                          </span>
                         : <span className="dim">—</span>}</td>
                       <td>{r.recovered
                         ? <Badge label="recovered" tone="green" />
