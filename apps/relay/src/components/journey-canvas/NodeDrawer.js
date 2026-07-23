@@ -37,6 +37,30 @@ function Field({ label, children }) {
   return <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">{label}</div>{children}</div>;
 }
 
+// Number + unit selector composing the engine's "N unit" duration string (journey-graph.js
+// durationToMs: second|minute|hour|day|week, plural optional). Free-text durations depended
+// on people typing "min/hr/days" correctly — a typo saved fine and only failed at runtime.
+const DUR_UNITS = ['minutes', 'hours', 'days'];
+function parseDur(str) {
+  const m = String(str || '').trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(second|minute|hour|day|week)s?$/);
+  return m ? { n: m[1], unit: m[2] + 's' } : { n: '', unit: 'hours' };
+}
+function DurationInput({ value, onChange, disabled }) {
+  const { n, unit } = parseDur(value);
+  const units = DUR_UNITS.includes(unit) ? DUR_UNITS : [unit, ...DUR_UNITS]; // legacy seconds/weeks round-trip
+  const emit = (nn, uu) => onChange(!nn || Number(nn) <= 0 ? '' : `${nn} ${uu}`);
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input className="f-inp mono" type="number" min="1" step="any" value={n} disabled={disabled}
+        onChange={(e) => emit(e.target.value, unit)} placeholder="24" style={{ width: 110, flex: '0 0 auto' }} />
+      <select className="f-inp" value={unit} disabled={disabled}
+        onChange={(e) => emit(n || '1', e.target.value)} style={{ flex: 1 }}>
+        {units.map((u) => <option key={u} value={u}>{u}</option>)}
+      </select>
+    </div>
+  );
+}
+
 export default function NodeDrawer({ nodeId, config, templates, onChange, onDelete, disabled }) {
   if (!nodeId || !config) return null;
   const set = (patch) => onChange({ ...config, ...patch });
@@ -93,9 +117,9 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
       </>)}
 
       {t === 'wait' && (
-        <Field label='Duration (e.g. "24 hours", "30 minutes")'>
-          <input className="f-inp mono" value={config.duration || ''} disabled={disabled}
-            onChange={(e) => set({ duration: e.target.value })} placeholder="24 hours" />
+        <Field label="Duration">
+          <DurationInput value={config.duration || ''} disabled={disabled}
+            onChange={(v) => set({ duration: v })} />
         </Field>
       )}
 
@@ -105,9 +129,9 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             onChange={(arr) => set({ awaited: arr })} />
           <datalist id="jc-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
         </Field>
-        <Field label='Within (e.g. "6 hours", "30 minutes")'>
-          <input className="f-inp mono" value={config.within || ''} disabled={disabled}
-            onChange={(e) => set({ within: e.target.value })} placeholder="6 hours" />
+        <Field label="Within">
+          <DurationInput value={config.within || ''} disabled={disabled}
+            onChange={(v) => set({ within: v })} />
         </Field>
         <div className="tw-note" style={{ margin: 0 }}>Responded path = <span className="mono">responded</span> handle, timeout = <span className="mono">timeout</span>.</div>
       </>)}
@@ -170,9 +194,9 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             {(templates || []).filter((x) => x.channel === 'whatsapp').map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
           </select>
         </Field>
-        <Field label='Wait for reply within (e.g. "6 hours")'>
-          <input className="f-inp mono" value={config.within || ''} disabled={disabled}
-            onChange={(e) => set({ within: e.target.value })} placeholder="6 hours" />
+        <Field label="Wait for reply within">
+          <DurationInput value={config.within || ''} disabled={disabled}
+            onChange={(v) => set({ within: v })} />
         </Field>
         <Field label="Buttons (id must match the template's button payload · max 3)">
           {(config.buttons || []).map((b, i) => (

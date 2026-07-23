@@ -159,15 +159,23 @@ async function handleGet(url, auth, env) {
     // ── M8: analytics — thin RPC passthroughs (relay_view already gated blanket-wide
     //    in fetch() before handleGet). SQL-side aggregation only; no raw rows to client.
     case 'getSendsOverview': {
-      const days = Number(url.searchParams.get('days')) || 30;
-      const r = await A.sbComms('/rest/v1/rpc/sends_overview', env,
-        { method: 'POST', body: JSON.stringify({ p_days: days }) });
+      // from/to (ISO timestamptz) → the range _v2 RPC (calendar presets: Today/MTD/Last mo/FY);
+      // plain `days` keeps the original trailing-window RPC.
+      const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+      const r = (from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to)))
+        ? await A.sbComms('/rest/v1/rpc/sends_overview_v2', env,
+            { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
+        : await A.sbComms('/rest/v1/rpc/sends_overview', env,
+            { method: 'POST', body: JSON.stringify({ p_days: Number(url.searchParams.get('days')) || 30 }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
     case 'getDeliverabilityHealth': {
-      const days = Number(url.searchParams.get('days')) || 30;
-      const r = await A.sbComms('/rest/v1/rpc/deliverability_health', env,
-        { method: 'POST', body: JSON.stringify({ p_days: days }) });
+      const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+      const r = (from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to)))
+        ? await A.sbComms('/rest/v1/rpc/deliverability_health_v2', env,
+            { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
+        : await A.sbComms('/rest/v1/rpc/deliverability_health', env,
+            { method: 'POST', body: JSON.stringify({ p_days: Number(url.searchParams.get('days')) || 30 }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
     case 'getCampaignsOverview': {   // broadcast analytics list (BiteSpeed parity, Phase 1)
@@ -474,8 +482,19 @@ async function handlePost(body, auth, env) {
       const r = await A.sbComms('/rest/v1/rpc/preview_segment', env, {
         method: 'POST', body: JSON.stringify({ p_def: definition || {}, p_channel: channel || 'email', p_purpose: purpose || 'marketing' }),
       });
+      if (!r.ok) return err('eval_error:' + JSON.stringify(r.data), 500);
       const row = Array.isArray(r.data) ? r.data[0] : r.data;
-      return r.ok ? ok(row) : err('eval_error:' + JSON.stringify(r.data), 500);
+      // Eye-ball sample (S232): a few matching profiles alongside the counts, best-effort —
+      // a sample failure must never break the counts the builder already relies on. Same
+      // segment_manage gate; same PII class the Contacts page already exposes.
+      let sample = [];
+      if (body.sample !== false) {
+        const s = await A.sbComms('/rest/v1/rpc/preview_segment_sample', env, {
+          method: 'POST', body: JSON.stringify({ p_def: definition || {}, p_limit: Math.min(Number(body.sample_limit) || 8, 20) }),
+        });
+        if (s.ok && Array.isArray(s.data)) sample = s.data;
+      }
+      return ok({ ...(row || {}), sample });
     }
     case 'materializeSegment': {
       if (!A.canSegment(auth.permissions)) return err('forbidden', 403);

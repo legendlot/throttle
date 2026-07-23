@@ -139,6 +139,13 @@ export default function CampaignsPage() {
   const [attr, setAttr] = useState(null);
   const [reach, setReach] = useState(null);   // {loading}|{total,reachable} for the picked segment × (channel,purpose)
   const [testTo, setTestTo] = useState('');
+  // WA tests: country code is a selector (default +91) so nobody hand-types prefixes.
+  // Bare-digit entries get the selected code; entries pasted with a leading + pass through.
+  const [testCc, setTestCc] = useState('+91');
+  const composeTestTo = () => c.channel !== 'whatsapp' ? testTo
+    : testTo.split(',').map((s) => s.trim()).filter(Boolean)
+        .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '') : testCc + s.replace(/\D/g, '').replace(/^0+/, ''))
+        .join(',');
   const [testBusy, setTestBusy] = useState(false);
   const [testResults, setTestResults] = useState(null);
   // Live test-mode flag (review M12) — undefined while unloaded/unreachable, which the banner
@@ -276,7 +283,7 @@ export default function CampaignsPage() {
       let draftVars = {};
       try { draftVars = c.vars && c.vars.trim() ? JSON.parse(c.vars) : {}; } catch { draftVars = {}; }
       const r = await workerFetch('sendCampaignTest', {
-        id: c.id, to: testTo,
+        id: c.id, to: composeTestTo(),
         draft: { channel: c.channel, purpose: c.purpose, template_id: c.template_id, vars: draftVars },
       }, session);
       const rows = r?.data?.results || r?.results || [];
@@ -474,9 +481,15 @@ export default function CampaignsPage() {
         {c.id && canBuild && (
           <Panel title="Send a test" pad>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              {c.channel === 'whatsapp' && (
+                <select className="f-inp mono" value={testCc} onChange={(e) => setTestCc(e.target.value)}
+                  disabled={testBusy} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
+                  {['+91', '+1', '+44', '+971', '+65'].map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              )}
               <input className="f-inp" style={{ flex: '1 1 320px' }} value={testTo}
                 onChange={(e) => setTestTo(e.target.value)}
-                placeholder={c.channel === 'whatsapp' ? '+919876543210, +919876543211' : 'you@legendoftoys.com'}
+                placeholder={c.channel === 'whatsapp' ? '9876543210, 9876543211' : 'you@legendoftoys.com'}
                 disabled={testBusy || !c.template_id} />
               <Btn onClick={sendTest} disabled={testBusy || !c.template_id || !testTo.trim()}>
                 <Send size={14} /> {testBusy ? 'Sending…' : 'Send test'}

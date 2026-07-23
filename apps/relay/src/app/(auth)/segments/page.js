@@ -14,7 +14,20 @@ const GROUPS = [
   { id: 'none', label: 'Match NONE of', hint: 'exclude all (NOT)' },
 ];
 const LEAF_TYPES = ['attr', 'event', 'consent'];
-const OPS = ['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte'];
+// Operator ids are the engine's AST vocabulary (eval_segment_node); the LABELS are what a
+// marketer reads — "gte" invites mis-picks, "at least" doesn't. before/within_days are the
+// migration-0022 relative-date ops (numeric days against a date attribute, e.g. last_order_at).
+const OPS = [
+  { id: 'eq', label: 'is' },
+  { id: 'neq', label: 'is not' },
+  { id: 'in', label: 'is any of' },
+  { id: 'gt', label: 'more than' },
+  { id: 'gte', label: 'at least' },
+  { id: 'lt', label: 'less than' },
+  { id: 'lte', label: 'at most' },
+  { id: 'before_days', label: 'older than (days)' },
+  { id: 'within_days', label: 'within last (days)' },
+];
 const ATTR_SUGGEST = ['lifetime_orders', 'lifetime_value', 'last_order_at', 'city', 'locale', 'display_name', 'first'];
 const EVENT_SUGGEST = ['order_placed', 'order_fulfilled', 'order_delivered', 'add_to_cart', 'checkout_started',
   'checkout_abandoned', 'return_created', 'email_delivered', 'email_opened', 'email_clicked'];
@@ -196,10 +209,13 @@ export default function SegmentsPage() {
 
                       {r.type === 'attr' && <>
                         <input className="f-inp mono" style={{ width: 160 }} list="attr-suggest" value={r.attr || ''} onChange={(e) => setLeaf(i, { attr: e.target.value })} placeholder="attribute" disabled={saving || !canEdit} />
-                        <select className="f-inp" style={{ width: 80 }} value={r.op} onChange={(e) => setLeaf(i, { op: e.target.value })} disabled={saving || !canEdit}>
-                          {OPS.map((o) => <option key={o} value={o}>{o}</option>)}
+                        <select className="f-inp" style={{ width: 150 }} value={r.op} onChange={(e) => setLeaf(i, { op: e.target.value })} disabled={saving || !canEdit}>
+                          {OPS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                         </select>
-                        <input className="f-inp" style={{ flex: 1, minWidth: 140 }} value={r.value || ''} onChange={(e) => setLeaf(i, { value: e.target.value })} placeholder={r.op === 'in' ? 'comma, separated, values' : 'value'} disabled={saving || !canEdit} />
+                        <input className="f-inp" style={{ flex: 1, minWidth: 140 }} value={r.value || ''} onChange={(e) => setLeaf(i, { value: e.target.value })}
+                          placeholder={r.op === 'in' ? 'comma, separated, values'
+                            : (r.op === 'before_days' || r.op === 'within_days') ? 'number of days (e.g. 90)' : 'value'}
+                          disabled={saving || !canEdit} />
                       </>}
 
                       {r.type === 'event' && <>
@@ -252,6 +268,30 @@ export default function SegmentsPage() {
               )}
             </div>
             <div className="tw-note" style={{ marginBottom: 0 }}>Reachable = matched, minus suppressions, and (for marketing) only those opted-in on the channel.</div>
+            {/* Eye-ball sample — numbers say "how many", these rows say "who": a rule that
+                counts plausibly but matches the wrong PEOPLE is caught here, before a send. */}
+            {pv && Array.isArray(pv.sample) && pv.sample.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div className="kv-k" style={{ marginBottom: 6 }}>Sample of matched customers</div>
+                <table className="dt">
+                  <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th><th>Last order</th></tr></thead>
+                  <tbody>
+                    {pv.sample.map((s) => (
+                      <tr key={s.id}>
+                        <td style={{ fontWeight: 600 }}>{s.display_name || <span className="dim">—</span>}</td>
+                        <td className="mono dim" style={{ fontSize: 12 }}>{s.email || '—'}</td>
+                        <td className="mono dim" style={{ fontSize: 12 }}>{s.phone || '—'}</td>
+                        <td className="mono">{s.lifetime_orders ?? '—'}</td>
+                        <td className="mono dim" style={{ fontSize: 12 }}>{s.last_order_at ? String(s.last_order_at).slice(0, 10) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {pv && Array.isArray(pv.sample) && pv.sample.length === 0 && (pv.total ?? 0) > 0 && (
+              <div className="tw-note" style={{ marginTop: 10, marginBottom: 0 }}>Sample unavailable for this rule.</div>
+            )}
           </Panel>
         )}
       </div>

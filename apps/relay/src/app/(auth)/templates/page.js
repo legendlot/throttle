@@ -16,6 +16,13 @@ const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
 const CHANNELS = ['email', 'whatsapp']; // sms lands in Phase 2
+// List channel filter — SMS chip is present ahead of Phase 2 so the mental model is stable.
+const CHAN_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'whatsapp', label: 'WhatsApp' },
+  { key: 'email', label: 'Email' },
+  { key: 'sms', label: 'SMS' },
+];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUSES = ['draft', 'active', 'archived'];
 const VAR_SOURCES = ['profile', 'event', 'constant', 'recipient', 'system'];
@@ -36,6 +43,7 @@ export default function TemplatesPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
+  const [chanFilter, setChanFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
   const [t, setT] = useState(emptyTemplate());
@@ -51,6 +59,17 @@ export default function TemplatesPage() {
 
   // test-send state
   const [testTo, setTestTo] = useState('');
+  // WhatsApp test sends: the country code is a SELECTOR (default +91), not something typed
+  // into the number field — every miskeyed "+91" prefix was a failed test. A pasted full
+  // international number (leading +) is respected as-is; otherwise cc + digits compose.
+  const [testCc, setTestCc] = useState('+91');
+  const composeTestTo = () => {
+    const raw = testTo.trim();
+    if (!raw) return '';
+    if (t.channel !== 'whatsapp') return raw;
+    if (raw.startsWith('+')) return raw.replace(/[^\d+]/g, '');
+    return testCc + raw.replace(/\D/g, '').replace(/^0+/, '');
+  };
   const [testVals, setTestVals] = useState('{}');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -74,6 +93,23 @@ export default function TemplatesPage() {
     finally { setLoading(false); }
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
+
+  // WABA picker options come from LIVE sender_identities, not a hardcoded list — a migrated
+  // number changes WABA and a stale hardcoded id had every UI-authored template pinning to a
+  // WABA with no sender (S232). Static WA_WABAS remains only as the fetch-failure fallback.
+  const [wabas, setWabas] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      try {
+        const s = await garageFetch('getSenderIdentities', {}, session);
+        const list = (Array.isArray(s) ? s : [])
+          .filter((x) => x.channel === 'whatsapp' && x.status === 'active' && x.metadata?.waba_id)
+          .map((x) => ({ id: x.metadata.waba_id, label: x.metadata.label || x.address, hint: x.address }));
+        if (list.length) setWabas(list);
+      } catch { /* static fallback list stays in effect */ }
+    })();
+  }, [session]);
 
   function startNew() { setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
   // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
@@ -230,7 +266,7 @@ export default function TemplatesPage() {
       // passed as BOTH constants and recipient overrides so any matching var resolves.
       const payload = buildPayload();
       const r = await workerFetch('sendTest', {
-        channel: t.channel, to: testTo.trim(),
+        channel: t.channel, to: composeTestTo(),
         template: { content: payload.content, variables: payload.variables },
         constants: vals, recipient: vals,
       }, session);
@@ -251,7 +287,7 @@ export default function TemplatesPage() {
   async function allowAndResend() {
     setTesting(true);
     try {
-      await workerFetch('addTestAllowlist', { entry: testTo.trim() }, session);
+      await workerFetch('addTestAllowlist', { entry: composeTestTo() }, session);
       setNeedsAllow(false);
       showToast('Added to test allowlist', 'success');
     } catch (e) { showToast(e.message || 'Could not add to allowlist', 'error'); setTesting(false); return; }
@@ -351,7 +387,7 @@ export default function TemplatesPage() {
 
         {t.channel === 'whatsapp' ? (
           <WaEditor wa={t.wa} setWa={(w) => { set('wa', w); setWaDirty(true); }} variables={t.variables} disabled={saving || !canEdit}
-          locked={!!t.provider_template_id} session={session} />
+          locked={!!t.provider_template_id} session={session} wabas={wabas} />
         ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
@@ -455,8 +491,19 @@ export default function TemplatesPage() {
             </div>
             <div className="form-grid">
               <div className="ff"><div className="kv-k">Test recipient</div>
-                <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)}
-                  placeholder={t.channel === 'whatsapp' ? '+917019103926' : 'you@legendoftoys.com'} disabled={testing} />
+                {t.channel === 'whatsapp' ? (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <select className="f-inp mono" value={testCc} onChange={(e) => setTestCc(e.target.value)}
+                      disabled={testing} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
+                      {['+91', '+1', '+44', '+971', '+65'].map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)}
+                      placeholder="7019103926" disabled={testing} style={{ flex: 1 }} />
+                  </div>
+                ) : (
+                  <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)}
+                    placeholder="you@legendoftoys.com" disabled={testing} />
+                )}
               </div>
               <div className="ff"><div className="kv-k">Test values (JSON)</div>
                 <input className="f-inp mono" value={testVals} onChange={(e) => setTestVals(e.target.value)} placeholder='{"first":"Afshaan"}' disabled={testing} />
@@ -464,7 +511,7 @@ export default function TemplatesPage() {
             </div>
             {needsAllow && (
               <div style={{ margin: '8px 0', fontSize: 13, padding: '10px 12px', border: '1px solid var(--line, #ddd)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <b>{testTo.trim()}</b> isn’t on the test allowlist — test sends only reach approved test
+                <b>{composeTestTo()}</b> isn’t on the test allowlist — test sends only reach approved test
                 addresses. Add it (exact address, test sends only) and resend?
                 <Btn kind="primary" onClick={allowAndResend} disabled={testing} style={{ marginLeft: 12 }}>
                   {testing ? 'Working…' : 'Add & resend'}
@@ -486,6 +533,8 @@ export default function TemplatesPage() {
     );
   }
 
+  const filteredRows = chanFilter === 'all' ? rows : rows.filter((r) => (r.channel || 'email') === chanFilter);
+
   return (
     <div className="pg">
       <PageHead title="Templates" sub="Channel-shaped message templates with merge variables. Editing an active template publishes a new version."
@@ -494,11 +543,19 @@ export default function TemplatesPage() {
         : rows.length === 0
           ? <Panel><EmptyState icon="file-text" title="No templates yet" hint="Create your first email template to start building campaigns." /></Panel>
           : (
-            <Panel title="Templates" count={rows.length}>
+            <Panel title="Templates" count={filteredRows.length}
+              action={
+                <span style={{ display: 'flex', gap: 4 }}>
+                  {CHAN_FILTERS.map((f) => (
+                    <Btn key={f.key} kind={chanFilter === f.key ? 'primary' : 'ghost'}
+                      onClick={() => setChanFilter(f.key)}>{f.label}</Btn>
+                  ))}
+                </span>
+              }>
               <table className="dt">
                 <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {filteredRows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
                       <td style={{ fontWeight: 600 }}>{r.name}</td>
                       {/* Channel glyph + label (§7.6) — WA green, email neutral. */}

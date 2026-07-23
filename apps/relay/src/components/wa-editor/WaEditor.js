@@ -40,7 +40,7 @@ function Count({ n, cap }) {
 
 // The WhatsApp-side authoring surface: Meta template fields + positional-slot mapping
 // + a live preview bubble. Pure presentation — the page owns state, save and submit.
-export default function WaEditor({ wa, setWa, variables, disabled, locked, session }) {
+export default function WaEditor({ wa, setWa, variables, disabled, locked, session, wabas }) {
   const c = wa || {};
   const mapping = Array.isArray(c.mapping) ? c.mapping : [];
   const tokens = (variables || []).map((v) => v.token).filter(Boolean);
@@ -127,7 +127,7 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
           <select className="f-inp" value={c.waba_id || ''} disabled={disabled || !!locked}
             onChange={(e) => set('waba_id', e.target.value)}>
             <option value="">Select an account…</option>
-            {WA_WABAS.map((w) => <option key={w.id} value={w.id}>{w.label} — {w.hint}</option>)}
+            {(wabas && wabas.length ? wabas : WA_WABAS).map((w) => <option key={w.id} value={w.id}>{w.label} — {w.hint}</option>)}
           </select>
           <div className="tw-note" style={{ marginTop: 6 }}>
             Templates live on ONE account and cannot be moved. Author on the account of the number

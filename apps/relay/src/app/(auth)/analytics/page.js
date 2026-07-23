@@ -10,7 +10,31 @@ import { BarChart3, RefreshCw } from 'lucide-react';
 import { PageHead, Panel, Kpi, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inr } from '@/components/format.js';
 
-const WINDOWS = [7, 30, 90];
+// Calendar presets, computed in IST (the business clock). Each resolves to a concrete
+// [from, to) range sent to the _v2 RPCs — "Last mo" and "MTD" are ranges, not trailing
+// windows, which is why the old numeric `days` param couldn't express them.
+const IST_MS = 5.5 * 3600 * 1000;
+function istPresetRange(key) {
+  const now = new Date();
+  const ist = new Date(now.getTime() + IST_MS);            // shifted clock; read via getUTC*
+  const y = ist.getUTCFullYear(), m = ist.getUTCMonth(), d = ist.getUTCDate();
+  const istMidnightUtc = (yy, mm, dd) => new Date(Date.UTC(yy, mm, dd) - IST_MS);
+  switch (key) {
+    case 'today':  return [istMidnightUtc(y, m, d), now];
+    case '7d':     return [new Date(now.getTime() - 7 * 86400000), now];
+    case '30d':    return [new Date(now.getTime() - 30 * 86400000), now];
+    case '90d':    return [new Date(now.getTime() - 90 * 86400000), now];
+    case 'mtd':    return [istMidnightUtc(y, m, 1), now];
+    case 'lastmo': return [istMidnightUtc(y, m - 1, 1), istMidnightUtc(y, m, 1)];
+    case 'fy':     return [istMidnightUtc(m >= 3 ? y : y - 1, 3, 1), now];   // FY = Apr 1 IST
+    default:       return [new Date(now.getTime() - 30 * 86400000), now];
+  }
+}
+const PRESETS = [
+  { key: 'today', label: 'Today' }, { key: '7d', label: '7D' }, { key: '30d', label: '30D' },
+  { key: '90d', label: '90D' }, { key: 'mtd', label: 'MTD' }, { key: 'lastmo', label: 'Last mo' },
+  { key: 'fy', label: 'FY' },
+];
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 
 // ROI = attributed revenue ÷ spend. Only meaningful where sends are actually priced
@@ -45,7 +69,7 @@ function SendsBars({ data }) {
 export default function AnalyticsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const [days, setDays] = useState(30);
+  const [preset, setPreset] = useState('30d');
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState([]);
   const [health, setHealth] = useState([]);
@@ -61,9 +85,11 @@ export default function AnalyticsPage() {
     setLoading(true);
     setStatsError(false);
     try {
+      const [from, to] = istPresetRange(preset);
+      const range = { from: from.toISOString(), to: to.toISOString() };
       const [ov, hl, cs, js] = await Promise.all([
-        garageFetch('getSendsOverview', { days }, session).catch(() => { setStatsError(true); return null; }),
-        garageFetch('getDeliverabilityHealth', { days }, session).catch(() => { setStatsError(true); return null; }),
+        garageFetch('getSendsOverview', range, session).catch(() => { setStatsError(true); return null; }),
+        garageFetch('getDeliverabilityHealth', range, session).catch(() => { setStatsError(true); return null; }),
         garageFetch('getCampaigns', {}, session).catch(() => { setStatsError(true); return null; }),
         garageFetch('getJourneys', {}, session).catch(() => { setStatsError(true); return null; }),
       ]);
@@ -93,7 +119,7 @@ export default function AnalyticsPage() {
       setCamps(enriched);
     } catch (e) { setStatsError(true); showToast(e.message || 'Failed to load analytics', 'error'); }
     finally { setLoading(false); }
-  }, [session, days, showToast]);
+  }, [session, preset, showToast]);
   useEffect(() => { load(); }, [load]);
 
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
@@ -116,10 +142,11 @@ export default function AnalyticsPage() {
   }
   const byDay = Object.values(byDayMap).sort((a, b) => (a.day < b.day ? -1 : 1));
 
+  const presetLabel = (PRESETS.find((x) => x.key === preset) || {}).label || preset;
   const winPicker = (
     <div className="rtabs">
-      {WINDOWS.map((w) => (
-        <button key={w} className={`rtab rtab-mono ${days === w ? 'on' : ''}`} onClick={() => setDays(w)}>{w}d</button>
+      {PRESETS.map((w) => (
+        <button key={w.key} className={`rtab rtab-mono ${preset === w.key ? 'on' : ''}`} onClick={() => setPreset(w.key)}>{w.label}</button>
       ))}
     </div>
   );
@@ -139,7 +166,7 @@ export default function AnalyticsPage() {
         ) : (
         <>
           <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
-            <Kpi label={`Sent · ${days}d`} value={totals.sent} tone="gray" sub="messages handed to provider" />
+            <Kpi label={`Sent · ${presetLabel}`} value={totals.sent} tone="gray" sub="messages handed to provider" />
             <Kpi label="Delivery rate" value={pct(totals.delivered, totals.sent)} tone="green" format={(v) => v.toFixed(1) + '%'} sub={`${totals.delivered.toLocaleString('en-IN')} delivered`} />
             <Kpi label="Read rate" value={pct(totals.opened, totals.delivered)} tone="green" format={(v) => v.toFixed(1) + '%'} sub={`${totals.opened.toLocaleString('en-IN')} read · of delivered`} />
             <Kpi label="Failed / bounced" value={totals.failed} tone={totals.failed ? 'red' : 'gray'} sub="hard failures" />
@@ -147,7 +174,7 @@ export default function AnalyticsPage() {
           </div>
 
           <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
-            <Kpi label={`Spend · ${days}d`} value={totals.spend} tone="gray" format={(v) => inr(v)}
+            <Kpi label={`Spend · ${presetLabel}`} value={totals.spend} tone="gray" format={(v) => inr(v)}
               sub={totals.spend > 0 ? 'per-conversation cost' : 'no priced sends (email is flat-rate)'} />
             <Kpi label="Attributed revenue" value={revenueTotal} tone="green" format={(v) => inr(v)}
               sub="campaigns + journeys, last-touch" />
@@ -157,7 +184,7 @@ export default function AnalyticsPage() {
               sub={totals.spend > 0 ? 'revenue ÷ spend' : 'needs priced sends'} />
           </div>
 
-          <Panel title={`Sends by day · ${days}d`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: 'var(--green, #34d399)' }}>■</span> delivered</span>} pad>
+          <Panel title={`Sends by day · ${presetLabel}`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: 'var(--green, #34d399)' }}>■</span> delivered</span>} pad>
             <SendsBars data={byDay} />
           </Panel>
 
@@ -230,7 +257,7 @@ export default function AnalyticsPage() {
               )}
           </Panel>
 
-          <Panel title={`Deliverability · ${days}d`} count={health.length} pad>
+          <Panel title={`Deliverability · ${presetLabel}`} count={health.length} pad>
             {health.length === 0
               ? <EmptyState icon="mail" title="No sender activity" hint="Bounce and complaint rates per sender identity appear here once emails are sent." />
               : (

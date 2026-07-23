@@ -13,8 +13,14 @@ export const WA_COMPONENTS = ['header', 'body', 'button'];
 // sit on their own WABA, so the target has to be chosen at authoring time — picking wrong
 // means re-authoring and re-queuing for Meta review at cutover.
 // Canonical ids: reference/bitespeed.md §1.
+// ⚠️ STATIC FALLBACK ONLY — the editor now feeds this list from live sender_identities
+// (templates page → getSenderIdentities → wabas prop), because a hardcoded id GOES STALE
+// when a number migrates WABAs: after the 2026-07-22 marketing migration this list still
+// pointed at the dead WABA and every UI-authored template pinned there (4 templates,
+// no_sender_on_waba at test send — S232). If you edit this list, you are probably doing
+// the wrong thing; fix the sender_identities metadata instead.
 export const WA_WABAS = [
-  { id: '4607501919493306', label: 'Marketing — 9035697508', hint: 'Promotions, abandonment, winback' },
+  { id: '1829828347997765', label: 'Marketing — 9035697508', hint: 'Promotions, abandonment, winback' },
   { id: '717043791430518', label: 'Transactional — 7022142666', hint: 'Order lifecycle, COD confirmation' },
   { id: '2257035788468620', label: 'Support — 9880212323', hint: 'Pitstop CS / inbound conversations' },
   { id: '1752135339132947', label: 'Sandbox — +1 555 174 8518', hint: 'Test number only; not reusable on live numbers' },
