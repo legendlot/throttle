@@ -13,6 +13,7 @@ const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
 const SHOPWH = require('./shopify-webhooks.js');
+const SUB = require('./subscribe.js');
 const SHOPFLO = require('./shopflo-webhooks.js');
 const CF = require('./cashfree.js');
 const CFWH = require('./cashfree-webhooks.js');
@@ -939,6 +940,12 @@ export default {
     // only. The source of checkout_started that fires the abandoned-cart journey.
     if (url.pathname === '/pixel' && request.method === 'POST') {
       const r = await SHOPWH.handlePixel(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Public mailing-list / "notify me" signup (S232) — website launch-list forms. Same
+    // publishable-token trust tier as /pixel; writes event + explicit consent + list attr.
+    if (url.pathname === '/subscribe' && request.method === 'POST') {
+      const r = await SUB.handleSubscribe(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
     // WhatsApp Cloud API webhook (M14). GET = Meta subscription verify (echo hub.challenge as
