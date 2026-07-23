@@ -34,10 +34,12 @@ Module._load = orig;
 
 let fail = 0; const ok = (c, l) => { console.log((c ? '  ok  ' : '  FAIL') + ' ' + l); if (!c) fail++; };
 const ingest = async (env, ev) => { state.ingested.push(ev); return { ok: true }; };
+// first_seen_at defaults RELATIVE (3d ago): old enough to be past the 24h profile grace,
+// young enough to pass the 30d age cap — and no hardcoded date for the age cap to time-bomb.
 const row = (o) => Object.assign({
   id: 'r1', uniware_package_code: 'SP/1', shopify_order_id: '123', shopify_order_name: '#LOT1',
   lifecycle: 'delivered', emitted_lifecycles: [], delivered_at: null, uniware_updated_at: null,
-  first_seen_at: '2026-07-01T00:00:00Z',
+  dispatched_at: null, first_seen_at: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
 }, o);
 const reset = () => { state.rows = []; state.patched = []; state.ingested = []; state.orderPlaced = true; state.eventsOk = true; state.settings = [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }]; };
 
@@ -78,6 +80,32 @@ const reset = () => { state.rows = []; state.patched = []; state.ingested = []; 
   state.rows = [row({ lifecycle: 'rto', delivered_at: null, uniware_updated_at: '2026-07-26T09:00:00Z' })];
   await SE.emitShipmentEvents({}, ingest);
   ok(state.ingested.length === 1 && state.ingested[0].name === 'order_rto', 'rto (no own stamp) emits off uniware_updated_at');
+
+  // AGE CAP — shipped with the 2026-07-23 poller seconds-vs-ms fix. Once re-polling works,
+  // a bulk Uniware reconciliation can bump uniware_updated_at past the watermark on parcels
+  // dispatched weeks ago; for rto/in_transit/OFD that stamp IS occurredAt, so without the cap
+  // each would emit a fresh customer message. delivered rides its true stamp; the cap is
+  // belt-and-braces there (accepted trade-off: a genuine >30d-after-dispatch event is silenced).
+  reset();
+  state.rows = [row({ lifecycle: 'rto', uniware_updated_at: '2026-07-26T09:00:00Z',
+    dispatched_at: new Date(Date.now() - 60 * 86400000).toISOString() })];
+  r = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && r.aged === 1 && state.patched.length === 0,
+    'rto on a parcel dispatched 60d ago is age-capped (dropped, NOT marked)');
+
+  reset();
+  state.rows = [row({ lifecycle: 'rto', uniware_updated_at: '2026-07-26T09:00:00Z',
+    dispatched_at: new Date(Date.now() - 5 * 86400000).toISOString() })];
+  await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 1 && state.ingested[0].name === 'order_rto',
+    'rto on a recently-dispatched parcel still emits');
+
+  reset();
+  state.rows = [row({ lifecycle: 'in_transit', uniware_updated_at: '2026-07-26T09:00:00Z',
+    first_seen_at: new Date(Date.now() - 45 * 86400000).toISOString() })];
+  r = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && r.aged === 1,
+    'no dispatched_at → first_seen_at governs the age cap');
 
   // The original de-dup guard must keep working alongside the watermark.
   reset();

@@ -2331,7 +2331,13 @@ async function syncUniwareTracking(env, opts = {}) {
   // stampede the first run (the window walk catches up over subsequent ticks).
   const cursor = Number(state.cursor_ms) || (now - 3 * 86400000);
   const winStart = cursor;
-  const winEnd = Math.min(cursor + UNI_TRACK_WINDOW_MS, now);
+  // A multi-page window must keep the SAME toDate across runs: winEnd used to be recomputed as
+  // min(cursor+6h, now) every tick, so for the current (partial) window `now` kept growing while
+  // page_offset carried over — the offset then indexed into a shifting result set and could skip
+  // or re-read rows. Freeze the end on the first page (win_end_ms, cleared when the window
+  // completes) so pagination always walks one immutable window.
+  const frozenEnd = Number(state.win_end_ms) || 0;
+  const winEnd = frozenEnd > winStart ? frozenEnd : Math.min(cursor + UNI_TRACK_WINDOW_MS, now);
   if (winStart >= winEnd) return { skipped: 'caught_up' };
 
   const token = await getUniwareToken(env);
@@ -2370,7 +2376,11 @@ async function syncUniwareTracking(env, opts = {}) {
       known[row.uniware_order_code] = Math.max(known[row.uniware_order_code] || 0, t);
     }
   }
-  const todo = candidates.filter((e) => (Number(e.updated) || 0) > (known[e.code] || 0));
+  // NB the search element's `updated` is epoch SECONDS while `known` holds Date.parse
+  // MILLISECONDS — comparing them raw made `seconds > ms` false for every order already in the
+  // table, collapsing the feed to first-sightings-only (order_delivered never fired; the trap
+  // uniUpdatedMs exists for). Normalise before the compare.
+  const todo = candidates.filter((e) => uniUpdatedMs(e.updated, 0) > (known[e.code] || 0));
 
   // 3. Fetch detail for the changed ones (the expensive leg — hard-capped).
   const gets = todo.slice(0, page);
@@ -2400,6 +2410,7 @@ async function syncUniwareTracking(env, opts = {}) {
     body: JSON.stringify({
       cursor_ms: windowDone ? winEnd : winStart,
       page_offset: windowDone ? 0 : offset + elements.length,
+      win_end_ms: windowDone ? null : winEnd,   // freeze the window end while paginating
       last_run_at: new Date().toISOString(), last_error: null,
       orders_seen: Number(state.orders_seen || 0) + elements.length,
       packages_upserted: Number(state.packages_upserted || 0) + rows.length,

@@ -29,6 +29,9 @@ const EMIT_EVENT = {
   rto: 'order_rto',
 };
 const MAX_PER_RUN = 15;   // keeps the cron tick well inside its subrequest budget
+// A courier event for a parcel dispatched more than this long ago is a late discovery /
+// reconciliation, not news a customer should be messaged about. See the age-cap filter below.
+const MAX_EVENT_AGE_MS = 30 * 86400000;
 
 // When did this lifecycle transition actually HAPPEN upstream? Deliberately not "when did we
 // poll it" — see the watermark note below. `delivered` carries a real delivery stamp (populated
@@ -64,7 +67,7 @@ async function emitShipmentEvents(env, ingest) {
   const q = `/rest/v1/ecom_shipments?lifecycle=in.(${want.join(',')})&shopify_order_id=not.is.null`
     + `&uniware_updated_at=gte.${encodeURIComponent(new Date(fromMs).toISOString())}`
     + `&select=id,uniware_package_code,shopify_order_name,shopify_order_id,lifecycle,courier,`
-    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,uniware_updated_at,first_seen_at`
+    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,dispatched_at,uniware_updated_at,first_seen_at`
     + `&order=uniware_updated_at.desc.nullslast&limit=300`;
   const r = await sbPublic(q, env);
   if (!r.ok) return { ok: false, error: `select_failed_${r.status}` };
@@ -73,17 +76,26 @@ async function emitShipmentEvents(env, ingest) {
   // reconciling a months-stale parcel bumps uniware_updated_at to today while delivered_at
   // stays in May. Those are dropped WITHOUT marking: they are not "done", they are out of
   // scope, and marking them would corrupt the guard if the watermark is ever moved back.
-  let stale = 0;
+  let stale = 0, aged = 0;
   const pending = (r.data || [])
     .filter((s) => !(s.emitted_lifecycles || []).includes(s.lifecycle))
     .filter((s) => {
       const at = occurredAt(s);
-      if (at !== null && at >= fromMs) return true;
-      stale++;
-      return false;
+      if (at === null || at < fromMs) { stale++; return false; }
+      // AGE CAP (2026-07-23, shipped with the poller seconds-vs-ms fix). For rto/in_transit/
+      // out_for_delivery, occurredAt IS uniware_updated_at — the very stamp a late Uniware
+      // re-touch bumps past the watermark. ~6k parcels sit at in_transit with dispatch weeks
+      // in the past; a bulk reconciliation on Uniware's side would otherwise turn each into a
+      // fresh "your order is on the way / being returned" message. A courier message about a
+      // parcel DISPATCHED >30 days ago is never news — drop WITHOUT marking (same rationale
+      // as `stale`: out of scope, not done). delivered is already governed by its true
+      // delivered_at stamp; this is belt-and-braces there.
+      const born = Date.parse(s.dispatched_at || s.first_seen_at || '');
+      if (!Number.isNaN(born) && Date.now() - born > MAX_EVENT_AGE_MS) { aged++; return false; }
+      return true;
     })
     .slice(0, MAX_PER_RUN);
-  if (!pending.length) return { ok: true, candidates: 0, sent: 0, stale };
+  if (!pending.length) return { ok: true, candidates: 0, sent: 0, stale, aged };
 
   let sent = 0, unresolved = 0, failed = 0;
   for (const s of pending) {
@@ -130,7 +142,7 @@ async function emitShipmentEvents(env, ingest) {
     await markEmitted(env, s);
     sent++;
   }
-  return { ok: true, candidates: pending.length, sent, unresolved, failed, stale };
+  return { ok: true, candidates: pending.length, sent, unresolved, failed, stale, aged };
 }
 
 async function markEmitted(env, s) {
