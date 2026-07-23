@@ -31,13 +31,15 @@ export function money(cur, n) {
 }
 
 // ── Status tone system (soft bg / fg / border / solid) ────────────────
+// The COMMAND prototype's ST map (handoff §3.2) — bright fg hues on dark,
+// bg ≈ rgba(hue,.13), bd ≈ rgba(hue,.34). Gray uses white at .05/.11.
 export const TONES = {
-  yellow: { bg: 'rgba(242,205,26,.13)', fg: '#f4d54a', bd: 'rgba(242,205,26,.32)', solid: '#F2CD1A' },
-  green:  { bg: 'rgba(34,197,94,.13)',  fg: '#5fe08a', bd: 'rgba(34,197,94,.30)',  solid: '#22c55e' },
-  red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7a7a', bd: 'rgba(222,42,42,.32)',  solid: '#DE2A2A' },
-  blue:   { bg: 'rgba(77,104,255,.16)', fg: '#9aabff', bd: 'rgba(77,104,255,.34)', solid: '#4d68ff' },
-  orange: { bg: 'rgba(249,115,22,.15)', fg: '#ffa459', bd: 'rgba(249,115,22,.32)', solid: '#f97316' },
-  gray:   { bg: 'rgba(255,255,255,.05)',fg: '#9aa0a6', bd: 'rgba(255,255,255,.10)', solid: '#71767c' },
+  yellow: { bg: 'rgba(242,205,26,.13)',  fg: '#f2cd1a', bd: 'rgba(242,205,26,.34)',  solid: '#F2CD1A' },
+  green:  { bg: 'rgba(52,211,153,.13)',  fg: '#34d399', bd: 'rgba(52,211,153,.34)',  solid: '#34d399' },
+  red:    { bg: 'rgba(248,113,113,.13)', fg: '#f87171', bd: 'rgba(248,113,113,.34)', solid: '#f87171' },
+  blue:   { bg: 'rgba(124,155,255,.15)', fg: '#7c9bff', bd: 'rgba(124,155,255,.34)', solid: '#7c9bff' },
+  orange: { bg: 'rgba(251,146,60,.15)',  fg: '#fb923c', bd: 'rgba(251,146,60,.36)',  solid: '#fb923c' },
+  gray:   { bg: 'rgba(255,255,255,.05)', fg: '#9aa0aa', bd: 'rgba(255,255,255,.11)', solid: '#71767c' },
 };
 
 export const PO_TONES = {

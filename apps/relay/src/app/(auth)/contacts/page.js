@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { ArrowLeft, Mail, Plus, RefreshCw, LogOut } from 'lucide-react';
+import { ArrowLeft, Plus, RefreshCw, LogOut } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 
@@ -277,18 +277,35 @@ export default function ContactsPage() {
           ? <Panel><EmptyState icon="inbox" title="No contacts yet" hint="Profiles arrive via ingestion (Shopify / internal events). Once seeded they appear here." /></Panel>
           : (
             <Panel title="Contacts" count={rows.length}>
+              {/* §7.5 — initials avatar + the prototype column set. (The Consent pill needs a
+                  consent state on the getProfiles list payload — a §9 read extension — so it
+                  is deliberately absent here; consent lives on the contact detail.) */}
               <table className="dt">
                 <thead><tr><th>Name</th><th>City</th><th>Locale</th><th className="num">Orders</th><th className="num">Lifetime ₹</th><th>Added</th></tr></thead>
                 <tbody>
                   {rows.map((r) => {
                     const a = r.attributes || {};
+                    const initials = String(r.display_name || '')
+                      .split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
                     return (
                       <tr key={r.id} className="row-click" onClick={() => open(r)}>
-                        <td><Mail size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.display_name || <span className="dim">— unnamed —</span>}</td>
-                        <td className="dim">{r.city || '—'}</td>
-                        <td className="dim">{r.locale || '—'}</td>
+                        <td>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              fontFamily: 'var(--font-disp)', fontSize: 11, fontWeight: 600,
+                              color: 'var(--t2)', background: 'rgba(255,255,255,.06)' }}>
+                              {initials || '—'}
+                            </span>
+                            <span style={{ fontWeight: 600, color: 'var(--t1)' }}>
+                              {r.display_name || <span className="dim" style={{ fontWeight: 400 }}>— unnamed —</span>}
+                            </span>
+                          </span>
+                        </td>
+                        <td className="dim" style={{ fontSize: 12.5 }}>{r.city || '—'}</td>
+                        <td className="dim" style={{ fontSize: 12.5 }}>{r.locale || '—'}</td>
                         <td className="num mono dim">{a.lifetime_orders ?? '—'}</td>
-                        <td className="num mono dim">{a.lifetime_value != null ? Number(a.lifetime_value).toLocaleString('en-IN') : '—'}</td>
+                        <td className="num mono">{a.lifetime_value != null ? Number(a.lifetime_value).toLocaleString('en-IN') : <span className="dim">—</span>}</td>
                         <td className="mono dim">{fmtDate(r.created_at)}</td>
                       </tr>
                     );

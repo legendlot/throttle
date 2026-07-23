@@ -1,11 +1,16 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Spinner, useSearchShortcut } from '@throttle/ui';
+import { Spinner } from '@throttle/ui';
+import { garageFetch } from '@throttle/db';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { Sidebar } from '../../components/chrome/Sidebar.js';
 import { ContextBar } from '../../components/chrome/ContextBar.js';
+import { CommandPalette } from '../../components/chrome/CommandPalette.js';
+
+const SB_KEY = 'relay-sb-collapsed';
+const ONAIR_POLL_MS = 60_000;
 
 export default function AuthLayout({ children }) {
   return (
@@ -16,13 +21,62 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
+  const { user, role, perms, session, signOut, loading } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+  // Sidebar collapse persists across sessions (handoff §4 — localStorage).
   const [collapsed, setCollapsed] = useState(false);
-  const [search, setSearch] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // ON AIR rail — the currently-sending broadcast, from the same campaign data
+  // the Campaigns list already reads (status === 'sending'). Read-only polling.
+  const [onair, setOnair] = useState(null);
 
-  useSearchShortcut(); // "/" focuses the sidebar search ([data-search-primary])
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(SB_KEY) === '1'); } catch { /* noop */ }
+  }, []);
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((c) => {
+      try { localStorage.setItem(SB_KEY, c ? '0' : '1'); } catch { /* noop */ }
+      return !c;
+    });
+  }, []);
+
+  // ⌘K / Ctrl+K opens the palette from every screen.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Poll for an in-flight send (light: one list call; progress only when live).
+  useEffect(() => {
+    if (!session) return undefined;
+    let dead = false;
+    async function tick() {
+      try {
+        const cs = await garageFetch('getCampaigns', {}, session);
+        const sending = (Array.isArray(cs) ? cs : []).filter((c) => c.status === 'sending');
+        if (dead) return;
+        if (!sending.length) { setOnair(null); return; }
+        const c = sending[0];
+        let sent = 0, total = Number(c.audience_snapshot || 0);
+        try {
+          const ov = await garageFetch('getCampaignsOverview', {}, session);
+          const o = (Array.isArray(ov) ? ov : []).find((x) => x.id === c.id);
+          if (o) { sent = Number(o.sent || 0); total = Number(o.total || total); }
+        } catch { /* progress optional */ }
+        if (!dead) setOnair({ id: c.id, name: c.name, sent, total });
+      } catch { if (!dead) setOnair(null); }
+    }
+    tick();
+    const t = setInterval(tick, ONAIR_POLL_MS);
+    return () => { dead = true; clearInterval(t); };
+  }, [session]);
 
   const navGroups = useMemo(() => filterNavByPerms(NAV_GROUPS, perms || {}), [perms]);
 
@@ -33,7 +87,6 @@ function AuthLayoutInner({ children }) {
 
   function onNav(route) {
     if (!route) return;
-    setSearch('');
     router.push(route);
   }
 
@@ -43,20 +96,27 @@ function AuthLayoutInner({ children }) {
         groups={navGroups}
         pathname={pathname}
         onNav={onNav}
-        appIcon={<img src="/favicon.svg" alt="Relay" style={{ height: 18, width: 'auto', display: 'block' }} />}
+        onair={onair}
         userLabel={displayName}
         userInitial={initial}
         userRole={role || ''}
         onLogout={signOut}
         collapsed={collapsed}
-        onToggle={() => setCollapsed(c => !c)}
-        search={search}
-        onSearch={setSearch}
+        onToggle={toggleCollapsed}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
       <div className="main-wrap">
         <ContextBar groups={navGroups} pathname={pathname} onNav={onNav} />
         <main className="main">{children}</main>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        groups={navGroups}
+        onNav={onNav}
+        session={session}
+        perms={perms}
+      />
     </div>
   );
 }

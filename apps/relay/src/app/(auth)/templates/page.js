@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
@@ -75,6 +75,16 @@ export default function TemplatesPage() {
   useEffect(() => { load(); }, [load]);
 
   function startNew() { setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
+  // ⌘K "New template" deep-link (?new=1) — read once on mount, then clean the URL.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
+      setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest();
+      setEditorKey('new-' + Date.now()); setView('form');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   function startEdit(r) {
     const c = r.content || {};
     setT({
@@ -497,9 +507,16 @@ export default function TemplatesPage() {
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
-                      <td>{r.name}</td>
-                      <td><Badge label={r.channel} tone="blue" /></td>
-                      <td className="dim">{r.purpose}</td>
+                      <td style={{ fontWeight: 600 }}>{r.name}</td>
+                      {/* Channel glyph + label (§7.6) — WA green, email neutral. */}
+                      <td>
+                        <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5,
+                          color: r.channel === 'whatsapp' ? 'var(--wa, #25D366)' : 'var(--t2)' }}>
+                          {r.channel === 'whatsapp' ? <MessageCircle size={14} /> : <Mail size={14} />}
+                          {r.channel === 'whatsapp' ? 'WhatsApp' : (r.channel === 'email' ? 'Email' : r.channel)}
+                        </span>
+                      </td>
+                      <td className="dim" style={{ fontSize: 12.5 }}>{r.purpose}</td>
                       <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td>{r.channel === 'whatsapp'
                         ? (r.approval_status

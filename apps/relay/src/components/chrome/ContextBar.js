@@ -1,22 +1,41 @@
 'use client';
-// Slim top strip: area breadcrumb + segmented sub-tabs + LIVE dot.
-// The page title lives in each page (PageHead), not here.
+// COMMAND top context bar (handoff §4): breadcrumb GROUP / SCREEN (mono,
+// uppercase) on the left; a green LIVE · UPDATED h:mm IST pulse + the
+// cross-system launcher on the right. Sub-tabs keep their slot for groups
+// with more than one screen. Page titles live in each page (PageHead).
+import { useEffect, useState } from 'react';
 import { matchActive } from './navMatch.js';
+import { crumbFor } from '../../lib/nav.js';
 import { AppLauncher } from '@throttle/ui';
+
+function istNow() {
+  try {
+    return new Intl.DateTimeFormat('en-IN', {
+      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata',
+    }).format(new Date());
+  } catch { return ''; }
+}
 
 export function ContextBar({ groups, pathname, onNav }) {
   const match = matchActive(groups, pathname);
   const group = match?.group;
   const activeRoute = match?.item?.route;
-  const isDeeper = activeRoute && pathname !== activeRoute && pathname.startsWith(activeRoute + '/');
+  const crumb = crumbFor(groups, pathname);
   const subTabs = group && !group.flat ? (group.items || []) : [];
+
+  // "UPDATED h:mm IST" — re-render once a minute so the stamp stays honest.
+  const [now, setNow] = useState(istNow);
+  useEffect(() => {
+    const t = setInterval(() => setNow(istNow()), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   return (
     <div className="cb cb-slim">
       <div className="cb-left">
-        <span className="cb-crumb">{group ? group.label : 'RELAY'}</span>
-        {isDeeper && match?.item?.label && (
-          <><span className="cb-slash">/</span><span className="cb-crumb cb-crumb-2">{match.item.label}</span></>
+        <span className="cb-crumb">{crumb.group}</span>
+        {crumb.page && (
+          <><span className="cb-slash">/</span><span className="cb-crumb cb-crumb-2">{crumb.page}</span></>
         )}
         {subTabs.length > 1 && (
           <div className="cb-tabs">
@@ -31,8 +50,8 @@ export function ContextBar({ groups, pathname, onNav }) {
           </div>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
-        <span className="tb-live"><span className="tb-dot" />LIVE</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+        <span className="tb-live"><span className="tb-dot" />LIVE · UPDATED {now} IST</span>
         <AppLauncher current="relay" />
       </div>
     </div>

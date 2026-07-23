@@ -200,6 +200,17 @@ export default function JourneysPage() {
     seedCanvas({ trigger: { type: 'event', name: 'checkout_started' } }, null);
     setView('form');
   }
+  // ⌘K "New journey" deep-link (?new=1) — read once on mount, then clean the URL.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
+      setJ(emptyJourney()); setCompileErrors(null); setFunnel(null);
+      seedCanvas({ trigger: { type: 'event', name: 'checkout_started' } }, null);
+      setView('form');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function open(r) {
     setCompileErrors(null); setFunnel(null);
@@ -363,7 +374,7 @@ export default function JourneysPage() {
                   onChange={(next) => setStatus(next ? 'active' : 'paused')}
                 />
                 <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: .3,
-                  color: isOn(j.status) ? 'var(--ok-fg, #2e7d32)' : 'var(--text-4)' }}>
+                  color: isOn(j.status) ? 'var(--green, #34d399)' : 'var(--text-4)' }}>
                   {isOn(j.status) ? 'ON' : 'OFF'}
                 </span>
               </span>
@@ -491,7 +502,7 @@ export default function JourneysPage() {
             {!j.id && <span className="dim" style={{ fontSize: 13 }}>Save the journey to enable the ON/OFF switch.</span>}
             {j.id && (
               <span className="dim" style={{ fontSize: 13 }}>
-                This journey is <strong style={{ color: isOn(j.status) ? 'var(--ok-fg, #2e7d32)' : 'var(--text-3)' }}>
+                This journey is <strong style={{ color: isOn(j.status) ? 'var(--green, #34d399)' : 'var(--text-3)' }}>
                   {isOn(j.status) ? 'ON — enrolling and sending' : 'OFF — not enrolling anyone'}
                 </strong>. Use the switch beside the title to change it.
               </span>
@@ -576,16 +587,15 @@ export default function JourneysPage() {
                 );
               })()}>
               <table className="dt">
-                {/* Campaign-parity analytics columns (journey_stats_list) + journey-native
-                    Enrolled/Conv. Version + re-enrolment moved off the list — they live in the
-                    editor; the list's job is "is it on, is it working, what is it worth". */}
+                {/* Lean COMMAND list (§7.3): On/Off · Journey (trigger·version) · Enrolled ·
+                    Conv · Revenue · Read · Last activity. The full analytics set (cost, sent,
+                    delivered, click, fail, skip) lives on /analytics and in the editor —
+                    the list's job is "is it on, is it working, what is it worth".
+                    Draft/archived (vs merely OFF) shows as a small pill beside the name. */}
                 <thead><tr>
-                  <th style={{ width: 92 }}>On / Off</th><th>Name</th><th>Status</th>
+                  <th style={{ width: 96 }}>On / Off</th><th>Journey</th>
                   <th className="num">Enrolled</th><th className="num">Conv</th>
-                  <th className="num">Revenue</th><th className="num">Cost</th>
-                  <th className="num">Sent</th><th className="num">Delivered</th>
-                  <th className="num">Read</th><th className="num">Click</th>
-                  <th className="num">Fail</th><th className="num">Skipped</th>
+                  <th className="num">Revenue</th><th className="num">Read</th>
                   <th>Last activity</th>
                 </tr></thead>
                 <tbody>
@@ -607,43 +617,44 @@ export default function JourneysPage() {
                             title={canBuild ? g.why : (on ? 'Sending' : 'Not sending')}
                             onChange={(next) => toggleRow(r, next)}
                           />
-                          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: .3,
-                            color: on ? 'var(--ok-fg, #2e7d32)' : 'var(--text-4)' }}>
+                          <span className="mono" style={{ fontSize: 10, fontWeight: 600,
+                            color: on ? 'var(--green)' : 'var(--t5)' }}>
                             {on ? 'ON' : 'OFF'}
                           </span>
                         </span>
                       </td>
                       <td>
-                        <GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}
-                        <div className="mono dim" style={{ fontSize: 11 }}>{triggerSummary(r.trigger, segments)} · v{r.active_version ?? '—'}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                          <GitBranch size={15} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+                          <div>
+                            <span style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</span>
+                            {/* OFF alone hides WHY it's off — draft/archived still matter. */}
+                            {(r.status === 'draft' || r.status === 'archived') && (
+                              <span style={{ marginLeft: 8 }}><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></span>
+                            )}
+                            <div className="mono dim" style={{ fontSize: 10.5, marginTop: 2 }}>
+                              {triggerSummary(r.trigger, segments)} · v{r.active_version ?? '—'}
+                            </div>
+                          </div>
+                        </div>
                       </td>
-                      {/* Kept alongside the switch: ON/OFF is the answer, but draft-vs-paused-vs-archived still matters. */}
-                      <td><Badge label={r.status || 'draft'} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td className="num mono" title={o ? `${o.enrolled} lifetime · ${o.in_flight} in flight · ${o.completed} completed` : undefined}>
                         {o ? o.enrolled_30d : '—'}
                         {o?.in_flight > 0 && <div className="dim" style={{ fontSize: 10 }}>{o.in_flight} in flight</div>}
                       </td>
                       {/* Conv = purchase-exits ÷ enrolled — the journey's own goal signal (a
                           purchase-exit can fire WITHOUT a message ever sending). */}
-                      <td className="num mono" title={o ? `${o.purchased_exits} purchase-exit(s) of ${o.enrolled} enrolled` : undefined}>{rate(o?.conversion_rate)}</td>
-                      <td className="num mono">{o?.attributed_revenue ? inr(o.attributed_revenue) : '—'}</td>
+                      <td className="num mono dim" title={o ? `${o.purchased_exits} purchase-exit(s) of ${o.enrolled} enrolled` : undefined}>{rate(o?.conversion_rate)}</td>
                       <td className="num mono">
-                        {o && Number(o.cost_inr) > 0 ? inr(o.cost_inr) : '—'}
-                        {/* An unpriced send is NOT a free one — say so rather than let a small
-                            ₹ figure read as the whole spend. */}
+                        {o?.attributed_revenue ? inr(o.attributed_revenue) : <span style={{ color: 'var(--t5)' }}>—</span>}
                         {o?.unpriced > 0 && (
                           <div className="dim" style={{ fontSize: 10 }} title={`${o.unpriced} sent message(s) have no rate card entry — spend is understated`}>
                             +{o.unpriced} unpriced
                           </div>
                         )}
                       </td>
-                      <td className="num mono dim" title={o?.by_channel ? Object.entries(o.by_channel).map(([c, v]) => `${c}: ${v.sent}`).join(' · ') : undefined}>{o ? o.sent : '—'}</td>
-                      <td className="num mono dim">{o ? o.delivered : '—'}</td>
-                      <td className="num mono">{rate(o?.read_rate)}</td>
-                      <td className="num mono">{rate(o?.click_rate)}</td>
-                      <td className="num mono">{rate(o?.fail_rate)}</td>
-                      <td className="num mono">{rate(o?.skip_rate)}</td>
-                      <td className="mono dim">{o?.at ? fmtDate(o.at) : fmtDate(r.updated_at)}</td>
+                      <td className="num mono dim">{rate(o?.read_rate)}</td>
+                      <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{o?.at ? fmtDate(o.at) : fmtDate(r.updated_at)}</td>
                     </tr>
                     );
                   })}

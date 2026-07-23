@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#08080b;font-family:'Hanken Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  a:hover{color:#F2CD1A}
+  .ms{font-family:'Material Symbols Rounded';font-weight:400;line-height:1;letter-spacing:normal;display:inline-block;overflow:hidden}
+  @keyframes rpulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  @keyframes rgrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  @keyframes rfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  ::-webkit-scrollbar{width:7px;height:7px}
+  ::-webkit-scrollbar-thumb{background:#2a2c31;border-radius:4px}
+</style>
+</helmet>
+
+<section data-turn="2" style="padding:40px 44px 70px;background:#08080b;border-bottom:1px solid #17181c">
+  <div style="max-width:1560px;margin:0 auto 26px">
+    <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;letter-spacing:.22em;color:#6f747b;text-transform:uppercase">COMMAND · Accent colorways</div>
+    <h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;margin-top:8px;letter-spacing:-.01em">Pick a color for COMMAND</h1>
+    <p style="color:#8b909a;font-size:14.5px;margin-top:8px;max-width:74ch;line-height:1.6">Same COMMAND layout, six accents — each shown on the real chrome (brand mark, active nav, primary button, ROI). Status colors stay semantic. Call a swatch by id (<a href="#2a" style="color:#F2CD1A">2a</a>–<a href="#2f" style="color:#F2CD1A">2f</a>).</p>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:30px;max-width:1560px;margin:0 auto">
+    <sc-for list="{{ colorways }}" as="w" hint-placeholder-count="6">
+      <div id="{{ w.id }}" style="flex:none;width:668px">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px">
+          <span style="width:20px;height:20px;border-radius:6px;background:{{ w.accent }};box-shadow:0 0 0 4px {{ w.soft }}"></span>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:#f4f5f6">{{ w.id2 }} · {{ w.name }}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">{{ w.accent }}</span>
+        </div>
+
+        <div style="height:452px;display:flex;background:#0d0e10;border:1px solid #212227;border-radius:16px;overflow:hidden;font-family:'Hanken Grotesk',sans-serif;box-shadow:0 26px 60px -34px rgba(0,0,0,.8)">
+          <!-- sidebar sliver -->
+          <aside style="width:172px;flex:none;background:#111214;border-right:1px solid #202128;display:flex;flex-direction:column;padding:0 0 12px">
+            <div style="height:52px;display:flex;align-items:center;gap:9px;padding:0 13px;border-bottom:1px solid #202128">
+              <div style="width:28px;height:28px;border-radius:8px;background:{{ w.soft }};border:1px solid {{ w.bd }};display:flex;align-items:center;justify-content:center"><span class="ms" style="font-size:16px;color:{{ w.accent }}">bolt</span></div>
+              <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13.5px;letter-spacing:.15em;color:#f4f5f6">RELAY</span>
+            </div>
+            <div style="padding:12px 10px;display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;color:#a3a8af;font-size:12.5px"><span class="ms" style="font-size:17px">space_dashboard</span>Overview</div>
+              <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;color:{{ w.accent }};font-weight:600;font-size:12.5px;background:{{ w.soft }};position:relative"><span style="position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:18px;border-radius:0 3px 3px 0;background:{{ w.accent }}"></span><span class="ms" style="font-size:17px">campaign</span>Campaigns</div>
+              <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;color:#a3a8af;font-size:12.5px"><span class="ms" style="font-size:17px">fork_right</span>Journeys</div>
+              <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;color:#a3a8af;font-size:12.5px"><span class="ms" style="font-size:17px">monitoring</span>Analytics</div>
+            </div>
+            <div style="margin-top:auto;margin:auto 10px 0;padding:10px 11px;background:linear-gradient(160deg,rgba(52,211,153,.09),rgba(52,211,153,.02));border:1px solid rgba(52,211,153,.24);border-radius:11px">
+              <div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.14em;color:#34d399">ON AIR</span></div>
+              <div style="font-size:12px;font-weight:600;color:#f4f5f6;margin-top:6px">Order Shipped</div>
+              <div style="height:4px;border-radius:3px;background:rgba(255,255,255,.06);margin-top:7px;overflow:hidden"><div style="height:100%;width:49%;background:#34d399;border-radius:3px"></div></div>
+            </div>
+          </aside>
+
+          <!-- main -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 18px 12px">
+              <h2 style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Campaigns</h2>
+              <button style="display:inline-flex;align-items:center;gap:6px;font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;color:{{ w.fg }};background:{{ w.accent }};border:none;border-radius:9px;padding:8px 13px;cursor:pointer;box-shadow:0 6px 16px -8px {{ w.glow }}"><span class="ms" style="font-size:16px">add</span>New campaign</button>
+            </div>
+            <!-- kpi strip -->
+            <div style="display:flex;background:#141518;border:1px solid #212227;border-radius:12px;overflow:hidden;margin:0 18px 12px">
+              <div style="flex:1;padding:11px 14px;border-right:1px solid #202128;position:relative"><div style="position:absolute;top:0;left:0;right:0;height:2px;background:{{ w.accent }}"></div><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Sent · 7d</div><div style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;color:#f4f5f6;margin-top:5px;line-height:1">26,340</div></div>
+              <div style="flex:1;padding:11px 14px;border-right:1px solid #202128"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Read rate</div><div style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;color:#f4f5f6;margin-top:5px;line-height:1">44.2%</div></div>
+              <div style="flex:1;padding:11px 14px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Blended ROI</div><div style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;color:{{ w.accent }};margin-top:5px;line-height:1">6.4×</div></div>
+            </div>
+            <!-- rows -->
+            <div style="margin:0 18px;background:#141518;border:1px solid #212227;border-radius:12px;overflow:hidden">
+              <sc-for list="{{ previewRows }}" as="c" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #1a1b1f">
+                  <span style="font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:600;letter-spacing:.05em;padding:3px 6px;border-radius:5px;color:{{ c.chFg }};background:{{ c.chBg }}">{{ c.chShort }}</span>
+                  <div style="flex:1;min-width:0"><div style="font-weight:600;color:#f4f5f6;font-size:13px">{{ c.name }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c;margin-top:1px">{{ c.purposeLabel }}</div></div>
+                  <span style="display:inline-flex;align-items:center;gap:5px;font-family:'JetBrains Mono',monospace;font-size:9.5px;padding:3px 8px;border-radius:6px;color:{{ c.sFg }};background:{{ c.sBg }};border:1px solid {{ c.sBd }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ c.sFg }}"></span>{{ c.statusLabel }}</span>
+                  <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:{{ c.roiColor }};width:44px;text-align:right">{{ c.roi }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+</section>
+
+<section data-turn="1" style="min-height:100vh;padding:40px 44px 90px;background:radial-gradient(1200px 600px at 20% -10%,rgba(242,205,26,.05),transparent),#08080b">
+  <div style="max-width:1560px;margin:0 auto 30px">
+    <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;letter-spacing:.22em;color:#6f747b;text-transform:uppercase">Relay · Frontend Redesign</div>
+    <h1 style="font-family:'Space Grotesk',sans-serif;font-size:30px;font-weight:700;color:#f4f5f6;margin-top:8px;letter-spacing:-.01em">Three directions for the Campaigns screen</h1>
+    <p style="color:#8b909a;font-size:15px;margin-top:8px;max-width:70ch;line-height:1.6">Each explores a different visual mood <em>and</em> a different navigation model — the two things you flagged. Same real content and data. Reference an option in chat by its id (<a href="#1a" style="color:#F2CD1A">1a</a>, <a href="#1b" style="color:#F2CD1A">1b</a>, <a href="#1c" style="color:#F2CD1A">1c</a>). Pan / zoom to compare.</p>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:56px;align-items:flex-start">
+
+    <!-- ══════════════════════ OPTION 1A — COMMAND ══════════════════════ -->
+    <div id="1a" style="flex:none">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;letter-spacing:.05em;color:#08080b;background:#F2CD1A;padding:4px 11px;border-radius:7px">1A</span>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:700;color:#f4f5f6;letter-spacing:.02em">COMMAND</span>
+        <span style="color:#71767c;font-size:13.5px">Grouped sidebar refined · ⌘K palette · live "on air" rail · Relay Yellow kept</span>
+      </div>
+
+      <div style="width:1480px;height:928px;display:flex;background:#0d0e10;border:1px solid #212227;border-radius:18px;overflow:hidden;font-family:'Hanken Grotesk',sans-serif;box-shadow:0 40px 90px -40px rgba(0,0,0,.8)">
+        <!-- sidebar -->
+        <aside style="width:256px;flex:none;background:#111214;border-right:1px solid #202128;display:flex;flex-direction:column">
+          <div style="height:60px;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid #202128">
+            <div style="width:34px;height:34px;border-radius:10px;background:rgba(242,205,26,.14);border:1px solid rgba(242,205,26,.34);display:flex;align-items:center;justify-content:center"><span class="ms" style="font-size:20px;color:#F2CD1A">bolt</span></div>
+            <div style="line-height:1"><div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;letter-spacing:.16em;color:#f4f5f6">RELAY</div><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.14em;color:#6f747b;margin-top:3px">CONTROL TOWER</div></div>
+          </div>
+          <div style="margin:12px 14px 6px;display:flex;align-items:center;gap:9px;background:#0a0b0d;border:1px solid #23252b;border-radius:10px;padding:9px 11px;cursor:pointer" style-hover="border-color:#33363c">
+            <span class="ms" style="font-size:17px;color:#6f747b">search</span>
+            <span style="flex:1;font-size:13px;color:#6f747b">Search or jump to…</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#8b909a;border:1px solid #2c2f36;border-radius:5px;padding:2px 6px">⌘K</span>
+          </div>
+          <nav style="flex:1;overflow-y:auto;padding:8px 12px">
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">space_dashboard</span>Overview</a>
+
+            <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.16em;color:#565b61;text-transform:uppercase;padding:14px 11px 7px">Send</div>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#F2CD1A;font-weight:600;font-size:13.5px;background:rgba(242,205,26,.12);position:relative;margin-bottom:2px"><span style="position:absolute;left:-12px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:0 3px 3px 0;background:#F2CD1A"></span><span class="ms" style="font-size:19px">campaign</span>Campaigns</a>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">fork_right</span>Journeys</a>
+
+            <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.16em;color:#565b61;text-transform:uppercase;padding:14px 11px 7px">Audience</div>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">filter_alt</span>Segments</a>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">contacts</span>Contacts</a>
+
+            <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.16em;color:#565b61;text-transform:uppercase;padding:14px 11px 7px">Build &amp; measure</div>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">mail</span>Templates</a>
+            <a href="#1a" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:10px;color:#a3a8af;font-size:13.5px;font-weight:500;margin-bottom:2px" style-hover="background:#1a1c20;color:#f4f5f6"><span class="ms" style="font-size:19px">monitoring</span>Analytics</a>
+          </nav>
+
+          <div style="margin:8px 14px;padding:12px 13px;background:linear-gradient(160deg,rgba(52,211,153,.09),rgba(52,211,153,.02));border:1px solid rgba(52,211,153,.24);border-radius:12px">
+            <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.16em;color:#34d399">ON AIR</span></div>
+            <div style="font-size:13px;font-weight:600;color:#f4f5f6;margin-top:8px">Order Shipped</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;margin-top:3px">612 / 1,240 sent</div>
+            <div style="height:5px;border-radius:3px;background:rgba(255,255,255,.06);margin-top:8px;overflow:hidden"><div style="height:100%;width:49%;background:#34d399;border-radius:3px;transform-origin:left;animation:rgrow .8s cubic-bezier(.22,1,.36,1)"></div></div>
+          </div>
+
+          <div style="border-top:1px solid #202128;padding:12px 14px;display:flex;align-items:center;gap:10px">
+            <div style="width:32px;height:32px;border-radius:9px;background:rgba(242,205,26,.14);border:1px solid rgba(242,205,26,.34);display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;font-weight:700;color:#F2CD1A;font-size:13px">A</div>
+            <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;color:#f4f5f6">Afshaan K.</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c">Super admin</div></div>
+            <span style="width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)"></span>
+          </div>
+        </aside>
+
+        <!-- main -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0d0e10">
+          <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #1c1d22;background:#0a0b0d">
+            <div style="display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#71767c"><span>SEND</span><span style="color:#33363c">/</span><span style="color:#a3a8af">CAMPAIGNS</span></div>
+            <div style="display:flex;align-items:center;gap:16px"><span style="display:flex;align-items:center;gap:7px;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#71767c"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:rpulse 2.4s infinite"></span>LIVE · UPDATED 14:22</span><span class="ms" style="font-size:18px;color:#71767c">apps</span></div>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;padding:24px 26px 40px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+              <div><h2 style="font-family:'Space Grotesk',sans-serif;font-size:30px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Campaigns</h2><p style="color:#8b909a;font-size:13.5px;margin-top:8px">One-shot broadcasts. Build a draft, submit for approval, then send.</p></div>
+              <div style="display:flex;gap:9px">
+                <button style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:9px;padding:9px 14px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f"><span class="ms" style="font-size:16px">download</span>CSV</button>
+                <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;letter-spacing:.02em;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New campaign</button>
+              </div>
+            </div>
+
+            <!-- KPI strip -->
+            <div style="display:flex;background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden;margin-bottom:18px">
+              <div style="flex:1;padding:15px 18px;border-right:1px solid #202128;position:relative"><div style="position:absolute;top:0;left:0;right:0;height:2px;background:#F2CD1A"></div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Sent · 7d</div><div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;color:#f4f5f6;margin-top:7px;line-height:1">26,340</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:5px">▲ 12.4%</div></div>
+              <div style="flex:1;padding:15px 18px;border-right:1px solid #202128"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Delivery</div><div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;color:#f4f5f6;margin-top:7px;line-height:1">97.6%</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:5px">▲ 0.4%</div></div>
+              <div style="flex:1;padding:15px 18px;border-right:1px solid #202128"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Read rate</div><div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;color:#f4f5f6;margin-top:7px;line-height:1">44.2%</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:5px">▲ 3.1%</div></div>
+              <div style="flex:1;padding:15px 18px;border-right:1px solid #202128"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Attr. revenue</div><div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;color:#f4f5f6;margin-top:7px;line-height:1">₹5.11L</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;margin-top:5px">last-touch · 7d</div></div>
+              <div style="flex:1;padding:15px 18px"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Blended ROI</div><div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;color:#F2CD1A;margin-top:7px;line-height:1">6.4×</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;margin-top:5px">rev ÷ spend</div></div>
+            </div>
+
+            <!-- panel -->
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;border-bottom:1px solid #202128">
+                <div style="display:flex;align-items:center;gap:6px;background:#0d0e10;border:1px solid #212227;border-radius:10px;padding:3px">
+                  <button style="font-size:12.5px;font-weight:600;color:#F2CD1A;background:rgba(242,205,26,.12);border:none;border-radius:7px;padding:6px 13px;cursor:pointer">All broadcasts <span style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7">7</span></button>
+                  <button style="font-size:12.5px;font-weight:500;color:#8b909a;background:none;border:none;border-radius:7px;padding:6px 13px;cursor:pointer" style-hover="color:#f4f5f6">Scheduled <span style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7">1</span></button>
+                  <button style="font-size:12.5px;font-weight:500;color:#8b909a;background:none;border:none;border-radius:7px;padding:6px 13px;cursor:pointer" style-hover="color:#f4f5f6">Drafts <span style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7">2</span></button>
+                  <button style="font-size:12.5px;font-weight:500;color:#8b909a;background:none;border:none;border-radius:7px;padding:6px 13px;cursor:pointer" style-hover="color:#f4f5f6">Sent <span style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7">3</span></button>
+                </div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">7 broadcasts</div>
+              </div>
+              <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="text-align:left">
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Broadcast</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Status</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">When</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Delivered</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Read</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Click</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Revenue</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">ROI</th>
+                </tr></thead>
+                <tbody>
+                  <sc-for list="{{ campaigns }}" as="c" hint-placeholder-count="7">
+                    <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f">
+                        <div style="display:flex;align-items:center;gap:9px">
+                          <span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;letter-spacing:.05em;padding:3px 6px;border-radius:5px;color:{{ c.chFg }};background:{{ c.chBg }}">{{ c.chShort }}</span>
+                          <div><div style="font-weight:600;color:#f4f5f6">{{ c.name }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;margin-top:2px">{{ c.purposeLabel }} · {{ c.chLabel }}</div></div>
+                        </div>
+                      </td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.02em;padding:3px 9px;border-radius:6px;color:{{ c.sFg }};background:{{ c.sBg }};border:1px solid {{ c.sBd }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ c.sFg }}"></span>{{ c.statusLabel }}</span></td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ c.when }}</td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace"><span style="color:#f4f5f6">{{ c.delivered }}</span> <span style="color:#565b61;font-size:11px">{{ c.deliveredPct }}</span></td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.read }}</td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.click }}</td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ c.revenue }}</td>
+                      <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.roiColor }}">{{ c.roi }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ OPTION 1B — BROADCAST ══════════════════════ -->
+    <div id="1b" style="flex:none">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+        <span style="font-family:'Bricolage Grotesque',sans-serif;font-size:13px;font-weight:700;letter-spacing:.02em;color:#fff;background:#FF5C49;padding:4px 11px;border-radius:7px">1B</span>
+        <span style="font-family:'Bricolage Grotesque',sans-serif;font-size:19px;font-weight:800;color:#f4f5f6;letter-spacing:.01em">BROADCAST</span>
+        <span style="color:#71767c;font-size:13.5px;font-family:'Instrument Sans',sans-serif">Top nav bar · live "on air" ribbon · roomy cards · coral-led, yellow retained</span>
+      </div>
+
+      <div style="width:1480px;height:928px;display:flex;flex-direction:column;background:#101013;border:1px solid #232327;border-radius:18px;overflow:hidden;font-family:'Instrument Sans',sans-serif;box-shadow:0 40px 90px -40px rgba(0,0,0,.8)">
+        <!-- top nav -->
+        <header style="height:62px;flex:none;display:flex;align-items:center;gap:26px;padding:0 26px;border-bottom:1px solid #202024;background:#141416">
+          <div style="display:flex;align-items:center;gap:11px">
+            <div style="width:34px;height:34px;border-radius:11px;background:#FF5C49;display:flex;align-items:center;justify-content:center"><span class="ms" style="font-size:20px;color:#fff">bolt</span></div>
+            <span style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:19px;letter-spacing:-.01em;color:#f4f5f6">Relay</span>
+          </div>
+          <nav style="display:flex;align-items:center;gap:3px;flex:1">
+            <a href="#1b" style="font-size:14px;font-weight:500;color:#9a9fa6;padding:8px 14px;border-radius:9px" style-hover="color:#f4f5f6;background:#1c1c20">Overview</a>
+            <a href="#1b" style="font-size:14px;font-weight:600;color:#FF5C49;padding:8px 14px;border-radius:9px;background:rgba(255,92,73,.13)">Campaigns</a>
+            <a href="#1b" style="font-size:14px;font-weight:500;color:#9a9fa6;padding:8px 14px;border-radius:9px" style-hover="color:#f4f5f6;background:#1c1c20">Journeys</a>
+            <a href="#1b" style="font-size:14px;font-weight:500;color:#9a9fa6;padding:8px 14px;border-radius:9px" style-hover="color:#f4f5f6;background:#1c1c20">Audiences</a>
+            <a href="#1b" style="font-size:14px;font-weight:500;color:#9a9fa6;padding:8px 14px;border-radius:9px" style-hover="color:#f4f5f6;background:#1c1c20">Templates</a>
+            <a href="#1b" style="font-size:14px;font-weight:500;color:#9a9fa6;padding:8px 14px;border-radius:9px" style-hover="color:#f4f5f6;background:#1c1c20">Analytics</a>
+          </nav>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:flex;align-items:center;gap:8px;background:#1c1c20;border:1px solid #2a2a2f;border-radius:10px;padding:8px 12px;width:230px;cursor:pointer"><span class="ms" style="font-size:17px;color:#71767c">search</span><span style="flex:1;font-size:13px;color:#71767c">Search…</span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#8b909a;border:1px solid #34343a;border-radius:5px;padding:1px 5px">⌘K</span></div>
+            <div style="width:34px;height:34px;border-radius:10px;background:rgba(255,92,73,.14);border:1px solid rgba(255,92,73,.3);display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-weight:700;color:#FF5C49;font-size:14px">A</div>
+          </div>
+        </header>
+
+        <!-- live ribbon -->
+        <div style="flex:none;display:flex;align-items:center;gap:0;background:#141416;border-bottom:1px solid #202024;padding:0 26px">
+          <div style="display:flex;align-items:center;gap:9px;padding:11px 20px 11px 0;border-right:1px solid #232327;margin-right:20px"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#34d399">ON AIR</span></div>
+          <div style="display:flex;align-items:center;gap:8px;flex:1;font-size:13px;color:#c3c7cc"><strong style="color:#f4f5f6;font-weight:600">Order Shipped</strong><span style="color:#71767c">is fanning out —</span><span style="font-family:'JetBrains Mono',monospace;color:#f4f5f6">612 / 1,240</span><span style="color:#71767c">· 97.7% delivered</span></div>
+          <div style="display:flex;align-items:center;gap:22px">
+            <div style="text-align:right"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:#71767c;text-transform:uppercase">Queue</div><div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:15px;color:#f4f5f6">628</div></div>
+            <div style="text-align:right"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:#71767c;text-transform:uppercase">Sent · 7d</div><div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:15px;color:#f4f5f6">26,340</div></div>
+            <div style="text-align:right"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:#71767c;text-transform:uppercase">Revenue</div><div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:15px;color:#F2CD1A">₹5.11L</div></div>
+          </div>
+        </div>
+
+        <!-- content -->
+        <div style="flex:1;overflow-y:auto;padding:30px 40px 40px;background:radial-gradient(900px 400px at 85% -5%,rgba(255,92,73,.06),transparent),#101013">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:26px">
+            <div><h2 style="font-family:'Bricolage Grotesque',sans-serif;font-size:34px;font-weight:800;color:#f4f5f6;letter-spacing:-.02em;line-height:1">Campaigns</h2><p style="color:#9a9fa6;font-size:14.5px;margin-top:9px">One-shot broadcasts. Build, approve, and send.</p></div>
+            <div style="display:flex;gap:10px">
+              <button style="display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:#c3c7cc;background:#1c1c20;border:1px solid #2a2a2f;border-radius:11px;padding:11px 16px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#3a3a40"><span class="ms" style="font-size:17px">download</span>Export CSV</button>
+              <button style="display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:700;color:#fff;background:#FF5C49;border:none;border-radius:11px;padding:11px 18px;cursor:pointer;box-shadow:0 8px 22px -8px rgba(255,92,73,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:18px">add</span>New campaign</button>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:20px">
+            <button style="font-size:13.5px;font-weight:600;color:#fff;background:#FF5C49;border:none;border-radius:10px;padding:8px 16px;cursor:pointer">All <span style="opacity:.8">7</span></button>
+            <button style="font-size:13.5px;font-weight:500;color:#9a9fa6;background:#1c1c20;border:1px solid #2a2a2f;border-radius:10px;padding:8px 16px;cursor:pointer" style-hover="color:#f4f5f6">Scheduled <span style="opacity:.7">1</span></button>
+            <button style="font-size:13.5px;font-weight:500;color:#9a9fa6;background:#1c1c20;border:1px solid #2a2a2f;border-radius:10px;padding:8px 16px;cursor:pointer" style-hover="color:#f4f5f6">Drafts <span style="opacity:.7">2</span></button>
+            <button style="font-size:13.5px;font-weight:500;color:#9a9fa6;background:#1c1c20;border:1px solid #2a2a2f;border-radius:10px;padding:8px 16px;cursor:pointer" style-hover="color:#f4f5f6">Sent <span style="opacity:.7">3</span></button>
+          </div>
+
+          <!-- campaign cards -->
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <sc-for list="{{ campaigns }}" as="c" hint-placeholder-count="7">
+              <div style="display:flex;align-items:center;gap:20px;background:#161618;border:1px solid #242427;border-radius:14px;padding:16px 20px;cursor:pointer" style-hover="border-color:#3a3a40;background:#19191c">
+                <div style="width:44px;height:44px;border-radius:12px;flex:none;display:flex;align-items:center;justify-content:center;color:{{ c.chFg }};background:{{ c.chBg }}"><span class="ms" style="font-size:22px">{{ c.chIcon }}</span></div>
+                <div style="width:270px;flex:none">
+                  <div style="display:flex;align-items:center;gap:9px"><span style="font-size:15.5px;font-weight:700;color:#f4f5f6">{{ c.name }}</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
+                    <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;color:{{ c.sFg }};background:{{ c.sBg }};border:1px solid {{ c.sBd }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ c.sFg }}"></span>{{ c.statusLabel }}</span>
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">{{ c.purposeLabel }}</span>
+                  </div>
+                </div>
+                <div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <div style="text-align:center;min-width:74px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">When</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#c3c7cc;margin-top:5px">{{ c.whenShort }}</div></div>
+                  <div style="text-align:center;min-width:74px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Delivered</div><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:#f4f5f6;margin-top:4px">{{ c.deliveredPct }}</div></div>
+                  <div style="text-align:center;min-width:60px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Read</div><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:#f4f5f6;margin-top:4px">{{ c.read }}</div></div>
+                  <div style="text-align:center;min-width:60px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Click</div><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:#f4f5f6;margin-top:4px">{{ c.click }}</div></div>
+                  <div style="text-align:right;min-width:96px"><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">Revenue · ROI</div><div style="margin-top:4px"><span style="font-family:'Bricolage Grotesque',sans-serif;font-size:15px;font-weight:700;color:#f4f5f6">{{ c.revenue }}</span> <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:{{ c.roiColor }}">{{ c.roi }}</span></div></div>
+                </div>
+                <span class="ms" style="font-size:20px;color:#565b61;flex:none">chevron_right</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ OPTION 1C — PULSE ══════════════════════ -->
+    <div id="1c" style="flex:none">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+        <span style="font-family:'Sora',sans-serif;font-size:13px;font-weight:700;letter-spacing:.02em;color:#fff;background:#8B5CF6;padding:4px 11px;border-radius:7px">1C</span>
+        <span style="font-family:'Sora',sans-serif;font-size:19px;font-weight:800;color:#f4f5f6;letter-spacing:.01em">PULSE</span>
+        <span style="color:#71767c;font-size:13.5px;font-family:'Plus Jakarta Sans',sans-serif">Dual-pane control tower · icon rail + contextual sub-nav · violet neon, yellow for data</span>
+      </div>
+
+      <div style="width:1480px;height:928px;display:flex;background:#0b0b12;border:1px solid #21212c;border-radius:18px;overflow:hidden;font-family:'Plus Jakarta Sans',sans-serif;box-shadow:0 40px 90px -40px rgba(0,0,0,.8)">
+        <!-- icon rail -->
+        <div style="width:70px;flex:none;background:#0e0e17;border-right:1px solid #1c1c26;display:flex;flex-direction:column;align-items:center;padding:14px 0">
+          <div style="width:40px;height:40px;border-radius:13px;background:linear-gradient(150deg,#8B5CF6,#6d3ff0);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px -6px rgba(139,92,246,.6)"><span class="ms" style="font-size:22px;color:#fff">bolt</span></div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:22px;width:100%;align-items:center">
+            <a href="#1c" title="Overview" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#7b7f93" style-hover="background:#191924;color:#f4f5f6"><span class="ms" style="font-size:22px">space_dashboard</span></a>
+            <a href="#1c" title="Campaigns" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#c4b5fd;background:rgba(139,92,246,.16);position:relative"><span style="position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:3px;height:22px;border-radius:0 3px 3px 0;background:#8B5CF6"></span><span class="ms" style="font-size:22px">campaign</span></a>
+            <a href="#1c" title="Journeys" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#7b7f93" style-hover="background:#191924;color:#f4f5f6"><span class="ms" style="font-size:22px">fork_right</span></a>
+            <a href="#1c" title="Audiences" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#7b7f93" style-hover="background:#191924;color:#f4f5f6"><span class="ms" style="font-size:22px">groups</span></a>
+            <a href="#1c" title="Analytics" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#7b7f93" style-hover="background:#191924;color:#f4f5f6"><span class="ms" style="font-size:22px">monitoring</span></a>
+          </div>
+          <div style="margin-top:auto;display:flex;flex-direction:column;gap:6px;align-items:center">
+            <a href="#1c" title="Admin" style="width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#7b7f93" style-hover="background:#191924;color:#f4f5f6"><span class="ms" style="font-size:22px">admin_panel_settings</span></a>
+            <div style="width:34px;height:34px;border-radius:11px;background:rgba(139,92,246,.16);border:1px solid rgba(139,92,246,.34);display:flex;align-items:center;justify-content:center;font-family:'Sora',sans-serif;font-weight:700;color:#c4b5fd;font-size:13px">A</div>
+          </div>
+        </div>
+
+        <!-- contextual sub-nav -->
+        <div style="width:212px;flex:none;background:#0e0e17;border-right:1px solid #1c1c26;display:flex;flex-direction:column;padding:20px 14px">
+          <div style="font-family:'Sora',sans-serif;font-size:17px;font-weight:800;color:#f4f5f6;letter-spacing:-.01em;padding:0 8px">Campaigns</div>
+          <div style="display:flex;align-items:center;gap:8px;margin:14px 4px 4px;background:#151520;border:1px solid #24242f;border-radius:10px;padding:8px 10px;cursor:pointer"><span class="ms" style="font-size:16px;color:#7b7f93">search</span><span style="flex:1;font-size:12.5px;color:#7b7f93">Search</span><span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#9a9fb0;border:1px solid #2e2e3a;border-radius:4px;padding:1px 5px">⌘K</span></div>
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:2px">
+            <a href="#1c" style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:600;color:#c4b5fd;background:rgba(139,92,246,.14)">All broadcasts <span style="font-family:'JetBrains Mono',monospace;font-size:11px;opacity:.8">7</span></a>
+            <a href="#1c" style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:500;color:#9a9fb0" style-hover="background:#17171f;color:#f4f5f6">Scheduled <span style="font-family:'JetBrains Mono',monospace;font-size:11px;opacity:.7">1</span></a>
+            <a href="#1c" style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:500;color:#9a9fb0" style-hover="background:#17171f;color:#f4f5f6">Drafts <span style="font-family:'JetBrains Mono',monospace;font-size:11px;opacity:.7">2</span></a>
+            <a href="#1c" style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:500;color:#9a9fb0" style-hover="background:#17171f;color:#f4f5f6">Sent <span style="font-family:'JetBrains Mono',monospace;font-size:11px;opacity:.7">3</span></a>
+          </div>
+          <div style="height:1px;background:#1c1c26;margin:16px 6px"></div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.14em;color:#565b71;text-transform:uppercase;padding:0 8px 8px">Live now</div>
+          <div style="margin:0 4px;padding:12px;background:linear-gradient(160deg,rgba(139,92,246,.12),rgba(139,92,246,.02));border:1px solid rgba(139,92,246,.26);border-radius:12px">
+            <div style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;color:#34d399">SENDING</span></div>
+            <div style="font-size:12.5px;font-weight:600;color:#f4f5f6;margin-top:7px">Order Shipped</div>
+            <div style="height:5px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden"><div style="height:100%;width:49%;background:#8B5CF6;border-radius:3px"></div></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9a9fb0;margin-top:6px">612 / 1,240</div>
+          </div>
+        </div>
+
+        <!-- main -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:radial-gradient(800px 400px at 80% -8%,rgba(139,92,246,.07),transparent),#0b0b12">
+          <div style="height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 26px;border-bottom:1px solid #1a1a24">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#7b7f93">SEND / CAMPAIGNS / ALL BROADCASTS</div>
+            <div style="display:flex;align-items:center;gap:14px"><span style="display:flex;align-items:center;gap:7px;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#7b7f93"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:rpulse 2.4s infinite"></span>LIVE 14:22</span></div>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;padding:24px 26px 40px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px">
+              <div><h2 style="font-family:'Sora',sans-serif;font-size:28px;font-weight:800;color:#f4f5f6;letter-spacing:-.02em;line-height:1">All broadcasts</h2><p style="color:#9a9fb0;font-size:13.5px;margin-top:8px">7 campaigns · one-shot sends across email &amp; WhatsApp</p></div>
+              <button style="display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:#fff;background:linear-gradient(150deg,#8B5CF6,#6d3ff0);border:none;border-radius:11px;padding:11px 17px;cursor:pointer;box-shadow:0 8px 22px -8px rgba(139,92,246,.7)" style-hover="filter:brightness(1.08)"><span class="ms" style="font-size:18px">add</span>New campaign</button>
+            </div>
+
+            <!-- KPI cards -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+              <div style="background:#13131c;border:1px solid #21212c;border-radius:14px;padding:15px 16px"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:#7b7f93;text-transform:uppercase">Sent · 7d</div><div style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800;color:#f4f5f6;margin-top:8px;line-height:1">26,340</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:6px">▲ 12.4%</div></div>
+              <div style="background:#13131c;border:1px solid #21212c;border-radius:14px;padding:15px 16px"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:#7b7f93;text-transform:uppercase">Delivery</div><div style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800;color:#f4f5f6;margin-top:8px;line-height:1">97.6%</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:6px">▲ 0.4%</div></div>
+              <div style="background:#13131c;border:1px solid #21212c;border-radius:14px;padding:15px 16px"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:#7b7f93;text-transform:uppercase">Read rate</div><div style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800;color:#f4f5f6;margin-top:8px;line-height:1">44.2%</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#34d399;margin-top:6px">▲ 3.1%</div></div>
+              <div style="background:linear-gradient(160deg,rgba(242,205,26,.1),rgba(139,92,246,.05));border:1px solid rgba(242,205,26,.28);border-radius:14px;padding:15px 16px"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:#c9b96b;text-transform:uppercase">Attr. revenue</div><div style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800;color:#F2CD1A;margin-top:8px;line-height:1">₹5.11L</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9a9fb0;margin-top:6px">6.4× ROI</div></div>
+            </div>
+
+            <!-- table -->
+            <div style="background:#13131c;border:1px solid #21212c;border-radius:14px;overflow:hidden">
+              <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="text-align:left">
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c">Broadcast</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c">Status</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c">Delivery</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c;text-align:right">Read</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c;text-align:right">Click</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c;text-align:right">Revenue</th>
+                  <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#7b7f93;font-weight:500;padding:12px 16px;border-bottom:1px solid #21212c;text-align:right">ROI</th>
+                </tr></thead>
+                <tbody>
+                  <sc-for list="{{ campaigns }}" as="c" hint-placeholder-count="7">
+                    <tr style="cursor:pointer" style-hover="background:rgba(139,92,246,.06)">
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23">
+                        <div style="display:flex;align-items:center;gap:10px">
+                          <div style="width:32px;height:32px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;color:{{ c.chFg }};background:{{ c.chBg }}"><span class="ms" style="font-size:17px">{{ c.chIcon }}</span></div>
+                          <div><div style="font-weight:600;color:#f4f5f6">{{ c.name }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#7b7f93;margin-top:2px">{{ c.purposeLabel }} · {{ c.chLabel }}</div></div>
+                        </div>
+                      </td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;color:{{ c.sFg }};background:{{ c.sBg }};border:1px solid {{ c.sBd }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ c.sFg }}"></span>{{ c.statusLabel }}</span></td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23">
+                        <div style="display:flex;align-items:center;gap:9px"><div style="width:70px;height:6px;border-radius:4px;background:rgba(255,255,255,.07);overflow:hidden"><div style="height:100%;border-radius:4px;background:#8B5CF6;transform-origin:left;width:{{ c.deliveredBarPct }}%"></div></div><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#c3c7cc">{{ c.deliveredPct }}</span></div>
+                      </td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23;text-align:right;font-family:'JetBrains Mono',monospace;color:#c3c7cc">{{ c.read }}</td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23;text-align:right;font-family:'JetBrains Mono',monospace;color:#c3c7cc">{{ c.click }}</td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ c.revenue }}</td>
+                      <td style="padding:13px 16px;border-bottom:1px solid #1a1a23;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.roiColor }}">{{ c.roi }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000}}">
+class Component extends DCLogic {
+  renderVals() {
+    const T = {
+      sent:      { fg:'#34d399', bg:'rgba(52,211,153,.13)',  bd:'rgba(52,211,153,.34)' },
+      sending:   { fg:'#fb923c', bg:'rgba(251,146,60,.15)',  bd:'rgba(251,146,60,.36)' },
+      scheduled: { fg:'#7c9bff', bg:'rgba(124,155,255,.15)', bd:'rgba(124,155,255,.34)' },
+      draft:     { fg:'#9aa0aa', bg:'rgba(255,255,255,.05)', bd:'rgba(255,255,255,.11)' },
+      pending:   { fg:'#f2cd1a', bg:'rgba(242,205,26,.13)',  bd:'rgba(242,205,26,.34)' },
+    };
+    const CH = {
+      email:    { label:'Email',    short:'EM', icon:'mail',           fg:'#a3a8af', bg:'rgba(255,255,255,.06)' },
+      whatsapp: { label:'WhatsApp', short:'WA', icon:'chat',           fg:'#25D366', bg:'rgba(37,211,102,.13)' },
+    };
+    const raw = [
+      { name:'July Win-Back Flow',   channel:'email',    purpose:'marketing',     tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 21',           whenShort:'Jul 21',   delivered:'8,180', deliveredPct:'97.2%', deliveredBarPct:97, read:'41.3%', click:'6.8%',  revenue:'₹3.24L', roi:'5.9×', roiPos:true },
+      { name:'Order Shipped',        channel:'whatsapp', purpose:'transactional', tone:'sending',   statusLabel:'In progress',     when:'Sending now',           whenShort:'now',      delivered:'598',   deliveredPct:'97.7%', deliveredBarPct:49, read:'88.1%', click:'12.4%', revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Monsoon Sale Blast',   channel:'email',    purpose:'marketing',     tone:'scheduled', statusLabel:'Scheduled',       when:'Fires Jul 26 · 9:00 AM', whenShort:'Jul 26',  delivered:'—',     deliveredPct:'—',     deliveredBarPct:0,  read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Abandoned Cart Nudge', channel:'whatsapp', purpose:'marketing',     tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 20',           whenShort:'Jul 20',   delivered:'3,020', deliveredPct:'97.8%', deliveredBarPct:98, read:'79.2%', click:'18.6%', revenue:'₹1.87L', roi:'8.2×', roiPos:true },
+      { name:'Diwali Early Access',  channel:'email',    purpose:'marketing',     tone:'draft',     statusLabel:'Draft',           when:'Edited 2h ago',         whenShort:'2h ago',   delivered:'—',     deliveredPct:'—',     deliveredBarPct:0,  read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'VIP Restock Alert',    channel:'whatsapp', purpose:'marketing',     tone:'pending',   statusLabel:'Pending approval', when:'Submitted 40m ago',    whenShort:'40m ago',  delivered:'—',     deliveredPct:'—',     deliveredBarPct:0,  read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Feedback Request',     channel:'email',    purpose:'utility',       tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 19',           whenShort:'Jul 19',   delivered:'5,310', deliveredPct:'98.5%', deliveredBarPct:99, read:'33.1%', click:'4.2%',  revenue:'—',      roi:'—',    roiPos:false },
+    ];
+    const campaigns = raw.map((r, i) => {
+      const t = T[r.tone], c = CH[r.channel];
+      return {
+        ...r, id:'c'+i,
+        sFg:t.fg, sBg:t.bg, sBd:t.bd,
+        chLabel:c.label, chShort:c.short, chIcon:c.icon, chFg:c.fg, chBg:c.bg,
+        purposeLabel: r.purpose.charAt(0).toUpperCase() + r.purpose.slice(1),
+        roiColor: r.roiPos ? '#34d399' : '#71767c',
+      };
+    });
+    const previewRows = [campaigns[0], campaigns[1], campaigns[2]];
+
+    const colorways = [
+      { id:'2a', id2:'2A', name:'Relay Yellow', accent:'#F2CD1A', fg:'#17140a', soft:'rgba(242,205,26,.13)', bd:'rgba(242,205,26,.34)', glow:'rgba(242,205,26,.7)' },
+      { id:'2b', id2:'2B', name:'Electric Lime', accent:'#B6F03C', fg:'#16200a', soft:'rgba(182,240,60,.14)', bd:'rgba(182,240,60,.34)', glow:'rgba(182,240,60,.6)' },
+      { id:'2c', id2:'2C', name:'Signal Cyan', accent:'#22D3EE', fg:'#04232a', soft:'rgba(34,211,238,.14)', bd:'rgba(34,211,238,.34)', glow:'rgba(34,211,238,.6)' },
+      { id:'2d', id2:'2D', name:'Coral Pop', accent:'#FF5C49', fg:'#ffffff', soft:'rgba(255,92,73,.14)', bd:'rgba(255,92,73,.34)', glow:'rgba(255,92,73,.7)' },
+      { id:'2e', id2:'2E', name:'Ultra Violet', accent:'#8B5CF6', fg:'#ffffff', soft:'rgba(139,92,246,.16)', bd:'rgba(139,92,246,.36)', glow:'rgba(139,92,246,.7)' },
+      { id:'2f', id2:'2F', name:'Azure', accent:'#4D8DFF', fg:'#ffffff', soft:'rgba(77,141,255,.15)', bd:'rgba(77,141,255,.34)', glow:'rgba(77,141,255,.7)' },
+    ];
+
+    return { campaigns, previewRows, colorways };
+  }
+}
+</script>
+</body>
+</html>

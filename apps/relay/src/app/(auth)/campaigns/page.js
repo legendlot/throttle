@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 
@@ -16,10 +16,23 @@ const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
 // Channel glyph — WhatsApp and email read very differently at a glance in a mixed list.
 function ChannelIcon({ channel }) {
   const c = String(channel || '').toLowerCase();
-  if (c === 'whatsapp') return <MessageCircle size={13} style={{ color: 'var(--ok, #25D366)' }} aria-label="WhatsApp" />;
+  if (c === 'whatsapp') return <MessageCircle size={13} style={{ color: 'var(--wa, #25D366)' }} aria-label="WhatsApp" />;
   if (c === 'email') return <Mail size={13} style={{ color: 'var(--text-3)' }} aria-label="Email" />;
   return <Send size={13} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
 }
+
+// COMMAND channel chip — mono short-code pill (WA green / EM neutral), §7.2.
+function ChannelChip({ channel }) {
+  const c = String(channel || '').toLowerCase();
+  const map = {
+    whatsapp: { short: 'WA', fg: 'var(--wa, #25D366)', bg: 'rgba(37,211,102,.13)' },
+    email:    { short: 'EM', fg: 'var(--t2)', bg: 'rgba(255,255,255,.06)' },
+    sms:      { short: 'SM', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
+  };
+  const m = map[c] || { short: (c || '?').slice(0, 2).toUpperCase(), fg: 'var(--t3)', bg: 'rgba(255,255,255,.06)' };
+  return <span className="chch" style={{ color: m.fg, background: m.bg }}>{m.short}</span>;
+}
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Which tab a campaign belongs to. Mirrors campaignStatus() so the chip and the tab can
 // never disagree — a campaign filed under "Scheduled" must be the one showing a Scheduled chip.
@@ -169,6 +182,14 @@ export default function CampaignsPage() {
     };
   }
   function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
+  // ⌘K "New campaign" deep-link (?new=1) — read once on mount, then clean the URL.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
+      setC(emptyCampaign()); setStats(null); setAttr(null); setView('form');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
   // Per-campaign performance (M8) — only meaningful once the campaign has sent.
   const loadStats = useCallback(async (id, status) => {
     if (!id || !['sending', 'sent'].includes(status)) { setStats(null); setAttr(null); return; }
@@ -555,10 +576,35 @@ export default function CampaignsPage() {
     );
   }
 
+  // KPI strip — aggregated from the SAME campaign_stats_list rows the table reads
+  // (§7.2: no extra RPC). Weighted rates; ROI only where cost is actually priced.
+  const kpiCells = (() => {
+    const os = Object.values(overview);
+    const sum = (k) => os.reduce((a, o) => a + Number(o?.[k] || 0), 0);
+    const sent = sum('sent'), delivered = sum('delivered'), opened = sum('opened');
+    const rev = sum('attributed_revenue'), cost = sum('cost_inr');
+    const pc = (n, d) => (d ? `${((n / d) * 100).toFixed(1)}%` : '—');
+    return [
+      { label: 'Sent · all time', value: sent.toLocaleString('en-IN'), delta: `${delivered.toLocaleString('en-IN')} delivered`, lead: true },
+      { label: 'Delivery', value: pc(delivered, sent), delta: 'of sent' },
+      { label: 'Read rate', value: pc(opened, delivered), delta: 'of delivered' },
+      { label: 'Attr. revenue', value: rev ? inr(rev) : '—', delta: 'last-touch' },
+      { label: 'Blended ROI', value: cost > 0 ? `${(rev / cost).toFixed(1)}×` : '—', delta: 'rev ÷ spend', color: cost > 0 ? 'var(--accent)' : undefined },
+    ];
+  })();
+
   return (
     <div className="pg">
       <PageHead title="Campaigns" sub="One-shot broadcasts. Build a draft, submit for approval, then send."
-        actions={canBuild ? <Btn kind="primary" onClick={startNew}><Plus size={14} /> New campaign</Btn> : null} />
+        actions={
+          <>
+            <Btn onClick={() => {
+              const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
+              downloadCampaignsCsv(shown, overview, tab);
+            }} disabled={!rows.length}><Download size={13} /> CSV</Btn>
+            {canBuild && <Btn kind="primary" onClick={startNew}><Plus size={14} /> New campaign</Btn>}
+          </>
+        } />
       {gateBanner}
       {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : rows.length === 0
@@ -567,77 +613,73 @@ export default function CampaignsPage() {
             const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
             const countFor = (id) => (id === 'all' ? rows.length : rows.filter((r) => tabOf(r) === id).length);
             return (
-            <Panel title="Campaigns" count={shown.length}
-              action={<Btn onClick={() => downloadCampaignsCsv(shown, overview, tab)} disabled={!shown.length}>
-                <Download size={13} /> CSV
-              </Btn>}>
-              <div style={{ display: 'flex', gap: 4, marginBottom: 12, flexWrap: 'wrap' }}>
-                {TABS.map((t2) => (
-                  <button key={t2.id} onClick={() => setTab(t2.id)} className="mono"
-                    style={{ padding: '5px 11px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
-                      border: '1px solid ' + (tab === t2.id ? 'var(--accent)' : 'var(--border)'),
-                      background: tab === t2.id ? 'var(--accent-soft, rgba(255,214,0,.10))' : 'transparent',
-                      color: tab === t2.id ? 'var(--accent)' : 'var(--text-3)' }}>
-                    {t2.label} <span style={{ opacity: .65 }}>{countFor(t2.id)}</span>
-                  </button>
-                ))}
-              </div>
+            <>
+            <KpiStrip cells={kpiCells} />
+            <Panel
+              title={(
+                <span className="rtabs" style={{ margin: '-4px 0' }}>
+                  {TABS.map((t2) => (
+                    <button key={t2.id} onClick={() => setTab(t2.id)} className={`rtab ${tab === t2.id ? 'on' : ''}`}>
+                      {t2.label}<span className="rtab-n">{countFor(t2.id)}</span>
+                    </button>
+                  ))}
+                </span>
+              )}
+              action={<span className="mono dim" style={{ fontSize: 11 }}>{shown.length} broadcast{shown.length === 1 ? '' : 's'}</span>}>
+              {/* Lean list (§7.2) — the old 14-column set stays in the CSV export. */}
               <table className="dt">
                 <thead><tr>
-                  <th>Broadcast</th><th>Status</th><th>Sent / scheduled</th>
-                  <th className="num">Revenue</th><th className="num">Cost</th><th className="num">ROI</th>
-                  <th className="num">Sent</th><th className="num">Delivered</th>
-                  <th className="num">Read</th><th className="num">Click</th><th className="num">Order</th>
-                  <th className="num">Unsub</th><th className="num">Fail</th><th className="num">Skipped</th>
+                  <th>Broadcast</th><th>Status</th><th>When</th>
+                  <th className="num">Delivered</th><th className="num">Read</th>
+                  <th className="num">Click</th><th className="num">Revenue</th><th className="num">ROI</th>
                 </tr></thead>
                 <tbody>
                   {shown.map((r) => {
                     const o = overview[r.id] || null;
+                    const st = campaignStatus(r);
                     return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <ChannelIcon channel={r.channel} />{r.name}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                          <ChannelChip channel={r.channel} />
+                          <div>
+                            <div style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</div>
+                            <div className="mono dim" style={{ fontSize: 10.5, marginTop: 2 }}>{cap(r.purpose)} · {cap(r.channel)}</div>
+                          </div>
                         </div>
-                        <span className="mono dim" style={{ fontSize: 11 }}>{r.channel} · {r.purpose}</span>
                       </td>
-                      <td>{(() => { const st = campaignStatus(r); return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
-                          <Badge label={st.label} tone={st.tone} dot={st.dot} />
-                          {st.sub && <span className="mono dim" style={{ fontSize: 11 }}>{st.sub}</span>}
-                        </div>); })()}</td>
-                      <td className="mono dim">
-                        {o?.at ? fmtDate(o.at) : '—'}
-                        {o?.is_scheduled && <span className="dim"> (sched)</span>}
+                      <td><Badge label={st.label} tone={st.tone} dot /></td>
+                      <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
+                        {st.sub ? st.sub : (o?.at ? `${st.label === 'Sent' ? 'Sent ' : ''}${fmtDate(o.at)}` : '—')}
                       </td>
-                      <td className="num mono">{o?.attributed_revenue ? inr(o.attributed_revenue) : '—'}</td>
                       <td className="num mono">
-                        {o && Number(o.cost_inr) > 0 ? inr(o.cost_inr) : '—'}
-                        {/* An unpriced send is NOT a free one — say so rather than let a small
-                            ₹ figure read as the whole spend. */}
+                        {o?.delivered != null && o?.sent > 0
+                          ? <><span style={{ color: 'var(--t1)' }}>{Number(o.delivered).toLocaleString('en-IN')}</span>{' '}
+                              <span style={{ color: 'var(--t5)', fontSize: 11 }}>{pct(o.delivered, o.sent)}%</span></>
+                          : <span style={{ color: 'var(--t5)' }}>—</span>}
+                      </td>
+                      <td className="num mono dim">{rate(o?.read_rate)}</td>
+                      <td className="num mono dim">{rate(o?.click_rate)}</td>
+                      <td className="num mono">
+                        {o?.attributed_revenue ? inr(o.attributed_revenue) : <span style={{ color: 'var(--t5)' }}>—</span>}
                         {o?.unpriced > 0 && (
                           <div className="dim" style={{ fontSize: 10 }} title={`${o.unpriced} sent message(s) have no rate card entry — spend is understated`}>
                             +{o.unpriced} unpriced
                           </div>
                         )}
                       </td>
-                      <td className="num mono">{o?.roi != null ? `${Number(o.roi).toFixed(2)}x` : '—'}</td>
-                      <td className="num mono dim">{o ? o.sent : '—'}</td>
-                      <td className="num mono dim">{o ? o.delivered : '—'}</td>
-                      <td className="num mono">{rate(o?.read_rate)}</td>
-                      <td className="num mono">{rate(o?.click_rate)}</td>
-                      <td className="num mono">{rate(o?.order_rate)}</td>
-                      <td className="num mono">{rate(o?.unsub_rate)}</td>
-                      <td className="num mono">{rate(o?.fail_rate)}</td>
-                      <td className="num mono">{rate(o?.skip_rate)}</td>
+                      <td className="num mono" style={{ fontWeight: 600, color: o?.roi != null ? 'var(--green)' : 'var(--t4)' }}>
+                        {o?.roi != null ? `${Number(o.roi).toFixed(1)}×` : '—'}
+                      </td>
                     </tr>);
                   })}
                 </tbody>
               </table>
               {shown.length === 0 && (
-                <div className="tw-note" style={{ marginBottom: 0 }}>No broadcasts in this view.</div>
+                <div className="tw-note" style={{ margin: '10px 16px' }}>No broadcasts in this view.</div>
               )}
-            </Panel>);
+            </Panel>
+            </>);
           })()}
     </div>
   );

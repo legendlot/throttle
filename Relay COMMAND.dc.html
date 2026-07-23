@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#08080b;font-family:'Hanken Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#f4f5f6}
+  a{color:inherit;text-decoration:none}
+  a:hover{color:#F2CD1A}
+  button{font-family:inherit}
+  .ms{font-family:'Material Symbols Rounded';font-weight:400;line-height:1;display:inline-block;overflow:hidden;user-select:none}
+  @keyframes rpulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  @keyframes rfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#2a2c31;border-radius:5px;border:2px solid #0d0e10}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+
+<template id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0d0e10"/><g transform="translate(154 130)"><rect x="0" y="0" width="204" height="204" rx="40" fill="rgba(242,205,26,.14)" stroke="rgba(242,205,26,.34)" stroke-width="4"/><path d="M96 34 L58 118 h34 l-8 70 62 -96 h-38 l24 -58 z" fill="#F2CD1A"/></g><text x="256" y="392" font-family="'Space Grotesk',sans-serif" font-size="52" font-weight="700" letter-spacing="8" fill="#f4f5f6" text-anchor="middle">RELAY</text></svg></template>
+<div style="display:flex;height:100vh;width:100%;overflow:hidden;background:#0d0e10">
+
+  <!-- ═══════════════ SIDEBAR ═══════════════ -->
+  <aside style="width:{{ sbWidth }};flex:none;background:#111214;border-right:1px solid #202128;display:flex;flex-direction:column;transition:width .2s cubic-bezier(.4,0,.2,1)">
+    <div onClick="{{ toggleSidebar }}" title="Collapse / expand sidebar" style="height:60px;display:flex;align-items:center;justify-content:{{ sbHeaderJustify }};gap:11px;padding:0 16px;border-bottom:1px solid #202128;flex:none;cursor:pointer" style-hover="background:#16171a">
+      <div style="width:34px;height:34px;flex:none;border-radius:10px;background:rgba(242,205,26,.14);border:1px solid rgba(242,205,26,.34);display:flex;align-items:center;justify-content:center"><span class="ms" style="font-size:20px;color:#F2CD1A">bolt</span></div>
+      <sc-if value="{{ expanded }}"><div style="line-height:1;flex:1;min-width:0"><div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;letter-spacing:.16em;color:#f4f5f6">RELAY</div><div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.14em;color:#6f747b;margin-top:3px">CONTROL TOWER</div></div><span class="ms" style="font-size:18px;color:#565b61">left_panel_close</span></sc-if>
+    </div>
+
+    <sc-if value="{{ expanded }}">
+      <div onClick="{{ openPalette }}" style="margin:12px 14px 6px;display:flex;align-items:center;gap:9px;background:#0a0b0d;border:1px solid #23252b;border-radius:10px;padding:9px 11px;cursor:pointer;flex:none" style-hover="border-color:#33363c">
+        <span class="ms" style="font-size:17px;color:#6f747b">search</span>
+        <span style="flex:1;font-size:13px;color:#6f747b">Search or jump to…</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#8b909a;border:1px solid #2c2f36;border-radius:5px;padding:2px 6px">⌘K</span>
+      </div>
+    </sc-if>
+    <sc-if value="{{ collapsed }}">
+      <div onClick="{{ openPalette }}" title="Search — ⌘K" style="margin:12px auto 6px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:#0a0b0d;border:1px solid #23252b;border-radius:10px;cursor:pointer;flex:none" style-hover="border-color:#33363c">
+        <span class="ms" style="font-size:18px;color:#6f747b">search</span>
+      </div>
+    </sc-if>
+
+    <nav style="flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 12px">
+      <sc-for list="{{ navGroups }}" as="g" hint-placeholder-count="5">
+        <sc-if value="{{ g.showLabel }}">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.16em;color:#565b61;text-transform:uppercase;padding:14px 11px 7px">{{ g.label }}</div>
+        </sc-if>
+        <sc-if value="{{ g.showRule }}">
+          <div style="height:1px;background:#202128;margin:12px 8px"></div>
+        </sc-if>
+        <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="2">
+          <a onClick="{{ it.onClick }}" title="{{ it.label }}" style="display:flex;align-items:center;justify-content:{{ it.justify }};gap:11px;padding:9px 11px;border-radius:10px;font-size:13.5px;margin-bottom:2px;cursor:pointer;position:relative;color:{{ it.fg }};font-weight:{{ it.weight }};background:{{ it.bg }}" style-hover="background:#1a1c20">
+            <sc-if value="{{ it.active }}"><span style="position:absolute;left:-12px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:0 3px 3px 0;background:#F2CD1A"></span></sc-if>
+            <span class="ms" style="font-size:19px;flex:none">{{ it.icon }}</span>
+            <sc-if value="{{ expanded }}"><span style="flex:1;white-space:nowrap;overflow:hidden">{{ it.label }}</span></sc-if>
+          </a>
+        </sc-for>
+      </sc-for>
+    </nav>
+
+    <sc-if value="{{ expanded }}">
+      <div style="margin:8px 14px;padding:12px 13px;background:linear-gradient(160deg,rgba(52,211,153,.09),rgba(52,211,153,.02));border:1px solid rgba(52,211,153,.24);border-radius:12px;flex:none">
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.16em;color:#34d399">ON AIR</span></div>
+        <div style="font-size:13px;font-weight:600;color:#f4f5f6;margin-top:8px">Order Shipped · WA</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;margin-top:3px">612 / 1,240 sent</div>
+        <div style="height:5px;border-radius:3px;background:rgba(255,255,255,.06);margin-top:8px;overflow:hidden"><div style="height:100%;width:49%;background:#34d399;border-radius:3px"></div></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ collapsed }}">
+      <div title="ON AIR — Order Shipped · 612 / 1,240 sent" style="margin:8px auto;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,rgba(52,211,153,.12),rgba(52,211,153,.03));border:1px solid rgba(52,211,153,.24);border-radius:11px;flex:none;position:relative"><span class="ms" style="font-size:19px;color:#34d399">wifi_tethering</span><span style="position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span></div>
+    </sc-if>
+
+    <div style="border-top:1px solid #202128;padding:12px 14px;display:flex;align-items:center;justify-content:{{ sbHeaderJustify }};gap:10px;flex:none">
+      <div title="Afshaan K. · Super admin" style="width:32px;height:32px;flex:none;border-radius:9px;background:rgba(242,205,26,.14);border:1px solid rgba(242,205,26,.34);display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;font-weight:700;color:#F2CD1A;font-size:13px">A</div>
+      <sc-if value="{{ expanded }}"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;color:#f4f5f6">Afshaan K.</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c">Super admin</div></div><span style="width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)"></span></sc-if>
+    </div>
+  </aside>
+
+  <!-- ═══════════════ MAIN ═══════════════ -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0d0e10">
+    <div style="height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #1c1d22;background:#0a0b0d">
+      <div style="display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#71767c"><span>{{ crumbGroup }}</span><span style="color:#33363c">/</span><span style="color:#a3a8af">{{ crumbPage }}</span></div>
+      <div style="display:flex;align-items:center;gap:16px"><span style="display:flex;align-items:center;gap:7px;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#71767c"><span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:rpulse 2.4s infinite"></span>LIVE · UPDATED 14:22 IST</span><span class="ms" style="font-size:18px;color:#71767c;cursor:pointer" style-hover="color:#a3a8af">notifications</span></div>
+    </div>
+
+    <div style="flex:1;overflow-y:auto">
+
+      <!-- ─────────── OVERVIEW ─────────── -->
+      <sc-if value="{{ isOverview }}">
+        <div style="padding:26px 30px 48px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:22px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:30px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Control tower</h1><p style="color:#8b909a;font-size:14px;margin-top:8px">Everything sending, right now — and how the last 7 days are landing.</p></div>
+            <button onClick="{{ goCampaigns }}" style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:10px 16px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New campaign</button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:16px">
+            <!-- live now -->
+            <div style="background:linear-gradient(150deg,rgba(52,211,153,.07),transparent 60%),#141518;border:1px solid #212227;border-radius:16px;padding:20px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><span style="width:8px;height:8px;border-radius:50%;background:#34d399;animation:rpulse 2.2s infinite"></span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;color:#34d399">SENDING NOW</span><span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c">2 active</span></div>
+              <sc-for list="{{ liveSends }}" as="s" hint-placeholder-count="2">
+                <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid #1e1f24">
+                  <div style="width:38px;height:38px;border-radius:11px;flex:none;display:flex;align-items:center;justify-content:center;color:{{ s.chFg }};background:{{ s.chBg }}"><span class="ms" style="font-size:19px">{{ s.chIcon }}</span></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:14px;font-weight:600;color:#f4f5f6">{{ s.name }}</div>
+                    <div style="height:5px;border-radius:3px;background:rgba(255,255,255,.06);margin-top:8px;overflow:hidden"><div style="height:100%;border-radius:3px;background:#34d399;width:{{ s.pct }}%"></div></div>
+                  </div>
+                  <div style="text-align:right;flex:none"><div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:#f4f5f6">{{ s.progress }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;margin-top:2px">{{ s.eta }}</div></div>
+                </div>
+              </sc-for>
+            </div>
+            <!-- queue health -->
+            <div style="background:#141518;border:1px solid #212227;border-radius:16px;padding:20px;display:flex;flex-direction:column">
+              <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:#71767c;text-transform:uppercase;margin-bottom:16px">Queue &amp; gates</div>
+              <div style="display:flex;flex-direction:column;gap:14px;flex:1">
+                <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13px;color:#a3a8af">In queue</span><span style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:700;color:#f4f5f6">628</span></div>
+                <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13px;color:#a3a8af">Awaiting approval</span><span style="display:inline-flex;align-items:center;gap:7px"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#f2cd1a;background:rgba(242,205,26,.13);border:1px solid rgba(242,205,26,.34);border-radius:6px;padding:2px 8px">1 pending</span></span></div>
+                <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13px;color:#a3a8af">Failed (24h)</span><span style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:700;color:#f4f5f6">14</span></div>
+              </div>
+              <div style="margin-top:16px;padding:12px 14px;background:rgba(242,205,26,.07);border:1px solid rgba(242,205,26,.28);border-radius:11px;display:flex;align-items:center;gap:10px"><span class="ms" style="font-size:18px;color:#F2CD1A">lock</span><div style="font-size:12px;line-height:1.4;color:#c9c3a6"><strong style="color:#F2CD1A">Test mode LOCKED</strong> — sends limited to the allowlist.</div></div>
+            </div>
+          </div>
+
+          <!-- KPI strip -->
+          <div style="display:flex;background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden;margin-bottom:16px">
+            <sc-for list="{{ overviewKpis }}" as="k" hint-placeholder-count="5">
+              <div style="flex:1;padding:16px 18px;border-right:1px solid #202128;position:relative">
+                <sc-if value="{{ k.accent }}"><div style="position:absolute;top:0;left:0;right:0;height:2px;background:#F2CD1A"></div></sc-if>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">{{ k.label }}</div>
+                <div style="font-family:'Space Grotesk',sans-serif;font-size:27px;font-weight:700;margin-top:7px;line-height:1;color:{{ k.color }}">{{ k.value }}</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;margin-top:5px;color:{{ k.deltaColor }}">{{ k.delta }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <!-- recent activity -->
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+              <div style="padding:14px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Recent activity</div>
+              <div style="padding:6px 0">
+                <sc-for list="{{ activity }}" as="a" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:flex-start;gap:12px;padding:10px 18px">
+                    <span class="ms" style="font-size:18px;margin-top:1px;color:{{ a.color }}">{{ a.icon }}</span>
+                    <div style="flex:1;min-width:0"><div style="font-size:13px;color:#d6d9dd;line-height:1.4">{{ a.text }}</div></div>
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;flex:none;margin-top:2px">{{ a.time }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- deliverability -->
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+              <div style="padding:14px 18px;border-bottom:1px solid #202128;display:flex;align-items:center;justify-content:space-between"><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Deliverability · 7d</span><a onClick="{{ goAnalytics }}" style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;cursor:pointer" style-hover="color:#F2CD1A">VIEW ALL →</a></div>
+              <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <sc-for list="{{ senderHealth }}" as="h" hint-placeholder-count="4">
+                  <tr>
+                    <td style="padding:11px 18px;border-top:1px solid #1a1b1f"><div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#d6d9dd">{{ h.address }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c;margin-top:2px">{{ h.channel }}</div></td>
+                    <td style="padding:11px 12px;border-top:1px solid #1a1b1f;text-align:right"><div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#a3a8af">{{ h.delivered }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#71767c;margin-top:2px">delivered</div></td>
+                    <td style="padding:11px 18px;border-top:1px solid #1a1b1f;text-align:right"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ h.qFg }};background:{{ h.qBg }};border:1px solid {{ h.qBd }}">{{ h.quality }}</span></td>
+                  </tr>
+                </sc-for>
+              </table>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── CAMPAIGNS ─────────── -->
+      <sc-if value="{{ isCampaigns }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Campaigns</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">One-shot broadcasts. Build a draft, submit for approval, then send.</p></div>
+            <div style="display:flex;gap:9px">
+              <button style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:9px;padding:9px 14px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f"><span class="ms" style="font-size:16px">download</span>CSV</button>
+              <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New campaign</button>
+            </div>
+          </div>
+          <div style="display:flex;background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden;margin-bottom:18px">
+            <sc-for list="{{ campaignKpis }}" as="k" hint-placeholder-count="5">
+              <div style="flex:1;padding:15px 18px;border-right:1px solid #202128;position:relative"><sc-if value="{{ k.accent }}"><div style="position:absolute;top:0;left:0;right:0;height:2px;background:#F2CD1A"></div></sc-if><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">{{ k.label }}</div><div style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:700;margin-top:7px;line-height:1;color:{{ k.color }}">{{ k.value }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;margin-top:5px;color:{{ k.deltaColor }}">{{ k.delta }}</div></div>
+            </sc-for>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;border-bottom:1px solid #202128">
+              <div style="display:flex;align-items:center;gap:4px;background:#0d0e10;border:1px solid #212227;border-radius:10px;padding:3px">
+                <sc-for list="{{ campaignTabs }}" as="t" hint-placeholder-count="4">
+                  <button style="font-size:12.5px;font-weight:{{ t.weight }};color:{{ t.fg }};background:{{ t.bg }};border:none;border-radius:7px;padding:6px 13px;cursor:pointer">{{ t.label }} <span style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7">{{ t.count }}</span></button>
+                </sc-for>
+              </div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">7 broadcasts</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Broadcast</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Status</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">When</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Delivered</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Read</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Click</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Revenue</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">ROI</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ campaigns }}" as="c" hint-placeholder-count="7">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><div style="display:flex;align-items:center;gap:9px"><span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;letter-spacing:.05em;padding:3px 6px;border-radius:5px;color:{{ c.chFg }};background:{{ c.chBg }}">{{ c.chShort }}</span><div><div style="font-weight:600;color:#f4f5f6">{{ c.name }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;margin-top:2px">{{ c.purposeLabel }} · {{ c.chLabel }}</div></div></div></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ c.sFg }};background:{{ c.sBg }};border:1px solid {{ c.sBd }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ c.sFg }}"></span>{{ c.statusLabel }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ c.when }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace"><span style="color:#f4f5f6">{{ c.delivered }}</span> <span style="color:#565b61;font-size:11px">{{ c.deliveredPct }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.read }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.click }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ c.revenue }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.roiColor }}">{{ c.roi }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── JOURNEYS ─────────── -->
+      <sc-if value="{{ isJourneys }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Journeys</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Multi-step automated flows triggered by customer events.</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New journey</button>
+          </div>
+          <div style="background:rgba(242,205,26,.06);border:1px solid rgba(242,205,26,.26);border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:11px;margin-bottom:18px"><span class="ms" style="font-size:18px;color:#F2CD1A">warning</span><span style="font-size:13px;color:#c9c3a6"><strong style="color:#F2CD1A">Internal testing only.</strong> Relay must not send to real customers until sign-off. Validate with an internal-staff segment first.</span></div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 18px;border-bottom:1px solid #202128"><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Journeys <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">5</span></span><span style="display:inline-flex;gap:7px;align-items:center"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#34d399;background:rgba(52,211,153,.13);border:1px solid rgba(52,211,153,.34);border-radius:6px;padding:2px 9px">2 on</span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#8b909a;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);border-radius:6px;padding:2px 9px">3 off</span></span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;width:96px">On / Off</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Journey</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Enrolled</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Conv</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Revenue</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Read</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Last activity</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ journeys }}" as="j" hint-placeholder-count="5">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:8px"><span style="width:34px;height:19px;border-radius:11px;background:{{ j.swBg }};border:1px solid {{ j.swBd }};position:relative;display:inline-block"><span style="position:absolute;top:1px;width:15px;height:15px;border-radius:50%;background:{{ j.knobBg }};left:{{ j.knobX }}"></span></span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:{{ j.onFg }}">{{ j.onLabel }}</span></span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><div style="display:flex;align-items:center;gap:9px"><span class="ms" style="font-size:16px;color:#71767c">fork_right</span><div><div style="font-weight:600;color:#f4f5f6">{{ j.name }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#71767c;margin-top:2px">{{ j.trigger }} · v{{ j.version }}</div></div></div></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ j.enrolled }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ j.conv }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ j.revenue }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ j.read }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ j.lastActivity }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── SEGMENTS ─────────── -->
+      <sc-if value="{{ isSegments }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Segments</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Audiences built from a live rule (dynamic) or a fixed list (static).</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New segment</button>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Segments <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">5</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Name</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Kind</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Conditions</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Members</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Updated</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ segments }}" as="s" hint-placeholder-count="5">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><div style="display:flex;align-items:center;gap:9px"><span class="ms" style="font-size:16px;color:#71767c">filter_alt</span><span style="font-weight:600;color:#f4f5f6">{{ s.name }}</span></div></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ s.kFg }};background:{{ s.kBg }};border:1px solid {{ s.kBd }}">{{ s.kind }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-size:12.5px;color:#8b909a">{{ s.conditions }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ s.members }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ s.updated }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── CONTACTS ─────────── -->
+      <sc-if value="{{ isContacts }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Contacts</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">The unified profile substrate — identities, identifiers, consent, events.</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:9px;padding:9px 14px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f"><span class="ms" style="font-size:16px">refresh</span>Refresh</button>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Contacts <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">7</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Name</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">City</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Consent</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Orders</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Lifetime ₹</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Added</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ contacts }}" as="p" hint-placeholder-count="7">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><div style="display:flex;align-items:center;gap:10px"><span style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:600;color:#a3a8af;background:rgba(255,255,255,.06)">{{ p.initials }}</span><span style="font-weight:600;color:#f4f5f6">{{ p.name }}</span></div></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-size:12.5px;color:#8b909a">{{ p.city }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ p.cFg }};background:{{ p.cBg }};border:1px solid {{ p.cBd }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ p.cFg }}"></span>{{ p.consent }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ p.orders }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ p.ltv }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ p.added }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── TEMPLATES ─────────── -->
+      <sc-if value="{{ isTemplates }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Templates</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Channel-shaped message templates with merge variables. Editing an active template publishes a new version.</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New template</button>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Templates <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">6</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Name</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Channel</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Purpose</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Status</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Meta</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Ver</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Updated</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ templates }}" as="t" hint-placeholder-count="6">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-weight:600;color:#f4f5f6">{{ t.name }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;color:{{ t.chFg }}"><span class="ms" style="font-size:14px">{{ t.chIcon }}</span>{{ t.channel }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-size:12.5px;color:#8b909a">{{ t.purpose }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ t.sFg }};background:{{ t.sBg }};border:1px solid {{ t.sBd }}">{{ t.status }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f">{{ t.metaCell }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#8b909a">v{{ t.version }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ t.updated }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ANALYTICS ─────────── -->
+      <sc-if value="{{ isAnalytics }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Analytics</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Delivery, engagement, and attribution across channels.</p></div>
+            <div style="display:flex;gap:6px;background:#0d0e10;border:1px solid #212227;border-radius:10px;padding:3px">
+              <button style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;background:none;border:none;border-radius:7px;padding:6px 12px;cursor:pointer">7d</button>
+              <button style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:#F2CD1A;background:rgba(242,205,26,.12);border:none;border-radius:7px;padding:6px 12px;cursor:pointer">30d</button>
+              <button style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;background:none;border:none;border-radius:7px;padding:6px 12px;cursor:pointer">90d</button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
+            <sc-for list="{{ analyticsKpis }}" as="k" hint-placeholder-count="4">
+              <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:15px 16px"><div style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:#71767c;text-transform:uppercase">{{ k.label }}</div><div style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:700;margin-top:8px;line-height:1;color:{{ k.color }}">{{ k.value }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a;margin-top:6px">{{ k.sub }}</div></div>
+            </sc-for>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden;margin-bottom:14px">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;display:flex;align-items:center;justify-content:space-between"><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Sends by day · 30d</span><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b909a"><span style="color:#F2CD1A">■</span> sent&nbsp;&nbsp;<span style="color:#34d399">■</span> delivered</span></div>
+            <div style="display:flex;align-items:flex-end;gap:5px;height:180px;padding:20px 18px 16px">
+              <sc-for list="{{ sendBars }}" as="b" hint-placeholder-count="14">
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:7px">
+                  <div style="width:100%;max-width:26px;height:120px;background:rgba(255,255,255,.04);border-radius:4px;display:flex;align-items:flex-end"><div style="width:100%;background:#F2CD1A;border-radius:4px;display:flex;align-items:flex-end;height:{{ b.sentPct }}%"><div style="width:100%;background:#34d399;border-radius:4px;height:{{ b.delivPct }}%"></div></div></div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#565b61">{{ b.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Campaign performance</div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Campaign</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Sent</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Delivered</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Opened</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Orders</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">Revenue</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128;text-align:right">ROI</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ analyticsRows }}" as="c" hint-placeholder-count="4">
+                  <tr>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-weight:600;color:#f4f5f6">{{ c.name }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.sent }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.delivered }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.opened }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#a3a8af">{{ c.orders }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;color:#f4f5f6">{{ c.revenue }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.roiColor }}">{{ c.roi }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ADMIN · ROLES ─────────── -->
+      <sc-if value="{{ isRoles }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Roles</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Relay permission roles. System roles are read-only but can be cloned into editable custom roles.</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New role</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+            <sc-for list="{{ roles }}" as="r" hint-placeholder-count="6">
+              <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="display:flex;align-items:center;gap:8px;font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;color:#f4f5f6">{{ r.label }}<sc-if value="{{ r.system }}"><span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#8b909a;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);border-radius:5px;padding:2px 6px">system</span></sc-if></span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">{{ r.key }}</div>
+                <div style="font-size:12.5px;color:#8b909a;line-height:1.5;flex:1">{{ r.desc }}</div>
+                <div style="display:flex;align-items:baseline;gap:7px;padding-top:4px;border-top:1px solid #1e1f24"><span style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;color:#F2CD1A">{{ r.perms }}</span><span style="font-size:12px;color:#71767c">permissions granted</span></div>
+                <div style="display:flex;gap:8px;margin-top:2px">
+                  <button style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:8px;padding:7px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f"><span class="ms" style="font-size:15px">{{ r.editIcon }}</span>{{ r.editLabel }}</button>
+                  <button style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:8px;padding:7px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f"><span class="ms" style="font-size:15px">content_copy</span>Clone</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ADMIN · USERS ─────────── -->
+      <sc-if value="{{ isUsers }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="margin-bottom:20px"><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Users</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Grant Relay access to LOT people. A legendoftoys.com login alone gives no access — a role must be assigned here.</p></div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:18px;margin-bottom:16px">
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6;margin-bottom:14px">Grant access</div>
+            <div style="display:flex;gap:12px;align-items:flex-end">
+              <div style="flex:1"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase;margin-bottom:6px">Person</div><div style="display:flex;align-items:center;gap:8px;background:#0a0b0d;border:1px solid #23252b;border-radius:9px;padding:9px 12px"><span class="ms" style="font-size:16px;color:#6f747b">search</span><span style="font-size:13px;color:#6f747b">Type a name or email…</span></div></div>
+              <div style="flex:1"><div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;color:#71767c;text-transform:uppercase;margin-bottom:6px">Role</div><div style="display:flex;align-items:center;justify-content:space-between;background:#0a0b0d;border:1px solid #23252b;border-radius:9px;padding:9px 12px"><span style="font-size:13px;color:#6f747b">— pick a role —</span><span class="ms" style="font-size:16px;color:#6f747b">expand_more</span></div></div>
+              <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:10px 15px;cursor:pointer"><span class="ms" style="font-size:16px">add</span>Grant access</button>
+            </div>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Access list <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">5</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">User</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Email</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Role</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Status</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Assigned</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ users }}" as="u" hint-placeholder-count="5">
+                  <tr style="opacity:{{ u.opacity }}">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-weight:600;color:#f4f5f6">{{ u.name }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ u.email }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:#7c9bff;background:rgba(124,155,255,.15);border:1px solid rgba(124,155,255,.34)">{{ u.role }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ u.stFg }};background:{{ u.stBg }};border:1px solid {{ u.stBd }}">{{ u.active }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8b909a">{{ u.assigned }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ADMIN · APPROVAL & CAPS ─────────── -->
+      <sc-if value="{{ isSettings }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="margin-bottom:20px"><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Approval &amp; Caps</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Global guardrails for sends — approval thresholds, frequency caps, quiet hours, attribution.</p></div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:18px;margin-bottom:16px">
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6;margin-bottom:14px">Test mode — global send lock</div>
+            <div style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:11px;border:1px solid rgba(242,205,26,.5);background:rgba(242,205,26,.08)">
+              <span class="ms" style="font-size:24px;color:#F2CD1A">lock</span>
+              <div style="flex:1"><div style="font-weight:700;font-size:15px;color:#f4f5f6">LOCKED — internal sends only</div><div style="font-size:12.5px;color:#8b909a;margin-top:3px">Every send (campaigns, journeys, test-sends, all channels) is blocked unless the recipient matches the allowlist below.</div></div>
+              <span style="width:64px;height:30px;border-radius:16px;background:rgba(242,205,26,.2);border:1px solid rgba(242,205,26,.5);position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:24px;height:24px;border-radius:50%;background:#F2CD1A;display:flex;align-items:center;justify-content:center"><span class="ms" style="font-size:15px;color:#17140a">lock</span></span></span>
+            </div>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Send governance</div>
+            <div>
+              <sc-for list="{{ governance }}" as="f" hint-placeholder-count="8">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 18px;border-bottom:1px solid #1a1b1f">
+                  <div style="flex:1"><div style="font-size:13.5px;font-weight:500;color:#e6e8ea">{{ f.label }}</div><div style="font-size:12px;color:#71767c;margin-top:3px;line-height:1.4">{{ f.hint }}</div></div>
+                  <div style="flex:none">{{ f.control }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ADMIN · SENDER IDENTITIES ─────────── -->
+      <sc-if value="{{ isSenders }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px">
+            <div><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Sender Identities</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">From-addresses and channel senders. Email rows show DNS verification state.</p></div>
+            <button style="display:inline-flex;align-items:center;gap:7px;font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:9px;padding:9px 15px;cursor:pointer;box-shadow:0 6px 18px -8px rgba(242,205,26,.7)" style-hover="filter:brightness(1.06)"><span class="ms" style="font-size:17px">add</span>New sender</button>
+          </div>
+          <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden">
+            <div style="padding:13px 18px;border-bottom:1px solid #202128;font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Senders <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c;font-weight:400">5</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="text-align:left">
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Channel</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Address</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Provider</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">Status</th>
+                <th style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#71767c;font-weight:500;padding:11px 16px;border-bottom:1px solid #202128">DNS</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{ senders }}" as="s" hint-placeholder-count="5">
+                  <tr style="cursor:pointer" style-hover="background:rgba(255,255,255,.028)">
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:10px;color:{{ s.chFg }}"><span class="ms" style="font-size:14px">{{ s.chIcon }}</span>{{ s.channel }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-family:'JetBrains Mono',monospace;font-size:12px;color:#e6e8ea">{{ s.address }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f;font-size:12.5px;color:#8b909a">{{ s.provider }}</td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ s.stFg }};background:{{ s.stBg }};border:1px solid {{ s.stBd }}">{{ s.status }}</span></td>
+                    <td style="padding:12px 16px;border-bottom:1px solid #1a1b1f">{{ s.dnsCell }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ─────────── ADMIN · CONNECTORS ─────────── -->
+      <sc-if value="{{ isConnectors }}">
+        <div style="padding:24px 26px 44px;animation:rfade .3s ease">
+          <div style="margin-bottom:20px"><h1 style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#f4f5f6;letter-spacing:-.01em;line-height:1">Connectors</h1><p style="color:#8b909a;font-size:13.5px;margin-top:8px">Provider wiring per channel. Read-only overview of configured senders plus data-sync tools.</p></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:18px">
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><span class="ms" style="font-size:19px;color:#95bf47">shopping_bag</span><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Shopify — customer data sync</span></div>
+              <div style="font-size:12.5px;color:#8b909a;line-height:1.5;margin-bottom:14px">Imports Shopify customers → profiles + identifiers + consent + attributes (idempotent). <strong style="color:#a3a8af">No emails are sent</strong> — the Test Mode lock is separate.</div>
+              <div style="display:flex;gap:9px"><button style="font-size:12px;font-weight:600;color:#a3a8af;background:transparent;border:1px solid #2c2f36;border-radius:8px;padding:8px 13px;cursor:pointer" style-hover="color:#f4f5f6;border-color:#45484f">Dry-run: import 5</button><button style="font-size:12px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:8px;padding:8px 13px;cursor:pointer">Full sync — all customers</button></div>
+            </div>
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;padding:18px">
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><span class="ms" style="font-size:19px;color:#7c9bff">link</span><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6">Cashfree — payment link</span></div>
+              <div style="font-size:12.5px;color:#8b909a;line-height:1.5;margin-bottom:14px">Mints a Cashfree payment link (COD→prepaid). The link self-wires its callback, so paying it fires a <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#a3a8af">payment_link_paid</span> event.</div>
+              <button style="font-size:12px;font-weight:600;color:#17140a;background:#F2CD1A;border:none;border-radius:8px;padding:8px 13px;cursor:pointer">Mint test link</button>
+            </div>
+          </div>
+          <sc-for list="{{ connectorChannels }}" as="ch" hint-placeholder-count="3">
+            <div style="background:#141518;border:1px solid #212227;border-radius:14px;overflow:hidden;margin-bottom:14px">
+              <div style="padding:13px 18px;border-bottom:1px solid #202128;display:flex;align-items:center;gap:9px"><span class="ms" style="font-size:17px;color:{{ ch.chFg }}">{{ ch.chIcon }}</span><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:600;color:#f4f5f6;text-transform:capitalize">{{ ch.channel }}</span><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#71767c">{{ ch.count }}</span></div>
+              <sc-if value="{{ ch.hasNone }}"><div style="padding:16px 18px;font-size:12.5px;color:#71767c">No {{ ch.channel }} sender configured yet.</div></sc-if>
+              <sc-for list="{{ ch.senders }}" as="s" hint-placeholder-count="1">
+                <div style="display:flex;align-items:center;gap:16px;padding:12px 18px;border-top:1px solid #1a1b1f"><span style="flex:1;font-family:'JetBrains Mono',monospace;font-size:12px;color:#e6e8ea">{{ s.address }}</span><span style="font-size:12px;color:#8b909a">{{ s.provider }}</span><span style="font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 9px;border-radius:6px;color:{{ s.stFg }};background:{{ s.stBg }};border:1px solid {{ s.stBd }}">{{ s.status }}</span></div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { page: 'overview', collapsed: false };
+  nav(id) { this.setState({ page: id }); }
+
+  renderVals() {
+    const page = this.state.page;
+    const collapsed = this.state.collapsed;
+    const expanded = !collapsed;
+    const go = (id) => () => this.nav(id);
+
+    // ---- tone helpers ----
+    const ST = {
+      sent:      { fg:'#34d399', bg:'rgba(52,211,153,.13)',  bd:'rgba(52,211,153,.34)' },
+      sending:   { fg:'#fb923c', bg:'rgba(251,146,60,.15)',  bd:'rgba(251,146,60,.36)' },
+      scheduled: { fg:'#7c9bff', bg:'rgba(124,155,255,.15)', bd:'rgba(124,155,255,.34)' },
+      draft:     { fg:'#9aa0aa', bg:'rgba(255,255,255,.05)', bd:'rgba(255,255,255,.11)' },
+      pending:   { fg:'#f2cd1a', bg:'rgba(242,205,26,.13)',  bd:'rgba(242,205,26,.34)' },
+      active:    { fg:'#34d399', bg:'rgba(52,211,153,.13)',  bd:'rgba(52,211,153,.34)' },
+      archived:  { fg:'#9aa0aa', bg:'rgba(255,255,255,.05)', bd:'rgba(255,255,255,.11)' },
+      green:     { fg:'#34d399', bg:'rgba(52,211,153,.13)',  bd:'rgba(52,211,153,.34)' },
+      red:       { fg:'#f87171', bg:'rgba(248,113,113,.13)', bd:'rgba(248,113,113,.34)' },
+      yellow:    { fg:'#f2cd1a', bg:'rgba(242,205,26,.13)',  bd:'rgba(242,205,26,.34)' },
+      blue:      { fg:'#7c9bff', bg:'rgba(124,155,255,.15)', bd:'rgba(124,155,255,.34)' },
+      gray:      { fg:'#9aa0aa', bg:'rgba(255,255,255,.05)', bd:'rgba(255,255,255,.11)' },
+    };
+    const CH = {
+      email:    { label:'Email',    short:'EM', icon:'mail', fg:'#a3a8af', bg:'rgba(255,255,255,.06)' },
+      whatsapp: { label:'WhatsApp', short:'WA', icon:'chat', fg:'#25D366', bg:'rgba(37,211,102,.13)' },
+      sms:      { label:'SMS',      short:'SM', icon:'sms',  fg:'#7c9bff', bg:'rgba(124,155,255,.13)' },
+    };
+
+    // ---- nav ----
+    const navDef = [
+      { items: [{ id:'overview', label:'Overview', icon:'space_dashboard' }] },
+      { label:'Send',           items: [{ id:'campaigns', label:'Campaigns', icon:'campaign' }, { id:'journeys', label:'Journeys', icon:'fork_right' }] },
+      { label:'Audience',       items: [{ id:'segments', label:'Segments', icon:'filter_alt' }, { id:'contacts', label:'Contacts', icon:'contacts' }] },
+      { label:'Build & measure',items: [{ id:'templates', label:'Templates', icon:'mail' }, { id:'analytics', label:'Analytics', icon:'monitoring' }] },
+      { label:'Admin',          items: [{ id:'roles', label:'Roles', icon:'shield' }, { id:'users', label:'Users', icon:'group' }, { id:'settings', label:'Approval & Caps', icon:'tune' }, { id:'senders', label:'Sender Identities', icon:'alternate_email' }, { id:'connectors', label:'Connectors', icon:'cable' }] },
+    ];
+    const navGroups = navDef.map((g, gi) => ({
+      label: g.label || '',
+      showLabel: !!g.label && expanded,
+      showRule: !!g.label && collapsed && gi > 0,
+      items: g.items.map(it => {
+        const active = it.id === page;
+        return { ...it, active, onClick: go(it.id),
+          justify: collapsed ? 'center' : 'flex-start',
+          fg: active ? '#F2CD1A' : '#a3a8af',
+          bg: active ? 'rgba(242,205,26,.12)' : 'transparent',
+          weight: active ? 600 : 500 };
+      }),
+    }));
+
+    // ---- breadcrumb ----
+    const CRUMB = {
+      overview:{g:'HOME',p:'OVERVIEW'}, campaigns:{g:'SEND',p:'CAMPAIGNS'}, journeys:{g:'SEND',p:'JOURNEYS'},
+      segments:{g:'AUDIENCE',p:'SEGMENTS'}, contacts:{g:'AUDIENCE',p:'CONTACTS'},
+      templates:{g:'BUILD',p:'TEMPLATES'}, analytics:{g:'BUILD',p:'ANALYTICS'},
+      roles:{g:'ADMIN',p:'ROLES'}, users:{g:'ADMIN',p:'USERS'}, settings:{g:'ADMIN',p:'APPROVAL & CAPS'},
+      senders:{g:'ADMIN',p:'SENDER IDENTITIES'}, connectors:{g:'ADMIN',p:'CONNECTORS'},
+    };
+    const crumb = CRUMB[page] || CRUMB.overview;
+
+    // ---- campaigns ----
+    const rawC = [
+      { name:'July Win-Back Flow',   channel:'email',    purpose:'marketing',     tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 21',            delivered:'8,180', deliveredPct:'97.2%', read:'41.3%', click:'6.8%',  revenue:'₹3.24L', roi:'5.9×', roiPos:true },
+      { name:'Order Shipped',        channel:'whatsapp', purpose:'transactional', tone:'sending',   statusLabel:'In progress',     when:'Sending now',            delivered:'598',   deliveredPct:'97.7%', read:'88.1%', click:'12.4%', revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Monsoon Sale Blast',   channel:'email',    purpose:'marketing',     tone:'scheduled', statusLabel:'Scheduled',       when:'Fires Jul 26 · 9:00 AM', delivered:'—',     deliveredPct:'—',     read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Abandoned Cart Nudge', channel:'whatsapp', purpose:'marketing',     tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 20',            delivered:'3,020', deliveredPct:'97.8%', read:'79.2%', click:'18.6%', revenue:'₹1.87L', roi:'8.2×', roiPos:true },
+      { name:'Diwali Early Access',  channel:'email',    purpose:'marketing',     tone:'draft',     statusLabel:'Draft',           when:'Edited 2h ago',          delivered:'—',     deliveredPct:'—',     read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'VIP Restock Alert',    channel:'whatsapp', purpose:'marketing',     tone:'pending',   statusLabel:'Pending approval',when:'Submitted 40m ago',      delivered:'—',     deliveredPct:'—',     read:'—',     click:'—',     revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Feedback Request',     channel:'email',    purpose:'utility',       tone:'sent',      statusLabel:'Sent',            when:'Sent Jul 19',            delivered:'5,310', deliveredPct:'98.5%', read:'33.1%', click:'4.2%',  revenue:'—',      roi:'—',    roiPos:false },
+    ];
+    const campaigns = rawC.map((r,i) => { const t=ST[r.tone], c=CH[r.channel]; return { ...r, id:'c'+i, sFg:t.fg,sBg:t.bg,sBd:t.bd, chLabel:c.label,chShort:c.short,chFg:c.fg,chBg:c.bg, purposeLabel:r.purpose[0].toUpperCase()+r.purpose.slice(1), roiColor:r.roiPos?'#34d399':'#71767c' }; });
+
+    const mkTabs = (defs) => defs.map((d,i) => ({ ...d, weight:i===0?600:500, fg:i===0?'#F2CD1A':'#8b909a', bg:i===0?'rgba(242,205,26,.12)':'transparent' }));
+    const campaignTabs = mkTabs([{label:'All broadcasts',count:7},{label:'Scheduled',count:1},{label:'Drafts',count:2},{label:'Sent',count:3}]);
+
+    const mkKpi = (label,value,delta,opt={}) => ({ label,value,delta, accent:!!opt.accent, color:opt.color||'#f4f5f6', deltaColor:opt.deltaColor||(delta&&delta[0]==='▲'?'#34d399':'#8b909a') });
+    const campaignKpis = [
+      mkKpi('Sent · 7d','26,340','▲ 12.4%',{accent:true}),
+      mkKpi('Delivery','97.6%','▲ 0.4%'),
+      mkKpi('Read rate','44.2%','▲ 3.1%'),
+      mkKpi('Attr. revenue','₹5.11L','last-touch · 7d'),
+      mkKpi('Blended ROI','6.4×','rev ÷ spend',{color:'#F2CD1A'}),
+    ];
+
+    // ---- overview ----
+    const overviewKpis = [
+      mkKpi('Sent · 7d','26,340','▲ 12.4%',{accent:true}),
+      mkKpi('Delivery','97.6%','▲ 0.4%'),
+      mkKpi('Read rate','44.2%','▲ 3.1%'),
+      mkKpi('Attr. revenue','₹5.11L','▲ 18.2%'),
+      mkKpi('Blended ROI','6.4×','rev ÷ spend',{color:'#F2CD1A'}),
+    ];
+    const liveSends = [
+      { name:'Order Shipped · WhatsApp', channel:'whatsapp', pct:49, progress:'612 / 1,240', eta:'~6 min left' },
+      { name:'Weekly Digest · Email',    channel:'email',    pct:78, progress:'9,360 / 12,000', eta:'~3 min left' },
+    ].map(s => { const c=CH[s.channel]; return { ...s, chIcon:c.icon, chFg:c.fg, chBg:c.bg }; });
+    const activity = [
+      { icon:'check_circle', color:'#34d399', text:'"July Win-Back Flow" finished sending — 8,180 delivered', time:'12m' },
+      { icon:'schedule',     color:'#7c9bff', text:'"Monsoon Sale Blast" scheduled for Jul 26, 9:00 AM', time:'34m' },
+      { icon:'pending',      color:'#f2cd1a', text:'"VIP Restock Alert" submitted for approval by Rhea', time:'40m' },
+      { icon:'fork_right',   color:'#a3a8af', text:'Journey "Abandoned Cart" enrolled 214 new profiles', time:'1h' },
+      { icon:'error',        color:'#f87171', text:'14 messages failed on hello@ — soft bounce retry queued', time:'2h' },
+    ];
+    const senderHealth = [
+      { address:'hello@legendoftoys.com', channel:'email',    delivered:'18,240', quality:'HEALTHY', tone:'green' },
+      { address:'care@legendoftoys.com',  channel:'email',    delivered:'5,310',  quality:'HEALTHY', tone:'green' },
+      { address:'+91 70191 03926',        channel:'whatsapp', delivered:'2,790',  quality:'HIGH',    tone:'green' },
+      { address:'offers@legendoftoys.com',channel:'email',    delivered:'980',    quality:'WATCH',   tone:'yellow' },
+    ].map(h => { const t=ST[h.tone]; return { ...h, qFg:t.fg, qBg:t.bg, qBd:t.bd }; });
+
+    // ---- journeys ----
+    const rawJ = [
+      { name:'Abandoned Cart',       trigger:'event: checkout_started', on:true,  version:4, enrolled:'1,240', conv:'6.2%', revenue:'₹4.12L', read:'79.2%', lastActivity:'2m ago' },
+      { name:'Welcome Series',       trigger:'event: profile_created',  on:true,  version:7, enrolled:'3,180', conv:'4.1%', revenue:'₹2.02L', read:'62.4%', lastActivity:'18m ago' },
+      { name:'Post-Purchase Nudge',  trigger:'event: order_delivered',  on:false, version:2, enrolled:'860',   conv:'8.8%', revenue:'₹1.44L', read:'71.0%', lastActivity:'Jul 18' },
+      { name:'Win-Back 90d',         trigger:'enters: Lapsed buyers',   on:false, version:3, enrolled:'2,020', conv:'3.4%', revenue:'₹96k',   read:'48.9%', lastActivity:'Jul 15' },
+      { name:'Birthday Reward',      trigger:'event: birthday_today',   on:false, version:1, enrolled:'—',     conv:'—',    revenue:'—',      read:'—',     lastActivity:'Draft' },
+    ];
+    const journeys = rawJ.map((j,i) => ({ ...j, id:'j'+i,
+      onLabel:j.on?'ON':'OFF', onFg:j.on?'#34d399':'#565b61',
+      swBg:j.on?'rgba(52,211,153,.2)':'rgba(255,255,255,.06)', swBd:j.on?'rgba(52,211,153,.5)':'rgba(255,255,255,.14)',
+      knobBg:j.on?'#34d399':'#71767c', knobX:j.on?'16px':'2px' }));
+
+    // ---- segments ----
+    const rawS = [
+      { name:'Lapsed buyers · 90 days', kind:'dynamic', conditions:'3 · match all', members:'2,020', updated:'Jul 21' },
+      { name:'VIP · LTV > ₹25k',        kind:'dynamic', conditions:'2 · match all', members:'418',   updated:'Jul 20' },
+      { name:'Bengaluru · opted-in',    kind:'dynamic', conditions:'2 · match all', members:'6,240', updated:'Jul 19' },
+      { name:'Internal staff (test)',   kind:'static',  conditions:'—',             members:'32',    updated:'Jul 12' },
+      { name:'Cart abandoners · 7d',    kind:'dynamic', conditions:'1 · match any', members:'1,180', updated:'Jul 22' },
+    ];
+    const segments = rawS.map((s,i) => { const t = s.kind==='dynamic'?ST.blue:ST.gray; return { ...s, id:'s'+i, kFg:t.fg,kBg:t.bg,kBd:t.bd }; });
+
+    // ---- contacts ----
+    const rawP = [
+      { name:'Aarav Mehta',    city:'Mumbai',    consent:'opted_in',  orders:'12', ltv:'42,300', added:'Jun 02' },
+      { name:'Diya Sharma',    city:'Bengaluru', consent:'opted_in',  orders:'7',  ltv:'28,900', added:'Jun 14' },
+      { name:'Kabir Nair',     city:'Delhi',     consent:'opted_out', orders:'3',  ltv:'9,100',  added:'May 28' },
+      { name:'Ananya Rao',     city:'Hyderabad', consent:'opted_in',  orders:'21', ltv:'71,400', added:'Apr 09' },
+      { name:'Vivaan Gupta',   city:'Pune',      consent:'unknown',   orders:'1',  ltv:'2,400',  added:'Jul 11' },
+      { name:'Ishani Bose',    city:'Kolkata',   consent:'opted_in',  orders:'9',  ltv:'33,050', added:'Mar 22' },
+      { name:'Reyansh Iyer',   city:'Chennai',   consent:'opted_in',  orders:'5',  ltv:'18,700', added:'Jul 03' },
+    ];
+    const cTone = { opted_in:ST.green, opted_out:ST.red, unknown:ST.gray };
+    const contacts = rawP.map((p,i) => { const t=cTone[p.consent]; return { ...p, id:'p'+i, initials:p.name.split(' ').map(w=>w[0]).join('').slice(0,2), cFg:t.fg,cBg:t.bg,cBd:t.bd }; });
+
+    // ---- templates ----
+    const rawT = [
+      { name:'Win-back · 30 days',    channel:'email',    purpose:'marketing',     status:'active',  meta:null,        version:3, updated:'Jul 21' },
+      { name:'Order Shipped',         channel:'whatsapp', purpose:'transactional', status:'active',  meta:'APPROVED',  version:2, updated:'Jul 20' },
+      { name:'Monsoon Sale',          channel:'email',    purpose:'marketing',     status:'draft',   meta:null,        version:1, updated:'Jul 22' },
+      { name:'VIP Restock Alert',     channel:'whatsapp', purpose:'marketing',     status:'draft',   meta:'PENDING',   version:1, updated:'Jul 22' },
+      { name:'Feedback Request',      channel:'email',    purpose:'utility',       status:'active',  meta:null,        version:5, updated:'Jul 19' },
+      { name:'Payment Reminder',      channel:'whatsapp', purpose:'utility',       status:'archived',meta:'REJECTED',  version:2, updated:'Jul 05' },
+    ];
+    const metaTone = { APPROVED:ST.green, PENDING:ST.yellow, REJECTED:ST.red };
+    const tStatusTone = { active:ST.green, draft:ST.gray, archived:ST.red };
+    const templates = rawT.map((t,i) => {
+      const c=CH[t.channel], st=tStatusTone[t.status];
+      let metaCell = React.createElement('span',{style:{color:'#565b61'}},'—');
+      if (t.channel==='whatsapp') {
+        if (t.meta) { const m=metaTone[t.meta]||ST.gray; metaCell = React.createElement('span',{style:{fontFamily:"'JetBrains Mono',monospace",fontSize:'10px',padding:'3px 9px',borderRadius:'6px',color:m.fg,background:m.bg,border:'1px solid '+m.bd}},t.meta); }
+        else metaCell = React.createElement('span',{style:{fontFamily:"'JetBrains Mono',monospace",fontSize:'11px',color:'#71767c'}},'not submitted');
+      }
+      return { ...t, id:'t'+i, chIcon:c.icon, chFg:c.fg, sFg:st.fg,sBg:st.bg,sBd:st.bd, metaCell };
+    });
+
+    // ---- analytics ----
+    const analyticsKpis = [
+      { label:'Sent · 30d', value:'112,400', color:'#f4f5f6', sub:'handed to provider' },
+      { label:'Delivery rate', value:'97.4%', color:'#34d399', sub:'109,480 delivered' },
+      { label:'Read rate', value:'43.8%', color:'#34d399', sub:'47,950 read · of delivered' },
+      { label:'Attr. revenue', value:'₹18.6L', color:'#F2CD1A', sub:'campaigns + journeys' },
+    ];
+    const barSeed = [42,55,48,61,58,72,66,80,74,69,88,82,95,90];
+    const sendBars = barSeed.map((v,i) => ({ label:(11+i)+'', sentPct: Math.round(v/95*100), delivPct: 92 + (i%5) }));
+    const rawA = [
+      { name:'July Win-Back Flow',   sent:'8,180', delivered:'7,951', opened:'3,284', orders:'186', revenue:'₹3.24L', roi:'5.9×', roiPos:true },
+      { name:'Abandoned Cart Nudge', sent:'3,020', delivered:'2,954', opened:'2,340', orders:'142', revenue:'₹1.87L', roi:'8.2×', roiPos:true },
+      { name:'Order Shipped',        sent:'1,240', delivered:'1,212', opened:'1,068', orders:'—',   revenue:'—',      roi:'—',    roiPos:false },
+      { name:'Feedback Request',     sent:'5,310', delivered:'5,231', opened:'1,732', orders:'—',   revenue:'—',      roi:'—',    roiPos:false },
+    ];
+    const analyticsRows = rawA.map((c,i) => ({ ...c, id:'a'+i, roiColor:c.roiPos?'#34d399':'#71767c' }));
+
+    // ---- roles ----
+    const rawR = [
+      { label:'Super Admin',       key:'relay_super_admin', system:true,  perms:10, desc:'Full control — roles, settings, caps, and all sends.' },
+      { label:'Campaign Manager',  key:'campaign_manager',  system:false, perms:6,  desc:'Build and send campaigns & journeys, manage templates and segments.' },
+      { label:'Approver',          key:'approver',          system:false, perms:3,  desc:'Review and approve sends that cross the approval threshold.' },
+      { label:'Analyst',           key:'analyst',           system:false, perms:1,  desc:'Read-only access to the Relay workspace and analytics.' },
+      { label:'Data Steward',      key:'data_steward',      system:false, perms:2,  desc:'Manage contact data and consent records.' },
+      { label:'Viewer',            key:'relay_viewer',      system:true,  perms:1,  desc:'View campaigns, journeys, segments, and templates.' },
+    ];
+    const roles = rawR.map((r,i) => ({ ...r, id:'r'+i, editLabel:r.system?'View':'Edit', editIcon:r.system?'visibility':'edit' }));
+
+    // ---- users ----
+    const rawU = [
+      { name:'Afshaan Khan',   email:'afshaan@legendoftoys.com', role:'Super Admin',      active:true },
+      { name:'Rhea Kapoor',    email:'rhea@legendoftoys.com',    role:'Campaign Manager', active:true },
+      { name:'Dev Malhotra',   email:'dev@legendoftoys.com',     role:'Approver',         active:true },
+      { name:'Sana Qureshi',   email:'sana@legendoftoys.com',    role:'Analyst',          active:true },
+      { name:'Old Contractor', email:'temp@legendoftoys.com',    role:'Campaign Manager', active:false },
+    ];
+    const users = rawU.map((u,i) => { const t=u.active?ST.green:ST.gray; return { ...u, id:'u'+i, active:u.active?'active':'inactive', opacity:u.active?1:0.5, stFg:t.fg,stBg:t.bg,stBd:t.bd, assigned:['Jan 04','Feb 18','Mar 30','May 12','Jun 22'][i] }; });
+
+    // ---- governance (settings) ----
+    const toggle = (on) => React.createElement('span',{style:{width:'52px',height:'28px',borderRadius:'15px',background:on?'rgba(52,211,153,.2)':'rgba(255,255,255,.06)',border:'1px solid '+(on?'rgba(52,211,153,.5)':'rgba(255,255,255,.14)'),position:'relative',display:'inline-block'}}, React.createElement('span',{style:{position:'absolute',top:'2px',left:on?'26px':'2px',width:'22px',height:'22px',borderRadius:'50%',background:on?'#34d399':'#71767c',transition:'left .15s'}}));
+    const numBox = (v) => React.createElement('span',{style:{fontFamily:"'JetBrains Mono',monospace",fontSize:'13px',color:'#e6e8ea',background:'#0a0b0d',border:'1px solid #23252b',borderRadius:'8px',padding:'8px 14px',minWidth:'120px',display:'inline-block',textAlign:'right'}},v);
+    const governance = [
+      { label:'Require approval for marketing sends', hint:'Marketing campaigns above the audience threshold need an approver.', control: toggle(true) },
+      { label:'Approval audience threshold', hint:'Marketing sends to more than this many contacts require approval.', control: numBox('5,000') },
+      { label:'Frequency cap (messages / day)', hint:'Max messages a single contact can receive within the window.', control: numBox('3') },
+      { label:'Frequency cap window (hours)', hint:'Rolling window the per-day cap is measured over.', control: numBox('24') },
+      { label:'Quiet hours start (HH:MM)', hint:'No sends after this local time.', control: numBox('21:00') },
+      { label:'Quiet hours end (HH:MM)', hint:'Sends resume from this local time.', control: numBox('08:00') },
+      { label:'Attribution window (days)', hint:'Conversions within this window after a send are attributed to it.', control: numBox('7') },
+      { label:'Daily send budget (marketing)', hint:'Warm-up throttle — max marketing sends per day (IST). Blank = unlimited.', control: numBox('5,000') },
+    ];
+
+    // ---- senders ----
+    const rawSnd = [
+      { channel:'email',    address:'hello@legendoftoys.com', provider:'resend', status:'active',  dns:'verified' },
+      { channel:'email',    address:'care@legendoftoys.com',  provider:'resend', status:'active',  dns:'verified' },
+      { channel:'email',    address:'offers@legendoftoys.com',provider:'resend', status:'pending', dns:'unverified' },
+      { channel:'whatsapp', address:'+91 70191 03926',        provider:'meta',   status:'active',  dns:null },
+      { channel:'sms',      address:'LEGEND',                 provider:'msg91',  status:'draft',   dns:null },
+    ];
+    const sndStatusTone = { active:ST.green, pending:ST.yellow, draft:ST.gray, disabled:ST.red };
+    const dnsCellFor = (r) => {
+      if (r.channel!=='email') return React.createElement('span',{style:{color:'#565b61'}},'—');
+      const ok = r.dns==='verified'; const t = ok?ST.green:ST.yellow;
+      return React.createElement('span',{style:{fontFamily:"'JetBrains Mono',monospace",fontSize:'10px',padding:'3px 9px',borderRadius:'6px',color:t.fg,background:t.bg,border:'1px solid '+t.bd}}, r.dns);
+    };
+    const senders = rawSnd.map((s,i) => { const c=CH[s.channel], st=sndStatusTone[s.status]; return { ...s, id:'snd'+i, chIcon:c.icon, chFg:c.fg, stFg:st.fg,stBg:st.bg,stBd:st.bd, provider:s.provider, dnsCell:dnsCellFor(s) }; });
+
+    // ---- connectors (senders grouped by channel) ----
+    const connectorChannels = ['email','whatsapp','sms'].map(chId => {
+      const c=CH[chId];
+      const list = senders.filter(s => s.channel===chId);
+      return { channel:chId, chIcon:c.icon, chFg:c.fg, count:list.length, hasNone:list.length===0, senders:list };
+    });
+
+    return {
+      page, nav:(id)=>this.nav(id), navGroups,
+      collapsed, expanded,
+      sbWidth: collapsed ? '68px' : '256px',
+      sbHeaderJustify: collapsed ? 'center' : 'flex-start',
+      toggleSidebar: () => this.setState(s => ({ collapsed: !s.collapsed })),
+      openPalette: () => {}, goCampaigns: go('campaigns'), goAnalytics: go('analytics'),
+      crumbGroup: crumb.g, crumbPage: crumb.p,
+      isOverview:page==='overview', isCampaigns:page==='campaigns', isJourneys:page==='journeys',
+      isSegments:page==='segments', isContacts:page==='contacts', isTemplates:page==='templates',
+      isAnalytics:page==='analytics', isRoles:page==='roles', isUsers:page==='users',
+      isSettings:page==='settings', isSenders:page==='senders', isConnectors:page==='connectors',
+      campaigns, campaignTabs, campaignKpis,
+      overviewKpis, liveSends, activity, senderHealth,
+      journeys, segments, contacts, templates,
+      analyticsKpis, sendBars, analyticsRows,
+      roles, users, governance, senders, connectorChannels,
+    };
+  }
+}
+</script>
+</body>
+</html>

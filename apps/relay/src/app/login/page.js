@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 
-const COND = "'Tomorrow', system-ui, -apple-system, 'Helvetica Neue', sans-serif";
+const COND = "'Space Grotesk', system-ui, -apple-system, 'Helvetica Neue', sans-serif";
 const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
 
 export default function LoginPage() {
@@ -45,7 +45,7 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           style={{
-            width: '100%', background: '#F2CD1A', color: '#282828', border: 'none',
+            width: '100%', background: '#F2CD1A', color: '#17140a', border: 'none',
             borderRadius: 6, padding: '14px',
             fontFamily: COND, fontWeight: 700, fontSize: 12,
             letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer',

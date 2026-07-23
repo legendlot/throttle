@@ -42,16 +42,16 @@ export function Switch({ checked, onChange, disabled = false, busy = false, labe
       style={{
         position: 'relative', width: 34, height: 19, flexShrink: 0, padding: 0,
         borderRadius: 999, cursor: disabled || busy ? 'not-allowed' : 'pointer',
-        border: `1px solid ${on ? 'var(--ok-bd, #2e7d32)' : 'var(--line, #d0d0d0)'}`,
-        background: on ? 'var(--ok-solid, #2e7d32)' : 'var(--surface-3, #e4e4e4)',
+        border: `1px solid ${on ? 'rgba(52,211,153,.5)' : 'rgba(255,255,255,.14)'}`,
+        background: on ? 'rgba(52,211,153,.2)' : 'rgba(255,255,255,.06)',
         opacity: disabled ? 0.45 : 1,
         transition: prefersReducedMotion() ? 'none' : 'background 140ms ease, border-color 140ms ease',
       }}
     >
       <span style={{
-        position: 'absolute', top: 2, left: on ? 17 : 2, width: 13, height: 13, borderRadius: '50%',
-        background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.3)',
-        transition: prefersReducedMotion() ? 'none' : 'left 140ms ease',
+        position: 'absolute', top: 1, left: on ? 16 : 2, width: 15, height: 15, borderRadius: '50%',
+        background: on ? 'var(--green, #34d399)' : 'var(--t4, #71767c)',
+        transition: prefersReducedMotion() ? 'none' : 'left 140ms ease, background 140ms ease',
       }} />
     </button>
   );
@@ -185,6 +185,25 @@ export function Kpi({ label, value, sub, tone = 'gray', series, delta, format, o
         <span className="kpi-sub">{sub}</span>
         {series && <Sparkline data={series} stroke={t.solid} w={72} h={26} />}
       </div>
+    </div>
+  );
+}
+
+/* ---- KpiStrip (§3.3) -------------------------------------------------- */
+// The COMMAND bordered multi-cell strip: equal cells divided by hairlines, a
+// 2px accent top-rule on the lead metric. Purely presentational.
+// cells: [{ label, value, delta, up (delta tinted green), lead, color }]
+export function KpiStrip({ cells = [] }) {
+  if (!cells.length) return null;
+  return (
+    <div className="kstrip">
+      {cells.map((c, i) => (
+        <div key={c.label || i} className={`ks-cell ${c.lead ? 'lead' : ''}`}>
+          <div className="ks-label">{c.label}</div>
+          <div className="ks-val" style={c.color ? { color: c.color } : undefined}>{c.value}</div>
+          {c.delta != null && <div className={`ks-delta ${c.up ? 'up' : ''}`}>{c.delta}</div>}
+        </div>
+      ))}
     </div>
   );
 }

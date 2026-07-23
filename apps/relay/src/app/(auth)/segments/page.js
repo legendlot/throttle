@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Trash2, Users, RefreshCw, Eye } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 
@@ -80,6 +80,14 @@ export default function SegmentsPage() {
   useEffect(() => { load(); }, [load]);
 
   function startNew() { setSeg(emptySeg()); setPv(null); setView('form'); }
+  // ⌘K "New segment" deep-link (?new=1) — read once on mount, then clean the URL.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
+      setSeg(emptySeg()); setPv(null); setView('form');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
     setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, rows: parsed.rows, member_count: null });
@@ -271,7 +279,12 @@ export default function SegmentsPage() {
                     const p = parseDef(r.definition);
                     return (
                       <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
-                        <td><Users size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}</td>
+                        <td>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+                            <Filter size={15} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+                            <span style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</span>
+                          </span>
+                        </td>
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
                         <td className="dim">{r.kind === 'static' ? '—' : (p.rows.length === 0 ? 'everyone' : `${p.rows.length} · match ${p.group}`)}</td>
                         <td className="mono dim">{fmtDate(r.updated_at)}</td>

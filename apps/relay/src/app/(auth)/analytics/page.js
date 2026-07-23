@@ -32,7 +32,7 @@ function SendsBars({ data }) {
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 28 }}>
           <div style={{ width: 22, height: 120, background: 'rgba(255,255,255,.04)', borderRadius: 4, display: 'flex', alignItems: 'flex-end' }}>
             <div style={{ width: '100%', height: `${(d.sent / max) * 100}%`, background: 'var(--accent, #F2CD1A)', borderRadius: 4, display: 'flex', alignItems: 'flex-end', minHeight: d.sent ? 2 : 0 }}>
-              <div style={{ width: '100%', height: `${d.sent ? (d.delivered / d.sent) * 100 : 0}%`, background: '#22c55e', borderRadius: 4 }} />
+              <div style={{ width: '100%', height: `${d.sent ? (d.delivered / d.sent) * 100 : 0}%`, background: 'var(--green, #34d399)', borderRadius: 4 }} />
             </div>
           </div>
           <div className="mono dim" style={{ fontSize: 10 }}>{fmtDateShort(d.day)}</div>
@@ -117,9 +117,9 @@ export default function AnalyticsPage() {
   const byDay = Object.values(byDayMap).sort((a, b) => (a.day < b.day ? -1 : 1));
 
   const winPicker = (
-    <div style={{ display: 'flex', gap: 6 }}>
+    <div className="rtabs">
       {WINDOWS.map((w) => (
-        <button key={w} className={`badge-btn ${days === w ? 'accent' : ''}`} onClick={() => setDays(w)}>{w}d</button>
+        <button key={w} className={`rtab rtab-mono ${days === w ? 'on' : ''}`} onClick={() => setDays(w)}>{w}d</button>
       ))}
     </div>
   );
@@ -157,7 +157,7 @@ export default function AnalyticsPage() {
               sub={totals.spend > 0 ? 'revenue ÷ spend' : 'needs priced sends'} />
           </div>
 
-          <Panel title={`Sends by day · ${days}d`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: '#22c55e' }}>■</span> delivered</span>} pad>
+          <Panel title={`Sends by day · ${days}d`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: 'var(--green, #34d399)' }}>■</span> delivered</span>} pad>
             <SendsBars data={byDay} />
           </Panel>
 

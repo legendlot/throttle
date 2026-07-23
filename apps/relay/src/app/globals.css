@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&family=Rubik:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 *, *::before, *::after {
   margin: 0;
@@ -7,139 +7,141 @@
 }
 
 /* ════════════════════════════════════════════════════════════
-   DESIGN TOKENS — Relay (CX comms)
-   Mirrors apps/snorkel/src/app/globals.css for cross-app
-   consistency. Same lifted-dark surface scale, same text ramp,
-   same semantic state colors, same focus ring. Brand palette:
-   Relay Yellow (#F2CD1A · accent), Ink (#282828), Signal Red
-   (#DE2A2A · danger).
+   DESIGN TOKENS — Relay COMMAND (CX comms control tower)
+   Ported verbatim from the COMMAND redesign prototype
+   (05_Throttle/Relay COMMAND.dc.html · RELAY_REDESIGN_HANDOFF.md §3).
+   Three type roles: Space Grotesk (display) · Hanken Grotesk (UI/body)
+   · JetBrains Mono (numbers, codes, labels, pills).
+   Relay Yellow #F2CD1A is the single accent (locked).
    ════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ── Surface ramp (cooler/darker, 4 steps) ───────────────── */
-  --bg:         #16181a;   /* body */
-  --surface:    #1e2023;   /* cards, panels, sidebar, modals */
-  --surface-2:  #26282c;   /* inputs, table-row hover, raised inner */
-  --surface-3:  #30343a;   /* active fills, chip-neutral bg, hover */
-  --border:     #2c2f33;   /* default 1px border */
-  --border-2:   #3a3e44;   /* emphasized border, focus, raised secondary */
+  /* ── Surface ramp (layered — cards must separate from the bg) ── */
+  --bg:            #0d0e10;   /* app canvas / main content */
+  --bg-2:          #0a0b0d;   /* recessed: top bar, search field, number inputs */
+  --surface:       #141518;   /* panels, cards, KPI strip */
+  --surface-2:     #111214;   /* sidebar */
+  --surface-hover: #1a1c20;
+  --border:        #212227;   /* panel borders */
+  --border-sb:     #202128;   /* sidebar / header dividers */
+  --row-border:    #1a1b1f;   /* table row separators */
+  --border-strong: #2c2f36;   /* secondary-button borders */
 
-  /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
-  --text-1:     #f3f4f5;   /* primary */
-  --text-2:     #a7acb2;   /* secondary */
-  --text-3:     #71767c;   /* tertiary */
-  --text-4:     #565b61;   /* decorative-only — icons, dividers */
+  /* ── Text ramp (§3.4 contrast rules) ─────────────────────── */
+  --t1: #f4f5f6;   /* primary — headings, values, key cells */
+  --t2: #a3a8af;   /* secondary — nav idle, secondary buttons */
+  --t3: #8b909a;   /* muted — descriptions, sub-labels, table dims */
+  --t4: #71767c;   /* micro — eyebrows, mono captions, breadcrumb */
+  --t5: #565b61;   /* faint — em-dash placeholders, group headers */
 
-  /* ── Brand colors (Relay) ────────────────────────────── */
-  --brand-yellow:      #F2CD1A;   /* Relay Yellow */
-  --brand-yellow-deep: #d4b200;
-  --brand-ink:         #282828;   /* Ink */
-  --ink:               #282828;
-  --brand-blue:        #213CE2;
-  --brand-red:         #DE2A2A;   /* Signal Red */
-  --danger:            #DE2A2A;
-  --brand-green:       #22c55e;
-  --brand-orange:      #f97316;
+  /* ── Brand + semantic (bright fg on dark — never deep hues) ── */
+  --accent:      #F2CD1A;
+  --accent-ink:  #17140a;                  /* text on a yellow fill */
+  --accent-soft: rgba(242, 205, 26, .12);
+  --accent-bd:   rgba(242, 205, 26, .34);
+  --green:  #34d399;
+  --blue:   #7c9bff;
+  --orange: #fb923c;
+  --red:    #f87171;
+  --gray:   #9aa0aa;
+  --wa:     #25D366;   /* WhatsApp brand green — channel glyphs only */
 
-  /* ── Redesign foreground variants (lighter text/badge fills on dark) ── */
-  --blue-fg:    #9aabff;
-  --green-fg:   #5fe08a;
-  --red-fg:     #ff7a7a;
-  --orange-fg:  #ffa459;
-  --blue-bright: #4d68ff;
-  --blue-solid:  #213CE2;
+  /* ── Radius (§3.2) ───────────────────────────────────────── */
+  --r-sm:   6px;      /* pills */
+  --r-md:   9px;      /* buttons / nav */
+  --r-lg:   10px;
+  --r-xl:   14px;     /* panels */
+  --r-2xl:  16px;     /* cards / rails */
+  --r-pill: 9999px;
 
-  /* ── Semantic state ───────────────────────────────────── */
-  --state-warning:    #fbbf24;
-  --state-warning-fg: #fbbf24;
-  --state-warning-bg: rgba(251, 191, 36, 0.12);
-  --state-error:      #DE2A2A;
-  --state-error-fg:   #ff7070;
-  --state-error-bg:   rgba(222, 42, 42, 0.15);
-  --state-success:    #22c55e;
-  --state-success-fg: #4ade80;
-  --state-success-bg: rgba(34, 197, 94, 0.12);
-  --state-info:       #7b93ff;
-  --state-info-fg:    #7b93ff;
-  --state-info-bg:    rgba(33, 60, 226, 0.20);
+  /* ── Elevation ───────────────────────────────────────────── */
+  --glow-accent: 0 6px 18px -8px rgba(242, 205, 26, .7);
+  --shadow-top:  0 40px 90px -40px rgba(0, 0, 0, .8);
 
-  /* Accent (primary action) — Relay Yellow on Ink */
-  --accent:      var(--brand-yellow);
-  --accent-fg:   #282828;
-  --accent-bg:   rgba(242, 205, 26, 0.08);
-  --accent-soft: rgba(242, 205, 26, 0.13);  /* tinted fill (active nav, soft badges) */
-  --accent-bd:   rgba(242, 205, 26, 0.32);  /* tinted border */
-
-  /* ── Type scale ──────────────────────────────────────── */
-  --text-2xs:  11px;
-  --text-xs:   12px;
-  --text-sm:   13px;
-  --text-base: 14px;
-  --text-md:   16px;
-  --text-lg:   18px;
-  --text-xl:   22px;
-  --text-2xl:  28px;
-  --text-3xl:  36px;
-
-  --tracking-tight:  0.04em;
-  --tracking-mid:    0.06em;
-  --tracking-wide:   0.08em;
-
-  /* ── Spacing scale ───────────────────────────────────── */
-  --space-1:  4px;
-  --space-2:  8px;
-  --space-3:  12px;
-  --space-4:  16px;
-  --space-5:  20px;
-  --space-6:  24px;
-  --space-8:  32px;
-  --space-10: 40px;
-
-  /* ── Radius scale ────────────────────────────────────── */
-  --radius-sm:   3px;
-  --radius-md:   4px;
-  --radius-lg:   8px;
-  --radius-full: 9999px;
-
-  /* ── Fonts (LOT design system — three type roles) ─────────
-     Display = Tomorrow, Body/UI = Rubik, Data/mono = JetBrains Mono */
+  /* ── Fonts — the three roles (§3.1) ──────────────────────── */
+  --font-disp: 'Space Grotesk', system-ui, sans-serif;
+  --font-ui:   'Hanken Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-cond: 'Tomorrow', system-ui, sans-serif;
-  --font-ui:   'Rubik', system-ui, sans-serif;
 
-  /* ── Motion ──────────────────────────────────────────── */
+  /* ── Motion ──────────────────────────────────────────────── */
   --duration-fast:    120ms;
   --duration-default: 180ms;
-  --duration-slow:    260ms;
-  --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* ── Redesign layout primitives ── */
-  --ease:       cubic-bezier(0.22, 1, 0.36, 1);
-  --radius:     7px;
-  --row-pad:    11px 12px;
-  --panel-pad:  16px 18px;
-  --shadow:     0 1px 0 rgba(255,255,255,.025) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+  --ease:     cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-sb:  cubic-bezier(0.4, 0, 0.2, 1);
 
   /* ════════════════════════════════════════════════════════
-     LEGACY ALIASES — shared components reference these names.
+     LEGACY ALIASES — existing components/pages reference these
+     names; they resolve to the COMMAND ramp above.
      ════════════════════════════════════════════════════════ */
-  --surface2: var(--surface-2);
-  --surface3: var(--surface-3);
-  --border2:  var(--border-2);
-  --t1:       var(--text-1);
-  --t2:       var(--text-2);
-  --t3:       var(--text-3);
-  --yellow:      var(--brand-yellow);
-  --yellow2:     var(--brand-yellow-deep);
-  --yellow-deep: var(--brand-yellow-deep);
-  --blue:     var(--blue-bright);
-  --red:      var(--brand-red);
-  --green:    var(--brand-green);
-  --orange:   var(--brand-orange);
-  --mono:     var(--font-mono);
-  --cond:     var(--font-cond);
-  --disp:     var(--font-cond);
-  --body:     var(--font-ui);
+  --text-1: var(--t1);
+  --text-2: var(--t2);
+  --text-3: var(--t3);
+  --text-4: var(--t4);
+  --surface-3: var(--surface-hover);
+  --surface2:  var(--surface-2);
+  --surface3:  var(--surface-hover);
+  --border-2:  var(--border-strong);   /* legacy "emphasized border" role */
+  --border2:   var(--border-strong);
+  --brand-yellow: var(--accent);
+  --brand-yellow-deep: #d4b200;
+  --yellow:      var(--accent);
+  --yellow2:     #d4b200;
+  --yellow-deep: #d4b200;
+  --accent-fg:  var(--accent-ink);
+  --accent-bg:  rgba(242, 205, 26, 0.08);
+  --brand-ink:  var(--accent-ink);
+  --ink:        var(--accent-ink);
+  --brand-red:  var(--red);
+  --danger:     var(--red);
+  --signal-red: var(--red);
+  --brand-green:  var(--green);
+  --brand-orange: var(--orange);
+  --brand-blue:   var(--blue);
+  --blue-fg:   var(--blue);
+  --green-fg:  var(--green);
+  --red-fg:    var(--red);
+  --orange-fg: var(--orange);
+  --blue-bright: var(--blue);
+  --blue-solid:  var(--blue);
+  --line: var(--border);
+  --star-on: var(--accent);
+  --ok:       var(--wa);
+  --ok-fg:    var(--green);
+  --ok-bd:    rgba(52, 211, 153, .5);
+  --ok-solid: var(--green);
+  --state-warning:    var(--accent);
+  --state-warning-fg: var(--accent);
+  --state-warning-bg: rgba(242, 205, 26, 0.12);
+  --state-error:      var(--red);
+  --state-error-fg:   var(--red);
+  --state-error-bg:   rgba(248, 113, 113, 0.13);
+  --state-success:    var(--green);
+  --state-success-fg: var(--green);
+  --state-success-bg: rgba(52, 211, 153, 0.13);
+  --state-info:       var(--blue);
+  --state-info-fg:    var(--blue);
+  --state-info-bg:    rgba(124, 155, 255, 0.15);
+  --mono: var(--font-mono);
+  --cond: var(--font-disp);
+  --disp: var(--font-disp);
+  --body: var(--font-ui);
+  --radius:     var(--r-xl);
+  --radius-sm:  3px;
+  --radius-md:  4px;
+  --radius-lg:  8px;
+  --radius-full: 9999px;
+  --row-pad:    12px 16px;
+  --panel-pad:  16px 18px;
+  --shadow:     none;
+  --ease-out:   var(--ease);
+  --duration-slow: 260ms;
+
+  /* legacy type/spacing scales (still referenced in a few spots) */
+  --text-2xs: 11px; --text-xs: 12px; --text-sm: 13px; --text-base: 14px;
+  --text-md: 16px; --text-lg: 18px; --text-xl: 22px; --text-2xl: 28px; --text-3xl: 36px;
+  --tracking-tight: 0.04em; --tracking-mid: 0.06em; --tracking-wide: 0.08em;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -148,9 +150,9 @@
 
 html, body {
   background: var(--bg);
-  color: var(--text-1);
+  color: var(--t1);
   font-family: var(--font-ui);
-  font-size: var(--text-base);
+  font-size: 14px;
   line-height: 1.5;
   height: 100%;
   overflow: hidden;
@@ -159,6 +161,7 @@ html, body {
 }
 
 a { color: inherit; text-decoration: none; }
+a:hover { color: var(--accent); }
 button { font-family: inherit; }
 
 /* ── Focus ring — keyboard only ──────────────────────────── */
@@ -172,15 +175,15 @@ button { font-family: inherit; }
 /* ── Selection ───────────────────────────────────────────── */
 ::selection {
   background: rgba(242, 205, 26, 0.35);
-  color: var(--text-1);
+  color: var(--t1);
 }
 
 /* ── Scrollbars — match dark theme ───────────────────────── */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar       { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar-thumb { background: #2a2c31; border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+* { scrollbar-width: thin; scrollbar-color: #2a2c31 transparent; }
 
 /* ══════════════════════════════════════════════════════════
    ACCESSIBILITY
@@ -199,6 +202,7 @@ button { font-family: inherit; }
    EMAIL EDITOR (GrapesJS + MJML)
    ══════════════════════════════════════════════════════════ */
 
-.email-gjs { border: 1px solid var(--border, #e5e5e5); border-radius: 8px; overflow: hidden; }
+.email-gjs { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .email-gjs .gjs-cv-canvas { background: #f4f4f4; }
-.chip { font-family: var(--mono, monospace); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border, #ddd); background: var(--surface, #fafafa); cursor: pointer; }
+.chip { font-family: var(--font-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; color: var(--t2); }
+.chip:hover { border-color: var(--border-strong); color: var(--t1); }
