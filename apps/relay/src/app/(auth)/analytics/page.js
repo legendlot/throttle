@@ -45,7 +45,7 @@ function SendsBars({ data }) {
 export default function AnalyticsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const [preset, setPreset] = useState('30d');
+  const [preset, setPreset] = useState('today');  // Afshaan: default every range picker to Today
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState([]);
   const [health, setHealth] = useState([]);
