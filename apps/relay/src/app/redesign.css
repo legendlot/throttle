@@ -26,7 +26,8 @@
 .sb-col .sb-head{justify-content:center;padding:0}
 .sb-brand{display:flex;align-items:center;gap:11px;min-width:0;flex:1}
 .sb-col .sb-brand{flex:none}
-.sb-mark{width:34px;height:34px;border-radius:10px;background:var(--accent-soft);border:1px solid var(--accent-bd);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--accent)}
+/* unstyled slot — the Relay logo SVG brings its own yellow rounded tile */
+.sb-mark{width:34px;height:34px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:visible}
 .sb-word-wrap{line-height:1;flex:1;min-width:0}
 .sb-word{font-family:var(--font-disp);font-weight:700;font-size:16px;letter-spacing:.16em;color:var(--t1);white-space:nowrap;display:block}
 .sb-sub{font-family:var(--font-mono);font-size:9px;letter-spacing:.14em;color:#6f747b;margin-top:3px;white-space:nowrap;display:block}
