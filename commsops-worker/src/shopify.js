@@ -227,9 +227,17 @@ function mapOrderEvent(o, name) {
     // here so the journey filter stays a simple equality, robust to gateway renames upstream
     // of the trigger. Forward-only — J3 is forward-only anyway.
     payment_gateway_names: Array.isArray(o.payment_gateway_names) ? o.payment_gateway_names : null,
-    is_cod: Array.isArray(o.payment_gateway_names)
-      ? o.payment_gateway_names.some((g) => /cash on delivery|\bcod\b/i.test(String(g)))
-      : (o.financial_status === 'pending' ? true : null),
+    // Either signal marks COD: a matching gateway name OR financial_status='pending'. The
+    // first live order showed Shopflo prepaid orders carry gateway "shopflo" — if COD orders
+    // do too, a gateway-only test would false-negative and J3 would never fire; pending⇔COD
+    // held 1,802/1,802 so the OR is safe. false only when a signal exists and neither says
+    // COD; null when both are absent (never a silent false).
+    is_cod: (Array.isArray(o.payment_gateway_names)
+              && o.payment_gateway_names.some((g) => /cash on delivery|\bcod\b/i.test(String(g))))
+      ? true
+      : o.financial_status === 'pending' ? true
+      : (Array.isArray(o.payment_gateway_names) || o.financial_status) ? false
+      : null,
     line_item_count: Array.isArray(o.line_items) ? o.line_items.length : null,
     // ── message-copy bindings (these were being dropped, leaving WA/email templates to
     //    fall back to generic values): {items}, {order_url}, {tracking_url}.

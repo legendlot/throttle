@@ -97,8 +97,13 @@ t('is_cod=true from a COD gateway name', () => {
   assert.deepEqual(e.properties.payment_gateway_names, ['Cash on Delivery (COD)']);
 });
 
-t('is_cod=false for a prepaid gateway even while pending', () => {
-  const e = mapOrderEvent({ ...base, payment_gateway_names: ['Cashfree Payments'], financial_status: 'pending' }, 'order_placed');
+t('is_cod=true when pending even under a non-COD gateway label (Shopflo labels COD "shopflo")', () => {
+  const e = mapOrderEvent({ ...base, payment_gateway_names: ['shopflo'], financial_status: 'pending' }, 'order_placed');
+  assert.equal(e.properties.is_cod, true);
+});
+
+t('is_cod=false for a non-COD gateway on a paid order', () => {
+  const e = mapOrderEvent({ ...base, payment_gateway_names: ['shopflo'], financial_status: 'paid' }, 'order_placed');
   assert.equal(e.properties.is_cod, false);
 });
 
