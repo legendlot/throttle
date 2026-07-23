@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import { Download } from 'lucide-react';
 import { PageHead, Panel, Kpi, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { istPresetRange, PRESETS } from '@/lib/dateRanges.js';
 
@@ -29,6 +30,30 @@ const fmtIst = (iso) => {
 const fmtVal = (v, cur) => (v == null || v === '' ? '—' : `${cur === 'INR' || !cur ? '₹' : cur + ' '}${Number(v).toLocaleString('en-IN')}`);
 
 const MSG_TONE = { delivered: 'green', read: 'green', sent: 'yellow', queued: 'yellow', failed: 'red', skipped: 'gray', suppressed: 'gray' };
+
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+// Export exactly the rows on screen (loaded pages, active event + date filter) — a shared
+// CSV and a shared screenshot can never disagree. Same discipline as the campaigns export.
+function downloadActivityCsv(rows, event, preset) {
+  const header = ['When (IST)', 'Customer', 'Phone', 'Email', 'Items', 'Value', 'Currency',
+    'Message', 'Recovered', 'Checkout URL', 'Profile ID'];
+  const body = rows.map((r) => [
+    fmtIst(r.occurred_at), r.display_name || 'anonymous', r.phone || '', r.email || '',
+    r.item || '', r.value ?? '', r.currency || '',
+    r.msg_status || '', r.recovered ? 'yes' : 'no', r.checkout_url || '', r.profile_id || '',
+  ]);
+  const csv = [header, ...body].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `relay-activity-${event}-${preset}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export default function ActivityPage() {
   const { session, perms } = useAuth();
@@ -107,7 +132,14 @@ export default function ActivityPage() {
         : rows.length === 0
           ? <Panel><EmptyState icon="activity" title="No events in this range" hint="Try a wider date range or another event type." /></Panel>
           : (
-            <Panel title={evLabel} count={stats ? Number(stats.total || rows.length) : rows.length}>
+            <Panel title={evLabel} count={stats ? Number(stats.total || rows.length) : rows.length}
+              action={
+                // NB Panel takes `action`, not `actions` — the campaigns CSV button silently
+                // vanished on that prop name once already (S220 gotcha).
+                <Btn onClick={() => downloadActivityCsv(rows, event, preset)} disabled={!rows.length}>
+                  <Download size={14} /> Download CSV
+                </Btn>
+              }>
               <table className="dt">
                 <thead><tr><th>When (IST)</th><th>Customer</th><th>Phone</th><th>Items</th><th>Value</th><th>Message</th><th>Recovered</th></tr></thead>
                 <tbody>
