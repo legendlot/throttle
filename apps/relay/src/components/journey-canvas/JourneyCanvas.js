@@ -60,7 +60,10 @@ function StepNode({ data, selected }) {
     : c.type === 'send' ? `${c.channel || 'email'} · ${c.purpose || 'marketing'}`
     : c.type === 'wait' ? (c.duration || 'duration not set')
     : c.type === 'wait_response' ? `awaits ${(c.awaited || []).join(', ') || 'not set'} · ${c.within || 'duration not set'}`
-    : c.type === 'condition' ? (c.check?.kind ? `${c.check.kind}${c.check.event ? `: ${c.check.event}` : ''}` : 'check not set')
+    : c.type === 'condition' ? (
+        c.check?.kind === 'event_property'
+          ? `${c.check.field || '?'} ${c.check.op || 'eq'} "${c.check.value ?? ''}"`
+          : c.check?.kind ? `${c.check.kind}${c.check.event ? `: ${c.check.event}` : ''}` : 'check not set')
     : isAction ? (c.kind === 'payment_link' ? (c.purpose || 'Cashfree pay-link')
         : c.kind === 'order_modify' ? (c.op || 'convert_to_prepaid')
         : `set ${c.attr || 'attr'} = ${c.value ?? ''}`)

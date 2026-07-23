@@ -23,6 +23,14 @@ const COND_KINDS = [
   { id: 'no_event_since_enrol', label: "Hasn't done event since enrol" },
   { id: 'event_since_enrol', label: 'Has done event since enrol' },
   { id: 'attribute', label: 'Profile attribute compare' },
+  { id: 'event_property', label: 'Trigger event property' },
+];
+// event_property field suggestions — the enriched/most-branched-on trigger properties.
+const EVENT_PROP_SUGGEST = ['primary_category', 'total', 'is_cod', 'financial_status',
+  'line_item_count', 'product_title', 'product_names'];
+const EVENT_PROP_OPS = [
+  { id: 'eq', label: 'is' }, { id: 'neq', label: 'is not' },
+  { id: 'contains', label: 'contains' }, { id: 'in', label: 'is any of (comma-sep)' },
 ];
 const CHANNELS = [
   { id: 'email', label: 'Email', live: true },
@@ -143,7 +151,26 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             {COND_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
         </Field>
-        {config.check?.kind !== 'attribute' ? (
+        {config.check?.kind === 'event_property' ? (<>
+          {/* Branch on the TRIGGER event's own properties — e.g. primary_category is
+              "L.O.T Build" → Build-voice template; anything else → Cars voice. */}
+          <Field label="Event property">
+            <input className="f-inp mono" list="jc-eventprop-suggest" value={config.check?.field || ''} disabled={disabled}
+              onChange={(e) => set({ check: { ...config.check, field: e.target.value } })} placeholder="primary_category" />
+            <datalist id="jc-eventprop-suggest">{EVENT_PROP_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+          </Field>
+          <Field label="Operator">
+            <select className="f-inp" value={config.check?.op || 'eq'} disabled={disabled}
+              onChange={(e) => set({ check: { ...config.check, op: e.target.value } })}>
+              {EVENT_PROP_OPS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Value">
+            <input className="f-inp mono" value={config.check?.value ?? ''} disabled={disabled}
+              onChange={(e) => set({ check: { ...config.check, value: e.target.value } })} placeholder="L.O.T Build" />
+          </Field>
+          <div className="tw-note" style={{ margin: '0 0 8px' }}>Matching is case-insensitive. A missing property compares as empty text.</div>
+        </>) : config.check?.kind !== 'attribute' ? (
           <Field label="Event">
             <input className="f-inp mono" list="jc-event-suggest" value={config.check?.event || ''} disabled={disabled}
               onChange={(e) => set({ check: { ...config.check, event: e.target.value } })} placeholder="order_placed" />

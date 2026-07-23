@@ -50,6 +50,10 @@ async function compile(env, definition, journey) {
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))
       errors.push(`condition_branch_missing:${id}`);
+    // event_property without a field can only ever evaluate '' — a silent always-false
+    // branch is exactly the class of bug compile exists to catch (cf. wait_bad_duration).
+    if (s.type === 'condition' && s.check?.kind === 'event_property' && !s.check.field)
+      errors.push(`event_property_no_field:${id}`);
     // A missing duration AND an unparseable one (e.g. a typo'd "3 dayz") are both compile
     // errors — the interpreter's #park catch-all can't tell "bad config" from "real
     // timeout", so a typo silently fires the drip instantly instead of failing loud here

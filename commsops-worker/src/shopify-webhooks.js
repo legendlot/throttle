@@ -5,6 +5,7 @@
 const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const SHOP = require('./shopify.js');
+const CAT = require('./product-category.js');
 
 // GDPR customers/redact — we hold no special PII store, so the compliant action is to
 // suppress every channel for the customer's contacts so nothing can ever reach them,
@@ -140,6 +141,13 @@ async function handlePixel(env, request) {
   // absolute https URL, so normalize here (server-side, so the pasted pixel needn't change).
   if (typeof props.product_image_url === 'string' && props.product_image_url.startsWith('//'))
     props.product_image_url = 'https:' + props.product_image_url;
+  // Category enrichment (S232): stamp primary_category so journeys can branch voice by
+  // product line (L.O.T Cars vs Build — RULE-TAXONOMY-001). Best-effort; null on no match
+  // (add-ons like "Gift Wrapping" deliberately classify to nothing).
+  if ((name === 'add_to_cart' || name === 'product_viewed') && !props.primary_category) {
+    const cat = await CAT.resolveCategory(env, props.product_title || props.product_name || '');
+    if (cat) props.primary_category = cat;
+  }
   // dedup a pixel checkout_started against the webhook's (same checkout token)
   const tok = body.checkout_token || props.checkout_token;
   const idem = (name === 'checkout_started' && tok) ? `shopify:checkout_started:${tok}` : null;

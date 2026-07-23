@@ -19,6 +19,7 @@ const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const FLO = require('./shopflo.js');
+const CAT = require('./product-category.js');
 
 // Bearer (Authorization) or custom X-Shopflo-Token header must equal the shared secret.
 function tokenOk(env, request) {
@@ -102,6 +103,12 @@ async function handleShopfloWebhook(env, request) {
     if (spec.event === 'checkout_abandoned' && envlp.properties && !envlp.properties.product_image_url) {
       envlp.properties.product_image_url = await resolveProductImage(
         env, envlp.properties.primary_product_name || envlp.properties.product_names);
+    }
+    // Category enrichment (S232) — primary_category ("L.O.T Cars"|"L.O.T Build") from the
+    // cart's titles, so journeys can branch template voice by product line. Best-effort.
+    if (spec.event === 'checkout_abandoned' && envlp.properties && !envlp.properties.primary_category) {
+      const cat = await CAT.resolveCategory(env, envlp.properties.product_names || envlp.properties.primary_product_name || '');
+      if (cat) envlp.properties.primary_category = cat;
     }
 
     const r = await ingest(env, envlp);

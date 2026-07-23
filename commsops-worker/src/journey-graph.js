@@ -87,6 +87,24 @@ function msUntilIstHour(nowMs, hour) {
   return target.getTime() - nowIst;
 }
 
+// event_property condition (S232) — branch on the TRIGGER EVENT's properties (e.g.
+// primary_category = "L.O.T Build" → Build-voice template). Pure so it unit-tests without
+// the interpreter. Case-insensitive throughout: the stored values are byte-exact
+// (RULE-TAXONOMY-001) but a marketer typing "l.o.t build" must not silently mis-branch.
+// {kind:'event_property', field, op:'eq'|'neq'|'contains'|'in', value}
+function evalEventProperty(check, props) {
+  if (!check || !check.field) return false;   // config bug → deterministic false, never a phantom match
+  const raw = props?.[check.field];
+  const v = (raw == null ? '' : String(raw)).toLowerCase();
+  const want = String(check?.value ?? '').toLowerCase();
+  switch (check?.op) {
+    case 'neq':      return v !== want;
+    case 'contains': return want !== '' && v.includes(want);
+    case 'in':       return want.split(',').map((x) => x.trim()).filter(Boolean).includes(v);
+    default:         return v === want;   // eq
+  }
+}
+
 // Did a send() result actually leave the building? (vs a gate skip/suppression/failure)
 function sendWentOut(res) {
   return !!res && (res.status === 'sent' || res.status === 'delivered' || res.status === 'deduped');
@@ -112,4 +130,4 @@ function resolveSendNext(step, res, def) {
   return { next: plainNext };
 }
 
-module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, msUntilIstHour, sendWentOut, resolveSendNext };
+module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, msUntilIstHour, sendWentOut, resolveSendNext, evalEventProperty };

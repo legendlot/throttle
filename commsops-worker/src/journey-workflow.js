@@ -164,7 +164,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         if (terminateOutcome) { await this.#end(env, step, enrolmentId, terminateOutcome, cur); return; }
         cur = G.resolveTarget(s, outHandle);
       } else if (s.type === 'condition') {
-        const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt));
+        const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt, triggerProps));
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
@@ -435,7 +435,10 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   }
 
   // condition v1
-  async #evalCondition(env, check, profileId, enrolledAt) {
+  async #evalCondition(env, check, profileId, enrolledAt, triggerProps) {
+    // Branch on the trigger event's own properties (S232 — category-voice branching).
+    // Pure comparator lives in journey-graph.js so it unit-tests without this class.
+    if (check?.kind === 'event_property') return G.evalEventProperty(check, triggerProps || {});
     if (check?.kind === 'no_event_since_enrol') {
       const r = await A.sbComms(
         `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(check.event)}` +
