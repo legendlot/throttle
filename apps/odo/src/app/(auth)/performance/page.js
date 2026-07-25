@@ -2,11 +2,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
+import { ArrowLeftRight, Sparkles, Wrench } from 'lucide-react';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
 import { aggOrders } from '../../../lib/segregation.js';
-import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
+import { Kpi, Delta, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
+import { PageHead, PanelHead, Swatch } from '../../../components/prism.js';
+import { HUE } from '../../../lib/hues.js';
 import { familyOf, FAMILIES, SUBCHANNEL_PALETTE } from '../../../lib/families.js';
 import StackedTrendChart from '../../../components/StackedTrendChart.js';
+
+// Order-type tile (Shopify MO tags) — icon + mono label + Sora value + mono sub.
+// Its own panel rather than a hue-tinted KPI: these are qualitative order flags, not
+// ladder metrics, and the icon is what makes them scannable at a glance.
+// Carries the same period-over-period <Delta> a Kpi tile does (tone="neutral" — these are
+// volume flags, so up isn't inherently good); dropping it would lose vs-prior-period context.
+function OrderTypeTile({ icon: Icon, color, lbl, val, sub, now, prev }) {
+  return (
+    <div className="so-card" style={{ borderRadius: 'var(--r-xl)', padding: '13px 15px', display: 'flex', alignItems: 'center', gap: 13 }}>
+      <Icon size={22} strokeWidth={1.75} color={color} style={{ flex: 'none' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="so-stat-lbl">{lbl}</span>
+          <Delta now={now} prev={prev} tone="neutral" />
+        </div>
+        <div style={{ fontFamily: 'var(--cond)', fontSize: 19, fontWeight: 700, color: 'var(--t1)', marginTop: 3 }}>{val}</div>
+      </div>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)', whiteSpace: 'nowrap' }}>{sub}</span>
+    </div>
+  );
+}
 
 export default function PerformancePage() {
   const { session } = useAuth();
@@ -62,49 +86,54 @@ export default function PerformancePage() {
     const fam = FAMILIES[familyOf(c.name)];
     return { key: c.id, label: c.name, color: fam?.color || SUBCHANNEL_PALETTE[i % SUBCHANNEL_PALETTE.length] };
   }), [chRows]);
+  // colour every channel reference in the table with the same family hue the chart uses
+  const chColor = useMemo(() => Object.fromEntries(trendGroups.map(g => [g.key, g.color])), [trendGroups]);
   const sort = useTableSort(chRows, { initialKey: 'grossAll' });
 
   return (
-    <div className="so-page">
-      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<span className="so-sub">vs prior period · order-grain channels</span>} />
+    <div className="so-page" style={{ gap: 12 }}>
+      <PageHead title="Performance" sub="Order-grain ladder · vs prior period · order-grain channels" />
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!a ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
-          {/* Headline ladder + tiles */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-            <Kpi lbl="Total Orders" val={fmtInt(a.totalOrders)} sub="placed (incl. cancelled)" now={a.totalOrders} prev={p.totalOrders} />
-            <Kpi lbl="Total Sales" val={inr(a.grossAll)} sub="gross revenue" now={a.grossAll} prev={p.grossAll} />
-            <Kpi lbl="Net Sales" val={inr(a.netCancel)} sub="excl. cancellations" now={a.netCancel} prev={p.netCancel} />
-            <Kpi lbl="Net Revenue (ex-GST)" val={inr(a.netExGst)} sub="after disc · returns · GST" now={a.netExGst} prev={p.netExGst} badge={<SettledBadge pct={a.settledPct} />} />
-            <Kpi lbl="AOV" val={inr(a.aov)} sub="gross / order" now={a.aov} prev={p.aov} />
-            <Kpi lbl="Cancellations" val={`${fmtInt(a.cancelledOrders)} · ${a.cancelRate.toFixed(1)}%`} sub={inr(a.cancelledValue)} now={a.cancelledOrders} prev={p.cancelledOrders} tone="neutral" />
-            <Kpi lbl="Returns" val={`${fmtInt(a.returnsCount)} · ${inr(a.returnsValue)}`} sub="refund value" now={a.returnsValue} prev={p.returnsValue} tone="neutral" />
-            <Kpi lbl="Total Discounts" val={inr(a.discount)} sub="discount given" now={a.discount} prev={p.discount} tone="neutral" />
+          {/* Headline ladder — dense 8-up, two rows of four, one hue per metric */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+            <Kpi dense hue={HUE.count} lbl="Total Orders" val={fmtInt(a.totalOrders)} sub="placed (incl. cancelled)" now={a.totalOrders} prev={p.totalOrders} />
+            <Kpi dense hue={HUE.primary} lbl="Total Sales" val={inr(a.grossAll)} sub="gross revenue" now={a.grossAll} prev={p.grossAll} />
+            <Kpi dense hue={HUE.gross} lbl="Net Sales" val={inr(a.netCancel)} sub="excl. cancellations" now={a.netCancel} prev={p.netCancel} />
+            <Kpi dense hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(a.netExGst)} sub="after disc · returns · GST" now={a.netExGst} prev={p.netExGst} badge={<SettledBadge pct={a.settledPct} />} />
+            <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(a.aov)} sub="gross / order" now={a.aov} prev={p.aov} />
+            <Kpi dense hue={HUE.cancel} lbl="Cancellations" val={`${fmtInt(a.cancelledOrders)} · ${a.cancelRate.toFixed(1)}%`} sub={inr(a.cancelledValue)} now={a.cancelledOrders} prev={p.cancelledOrders} tone="neutral" />
+            <Kpi dense hue={HUE.returns} lbl="Returns" val={`${fmtInt(a.returnsCount)} · ${inr(a.returnsValue)}`} sub="refund value" now={a.returnsValue} prev={p.returnsValue} tone="neutral" />
+            <Kpi dense hue={HUE.neutral} lbl="Total Discounts" val={inr(a.discount)} sub="discount given" now={a.discount} prev={p.discount} tone="neutral" />
           </div>
 
-          {/* trend */}
+          {/* trend — the chart itself ships unchanged (§7); only the panel around it is restyled.
+              The chart sits in a plain wrapper so .so-card's backdrop-filter is never its DIRECT parent. */}
           <div className="so-card">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-              <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily {metric === 'net' ? 'net revenue (ex-GST)' : 'total sales'} by channel</div>
-              <SegmentedToggle options={[['gross', 'Total Sales'], ['net', 'Net ex-GST']]} value={metric} onChange={setMetric} size="sm" />
+            <PanelHead
+              title={`Daily ${metric === 'net' ? 'net revenue (ex-GST)' : 'total sales'} by channel`}
+              right={<SegmentedToggle options={[['gross', 'Total Sales'], ['net', 'Net ex-GST']]} value={metric} onChange={setMetric} size="sm" />}
+            />
+            <div>
+              <StackedTrendChart days={trend.days} dayVals={trend.dv} metric="gross" groups={trendGroups} />
             </div>
-            <StackedTrendChart days={trend.days} dayVals={trend.dv} metric="gross" groups={trendGroups} />
           </div>
 
           {/* Order-type tiles (Shopify MO tags) */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-            <Kpi lbl="Replacements" val={fmtInt(a.repl)} sub="replacement orders" now={a.repl} prev={p.repl} tone="neutral" />
-            <Kpi lbl="Influencer Orders" val={fmtInt(a.infl)} sub="influencer / seeding" now={a.infl} prev={p.infl} tone="neutral" />
-            <Kpi lbl="Repairs" val={fmtInt(a.repair)} sub="repair orders" now={a.repair} prev={p.repair} tone="neutral" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+            <OrderTypeTile icon={ArrowLeftRight} color="#A78BFA" lbl="Replacements" val={fmtInt(a.repl)} sub="replacement orders" now={a.repl} prev={p.repl} />
+            <OrderTypeTile icon={Sparkles} color="#F2CD1A" lbl="Influencer Orders" val={fmtInt(a.infl)} sub="influencer / seeding" now={a.infl} prev={p.infl} />
+            <OrderTypeTile icon={Wrench} color="#2DA8F0" lbl="Repairs" val={fmtInt(a.repair)} sub="repair orders" now={a.repair} prev={p.repair} />
           </div>
 
-          {/* Per-channel breakdown */}
-          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By channel</div>
+          {/* Per-channel breakdown — full-bleed table panel */}
+          <div className="so-card flush" style={{ overflow: 'hidden' }}>
+            <PanelHead title="By channel" style={{ marginBottom: 0 }} />
             <div style={{ overflowX: 'auto' }}>
-              <table className="so-table" style={{ marginTop: 8 }}>
+              <table className="so-table">
                 <thead><tr>
                   <SortHeader k="name" label="Channel" sort={sort} /><SortHeader k="totalOrders" label="Orders" sort={sort} numeric /><SortHeader k="grossAll" label="Gross" sort={sort} numeric />
                   <SortHeader k="netCancel" label="Net (excl. canc.)" sort={sort} numeric /><SortHeader k="discount" label="Discounts" sort={sort} numeric />
@@ -116,9 +145,13 @@ export default function PerformancePage() {
                   </td></tr>}
                   {sort.sorted.map(c => (
                     <tr key={c.id}>
-                      <td>{c.name}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <Swatch color={chColor[c.id] || FAMILIES.other.color} />{c.name}
+                        </span>
+                      </td>
                       <td className="so-num">{fmtInt(c.totalOrders)}</td>
-                      <td className="so-num">{inr(c.grossAll)}</td>
+                      <td className="so-num bright">{inr(c.grossAll)}</td>
                       <td className="so-num">{inr(c.netCancel)}</td>
                       <td className="so-num">{inr(c.discount)}</td>
                       <td className="so-num">{inr(c.tax)}</td>

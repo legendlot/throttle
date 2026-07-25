@@ -6,7 +6,7 @@ import { salesGet } from '../lib/api.js';
 import { scopeForRoute, summarize, ago, shortAge, TONE_COLOR } from '../lib/freshness.js';
 
 // One getFreshness call for the whole app, held in the layout — every page gets its stamp free.
-const Ctx = createContext({ feeds: [], manual: {}, loading: true });
+const Ctx = createContext({ feeds: [], manual: {}, loading: true, unmapped: 0, oldestOkAt: null });
 export const useFreshness = () => useContext(Ctx);
 
 const POLL_MS = 5 * 60 * 1000;   // feeds move on an hourly cron — 5 min is plenty
@@ -14,13 +14,24 @@ const TICK_MS = 30 * 1000;       // re-render relative labels so they never look
 
 export function FreshnessProvider({ children }) {
   const { session } = useAuth();
-  const [state, setState] = useState({ feeds: [], manual: {}, loading: true });
+  const [state, setState] = useState({ feeds: [], manual: {}, loading: true, unmapped: 0, oldestOkAt: null });
 
   useEffect(() => {
     if (!session) return;
     let alive = true;
+    // ONE read for the whole shell — `getFreshness`, exactly as before.
+    // NB an earlier pass also polled `getUnmapped` here to drive an amber count on the
+    // sidebar's Mapping item. That was removed: `getUnmapped` is an ungated `select=*` with
+    // no limit (~300 rows / ~280 kB today), so the shell would have pulled the entire
+    // unmapped-SKU table every 5 minutes, on every page, for every user, to render a badge.
+    // The count belongs to /mapping, which already loads it. Don't re-add it here.
     const load = () => salesGet('getFreshness', {}, session)
-      .then(d => { if (alive) setState({ feeds: d?.feeds || [], manual: d?.manual || {}, loading: false }); })
+      .then(d => {
+        if (!alive) return;
+        const feeds = d?.feeds || [];
+        const oks = feeds.filter(f => f.enabled && f.last_ok_at).map(f => f.last_ok_at).sort();
+        setState({ feeds, manual: d?.manual || {}, loading: false, oldestOkAt: oks[0] || null });
+      })
       .catch(() => { if (alive) setState(s => ({ ...s, loading: false })); });   // never break the shell
     load();
     const t = setInterval(load, POLL_MS);
@@ -82,8 +93,8 @@ export function FreshnessChip() {
         title="Data freshness — click for the per-feed breakdown"
         style={{
           display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
-          background: 'var(--surface2)', border: `1px solid ${stale ? color : 'var(--border)'}`,
-          borderRadius: 999, padding: '5px 11px', fontFamily: 'var(--mono)', fontSize: 11,
+          background: 'var(--control)', border: `1px solid ${stale ? color : 'var(--border-ctl)'}`,
+          borderRadius: 999, padding: '5px 11px', fontFamily: 'var(--mono)', fontSize: 10.5,
           color: stale ? color : 'var(--t2)', whiteSpace: 'nowrap',
         }}>
         <span className="so-dot" style={{ background: color, flexShrink: 0 }} />
@@ -93,8 +104,10 @@ export function FreshnessChip() {
       {open && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 60, width: 320,
-          background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 12,
-          boxShadow: 'var(--card-shadow, 0 12px 34px rgba(0,0,0,.4))', padding: 14,
+          // OPAQUE on purpose: this popover overlays live page content. --surface is
+          // translucent in the Prism theme and would let the table underneath read through.
+          background: 'var(--surface-solid)', border: '1px solid var(--border-ctl)', borderRadius: 12,
+          boxShadow: 'var(--shadow)', padding: 14,
         }}>
           <div className="so-kpi-lbl" style={{ margin: '0 0 4px' }}>Data freshness</div>
           <div style={{ fontSize: 10.5, color: 'var(--t3)', lineHeight: 1.45, marginBottom: 11 }}>

@@ -4,6 +4,8 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
 import { Kpi, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
+import { PageHead, PanelHead, Pill, Nil } from '../../../components/prism.js';
+import { HUE, STATUS } from '../../../lib/hues.js';
 import PerfTrendChart from '../../../components/PerfTrendChart.js';
 
 const sumBy = (rows, k) => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -16,16 +18,18 @@ const PLAT_COLOR = { meta: '#4C63F0', google: '#E8A33D', amazon: '#FF9900', amaz
 // Amazon Sponsored Ads (SP/SB/SD) = 'amazon'; Amazon DSP = 'amazon_dsp' — a distinct platform lens.
 const PLAT_LABEL = { meta: 'Meta', google: 'Google', amazon: 'Amazon (Sponsored)', amazon_dsp: 'Amazon DSP', ga4: 'GA4' };
 const platLabel = (p) => PLAT_LABEL[p] || p || '—';
+// Platform chip — the Prism status pill in the platform's own colour. PLAT_LABEL casing is
+// product vocabulary ("Amazon (Sponsored)"), so the pill's uppercase transform is switched off.
 const PlatChip = ({ p }) => (
-  <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 7px', borderRadius: 5,
-    background: (PLAT_COLOR[p] || 'var(--t3)') + '22', color: PLAT_COLOR[p] || 'var(--t2)',
-    border: `1px solid ${(PLAT_COLOR[p] || 'var(--t3)')}44` }}>{platLabel(p)}</span>
+  <Pill color={PLAT_COLOR[p] || 'var(--t3)'} style={{ textTransform: 'none', whiteSpace: 'nowrap' }}>{platLabel(p)}</Pill>
 );
 // Live/Paused marker — green = ACTIVE, grey = paused/other. null (no status synced yet) → no dot.
 const StatusDot = ({ live }) => live == null ? null : (
   <span title={live ? 'Live' : 'Paused'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
     marginRight: 7, verticalAlign: 'middle', background: live ? 'var(--green)' : 'var(--t3)' }} />
 );
+const microLbl = { fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t5)', whiteSpace: 'nowrap',
+  display: 'inline-flex', alignItems: 'center', gap: 5 };
 
 export default function MarketingPage() {
   const { session } = useAuth();
@@ -94,55 +98,99 @@ export default function MarketingPage() {
     }));
   }, [mktDaily, salesRows, trafDaily]);
 
+  // Hero sparklines read the SAME daily series the chart plots — nothing new is aggregated.
+  // Clicks has no daily series on this page (the merge keeps spend + conversions only), so that
+  // tile ships without one rather than inventing a rollup.
+  const sparks = useMemo(() => ({
+    spend: series.map(d => d.spend),
+    revenue: series.map(d => d.revenue),
+    roas: series.map(d => d.roas),
+    conversions: series.map(d => d.conversions),
+  }), [series]);
+
   return (
     <div className="so-page">
-      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<SegmentedToggle options={[['platform', 'By platform'], ['campaign', 'By campaign'], ['adset', 'By ad set'], ['ad', 'By ad']]} value={group} onChange={setGroup} size="sm" />} />
+      <PageHead title="Marketing" sub="Spend, ROAS and attribution across ad platforms" />
+
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(165px,1fr))', gap: 12 }}>
-            <Kpi lbl="Ad spend" val={inr(spend)} now={spend} prev={pv.spend} tone="neutral" />
-            <Kpi lbl="Sales gross" val={inr(salesGross)} sub="blended, all channels" now={salesGross} prev={pv.gross} />
-            <Kpi lbl="Blended ROAS" val={roas.toFixed(2) + '×'} sub="gross / spend" now={roas} prev={prevRoas} />
-            <Kpi lbl="Clicks" val={fmtInt(clicks)} now={clicks} prev={pv.clicks} tone="neutral" />
-            <Kpi lbl="Conversions" val={fmtInt(convs)} now={convs} prev={pv.convs} />
+          {/* Hues are keyed to the trend chart directly below, which is spec-fixed: spend = blue,
+              revenue = green, ROAS = the yellow right-axis line, conversions = violet. A tile whose
+              colour contradicts the chart under it makes both unreadable, so the tiles follow it. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
+            <Kpi lbl="Ad spend" val={inr(spend)} now={spend} prev={pv.spend} tone="neutral" hue={HUE.gross} spark={sparks.spend} />
+            <Kpi lbl="Sales gross" val={inr(salesGross)} sub="blended, all channels" now={salesGross} prev={pv.gross} hue={HUE.units} spark={sparks.revenue} />
+            <Kpi lbl="Blended ROAS" val={roas.toFixed(2) + '×'} sub="gross / spend" now={roas} prev={prevRoas} hue={HUE.primary} spark={sparks.roas} />
+            <Kpi lbl="Clicks" val={fmtInt(clicks)} now={clicks} prev={pv.clicks} tone="neutral" hue={HUE.count} />
+            <Kpi lbl="Conversions" val={fmtInt(convs)} now={convs} prev={pv.convs} hue={HUE.derived} spark={sparks.conversions} />
           </div>
 
           <PerfTrendChart data={series} />
+        </>
+      )}
 
-          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>
-              {GROUP_LABEL[group]}s · spend & performance
-              {adMode && <span style={{ color: 'var(--t3)', fontWeight: 400 }}> · Meta, last ~14d · ROAS = Meta-attributed</span>}
-              {group !== 'platform' && <span style={{ color: 'var(--t3)', fontWeight: 400 }}> · <span style={{ color: 'var(--green)' }}>●</span> live <span style={{ color: 'var(--t3)' }}>●</span> paused</span>}
+      {/* grouping — swaps the table's source (getMarketing ↔ getAdMetrics for ad set / ad).
+          Deliberately OUTSIDE the loading guard: changing `group` sets rows=null, so a control
+          rendered inside the guard would unmount the instant it's clicked and a misclick couldn't
+          be corrected until a 7-call Promise.all resolved. It stays mounted while data loads. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <SegmentedToggle options={[['platform', 'By platform'], ['campaign', 'By campaign'], ['adset', 'By ad set'], ['ad', 'By ad']]} value={group} onChange={setGroup} />
+      </div>
+
+      {rows && (
+        <>
+          <div className="so-card flush" style={{ overflow: 'hidden' }}>
+            <PanelHead
+              style={{ marginBottom: 0 }}
+              title={`${GROUP_LABEL[group]}s · spend & performance`}
+              qual={adMode ? '· Meta, last ~14d · ROAS = Meta-attributed' : undefined}
+              right={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                  {group !== 'platform' && (
+                    <span style={microLbl}>
+                      <span className="so-dot" style={{ background: 'var(--green)' }} /> live
+                      <span className="so-dot" style={{ background: 'var(--t3)', marginLeft: 6 }} /> paused
+                    </span>
+                  )}
+                  <span style={microLbl}>
+                    ROAS gates · <span style={{ color: STATUS.good }}>≥4 graduate</span> · <span style={{ color: STATUS.bad }}>&lt;2 kill</span>
+                  </span>
+                </div>
+              } />
+            <div style={{ overflowX: 'auto' }}>
+              <table className="so-table">
+                <thead><tr>
+                  <SortHeader k="name" label={GROUP_LABEL[group]} sort={sort} />
+                  {group !== 'platform' && <SortHeader k="platform" label="Platform" sort={sort} />}
+                  <SortHeader k="spend" label="Spend" sort={sort} numeric />
+                  <SortHeader k="roas" label="ROAS" sort={sort} numeric />
+                  <SortHeader k="impressions" label="Impressions" sort={sort} numeric />
+                  <SortHeader k="clicks" label="Clicks" sort={sort} numeric />
+                  <SortHeader k="conversions" label="Conversions" sort={sort} numeric />
+                  <SortHeader k="conv_value" label="Conv. value" sort={sort} numeric />
+                </tr></thead>
+                <tbody>
+                  {sort.sorted.length === 0 && <tr><td colSpan={group === 'platform' ? 7 : 8} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
+                  {sort.sorted.map((r, i) => {
+                    const rv = roasOf(r);
+                    const name = (adMode ? r.label : (group === 'platform' ? platLabel(r.grp) : r.grp)) || '—';
+                    return (<tr key={i}>
+                      <td style={{ whiteSpace: 'nowrap' }}><StatusDot live={r.is_live} />{name === '—' ? <Nil /> : name}</td>
+                      {group !== 'platform' && <td><PlatChip p={r.platform} /></td>}
+                      <td className="so-num">{inr(r.spend)}</td>
+                      <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : <Nil />}</td>
+                      <td className="so-num">{fmtInt(r.impressions)}</td>
+                      <td className="so-num">{fmtInt(r.clicks)}</td>
+                      <td className="so-num">{fmtInt(r.conversions)}</td>
+                      <td className="so-num">{inr(r.conv_value)}</td>
+                    </tr>);
+                  })}
+                </tbody>
+              </table>
             </div>
-            <table className="so-table" style={{ marginTop: 8 }}>
-              <thead><tr>
-                <SortHeader k="name" label={GROUP_LABEL[group]} sort={sort} />
-                {group !== 'platform' && <SortHeader k="platform" label="Platform" sort={sort} />}
-                <SortHeader k="spend" label="Spend" sort={sort} numeric />
-                <SortHeader k="roas" label="ROAS" sort={sort} numeric />
-                <SortHeader k="impressions" label="Impressions" sort={sort} numeric />
-                <SortHeader k="clicks" label="Clicks" sort={sort} numeric />
-                <SortHeader k="conversions" label="Conversions" sort={sort} numeric />
-                <SortHeader k="conv_value" label="Conv. value" sort={sort} numeric />
-              </tr></thead>
-              <tbody>
-                {sort.sorted.length === 0 && <tr><td colSpan={group === 'platform' ? 7 : 8} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
-                {sort.sorted.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
-                  <td><StatusDot live={r.is_live} />{(adMode ? r.label : (group === 'platform' ? platLabel(r.grp) : r.grp)) || '—'}</td>
-                  {group !== 'platform' && <td><PlatChip p={r.platform} /></td>}
-                  <td className="so-num">{inr(r.spend)}</td>
-                  <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>
-                  <td className="so-num">{fmtInt(r.impressions)}</td>
-                  <td className="so-num">{fmtInt(r.clicks)}</td>
-                  <td className="so-num">{fmtInt(r.conversions)}</td>
-                  <td className="so-num">{inr(r.conv_value)}</td>
-                </tr>); })}
-              </tbody>
-            </table>
           </div>
         </>
       )}

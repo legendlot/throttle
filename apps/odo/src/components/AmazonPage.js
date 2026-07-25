@@ -5,15 +5,20 @@
 // the shared S169 kit. Order-type tiles (Replacements/Influencer/Repairs) are intentionally NOT
 // shown — they're Shopify-tag-driven and always 0 for Amazon.
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../lib/api.js';
-import { familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
+import { familyOf, FAMILIES, FAMILY_ORDER, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
 import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
+import { ScopeTab, Swatch } from './prism.js';
+import { HUE } from '../lib/hues.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
 const AMZ = '#4C63F0';
+// bar-in-cell track (§3.6) — the old `--surface2` fill was a nested-ROW token, too heavy for a track
+const TRACK = 'rgba(255,255,255,.05)';
 const pct1 = (n, d) => (d > 0 ? (n / d) * 100 : 0);
 
 function aggReturns(rows) {
@@ -42,6 +47,7 @@ function topByCode(rows, mode, c2p) {
 
 export default function AmazonPage() {
   const { session } = useAuth();
+  const router = useRouter();
   const presets = rangePresets();
   const mtd = presets.find(p => p.key === 'mtd');
   const [from, setFrom] = useState(mtd.from);
@@ -184,57 +190,68 @@ export default function AmazonPage() {
   return (
     <div className="so-page">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 11, height: 11, borderRadius: 3, background: AMZ }} />
+        <Swatch color={AMZ} size={11} glow />
         <span className="so-h2" style={{ fontSize: 18 }}>Amazon</span>
       </div>
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
+
+      {/* family scope tabs — identical strip to ChannelFamilyPage. Amazon has its own bespoke page
+          rather than the generic family page, so without this the route is a dead end: the rail's
+          Channels item hard-routes to /channels/website and there is no other way back out. */}
+      <div className="so-scopebar">
+        {FAMILY_ORDER.map(k => (
+          <ScopeTab key={k} on={k === 'amazon'} color={FAMILIES[k].color} label={FAMILIES[k].label}
+            title={FAMILIES[k].label} onClick={() => { if (k !== 'amazon') router.push('/channels/' + k); }} />
+        ))}
+      </div>
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <Spinner /> : (
         <>
           {/* ── Orders & sales value ── */}
-          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Orders &amp; sales value</div>
+          <div className="so-eyebrow" style={{ marginTop: 4 }}>Orders &amp; sales value</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-            <Kpi lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled" now={seg.totalOrders} prev={segP.totalOrders} />
-            <Kpi lbl="Total Sales" val={inr(gross)} sub="gross (tax-incl)" now={gross} prev={pGross} />
-            <Kpi lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
-            <Kpi lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
-            <Kpi lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
-            <Kpi lbl="AOV" val={inr(seg.aov)} sub="gross / order" now={seg.aov} prev={segP.aov} />
-            <Kpi lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · ${inr(seg.cancelledValue)}`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
-            <Kpi lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
-            <Kpi lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
-            <Kpi lbl="RTV" val={inr(ret.rtv.value)} sub={`${fmtInt(ret.rtv.units)}u · customer returns`} tone="neutral" />
-            <Kpi lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
-            <Kpi lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
+            <Kpi hue={HUE.count} lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled" now={seg.totalOrders} prev={segP.totalOrders} />
+            <Kpi hue={HUE.primary} lbl="Total Sales" val={inr(gross)} sub="gross (tax-incl)" now={gross} prev={pGross} />
+            <Kpi hue={HUE.gross} lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
+            <Kpi hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
+            <Kpi hue={HUE.gross} lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
+            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order" now={seg.aov} prev={segP.aov} />
+            <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · ${inr(seg.cancelledValue)}`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
+            <Kpi hue={HUE.returns} lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
+            <Kpi hue={HUE.returns} lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
+            <Kpi hue={HUE.returns} lbl="RTV" val={inr(ret.rtv.value)} sub={`${fmtInt(ret.rtv.units)}u · customer returns`} tone="neutral" />
+            <Kpi hue={HUE.neutral} lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
+            <Kpi hue={HUE.neutral} lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
           </div>
           <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: -2 }}>
             Returns / RTO / RTV come from Amazon&apos;s Finances refund feed, which posts <b>weeks after</b> the sale — so a current-month figure understates and fills in as refunds settle. Older periods are the accurate read.
           </div>
 
           {/* ── Sponsored Ads (SP · SB · SD) — platform 'amazon', DSP excluded ── */}
-          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Sponsored Ads <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· SP · SB · SD</span></div>
+          <div className="so-eyebrow" style={{ marginTop: 4 }}>Sponsored Ads <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· SP · SB · SD</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
-            <Kpi lbl="Ad Spend" val={inr(spend)} now={spend} prev={pSpend} tone="neutral" />
-            <Kpi lbl="ROAS" val={roas.toFixed(2) + '×'} sub="attributed sales / spend" now={roas} prev={pRoas} />
-            <Kpi lbl="ACOS" val={acos.toFixed(1) + '%'} sub="spend / attributed sales" now={acos} prev={pAcos} tone="neutral" />
-            <Kpi lbl="TACOS" val={tacos.toFixed(1) + '%'} sub="spend / total sales" now={tacos} prev={pTacos} tone="neutral" />
-            <Kpi lbl="CTR" val={ctr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
-            <Kpi lbl="CPC" val={inr(cpc)} sub="spend / click" tone="neutral" />
-            <Kpi lbl="Conversion" val={cvr.toFixed(2) + '%'} sub="orders / click" tone="neutral" />
+            <Kpi hue={HUE.gross} lbl="Ad Spend" val={inr(spend)} now={spend} prev={pSpend} tone="neutral" />
+            <Kpi hue={HUE.primary} lbl="ROAS" val={roas.toFixed(2) + '×'} sub="attributed sales / spend" now={roas} prev={pRoas} />
+            <Kpi hue={HUE.derived} lbl="ACOS" val={acos.toFixed(1) + '%'} sub="spend / attributed sales" now={acos} prev={pAcos} tone="neutral" />
+            <Kpi hue={HUE.neutral} lbl="TACOS" val={tacos.toFixed(1) + '%'} sub="spend / total sales" now={tacos} prev={pTacos} tone="neutral" />
+            <Kpi hue={HUE.count} lbl="CTR" val={ctr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
+            <Kpi hue={HUE.cancel} lbl="CPC" val={inr(cpc)} sub="spend / click" tone="neutral" />
+            <Kpi hue={HUE.units} lbl="Conversion" val={cvr.toFixed(2) + '%'} sub="orders / click" tone="neutral" />
           </div>
 
           {/* ── Amazon DSP (programmatic) — SEPARATE lens, not summed into Sponsored Ads above ── */}
-          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Amazon DSP <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· programmatic display/video · separate lens</span></div>
+          <div className="so-eyebrow" style={{ marginTop: 4 }}>Amazon DSP <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· programmatic display/video · separate lens</span></div>
           {dspHasData ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+              {/* DSP Spend keeps its bespoke violet — it is the separate-lens marker, not a metric hue. */}
               <Kpi lbl="DSP Spend" val={inr(dSpend)} now={dSpend} prev={dpSpend} tone="neutral" accent="#7C5CF0" />
-              <Kpi lbl="DSP ROAS" val={dRoas.toFixed(2) + '×'} sub="sales (14d) / spend" now={dRoas} prev={dpRoas} />
-              <Kpi lbl="Impressions" val={fmtInt(dImpr)} tone="neutral" />
-              <Kpi lbl="CTR" val={dCtr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
-              <Kpi lbl="CPM" val={inr(dCpm)} sub="cost / 1000 impr" tone="neutral" />
-              <Kpi lbl="Purchases (14d)" val={fmtInt(dPurch)} sub={`${dPurchRate.toFixed(3)}% purch. rate`} tone="neutral" />
-              <Kpi lbl="Sales (14d)" val={inr(dSales)} sub="DSP-attributed" tone="neutral" />
+              <Kpi hue={HUE.primary} lbl="DSP ROAS" val={dRoas.toFixed(2) + '×'} sub="sales (14d) / spend" now={dRoas} prev={dpRoas} />
+              <Kpi hue={HUE.count} lbl="Impressions" val={fmtInt(dImpr)} tone="neutral" />
+              <Kpi hue={HUE.derived} lbl="CTR" val={dCtr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
+              <Kpi hue={HUE.cancel} lbl="CPM" val={inr(dCpm)} sub="cost / 1000 impr" tone="neutral" />
+              <Kpi hue={HUE.units} lbl="Purchases (14d)" val={fmtInt(dPurch)} sub={`${dPurchRate.toFixed(3)}% purch. rate`} tone="neutral" />
+              <Kpi hue={HUE.gross} lbl="Sales (14d)" val={inr(dSales)} sub="DSP-attributed" tone="neutral" />
             </div>
           ) : (
             <div className="so-sub" style={{ fontSize: 11, color: 'var(--t3)' }}>No DSP spend in this range yet — the DSP connector backfills from 2026-04-16 forward (one report per day), so recent days fill in first.</div>
@@ -246,7 +263,7 @@ export default function AmazonPage() {
           {/* ── Daily trend ── */}
           <div className="so-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily {trendMetric === 'units' ? 'units' : 'gross'}</div>
+              <div className="so-eyebrow" style={{ margin: 0 }}>Daily {trendMetric === 'units' ? 'units' : 'gross'}</div>
               <SegmentedToggle options={['gross', 'units']} value={trendMetric} onChange={setTrendMetric} size="sm" />
             </div>
             <StackedTrendChart days={tDays} dayVals={tVals} metric={trendMetric} groups={trendGroups} />
@@ -254,7 +271,7 @@ export default function AmazonPage() {
 
           {/* ── Returns: RTO vs RTV ── */}
           <div className="so-card">
-            <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Returns — RTO vs RTV</div>
+            <div className="so-eyebrow" style={{ marginBottom: 12 }}>Returns — RTO vs RTV</div>
             {ret.total === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No returns in this range.</div> : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
                 {[['rto', 'RTO · undelivered', 'var(--green)'], ['rtv', 'RTV · customer return', '#EC6A5E'], ['unknown', 'Unclassified (backfilling)', 'var(--t3)']].map(([key, label, color]) => {
@@ -262,7 +279,7 @@ export default function AmazonPage() {
                   return (
                     <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 200, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{label}</div>
-                      <div style={{ flex: 1, height: 16, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ flex: 1, height: 16, background: TRACK, borderRadius: 4, overflow: 'hidden' }}>
                         <div style={{ width: `${pct1(v, ret.total)}%`, height: '100%', background: color, opacity: 0.85 }} />
                       </div>
                       <div style={{ width: 150, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>{inr(v)} · {pct1(v, ret.total).toFixed(0)}%</div>
@@ -277,7 +294,7 @@ export default function AmazonPage() {
           {/* ── Payout & fees (settlement → margin, net of marketplace cost) ── */}
           <div className="so-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              <div className="so-kpi-lbl" style={{ margin: 0 }}>Payout &amp; fees · net of marketplace cost</div>
+              <div className="so-eyebrow" style={{ margin: 0 }}>Payout &amp; fees · net of marketplace cost</div>
               <span className="so-sub" style={{ fontSize: 10.5 }}>from Amazon settlement reports · reconciles to deposits</span>
             </div>
             {!hasSettle ? (
@@ -287,13 +304,13 @@ export default function AmazonPage() {
             ) : (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 14 }}>
-                  <Kpi lbl="Net payout" val={inr(settle.net)} sub={`${settle.netRate.toFixed(0)}% of revenue`} accent="var(--green)" />
-                  <Kpi lbl="Revenue (ex-tax)" val={inr(settle.principal)} sub={`${fmtInt(settle.units)} units settled`} />
-                  <Kpi lbl="Marketplace fees" val={inr(settle.fees)} sub={`${settle.takeRate.toFixed(1)}% take-rate`} tone="neutral" accent="var(--red)" />
+                  <Kpi lbl="Net payout" val={inr(settle.net)} sub={`${settle.netRate.toFixed(0)}% of revenue`} hue={HUE.units} />
+                  <Kpi hue={HUE.primary} lbl="Revenue (ex-tax)" val={inr(settle.principal)} sub={`${fmtInt(settle.units)} units settled`} />
+                  <Kpi lbl="Marketplace fees" val={inr(settle.fees)} sub={`${settle.takeRate.toFixed(1)}% take-rate`} tone="neutral" hue={HUE.returns} />
                   <Kpi lbl="Ad spend" val={inr(settle.advertising)} sub={`${settle.adRate.toFixed(1)}% of revenue · also in Marketing`} tone="neutral" accent="#E0903B" />
-                  <Kpi lbl="Tax (net)" val={inr(settle.tax)} sub="GST coll − TCS/TDS" tone="neutral" />
+                  <Kpi hue={HUE.neutral} lbl="Tax (net)" val={inr(settle.tax)} sub="GST coll − TCS/TDS" tone="neutral" />
                 </div>
-                <div className="so-kpi-lbl" style={{ marginBottom: 8, fontSize: 11 }}>Where the revenue goes (% of revenue)</div>
+                <div className="so-eyebrow" style={{ marginBottom: 8, fontSize: 11 }}>Where the revenue goes (% of revenue)</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                   {[
                     ['Commission & closing', settle.commission, 'var(--red)'],
@@ -312,9 +329,9 @@ export default function AmazonPage() {
                           <span className="so-dot" style={{ background: color, marginRight: 7 }} />
                           <span style={{ color: 'var(--t1)', flex: 1 }}>{label}</span>
                           <span style={{ color: 'var(--t3)', width: 46, textAlign: 'right' }}>{(Math.abs(v) / (settle.principal || 1) * 100).toFixed(1)}%</span>
-                          <span style={{ color: v < 0 ? 'var(--red)' : 'var(--green)', width: 96, textAlign: 'right' }}>{inr(v)}</span>
+                          <span style={{ color: v < 0 ? 'var(--red)' : 'var(--green-fg)', width: 96, textAlign: 'right' }}>{inr(v)}</span>
                         </div>
-                        <div style={{ height: 6, background: 'var(--surface2,var(--border))', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ height: 6, background: TRACK, borderRadius: 4, overflow: 'hidden' }}>
                           <div style={{ width: `${w}%`, height: '100%', background: color }} />
                         </div>
                       </div>
@@ -323,7 +340,7 @@ export default function AmazonPage() {
                 </div>
                 {settleRecon.length > 0 && (
                   <div style={{ marginTop: 16 }}>
-                    <div className="so-kpi-lbl" style={{ marginBottom: 8, fontSize: 11 }}>Settlement reconciliation</div>
+                    <div className="so-eyebrow" style={{ marginBottom: 8, fontSize: 11 }}>Settlement reconciliation</div>
                     <div style={{ overflowX: 'auto' }}>
                       <table className="so-table">
                         <thead><tr>
@@ -338,7 +355,7 @@ export default function AmazonPage() {
                                 <td>{r.deposit_date || '—'}</td>
                                 <td className="so-num">{inr(Number(r.header_total))}</td>
                                 <td className="so-num">{inr(Number(r.fact_net))}</td>
-                                <td className="so-num" style={{ color: ok ? 'var(--green)' : 'var(--red)' }}>{ok ? '✓' : inr(Number(r.diff))}</td>
+                                <td className="so-num" style={{ color: ok ? 'var(--green-fg)' : 'var(--red)' }}>{ok ? '✓' : inr(Number(r.diff))}</td>
                               </tr>
                             );
                           })}
@@ -353,13 +370,13 @@ export default function AmazonPage() {
 
           {/* ── Sales by state ── */}
           <div className="so-card">
-            <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Sales by state</div>
+            <div className="so-eyebrow" style={{ marginBottom: 12 }}>Sales by state</div>
             {geo.arr.length === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No location data in this range.</div> : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {geo.arr.map(s => (
                   <div key={s.state} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 160, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.state}</div>
-                    <div style={{ flex: 1, height: 16, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ flex: 1, height: 16, background: TRACK, borderRadius: 4, overflow: 'hidden' }}>
                       <div style={{ width: `${(s.gross / geo.max) * 100}%`, height: '100%', background: AMZ, opacity: 0.85 }} />
                     </div>
                     <div style={{ width: 130, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>{inr(s.gross)} · {fmtInt(s.units)}u</div>
@@ -372,7 +389,7 @@ export default function AmazonPage() {
           {/* ── Top sellers (Model/SKU) ── */}
           <div className="so-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div className="so-kpi-lbl" style={{ margin: 0 }}>Top sellers</div>
+              <div className="so-eyebrow" style={{ margin: 0 }}>Top sellers</div>
               <SegmentedToggle options={[['product', 'Model'], ['variant', 'SKU']]} value={grp} onChange={setGrp} size="sm" />
             </div>
             {sellers.arr.length === 0 ? (

@@ -3,17 +3,28 @@
 // chosen metric (DRR default · Units · Gross). Read across a product's row for its channel-wise
 // DRR; click a product to expand its SKUs as channel-wise sub-rows. DRR comes from the reusable
 // sales.f_product_drr contract (trailing global window); Units/Gross are for the selected range.
+//
+// Prism redesign (§9.7): the pivot, the colMax heat-shading maths and the drrWindow contract are
+// untouched — only the chrome changed. Channel headers now carry their family swatch, the sticky
+// product column is OPAQUE (--surface-solid) so the matrix can't bleed through it while scrolling,
+// and expanded SKU rows sit on --surface2 with the code in mono beneath the name.
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
+import { useRouter } from 'next/navigation';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets } from '../../../../lib/api.js';
 import { RangePicker, SegmentedToggle } from '../../../../components/kit.js';
+import { PageHead, PanelHead, Pill, ScopeTab, Swatch } from '../../../../components/prism.js';
+import { FAMILIES, familyOf } from '../../../../lib/families.js';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 
 const drrFmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 1 });
+// The Total column is fenced off from the month/channel columns by this divider (§9.6/§9.7).
+const TOT_BD = '1px solid #2a2d35';
 
 export default function ProductsPage() {
   const { session } = useAuth();
+  const router = useRouter();
   const presets = rangePresets();
   const mtd = presets.find(p => p.key === 'mtd');
   const [from, setFrom] = useState(mtd.from);
@@ -74,75 +85,103 @@ export default function ProductsPage() {
   const cellVal = (o) => !o ? 0 : (metric === 'drr' ? o.drr : metric === 'units' ? o.units : o.gross);
   const fmtCell = (v) => !v ? '·' : (metric === 'drr' ? drrFmt(v) : metric === 'units' ? fmtInt(v) : inr(v));
   const colMax = useMemo(() => Math.max(...fams.flatMap(f => cols.map(c => cellVal(f.ch[c]))), 1), [fams, cols, metric]);
-  const shade = (v) => v > 0 ? `color-mix(in srgb, var(--accent) ${Math.round((v / colMax) * 26)}%, transparent)` : 'transparent';
+  // Heat shade: same v/colMax ratio as before, capped at .26 alpha of the LOT yellow (§9.7).
+  const shade = (v) => v > 0 ? `rgba(242,205,26,${((v / colMax) * 0.26).toFixed(3)})` : 'transparent';
   const toggle = (f) => setExpanded(e => ({ ...e, [f]: !e[f] }));
+  // Every channel reference carries its family colour (§3.5).
+  const chColor = (cid) => FAMILIES[familyOf(chName[cid] || String(cid))]?.color || FAMILIES.other.color;
 
   const ready = d !== null;
-  const cell = (o, em) => (
-    <td className="so-num" style={{ background: shade(cellVal(o)), color: cellVal(o) ? 'var(--t1)' : 'var(--t3)', fontWeight: em ? 600 : 400 }}>{fmtCell(cellVal(o))}</td>
+  const cell = (o, em, key) => (
+    <td key={key} className="so-num" style={{ background: shade(cellVal(o)), color: cellVal(o) ? 'var(--t1-cell)' : 'var(--t5)', fontWeight: em ? 600 : 400 }}>{fmtCell(cellVal(o))}</td>
   );
+
+  const drrNote = metric === 'drr'
+    ? `DRR = avg units/day over the last ${drrWindow} days (independent of the range above). Click a product to expand its SKUs.`
+    : 'For the selected range. Click a product to expand its SKUs.';
 
   return (
     <div className="so-page">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-        <span className="so-h2" style={{ fontSize: 18 }}>Products · cross-channel</span>
-        <span className="so-pill" style={{ background: 'var(--surface2)', color: 'var(--t2)' }} title={`DRR = avg units sold/day over the last ${drrWindow} full days (set in Admin). Units/Gross use the selected range.`}>DRR · {drrWindow}d</span>
+      <PageHead
+        title="Products · cross-channel"
+        sub={drrNote}
+        right={<>
+          <Pill color="#F2CD1A" title={`DRR = avg units sold/day over the last ${drrWindow} full days (set in Admin). Units/Gross use the selected range.`}>DRR · {drrWindow}d</Pill>
+          <SegmentedToggle options={[['drr', 'DRR /day'], ['units', 'Units'], ['gross', 'Gross']]} value={metric} onChange={setMetric} />
+        </>} />
+
+      {/* The rail no longer lists Products' children (the IA moved scope selection in-page), so
+          this strip is what keeps /products/pnl reachable. Same routes as the old sidebar
+          children — links and bookmarks are unaffected. */}
+      <div className="so-scopebar">
+        <ScopeTab on label="Cross-channel" onClick={() => {}} />
+        <ScopeTab label="P&L by product" onClick={() => router.push('/products/pnl')} />
       </div>
-      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<SegmentedToggle options={[['drr', 'DRR /day'], ['units', 'Units'], ['gross', 'Gross']]} value={metric} onChange={setMetric} size="sm" />} />
-      <div className="so-sub" style={{ fontSize: 11, marginTop: -8 }}>
-        {metric === 'drr' ? `DRR = avg units/day over the last ${drrWindow} days (independent of the range above). Click a product to expand its SKUs.` : 'For the selected range. Click a product to expand its SKUs.'}
-      </div>
+
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <Spinner /> : fams.length === 0 ? (
         <div className="so-card" style={{ padding: 40, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12.5 }}>No mapped product sales in this range.</div>
       ) : (
-        <div className="so-card" style={{ padding: 0, overflowX: 'auto' }}>
-          <table className="so-table" style={{ minWidth: 640 }}>
-            <thead>
-              <tr>
-                <th style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>Product</th>
-                {cols.map(c => <th key={c} className="so-num">{chName[c] || c}</th>)}
-                <th className="so-num" style={{ color: 'var(--t1)' }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fams.map(f => (
-                <Row key={f.family} f={f} cols={cols} expanded={!!expanded[f.family]} toggle={toggle} cell={cell} fmtCell={fmtCell} cellVal={cellVal} chName={chName} />
-              ))}
-              {/* all-products total row */}
-              <tr style={{ borderTop: '2px solid var(--border-strong)' }}>
-                <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', fontWeight: 600, color: 'var(--t2)' }}>All products</td>
-                {cols.map(c => <td key={c} className="so-num" style={{ color: 'var(--t2)' }}>{fmtCell(cellVal(chTot[c]))}</td>)}
-                <td className="so-num" style={{ fontWeight: 700, color: 'var(--t1)' }}>{fmtCell(cols.reduce((s, c) => s + cellVal(chTot[c]), 0))}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div className="so-card flush" style={{ overflow: 'hidden' }}>
+          <PanelHead title="Cross-channel matrix"
+            qual={`· ${metric === 'drr' ? 'DRR / day' : metric === 'units' ? 'units' : 'gross'} · shaded vs the busiest cell`} />
+          <div style={{ overflowX: 'auto' }}>
+            <table className="so-table" style={{ minWidth: 900 }}>
+              <thead>
+                <tr>
+                  <th style={{ position: 'sticky', left: 0, background: 'var(--surface-solid)', zIndex: 2, minWidth: 230 }}>Product</th>
+                  {cols.map(c => (
+                    <th key={c} className="so-num" title={chName[c] || c}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <Swatch color={chColor(c)} size={7} />{chName[c] || c}
+                      </span>
+                    </th>
+                  ))}
+                  <th className="so-num" style={{ color: 'var(--t1)', borderLeft: TOT_BD }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fams.map(f => (
+                  <Row key={f.family} f={f} cols={cols} expanded={!!expanded[f.family]} toggle={toggle} cell={cell} fmtCell={fmtCell} cellVal={cellVal} />
+                ))}
+                {/* all-products total row */}
+                <tr style={{ borderTop: '2px solid var(--border-strong)' }}>
+                  <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface-solid)', fontWeight: 600, color: 'var(--t2)' }}>All products</td>
+                  {cols.map(c => <td key={c} className="so-num" style={{ color: 'var(--t2-cell)' }}>{fmtCell(cellVal(chTot[c]))}</td>)}
+                  <td className="so-num" style={{ borderLeft: TOT_BD, fontWeight: 700, color: 'var(--t1)' }}>{fmtCell(cols.reduce((s, c) => s + cellVal(chTot[c]), 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function Row({ f, cols, expanded, toggle, cell, fmtCell, cellVal, chName }) {
+function Row({ f, cols, expanded, toggle, cell, fmtCell, cellVal }) {
   const codes = Object.values(f.codes).sort((a, b) => b.tot.gross - a.tot.gross);
   return (
     <>
       <tr onClick={() => toggle(f.family)} style={{ cursor: 'pointer' }}>
-        <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', fontWeight: 600, color: 'var(--t1)' }}>
+        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface-solid)', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{f.family}
+            {expanded ? <ChevronDown size={13} strokeWidth={1.75} /> : <ChevronRight size={13} strokeWidth={1.75} />}{f.family}
           </span>
         </td>
-        {cols.map(c => cell(f.ch[c], true))}
-        <td className="so-num" style={{ fontWeight: 700, color: 'var(--t1)' }}>{fmtCell(cellVal(f.tot))}</td>
+        {cols.map(c => cell(f.ch[c], true, c))}
+        <td className="so-num" style={{ borderLeft: TOT_BD, fontWeight: 700, color: 'var(--t1)' }}>{fmtCell(cellVal(f.tot))}</td>
       </tr>
       {expanded && codes.map(co => (
-        <tr key={co.code} style={{ background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
-          <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', paddingLeft: 30, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12 }}>{co.label}</td>
-          {cols.map(c => cell(co.ch[c], false))}
-          <td className="so-num" style={{ color: 'var(--t2)' }}>{fmtCell(cellVal(co.tot))}</td>
+        <tr key={co.code} style={{ background: 'rgba(255,255,255,.018)' }}>
+          <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface2)', paddingLeft: 34, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
+            {co.label}
+            {co.code !== co.label && <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t5)', marginTop: 2 }}>{co.code}</div>}
+          </td>
+          {cols.map(c => cell(co.ch[c], false, c))}
+          <td className="so-num" style={{ borderLeft: TOT_BD, color: 'var(--t2-cell)' }}>{fmtCell(cellVal(co.tot))}</td>
         </tr>
       ))}
     </>

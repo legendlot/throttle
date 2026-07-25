@@ -4,6 +4,8 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, fmtInt, inr, rangePresets } from '../../../lib/api.js';
 import { RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
+import { PageHead, PanelHead, Pill, Bar, Nil } from '../../../components/prism.js';
+import { HUE, hueStyle, rgb, STATUS } from '../../../lib/hues.js';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine } from 'recharts';
 
 const numfmt = n => Number(n || 0).toLocaleString('en-IN');
@@ -16,11 +18,11 @@ const fmtPct = n => `${+Number(n || 0).toFixed(2)}%`;   // up to 2 decimals, no 
 function Tick({ now, prev }) {
   if (prev == null || prev === '') return null;
   const n = Number(now) || 0, p = Number(prev) || 0;
-  if (n === p) return <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t3)' }}>–</span>;
+  if (n === p) return <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t5)' }}>–</span>;
   const up = n > p;
   const pct = p !== 0 ? Math.abs((n - p) / p * 100) : 100;
   return (
-    <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: up ? 'var(--green)' : '#EC6A5E', whiteSpace: 'nowrap' }}>
+    <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: up ? STATUS.good : STATUS.bad, whiteSpace: 'nowrap' }}>
       {up ? '▲' : '▼'}{pct >= 0.5 ? ` ${pct.toFixed(pct < 10 ? 1 : 0)}%` : ''}
     </span>
   );
@@ -28,6 +30,7 @@ function Tick({ now, prev }) {
 
 // Stepped conversion funnel: each stage's bar is sized to its share of Sessions, with the
 // step-to-step conversion rate called out between stages. The drop-off is the story.
+// 38px rows, gradient hue → hue@55%, count left / share right (handoff §6.8).
 function Funnel({ steps }) {
   const top = steps[0]?.value || 0;
   return (
@@ -38,21 +41,26 @@ function Funnel({ steps }) {
         return (
           <div key={s.key}>
             {i > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0 2px 4px' }}>
-                <span style={{ color: 'var(--t3)', fontSize: 13 }}>↳</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: stepConv >= 50 ? 'var(--green)' : stepConv >= 20 ? 'var(--amber)' : 'var(--t2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', marginLeft: 110 }}>
+                <span style={{ color: 'var(--t5)', fontSize: 13 }}>↳</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: stepConv >= 50 ? STATUS.good : stepConv >= 20 ? STATUS.warn : 'var(--t2)' }}>
                   {fmtPct(stepConv)}
                 </span>
-                <span className="so-sub" style={{ fontSize: 11 }}>continue to {s.label.toLowerCase()}</span>
+                <span className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)' }}>continue to {s.label.toLowerCase()}</span>
               </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              <div style={{ width: 96, fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t2)', textAlign: 'right' }}>{s.label}</div>
-              <div style={{ flex: 1, position: 'relative', height: 38, background: 'var(--surface2)', borderRadius: 8, overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, transformOrigin: 'left', transform: `scaleX(${Math.max(share, 0) / 100})`, background: `linear-gradient(90deg, ${s.color}, color-mix(in srgb, ${s.color} 65%, transparent))`, borderRadius: 8, transition: 'transform .45s cubic-bezier(.22,1,.36,1)' }} />
+              <div style={{ width: 96, flex: 'none', fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t2)', textAlign: 'right' }}>{s.label}</div>
+              <div style={{ flex: 1, position: 'relative', height: 38, background: 'rgba(255,255,255,.045)', borderRadius: 9, overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.max(share, 0)}%`, background: `linear-gradient(90deg, ${s.color}, rgba(${rgb(s.color)},.55))`, borderRadius: 9 }} />
+                {/* Ink has to follow the FILL, not the row: the step colours (#F2CD1A → #F59E0B →
+                    #FF7A1A → #34D27B) are all light, so near-white text over the filled part is
+                    ~1.2:1. The count sits at the left edge and is therefore always over the fill →
+                    dark ink. The share sits at the right edge and is only over the fill when the bar
+                    is nearly full (the first step is always 100%). */}
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 13px' }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, color: 'var(--t1)' }}>{numfmt(s.value)}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{fmtPct(share)}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, color: share > 6 ? 'var(--accent-fg)' : 'var(--t1)' }}>{numfmt(s.value)}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: share > 92 ? 'var(--accent-fg)' : 'var(--t2-cell)' }}>{fmtPct(share)}</span>
                 </div>
               </div>
             </div>
@@ -66,6 +74,9 @@ function Funnel({ steps }) {
 // Daily conversion-rate trend (Recharts — axes + hover tooltip, consistent with the app's other
 // charts). Website-change events overlay as reference lines; the tooltip shows the exact CR%, the
 // day's funnel counts, and any change that shipped that day.
+// ⚠ Handoff §7: this chart keeps its own literal palette (same hexes the untouched
+// StackedTrendChart uses) — only the panel AROUND it was reskinned. Do not harmonise it
+// with the new token ramp, and do not put backdrop-filter on its direct parent.
 const C_GRID = '#33343D', C_T2 = '#A4A6AE', C_T3 = '#6E6F79', C_SURFACE2 = '#26272E', C_GREEN = '#34D27B', C_ACCENT = '#F2CD1A', C_STOCK = '#2DA8F0', C_RED = '#EC6A5E';
 const mmdd = d => (d ? String(d).slice(5) : '');
 function DailyTrend({ rows, changes = [] }) {
@@ -140,18 +151,28 @@ const stockName = t => String(t || '').split(' — ')[0].replace(/^L\.O\.T\s+(Ca
 const fmtPP = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}pp`);
 const gapLabel = g => (g === 0 ? 'same day' : g > 0 ? `+${g}d` : `${g}d`);
 const impC = v => (v == null ? 'var(--t3)' : v > 0 ? 'var(--green)' : v < 0 ? '#EC6A5E' : 'var(--t3)');
+// Marker legend — the same three categories the chart's reference lines use.
+const MarkerLegend = () => (
+  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+    {CAT_ORDER.map(k => (
+      <span key={k} style={{ fontFamily: 'var(--mono)', fontSize: 10, color: CAT[k].color, whiteSpace: 'nowrap' }}>
+        {CAT[k].arrow} {CAT[k].label.toLowerCase()}
+      </span>
+    ))}
+  </div>
+);
 // One categorised row: "▼ Out of stock ·N   name · name · name" (stock inline, website stacked).
 function CatRow({ catk, items }) {
   const c = CAT[catk], isWeb = catk === 'web';
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: c.color, width: 96, flexShrink: 0, fontWeight: 600 }}>{c.arrow} {c.label}<span className="so-sub" style={{ color: 'var(--t3)', fontWeight: 400 }}> ·{items.length}</span></span>
+    <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: c.color, width: 100, flexShrink: 0, fontWeight: 600 }}>{c.arrow} {c.label}<span style={{ color: 'var(--t5)', fontWeight: 400 }}> ·{items.length}</span></span>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: isWeb ? 'column' : 'row', flexWrap: 'wrap', gap: isWeb ? 3 : '2px 0' }}>
         {items.map((e, i) => (
-          <span key={e.id || i} title={e.title} style={{ fontSize: 12, color: 'var(--t1)', minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span key={e.id || i} title={e.title} style={{ fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t1-cell)', minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {isWeb ? e.title : stockName(e.title)}
-            {e.gap != null && e.gap !== 0 ? <span className="so-sub" style={{ marginLeft: 4, fontFamily: 'var(--mono)', fontSize: 10 }}>{gapLabel(e.gap)}</span> : null}
-            {!isWeb && i < items.length - 1 ? <span style={{ color: 'var(--t3)' }}>&nbsp;·&nbsp;</span> : null}
+            {e.gap != null && e.gap !== 0 ? <span style={{ marginLeft: 4, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t5)' }}>{gapLabel(e.gap)}</span> : null}
+            {!isWeb && i < items.length - 1 ? <span style={{ color: 'var(--t5)' }}>&nbsp;·&nbsp;</span> : null}
           </span>
         ))}
       </div>
@@ -163,7 +184,7 @@ function CatGroups({ events }) {
   const m = { oos: [], restock: [], web: [] };
   for (const e of events) m[e.cat].push(e);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {CAT_ORDER.filter(k => m[k].length).map(k => <CatRow key={k} catk={k} items={m[k]} />)}
     </div>
   );
@@ -190,37 +211,38 @@ function DriversPanel({ drivers }) {
   libByDate.sort((a, b) => Math.abs(b.swing ?? 0) - Math.abs(a.swing ?? 0));
   return (
     <div className="so-card">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-        <div className="so-kpi-lbl" style={{ margin: 0 }}>Likely drivers <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· why conversion moved (±{st.window_days ?? 2}d · correlation, not proof)</span></div>
-        <SegmentedToggle options={[['byday', 'By day'], ['library', 'Driver library']]} value={tab} onChange={setTab} size="sm" />
-      </div>
+      <PanelHead
+        title="Likely drivers"
+        qual={`· why conversion moved (±${st.window_days ?? 2}d · correlation, not proof)`}
+        right={<SegmentedToggle options={[['byday', 'By day'], ['library', 'Driver library']]} value={tab} onChange={setTab} size="sm" />}
+      />
       {tab === 'byday' ? (
-        byDay.length === 0 ? <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No notable conversion moves in this range (CR stayed within ±{st.notable_pct ?? 15}% of its 7-day average).</div> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        byDay.length === 0 ? <div className="so-sub" style={{ fontSize: 12.5, color: 'var(--t3)' }}>No notable conversion moves in this range (CR stayed within ±{st.notable_pct ?? 15}% of its 7-day average).</div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {byDay.map(d => (
-              <div key={d.date} style={{ borderBottom: '1px solid var(--surface2)', paddingBottom: 9 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+              <div key={d.date} style={{ borderBottom: '1px solid var(--row-border)', padding: '9px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)', width: 88, flexShrink: 0 }}>{d.date}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--green)' }}>{fmtPct(d.cr)}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 600, color: d.dev >= 0 ? 'var(--green)' : '#EC6A5E' }}>{d.dev >= 0 ? '▲' : '▼'} {Math.abs(d.dev).toFixed(0)}% vs 7-day avg</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: STATUS.good }}>{fmtPct(d.cr)}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 600, color: d.dev >= 0 ? STATUS.good : STATUS.bad }}>{d.dev >= 0 ? '▲' : '▼'} {Math.abs(d.dev).toFixed(0)}% vs 7-day avg</span>
                 </div>
                 {d.events.length === 0
-                  ? <div className="so-sub" style={{ fontSize: 11, marginTop: 3, marginLeft: 98 }}>no known driver near this day</div>
-                  : <div style={{ marginTop: 6, marginLeft: 98 }}><CatGroups events={d.events} /></div>}
+                  ? <div className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 4, marginLeft: 100 }}>no known driver near this day</div>
+                  : <div style={{ marginTop: 8, marginLeft: 100 }}><CatGroups events={d.events} /></div>}
               </div>
             ))}
           </div>
         )
       ) : (
-        libByDate.length === 0 ? <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No events in this range yet.</div> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            <div className="so-sub" style={{ fontSize: 10.5, marginBottom: 2 }}>Each date's changes, grouped. The <span style={{ fontFamily: 'var(--mono)' }}>pp</span> is that date's CR swing (avg {st.impact_days ?? 3}d after − {st.impact_days ?? 3}d before) — a date-level signal shared by every change that day, not any single event's effect.</div>
+        libByDate.length === 0 ? <div className="so-sub" style={{ fontSize: 12.5, color: 'var(--t3)' }}>No events in this range yet.</div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div className="so-sub" style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 6, lineHeight: 1.5 }}>Each date's changes, grouped. The <span style={{ fontFamily: 'var(--mono)' }}>pp</span> is that date's CR swing (avg {st.impact_days ?? 3}d after − {st.impact_days ?? 3}d before) — a date-level signal shared by every change that day, not any single event's effect.</div>
             {libByDate.map(g => (
-              <div key={g.date} style={{ borderBottom: '1px solid var(--surface2)', paddingBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
+              <div key={g.date} style={{ borderBottom: '1px solid var(--row-border)', padding: '9px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)', width: 88, flexShrink: 0 }}>{g.date}</span>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: impC(g.swing) }}>{fmtPP(g.swing)}</span>
-                  <span className="so-sub" style={{ fontSize: 10.5 }}>CR swing ±{st.impact_days ?? 3}d</span>
+                  <span className="so-qual">CR swing ±{st.impact_days ?? 3}d</span>
                 </div>
                 <div style={{ marginLeft: 4 }}><CatGroups events={g.events} /></div>
               </div>
@@ -236,8 +258,8 @@ function DriversPanel({ drivers }) {
 function BigKpi({ label, val, tone = 'var(--t1)' }) {
   return (
     <div style={{ textAlign: 'right' }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: tone, lineHeight: 1 }}>{val}</div>
-      <div className="so-sub" style={{ fontSize: 10.5, marginTop: 3 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 800, letterSpacing: '-0.01em', color: tone, lineHeight: 1 }}>{val}</div>
+      <div className="so-eyebrow" style={{ fontSize: 9.5, marginTop: 6 }}>{label}</div>
     </div>
   );
 }
@@ -246,36 +268,45 @@ function NetCr({ data }) {
   const rows = data.rows || [];
   const s = data.summary || {};
   const fmtCr = (v) => (v == null ? '—' : Number(v).toFixed(2) + '%');
+  const crCell = (v) => (v == null ? <Nil /> : Number(v).toFixed(2) + '%');
   // chronological prev-day lookup for the CR ▲/▼ (independent of row order)
   const prev = {};
   { const chron = [...rows].sort((a, b) => (a.the_date < b.the_date ? -1 : 1)); chron.forEach((r, i) => { if (i > 0) prev[r.the_date] = chron[i - 1]; }); }
   const hasShop = s.cr_shopify != null;   // Shopify-sessions feed populated → gold-standard CR available
   const primCr = hasShop ? 'cr_shopify' : 'cr';
   const primSess = hasShop ? 'shopify_sessions' : 'sessions';
+  const th = { position: 'sticky', top: 0, background: 'var(--surface-solid)', cursor: 'default', zIndex: 1 };
   return (
-    <div className="so-card" style={{ boxShadow: '0 0 0 1px var(--accent)33' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
-        <div>
-          <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15 }}>Net Conversion <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 12 }}>· Shopify net orders ÷ {hasShop ? 'Shopify sessions' : 'GA4 sessions'}</span></div>
-          <div className="so-sub" style={{ fontSize: 11.5, marginTop: 3, maxWidth: 680 }}>
+    // Accent-tinted hero — the one panel that sits above BOTH sub-views (handoff §9.5).
+    <div className="so-card" style={{
+      background: 'linear-gradient(150deg, rgba(242,205,26,.09), var(--surface) 62%)',
+      borderColor: 'rgba(242,205,26,.3)', boxShadow: '0 18px 44px -26px rgba(242,205,26,.5)', padding: '18px 20px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>
+        <div style={{ maxWidth: 660 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span className="so-h2" style={{ fontSize: 15, fontWeight: 700 }}>Net Conversion</span>
+            <span className="so-qual">· Shopify net orders ÷ {hasShop ? 'Shopify sessions' : 'GA4 sessions'}</span>
+          </div>
+          <p className="so-sub" style={{ fontSize: 12, marginTop: 7, lineHeight: 1.55 }}>
             Net orders = paid Website orders, excluding cancelled, ₹0, and MO_Repair / MO_Replacement. Recent 3 days provisional (late orders + session revisions still settle).
             {hasShop
-              ? <> Denominator = <b>Shopify sessions</b> — same source as the orders, so this matches your hand-calc{s.calibration != null && <> · Shopify ≈ {s.calibration}× GA4</>}.</>
-              : <> Denominator = <b>GA4 sessions</b>. <span style={{ color: '#E8A33D' }}>Shopify-sessions feed pending — add the <code>read_reports</code> scope to the Shopify app to switch to the exact same-source CR.</span></>}
-          </div>
+              ? <> Denominator = <b style={{ color: 'var(--t1)' }}>Shopify sessions</b> — same source as the orders, so this matches your hand-calc{s.calibration != null && <> · Shopify ≈ <span style={{ fontFamily: 'var(--mono)' }}>{s.calibration}×</span> GA4</>}.</>
+              : <> Denominator = <b style={{ color: 'var(--t1)' }}>GA4 sessions</b>. <span style={{ color: STATUS.warn }}>Shopify-sessions feed pending — add the <code style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>read_reports</code> scope to the Shopify app to switch to the exact same-source CR.</span></>}
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: 20 }}>
+        <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap' }}>
           <BigKpi label={hasShop ? 'CR · Shopify' : 'CR · GA4'} val={fmtCr(hasShop ? s.cr_shopify : s.cr)} tone="var(--accent)" />
           {hasShop && <BigKpi label="CR · GA4" val={fmtCr(s.cr)} />}
           <BigKpi label="Net orders" val={fmtInt(s.net_orders)} />
           <BigKpi label={hasShop ? 'Sessions · Shop' : 'Sessions · GA4'} val={fmtInt(hasShop ? s.shopify_sessions : s.sessions)} />
         </div>
       </div>
-      <div style={{ overflowX: 'auto', maxHeight: 340, overflowY: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-          <thead><tr style={{ color: 'var(--t2)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      <div style={{ overflowX: 'auto', maxHeight: 340, overflowY: 'auto', marginTop: 14 }}>
+        <table className="so-table">
+          <thead><tr>
             {['Date', hasShop ? 'Sessions·Shop' : 'Sessions', 'Net orders', 'Excl.', hasShop ? 'CR·Shop' : 'CR', ...(hasShop ? ['CR·GA4'] : [])].map((h, i) => (
-              <th key={h} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>{h}</th>
+              <th key={h} className={i === 0 ? undefined : 'so-num'} style={th}>{h}</th>
             ))}
           </tr></thead>
           <tbody>
@@ -283,17 +314,17 @@ function NetCr({ data }) {
               const p = prev[r.the_date];
               const dod = p && r[primCr] != null && p[primCr] != null ? Number(r[primCr]) - Number(p[primCr]) : null;
               return (
-                <tr key={r.the_date} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '6px 8px', fontFamily: 'var(--mono)' }}>{r.the_date}
-                    {r.provisional && <span style={{ marginLeft: 6, fontSize: 9.5, color: '#E8A33D', border: '1px solid #E8A33D55', borderRadius: 4, padding: '0 4px' }}>provisional</span>}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r[primSess])}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.net_orders)}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fmtInt(r.excluded_orders)}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>
-                    <b>{fmtCr(r[primCr])}</b>
-                    {dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10.5, color: dod > 0 ? 'var(--green)' : 'var(--red)' }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}
+                <tr key={r.the_date}>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2-cell)', whiteSpace: 'nowrap' }}>{r.the_date}
+                    {r.provisional && <Pill color="#F59E0B" style={{ marginLeft: 7, fontSize: 9, textTransform: 'none', letterSpacing: 0 }}>provisional</Pill>}</td>
+                  <td className="so-num">{fmtInt(r[primSess])}</td>
+                  <td className="so-num">{fmtInt(r.net_orders)}</td>
+                  <td className="so-num" style={{ color: 'var(--t4)' }}>{fmtInt(r.excluded_orders)}</td>
+                  <td className="so-num bright" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {crCell(r[primCr])}
+                    {dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 400, color: dod > 0 ? STATUS.good : STATUS.bad }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}
                   </td>
-                  {hasShop && <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fmtCr(r.cr)}</td>}
+                  {hasShop && <td className="so-num" style={{ color: 'var(--t4)' }}>{crCell(r.cr)}</td>}
                 </tr>
               );
             })}
@@ -309,35 +340,35 @@ function NetCr({ data }) {
 function ShopifyDailyFunnel({ rows }) {
   const list = rows || [];
   const hasShop = list.some(r => r.shopify_sessions != null);
-  const fmtCr = (v) => (v == null ? '—' : Number(v).toFixed(2) + '%');
+  const crCell = (v) => (v == null ? <Nil /> : Number(v).toFixed(2) + '%');
   const prev = {};
   { const chron = [...list].sort((a, b) => (a.the_date < b.the_date ? -1 : 1)); chron.forEach((r, i) => { if (i > 0) prev[r.the_date] = chron[i - 1]; }); }
   return (
     <>
-      <div className="so-sub" style={{ fontSize: 11, padding: '4px 18px 0', color: 'var(--t3)', maxWidth: 760 }}>
+      <div className="so-sub" style={{ fontSize: 12, padding: '0 18px 4px', color: 'var(--t3)', maxWidth: 780, lineHeight: 1.55 }}>
         Shopify-sourced · same source as your orders. Sessions = Shopify online-store sessions; Net orders excl. cancelled / ₹0 / MO_Repair / MO_Replacement; CR = Net orders ÷ Shopify sessions (your hand-calc). <b style={{ color: 'var(--t2)' }}>Add-to-cart &amp; Checkout aren't exposed by Shopify's API — use the GA4 tab for those.</b>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table className="so-table" style={{ marginTop: 8 }}>
           <thead><tr>
-            <th style={{ textAlign: 'left' }}>Date</th>
-            <th style={{ textAlign: 'right' }}>Sessions</th>
-            <th style={{ textAlign: 'right' }}>Net orders</th>
-            <th style={{ textAlign: 'right' }}>CR · Shopify</th>
-            <th style={{ textAlign: 'right' }}>CR · GA4</th>
+            <th style={{ cursor: 'default' }}>Date</th>
+            <th className="so-num" style={{ cursor: 'default' }}>Sessions</th>
+            <th className="so-num" style={{ cursor: 'default' }}>Net orders</th>
+            <th className="so-num" style={{ cursor: 'default' }}>CR · Shopify</th>
+            <th className="so-num" style={{ cursor: 'default' }}>CR · GA4</th>
           </tr></thead>
           <tbody>
-            {!hasShop && <tr><td colSpan={5} style={{ color: 'var(--t3)', padding: 14 }}>Shopify sessions not synced for this range yet.</td></tr>}
+            {!hasShop && <tr><td colSpan={5} className="so-sub" style={{ color: 'var(--t3)', padding: 14 }}>Shopify sessions not synced for this range yet.</td></tr>}
             {hasShop && list.map(r => {
               const p = prev[r.the_date];
               const dod = p && r.cr_shopify != null && p.cr_shopify != null ? Number(r.cr_shopify) - Number(p.cr_shopify) : null;
               return (
                 <tr key={r.the_date}>
-                  <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.the_date}{r.provisional && <span style={{ marginLeft: 6, fontSize: 9.5, color: '#E8A33D', border: '1px solid #E8A33D55', borderRadius: 4, padding: '0 4px' }}>prov</span>}</td>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2-cell)', whiteSpace: 'nowrap' }}>{r.the_date}{r.provisional && <Pill color="#F59E0B" style={{ marginLeft: 7, fontSize: 9, textTransform: 'none', letterSpacing: 0 }}>prov</Pill>}</td>
                   <td className="so-num">{numfmt(r.shopify_sessions)}</td>
                   <td className="so-num">{numfmt(r.net_orders)}</td>
-                  <td className="so-num" style={{ color: 'var(--green)' }}>{fmtCr(r.cr_shopify)}{dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10.5, color: dod > 0 ? 'var(--green)' : '#EC6A5E' }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}</td>
-                  <td className="so-num" style={{ color: 'var(--t3)' }}>{fmtCr(r.cr)}</td>
+                  <td className="so-num" style={{ color: STATUS.good, fontWeight: 600, whiteSpace: 'nowrap' }}>{crCell(r.cr_shopify)}{dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 400, color: dod > 0 ? STATUS.good : STATUS.bad }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}</td>
+                  <td className="so-num" style={{ color: 'var(--t4)' }}>{crCell(r.cr)}</td>
                 </tr>
               );
             })}
@@ -345,6 +376,21 @@ function ShopifyDailyFunnel({ rows }) {
         </table>
       </div>
     </>
+  );
+}
+
+// Side card for the funnel / daily-history splits — the §3.4 tile recipe at a larger value size.
+function SideStat({ hue, lbl, val, valSize = 30, valColor, sub, children }) {
+  return (
+    <div className="so-stat" style={{ ...hueStyle(hue), flex: 1, justifyContent: 'center' }}>
+      <div className="so-stat-top">
+        <span className="so-stat-swatch" />
+        <span className="so-stat-lbl">{lbl}</span>
+      </div>
+      {val != null && <span className="so-stat-val" style={{ fontSize: valSize, color: valColor || 'var(--t1)' }}>{val}</span>}
+      {sub && <div className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 6 }}>{sub}</div>}
+      {children}
+    </div>
   );
 }
 
@@ -406,8 +452,15 @@ export default function FunnelPage() {
 
   return (
     <div className="so-page">
+      <PageHead
+        title="Funnel"
+        sub="Website conversion · GA4 + Shopify + Razorpay"
+        right={<SegmentedToggle options={[['overview', 'Overview'], ['history', 'Daily history']]} value={view} onChange={setView} />}
+      />
+
+      {/* sticky page-level range header — never nested in a .so-card */}
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<><SegmentedToggle options={[['overview', 'Overview'], ['history', 'Daily history']]} value={view} onChange={setView} size="sm" /><span className="so-sub" style={{ marginLeft: 10 }}>GA4 · Website</span></>} />
+        right={<span className="so-qual">GA4 · Website</span>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
@@ -416,13 +469,22 @@ export default function FunnelPage() {
       {view === 'history' ? (
         !hist ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(220px,1fr)', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(230px,1fr)', gap: 16 }}>
               <div className="so-card">
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                  <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily conversion rate · sessions → purchase</div>
-                  {changes.length > 0 && <span className="so-sub" style={{ fontSize: 10.5 }}><span className="so-dot" style={{ background: 'var(--accent)', marginRight: 5 }} />{changes.length} website change{changes.length > 1 ? 's' : ''}</span>}
-                </div>
-                <DailyTrend rows={hist} changes={changes} />
+                <PanelHead
+                  title="Daily conversion rate"
+                  qual="· sessions → purchase"
+                  right={changes.length > 0 ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                      <MarkerLegend />
+                      <span className="so-qual" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                        <span className="so-dot" style={{ background: 'var(--accent)', marginRight: 5 }} />{changes.length} website change{changes.length > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  ) : null}
+                />
+                {/* plain wrapper: the chart's direct parent must not carry backdrop-filter (§7) */}
+                <div><DailyTrend rows={hist} changes={changes} /></div>
               </div>
               {(() => {
                 const wd = (hist || []).filter(r => Number(r.sessions) > 0);
@@ -431,31 +493,28 @@ export default function FunnelPage() {
                 const best = wd.length ? wd.reduce((m, r) => Number(r.purchase_cr) > Number(m.purchase_cr) ? r : m) : null;
                 const worst = wd.length ? wd.reduce((m, r) => Number(r.purchase_cr) < Number(m.purchase_cr) ? r : m) : null;
                 return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                    <div className="so-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
-                      <div className="so-kpi-lbl">Avg daily conversion</div>
-                      <span className="so-kpi-val" style={{ fontSize: 30, color: 'var(--green)' }}>{avg.toFixed(2)}%</span>
-                      <span className="so-sub" style={{ fontSize: 11 }}>{wd.length} days in range</span>
-                    </div>
-                    <div className="so-card" style={{ flex: 1 }}>
-                      <div className="so-kpi-lbl">Best / worst day</div>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, marginTop: 6, lineHeight: 1.7 }}>
-                        <div style={{ color: 'var(--green)' }}>▲ {best?.the_date} · {Number(best?.purchase_cr || 0).toFixed(2)}%</div>
-                        <div style={{ color: '#EC6A5E' }}>▼ {worst?.the_date} · {Number(worst?.purchase_cr || 0).toFixed(2)}%</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <SideStat hue={HUE.units} lbl="Avg daily conversion" val={`${avg.toFixed(2)}%`} valSize={30} valColor={STATUS.good} sub={`${wd.length} days in range`} />
+                    <SideStat hue={HUE.neutral} lbl="Best / worst day">
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, marginTop: 10, lineHeight: 1.8 }}>
+                        <div style={{ color: STATUS.good }}>▲ {best?.the_date || <Nil />} · {Number(best?.purchase_cr || 0).toFixed(2)}%</div>
+                        <div style={{ color: STATUS.bad }}>▼ {worst?.the_date || <Nil />} · {Number(worst?.purchase_cr || 0).toFixed(2)}%</div>
                       </div>
-                    </div>
+                    </SideStat>
                   </div>
                 );
               })()}
             </div>
-            <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, padding: '16px 18px 0' }}>
-                <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily funnel <span className="so-sub" style={{ fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>· <span style={{ color: 'var(--green)' }}>▲</span>/<span style={{ color: '#EC6A5E' }}>▼</span> vs previous day</span></div>
-                <SegmentedToggle options={[['ga4', 'GA4'], ['shopify', 'Shopify']]} value={histSrc} onChange={setHistSrc} size="sm" />
-              </div>
+
+            <div className="so-card flush">
+              <PanelHead
+                title="Daily funnel"
+                qual={<>· <span style={{ color: STATUS.good }}>▲</span>/<span style={{ color: STATUS.bad }}>▼</span> vs previous day</>}
+                right={<SegmentedToggle options={[['ga4', 'GA4'], ['shopify', 'Shopify']]} value={histSrc} onChange={setHistSrc} size="sm" />}
+              />
               {histSrc === 'ga4' ? (
               <div style={{ overflowX: 'auto' }}>
-                <table className="so-table" style={{ marginTop: 8 }}>
+                <table className="so-table">
                   <thead><tr>
                     <SortHeader k="the_date" label="Date" sort={histSort} />
                     <SortHeader k="sessions" label="Sessions" sort={histSort} numeric />
@@ -466,18 +525,18 @@ export default function FunnelPage() {
                     <SortHeader k="purchase_cr" label="Conv. rate" sort={histSort} numeric />
                   </tr></thead>
                   <tbody>
-                    {histSort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>No snapshot days in this range yet.</td></tr>}
+                    {histSort.sorted.length === 0 && <tr><td colSpan={7} className="so-sub" style={{ color: 'var(--t3)', padding: 14 }}>No snapshot days in this range yet.</td></tr>}
                     {histSort.sorted.map(r => {
                       const prev = prevByDate[r.the_date];
                       return (
                       <tr key={r.the_date}>
-                        <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.the_date}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2-cell)', whiteSpace: 'nowrap' }}>{r.the_date}</td>
                         <td className="so-num">{numfmt(r.sessions)}<Tick now={r.sessions} prev={prev?.sessions} /></td>
                         <td className="so-num">{numfmt(r.add_to_carts)}<Tick now={r.add_to_carts} prev={prev?.add_to_carts} /></td>
                         <td className="so-num">{numfmt(r.checkouts)}<Tick now={r.checkouts} prev={prev?.checkouts} /></td>
                         <td className="so-num">{numfmt(r.purchases)}<Tick now={r.purchases} prev={prev?.purchases} /></td>
                         <td className="so-num">{fmtPct(r.atc_rate)}<Tick now={r.atc_rate} prev={prev?.atc_rate} /></td>
-                        <td className="so-num" style={{ color: 'var(--green)' }}>{fmtPct(r.purchase_cr)}<Tick now={r.purchase_cr} prev={prev?.purchase_cr} /></td>
+                        <td className="so-num" style={{ color: STATUS.good, fontWeight: 600 }}>{fmtPct(r.purchase_cr)}<Tick now={r.purchase_cr} prev={prev?.purchase_cr} /></td>
                       </tr>
                       );
                     })}
@@ -486,80 +545,77 @@ export default function FunnelPage() {
               </div>
               ) : <ShopifyDailyFunnel rows={netcr?.rows} />}
             </div>
+
             <DriversPanel drivers={drivers} />
+
             {changes.length > 0 && (
               <div className="so-card">
-                <div className="so-kpi-lbl" style={{ marginBottom: 10 }}>Changes &amp; events in range · <span style={{ color: 'var(--t3)' }}>what shipped / stock moves</span></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                <PanelHead title="Changes & events in range" qual="· what shipped / stock moves" />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {changes.slice().sort((a, b) => (a.the_date < b.the_date ? 1 : -1)).map(c => (
-                    <div key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'baseline', borderBottom: '1px solid var(--surface2)', paddingBottom: 8 }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2)', width: 88, flexShrink: 0 }}>{c.the_date}</span>
+                    <div key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'baseline', borderBottom: '1px solid var(--row-border)', padding: '8px 0' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2-cell)', width: 88, flexShrink: 0 }}>{c.the_date}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, color: 'var(--t1)', display: 'flex', alignItems: 'center' }}>{streamDot(c.stream)}<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
-                          {c.workstream && c.workstream !== 'stock' && <span className="so-sub" style={{ marginLeft: 8, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0 }}>{c.workstream}{c.surface ? ` · ${c.surface}` : ''}</span>}
+                        <div style={{ fontFamily: 'var(--ui)', fontSize: 13, color: 'var(--t1)', display: 'flex', alignItems: 'center' }}>{streamDot(c.stream)}<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
+                          {c.workstream && c.workstream !== 'stock' && <span className="so-eyebrow" style={{ marginLeft: 8, fontSize: 9.5, flexShrink: 0 }}>{c.workstream}{c.surface ? ` · ${c.surface}` : ''}</span>}
                         </div>
-                        {c.hypothesis && <div className="so-sub" style={{ fontSize: 11.5, marginTop: 2 }}>{c.hypothesis}</div>}
+                        {c.hypothesis && <div className="so-sub" style={{ fontSize: 12, color: 'var(--t3)', marginTop: 3 }}>{c.hypothesis}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-                        {c.status && <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: c.status === 'reverted' ? '#EC6A5E' : 'var(--t3)' }}>{c.status}</span>}
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: c.result && c.result !== 'pending' ? 'var(--green)' : 'var(--t3)' }}>{c.result || '—'}</span>
+                        {c.status && <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: c.status === 'reverted' ? STATUS.bad : 'var(--t4)' }}>{c.status}</span>}
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: c.result && c.result !== 'pending' ? STATUS.good : 'var(--t4)' }}>{c.result || <Nil />}</span>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers: <span style={{ color: '#EC6A5E' }}>▼ out of stock</span> · <span style={{ color: 'var(--green)' }}>▲ restocked</span> (native Shopify inventory, forward-only) · <span style={{ color: 'var(--accent)' }}>◆ website changes</span> (Website repo change-log). A marker line takes the priority colour (out-of-stock first); hover for the full per-change list. Likely drivers are heuristic time-proximity — correlation, not proof.</div>
+
+            <div className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.6 }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers: <span style={{ color: '#EC6A5E' }}>▼ out of stock</span> · <span style={{ color: 'var(--green)' }}>▲ restocked</span> (native Shopify inventory, forward-only) · <span style={{ color: 'var(--accent)' }}>◆ website changes</span> (Website repo change-log). A marker line takes the priority colour (out-of-stock first); hover for the full per-change list. Likely drivers are heuristic time-proximity — correlation, not proof.</div>
           </>
         )
       ) : (
       !rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
           {/* funnel viz + headline conversion */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(220px,1fr)', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(230px,1fr)', gap: 16 }}>
             <div className="so-card">
-              <div className="so-kpi-lbl" style={{ marginBottom: 16 }}>Conversion funnel</div>
+              <PanelHead title="Conversion funnel" style={{ marginBottom: 16 }} />
               {sessions === 0
-                ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '28px 0', textAlign: 'center' }}>No traffic in this range yet.</div>
+                ? <div className="so-sub" style={{ color: 'var(--t3)', fontSize: 12.5, padding: '28px 0', textAlign: 'center' }}>No traffic in this range yet.</div>
                 : <Funnel steps={steps} />}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="so-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
-                <div className="so-kpi-lbl">Overall conversion</div>
-                <span className="so-kpi-val" style={{ fontSize: 34, color: 'var(--green)' }}>{cr.toFixed(2)}%</span>
-                <span className="so-sub" style={{ fontSize: 11 }}>sessions → purchase</span>
-              </div>
-              <div className="so-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
-                <div className="so-kpi-lbl">Revenue</div>
-                <span className="so-kpi-val" style={{ fontSize: 26 }}>{inr(revenue)}</span>
-                <span className="so-sub" style={{ fontSize: 11 }}>GA4 purchase value</span>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <SideStat hue={HUE.units} lbl="Overall conversion" val={`${cr.toFixed(2)}%`} valSize={34} valColor={STATUS.good} sub="sessions → purchase" />
+              <SideStat hue={HUE.primary} lbl="Revenue" val={inr(revenue)} valSize={26} sub="GA4 purchase value" />
             </div>
           </div>
 
           {/* by source */}
-          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By traffic source</div>
-            <table className="so-table" style={{ marginTop: 8 }}>
-              <thead><tr>
-                <SortHeader k="src_group" label="Source" sort={srcSort} /><SortHeader k="sessions" label="Sessions" sort={srcSort} numeric /><SortHeader k="add_to_carts" label="Add to cart" sort={srcSort} numeric />
-                <SortHeader k="checkouts" label="Checkouts" sort={srcSort} numeric /><SortHeader k="purchases" label="Purchases" sort={srcSort} numeric /><SortHeader k="conv" label="Conv. rate" sort={srcSort} numeric />
-              </tr></thead>
-              <tbody>
-                {srcSort.sorted.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 14 }}>No traffic in this range yet — connector may still be backfilling.</td></tr>}
-                {srcSort.sorted.map((r, i) => {
-                  const s = Number(r.sessions || 0), pu = Number(r.purchases || 0);
-                  return (<tr key={i}>
-                    <td>{r.src_group || '—'}</td>
-                    <td className="so-num">{numfmt(r.sessions)}</td>
-                    <td className="so-num">{numfmt(r.add_to_carts)}</td>
-                    <td className="so-num">{numfmt(r.checkouts)}</td>
-                    <td className="so-num">{numfmt(r.purchases)}</td>
-                    <td className="so-num">{s > 0 ? (pu / s * 100).toFixed(2) + '%' : '—'}</td>
-                  </tr>);
-                })}
-              </tbody>
-            </table>
+          <div className="so-card flush">
+            <PanelHead title="By traffic source" />
+            <div style={{ overflowX: 'auto' }}>
+              <table className="so-table">
+                <thead><tr>
+                  <SortHeader k="src_group" label="Source" sort={srcSort} /><SortHeader k="sessions" label="Sessions" sort={srcSort} numeric /><SortHeader k="add_to_carts" label="Add to cart" sort={srcSort} numeric />
+                  <SortHeader k="checkouts" label="Checkouts" sort={srcSort} numeric /><SortHeader k="purchases" label="Purchases" sort={srcSort} numeric /><SortHeader k="conv" label="Conv. rate" sort={srcSort} numeric />
+                </tr></thead>
+                <tbody>
+                  {srcSort.sorted.length === 0 && <tr><td colSpan={6} className="so-sub" style={{ color: 'var(--t3)', padding: 14 }}>No traffic in this range yet — connector may still be backfilling.</td></tr>}
+                  {srcSort.sorted.map((r, i) => {
+                    const s = Number(r.sessions || 0), pu = Number(r.purchases || 0);
+                    return (<tr key={i}>
+                      <td>{r.src_group || <Nil />}</td>
+                      <td className="so-num">{numfmt(r.sessions)}</td>
+                      <td className="so-num">{numfmt(r.add_to_carts)}</td>
+                      <td className="so-num">{numfmt(r.checkouts)}</td>
+                      <td className="so-num">{numfmt(r.purchases)}</td>
+                      <td className="so-num bright" style={{ fontWeight: 600 }}>{s > 0 ? (pu / s * 100).toFixed(2) + '%' : <Nil />}</td>
+                    </tr>);
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* ── Checkout & payment funnel (Razorpay) ── */}
@@ -573,66 +629,62 @@ export default function FunnelPage() {
             const maxM = Math.max(...methods.map(m => Number(m[1].attempts) || 0), 1);
             const maxR = Math.max(...reasons.map(r => Number(r[1]) || 0), 1);
             const stat = (lbl, val, sub, color) => (
-              <div className="so-card" style={{ flex: 1, minWidth: 120, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div className="so-kpi-lbl">{lbl}</div>
-                <span className="so-kpi-val" style={{ fontSize: 22, color: color || 'var(--t1)' }}>{val}</span>
-                {sub ? <span className="so-sub" style={{ fontSize: 11 }}>{sub}</span> : null}
+              <div key={lbl} style={{ background: 'var(--control)', border: '1px solid var(--border-ctl)', borderRadius: 12, padding: '12px 14px', minWidth: 0 }}>
+                <div className="so-stat-lbl" style={{ color: 'var(--t2)' }}>{lbl}</div>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 20, fontWeight: 700, letterSpacing: '-0.01em', color: color || 'var(--t1)', marginTop: 7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{val}</div>
+                {sub ? <div className="so-stat-sub" style={{ marginTop: 3 }}>{sub}</div> : null}
               </div>
             );
             return (
               <div className="so-card">
-                <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Checkout &amp; payment · <span style={{ color: 'var(--t3)' }}>Razorpay</span></div>
+                <PanelHead title="Checkout & payment" qual="· Razorpay" />
                 {!pay ? <div style={{ padding: 20, textAlign: 'center' }}><Spinner /></div>
-                  : (attempts === 0 && cod === 0) ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
+                  : (attempts === 0 && cod === 0) ? <div className="so-sub" style={{ color: 'var(--t3)', fontSize: 12.5, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
                     : (
                       <>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 18 }}>
                           {stat('Prepaid attempts', numfmt(attempts))}
-                          {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% success`, 'var(--green)')}
-                          {stat('Failed', numfmt(failed), failed ? `${(100 * failed / Math.max(attempts, 1)).toFixed(1)}% of attempts` : null, '#EC6A5E')}
+                          {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% success`, STATUS.good)}
+                          {stat('Failed', numfmt(failed), failed ? `${(100 * failed / Math.max(attempts, 1)).toFixed(1)}% of attempts` : null, STATUS.bad)}
                           {stat('COD orders', numfmt(cod), 'captured on delivery', 'var(--t2)')}
                           {stat('Captured value', inr(capAmt))}
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 18 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 24 }}>
                           <div>
-                            <div className="so-sub" style={{ marginBottom: 8 }}>Why payments fail</div>
-                            {reasons.length === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>No failures in range.</div>
+                            <div className="so-eyebrow" style={{ marginBottom: 10 }}>Why payments fail</div>
+                            {reasons.length === 0 ? <div className="so-sub" style={{ color: 'var(--t3)', fontSize: 12 }}>No failures in range.</div>
                               : reasons.map(([reason, c]) => (
-                                <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                                  <div style={{ width: 130, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reason}</div>
-                                  <div style={{ flex: 1, height: 13, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-                                    <div style={{ width: `${(Number(c) / maxR) * 100}%`, height: '100%', background: '#EC6A5E', opacity: 0.8 }} />
-                                  </div>
-                                  <div style={{ width: 40, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11 }}>{numfmt(c)}</div>
+                                <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                                  <div style={{ width: 150, flex: 'none', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reason}>{reason}</div>
+                                  <Bar pct={(Number(c) / maxR) * 100} color="rgba(236,106,94,.82)" height={13} style={{ flex: 1, borderRadius: 3 }} />
+                                  <div style={{ width: 44, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2-cell)' }}>{numfmt(c)}</div>
                                 </div>
                               ))}
                           </div>
                           <div>
-                            <div className="so-sub" style={{ marginBottom: 8 }}>By payment method (captured / attempts)</div>
+                            <div className="so-eyebrow" style={{ marginBottom: 10 }}>By payment method <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--t5)' }}>(captured / attempts)</span></div>
                             {methods.map(([m, o]) => {
                               const a = Number(o.attempts) || 0, cap = Number(o.captured) || 0;
                               return (
-                                <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                                  <div style={{ width: 90, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{m}</div>
-                                  <div style={{ flex: 1, height: 13, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-                                    <div style={{ width: `${(a / maxM) * 100}%`, height: '100%', background: '#F2CD1A', opacity: 0.85 }} />
-                                  </div>
-                                  <div style={{ width: 72, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11 }}>{numfmt(cap)}/{numfmt(a)}</div>
+                                <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                                  <div style={{ width: 92, flex: 'none', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{m}</div>
+                                  <Bar pct={(a / maxM) * 100} color="rgba(242,205,26,.85)" height={13} style={{ flex: 1, borderRadius: 3 }} />
+                                  <div style={{ width: 88, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2-cell)' }}>{numfmt(cap)}/{numfmt(a)}</div>
                                 </div>
                               );
                             })}
                           </div>
                         </div>
-                        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--surface2)' }}>
-                          <div className="so-sub" style={{ marginBottom: 8 }}>Reconciliation · {from} → {to}</div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>
+                        <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border-table)' }}>
+                          <div className="so-eyebrow" style={{ marginBottom: 9 }}>Reconciliation · {from} → {to}</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>
                             <span>GA4 purchases <b style={{ color: 'var(--t1)' }}>{numfmt(rc.ga4_purchases)}</b></span>
-                            <span style={{ color: 'var(--t3)' }}>·</span>
+                            <span style={{ color: 'var(--t5)' }}>·</span>
                             <span>Shopify orders <b style={{ color: 'var(--t1)' }}>{numfmt(rc.shopify_orders)}</b></span>
-                            <span style={{ color: 'var(--t3)' }}>·</span>
-                            <span>Razorpay captured <b style={{ color: 'var(--t1)' }}>{numfmt(rc.razorpay_captured)}</b> <span style={{ color: 'var(--t3)' }}>({inr(rc.razorpay_captured_amount)})</span></span>
+                            <span style={{ color: 'var(--t5)' }}>·</span>
+                            <span>Razorpay captured <b style={{ color: 'var(--t1)' }}>{numfmt(rc.razorpay_captured)}</b> <span style={{ color: 'var(--t5)' }}>({inr(rc.razorpay_captured_amount)})</span></span>
                           </div>
-                          <div className="so-sub" style={{ fontSize: 10.5, marginTop: 6 }}>Prepaid captures come from Razorpay; COD orders have no online capture (they appear in Shopify orders, not here). GA4 typically over-counts slightly.</div>
+                          <p className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 8, lineHeight: 1.55 }}>Prepaid captures come from Razorpay; COD orders have no online capture (they appear in Shopify orders, not here). GA4 typically over-counts slightly.</p>
                         </div>
                       </>
                     )}

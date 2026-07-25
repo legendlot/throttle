@@ -7,6 +7,9 @@ import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
 import { hybridHeadline } from '../../lib/segregation.js';
+// Prism atoms — shared vocabulary, presentational only.
+import { Swatch, PanelHead, PageHead, Bar, Donut, Nil } from '../../components/prism.js';
+import { HUE, STATUS } from '../../lib/hues.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
 import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
@@ -28,9 +31,15 @@ function ago(iso) {
   if (s < 172800) return Math.round(s / 3600) + 'h ago';
   return Math.round(s / 86400) + 'd ago';
 }
-const HEALTH_COLOR = { ok: 'var(--green)', partial: 'var(--amber)', error: 'var(--red)', never: 'var(--t3)' };
+// Semantic status never borrows a family hue (handoff §3.5) — these are the STATUS tokens.
+const HEALTH_COLOR = { ok: STATUS.good, partial: STATUS.warn, error: STATUS.bad, never: STATUS.none };
 
 const PRESETS = rangePresets();
+
+// shared row primitives — names in the UI font, every number in mono tabular
+const NAME = { fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t1)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+const NUM = { fontFamily: 'var(--mono)', fontSize: 11, fontVariantNumeric: 'tabular-nums', textAlign: 'right' };
+const EMPTY = { fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' };
 
 export default function Dashboard() {
   const { session } = useAuth();
@@ -144,6 +153,18 @@ export default function Dashboard() {
     return { arr, max };
   }, [cur, prev, chName]);
 
+  // family roll-up of the same product-grain channel aggregate — one donut arc per family.
+  // Derived client-side from rows already loaded; no additional read.
+  const famMix = useMemo(() => {
+    const t = {};
+    for (const [id, v] of Object.entries(cur.ch)) {
+      const k = channelGroup(chName[id] || '');
+      (t[k] = t[k] || { key: k, label: GROUP_META[k].label, color: GROUP_META[k].color, value: 0 });
+      t[k].value += v.gross;
+    }
+    return GROUP_ORDER.filter(k => t[k] && t[k].value > 0).map(k => t[k]);
+  }, [cur, chName]);
+
   const variantBoard = useMemo(() => {
     const src = {};
     for (const [code, v] of Object.entries(cur.variant)) {
@@ -210,10 +231,17 @@ export default function Dashboard() {
   const toggleCh = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
   const ppLabel = preset ? `prior ${PRESETS.find(p => p.key === preset)?.label || ''}` : 'prior period';
+  const rangeLabel = (preset && PRESETS.find(p => p.key === preset)?.label) || `${from} → ${to}`;
 
   return (
     <div className="so-page">
-      {/* controls — range + channel filter + export, one row */}
+      <PageHead
+        title="Cross-channel dashboard"
+        sub={<>Net revenue, mix and movers across every sales channel <span className="so-qual">· {rangeLabel}</span></>}
+      />
+
+      {/* controls — range + channel filter + export, one row. Stays a PAGE-LEVEL sticky
+          header; never nest it inside a .so-card. */}
       <RangePicker from={from} to={to}
         onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); }}
         right={<>
@@ -225,87 +253,118 @@ export default function Dashboard() {
 
       {loading && !rows.length ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
       <>
-        {/* KPI hero row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14 }}>
+        {/* ── hero KPI 5-up — every tile owns a metric hue (handoff §3.4) ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(0,1fr))', gap: 14 }}>
           {[
-            { lbl: 'Net revenue (ex-GST)', val: inr(head.netExGst), d: pct(head.netExGst, headPrev.netExGst), spark: headDaily.net, color: 'var(--accent)', sub: 'after disc · returns · GST', badge: <SettledBadge pct={head.settledPct} /> },
-            { lbl: 'Gross sales', val: inr(head.grossAll), d: pct(head.grossAll, headPrev.grossAll), spark: headDaily.gross, color: 'var(--blue)', sub: 'tax-incl · all channels' },
-            { lbl: 'Units sold', val: fmtInt(head.units), d: pct(head.units, headPrev.units), spark: daySeries.units, color: 'var(--green)' },
-            { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, color: 'var(--t2)' },
-            { lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, color: 'var(--t2)' },
+            { lbl: 'Net revenue (ex-GST)', val: inr(head.netExGst), d: pct(head.netExGst, headPrev.netExGst), spark: headDaily.net, hue: HUE.primary, sub: 'after disc · returns · GST', badge: <SettledBadge pct={head.settledPct} /> },
+            { lbl: 'Gross sales', val: inr(head.grossAll), d: pct(head.grossAll, headPrev.grossAll), spark: headDaily.gross, hue: HUE.gross, sub: 'tax-incl · all channels' },
+            { lbl: 'Units sold', val: fmtInt(head.units), d: pct(head.units, headPrev.units), spark: daySeries.units, hue: HUE.units },
+            { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, hue: HUE.derived },
+            { lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, hue: HUE.count },
           ].map((k, i) => (
-            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} sub={k.sub} badge={k.badge} spark={k.spark} sparkColor={k.color} deltaNote={`vs ${ppLabel}`} />
+            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} sub={k.sub} badge={k.badge} spark={k.spark} hue={k.hue} deltaNote={`vs ${ppLabel}`} />
           ))}
         </div>
 
-        {/* trend */}
+        {/* ── stacked family trend — the chart itself ships UNCHANGED (handoff §7).
+               Only the panel around it is restyled; the chart's direct parent carries no
+               backdrop-filter. ── */}
         <div className="so-card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-            <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily {trendMetric === 'units' ? 'units' : 'gross'} by channel family</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: 12 }}>
-                {GROUP_ORDER.filter(g => trend.days.some(d => (trend.dv[d]?.[g] || 0) > 0)).map(g => (
-                  <span key={g} style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--t2)' }}>
-                    <span className="so-dot" style={{ background: GROUP_META[g].color }} />{GROUP_META[g].label}
-                  </span>
-                ))}
+          <PanelHead
+            style={{ marginBottom: 6 }}
+            title={`Daily ${trendMetric === 'units' ? 'units' : 'gross'} by channel family`}
+            right={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 13, flexWrap: 'wrap' }}>
+                  {GROUP_ORDER.filter(g => trend.days.some(d => (trend.dv[d]?.[g] || 0) > 0)).map(g => (
+                    <span key={g} style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)' }}>
+                      <Swatch color={GROUP_META[g].color} />{GROUP_META[g].label}
+                    </span>
+                  ))}
+                </div>
+                <SegmentedToggle options={['gross', 'units']} value={trendMetric} onChange={setTrendMetric} size="sm" />
               </div>
-              <SegmentedToggle options={['gross', 'units']} value={trendMetric} onChange={setTrendMetric} size="sm" />
-            </div>
+            } />
+          <div>
+            <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
+              groups={GROUP_ORDER.map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color }))} />
           </div>
-          <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
-            groups={GROUP_ORDER.map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color }))} />
         </div>
 
-        {/* channel mix + top variants */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))', gap: 14 }}>
-          {/* channel leaderboard */}
+        {/* ── channel-mix donut + top variants ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+          {/* channel mix — one donut arc per family, then the per-channel leaderboard */}
           <div className="so-card">
-            <div className="so-kpi-lbl">Channel mix</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-              {channelBoard.arr.length === 0 && <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No sales in range.</div>}
-              {channelBoard.arr.map(c => {
-                const share = cur.gross ? (c.gross / cur.gross) * 100 : 0;
-                return (
-                  <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11.5 }}>
-                      <span className="so-dot" style={{ background: GROUP_META[c.gk].color }} />
-                      <span style={{ color: 'var(--t1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                      <Delta pct={pct(c.gross, c.prevGross)} />
-                      <span style={{ color: 'var(--t3)', width: 38, textAlign: 'right' }}>{share.toFixed(0)}%</span>
-                      <span style={{ color: 'var(--t1)', width: 80, textAlign: 'right' }}>{inr(c.gross)}</span>
+            <PanelHead title="Channel mix" qual="· gross share" />
+            {channelBoard.arr.length === 0 ? <div style={EMPTY}>No sales in range.</div> : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+                <Donut segments={famMix.map(f => ({ key: f.key, label: f.label, value: f.value, color: f.color }))}
+                  total={inr(cur.gross)} centerLabel="GROSS" />
+                <div style={{ flex: 1, minWidth: 190, display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {famMix.map(f => (
+                    <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Swatch color={f.color} />
+                      <span style={NAME}>{f.label}</span>
+                      <span style={{ ...NUM, color: 'var(--t3)', width: 46 }}>{cur.gross ? ((f.value / cur.gross) * 100).toFixed(1) : '0.0'}%</span>
+                      <span style={{ ...NUM, color: 'var(--t1-cell)', width: 78 }}>{inr(f.value)}</span>
                     </div>
-                    <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
-                      <div style={{ width: `${(c.gross / channelBoard.max) * 100}%`, height: '100%', background: GROUP_META[c.gk].color }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--row-border)' }}>
+                <div className="so-eyebrow" style={{ marginBottom: 10 }}>By channel</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {channelBoard.arr.map(c => {
+                    const share = cur.gross ? (c.gross / cur.gross) * 100 : 0;
+                    return (
+                      <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Swatch color={GROUP_META[c.gk].color} />
+                          <span style={NAME}>{c.name}</span>
+                          <Delta pct={pct(c.gross, c.prevGross)} />
+                          <span style={{ ...NUM, color: 'var(--t3)', width: 38 }}>{share.toFixed(0)}%</span>
+                          <span style={{ ...NUM, color: 'var(--t1-cell)', width: 78 }}>{inr(c.gross)}</span>
+                        </div>
+                        <Bar pct={(c.gross / channelBoard.max) * 100} color={GROUP_META[c.gk].color} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+            )}
           </div>
 
-          {/* top sellers */}
+          {/* top sellers — ranking bars */}
           <div className="so-card">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <div className="so-kpi-lbl" style={{ margin: 0 }}>Top {sellerRollup === 'product' ? 'products' : 'variants'}</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <SegmentedToggle options={[['variant', 'Variant'], ['product', 'Product']]} value={sellerRollup} onChange={setSellerRollup} size="sm" />
-                <SegmentedToggle options={['gross', 'units']} value={variantMetric} onChange={setVariantMetric} size="sm" />
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginTop: 12 }}>
-              {variantBoard.arr.length === 0 && <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No sales in range.</div>}
+            <PanelHead
+              title={`Top ${sellerRollup === 'product' ? 'products' : 'variants'}`}
+              right={
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <SegmentedToggle options={[['variant', 'Variant'], ['product', 'Product']]} value={sellerRollup} onChange={setSellerRollup} size="sm" />
+                  <SegmentedToggle options={['gross', 'units']} value={variantMetric} onChange={setVariantMetric} size="sm" />
+                </div>
+              } />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {variantBoard.arr.length === 0 && <div style={EMPTY}>No sales in range.</div>}
               {variantBoard.arr.map(v => {
-                const m = variantMetric === 'units' ? v.units : v.gross;
+                const onUnits = variantMetric === 'units';
+                const m = onUnits ? v.units : v.gross;
+                // Both numbers show, but the SELECTED metric is the emphasised one (bright + wider
+                // slot) and the other drops to secondary — otherwise the toggle changes the sort
+                // without changing what the eye reads. ₹ keeps its 78px slot in both states so a
+                // long value never spills into the name column.
                 return (
-                  <div key={v.code} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11.5 }}>
-                      <span style={{ color: 'var(--t1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.label}</span>
-                      <span style={{ color: 'var(--t1)', width: 90, textAlign: 'right' }}>{variantMetric === 'units' ? fmtInt(v.units) : inr(v.gross)}</span>
+                  <div key={v.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={NAME}>{v.label}</span>
+                      <span style={{ ...NUM, color: onUnits ? 'var(--t1-cell)' : 'var(--t3)', fontWeight: onUnits ? 600 : 400, width: onUnits ? 78 : 54 }}>{fmtInt(v.units)}</span>
+                      <span style={{ ...NUM, color: onUnits ? 'var(--t3)' : 'var(--t1-cell)', fontWeight: onUnits ? 400 : 600, width: 78 }}>{inr(v.gross)}</span>
                     </div>
-                    <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
-                      <div style={{ width: `${(m / variantBoard.max) * 100}%`, height: '100%', background: 'var(--accent)' }} />
-                    </div>
+                    <Bar pct={(m / variantBoard.max) * 100} color="linear-gradient(90deg,#4C63F0,#F2CD1A)" />
                   </div>
                 );
               })}
@@ -313,54 +372,60 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* movers */}
-        <div className="so-card">
-          <div className="so-kpi-lbl">Movers <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--t3)' }}>· gross ₹ vs {ppLabel}</span></div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 22, marginTop: 12 }}>
-            {[['Gaining', movers.up, 'var(--green)'], ['Slipping', movers.down, 'var(--red)']].map(([title, list, color]) => (
-              <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
-                {list.length === 0 && <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11.5 }}>—</div>}
-                {list.map(m => (
-                  <div key={m.code} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11.5 }}>
-                    <span style={{ color: 'var(--t1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.label}</span>
-                    <span style={{ color, width: 86, textAlign: 'right' }}>{m.delta >= 0 ? '+' : '−'}{inr(Math.abs(m.delta))}</span>
-                    <span style={{ color: 'var(--t3)', width: 56, textAlign: 'right' }}>{m.pct == null ? 'new' : `${m.pct >= 0 ? '+' : ''}${m.pct.toFixed(0)}%`}</span>
+        {/* ── movers + connector health ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
+
+          <div className="so-card">
+            <PanelHead title="Movers" qual={`· gross ₹ vs ${ppLabel}`} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 22 }}>
+              {[['Gaining', movers.up, STATUS.good], ['Slipping', movers.down, STATUS.bad]].map(([title, list, color]) => (
+                <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
+                  {list.length === 0 && <Nil />}
+                  {list.map(m => (
+                    <div key={m.code} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={NAME}>{m.label}</span>
+                      <span style={{ ...NUM, color, width: 84 }}>{m.delta >= 0 ? '+' : '−'}{inr(Math.abs(m.delta))}</span>
+                      <span style={{ ...NUM, color: 'var(--t5)', width: 52 }}>{m.pct == null ? 'new' : `${m.pct >= 0 ? '+' : ''}${m.pct.toFixed(0)}%`}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="so-card">
+            <PanelHead title="Connector health" right={
+              <a href="/mapping" style={{ fontFamily: 'var(--mono)', fontSize: 10, color: unmappedCount ? 'var(--amber)' : 'var(--t3)', border: `1px solid ${unmappedCount ? 'rgba(245,158,11,.4)' : 'var(--border-ctl)'}`, borderRadius: 'var(--r-pill)', padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                {unmappedCount} unmapped SKU{unmappedCount === 1 ? '' : 's'}{unmappedCount ? ' →' : ''}
+              </a>
+            } />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {health.length === 0 && <div style={EMPTY}>No connectors enabled.</div>}
+              {health.map(c => {
+                const gk = channelGroup(c.name || '');
+                const sc = HEALTH_COLOR[c.statusKey];
+                return (
+                  <div key={c.channel_id} title={c.last_error || ''}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--control)', border: '1px solid var(--border-ctl)', borderRadius: 'var(--r-md)', padding: '6px 10px' }}>
+                    <Swatch color={GROUP_META[gk].color} />
+                    <span style={{ fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t1)' }}>{c.name}</span>
+                    <span className="so-dot" style={{ width: 6, height: 6, background: sc, boxShadow: `0 0 7px 0 ${sc}` }} />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t5)' }}>{ago(c.last_ok_at)}</span>
                   </div>
-                ))}
-              </div>
-            ))}
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        {/* connector health */}
-        <div className="so-card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-            <div className="so-kpi-lbl" style={{ margin: 0 }}>Connector health</div>
-            <a href="/mapping" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: unmappedCount ? 'var(--amber)' : 'var(--t3)', border: `1px solid ${unmappedCount ? 'var(--amber)' : 'var(--border-strong)'}`, borderRadius: 999, padding: '3px 10px' }}>
-              {unmappedCount} unmapped SKU{unmappedCount === 1 ? '' : 's'}{unmappedCount ? ' →' : ''}
-            </a>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {health.length === 0 && <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11.5 }}>No connectors enabled.</div>}
-            {health.map(c => (
-              <div key={c.channel_id} title={c.last_error || ''} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 11px' }}>
-                <span className="so-dot" style={{ background: HEALTH_COLOR[c.statusKey] }} />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t1)' }}>{c.name}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--t3)' }}>{ago(c.last_ok_at)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* drill table */}
-        <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
-            <div className="so-kpi-lbl" style={{ margin: 0 }}>Detail</div>
+        {/* ── drill table ── */}
+        <div className="so-card flush">
+          <PanelHead title="Detail" style={{ marginBottom: 0 }} right={
             <SegmentedToggle options={GROUPS.map(g => [g.key, g.label])} value={group} onChange={setGroup} size="sm" />
-          </div>
+          } />
           {table.length === 0 ? (
-            <div style={{ padding: 36, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+            <div style={{ ...EMPTY, padding: 36, textAlign: 'center' }}>
               No sales for this range yet. Pull a channel from <b style={{ color: 'var(--t2)' }}>Connectors</b> or upload a report from <b style={{ color: 'var(--t2)' }}>Uploads</b>.
             </div>
           ) : (
@@ -373,9 +438,17 @@ export default function Dashboard() {
               <tbody>
                 {tblSort.sorted.map(r => (
                   <tr key={r.key}>
-                    <td style={{ color: 'var(--t1)' }}>{r.label}</td>
+                    <td>
+                      {group === 'channel' ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <Swatch color={GROUP_META[channelGroup(r.label)].color} />{r.label}
+                        </span>
+                      ) : group === 'date' ? (
+                        <span style={{ fontFamily: 'var(--mono)', fontVariantNumeric: 'tabular-nums' }}>{r.label}</span>
+                      ) : r.label}
+                    </td>
                     <td className="so-num">{fmtInt(r.units)}</td>
-                    <td className="so-num">{inr(r.gross)}</td>
+                    <td className="so-num bright">{inr(r.gross)}</td>
                   </tr>
                 ))}
               </tbody>

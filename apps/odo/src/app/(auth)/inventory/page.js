@@ -1,12 +1,20 @@
 'use client';
-// Odo — Inventory (S223). Two jobs only: availability watch + history audit.
+// Odo — Inventory (S223; PRISM reskin 2026-07). Two jobs only: availability watch + history audit.
 // Spec: docs/superpowers/specs/2026-07-20-odo-inventory-design.md
+//
+// The reskin is markup + tokens ONLY. Every RPC (`getInventoryStatus`, `getVariants`,
+// `getInventoryHistory`), every argument, and every derived number below is unchanged —
+// including the rollup-over-ALL-variants rule, the worst-variant headline, the `≥` floor
+// durations, `autoExpand`, and `variantLabel` prefix-stripping.
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Combobox } from '@throttle/ui';
+import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea } from 'recharts';
 import { salesGet, fmtInt, istToday, istDaysAgo, downloadCsv } from '../../../lib/api.js';
 import { Kpi, SegmentedToggle, RangePicker, useTableSort, SortHeader } from '../../../components/kit.js';
+import { PageHead, PanelHead, Pill, Nil } from '../../../components/prism.js';
+import { HUE } from '../../../lib/hues.js';
 
 const STATUS_META = {
   oos:   { label: 'Out of stock', color: '#F2545B' },
@@ -30,6 +38,33 @@ function durationLabel(since, now, atFloor) {
   return (atFloor ? '≥ ' : '') + s;
 }
 
+// Headline tallies over a set of status rows. Extracted so the hero KPI row can render on BOTH
+// tabs from the `getInventoryStatus` payload each one already loads — no extra call, no new arg.
+function statusCounts(rows) {
+  const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0, units: 0 };
+  for (const r of rows) {
+    c[r.status] = (c[r.status] || 0) + 1;
+    if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
+    if (r.status !== 'gone') c.units += Number(r.available_qty) || 0;
+  }
+  return c;
+}
+
+// Hero KPI 5-up. This is a STATUS row, so its hues are the STATUS_META colours rather than the
+// generic metric hues — the tile colour has to agree with the dot next to the same word in the
+// table below it.
+function InventoryKpis({ counts, lowThreshold }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
+      <Kpi hue={STATUS_META.oos.color} lbl="Out of stock" val={fmtInt(counts.oos)} sub="live on the website" />
+      <Kpi hue={STATUS_META.low.color} lbl={`Low (< ${lowThreshold})`} val={fmtInt(counts.low)} sub="approaching zero" />
+      <Kpi hue={HUE.returns} lbl="Unbuyable" val={fmtInt(counts.unbuyable)} sub="listing not purchasable" />
+      <Kpi hue={HUE.units} lbl="Units on hand" val={fmtInt(counts.units)} sub="across tracked SKUs" />
+      <Kpi hue={HUE.neutral} lbl="Delisted" val={fmtInt(counts.gone)} sub="gone from the feed" />
+    </div>
+  );
+}
+
 // Product-row availability: one small tick per variant, plus a plain-language summary.
 //
 // The first cut was a full-width proportional bar in saturated red/amber. Two problems: it
@@ -40,6 +75,9 @@ function durationLabel(since, now, atFloor) {
 // Only the exceptional states carry colour. "In stock" is drawn in a muted neutral rather than
 // green, because it isn't news — letting it compete for attention is what made the original
 // jarring. Muted red/amber still read clearly against it without shouting.
+//
+// PRISM note: the ticks are deliberately NOT restyled. The reskin touched the summary's type
+// role (prose → --ui) and the overflow counter's (number → --mono) and nothing else.
 const TICK = {
   oos:  '#C4565B',
   low:  '#B8862F',
@@ -60,16 +98,19 @@ function Availability({ counts, total }) {
 
   return (
     <div style={{ minWidth: 150 }}>
-      <div style={{ display: 'flex', gap: 3, marginBottom: 6, flexWrap: 'wrap', maxWidth: 220 }}>
+      <div style={{ display: 'flex', gap: 3, marginBottom: 6, flexWrap: 'wrap', maxWidth: 220, alignItems: 'center' }}>
         {seq.slice(0, 24).map((k, i) => (
           <span key={i} title={STATUS_META[k].label}
             style={{ width: 9, height: 5, borderRadius: 2, background: TICK[k], flex: '0 0 auto' }} />
         ))}
         {seq.length > 24 && (
-          <span style={{ fontSize: 10, color: 'var(--t3)', lineHeight: '5px' }}>+{seq.length - 24}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t4)', lineHeight: '5px' }}>+{seq.length - 24}</span>
         )}
       </div>
-      <span style={{ fontSize: 11, color: counts.oos ? 'var(--t2)' : 'var(--t3)' }}>{parts.join(' · ')}</span>
+      {/* The summary is a sentence, not a datum — it stays in the UI font (§3.1). */}
+      <span style={{ fontFamily: 'var(--ui)', fontSize: 11.5, color: counts.oos ? 'var(--t2)' : 'var(--t3)' }}>
+        {parts.join(' · ')}
+      </span>
     </div>
   );
 }
@@ -86,8 +127,8 @@ function variantLabel(r) {
 function StatusChip({ status }) {
   const m = STATUS_META[status] || STATUS_META.ok;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t1)' }}>
-      <span style={{ width: 7, height: 7, borderRadius: 99, background: m.color, flex: '0 0 auto' }} />
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t1)' }}>
+      <span className="so-dot" style={{ background: m.color, flex: '0 0 auto' }} />
       {m.label}
     </span>
   );
@@ -97,10 +138,16 @@ export default function InventoryPage() {
   const { session } = useAuth();
   const [tab, setTab] = useState('watch');
   return (
-    <div className="so-page">
-      <SegmentedToggle
-        options={[{ key: 'watch', label: 'Watch' }, { key: 'history', label: 'History' }]}
-        value={tab} onChange={setTab}
+    <div className="so-page" style={{ gap: 12 }}>
+      <PageHead
+        title="Inventory"
+        sub="Availability watch and history audit · Website (Shopify) only"
+        right={
+          <SegmentedToggle
+            options={[{ key: 'watch', label: 'Watch' }, { key: 'history', label: 'History' }]}
+            value={tab} onChange={setTab}
+          />
+        }
       />
       {tab === 'watch' ? <Watch session={session} /> : <History session={session} />}
     </div>
@@ -146,15 +193,7 @@ function Watch({ session }) {
     at_floor: !!(meta.history_start && r.since && new Date(r.since).getTime() <= new Date(meta.history_start).getTime()),
   })), [rows, nameOf, meta.history_start]);
 
-  const counts = useMemo(() => {
-    const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0, units: 0 };
-    for (const r of enriched) {
-      c[r.status] = (c[r.status] || 0) + 1;
-      if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
-      if (r.status !== 'gone') c.units += r.available_qty;
-    }
-    return c;
-  }, [enriched]);
+  const counts = useMemo(() => statusCounts(enriched), [enriched]);
 
   const filtered = useMemo(() => {
     if (filter === 'all') return enriched;
@@ -215,51 +254,61 @@ function Watch({ session }) {
   const autoExpand = filter !== 'all';
   const isOpen = (fam) => touched[fam] !== undefined ? touched[fam] : autoExpand;
 
-  if (loading) return <Spinner />;
+  if (loading) return <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div>;
 
+  // Each filter carries its own colour so the chip row reads as the same vocabulary as the
+  // status dots below it. "Needs attention" is oos+low, so it gets both.
   const FILTERS = [
-    ['attention', `Needs attention (${counts.oos + counts.low})`],
-    ['all', `All (${enriched.length})`],
-    ['oos', `Out of stock (${counts.oos})`],
-    ['low', `Low (${counts.low})`],
-    ['unbuyable', `Unbuyable (${counts.unbuyable})`],
-    ['gone', `Delisted (${counts.gone})`],
+    ['attention', 'Needs attention', counts.oos + counts.low, `linear-gradient(135deg,${STATUS_META.oos.color},${STATUS_META.low.color})`],
+    ['all', 'All', enriched.length, 'var(--t3)'],
+    ['oos', 'Out of stock', counts.oos, STATUS_META.oos.color],
+    ['low', 'Low', counts.low, STATUS_META.low.color],
+    ['unbuyable', 'Unbuyable', counts.unbuyable, HUE.returns],
+    ['gone', 'Delisted', counts.gone, STATUS_META.gone.color],
   ];
+
+  const allOpen = sortedGroups.every(g => isOpen(g.family));
 
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
-        <Kpi lbl="Out of stock" val={fmtInt(counts.oos)} sub="live on the website" />
-        <Kpi lbl={`Low (< ${meta.low_threshold})`} val={fmtInt(counts.low)} sub="approaching zero" />
-        <Kpi lbl="Unbuyable" val={fmtInt(counts.unbuyable)} sub="listing not purchasable" />
-        <Kpi lbl="Units on hand" val={fmtInt(counts.units)} sub="across tracked SKUs" />
-        <Kpi lbl="Delisted" val={fmtInt(counts.gone)} sub="gone from the feed" />
-      </div>
+      <InventoryKpis counts={counts} lowThreshold={meta.low_threshold} />
 
-      <div className="so-card">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 14 }}>
-          {FILTERS.map(([k, lbl]) => (
-            <button key={k} className={`so-chip${filter === k ? ' on' : ''}`} onClick={() => setFilter(k)}>{lbl}</button>
+      <div className="so-card flush" style={{ overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '0 18px 14px' }}>
+          {FILTERS.map(([k, lbl, n, color]) => (
+            <button key={k} className={`so-chip${filter === k ? ' on' : ''}`} onClick={() => setFilter(k)}>
+              <span className="so-swatch" style={{ background: color }} />
+              {lbl}
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: filter === k ? 'inherit' : 'var(--t4)' }}>
+                {fmtInt(n)}
+              </span>
+            </button>
           ))}
           <div style={{ flex: 1 }} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--t3)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={showUnmapped} onChange={e => setShowUnmapped(e.target.checked)} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t3)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showUnmapped} onChange={e => setShowUnmapped(e.target.checked)}
+              style={{ accentColor: 'var(--accent)' }} />
             Show unmapped SKUs
           </label>
-          <button className="so-chip" onClick={() => downloadCsv(
-            sortedGroups.flatMap(g => g.rows).map(r => ({
-              product: r.family, variant: r.variant_name, sku: r.sku,
-              product_code: r.product_code || '', qty: r.available_qty,
-              status: r.status, purchasable: r.purchasable, since: r.since || '',
-            })), 'inventory-watch.csv')}>Export CSV</button>
-          <button className="so-chip" onClick={() => setTouched(
-            Object.fromEntries(sortedGroups.map(g => [g.family, !sortedGroups.every(x => isOpen(x.family))])))}>
-            {sortedGroups.every(g => isOpen(g.family)) ? 'Collapse all' : 'Expand all'}
+          <button className="so-btn ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => downloadCsv(
+              sortedGroups.flatMap(g => g.rows).map(r => ({
+                product: r.family, variant: r.variant_name, sku: r.sku,
+                product_code: r.product_code || '', qty: r.available_qty,
+                status: r.status, purchasable: r.purchasable, since: r.since || '',
+              })), 'inventory-watch.csv')}>
+            <Download size={14} strokeWidth={1.75} />Export CSV
+          </button>
+          <button className="so-btn ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => setTouched(
+              Object.fromEntries(sortedGroups.map(g => [g.family, !sortedGroups.every(x => isOpen(x.family))])))}>
+            {allOpen ? <ChevronRight size={14} strokeWidth={1.75} /> : <ChevronDown size={14} strokeWidth={1.75} />}
+            {allOpen ? 'Collapse all' : 'Expand all'}
           </button>
         </div>
 
         {!showUnmapped && (
-          <p style={{ fontSize: 12, color: 'var(--t3)', margin: '0 0 12px' }}>
+          <p style={{ fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--t3)', padding: '0 18px 12px', margin: 0, maxWidth: 780, lineHeight: 1.6 }}>
             Showing SKUs mapped to a product. Most of the raw Shopify feed is retired or
             non-catalogue variants — turn on <em>Show unmapped</em> to see them, and map the real
             ones in <a href="/mapping" style={{ color: 'var(--accent)' }}>Mapping</a>.
@@ -274,8 +323,7 @@ function Watch({ session }) {
                 <SortHeader k="attention" label="Availability" sort={sort} />
                 <SortHeader k="total" label="Variants" sort={sort} numeric />
                 <SortHeader k="units" label="Units" sort={sort} numeric />
-                <th>Longest out</th>
-                <th style={{ width: 28 }} />
+                <th className="so-num">Longest out</th>
               </tr>
             </thead>
             <tbody>
@@ -285,51 +333,51 @@ function Watch({ session }) {
                   <Fragment key={g.family}>
                     <tr onClick={() => setTouched(t => ({ ...t, [g.family]: !open }))}
                       style={{ cursor: 'pointer' }}>
-                      <td style={{ color: 'var(--t1)', fontWeight: 600 }}>
-                        <span style={{ display: 'inline-block', width: 14, color: 'var(--t3)' }}>
-                          {open ? '▾' : '▸'}
+                      <td style={{ color: 'var(--t1)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {open
+                            ? <ChevronDown size={15} strokeWidth={1.75} color="var(--t3)" style={{ flex: 'none' }} />
+                            : <ChevronRight size={15} strokeWidth={1.75} color="var(--t3)" style={{ flex: 'none' }} />}
+                          {g.family}
                         </span>
-                        {g.family}
                       </td>
                       <td><Availability counts={g.counts} total={g.total} /></td>
                       <td className="so-num">
                         {g.total}
                         {g.shownCount < g.total && (
-                          <span style={{ color: 'var(--t3)', fontSize: 11 }}> · {g.shownCount} shown</span>
+                          <span style={{ color: 'var(--t4)', fontSize: 10.5 }}> · {g.shownCount} shown</span>
                         )}
                       </td>
-                      <td className="so-num">{fmtInt(g.units)}</td>
-                      <td className="so-num" style={{ color: g.oldest ? 'var(--t2)' : 'var(--t3)' }}>
+                      <td className="so-num bright">{fmtInt(g.units)}</td>
+                      <td className="so-num" style={{ color: g.oldest ? 'var(--t2-cell)' : undefined }}>
                         {g.oldest ? durationLabel(new Date(g.oldest).toISOString(), now,
-                          meta.history_start && g.oldest <= new Date(meta.history_start).getTime()) : '—'}
+                          meta.history_start && g.oldest <= new Date(meta.history_start).getTime()) : <Nil />}
                       </td>
-                      <td />
                     </tr>
                     {open && g.rows.map(r => (
                       <tr key={`${r.channel_id}:${r.sku}`} style={{ background: 'var(--surface2)' }}>
-                        <td style={{ paddingLeft: 34, color: 'var(--t2)' }}>
+                        <td style={{ paddingLeft: 42, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
                           {variantLabel(r)}
                           {!r.purchasable && r.status !== 'gone' && (
-                            <span style={{ marginLeft: 8, fontSize: 10, letterSpacing: '.08em', color: '#F59E0B' }}>UNBUYABLE</span>
+                            <Pill color={STATUS_META.low.color} style={{ marginLeft: 8 }}>Unbuyable</Pill>
                           )}
-                          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{r.sku}</div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t4)', marginTop: 2 }}>{r.sku}</div>
                         </td>
                         <td><StatusChip status={r.status} /></td>
                         <td />
-                        <td className="so-num">{r.status === 'gone' ? '—' : fmtInt(r.available_qty)}</td>
+                        <td className="so-num">{r.status === 'gone' ? <Nil /> : fmtInt(r.available_qty)}</td>
                         <td className="so-num" style={{ color: 'var(--t2)' }}>
                           {r.status === 'gone'
-                            ? <span style={{ fontSize: 11, color: 'var(--t3)' }}>last seen {istTime(r.last_seen_at)}</span>
+                            ? <span style={{ fontSize: 10.5, color: 'var(--t4)' }}>last seen {istTime(r.last_seen_at)}</span>
                             : durationLabel(r.since, now, r.at_floor)}
                         </td>
-                        <td />
                       </tr>
                     ))}
                   </Fragment>
                 );
               })}
               {!sortedGroups.length && (
-                <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 22, textAlign: 'center' }}>
+                <tr><td colSpan={5} style={{ color: 'var(--t3)', padding: 22, textAlign: 'center' }}>
                   Nothing in this filter.
                 </td></tr>
               )}
@@ -337,9 +385,9 @@ function Watch({ session }) {
           </table>
         </div>
 
-        <p style={{ fontSize: 11, color: 'var(--t3)', margin: '14px 0 0' }}>
+        <p style={{ fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--t3)', padding: '14px 18px 16px', margin: 0, lineHeight: 1.6 }}>
           Website (Shopify) only — Amazon is not wired yet. Durations shown with ≥ reach the start
-          of the history we hold ({meta.history_start ? istTime(meta.history_start) : '—'}) and are
+          of the history we hold (<span style={{ fontFamily: 'var(--mono)', color: 'var(--t4)' }}>{meta.history_start ? istTime(meta.history_start) : '—'}</span>) and are
           therefore a floor, not an exact age.
         </p>
       </div>
@@ -352,6 +400,7 @@ function Watch({ session }) {
 function History({ session }) {
   const [variants, setVariants] = useState([]);
   const [statusRows, setStatusRows] = useState([]);
+  const [lowThreshold, setLowThreshold] = useState(10);
   const [sku, setSku] = useState('');
   const [from, setFrom] = useState(istDaysAgo(30));
   const [to, setTo] = useState(istToday());
@@ -367,6 +416,7 @@ function History({ session }) {
       setVariants(Array.isArray(v?.rows) ? v.rows : []);
       const sr = Array.isArray(s?.rows) ? s.rows : [];
       setStatusRows(sr);
+      setLowThreshold(Number(s?.low_threshold) || 10);
       if (!sku && sr.length) setSku(sr[0].sku);
     });
   }, [session]);
@@ -387,6 +437,11 @@ function History({ session }) {
     label: r.product_code ? (famOf[r.product_code] || r.product_code) : r.sku,
     hint: r.sku,
   })), [statusRows, famOf]);
+
+  // Same headline row as Watch, off the getInventoryStatus payload this tab already loads.
+  const counts = useMemo(() => statusCounts(statusRows), [statusRows]);
+
+  const picked = useMemo(() => options.find(o => o.value === sku), [options, sku]);
 
   const chart = useMemo(() => rows.map(r => ({
     t: new Date(r.captured_at).getTime(),
@@ -422,42 +477,52 @@ function History({ session }) {
           </div>
         } />
 
-      {loading ? <Spinner /> : (
+      {statusRows.length > 0 && <InventoryKpis counts={counts} lowThreshold={lowThreshold} />}
+
+      {loading ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
           <div className="so-card">
-            <h3 style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--t2)' }}>Stock level</h3>
-            {chart.length ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={chart}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--t3)' }} minTickGap={40} />
-                  <YAxis tick={{ fontSize: 10, fill: 'var(--t3)' }} allowDecimals={false} />
-                  <Tooltip
-                    contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }}
-                    formatter={(v) => [fmtInt(v), 'Units']}
-                  />
-                  {oosBands.map(([a, b], i) => (
-                    <ReferenceArea key={i} x1={chart.find(p => p.t === a)?.label}
-                      x2={chart.find(p => p.t === b)?.label}
-                      fill="#F2545B" fillOpacity={0.12} strokeOpacity={0} />
-                  ))}
-                  <Area type="stepAfter" dataKey="qty" stroke="var(--accent)"
-                    fill="var(--accent)" fillOpacity={0.14} strokeWidth={2} dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <p style={{ color: 'var(--t3)', fontSize: 13, padding: '18px 0' }}>
-                No readings for this SKU in the selected range.
-              </p>
-            )}
-            <p style={{ fontSize: 11, color: 'var(--t3)', margin: '12px 0 0' }}>
+            <PanelHead title="Stock level" qual={picked ? `· ${picked.label}` : undefined} />
+            {/* The chart sits in a plain wrapper so .so-card's backdrop-filter is never its
+                DIRECT parent (§7) — and the stepAfter line + red oosBands are unchanged. */}
+            <div>
+              {chart.length ? (
+                <ResponsiveContainer width="100%" height={260}>
+                  <AreaChart data={chart}>
+                    <CartesianGrid strokeDasharray="4 4" stroke="var(--row-border)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--t3)', fontFamily: 'var(--mono)' }}
+                      minTickGap={40} axisLine={{ stroke: 'var(--border-table)' }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: 'var(--t3)', fontFamily: 'var(--mono)' }}
+                      allowDecimals={false} axisLine={false} tickLine={false} width={44} />
+                    <Tooltip
+                      contentStyle={{ background: 'var(--surface-solid)', border: '1px solid var(--border-ctl)',
+                        borderRadius: 10, fontFamily: 'var(--mono)', fontSize: 11.5 }}
+                      labelStyle={{ color: 'var(--t3)' }} itemStyle={{ color: 'var(--t1)' }}
+                      formatter={(v) => [fmtInt(v), 'Units']}
+                    />
+                    {oosBands.map(([a, b], i) => (
+                      <ReferenceArea key={i} x1={chart.find(p => p.t === a)?.label}
+                        x2={chart.find(p => p.t === b)?.label}
+                        fill="#F2545B" fillOpacity={0.12} strokeOpacity={0} />
+                    ))}
+                    <Area type="stepAfter" dataKey="qty" stroke="var(--accent)"
+                      fill="var(--accent)" fillOpacity={0.14} strokeWidth={2} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <p style={{ fontFamily: 'var(--ui)', color: 'var(--t3)', fontSize: 13, padding: '18px 0' }}>
+                  No readings for this SKU in the selected range.
+                </p>
+              )}
+            </div>
+            <p style={{ fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--t3)', margin: '12px 0 0', lineHeight: 1.6 }}>
               Shaded bands are out-of-stock periods. Shopify exposes no historical inventory API,
               so this record begins when capture started — there is no earlier data to backfill.
             </p>
           </div>
 
-          <div className="so-card">
-            <h3 style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--t2)' }}>Changes ({flips.length})</h3>
+          <div className="so-card flush" style={{ overflow: 'hidden' }}>
+            <PanelHead title="Changes" qual={`(${flips.length})`} style={{ marginBottom: 0 }} />
             <div style={{ overflowX: 'auto' }}>
               <table className="so-table">
                 <thead>
@@ -466,10 +531,12 @@ function History({ session }) {
                 <tbody>
                   {flips.map((f, i) => (
                     <tr key={i}>
-                      <td style={{ fontSize: 12 }}>{istTime(f.captured_at)}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2-cell)', whiteSpace: 'nowrap' }}>
+                        {istTime(f.captured_at)}
+                      </td>
                       <td><StatusChip status={f.prev_status} /></td>
                       <td><StatusChip status={f.status} /></td>
-                      <td className="so-num">{fmtInt(Number(f.available_qty) || 0)}</td>
+                      <td className="so-num bright">{fmtInt(Number(f.available_qty) || 0)}</td>
                     </tr>
                   ))}
                   {!flips.length && (

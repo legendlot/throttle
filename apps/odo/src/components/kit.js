@@ -4,6 +4,7 @@
 // Channels) renders these, so the controls + tiles look and behave identically everywhere.
 import { useState } from 'react';
 import { rangePresets, istToday } from '../lib/api.js';
+import { HUE, hueStyle } from '../lib/hues.js';
 
 const PRESETS = rangePresets();
 
@@ -53,7 +54,7 @@ export function SortHeader({ k, label, sort, numeric, style }) {
   return (
     <th className={numeric ? 'so-num' : undefined} onClick={() => sort.toggle(k)}
       style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', ...style }} title="Click to sort">
-      {label}<span style={{ marginLeft: 3, fontSize: 9, opacity: active ? 0.9 : 0.3 }}>{active ? (sort.sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      {label}<span style={{ marginLeft: 4, fontSize: 8, opacity: active ? 0.9 : 0.28, color: active ? 'var(--accent)' : 'inherit' }}>{active ? (sort.sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
     </th>
   );
 }
@@ -69,10 +70,10 @@ export function Delta({ now, prev, pct: pctIn, tone = 'pos' }) {
   }
   if (!isFinite(pct)) return null;
   const up = pct >= 0;
-  const color = tone === 'neutral' ? 'var(--t3)' : (up ? 'var(--green)' : 'var(--red)');
+  const color = tone === 'neutral' ? 'var(--t4)' : (up ? 'var(--green-fg)' : 'var(--red)');
   return (
-    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-      {up ? '↗' : '↘'} {Math.abs(pct).toFixed(0)}%
+    <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 500, color, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+      {up ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%
     </span>
   );
 }
@@ -91,28 +92,28 @@ export function Spark({ data, color = 'var(--accent)', height = 30 }) {
 }
 
 // ── KPI tile ───────────────────────────────────────────────────────────────
-// One tile used everywhere. Optional spark (sparkline data) + sparkColor; optional badge slot;
-// deltaNote shows what the delta compares against.
-export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkColor = 'var(--accent)', deltaNote, accent }) {
-  // Left accent: explicit `accent` wins; else tone-aware (green up / red down) when there's a
-  // directional delta; else a neutral edge. Gives the Redline at-a-glance read without per-tile config.
-  let acc = accent;
-  if (!acc) {
-    let p = pct;
-    if (p == null && prev != null && isFinite(prev) && prev !== 0) p = (now - prev) / Math.abs(prev) * 100;
-    acc = (tone !== 'neutral' && p != null && isFinite(p)) ? (p >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--border-strong)';
-  }
+// The signature Prism element. EVERY colour on the tile derives from one metric `hue`,
+// so a new metric needs no new tokens — pass a hex (see lib/hues.js HUE) and the swatch,
+// tint, border and glow all follow.
+//   hero  (default) — 5-up rows: glow + optional sparkline
+//   dense (dense)   — 8-up / 4-up rows: tuned down, no glow, mono sub-line
+// Optional spark (sparkline data) + sparkColor; optional badge slot; deltaNote shows
+// what the delta compares against. `accent` is accepted for back-compat and, when it's a
+// hex, is used as the hue (older call sites passed a semantic colour there).
+export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkColor, deltaNote, accent, hue, dense }) {
+  const h = hue || (typeof accent === 'string' && accent.startsWith('#') ? accent : HUE.neutral);
   return (
-    <div className="so-stat" style={{ '--stat-accent': acc }}>
+    <div className={`so-stat${dense ? ' dense' : ''}`} style={hueStyle(h)}>
       <div className="so-stat-top">
-        <div className="so-stat-lbl">{lbl}</div>
+        <span className="so-stat-swatch" />
+        <span className="so-stat-lbl">{lbl}</span>
+        {badge}
         <Delta now={now} prev={prev} pct={pct} tone={tone} />
       </div>
       <span className="so-stat-val">{val}</span>
       {sub && <div className="so-stat-sub">{sub}</div>}
-      {spark && <Spark data={spark} color={sparkColor} />}
-      {deltaNote && <div className="so-stat-sub" style={{ fontSize: 9.5 }}>{deltaNote}</div>}
-      {badge}
+      {deltaNote && <div className="so-stat-sub">{deltaNote}</div>}
+      {spark && <div style={{ marginTop: 8 }}><Spark data={spark} color={sparkColor || h} height={28} /></div>}
     </div>
   );
 }
@@ -122,10 +123,10 @@ export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkCo
 export function SegmentedToggle({ options, value, onChange, size = 'md' }) {
   const opts = (options || []).map(o =>
     Array.isArray(o) ? { key: o[0], label: o[1] } : (typeof o === 'object' ? o : { key: o, label: o }));
-  const pad = size === 'sm' ? '5px 9px' : '6px 11px';
-  const fs = size === 'sm' ? 11 : 12;
+  const pad = size === 'sm' ? '4px 10px' : '6px 11px';
+  const fs = size === 'sm' ? 10 : 11;
   return (
-    <div className="so-seg">
+    <div className={`so-seg${size === 'sm' ? ' inpanel' : ''}`}>
       {opts.map(o => (
         <button key={o.key} className={value === o.key ? 'on' : ''} onClick={() => onChange(o.key)}
           style={{ padding: pad, fontSize: fs, textTransform: o.label === o.key ? 'capitalize' : 'none' }}>
@@ -142,12 +143,13 @@ export function SegmentedToggle({ options, value, onChange, size = 'md' }) {
 export function RangePicker({ from, to, onChange, right }) {
   const activePreset = PRESETS.find(p => p.from === from && p.to === to)?.key || '';
   // Sticky filter bar: pins to the top of the scrolling area (.so-scroll) so the range controls
-  // stay reachable while the page scrolls. top:-26px cancels .so-scroll's 26px top padding so the
-  // bar pins FLUSH under the app header (top:0 would pin at the padding edge, leaving a 26px gap
-  // where cards peek through). Opaque --bg + bottom border so content scrolls under a clean edge;
-  // z-index above cards but below portal popovers (.so-pop = 40).
+  // stay reachable while the page scrolls. top:-22px cancels .so-scroll's 22px top padding so the
+  // bar pins FLUSH under the app header (top:0 would pin at the padding edge, leaving a gap where
+  // cards peek through). It stays a PAGE-LEVEL header — never nest it inside a .so-card.
+  // Near-opaque canvas tint + blur so content scrolls under a clean edge without showing a flat
+  // black band across the canvas glow; z-index above cards but below portal popovers (.so-pop = 40).
   return (
-    <div style={{ position: 'sticky', top: -26, zIndex: 30, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+    <div style={{ position: 'sticky', top: -22, zIndex: 30, background: 'rgba(8,9,12,.86)', backdropFilter: 'blur(8px)', borderBottom: '1px solid var(--row-border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
       <div className="so-seg">
         {PRESETS.map(p => (
           <button key={p.key} className={activePreset === p.key ? 'on' : ''}
@@ -158,7 +160,7 @@ export function RangePicker({ from, to, onChange, right }) {
       </div>
       <input className="so-input" type="date" value={from} max={to}
         onChange={e => onChange({ from: e.target.value, to, preset: '' })} />
-      <span style={{ color: 'var(--t3)' }}>→</span>
+      <span style={{ color: 'var(--t5)', fontFamily: 'var(--mono)' }}>→</span>
       <input className="so-input" type="date" value={to} min={from} max={istToday()}
         onChange={e => onChange({ from, to: e.target.value, preset: '' })} />
       {right && <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>{right}</div>}
@@ -172,11 +174,16 @@ export function RangePicker({ from, to, onChange, right }) {
 export function SettledBadge({ pct }) {
   if (pct == null) return null;
   const glyph = pct >= 80 ? '●' : pct >= 40 ? '◐' : '○';
-  const color = pct >= 80 ? 'var(--green)' : pct >= 40 ? '#d9a441' : 'var(--t3)';
+  const color = pct >= 80 ? 'var(--green-fg)' : pct >= 40 ? '#F59E0B' : 'var(--t3)';
+  const bd = pct >= 80 ? 'rgba(52,211,153,.35)' : pct >= 40 ? 'rgba(245,158,11,.35)' : 'var(--border-ctl)';
   return (
     <span
       title={`${pct}% of this period's GST is confirmed by marketplace settlement. The rest is estimated live at 18% and sharpens as settlement posts (marketplace events can lag the sale by up to ~4 weeks). Net revenue itself is live regardless.`}
-      style={{ fontFamily: 'var(--mono)', fontSize: 11, color, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      // Keep the word "settled". The tile's top row also carries the period <Delta> (e.g. "▲ 8%"),
+      // so a bare "◐ 62%" next to it reads as a second delta — two unrelated percentages in the
+      // same mono ramp. The word is what disambiguates them; the title alone isn't enough.
+      style={{ fontFamily: 'var(--mono)', fontSize: 9, color, border: `1px solid ${bd}`, borderRadius: 999,
+        padding: '1px 6px', display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
       {glyph} {pct}% settled
     </span>
   );

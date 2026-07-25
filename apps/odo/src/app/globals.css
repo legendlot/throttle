@@ -144,11 +144,17 @@ button { font-family: inherit; }
 .so-page { display: flex; flex-direction: column; gap: 16px; max-width: 1320px; animation: ofade .22s ease; }
 
 /* ── sidebar nav ── */
+/* The rail's scroller carries NO horizontal padding — the items do (.so-nav margin). `overflow-y:auto`
+   forces `overflow-x` to compute to `auto`, so a scroller with side padding would clip the active
+   item's accent bar, which deliberately bleeds 12px off the item's left edge. Keep the gutter on the
+   items, not the scroller. */
+.so-navscroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 0 10px; }
 .so-navgroup { font-family: var(--mono); font-size: 9px; letter-spacing: .16em; color: var(--t5);
-  text-transform: uppercase; padding: 14px 10px 6px; }
-.so-navrule { height: 1px; background: var(--row-border); margin: 12px 6px 10px; }
-.so-nav { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px;
-  border: none; background: transparent; border-radius: var(--r-lg); margin-bottom: 2px; text-align: left;
+  text-transform: uppercase; padding: 13px 10px 5px; margin: 0 12px; }
+.so-navrule { height: 1px; background: var(--row-border); margin: 12px 18px 10px; }
+.so-nav { position: relative; display: flex; align-items: center; gap: 11px; width: calc(100% - 24px);
+  padding: 8px 10px; border: none; background: transparent; border-radius: var(--r-lg);
+  margin: 0 12px 2px; text-align: left;
   font-family: var(--ui); font-size: 13px; font-weight: 500; color: var(--t2); cursor: pointer;
   transition: background .14s, color .14s; }
 .so-nav:hover { background: rgba(255,255,255,.05); color: var(--t1); }
@@ -189,9 +195,14 @@ button { font-family: inherit; }
 .so-stat.dense .so-stat-swatch { width: 8px; height: 8px; box-shadow: none; }
 .so-stat-lbl { font-family: var(--mono); font-size: 9px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--t2); line-height: 1.3; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.so-stat-val { font-family: var(--cond); font-size: 25px; font-weight: 800; color: var(--t1); letter-spacing: -0.01em;
-  line-height: 1.15; margin-top: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.so-stat.dense .so-stat-val { font-size: 21.5px; font-weight: 700; margin-top: 9px; }
+/* The KPI rows are fixed 5-up / 4-up grids (§3.4/§8), and `.so-stat-val` is nowrap+ellipsis — so on a
+   narrow window a long value like ₹1,23,45,678 would SILENTLY TRUNCATE rather than the grid reflowing.
+   Silently-wrong currency is the worst failure mode on this app, so the value scales with the viewport
+   and only falls back to the ellipsis in the extreme. clamp()'s upper bound is the spec size, so at
+   normal desktop widths nothing changes. */
+.so-stat-val { font-family: var(--cond); font-size: clamp(17px, 1.62vw, 25px); font-weight: 800; color: var(--t1);
+  letter-spacing: -0.01em; line-height: 1.15; margin-top: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.so-stat.dense .so-stat-val { font-size: clamp(15px, 1.4vw, 21.5px); font-weight: 700; margin-top: 9px; }
 .so-stat-sub { font-family: var(--mono); font-size: 9.5px; color: var(--t4); margin-top: 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -214,9 +225,12 @@ button { font-family: inherit; }
 /* ── data grid — names in the UI font, everything numeric in mono tabular ── */
 .so-table { width: 100%; border-collapse: collapse; font-family: var(--ui); font-size: 12.5px; }
 .so-table thead tr { background: rgba(255,255,255,.02); }
+/* NB no `cursor:pointer` here — only a genuinely sortable header gets one, and <SortHeader>
+   sets it inline. The old global rule made every static header (P&L months, Products channels)
+   look clickable when nothing happens on click. */
 .so-table th { text-align: left; padding: 8px 14px; color: var(--t3); font-weight: 400; font-size: 9.5px;
   letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--border-table);
-  white-space: nowrap; cursor: pointer; user-select: none; font-family: var(--mono); }
+  white-space: nowrap; user-select: none; font-family: var(--mono); }
 .so-table td { padding: 9px 14px; border-bottom: 1px solid var(--row-border); color: var(--t2); }
 .so-table td:first-child { color: var(--t1); }
 .so-table tr:last-child td { border-bottom: none; }

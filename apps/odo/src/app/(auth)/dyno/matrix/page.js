@@ -2,13 +2,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
+import { RefreshCw } from 'lucide-react';
 import { salesGet, inr } from '../../../../lib/api.js';
-import { SegmentedToggle } from '../../../../components/kit.js';
+import { Kpi, SegmentedToggle } from '../../../../components/kit.js';
+import { PageHead, PanelHead } from '../../../../components/prism.js';
+import { HUE } from '../../../../lib/hues.js';
 import { DynoTabs } from '../tabs.js';
 
 // Dyno — Matrix (coverage) view. Strategic altitude on the SAME data the board reads: a
 // per-product angle × segment bingo card showing what's alive, dead, or never tried. Pure
 // client-side pivot over getDynoBoard — no new pipeline (brief §2). V1 = read-only render.
+//
+// Deliberately does NOT carry the board's operational chrome — no spend split, no committed/
+// ceiling budget bar, no win/kill counters. The board owns that altitude; this view owns coverage.
 
 const RECENT_DAYS = 3;
 const GATE_INR = 6500;               // "competent execution" spend gate (mirror of the board)
@@ -17,6 +23,9 @@ const SEGMENTS = ['Kidult', 'Parent', 'Family', 'Gifter'];   // fixed 4 columns,
 const N = (v) => Number(v || 0);
 const nn = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };   // null-safe number
 const norm = (s) => String(s || '').trim().toLowerCase();
+// Tint helper — the STATE colours are CSS custom properties as often as hexes, so string-concat
+// alpha (`var(--green)10`) produced invalid CSS. color-mix accepts both forms.
+const alpha = (c, a) => `color-mix(in srgb, ${c} ${Math.round(a * 100)}%, transparent)`;
 
 // Cell state → dot + colour (maps to the verdict vocabulary, brief §3C/§4).
 const STATE = {
@@ -121,33 +130,33 @@ export default function DynoMatrixPage() {
     return s;
   }, [visible, rows, canon, win]);
 
-  if (!data && !err) return <div style={{ padding: 40 }}><Spinner /></div>;
+  if (!data && !err) return <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div>;
   const coveragePct = stats.cells > 0 ? Math.round((stats.covered / stats.cells) * 100) : 0;
 
   return (
-    <div style={{ padding: '20px 28px 60px', maxWidth: 1400 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 6 }}>
-        <div>
-          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.03em', margin: 0 }}>Dyno</h1>
-          <div style={{ color: 'var(--t2)', fontSize: 12.5, marginTop: 2 }}>
-            Coverage matrix — angle × segment per product. What's alive, dead, or never tried. ROAS shown <b>{win === 'recent' ? `recent ${RECENT_DAYS}d` : 'lifetime'}</b>.
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Stat lbl="Products" val={stats.products} />
-          <Stat lbl="Angles" val={stats.angles.size} />
-          <Stat lbl="Coverage" val={`${coveragePct}%`} sub={`${stats.covered}/${stats.cells}`} />
-          <Stat lbl="Winners" val={stats.winners} tone="var(--green)" />
-          <Stat lbl="Dead" val={stats.dead} tone="var(--t2)" />
-          <button className="so-btn ghost" onClick={() => load()} title="Refresh">↻</button>
-        </div>
+    <div className="so-page" style={{ gap: 14 }}>
+      <PageHead
+        title="Dyno · Matrix"
+        sub={<>Coverage matrix — angle × segment per product. What&apos;s alive, dead, or never tried. ROAS shown <b>{win === 'recent' ? `recent ${RECENT_DAYS}d` : 'lifetime'}</b>.</>}
+        right={<button className="so-btn ghost" onClick={() => load()} title="Refresh"
+          style={{ display: 'inline-flex', alignItems: 'center', padding: '8px 10px' }}>
+          <RefreshCw size={15} strokeWidth={1.75} />
+        </button>}
+      />
+
+      {/* Coverage strip — this view's own read (how much of the grid has been explored). */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+        <Kpi dense hue={HUE.count} lbl="Products" val={stats.products} sub="in this view" />
+        <Kpi dense hue={HUE.derived} lbl="Angles" val={stats.angles.size} sub="product × angle" />
+        <Kpi dense hue={HUE.primary} lbl="Coverage" val={`${coveragePct}%`} sub={`${stats.covered} / ${stats.cells} cells`} />
+        <Kpi dense hue={HUE.units} lbl="Winners" val={stats.winners} sub="winner-track cells" />
+        <Kpi dense hue={HUE.neutral} lbl="Dead" val={stats.dead} sub="two competent kills" />
       </div>
 
       <DynoTabs />
 
-      {/* Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, flexWrap: 'wrap' }}>
+      {/* Controls — this view's own: product · window · filter · legend */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         {products.length > 1 && (
           <SegmentedToggle value={product} onChange={setProduct}
             options={[{ key: 'all', label: 'All products' }, ...products.map(p => ({ key: p, label: p }))]} />
@@ -159,22 +168,24 @@ export default function DynoMatrixPage() {
         <Legend />
       </div>
 
-      {err && <div style={{ background: 'var(--red)15', border: '1px solid var(--red)55', color: 'var(--red)', padding: '9px 13px', borderRadius: 8, fontSize: 12.5, marginBottom: 14 }}>{err}</div>}
+      {err && <div className="so-card" style={{ background: alpha('var(--red)', 0.08), border: '1px solid ' + alpha('var(--red)', 0.34),
+        color: 'var(--red)', padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
       {/* Data-hygiene banner — variants that can't be placed on the matrix. */}
       {unplaceable.total > 0 && (
-        <div style={{ background: '#E8A33D14', border: '1px solid #E8A33D55', color: 'var(--t1)', padding: '9px 13px', borderRadius: 8, fontSize: 12, marginBottom: 14 }}>
-          <b>⚠ {unplaceable.total} variant{unplaceable.total > 1 ? 's' : ''} not on the matrix.</b>{' '}
+        <div className="so-card" style={{ background: 'linear-gradient(150deg,rgba(232,163,61,.11),rgba(20,21,26,.7) 62%)',
+          border: '1px solid rgba(232,163,61,.32)', padding: '11px 15px', fontSize: 12, color: 'var(--t2)' }}>
+          <b style={{ color: 'var(--t1)' }}>⚠ {unplaceable.total} variant{unplaceable.total > 1 ? 's' : ''} not on the matrix.</b>{' '}
           {unplaceable.untaggedAngle > 0 && <span>{unplaceable.untaggedAngle} with no angle tagged. </span>}
           {Object.keys(unplaceable.unmappedSegs).length > 0 && (
             <span>Unmapped segment{Object.keys(unplaceable.unmappedSegs).length > 1 ? 's' : ''}:{' '}
               {Object.entries(unplaceable.unmappedSegs).map(([k, v]) => `${k} (${v})`).join(', ')}. </span>
           )}
-          <span style={{ color: 'var(--t2)' }}>Tag the ad's angle/segment or add the string to <code style={{ fontFamily: 'var(--mono)' }}>sales.lab_segment_map</code>.</span>
+          <span>Tag the ad&apos;s angle/segment or add the string to <code style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>sales.lab_segment_map</code>.</span>
         </div>
       )}
 
-      {visible.length === 0 && <div style={{ color: 'var(--t2)', padding: 30, textAlign: 'center' }}>No variants in this view.</div>}
+      {visible.length === 0 && <div className="so-sub" style={{ padding: 30, textAlign: 'center' }}>No variants in this view.</div>}
 
       {visible.map(p => <ProductMatrix key={p} product={p} rows={rows} canon={canon} win={win} />)}
     </div>
@@ -200,32 +211,34 @@ function ProductMatrix({ product, rows, canon, win }) {
     return m;
   }, [rows, product, angles, canon]);
 
+  const TH = { padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: 9.5, fontWeight: 400, letterSpacing: '0.1em',
+    textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border-table)', whiteSpace: 'nowrap', cursor: 'default' };
+
   return (
-    <div className="so-card" style={{ marginBottom: 18, padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', background: 'var(--t3)0c', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15 }}>{product}</span>
-        <span style={{ fontSize: 11.5, color: 'var(--t2)' }}>{angles.length} angle{angles.length !== 1 ? 's' : ''} tracked</span>
-      </div>
+    <div className="so-card flush" style={{ overflow: 'hidden' }}>
+      <PanelHead title={product} qual={`· ${angles.length} angle${angles.length !== 1 ? 's' : ''} tracked`}
+        style={{ marginBottom: 0 }} />
 
       {angles.length === 0 ? (
-        <div style={{ padding: 26, textAlign: 'center', color: 'var(--t2)', fontSize: 12.5 }}>No angle × segment-tagged variants yet.</div>
+        <div className="so-sub" style={{ padding: 26, textAlign: 'center', fontSize: 12.5 }}>No angle × segment-tagged variants yet.</div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: 620, borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
+          <table className="so-table" style={{ minWidth: 620, tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: 210 }} />
               {SEGMENTS.map((s) => <col key={s} style={{ width: 130 }} />)}
             </colgroup>
             <thead>
-              <tr style={{ color: 'var(--t2)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                <th style={{ padding: '8px 12px', textAlign: 'left' }}>Angle</th>
-                {SEGMENTS.map(s => <th key={s} style={{ padding: '8px', textAlign: 'center' }}>{s}</th>)}
+              <tr>
+                <th style={TH}>Angle</th>
+                {SEGMENTS.map(s => <th key={s} style={{ ...TH, textAlign: 'center' }}>{s}</th>)}
               </tr>
             </thead>
             <tbody>
               {angles.map(a => (
-                <tr key={a} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '8px 12px', fontWeight: 600, color: 'var(--t1)' }}>{a}</td>
+                <tr key={a}>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t1)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a}</td>
                   {SEGMENTS.map(seg => <Cell key={seg} variants={cellMap[a][seg]} win={win} />)}
                 </tr>
               ))}
@@ -233,15 +246,22 @@ function ProductMatrix({ product, rows, canon, win }) {
           </table>
         </div>
       )}
+      <p className="so-qual" style={{ padding: '13px 18px', lineHeight: 1.6 }}>
+        A pure client-side pivot over the same board data — no separate pipeline. Winner beats everything;
+        two competent kills (each past the {inr(GATE_INR)} spend gate) mark a cell dead; otherwise the
+        latest at-bat&apos;s ROAS colours it. Read-only.
+      </p>
     </div>
   );
 }
 
+// One cell of the coverage grid (§6.9): state dot + ROAS + at-bat count on an rgba(hue,.09) wash.
 function Cell({ variants, win }) {
   const st = cellStat(variants, win);
   const meta = STATE[st.state];
+  const TD = { padding: '9px 14px', textAlign: 'center' };
   if (st.state === 'untested') {
-    return <td style={{ padding: '10px 8px', textAlign: 'center', color: 'var(--t3)', fontSize: 16 }}>·</td>;
+    return <td style={{ ...TD, color: 'var(--t5)', fontSize: 16, lineHeight: 1 }}>{STATE.untested.dot}</td>;
   }
   // native tooltip listing every at-bat (creative · window ROAS · verdict) — cheap; rich hover is V2.
   const title = variants.map(v => {
@@ -249,15 +269,13 @@ function Cell({ variants, win }) {
     return `${v.headline || v.ad_name || v.meta_id} · ROAS ${roas == null ? '—' : roas.toFixed(2)} · ${v.verdict || v.computed_status || '—'} · ${inr(v.spend_life)}`;
   }).join('\n');
   return (
-    <td title={title} style={{ padding: '8px', textAlign: 'center', background: meta.color + '10' }}>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-        <span style={{ fontSize: 13 }}>{meta.dot}</span>
-        <b style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: meta.color }}>
-          {st.roas == null ? '—' : st.roas.toFixed(2)}
-        </b>
-        {st.atbats > 1 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, padding: '0 5px', borderRadius: 20, background: 'var(--t3)26', color: 'var(--t2)' }}>×{st.atbats}</span>
-        )}
+    <td title={title} style={{ ...TD, background: alpha(meta.color, 0.09) }}>
+      <div style={{ fontSize: 13, lineHeight: 1.2 }}>{meta.dot}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontVariantNumeric: 'tabular-nums', color: meta.color, marginTop: 3 }}>
+        {st.roas == null ? '—' : st.roas.toFixed(2)}
+      </div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t5)', marginTop: 2 }}>
+        {st.atbats} at-bat{st.atbats === 1 ? '' : 's'}
       </div>
     </td>
   );
@@ -265,22 +283,14 @@ function Cell({ variants, win }) {
 
 function Legend() {
   return (
-    <div style={{ display: 'inline-flex', gap: 12, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap', fontSize: 10.5, color: 'var(--t2)' }}>
+    <div style={{ display: 'inline-flex', gap: 12, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap',
+      fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em', color: 'var(--t3)' }}>
       {['winner', 'inconclusive', 'kill', 'dead'].map(k => (
-        <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <span style={{ fontSize: 12 }}>{STATE[k].dot}</span>{STATE[k].label}
         </span>
       ))}
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ fontSize: 13 }}>·</span>Untested</span>
-    </div>
-  );
-}
-
-function Stat({ lbl, val, sub, tone = 'var(--t1)' }) {
-  return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 700, color: tone, lineHeight: 1 }}>{val}</div>
-      <div style={{ fontSize: 10.5, color: 'var(--t2)', marginTop: 2 }}>{lbl}{sub ? <span style={{ color: 'var(--t3)' }}> · {sub}</span> : ''}</div>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ fontSize: 13 }}>{STATE.untested.dot}</span>{STATE.untested.label}</span>
     </div>
   );
 }

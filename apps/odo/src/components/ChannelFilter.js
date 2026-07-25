@@ -2,6 +2,7 @@
 // Grouped multi-select channel filter — collapses the dashboard's chip-wall into one pill.
 // Channels are grouped by family; a family header toggles its whole group. Empty value = all.
 import { useState, useRef, useEffect } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { FAMILY_ORDER, FAMILIES, familyOf } from '../lib/families.js';
 
 export default function ChannelFilter({ channels, value, onChange }) {
@@ -28,13 +29,20 @@ export default function ChannelFilter({ channels, value, onChange }) {
     onChange(allOn ? sel.filter(x => !ids.includes(x)) : [...new Set([...sel, ...ids])]);
   };
 
-  const label = isAll ? 'All channels' : `${sel.length} channel${sel.length > 1 ? 's' : ''}`;
+  // The count is a NUMBER — mono, per the type rule. Everything around it is prose, so it stays
+  // in the UI font rather than setting the whole label in mono.
+  const label = isAll
+    ? 'All channels'
+    : <><span style={{ fontFamily: 'var(--mono)', fontVariantNumeric: 'tabular-nums' }}>{sel.length}</span>{` channel${sel.length > 1 ? 's' : ''}`}</>;
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
+      {/* .so-btn already carries the UI font, weight and no letter-spacing — only the selection
+          state (accent border once a subset is picked) is worth overriding here. */}
       <button className="so-btn ghost" onClick={() => setOpen(o => !o)}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--ui)', fontWeight: 500, borderColor: isAll ? 'var(--border-strong)' : 'var(--accent)', color: isAll ? 'var(--t2)' : 'var(--t1)' }}>
-        {label} <span style={{ fontSize: 10, color: 'var(--t3)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+        style={{ display: 'flex', alignItems: 'center', gap: 7, borderColor: isAll ? 'var(--border-strong)' : 'var(--accent-bd)', color: isAll ? 'var(--t2)' : 'var(--t1)' }}>
+        {label}
+        <ChevronDown size={14} strokeWidth={1.75} style={{ color: 'var(--t3)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
       </button>
       {open && (
         <div className="so-pop" style={{ top: 'calc(100% + 6px)', right: 0, width: 264, maxHeight: 400, overflowY: 'auto' }}>
