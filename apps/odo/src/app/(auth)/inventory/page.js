@@ -5,7 +5,8 @@
 // The reskin is markup + tokens ONLY. Every RPC (`getInventoryStatus`, `getVariants`,
 // `getInventoryHistory`), every argument, and every derived number below is unchanged —
 // including the rollup-over-ALL-variants rule, the worst-variant headline, the `≥` floor
-// durations, `autoExpand`, and `variantLabel` prefix-stripping.
+// durations and `variantLabel` prefix-stripping. (The old `autoExpand` rule was retired
+// 2026-07-25 — groups now default to COLLAPSED on every filter; see `isOpen` below.)
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Combobox } from '@throttle/ui';
@@ -249,10 +250,13 @@ function Watch({ session }) {
   });
   const sortedGroups = sort.sorted;
 
-  // With a filter on, every visible child already matches — collapsed rows would hide exactly
-  // what was asked for, so open them. Manual toggles still win via `touched`.
-  const autoExpand = filter !== 'all';
-  const isOpen = (fam) => touched[fam] !== undefined ? touched[fam] : autoExpand;
+  // COLLAPSED IS THE DEFAULT, on every filter (Afshaan, 2026-07-25).
+  // This replaces the old `autoExpand = filter !== 'all'` rule, whose reasoning was that a filter
+  // implies you want to see the matching variants. In practice the product list is long enough
+  // that auto-expanding buries the product-level rollup — which is the row you actually scan —
+  // under its own children. Open what you need from the master toggle in the Product header, or
+  // per product. Manual toggles still win via `touched`.
+  const isOpen = (fam) => touched[fam] === true;
 
   if (loading) return <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div>;
 
@@ -267,7 +271,10 @@ function Watch({ session }) {
     ['gone', 'Delisted', counts.gone, STATUS_META.gone.color],
   ];
 
-  const allOpen = sortedGroups.every(g => isOpen(g.family));
+  // `every` on an empty array is true, which would label the master toggle "Collapse all" over an
+  // empty table — require at least one group.
+  const allOpen = sortedGroups.length > 0 && sortedGroups.every(g => isOpen(g.family));
+  const toggleAll = () => setTouched(Object.fromEntries(sortedGroups.map(g => [g.family, !allOpen])));
 
   return (
     <>
@@ -299,12 +306,8 @@ function Watch({ session }) {
               })), 'inventory-watch.csv')}>
             <Download size={14} strokeWidth={1.75} />Export CSV
           </button>
-          <button className="so-btn ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            onClick={() => setTouched(
-              Object.fromEntries(sortedGroups.map(g => [g.family, !sortedGroups.every(x => isOpen(x.family))])))}>
-            {allOpen ? <ChevronRight size={14} strokeWidth={1.75} /> : <ChevronDown size={14} strokeWidth={1.75} />}
-            {allOpen ? 'Collapse all' : 'Expand all'}
-          </button>
+          {/* Expand/collapse-all lives in the Product column header, not out here — see the table
+              head below. It belongs beside the column it acts on, at the start of the reading line. */}
         </div>
 
         {!showUnmapped && (
@@ -319,7 +322,26 @@ function Watch({ session }) {
           <table className="so-table">
             <thead>
               <tr>
-                <SortHeader k="family" label="Product" sort={sort} />
+                {/* Master expand/collapse sits IN the Product header, aligned with the per-row
+                    chevrons directly beneath it, so the whole column reads as one control. The
+                    chevron mirrors the row convention (down = open) rather than naming the action.
+                    stopPropagation keeps the header's own click free for sorting. */}
+                <SortHeader k="family" sort={sort} label={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <span role="button" tabIndex={0}
+                      title={allOpen ? 'Collapse all products' : 'Expand all products'}
+                      aria-label={allOpen ? 'Collapse all products' : 'Expand all products'}
+                      onClick={(e) => { e.stopPropagation(); toggleAll(); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleAll(); } }}
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 19, height: 19, borderRadius: 5, cursor: 'pointer',
+                        background: 'var(--control)', border: '1px solid var(--border-ctl)',
+                        color: allOpen ? 'var(--accent)' : 'var(--t2)' }}>
+                      {allOpen ? <ChevronDown size={13} strokeWidth={2} /> : <ChevronRight size={13} strokeWidth={2} />}
+                    </span>
+                    Product
+                  </span>
+                } />
                 <SortHeader k="attention" label="Availability" sort={sort} />
                 <SortHeader k="total" label="Variants" sort={sort} numeric />
                 <SortHeader k="units" label="Units" sort={sort} numeric />
