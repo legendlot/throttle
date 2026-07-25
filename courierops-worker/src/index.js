@@ -1,5 +1,6 @@
 import { loginB2B, trackLrn } from './adapters/delhivery.js';
 import { TERMINAL_STAGES, mergeCheckpoint } from './normalize.js';
+import { handleDelhiveryScanPush } from './webhook.js';
 
 const SUPABASE_URL = 'https://jkxcnjabmrkteanzoofj.supabase.co';
 // Each LRN is its OWN subrequest now (B2B has no bulk track). Budget per run: 1 select + 1 login +
@@ -86,5 +87,26 @@ export default {
   async scheduled(event, env, ctx) {
     try { await sweep(env); }
     catch (e) { console.error('courierops cron failed:', e?.message || e); }
+  },
+
+  // courierops was cron-only until S233. It now also terminates the direct-courier scan webhooks
+  // (its own wrangler header always earmarked "webhooks = V2"). Only the ScanPush routes exist —
+  // there is no general HTTP surface here, and anything unrouted is a 404.
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({
+        ok: true,
+        scanpush: env.DELHIVERY_WEBHOOK_TOKEN ? 'configured' : 'inert',
+        apply: String(env.DELHIVERY_SCANPUSH_APPLY || '') === 'true' ? 'on' : 'discovery',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    // `-dev` is the non-production target offered to Delhivery for their own testing; same handler,
+    // same auth, and it is harmless because discovery mode writes nothing downstream either way.
+    if (url.pathname === '/webhooks/delhivery' || url.pathname === '/webhooks/delhivery-dev') {
+      return handleDelhiveryScanPush(request, env, ctx);
+    }
+    return new Response(JSON.stringify({ error: 'not_found' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } });
   },
 };
