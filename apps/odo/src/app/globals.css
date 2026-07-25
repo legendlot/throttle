@@ -1,36 +1,88 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* ════════════════════════════════════════════════════════════
    ODO — consolidated cross-channel sales dashboard (odo.legendoftoys.com).
-   Dark telemetry theme, shared with the LOT system family.
-   Brand: LOT yellow #F2CD1A + odometer blue #213CE2 (from the logo).
+   PRISM theme (2026-07): translucent blurred panels over a lit near-black canvas.
+   Panels separate by LIGHT, not by border weight — do not flatten back to one
+   opaque near-black, and do not raise panel opacity above .7.
+
+   Type has three roles and they must not be mixed:
+     Sora            — display: h1, KPI values, panel titles, wordmark
+     Hanken Grotesk  — UI + prose: nav, descriptions, buttons, names in cells
+     JetBrains Mono  — EVERY number, ₹, %, code, SKU, date, ID, eyebrow, <th>, pill
+
+   Brand: LOT yellow #F2CD1A is the ONE accent. The odometer blue #4C63F0 is a
+   DATA colour (Amazon family), never a UI accent.
+
+   ⚠ components/StackedTrendChart.js deliberately hardcodes the OLD hexes
+   (#33343D / #6E6F79 / #26272E). That chart ships unchanged by client request —
+   do not "harmonise" it with the ramp below.
    ════════════════════════════════════════════════════════════ */
 
 :root {
   color-scheme: dark;
-  --bg:            #141518;
-  --surface:       #1E1F24;
-  --surface2:      #26272E;
-  --border:        #33343D;
-  --border-strong: #494A54;
-  --t1:            #F2F3F0;
-  --t2:            #A4A6AE;
-  --t3:            #6E6F79;
-  --accent:        #F2CD1A;   /* LOT yellow — Odo primary (logo tile) */
-  --accent-fg:     #282828;
-  --green:         #34D27B;
-  --red:           #FF6B6B;
-  --blue:          #4C63F0;   /* odometer blue (logo segment) */
-  --amber:         #F2CD1A;
-  --radius:        14px;
-  --shadow:        0 18px 44px -20px rgba(0,0,0,.7);
-  /* Card elevation — soft, warm-tinted. Replaces the flat 1px-border "wall" look. */
-  --card-shadow:   0 1px 1px rgba(0,0,0,.22), 0 10px 30px -22px rgba(0,0,0,.55);
-  --font-ui:       'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;  /* warm humanist — body/labels/UI */
-  --font-display:  'Space Grotesk', system-ui, -apple-system, sans-serif;              /* display — wordmark + titles */
-  --font-mono:     'JetBrains Mono', ui-monospace, Menlo, monospace;                   /* numbers + code/SKU tokens only */
 
-  /* aliases consumed by shared components (AppLauncher, etc.) + /login */
+  /* ── canvas + panels ── */
+  --bg:            #08090c;
+  --bg-2:          #0a0b0d;   /* recessed: inputs, search field */
+  --surface:       rgba(20,21,26,.6);   /* translucent panel — pair with backdrop-filter */
+  --surface-solid: #15161c;   /* opaque fallback: sticky columns, popovers, modals */
+  --surface2:      #181920;   /* nested / child table rows — OPAQUE (shared Combobox reads it) */
+  --sidebar:       rgba(13,14,19,.72);
+  --topbar:        rgba(8,9,12,.6);
+
+  /* ── borders (much quieter than the old #33343D wall) ── */
+  --border:        #1e1f26;   /* panel borders */
+  --border-2:      #17181d;   /* sidebar + top-bar dividers */
+  --border-table:  #23252b;   /* under table <thead> */
+  --row-border:    #1c1e24;   /* table row separators */
+  --border-ctl:    #26282f;   /* segmented controls, chips */
+  --border-strong: #33363c;   /* secondary-button borders */
+  --surface-hover: rgba(255,255,255,.025);   /* table rows */
+  --control:       rgba(255,255,255,.03);    /* button / input / chip fills */
+
+  /* ── text ramp ── */
+  --t1:            #f4f5f6;
+  --t1-cell:       #e4e6ea;   /* bright numeric cells */
+  --t2:            #9aa0aa;
+  --t2-cell:       #c9ccd2;   /* normal numeric cells */
+  --t3:            #71767c;
+  --t4:            #6a6f78;   /* micro / mono captions — never prose */
+  --t5:            #565b61;   /* faint / em-dash placeholders — never prose */
+
+  /* ── accent + semantics ── */
+  --accent:        #F2CD1A;   /* LOT yellow — the ONLY UI accent */
+  --accent-fg:     #17140a;   /* ink on a yellow fill — never white */
+  --accent-grad:   linear-gradient(145deg,#F2CD1A,#f59e0b);
+  --accent-soft:   rgba(242,205,26,.16);
+  --accent-bd:     rgba(242,205,26,.34);
+  --green:         #34D27B;   /* chart/status — unchanged */
+  --green-fg:      #34d399;   /* text/deltas on dark */
+  --red:           #f87171;
+  --blue:          #4C63F0;   /* odometer blue — DATA colour (Amazon) */
+  --amber:         #F59E0B;
+
+  /* ── radii ── */
+  --r-sm:          5px;
+  --r-md:          9px;
+  --r-lg:          11px;
+  --r-xl:          14px;
+  --r-2xl:         16px;
+  --r-pill:        999px;
+  --radius:        var(--r-2xl);
+
+  /* ── elevation: glow only, never a drop shadow ── */
+  --shadow:        0 40px 90px -30px rgba(0,0,0,.9);
+  --card-shadow:   none;      /* panels separate by translucency, not shadow */
+  --glow-accent:   0 6px 16px -8px rgba(242,205,26,.8);
+
+  --font-ui:       'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display:  'Sora', system-ui, -apple-system, sans-serif;
+  --font-mono:     'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+  /* aliases consumed by shared components (AppLauncher, Combobox, Modal) + /login.
+     --cond is the display font app-wide (PnlView, board.js, kit.js) — repointing it
+     to Sora reskins every call site; don't hunt them down individually. */
   --mono: var(--font-mono);
   --ui:   var(--font-ui);
   --cond: var(--font-display);
@@ -63,88 +115,172 @@ button { font-family: inherit; }
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; border-radius: 2px; }
 ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--t1); }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 999px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb { background: #2a2c31; border-radius: 5px; border: 2px solid #0d0e10; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
-* { scrollbar-width: thin; scrollbar-color: var(--surface2) transparent; }
+* { scrollbar-width: thin; scrollbar-color: #2a2c31 transparent; }
 
-/* ── app shell ── */
-.so-app { display: flex; height: 100dvh; width: 100vw; overflow: hidden; }
-.so-side { width: 224px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-.so-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+@keyframes opulse { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.5) } 70% { box-shadow: 0 0 0 6px rgba(52,211,153,0) } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0) } }
+@keyframes ofade { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+/* ── app shell ──
+   The canvas glow lives on .so-app (the shell root), NOT on body — backdrop-filter
+   needs a painted, non-transparent ancestor stack to read. Do not insert an
+   overflow:hidden wrapper between this and the panels. */
+.so-app {
+  display: flex; height: 100dvh; width: 100vw; overflow: hidden;
+  background:
+    radial-gradient(1100px 620px at 76% -10%, rgba(76,99,240,.13), transparent 62%),
+    radial-gradient(820px 520px at 8% 2%,     rgba(242,205,26,.07), transparent 58%),
+    var(--bg);
+}
+.so-side { width: 234px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border-2);
+  display: flex; flex-direction: column; backdrop-filter: blur(10px); transition: width .18s ease; }
+.so-side.collapsed { width: 70px; }
+.so-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* single source of page gutter — pages must NOT add their own outer padding (avoids double-gutter drift) */
-.so-scroll { flex: 1; overflow-y: auto; padding: 26px 30px 40px; }
-.so-page { display: flex; flex-direction: column; gap: 18px; max-width: 1320px; }
+.so-scroll { flex: 1; overflow-y: auto; padding: 22px 26px 40px; }
+.so-page { display: flex; flex-direction: column; gap: 16px; max-width: 1320px; animation: ofade .22s ease; }
 
-.so-nav { display: flex; align-items: center; gap: 11px; padding: 9px 16px; margin: 1px 10px; border-radius: 8px;
-  font-family: var(--ui); font-size: 13px; font-weight: 500; color: var(--t2); cursor: pointer; transition: background .14s, color .14s; }
-.so-nav:hover { background: var(--surface2); color: var(--t1); }
-.so-nav.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--t1); }
+/* ── sidebar nav ── */
+.so-navgroup { font-family: var(--mono); font-size: 9px; letter-spacing: .16em; color: var(--t5);
+  text-transform: uppercase; padding: 14px 10px 6px; }
+.so-navrule { height: 1px; background: var(--row-border); margin: 12px 6px 10px; }
+.so-nav { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px;
+  border: none; background: transparent; border-radius: var(--r-lg); margin-bottom: 2px; text-align: left;
+  font-family: var(--ui); font-size: 13px; font-weight: 500; color: var(--t2); cursor: pointer;
+  transition: background .14s, color .14s; }
+.so-nav:hover { background: rgba(255,255,255,.05); color: var(--t1); }
+.so-nav.active { background: linear-gradient(90deg, var(--accent-soft), transparent); color: var(--accent); font-weight: 600; }
+.so-nav.active::before { content: ''; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 18px; border-radius: 0 3px 3px 0; background: var(--accent); box-shadow: 0 0 10px 0 rgba(242,205,26,.7); }
+.so-side.collapsed .so-nav { justify-content: center; gap: 0; }
+.so-navlbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.so-navbadge { font-family: var(--mono); font-size: 9.5px; color: var(--amber); background: rgba(245,158,11,.16);
+  border-radius: var(--r-pill); padding: 1px 6px; }
+.so-nav.active .so-navbadge { color: var(--accent-fg); background: var(--accent); }
 
-.so-card { background: var(--surface); border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--card-shadow); }
-.so-kpi-val { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--t1); letter-spacing: -0.01em; }
-.so-kpi-lbl { font-family: var(--ui); font-size: 10.5px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--t3); margin-bottom: 6px; }
+/* ── panel ── the single most repeated element */
+.so-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-2xl);
+  padding: 16px 20px; backdrop-filter: blur(6px); }
+/* .flush = the body is a full-bleed table: header keeps its gutter, table bleeds edge-to-edge */
+.so-card.flush { padding: 16px 0 0; }
+.so-card.flush > .so-cardhead { padding: 0 18px 10px; }
+.so-cardhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 
-/* compact stat tile (the Kpi component) — uniform height, single-line value, subtle left
-   accent (Redline-style). Replaces the old stretchy top-aligned card whose value wrapped. */
-.so-stat { position: relative; background: var(--surface); border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 11px; padding: 13px 15px 14px 17px; box-shadow: var(--card-shadow);
-  display: flex; flex-direction: column; gap: 5px; min-height: 100px; overflow: hidden; }
-.so-stat::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--stat-accent, var(--border-strong)); }
-.so-stat-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 26px; }
-.so-stat-lbl { font-family: var(--ui); font-size: 10px; font-weight: 600; letter-spacing: 0.11em; text-transform: uppercase; color: var(--t3); line-height: 1.3; }
-.so-stat-val { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--t1); letter-spacing: -0.01em; line-height: 1.15;
+.so-kpi-val { font-family: var(--cond); font-size: 25px; font-weight: 800; color: var(--t1); letter-spacing: -0.01em; }
+.so-kpi-lbl { font-family: var(--mono); font-size: 9.5px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--t3); margin-bottom: 6px; }
+
+/* ── KPI tile — the signature element ──
+   Every colour derives from ONE metric hue passed as --stat-hue (an r,g,b triplet),
+   so a new metric needs no new tokens. Hero = glow + sparkline; .dense = tuned down. */
+.so-stat { position: relative; border-radius: var(--r-2xl); padding: 15px 16px 12px; overflow: hidden;
+  display: flex; flex-direction: column;
+  background: linear-gradient(160deg, rgba(var(--stat-hue, 138,140,149),.13), #101218 70%);
+  border: 1px solid rgba(var(--stat-hue, 138,140,149),.32);
+  box-shadow: 0 14px 34px -18px rgba(var(--stat-hue, 138,140,149),.6); }
+.so-stat.dense { border-radius: var(--r-xl); padding: 13px 15px;
+  background: linear-gradient(160deg, rgba(var(--stat-hue, 138,140,149),.11), #101218 70%);
+  border-color: rgba(var(--stat-hue, 138,140,149),.28); box-shadow: none; }
+.so-stat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.so-stat-swatch { width: 9px; height: 9px; flex: none; border-radius: 3px; background: rgb(var(--stat-hue, 138,140,149));
+  box-shadow: 0 0 8px 0 rgba(var(--stat-hue, 138,140,149),.32); }
+.so-stat.dense .so-stat-swatch { width: 8px; height: 8px; box-shadow: none; }
+.so-stat-lbl { font-family: var(--mono); font-size: 9px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--t2); line-height: 1.3; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.so-stat-val { font-family: var(--cond); font-size: 25px; font-weight: 800; color: var(--t1); letter-spacing: -0.01em;
+  line-height: 1.15; margin-top: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.so-stat.dense .so-stat-val { font-size: 21.5px; font-weight: 700; margin-top: 9px; }
+.so-stat-sub { font-family: var(--mono); font-size: 9.5px; color: var(--t4); margin-top: 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.so-stat-sub { font-family: var(--ui); font-size: 11px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.so-btn { background: var(--accent); color: var(--accent-fg); border: none; border-radius: 6px; padding: 9px 14px;
-  font-family: var(--cond); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: filter .12s; }
-.so-btn:hover { filter: brightness(1.08); }
-.so-btn.ghost { background: transparent; color: var(--t2); border: 1px solid var(--border-strong); }
-.so-btn.ghost:hover { color: var(--t1); border-color: var(--t3); filter: none; }
-.so-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* ── buttons ── */
+.so-btn { background: var(--accent-grad); color: var(--accent-fg); border: none; border-radius: 8px; padding: 7px 13px;
+  font-family: var(--ui); font-weight: 600; font-size: 12px; letter-spacing: 0; text-transform: none;
+  cursor: pointer; box-shadow: var(--glow-accent); transition: filter .12s; }
+.so-btn:hover { filter: brightness(1.06); }
+.so-btn.ghost { background: var(--control); color: var(--t2); border: 1px solid var(--border-strong); box-shadow: none; }
+.so-btn.ghost:hover { color: var(--t1); border-color: #4a4e57; filter: none; }
+.so-btn.bare { background: transparent; color: var(--t2); border: none; box-shadow: none; }
+.so-btn.bare:hover { color: var(--t1); filter: none; }
+.so-btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
 
-.so-input, .so-select { background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; padding: 8px 11px;
-  font-size: 13px; color: var(--t1); outline: none; font-family: var(--ui); transition: border-color .14s; }
-.so-input:focus, .so-select:focus { border-color: var(--accent); }
+.so-input, .so-select { background: var(--bg-2); border: 1px solid var(--border-ctl); border-radius: var(--r-md);
+  padding: 8px 11px; font-size: 12.5px; color: var(--t1); outline: none; font-family: var(--ui); transition: border-color .14s, box-shadow .14s; }
+.so-input:focus, .so-select:focus { border-color: var(--accent-bd); box-shadow: 0 0 0 3px rgba(242,205,26,.1); }
+.so-input[type="date"] { font-family: var(--mono); font-size: 11.5px; }
 
-/* data grid — names/labels in the warm sans, numerics in mono tabular */
-.so-table { width: 100%; border-collapse: collapse; font-family: var(--ui); font-size: 13px; }
-.so-table th { text-align: left; padding: 9px 12px; color: var(--t3); font-weight: 600; font-size: 10px; letter-spacing: 0.1em;
-  text-transform: uppercase; border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none; font-family: var(--ui); }
-.so-table td { padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--t2); }
+/* ── data grid — names in the UI font, everything numeric in mono tabular ── */
+.so-table { width: 100%; border-collapse: collapse; font-family: var(--ui); font-size: 12.5px; }
+.so-table thead tr { background: rgba(255,255,255,.02); }
+.so-table th { text-align: left; padding: 8px 14px; color: var(--t3); font-weight: 400; font-size: 9.5px;
+  letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--border-table);
+  white-space: nowrap; cursor: pointer; user-select: none; font-family: var(--mono); }
+.so-table td { padding: 9px 14px; border-bottom: 1px solid var(--row-border); color: var(--t2); }
+.so-table td:first-child { color: var(--t1); }
 .so-table tr:last-child td { border-bottom: none; }
-.so-table tr:hover td { background: var(--surface2); }
-.so-num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); }
+.so-table tbody tr:hover td { background: var(--surface-hover); }
+.so-num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--t2-cell); }
 .so-table th.so-num { text-align: right; } /* th text-align:left out-specifies .so-num — re-assert right for numeric headers */
+.so-table td.so-num.bright { color: var(--t1-cell); }
+/* null placeholder — the em-dash convention, app-wide */
+.so-null { color: var(--t5); }
 
-.so-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
-  border: 1px solid var(--border-strong); font-family: var(--ui); font-size: 12px; color: var(--t2); cursor: pointer; transition: all .14s; }
-.so-chip:hover { color: var(--t1); border-color: var(--t3); }
-.so-chip.on, .so-chip.active { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); color: var(--t1); }
-
-/* segmented control — the one toggle/preset vocabulary across every page */
-.so-seg { display: inline-flex; gap: 3px; background: var(--surface2); border-radius: 9px; padding: 3px; }
-.so-seg > button { background: transparent; color: var(--t2); border: none; border-radius: 6px; padding: 6px 11px;
-  font-family: var(--ui); font-weight: 500; font-size: 12px; cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; }
-.so-seg > button:hover { color: var(--t1); }
-.so-seg > button.on { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-
+/* ── chips / pills ── */
+.so-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--r-pill);
+  border: 1px solid var(--border-ctl); background: var(--control); font-family: var(--ui); font-size: 12px;
+  color: var(--t2); cursor: pointer; transition: all .14s; }
+.so-chip:hover { color: var(--t1); border-color: #3a3d46; }
+.so-chip.on, .so-chip.active { background: var(--accent-soft); border-color: rgba(242,205,26,.4); color: var(--accent); }
 .so-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.so-pill { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; }
+.so-swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+.so-pill { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: var(--r-sm); }
 
-/* page title (header bar + section headings) */
-.so-h2 { font-family: var(--cond); font-weight: 600; font-size: 15px; color: var(--t1); letter-spacing: 0.01em; }
-.so-sub { font-family: var(--ui); font-size: 12px; color: var(--t3); }
+/* ── segmented control ── */
+.so-seg { display: inline-flex; gap: 3px; background: var(--control); border: 1px solid var(--border-ctl);
+  border-radius: var(--r-md); padding: 3px; }
+.so-seg > button { background: transparent; color: var(--t2); border: none; border-radius: 6px; padding: 6px 11px;
+  font-family: var(--mono); font-weight: 400; font-size: 11px; cursor: pointer;
+  transition: background .14s, color .14s; white-space: nowrap; }
+.so-seg > button:hover { color: var(--t1); }
+.so-seg > button.on { background: var(--accent-grad); color: var(--accent-fg); font-weight: 500; }
+/* in-panel variant (chart metric toggles) — flatter, sits on a panel not the canvas */
+.so-seg.inpanel { background: rgba(255,255,255,.04); border-color: transparent; padding: 2px; }
+.so-seg.inpanel > button { padding: 4px 10px; font-size: 10px; border-radius: var(--r-sm); }
+.so-seg.inpanel > button.on { background: var(--accent); color: var(--accent-fg); }
 
-/* filter dropdown (channel multi-select) */
-.so-pop { position: absolute; z-index: 40; background: var(--surface); border: 1px solid var(--border-strong);
-  border-radius: 11px; box-shadow: var(--shadow); padding: 6px; }
+/* ── type roles ── */
+.so-h1 { font-family: var(--cond); font-weight: 800; font-size: 26px; letter-spacing: -0.01em; color: var(--t1); }
+.so-h2 { font-family: var(--cond); font-weight: 600; font-size: 14px; color: var(--t1); letter-spacing: 0; }
+.so-sub { font-family: var(--ui); font-size: 13px; color: var(--t2); }
+.so-eyebrow { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--t3); }
+.so-qual { font-family: var(--mono); font-size: 10.5px; color: var(--t5); }
+
+/* ── filter dropdown (channel multi-select) ── opaque: it overlays live content */
+.so-pop { position: absolute; z-index: 40; background: var(--surface-solid); border: 1px solid var(--border-ctl);
+  border-radius: var(--r-xl); box-shadow: var(--shadow); padding: 6px; }
 .cf-row { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; background: transparent; border: none;
-  cursor: pointer; padding: 7px 9px; border-radius: 7px; font-family: var(--ui); font-size: 13px; color: var(--t2); }
-.cf-row:hover { background: var(--surface2); color: var(--t1); }
-.cf-fam { font-family: var(--ui); font-size: 9.5px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase;
-  color: var(--t3); padding: 9px 9px 3px; }
+  cursor: pointer; padding: 7px 9px; border-radius: 7px; font-family: var(--ui); font-size: 12.5px; color: var(--t2); }
+.cf-row:hover { background: rgba(255,255,255,.05); color: var(--t1); }
+.cf-fam { font-family: var(--mono); font-size: 9px; font-weight: 400; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--t5); padding: 9px 9px 3px; }
 .cf-check { margin-left: auto; color: var(--accent); font-size: 12px; width: 14px; text-align: right; }
+
+/* ── scope tabs (Channels / P&L / Products) — the strip that emptied the rail ── */
+.so-scopebar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding-bottom: 14px; border-bottom: 1px solid var(--row-border); }
+.so-scope { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-ctl);
+  background: var(--control); border-radius: var(--r-pill); padding: 6px 14px; font-family: var(--ui);
+  font-size: 12.5px; color: var(--t2); cursor: pointer; transition: all .14s; white-space: nowrap; }
+.so-scope:hover { border-color: #3a3d46; color: var(--t1); }
+.so-scope.on { color: var(--t1); font-weight: 600; }
+
+/* ── bar-in-cell ── */
+.so-bar { background: rgba(255,255,255,.05); border-radius: 4px; height: 6px; overflow: hidden; }
+.so-bar > i { display: block; height: 100%; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

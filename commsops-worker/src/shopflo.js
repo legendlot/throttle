@@ -60,6 +60,48 @@ function identsFromShopflo(body) {
   return out;
 }
 
+// Shopflo's cart token, normalised. Two traps, both silent:
+//  1. CASING — the doc/first wire shape used snake `cart_token` (which arrived NULL on every
+//     live event); the newer payload sends camel **`cartToken`**. Reading one casing only
+//     means the field looks permanently empty while it is actually being delivered.
+//  2. THE `?key=` SUFFIX — Shopify cart permalinks arrive as
+//     `hWNEcGe5qKlOtm1QkMUkF7eG?key=2b56e8f311a84d1995a47852e65416c0`. The part before `?` is
+//     the cart id; `key` is a permalink secret. If one event carries the suffix and another
+//     does not, they store as TWO different identifiers and never match — which defeats the
+//     entire point of a stitching key, invisibly.
+// Returns null for anything that is not a usable token (empty, or a bare `?key=…`).
+function normalizeCartToken(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const base = s.split('?')[0].trim();
+  return base || null;
+}
+
+// Read the cart token wherever Shopflo puts it, across both casings + the usual nestings.
+function cartToken(body) {
+  const b = body || {};
+  const srcs = [b, b.cart, b.checkout, b.data, b.eventPayload].filter(Boolean);
+  for (const src of srcs) {
+    for (const k of ['cart_token', 'cartToken', 'cart_id', 'cartId']) {
+      const v = normalizeCartToken(src[k]);
+      if (v) return v;
+    }
+  }
+  return null;
+}
+
+// The cart token as a WEAK identifier (`cart_id`), which is the only form that actually
+// stitches — a token sitting in `properties` is inert for identity resolution. Weak by
+// design: it identifies a CART, never a person (measured 2026-07-25: profiles carrying a
+// cart_id are 3.2% messageable, vs 89.3% for checkout_token). Its value is as a join key, so
+// that a later event carrying the same cart resolves to whoever the cart turned out to belong
+// to. resolve_identity's weak/strong rules (S224) govern the merge; nothing here bypasses them.
+function cartIdentifier(body) {
+  const t = cartToken(body);
+  return t ? { type: 'cart_id', value: t, is_verified: false } : null;
+}
+
 function displayName(body) {
   // Mirrors the Shopify customer mapper's `first || full` preference — display_name is
   // what template greetings bind ("Hi {first_name}"), so a bare first name beats
@@ -194,12 +236,12 @@ function mapCheckoutAbandoned(body) {
     (typeof body.token_id === 'string' && body.token_id.startsWith('http')) ? body.token_id : null,
     body.abandoned_checkout_url,
   );
-  const key = firstNonEmpty(body.checkout_id, body.cart_token, body.session_id) || '';
+  const key = firstNonEmpty(body.checkout_id, cartToken(body), body.session_id) || '';
   const namesOrdered = orderedNames(body.cart_product_names, body.line_items);
   const primaryName = (namesOrdered || '').split(',')[0].trim() || null;
   const props = {
     checkout_id: body.checkout_id || null,
-    cart_token: body.cart_token || null,
+    cart_token: cartToken(body),          // normalised (casing + `?key=` stripped)
     checkout_url: checkoutUrl || null,
     currency: body.currency || null,
     subtotal_price: num(body.subtotal_price),
@@ -224,6 +266,11 @@ function mapCheckoutAbandoned(body) {
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
+  // Weak key attached only once a STRONG identity exists (the guard above already returned).
+  // So the cart becomes a lookup key ON a known person, and we never mint weak-only orphans
+  // (the 19.7k web_session profiles at 2.2% messageable are that lesson).
+  const cartId = cartIdentifier(body);
+  if (cartId) identifiers.push(cartId);
   return {
     identifiers, name: 'checkout_abandoned',
     occurred_at: toIso(firstNonEmpty(body.updated_at, body.created_at, body.timestamp)),
@@ -258,6 +305,8 @@ function mapOrderCompleted(body) {
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
+  const cartId = cartIdentifier(body);
+  if (cartId) identifiers.push(cartId);
   return {
     identifiers, name: 'shopflo_order_completed',
     occurred_at: toIso(firstNonEmpty(body.created_at, body.timestamp)),
@@ -272,6 +321,7 @@ function mapAddToCart(body) {
   const identifiers = identsFromShopflo(body);
   if (!identifiers.length) return null;
   const props = {
+    cart_token: cartToken(body),          // normalised (casing + `?key=` stripped)
     cart_product_ids: body.cart_product_ids || null,
     cart_product_names: body.cart_product_names || null,
     cart_variant_ids: body.cart_variant_ids || null,
@@ -279,11 +329,14 @@ function mapAddToCart(body) {
     total_price: num(body.total_price),
     source_surface: 'shopflo',
   };
+  const cartId = cartIdentifier(body);
+  if (cartId) identifiers.push(cartId);
   return {
     identifiers, name: 'add_to_cart',
     occurred_at: toIso(body.timestamp),
     properties: props, source: 'shopflo',
-    idempotency_key: body.session_id ? `shopflo:add_to_cart:${body.session_id}:${body.timestamp || ''}` : null,
+    idempotency_key: (body.session_id || cartToken(body))
+      ? `shopflo:add_to_cart:${body.session_id || cartToken(body)}:${body.timestamp || ''}` : null,
   };
 }
 
@@ -316,5 +369,6 @@ function consentRowsFrom(body, capturedAt) {
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, SHOPFLO_CHECKOUT_BASE,
+  normalizeCartToken, cartToken, cartIdentifier,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };

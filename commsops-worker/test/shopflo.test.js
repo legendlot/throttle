@@ -266,5 +266,55 @@ t('displayName reads camelCase userData (store_page_view shape)', () => {
   assert.equal(FLO.displayName({ eventName: 'store_page_view', eventPayload: { userData: { firstName: 'Aman', lastName: 'S' } } }), 'Aman');
 });
 
+
+// ── Cart-token normalisation (2026-07-25, Shopflo started sending it) ──────────────────
+// Two silent traps: the wire uses camel `cartToken` while the doc used snake `cart_token`
+// (which arrived NULL on every live event), and the value carries Shopify's `?key=` permalink
+// suffix. Either one alone makes the stitching key quietly never match.
+t('normalizeCartToken strips the ?key= permalink suffix', () => {
+  const raw = 'hWNEcGe5qKlOtm1QkMUkF7eG?key=2b56e8f311a84d1995a47852e65416c0';
+  assert.equal(FLO.normalizeCartToken(raw), 'hWNEcGe5qKlOtm1QkMUkF7eG');
+  // suffixed and bare forms MUST collapse to the same identifier, or they never join
+  assert.equal(FLO.normalizeCartToken('hWNEcGe5qKlOtm1QkMUkF7eG'), FLO.normalizeCartToken(raw));
+  assert.equal(FLO.normalizeCartToken('  padded?key=x  '), 'padded');
+  assert.equal(FLO.normalizeCartToken(''), null);
+  assert.equal(FLO.normalizeCartToken(null), null);
+  assert.equal(FLO.normalizeCartToken('?key=onlysecret'), null);   // no cart id at all
+});
+
+t('cartToken reads BOTH casings and the usual nestings', () => {
+  assert.equal(FLO.cartToken({ cartToken: 'abc?key=1' }), 'abc');     // camel (the live shape)
+  assert.equal(FLO.cartToken({ cart_token: 'abc' }), 'abc');          // snake (the doc shape)
+  assert.equal(FLO.cartToken({ cart: { cartToken: 'nested' } }), 'nested');
+  assert.equal(FLO.cartToken({ cart_token: null, cartToken: 'wins' }), 'wins'); // null snake ignored
+  assert.equal(FLO.cartToken({}), null);
+});
+
+t('cart token rides as a WEAK cart_id identifier, never instead of identity', () => {
+  const body = {
+    event_name: 'checkout_abandoned',
+    cartToken: 'hWNEcGe5qKlOtm1QkMUkF7eG?key=2b56e8f311a84d1995a47852e65416c0',
+    customer: { phone: '9876543210', email: 'A@B.com' },
+    total_price: 2099,
+  };
+  const e = FLO.mapCheckoutAbandoned(body);
+  const cart = e.identifiers.filter((i) => i.type === 'cart_id');
+  assert.equal(cart.length, 1);
+  assert.equal(cart[0].value, 'hWNEcGe5qKlOtm1QkMUkF7eG');   // normalised
+  assert.equal(cart[0].is_verified, false);                   // weak — identifies a cart, not a person
+  // the strong keys are still there and still first
+  assert.ok(e.identifiers.some((i) => i.type === 'phone'));
+  assert.ok(e.identifiers.some((i) => i.type === 'email'));
+  assert.equal(e.properties.cart_token, 'hWNEcGe5qKlOtm1QkMUkF7eG');
+});
+
+// The guard that stops us minting weak-only orphans (the 19.7k web_session profiles at 2.2%
+// messageable are that lesson). A cart token must never make an anonymous event look identified.
+t('a cart token alone does NOT make an anonymous event ingestable', () => {
+  assert.equal(FLO.mapCheckoutAbandoned({ cartToken: 'abc?key=1', total_price: 999 }), null);
+  assert.equal(FLO.mapAddToCart({ cartToken: 'abc?key=1' }), null);
+});
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
