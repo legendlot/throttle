@@ -3,6 +3,8 @@
 // receives the node's config + templates list, calls onChange(partial) / onDelete().
 import { useState, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
+import { Combobox } from '@throttle/ui';
+import { eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 
 // Multi-value comma-separated input with a local text buffer. Committing the parsed
 // array on every keystroke (filter(Boolean) drops the trailing empty token) makes a
@@ -37,9 +39,10 @@ const CHANNELS = [
   { id: 'whatsapp', label: 'WhatsApp', live: true },
   { id: 'sms', label: 'SMS (not live yet)', live: false },
 ];
-const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'order_cancelled',
-  'add_to_cart', 'link_clicked', 'whatsapp_inbound', 'shopflo_order_completed',
-  'payment_link_paid', 'payment_link_failed'];
+// Event names arrive as the `eventDefs` prop, loaded once by the journeys page from the
+// live comms.event_definitions registry (@/lib/eventDefs.js). The hardcoded list that used
+// to sit here was a THIRD divergent copy — it offered payment/whatsapp events the segment
+// builder lacked, and omitted order_delivered/checkout_abandoned which it had.
 
 function Field({ label, children }) {
   return <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">{label}</div>{children}</div>;
@@ -69,8 +72,11 @@ function DurationInput({ value, onChange, disabled }) {
   );
 }
 
-export default function NodeDrawer({ nodeId, config, templates, onChange, onDelete, disabled }) {
+export default function NodeDrawer({ nodeId, config, templates, onChange, onDelete, disabled, eventDefs }) {
   if (!nodeId || !config) return null;
+  // Defaulted through normalizeEventDefs so the drawer still renders a usable list if it is
+  // ever mounted without the prop (fallback set), never an empty picker.
+  const evDefs = (eventDefs && eventDefs.length) ? eventDefs : normalizeEventDefs(null);
   const set = (patch) => onChange({ ...config, ...patch });
   const t = config.type;
   const channelTemplates = (templates || []).filter((x) => x.channel === (config.channel || 'email'));
@@ -135,7 +141,9 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
         <Field label="Awaited events (comma-separated)">
           <AwaitedEventsInput nodeId={nodeId} value={config.awaited} disabled={disabled}
             onChange={(arr) => set({ awaited: arr })} />
-          <datalist id="jc-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+          {/* Multi-value field, so a datalist (not a Combobox) — but fed from the live
+              registry rather than a hardcoded list. */}
+          <datalist id="jc-event-suggest">{evDefs.map((d) => <option key={d.name} value={d.name} />)}</datalist>
         </Field>
         <Field label="Within">
           <DurationInput value={config.within || ''} disabled={disabled}
@@ -172,9 +180,15 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
           <div className="tw-note" style={{ margin: '0 0 8px' }}>Matching is case-insensitive. A missing property compares as empty text.</div>
         </>) : config.check?.kind !== 'attribute' ? (
           <Field label="Event">
-            <input className="f-inp mono" list="jc-event-suggest" value={config.check?.event || ''} disabled={disabled}
-              onChange={(e) => set({ check: { ...config.check, event: e.target.value } })} placeholder="order_placed" />
-            <datalist id="jc-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+            <Combobox
+              value={config.check?.event || ''}
+              options={eventComboOptions(evDefs)}
+              onChange={(v) => set({ check: { ...config.check, event: v || '' } })}
+              placeholder="Search events…"
+              disabled={disabled}
+              allowClear={false}
+              emptyLabel="No matching event — check it is registered in comms.event_definitions"
+            />
           </Field>
         ) : (<>
           <Field label="Attribute">

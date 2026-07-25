@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -8,9 +8,18 @@ import { createPortal } from 'react-dom';
  *
  * Controlled component:
  *   value     — the currently-selected option's `value` (string). Pass '' for none.
- *   options   — [{ value: string, label: string, hint?: string, search?: string }, ...]
+ *   options   — [{ value: string, label: string, hint?: string, search?: string,
+ *                  group?: string }, ...]
  *               `hint` is shown to the right of the label AND matched against.
  *               `search` is matched against but NEVER rendered — hidden alias text.
+ *               `group` is OPTIONAL: when set, a sticky section header is rendered each
+ *               time it changes between adjacent options, so a long list reads as
+ *               segmented sections (Relay's event pickers). Options WITHOUT `group`
+ *               render exactly as before — this is purely additive.
+ *               NB the caller must keep same-group options CONTIGUOUS (headers are emitted
+ *               on change, not by bucketing) — a group that appears twice renders twice.
+ *               Headers are not selectable and are NOT part of the keyboard-highlight
+ *               index, so Arrow/Enter navigation is unaffected by grouping.
  *   onChange  — (value: string, option | null) => void. Fires on selection and on clear.
  *
  * Behaviour:
@@ -338,7 +347,12 @@ export function Combobox({
             filtered.map((o, idx) => {
               const highlighted = idx === highlight;
               const isSelected = String(o.value) === String(value);
-              return (
+              // Section header on each group change. Driven off the FILTERED list, so a
+              // group whose options all filter out takes its header with it. `idx` still
+              // indexes options only — keyboard highlight is untouched by grouping.
+              const prevGroup = idx > 0 ? filtered[idx - 1].group : null;
+              const showGroupHeader = o.group && o.group !== prevGroup;
+              const optionRow = (
                 <div
                   key={`${o.value}__${idx}`}
                   ref={highlighted ? highlightedRef : null}
@@ -376,6 +390,25 @@ export function Combobox({
                     </>
                   )}
                 </div>
+              );
+              if (!showGroupHeader) return optionRow;
+              return (
+                <Fragment key={`grp__${o.group}__${idx}`}>
+                  <div style={{
+                    padding: '6px 10px 4px',
+                    fontSize: 9,
+                    letterSpacing: '.09em',
+                    textTransform: 'uppercase',
+                    fontFamily: 'var(--mono)',
+                    color: 'var(--t3)',
+                    background: 'var(--surface)',
+                    borderBottom: '1px solid rgba(42,42,42,.5)',
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1,
+                  }}>{o.group}</div>
+                  {optionRow}
+                </Fragment>
               );
             })
           )}

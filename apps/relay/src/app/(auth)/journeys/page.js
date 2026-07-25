@@ -10,6 +10,7 @@ import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 import { useNewParam } from '@/lib/useNewParam.js';
+import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 
 // React Flow touches window — client-only.
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -54,12 +55,10 @@ const REENROL = [
   { id: 'once_ever', label: 'Once ever' },
   { id: 'cooldown', label: 'Cooldown (hours)' },
 ];
-// Fallback only — the picker loads the live comms.event_definitions registry via
-// getEventDefinitions. This list is what shows if that call fails; it was previously the
-// ONLY source, which silently hid every event registered after it was written (the whole
-// courier lifecycle, payment_link_*, segment_entered, whatsapp_*, shopflo_order_completed).
-const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'order_delivered',
-  'add_to_cart', 'checkout_abandoned', 'return_created'];
+// Event names + their category grouping come from the LIVE comms.event_definitions
+// registry via @/lib/eventDefs.js (shared with /segments and the journey canvas). The
+// fallback that used to live here is now FALLBACK_EVENT_DEFS in that module — one list,
+// one place.
 
 function emptyJourney() {
   return { id: null, name: '', status: 'draft', active_version: null,
@@ -137,9 +136,9 @@ export default function JourneysPage() {
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
         garageFetch('getSegments', {}, session),
-        // Registry-backed trigger picker. Non-fatal: fall back to EVENT_SUGGEST rather
-        // than failing the whole page load over a suggestion list.
-        garageFetch('getEventDefinitions', {}, session).catch(() => null),
+        // Registry-backed trigger picker. loadEventDefs never rejects — it falls back to
+        // FALLBACK_EVENT_DEFS internally — so a suggestion list cannot fail a page load.
+        loadEventDefs(garageFetch, session),
         // Non-fatal (review M12): a failed/denied fetch leaves settings null, which the banner
         // and the activate confirm below both read as "test mode unknown" and default to safe copy.
         garageFetch('getRelaySettings', {}, session).catch(() => null),
@@ -150,7 +149,7 @@ export default function JourneysPage() {
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setSegments(Array.isArray(sg) ? sg : []);
-      setEventDefs(Array.isArray(ev) && ev.length ? ev : EVENT_SUGGEST.map((name) => ({ name, description: null })));
+      setEventDefs(normalizeEventDefs(ev));
       setSettings(st || null);
       setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
     } catch (e) { showToast(e.message || 'Failed to load journeys', 'error'); }
@@ -407,9 +406,9 @@ export default function JourneysPage() {
                     also the house standard for pickers (PATTERN-160). */}
                 <Combobox
                   value={j.triggerEvent}
-                  options={eventDefs.map((d) => ({ value: d.name, label: d.name, hint: d.description || '' }))}
+                  options={eventComboOptions(eventDefs)}
                   onChange={(v) => set('triggerEvent', v || '')}
-                  placeholder="Search 29 registered events…"
+                  placeholder={`Search ${eventDefs.length} registered events…`}
                   disabled={busy || !editable}
                   allowClear={false}
                   emptyLabel="No matching event — check the name is registered in comms.event_definitions"
@@ -463,7 +462,7 @@ export default function JourneysPage() {
                 <div style={{ flex: 1 }}>
                   <Combobox
                     value={rule.event || ''}
-                    options={eventDefs.map((d) => ({ value: d.name, label: d.name, hint: d.description || '' }))}
+                    options={eventComboOptions(eventDefs)}
                     onChange={(v) => setExitRule(i, 'event', v || '')}
                     placeholder="order_cancelled"
                     disabled={busy || !editable}
@@ -484,6 +483,7 @@ export default function JourneysPage() {
           <JourneyCanvas nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
             onSelect={setSelected} readOnly={busy || !editable} />
           <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates}
+            eventDefs={eventDefs}
             onChange={updateSelectedConfig} onDelete={deleteSelected} disabled={busy || !editable} />
         </Panel>
 

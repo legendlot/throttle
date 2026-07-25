@@ -2,11 +2,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
+import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -29,8 +30,10 @@ const OPS = [
   { id: 'within_days', label: 'within last (days)' },
 ];
 const ATTR_SUGGEST = ['lifetime_orders', 'lifetime_value', 'last_order_at', 'city', 'locale', 'display_name', 'first'];
-const EVENT_SUGGEST = ['order_placed', 'order_fulfilled', 'order_delivered', 'add_to_cart', 'checkout_started',
-  'checkout_abandoned', 'return_created', 'email_delivered', 'email_opened', 'email_clicked'];
+// Event names come from the LIVE comms.event_definitions registry (see @/lib/eventDefs.js).
+// The hardcoded EVENT_SUGGEST that used to live here listed 10 of 34 registered events and
+// offered `email_clicked`, which S189 renamed to `link_clicked` — a condition that could
+// never match. Registering an event now surfaces it here automatically.
 const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
@@ -79,6 +82,7 @@ export default function SegmentsPage() {
   const [pv, setPv] = useState(null);
   const [pvLoading, setPvLoading] = useState(false);
   const [materializing, setMaterializing] = useState(false);
+  const [eventDefs, setEventDefs] = useState([]);
 
   const canEdit = !perms || perms.segment_manage;
 
@@ -86,8 +90,15 @@ export default function SegmentsPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const r = await garageFetch('getSegments', {}, session);
+      // Registry-backed event picker alongside the segment list. loadEventDefs never
+      // rejects (it falls back internally), so it can share the page's try block without
+      // a suggestion list ever being able to fail the load.
+      const [r, ev] = await Promise.all([
+        garageFetch('getSegments', {}, session),
+        loadEventDefs(garageFetch, session),
+      ]);
       setRows(Array.isArray(r) ? r : []);
+      setEventDefs(ev);
     } catch (e) { showToast(e.message || 'Failed to load segments', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -219,7 +230,20 @@ export default function SegmentsPage() {
                       </>}
 
                       {r.type === 'event' && <>
-                        <input className="f-inp mono" style={{ width: 180 }} list="event-suggest" value={r.event || ''} onChange={(e) => setLeaf(i, { event: e.target.value })} placeholder="event name" disabled={saving || !canEdit} />
+                        {/* Combobox (not a datalist): a datalist filters against what is
+                            ALREADY in the input, so a pre-filled field collapsed to one row
+                            and read as empty/broken. Grouped by category — PATTERN-160. */}
+                        <div style={{ width: 240 }}>
+                          <Combobox
+                            value={r.event || ''}
+                            options={eventComboOptions(eventDefs)}
+                            onChange={(v) => setLeaf(i, { event: v || '' })}
+                            placeholder="Search events…"
+                            disabled={saving || !canEdit}
+                            allowClear={false}
+                            emptyLabel="No matching event — check it is registered in comms.event_definitions"
+                          />
+                        </div>
                         <span className="dim" style={{ fontSize: 12 }}>≥</span>
                         <input className="f-inp mono" style={{ width: 64 }} type="number" min="1" value={r.count} onChange={(e) => setLeaf(i, { count: e.target.value })} disabled={saving || !canEdit} />
                         <span className="dim" style={{ fontSize: 12 }}>within</span>
@@ -245,7 +269,6 @@ export default function SegmentsPage() {
                 </div>
               )}
             <datalist id="attr-suggest">{ATTR_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
-            <datalist id="event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
           </Panel>
         )}
 

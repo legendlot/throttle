@@ -140,10 +140,15 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
-    case 'getEventDefinitions': {      // the registry that backs the journey trigger picker
-      const r = await A.sbComms(
-        '/rest/v1/event_definitions?is_active=is.true&select=name,description&order=name.asc', env);
-      return r.ok ? ok(r.data) : err('db_error', 500);
+    case 'getEventDefinitions': {      // THE registry behind every event picker (S233)
+      // One set-based call: active definitions + their `category` (picker grouping) + live
+      // usage, so an author can see an event has never fired before building a segment on
+      // it — the exact trap the retired `email_clicked` was. Registering a new event is an
+      // INSERT here with a category; it then shows up, grouped, in all three pickers with
+      // no code change. Ordered by (category, name) server-side so groups stay contiguous.
+      const r = await A.sbComms('/rest/v1/rpc/event_registry', env,
+        { method: 'POST', body: JSON.stringify({ p_days: 30 }) });
+      return r.ok ? ok(r.data || []) : err('db_error', 500);
     }
 
     case 'getSegments': {              // M6 (+member_count S231)
