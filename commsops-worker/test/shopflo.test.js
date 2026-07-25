@@ -316,5 +316,47 @@ t('a cart token alone does NOT make an anonymous event ingestable', () => {
 });
 
 
+
+// ── Shopflo's own event-name list (Pruthvi, 2026-07-25) ───────────────────────────────
+// Their list spells it `add_to_cart_ui` (no "ed") and capitalises the browse events, while
+// our live wire is lowercase and our original key was `added_to_cart_ui`. The lookup used to
+// be exact-match, so a spelling/casing difference would drop a whole event type as UNMAPPED —
+// captured, never ingested, and invisible until someone asked why a journey never fired.
+t('lookupEvent tolerates the add_to_cart_ui / added_to_cart_ui spelling split', () => {
+  assert.equal(FLO.lookupEvent('added_to_cart_ui').event, 'add_to_cart');
+  assert.equal(FLO.lookupEvent('add_to_cart_ui').event, 'add_to_cart');
+});
+
+t('lookupEvent folds case (their list reads Product_page_view)', () => {
+  assert.equal(FLO.lookupEvent('Product_page_view').event, 'product_viewed');
+  assert.equal(FLO.lookupEvent('Collection_page_view').event, 'collection_viewed');
+  assert.equal(FLO.lookupEvent('Checkout_clicked').event, 'checkout_started');
+  assert.equal(FLO.lookupEvent('Abandoned_checkout'), null);   // not a name we map (theirs is checkout_abandoned)
+  assert.equal(FLO.lookupEvent(''), null);
+  assert.equal(FLO.lookupEvent(null), null);
+});
+
+t('browse mapper carries identity + product context + cart token', () => {
+  const e = FLO.mapBrowse('product_viewed')({
+    event_name: 'Product_page_view',
+    userData: { phone: '9876543210', email: 'B@C.com' },
+    product_name: 'L.O.T Cars Dash', product_id: '15510899228745',
+    cartToken: 'tok123?key=secret', timestamp: '2026-07-25T10:00:00Z',
+  });
+  assert.equal(e.name, 'product_viewed');
+  assert.equal(e.properties.product_name, 'L.O.T Cars Dash');
+  assert.equal(e.properties.cart_token, 'tok123');
+  assert.equal(e.properties.source_surface, 'shopflo');   // distinguishes from the pixel's copy
+  assert.ok(e.identifiers.some((i) => i.type === 'phone'));
+  assert.ok(e.identifiers.some((i) => i.type === 'cart_id' && i.value === 'tok123'));
+});
+
+// The volume guard. Product page views are Shopflo's highest-volume event (~90.8k/24d in their
+// own analytics); ingesting anonymous ones would flood the substrate with unreachable profiles.
+t('browse mapper DROPS anonymous page views (no strong identity)', () => {
+  assert.equal(FLO.mapBrowse('product_viewed')({ product_name: 'X', cartToken: 'tok' }), null);
+  assert.equal(FLO.mapBrowse('collection_viewed')({ collection_name: 'Drift' }), null);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

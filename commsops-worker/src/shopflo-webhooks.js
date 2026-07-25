@@ -85,7 +85,9 @@ async function handleShopfloWebhook(env, request) {
   try { body = raw ? JSON.parse(raw) : {}; } catch { body = { _unparsed: raw }; }
 
   const evName = FLO.eventName(body);
-  const spec = evName ? FLO.EVENT_MAP[evName] : null;
+  // Tolerant lookup (case + the add_to_cart_ui / added_to_cart_ui spelling split) — an exact
+  // match would silently drop a whole event type as "unmapped" on a casing difference.
+  const spec = FLO.lookupEvent(evName);
 
   // Unmapped (or unparseable / no event name) → capture raw for discovery, ack 200.
   if (!spec) {

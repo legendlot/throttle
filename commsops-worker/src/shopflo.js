@@ -343,11 +343,77 @@ function mapAddToCart(body) {
 // Shopflo event_name → { event: comms event name, map: mapper }. Only the
 // decision-driving events are mapped in v1; browse/page-view events are captured for
 // discovery but not turned into substrate events (add a row here to promote one).
+// Browse-stage mapper factory (product / collection page views, checkout clicked). Shopflo's
+// value here is IDENTITY: the Shopify Web Pixel already emits these events but ~98% anonymously
+// (measured: 16 phones across 16,093 add_to_cart profiles), because identity lives in Shop Pass,
+// not Shopify. A Shopflo-sourced browse event that carries phone/email is the thing that makes
+// browse + cart abandonment addressable at all.
+//
+// Same guard as every other mapper: NO STRONG IDENTITY -> return null. These are the highest-
+// volume events Shopflo has (~90.8k product page views / 24d in their own analytics), so
+// ingesting anonymous ones would flood the substrate with unreachable profiles for zero gain.
+// `source_surface:'shopflo'` distinguishes them from the pixel's copies of the same event names.
+function mapBrowse(eventName) {
+  return function mapBrowseEvent(body) {
+    const identifiers = identsFromShopflo(body);
+    if (!identifiers.length) return null;
+    const b = body || {};
+    const p = b.eventPayload || b.data || {};
+    const pick = (...keys) => firstNonEmpty(...keys.map((k) => b[k] ?? p[k]));
+    const props = {
+      product_name: pick('product_name', 'productName', 'title', 'product_title'),
+      product_id: pick('product_id', 'productId'),
+      variant_id: pick('variant_id', 'variantId'),
+      product_url: pick('product_url', 'productUrl', 'url', 'page_url'),
+      collection_name: pick('collection_name', 'collectionName', 'collection'),
+      price: num(pick('price', 'total_price')),
+      currency: pick('currency'),
+      cart_token: cartToken(body),
+      source_surface: 'shopflo',
+    };
+    const key = firstNonEmpty(cartToken(body), b.session_id, b.longSessionId, p.longSessionId) || '';
+    const ts = toIso(firstNonEmpty(b.timestamp, b.updated_at, b.created_at));
+    const cartId = cartIdentifier(body);
+    if (cartId) identifiers.push(cartId);
+    return {
+      identifiers, name: eventName, occurred_at: ts,
+      properties: props, source: 'shopflo',
+      // Page views legitimately repeat, so the timestamp stays in the key — dedupe a
+      // redelivery, not the customer viewing the same product twice.
+      idempotency_key: key ? `shopflo:${eventName}:${key}:${ts || ''}` : null,
+    };
+  };
+}
+
 const EVENT_MAP = {
   checkout_abandoned: { event: 'checkout_abandoned', map: mapCheckoutAbandoned },
   order_completed: { event: 'shopflo_order_completed', map: mapOrderCompleted },
   added_to_cart_ui: { event: 'add_to_cart', map: mapAddToCart },
+  // Shopflo's own list (Pruthvi, 2026-07-25) spells this WITHOUT the "ed" — and the
+  // lookup used to be exact-match, so `add_to_cart_ui` would have fallen through as
+  // UNMAPPED the moment they started routing it: captured, never ingested, silent.
+  // Both spellings map to the same event; lookupEvent() also folds case (their list
+  // reads `Product_page_view`/`Checkout_clicked`, our live wire is lowercase, and
+  // nobody can say which is authoritative until a real payload lands).
+  add_to_cart_ui: { event: 'add_to_cart', map: mapAddToCart },
+  // Browse-stage events. Shopflo says identity rides on these (which is the whole point —
+  // it is the identification Shopify's pixel cannot give us). All three target event
+  // definitions are already registered, and `product_viewed` is the Browse Abandonment
+  // journey's trigger.
+  product_page_view: { event: 'product_viewed', map: mapBrowse('product_viewed') },
+  collection_page_view: { event: 'collection_viewed', map: mapBrowse('collection_viewed') },
+  checkout_clicked: { event: 'checkout_started', map: mapBrowse('checkout_started') },
 };
+
+// Case/spelling-tolerant lookup. Exact match first (cheapest, and preserves any key that
+// deliberately differs), then a normalised fallback.
+function lookupEvent(name) {
+  if (!name) return null;
+  if (EVENT_MAP[name]) return EVENT_MAP[name];
+  const norm = String(name).toLowerCase().trim();
+  if (EVENT_MAP[norm]) return EVENT_MAP[norm];
+  return null;
+}
 
 // Consent rows from `customer.marketing_consent` (true→opted_in, false→opted_out,
 // absent→[] i.e. leave the gate's default block in place). One flag → both email
@@ -369,6 +435,6 @@ function consentRowsFrom(body, capturedAt) {
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, SHOPFLO_CHECKOUT_BASE,
-  normalizeCartToken, cartToken, cartIdentifier,
+  normalizeCartToken, cartToken, cartIdentifier, mapBrowse, lookupEvent,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };
