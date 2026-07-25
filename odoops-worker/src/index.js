@@ -2291,6 +2291,124 @@ function uniPackageRow(so, p) {
 // so odoops cannot POST to commsops /ingest. commsops pulls from public.ecom_shipments on its
 // own cron and calls ingest() in-process — which is also what fires the journey triggers.
 
+// ── Stale-shipment reconcile ────────────────────────────────────────────────────────────────
+// The poller walks FORWARD off an updated_at watermark, so a parcel Uniware never re-touches is
+// never revisited. Measured 2026-07-25: 6,101 shipments stuck at in_transit/manifested with
+// dispatch >10 days ago (4,881 of them >30 days) — they are delivered in reality. That is the
+// root cause of order_delivered never firing: we detect a handful of deliveries a day out of ~100.
+//
+// ⚠️ EMISSION SAFETY — the one rule this must not break. commsops emits off ecom_shipments, and
+// `occurredAt()` there reads `delivered_at` for delivered and **`uniware_updated_at` for
+// in_transit/out_for_delivery/rto**. So if a reconcile stamped `uniware_updated_at = now()`, every
+// resolved parcel would look like a transition that just happened and blast "your order is on the
+// way / being returned" for weeks-old orders. Measured against the live gates:
+//     writes now()                → 1,197 rows would emit
+//     writes Uniware's own stamp  →     0 rows would emit
+// We reuse `uniPackageRow`, which already writes `uniTs(p.updated || so.updated)` — Uniware's own
+// value — so a faithful reconcile is safe BY CONSTRUCTION. Do not "helpfully" freshen that field.
+// The age cap (>30 days since dispatch) and the courier_emit_from watermark are the backstops.
+//
+// Dry run is the DEFAULT: it fetches from Uniware and reports what would change (and what would
+// emit) without writing, so the safety claim is re-checked against real data before any apply.
+const RECONCILE_LIMIT = 100;      // saleorder/get calls per run — 1 subrequest each
+const RECONCILE_MIN_AGE_DAYS = 10; // a parcel dispatched <10d ago may legitimately still be moving
+
+async function reconcileStaleShipments(env, opts = {}) {
+  const dryRun = opts.dry_run !== false;                       // default DRY
+  const limit = Math.min(Number(opts.limit) || RECONCILE_LIMIT, 400);
+  const minAge = Number(opts.min_age_days) || RECONCILE_MIN_AGE_DAYS;
+  const cutoff = new Date(Date.now() - minAge * 86400000).toISOString();
+
+  // Oldest-checked first (reconciled_at NULLS FIRST) so the sweep rotates fairly and drains,
+  // instead of re-fetching the same head every run.
+  const q = `/rest/v1/ecom_shipments?lifecycle=in.(in_transit,out_for_delivery,manifested,pending)`
+    + `&dispatched_at=lt.${encodeURIComponent(cutoff)}&uniware_order_code=not.is.null`
+    + `&select=id,uniware_order_code,uniware_package_code,lifecycle,dispatched_at,first_seen_at,`
+    + `uniware_updated_at,delivered_at,shopify_order_id,emitted_lifecycles`
+    + `&order=reconciled_at.asc.nullsfirst,dispatched_at.asc&limit=${limit}`;
+  const sel = await sbPublic(q);
+  if (!sel.ok) return { ok: false, error: `select_${sel.status}` };
+  const stale = sel.data || [];
+  if (!stale.length) return { ok: true, dry_run: dryRun, candidates: 0, note: 'nothing stale' };
+
+  // The emit watermark, so a dry run can report would-emit precisely rather than guessing.
+  const st = await sbComms('/rest/v1/settings?id=eq.1&select=courier_emit_from&limit=1');
+  const fromMs = Date.parse((st.ok && st.data?.[0]?.courier_emit_from) || '') || Infinity;
+
+  const token = await getUniwareToken(env);
+  const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+
+  // One saleorder/get per ORDER (an order can hold several parcels) — dedupe first.
+  const byOrder = new Map();
+  for (const s of stale) if (!byOrder.has(s.uniware_order_code)) byOrder.set(s.uniware_order_code, s);
+
+  const rows = [], changes = [], errors = [];
+  let fetched = 0;
+  for (const [code] of byOrder) {
+    let so = null;
+    try {
+      const r = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, {
+        method: 'POST',
+        headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      fetched++;
+      so = (await r.json().catch(() => ({})))?.saleOrderDTO || null;
+    } catch (e) { errors.push({ code, error: String(e?.message || e) }); continue; }
+    if (!so) { errors.push({ code, error: 'no_order' }); continue; }
+    for (const p of (so.shippingPackages || [])) {
+      if (!p?.code) continue;
+      const row = uniPackageRow(so, p);                        // writes UNIWARE's stamps, not now()
+      rows.push(row);
+      const before = stale.find((s) => s.uniware_package_code === p.code);
+      if (before && before.lifecycle !== row.lifecycle) {
+        // Would commsops emit this transition? Mirror its gates exactly.
+        const occurred = Date.parse(
+          (row.lifecycle === 'delivered' ? (row.delivered_at || row.uniware_updated_at)
+                                         : row.uniware_updated_at) || '');
+        const born = Date.parse(row.dispatched_at || before.first_seen_at || '');
+        const wouldEmit = !!before.shopify_order_id
+          && ['in_transit', 'out_for_delivery', 'delivered', 'rto'].includes(row.lifecycle)
+          && !(before.emitted_lifecycles || []).includes(row.lifecycle)
+          && !Number.isNaN(occurred) && occurred >= fromMs
+          && !(!Number.isNaN(born) && Date.now() - born > 30 * 86400000);
+        changes.push({ pkg: p.code, from: before.lifecycle, to: row.lifecycle, would_emit: wouldEmit });
+      }
+    }
+  }
+
+  const summary = changes.reduce((a, c) => { const k = `${c.from}->${c.to}`; a[k] = (a[k] || 0) + 1; return a; }, {});
+  const wouldEmit = changes.filter((c) => c.would_emit).length;
+
+  if (dryRun) {
+    return { ok: true, dry_run: true, candidates: stale.length, orders_fetched: fetched,
+             parcels_seen: rows.length, changes: changes.length, transitions: summary,
+             would_emit: wouldEmit, errors: errors.slice(0, 5), error_count: errors.length,
+             sample: changes.slice(0, 10) };
+  }
+
+  // APPLY. The upsert carries Uniware's own timestamps; `reconciled_at` is stamped separately so
+  // it can never be mistaken for a lifecycle time (and the emitter never reads it).
+  let applied = 0;
+  if (rows.length) {
+    const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
+    });
+    if (!up.ok) return { ok: false, error: `upsert_${up.status}`, detail: up.data };
+    applied = rows.length;
+  }
+  // Mark every candidate as checked — INCLUDING ones that did not change, else an unresolvable
+  // parcel is re-fetched every run and the sweep never drains past it.
+  const ids = stale.map((s) => s.id);
+  if (ids.length) {
+    await sbPublic(`/rest/v1/ecom_shipments?id=in.(${ids.join(',')})`,
+      { method: 'PATCH', body: JSON.stringify({ reconciled_at: new Date().toISOString() }) });
+  }
+  return { ok: true, dry_run: false, candidates: stale.length, orders_fetched: fetched,
+           applied, changes: changes.length, transitions: summary, would_emit: wouldEmit,
+           error_count: errors.length };
+}
+
 // Refresh ONE order's parcels on demand (the Pitstop agent hitting ⟳ mid-call). Cheap: token +
 // one saleorder/get + one upsert. Only works for orders we already track — the Uniware order
 // code is the Shopify order ID, which we hold on the existing row; without it there is nothing
@@ -3128,12 +3246,20 @@ export default {
       let b = {}; try { b = await request.json(); } catch { /* ignore */ }
       // Run the real tracking sync on demand (same code the cron calls) — for bring-up and
       // for draining a backlog faster than hourly ticks would.
-      if (b.op === 'sync' || b.op === 'refreshOrder') {
+      if (b.op === 'sync' || b.op === 'refreshOrder' || b.op === 'reconcile') {
         SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
         try {
           if (b.op === 'refreshOrder') {
             const r = await refreshUniwareOrder(env, b.order);
             return r.ok ? ok(r) : err(r.error, 404);
+          }
+          // Stale-shipment reconcile. DRY BY DEFAULT — pass {"dry_run":false} to write.
+          // A dry run re-proves the emission-safety claim against live Uniware data
+          // (`would_emit` must be 0) before anything is applied.
+          if (b.op === 'reconcile') {
+            const r = await reconcileStaleShipments(env,
+              { dry_run: b.dry_run, limit: b.limit, min_age_days: b.min_age_days });
+            return r.ok ? ok(r) : err(r.error, 500);
           }
           return ok(await syncUniwareTracking(env, { pageSize: b.pageSize }));
         } catch (e) { return err(String(e?.message || e), 500); }
