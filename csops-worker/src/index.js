@@ -685,6 +685,7 @@ async function handleGet(action, params, auth, env) {
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
     case 'getMessagingStats':   return getMessagingStats(params, auth, env);
+    case 'getEmailAttachment':  return getEmailAttachment(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -4841,6 +4842,102 @@ const EMAIL_ATTACH_MAX_PER_FILE = 10 * 1024 * 1024;   // 10MB per file
 const EMAIL_ATTACH_MAX_TOTAL    = 15 * 1024 * 1024;   // 15MB total (Gmail hard cap 25MB; kept low for Worker memory)
 const EMAIL_ATTACH_MAX_COUNT    = 10;                 // subrequest-budget guard (one upload each)
 
+// ── INBOUND email attachments (2026-07-25, Pruthvi #bugs) ────────────────────
+// The inbox bubble already renders a chip per raw_meta.attachments entry and links
+// it when the entry carries a url; outbound sends host their bytes on the PUBLIC
+// cs-inbox-media bucket. Inbound stored filename/mime/size only, so every incoming
+// attachment rendered as a dead "preview unavailable" chip and agents had to open
+// Gmail. We now pull the bytes and host them — on a PRIVATE bucket, because these
+// are files CUSTOMERS sent us (IDs, invoices, addresses), not files we authored.
+// Only a storage_path is persisted; a signed URL is minted per click by
+// getEmailAttachment (cs_ticket_view-gated, 120s TTL).
+const EMAIL_INBOUND_BUCKET        = 'cs-email-attachments';
+const EMAIL_INBOUND_MAX_PER_FILE  = 10 * 1024 * 1024;   // matches the bucket's file_size_limit
+const EMAIL_INBOUND_MAX_TOTAL     = 20 * 1024 * 1024;   // per message (Worker memory: base64 inflates ~4/3)
+const EMAIL_INBOUND_MAX_COUNT     = 10;                 // per message
+const EMAIL_INBOUND_MAX_PER_RUN   = 24;                 // per sync tick, across all messages
+// Types we let the browser render inline (previewed in a new tab). EVERYTHING else is
+// force-downloaded via the signed URL's ?download= param, so a customer-sent .html/.svg
+// can never execute in a browsing context. Deliberately NOT an upload allowlist — we
+// host whatever arrived under the size cap, since refusing to store it just recreates
+// the unopenable-chip bug (an iPhone HEIC, say) while adding no safety: the file is
+// already in the mailbox and the agent's fallback is opening Gmail anyway.
+const EMAIL_INLINE_SAFE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
+
+// Supabase Storage with the service key (mirrors podiumops/snorkelops storageFetch).
+async function csStorageFetch(path, env, opts = {}) {
+  const r = await fetch(`${env.SUPABASE_URL}/storage/v1${path}`, {
+    ...opts,
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: r.ok, status: r.status, data };
+}
+
+// Fetch each Gmail attachment part and store it on the private bucket. Returns the
+// raw_meta.attachments array to persist: the original metadata plus either a
+// storage_path (fetchable) or a skipped reason (chip stays inert but HONEST about why
+// — never silently dropped). Best-effort throughout: a failure on one file must not
+// cost us the message itself.
+async function storeInboundEmailAttachments(env, { threadId, gmailMessageId, attachments, budget }) {
+  const out = [];
+  let total = 0;
+  for (let i = 0; i < attachments.length; i++) {
+    const a = attachments[i];
+    const base = { filename: a.filename, mime: a.mime, size: a.size, attachment_id: a.attachment_id };
+    // Cheap guards first — each of these saves two subrequests.
+    if (i >= EMAIL_INBOUND_MAX_COUNT)                { out.push({ ...base, skipped: 'too_many' }); continue; }
+    if (!a.attachment_id)                            { out.push({ ...base, skipped: 'inline_part' }); continue; }
+    if (Number(a.size || 0) > EMAIL_INBOUND_MAX_PER_FILE) { out.push({ ...base, skipped: 'too_large' }); continue; }
+    if (total + Number(a.size || 0) > EMAIL_INBOUND_MAX_TOTAL) { out.push({ ...base, skipped: 'message_too_large' }); continue; }
+    if (budget.left <= 0)                            { out.push({ ...base, skipped: 'run_budget' }); continue; }
+    budget.left--;
+
+    try {
+      const att = await gmailFetch(env, `/messages/${encodeURIComponent(gmailMessageId)}/attachments/${encodeURIComponent(a.attachment_id)}`);
+      if (!att.ok || !att.data?.data) {
+        console.error('[email] attachment fetch failed', gmailMessageId, a.filename, att.status);
+        out.push({ ...base, skipped: 'fetch_failed' }); continue;
+      }
+      const bytes = b64urlToBytes(att.data.data);
+      if (bytes.length > EMAIL_INBOUND_MAX_PER_FILE) { out.push({ ...base, skipped: 'too_large' }); continue; }
+      total += bytes.length;
+
+      // Path is server-generated; nothing client-supplied reaches the bucket.
+      const path = `${threadId}/${gmailMessageId}/${crypto.randomUUID()}${extFromFilename(a.filename)}`;
+      const up = await csStorageFetch(`/object/${EMAIL_INBOUND_BUCKET}/${path}`, env, {
+        method: 'POST',
+        headers: { 'Content-Type': a.mime || 'application/octet-stream', 'x-upsert': 'true' },
+        body: bytes,
+      });
+      if (!up.ok) {
+        console.error('[email] attachment upload failed', a.filename, up.status, JSON.stringify(up.data)?.slice(0, 160));
+        out.push({ ...base, skipped: 'upload_failed' }); continue;
+      }
+      out.push({ ...base, size: bytes.length, storage_path: path });
+    } catch (e) {
+      console.error('[email] attachment store error', a.filename, String(e?.message || e));
+      out.push({ ...base, skipped: 'error' });
+    }
+  }
+  return out;
+}
+
+// NB attachment bodies are base64URL — decoded with the existing b64urlToBytes helper
+// (declared with the other base64url utils below; atob's forgiving decode handles
+// Gmail's unpadded output).
+// Keep the original extension on the stored object (helps when a signed URL is opened
+// directly). Whitelist-shaped so a filename can never inject path or query characters.
+function extFromFilename(name) {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(name || ''));
+  return m ? `.${m[1].toLowerCase()}` : '';
+}
+
 // bytes -> standard base64 (NOT base64url), CRLF-wrapped at 76 cols per RFC 2045.
 function bytesToB64Wrapped(bytes) {
   let bin = '';
@@ -5148,21 +5245,25 @@ async function syncGmail(env, { lookbackDays = 2 } = {}) {
   if (!fresh.length) return { ok: true, fetched: ids.length, new: 0 };
 
   let created = 0;
+  // Shared attachment budget for the whole tick (2 subrequests per file). The real
+  // ceiling is 10,000/invocation so this is nowhere near it — it's a guard against one
+  // pathological batch of attachment-heavy mail, not a plan-limit workaround.
+  const budget = { left: EMAIL_INBOUND_MAX_PER_RUN };
   for (const id of fresh) {
     try {
       const gm = await gmailFetch(env, `/messages/${encodeURIComponent(id)}?format=full`);
       if (!gm.ok) { console.error('[email] get failed', id, gm.status); continue; }
       const parsed = parseGmailMessage(gm.data);
-      const ok2 = await ingestInboundEmail(env, parsed);
+      const ok2 = await ingestInboundEmail(env, parsed, budget);
       if (ok2) created++;
     } catch (e) { console.error('[email] sync msg error', id, e); }
   }
-  return { ok: true, fetched: ids.length, new: created };
+  return { ok: true, fetched: ids.length, new: created, attachments_left: budget.left };
 }
 
 // Persist one inbound email: resolve profile via Relay, upsert thread, insert
 // message, auto-reopen + round-robin assign. Mirrors metaHandleMessage.
-async function ingestInboundEmail(env, p) {
+async function ingestInboundEmail(env, p, budget = { left: EMAIL_INBOUND_MAX_PER_RUN }) {
   if (!p.from_email) return false;
 
   // 1. Identity via the Relay substrate (best-effort).
@@ -5226,6 +5327,34 @@ async function ingestInboundEmail(env, p) {
   });
   if (!ins.ok) { console.error('[email] message insert failed', ins.status, JSON.stringify(ins.data)?.slice(0, 200)); return false; }
 
+  // 3b. Pull the attachment bytes onto the private bucket and stamp the storage paths
+  // back onto raw_meta (2026-07-25). Deliberately AFTER the insert and gated on the
+  // insert having actually created a row: with resolution=ignore-duplicates a re-poll
+  // of the same Gmail id returns [], so a message we already have costs zero Gmail
+  // fetches and zero uploads here. Best-effort — the message is already safely stored,
+  // so a storage failure only leaves the chips inert (with a reason), never loses mail.
+  const inserted = ins.data?.[0] || null;
+  if (inserted?.id && p.attachments?.length && budget.left > 0) {
+    const stored = await storeInboundEmailAttachments(env, {
+      threadId: thread.id, gmailMessageId: p.gmail_message_id, attachments: p.attachments, budget,
+    });
+    const primary = stored.find(a => a.storage_path && (a.mime || '').startsWith('image/'))
+                 || stored.find(a => a.storage_path) || null;
+    const patchMeta = {
+      raw_meta: { ...(inserted.raw_meta || {}), attachments: stored },
+      // Mirror the WA/outbound shape so any other reader sees a media message. The email
+      // bubble reads raw_meta.attachments and is unaffected by kind; media_url stays NULL
+      // because a private object has no durable URL — the path is the durable handle.
+      kind: stored.some(a => a.storage_path)
+        ? (stored.filter(a => a.storage_path).length === 1 && (primary?.mime || '').startsWith('image/') ? 'image' : 'document')
+        : 'text',
+      ...(primary ? { media_filename: primary.filename, media_mime_type: primary.mime, media_size_bytes: primary.size } : {}),
+    };
+    await sb(`/rest/v1/cs_wa_messages?id=eq.${inserted.id}`, env, {
+      method: 'PATCH', body: JSON.stringify(patchMeta),
+    }).catch(e => console.error('[email] attachment meta patch failed', String(e?.message || e)));
+  }
+
   // 4. Thread housekeeping: bump activity, backfill profile/subject, auto-reopen.
   const patch = { last_message_at: p.internal_date, last_inbound_at: p.internal_date };   // last_inbound_at = unread watermark
   if (!thread.comms_profile_id && profileId) patch.comms_profile_id = profileId;
@@ -5251,6 +5380,48 @@ async function syncGmailNow(body, auth, env) {
     const res = await syncGmail(env, { lookbackDays: Number(body?.lookbackDays) || 2 });
     return res.ok ? ok(res) : err(`Gmail sync failed: ${res.error || ''}`, 502);
   } catch (e) { return err(`Gmail sync error: ${String(e.message || e)}`, 502); }
+}
+
+// ── Inbound attachment download — mint a short-lived signed URL ---------------
+// The bucket is private, so this is the ONLY way an agent reaches a customer-sent
+// file. Two deliberate choices:
+//  · The client sends message_id + idx, never a path. The path is read out of the
+//    stored row, so no caller can walk the bucket or reach another bucket by
+//    crafting input (the getProfiles/M9 oracle class of bug).
+//  · Anything not in EMAIL_INLINE_SAFE_MIME gets ?download=, which makes Storage
+//    send Content-Disposition: attachment — a customer-sent .html/.svg downloads
+//    instead of executing in a browsing context.
+async function getEmailAttachment(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const message_id = params.get('message_id');
+  const idx = Number(params.get('idx'));
+  if (!message_id) return err('message_id required');
+  if (!Number.isInteger(idx) || idx < 0) return err('idx must be a non-negative integer');
+
+  const mRes = await sb(
+    `/rest/v1/cs_wa_messages?id=eq.${encodeURIComponent(message_id)}&select=id,channel,raw_meta&limit=1`, env);
+  const msg = mRes.data?.[0];
+  if (!msg) return err('Message not found', 404);
+  if (msg.channel !== 'email') return err('Not an email message', 400);
+
+  const att = Array.isArray(msg.raw_meta?.attachments) ? msg.raw_meta.attachments[idx] : null;
+  if (!att) return err('Attachment not found', 404);
+  // Outbound sends already hosted their copy publicly — hand that back unchanged.
+  if (att.url) return ok({ url: att.url, filename: att.filename || null, mime_type: att.mime || null, inline: true });
+  if (!att.storage_path) return err(`Attachment unavailable${att.skipped ? ` (${att.skipped})` : ''}`, 409);
+
+  const seg = String(att.storage_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await csStorageFetch(`/object/sign/${EMAIL_INBOUND_BUCKET}/${seg}`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)?.slice(0, 160)}`, 502);
+
+  const inline = EMAIL_INLINE_SAFE_MIME.has(String(att.mime || '').toLowerCase());
+  let url = `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`;
+  if (!inline) url += `${url.includes('?') ? '&' : '?'}download=${encodeURIComponent(att.filename || 'attachment')}`;
+  return ok({ url, filename: att.filename || null, mime_type: att.mime || null, inline });
 }
 
 // ── Reply — Gmail-native send, in-thread, mirrored to Relay -------------------

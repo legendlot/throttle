@@ -27,6 +27,26 @@ const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), 
   loading: () => <div style={{ padding: 20, fontSize: 12, color: 'var(--t3)' }}>Loading emoji…</div>,
 });
 
+// Why an inbound email attachment couldn't be stored (raw_meta.attachments[].skipped,
+// stamped by csops at ingest). Shown as the chip's tooltip so a dead chip explains
+// itself instead of just reading "unavailable".
+const ATT_SKIP_REASON = {
+  too_large: 'Too large to preview here (over 10MB) — open the email in Gmail',
+  message_too_large: 'This email’s attachments exceed the size limit — open it in Gmail',
+  too_many: 'Beyond the 10-attachment limit — open the email in Gmail',
+  inline_part: 'Embedded in the email body, not a separate file',
+  fetch_failed: 'Couldn’t be retrieved — open the email in Gmail',
+  upload_failed: 'Couldn’t be saved — open the email in Gmail',
+  run_budget: 'Not fetched yet — it will appear shortly',
+  error: 'Couldn’t be retrieved — open the email in Gmail',
+};
+function fmtBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const CHANNELS = {
   instagram: { label: 'Instagram', color: '#E1306C', Glyph: Instagram, sendable: true, hasWindow: true },
   messenger: { label: 'Messenger', color: '#0084FF', Glyph: Facebook, sendable: true, hasWindow: true },
@@ -1422,6 +1442,31 @@ function noteHtml(s) {
   return esc.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/_([^_]+)_/g, '<em>$1</em>');
 }
 function Bubble({ m, accent }) {
+  const { session } = useAuth();
+  // Per-attachment open state (index being fetched, and the last error). Hooks stay
+  // above the internal-note early return so the call order is unconditional.
+  const [attBusy, setAttBusy] = useState(null);
+  const [attErr, setAttErr] = useState(null);
+
+  // Inbound customer attachments live on a PRIVATE bucket, so there is no durable URL
+  // to put in an href — we mint a 120s signed one per click. The blank tab is opened
+  // SYNCHRONOUSLY inside the gesture, then pointed at the URL once it resolves;
+  // opening after the await is what popup blockers kill.
+  const openAttachment = async (idx) => {
+    if (attBusy !== null) return;
+    setAttBusy(idx); setAttErr(null);
+    const tab = window.open('', '_blank');
+    try {
+      const d = await csopsGet('getEmailAttachment', { message_id: m.id, idx: String(idx) }, session);
+      if (!d?.url) throw new Error('No URL returned');
+      if (tab) tab.location = d.url;
+      else setAttErr('Allow pop-ups for this site to open attachments');
+    } catch (e) {
+      if (tab) tab.close();
+      setAttErr(String(e?.message || e).replace(/^Error:\s*/, ''));
+    } finally { setAttBusy(null); }
+  };
+
   // Internal note — full-width, centered, amber, never customer-facing (S162-B).
   if (m.is_internal || m.kind === 'note') {
     const ts = m.sent_at || m.created_at;
@@ -1459,15 +1504,39 @@ function Bubble({ m, accent }) {
             letterSpacing: '0.05em', marginBottom: 4 }}>Template · {m.template_name}</div>
         )}
         {emailAtts ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: (m.body || emailHtml) ? 6 : 2 }}>
-            {emailAtts.map((a, i) => {
-              const chip = { display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 220,
-                padding: '3px 8px', borderRadius: 999, fontSize: 11, border: '1px solid var(--border)', background: 'var(--surface)' };
-              const label = <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.filename || 'attachment'}</span>;
-              return a.url
-                ? <a key={i} href={a.url} target="_blank" rel="noreferrer" style={{ ...chip, color: 'var(--accent)', textDecoration: 'none' }}><FileText size={11} />{label}</a>
-                : <span key={i} style={{ ...chip, color: 'var(--t3)', opacity: 0.75 }} title="Sent — preview unavailable"><FileText size={11} />{label}</span>;
-            })}
+          <div style={{ marginBottom: (m.body || emailHtml) ? 6 : 2 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {emailAtts.map((a, i) => {
+                const chip = { display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 220,
+                  padding: '3px 8px', borderRadius: 999, fontSize: 11, border: '1px solid var(--border)', background: 'var(--surface)' };
+                const label = <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.filename || 'attachment'}</span>;
+                const busy = attBusy === i;
+                // Outbound sends carry a public url (hosted at send time) — plain link.
+                if (a.url) {
+                  return <a key={i} href={a.url} target="_blank" rel="noreferrer" style={{ ...chip, color: 'var(--accent)', textDecoration: 'none' }}><FileText size={11} />{label}</a>;
+                }
+                // Inbound with stored bytes — mint a signed URL on click.
+                if (a.storage_path) {
+                  return (
+                    <button key={i} type="button" onClick={() => openAttachment(i)} disabled={busy}
+                      title={`${a.filename || 'attachment'}${a.size ? ` · ${fmtBytes(a.size)}` : ''}`}
+                      style={{ ...chip, color: 'var(--accent)', cursor: busy ? 'progress' : 'pointer',
+                        font: 'inherit', fontSize: 11, opacity: busy ? 0.6 : 1 }}>
+                      <FileText size={11} />{label}
+                    </button>
+                  );
+                }
+                // Neither: say WHY rather than a bare "unavailable" (a skipped reason is
+                // recorded at ingest — oversize, fetch failure, etc.).
+                return (
+                  <span key={i} style={{ ...chip, color: 'var(--t3)', opacity: 0.75 }}
+                    title={ATT_SKIP_REASON[a.skipped] || 'Preview unavailable — open the email in Gmail'}>
+                    <FileText size={11} />{label}
+                  </span>
+                );
+              })}
+            </div>
+            {attErr && <div style={{ marginTop: 4, fontSize: 10.5, color: 'var(--bad-fg)' }}>{attErr}</div>}
           </div>
         ) : m.media_url && (m.kind === 'image' ? (
           <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 2 }}>
