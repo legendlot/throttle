@@ -738,6 +738,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
+    case 'backfillEmailAttachments': return backfillEmailAttachments(body, auth, env);
     case 'backfillPurchaseDates':    return backfillPurchaseDates(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
@@ -4928,6 +4929,69 @@ async function storeInboundEmailAttachments(env, { threadId, gmailMessageId, att
   return out;
 }
 
+// Write the stored-attachment array back onto a message row. `attachments_backfilled_at`
+// is the drain marker: it means "we have tried every file on this message", so the
+// backfill never re-walks a message whose files are genuinely unfetchable.
+async function patchStoredAttachments(env, row, stored) {
+  const withBytes = stored.filter(a => a.storage_path);
+  const primary = withBytes.find(a => (a.mime || '').startsWith('image/')) || withBytes[0] || null;
+  const patch = {
+    raw_meta: { ...(row.raw_meta || {}), attachments: stored, attachments_backfilled_at: new Date().toISOString() },
+    // Mirror the WA/outbound shape so any other reader sees a media message. The email
+    // bubble reads raw_meta.attachments and is unaffected by kind; media_url stays NULL
+    // because a private object has no durable URL — the path is the durable handle.
+    kind: withBytes.length
+      ? (withBytes.length === 1 && (primary?.mime || '').startsWith('image/') ? 'image' : 'document')
+      : 'text',
+    ...(primary ? { media_filename: primary.filename, media_mime_type: primary.mime, media_size_bytes: primary.size } : {}),
+  };
+  const r = await sb(`/rest/v1/cs_wa_messages?id=eq.${row.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) })
+    .catch(e => { console.error('[email] attachment meta patch failed', String(e?.message || e)); return { ok: false }; });
+  return { ok: !!r?.ok, stored: withBytes.length, total: stored.length };
+}
+
+// Backfill the attachments of emails ingested BEFORE this feature existed (the ingest
+// path only stores on insert, so ~468 messages back to 2026-06-26 had metadata but no
+// bytes — including the ones in the original bug report). Gmail still holds the
+// messages and we persisted each part's attachment_id, so the bytes are recoverable.
+// Admin-gated, capped per call, newest-first, drains across repeated calls.
+async function backfillEmailAttachments(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  if (!gmailConfigured(env)) return err('Gmail not configured', 503);
+  const limit = Math.min(Math.max(Number(body?.limit) || 20, 1), 50);
+
+  // Candidates: inbound email, has attachment metadata, never walked before.
+  const cRes = await sb(
+    `/rest/v1/cs_wa_messages?channel=eq.email&direction=eq.inbound` +
+    `&raw_meta->attachments=not.is.null&raw_meta->>attachments_backfilled_at=is.null` +
+    `&select=id,thread_id,provider_message_id,raw_meta&order=received_at.desc&limit=${limit}`, env);
+  if (!cRes.ok) return err(`candidate query failed: ${JSON.stringify(cRes.data)?.slice(0, 160)}`, 502);
+
+  const rows = (cRes.data || []).filter(r => Array.isArray(r.raw_meta?.attachments) && r.raw_meta.attachments.length);
+  const budget = { left: EMAIL_INBOUND_MAX_PER_RUN * 4 };   // a backfill call is allowed more than a cron tick
+  let messages = 0, files = 0;
+  for (const row of rows) {
+    if (budget.left <= 0) break;
+    if (!row.provider_message_id) {          // no Gmail id → nothing to fetch; mark so it stops surfacing
+      await patchStoredAttachments(env, row, row.raw_meta.attachments.map(a => ({ ...a, skipped: 'no_gmail_id' })));
+      messages++; continue;
+    }
+    const stored = await storeInboundEmailAttachments(env, {
+      threadId: row.thread_id, gmailMessageId: row.provider_message_id,
+      attachments: row.raw_meta.attachments, budget,
+    });
+    const res = await patchStoredAttachments(env, row, stored);
+    messages++; files += res.stored;
+  }
+
+  const remaining = await sb(
+    `/rest/v1/cs_wa_messages?channel=eq.email&direction=eq.inbound` +
+    `&raw_meta->attachments=not.is.null&raw_meta->>attachments_backfilled_at=is.null&select=id`, env);
+  return ok({ messages_processed: messages, files_stored: files,
+              remaining: Array.isArray(remaining.data) ? remaining.data.length : null,
+              budget_left: budget.left });
+}
+
 // NB attachment bodies are base64URL — decoded with the existing b64urlToBytes helper
 // (declared with the other base64url utils below; atob's forgiving decode handles
 // Gmail's unpadded output).
@@ -5338,21 +5402,7 @@ async function ingestInboundEmail(env, p, budget = { left: EMAIL_INBOUND_MAX_PER
     const stored = await storeInboundEmailAttachments(env, {
       threadId: thread.id, gmailMessageId: p.gmail_message_id, attachments: p.attachments, budget,
     });
-    const primary = stored.find(a => a.storage_path && (a.mime || '').startsWith('image/'))
-                 || stored.find(a => a.storage_path) || null;
-    const patchMeta = {
-      raw_meta: { ...(inserted.raw_meta || {}), attachments: stored },
-      // Mirror the WA/outbound shape so any other reader sees a media message. The email
-      // bubble reads raw_meta.attachments and is unaffected by kind; media_url stays NULL
-      // because a private object has no durable URL — the path is the durable handle.
-      kind: stored.some(a => a.storage_path)
-        ? (stored.filter(a => a.storage_path).length === 1 && (primary?.mime || '').startsWith('image/') ? 'image' : 'document')
-        : 'text',
-      ...(primary ? { media_filename: primary.filename, media_mime_type: primary.mime, media_size_bytes: primary.size } : {}),
-    };
-    await sb(`/rest/v1/cs_wa_messages?id=eq.${inserted.id}`, env, {
-      method: 'PATCH', body: JSON.stringify(patchMeta),
-    }).catch(e => console.error('[email] attachment meta patch failed', String(e?.message || e)));
+    await patchStoredAttachments(env, inserted, stored);
   }
 
   // 4. Thread housekeeping: bump activity, backfill profile/subject, auto-reopen.
