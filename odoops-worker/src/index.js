@@ -2409,6 +2409,28 @@ async function reconcileStaleShipments(env, opts = {}) {
            error_count: errors.length };
 }
 
+// Hourly DRY probe, logged to public.reconcile_runs so the safety number is readable over plain
+// SQL. The paper analysis ("Uniware's own stamp emits nothing") was computed from the stamps we
+// already held; Uniware may return a FRESHER `updated` for some parcels, and only a live fetch can
+// settle that. Running it every hour re-proves it continuously instead of once — and keeps a
+// routine check from depending on a token nobody has to hand.
+// Deliberately small (default 30 orders): this predicts what the NEXT apply would do, which is the
+// question that matters, and keeps the shared cron tick light.
+const RECONCILE_PROBE_LIMIT = 30;
+
+async function logReconcileProbe(env) {
+  const r = await reconcileStaleShipments(env, { dry_run: true, limit: RECONCILE_PROBE_LIMIT });
+  const row = r.ok
+    ? { source: 'cron', dry_run: true, candidates: r.candidates ?? 0,
+        orders_fetched: r.orders_fetched ?? 0, parcels_seen: r.parcels_seen ?? 0,
+        changes: r.changes ?? 0, would_emit: r.would_emit ?? 0,
+        transitions: r.transitions || {}, error_count: r.error_count ?? 0, note: r.note || null }
+    : { source: 'cron', dry_run: true, note: `failed: ${r.error}`, error_count: 1 };
+  await sbPublic('/rest/v1/reconcile_runs', { method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify([row]) });
+  return r;
+}
+
 // Refresh ONE order's parcels on demand (the Pitstop agent hitting ⟳ mid-call). Cheap: token +
 // one saleorder/get + one upsert. Only works for orders we already track — the Uniware order
 // code is the Shopify order ID, which we hold on the existing row; without it there is nothing
@@ -3143,6 +3165,14 @@ export default {
     try {
       const r = await syncUniwareTracking(env);
       console.log('odoops cron (uniware tracking):', JSON.stringify(r));
+      // Stale-shipment reconcile PROBE — dry run only, never writes to ecom_shipments. Logs the
+      // would_emit safety number to public.reconcile_runs. Nested inside the tracking try so a
+      // Uniware outage skips it too; its own catch keeps a probe failure from masking a real
+      // tracking result that already succeeded above.
+      try {
+        const p = await logReconcileProbe(env);
+        console.log('odoops cron (reconcile probe):', JSON.stringify(p));
+      } catch (e) { console.error('odoops cron (reconcile probe) failed:', e?.message || e); }
     } catch (e) {
       console.error('odoops cron (uniware tracking) failed:', e?.message || e);
       try { await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', { method: 'PATCH',
