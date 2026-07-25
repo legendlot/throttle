@@ -3,16 +3,34 @@ main = "src/index.js"
 compatibility_date = "2026-05-28"
 workers_dev = true
 
-# courierops — LOT courier-tracking service. Headless: cron-driven only, no inbound HTTP auth.
-# service_role on the SAME Supabase project as lotopsproxy. Polls Delhivery by AWB and writes
-# tracking back onto public.dispatch_shipments (tracking_status/_stage_label/_checkpoints/_synced_at
-# + keeps expected_delivery_date/delivery_date fresh) via the apply_courier_tracking RPC.
-# V1 = Delhivery, forward shipments only. Shiprocket + webhooks + returns = V2.
+# courierops — LOT courier-tracking service. service_role on the SAME Supabase project as
+# lotopsproxy. TWO independent surfaces, one worker (do not conflate them):
+#
+#   1. CRON (B2B/LTL, since V1) — polls Delhivery by LRN and writes tracking back onto
+#      public.dispatch_shipments (tracking_status/_stage_label/_checkpoints/_synced_at + keeps
+#      expected_delivery_date/delivery_date fresh) via the apply_courier_tracking RPC.
+#      Vocabulary: src/normalize.js (Delhivery B2B, 14 statuses).
+#
+#   2. HTTP (B2C/AWB, added S233 — this worker was cron-only before) — terminates the direct
+#      courier scan webhooks. Routes: POST /webhooks/delhivery, POST /webhooks/delhivery-dev,
+#      GET /health. Everything else 404s; there is no general HTTP surface here.
+#      Vocabulary: src/scanpush.js (Delhivery B2C) → public.ecom_shipments, NOT dispatch_shipments.
+#
+# ⏱️ ScanPush answers in ≤500 ms or Delhivery times out and the scan is LOST (no retry) — the
+#    handler is ack-first and does every DB write in ctx.waitUntil AFTER responding. Never add an
+#    awaited DB/network call before the Response in src/webhook.js.
+# Scan push is a BACKUP lifecycle feed; the Uniware poller (odoops) stays primary across couriers.
 
-# Every 30 min: sweep open Delhivery shipments and refresh tracking.
+# Every 30 min: sweep open Delhivery B2B shipments and refresh tracking.
 [triggers]
 crons = ["*/30 * * * *"]
 
 # Secrets set via `wrangler secret put` — never stored in this file:
-#   SUPABASE_SERVICE_KEY   (Supabase service_role sb_secret key — same project as lotopsproxy)
-#   DELHIVERY_API_TOKEN    (production token — Delhivery One → Settings → API Setup; header is `Token <t>`, not Bearer)
+#   SUPABASE_SERVICE_KEY      (Supabase service_role sb_secret key — same project as lotopsproxy)
+#   DELHIVERY_API_TOKEN       (production token — Delhivery One → Settings → API Setup; header is `Token <t>`, not Bearer)
+#   DELHIVERY_B2B_USERNAME/_PASSWORD  (B2B/LTL login for the LRN track API — the cron surface)
+#   DELHIVERY_WEBHOOK_TOKEN   (ScanPush shared bearer, matched against the X-Delhivery-Token header.
+#                              UNSET = the webhook routes are a 503 no-op, not an open endpoint.)
+#   DELHIVERY_IP_ALLOWLIST    (optional 2nd factor — comma-separated Delhivery PROD IPs vs CF-Connecting-IP)
+#   DELHIVERY_SCANPUSH_APPLY  (optional; 'true' leaves DISCOVERY MODE and lets scans advance
+#                              ecom_shipments.lifecycle. Unset = capture-only, nothing downstream.)
