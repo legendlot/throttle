@@ -403,6 +403,11 @@ const EVENT_MAP = {
   product_page_view: { event: 'product_viewed', map: mapBrowse('product_viewed') },
   collection_page_view: { event: 'collection_viewed', map: mapBrowse('collection_viewed') },
   checkout_clicked: { event: 'checkout_started', map: mapBrowse('checkout_started') },
+  // Their list writes the abandonment event as `Abandoned_checkout`; the LIVE wire sends
+  // `checkout_abandoned` (proven — 1,463 received). Rather than bet on which is authoritative,
+  // accept both. This feed has already produced two silent-failure modes today (the `?key=`
+  // suffix and the add_to_cart_ui spelling), so tolerance beats strictness here.
+  abandoned_checkout: { event: 'checkout_abandoned', map: mapCheckoutAbandoned },
 };
 
 // Case/spelling-tolerant lookup. Exact match first (cheapest, and preserves any key that

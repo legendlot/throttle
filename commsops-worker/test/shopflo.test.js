@@ -331,7 +331,10 @@ t('lookupEvent folds case (their list reads Product_page_view)', () => {
   assert.equal(FLO.lookupEvent('Product_page_view').event, 'product_viewed');
   assert.equal(FLO.lookupEvent('Collection_page_view').event, 'collection_viewed');
   assert.equal(FLO.lookupEvent('Checkout_clicked').event, 'checkout_started');
-  assert.equal(FLO.lookupEvent('Abandoned_checkout'), null);   // not a name we map (theirs is checkout_abandoned)
+  // Their list writes it `Abandoned_checkout`; the live wire sends `checkout_abandoned`.
+  // Both must resolve — we do not know which spelling a given event type will use.
+  assert.equal(FLO.lookupEvent('Abandoned_checkout').event, 'checkout_abandoned');
+  assert.equal(FLO.lookupEvent('checkout_abandoned').event, 'checkout_abandoned');
   assert.equal(FLO.lookupEvent(''), null);
   assert.equal(FLO.lookupEvent(null), null);
 });
@@ -356,6 +359,24 @@ t('browse mapper carries identity + product context + cart token', () => {
 t('browse mapper DROPS anonymous page views (no strong identity)', () => {
   assert.equal(FLO.mapBrowse('product_viewed')({ product_name: 'X', cartToken: 'tok' }), null);
   assert.equal(FLO.mapBrowse('collection_viewed')({ collection_name: 'Drift' }), null);
+});
+
+
+// Shopflo's five named events (Pruthvi, 2026-07-25) must ALL resolve. This is the coverage
+// guard: if someone renames a key, this fails instead of a journey quietly never firing.
+t('all 5 Shopflo event names resolve to a mapped event', () => {
+  const expected = {
+    'Product_page_view': 'product_viewed',
+    'Collection_page_view': 'collection_viewed',
+    'add_to_cart_ui': 'add_to_cart',
+    'Checkout_clicked': 'checkout_started',
+    'Abandoned_checkout': 'checkout_abandoned',
+  };
+  for (const [wire, want] of Object.entries(expected)) {
+    const spec = FLO.lookupEvent(wire);
+    assert.ok(spec, `unmapped Shopflo event: ${wire}`);
+    assert.equal(spec.event, want, `${wire} should map to ${want}`);
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
