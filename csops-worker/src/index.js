@@ -4960,10 +4960,16 @@ async function backfillEmailAttachments(body, auth, env) {
   if (!gmailConfigured(env)) return err('Gmail not configured', 503);
   const limit = Math.min(Math.max(Number(body?.limit) || 20, 1), 50);
 
-  // Candidates: inbound email, has attachment metadata, never walked before.
+  // Candidates: inbound email, has at least one attachment, never walked before.
+  // The `<> '[]'` half matters: 2,754 of 3,224 rows carry an EMPTY attachments array
+  // (a plain email still records the key). Excluding them in the QUERY, not in JS after
+  // it, is what makes this drain — filtering post-query left the empty rows unmarked and
+  // still matching, so every call would re-fetch the same page and report 0 processed.
+  const ATT_FILTER = `channel=eq.email&direction=eq.inbound` +
+    `&raw_meta->attachments=not.is.null&raw_meta->>attachments=neq.${encodeURIComponent('[]')}` +
+    `&raw_meta->>attachments_backfilled_at=is.null`;
   const cRes = await sb(
-    `/rest/v1/cs_wa_messages?channel=eq.email&direction=eq.inbound` +
-    `&raw_meta->attachments=not.is.null&raw_meta->>attachments_backfilled_at=is.null` +
+    `/rest/v1/cs_wa_messages?${ATT_FILTER}` +
     `&select=id,thread_id,provider_message_id,raw_meta&order=received_at.desc&limit=${limit}`, env);
   if (!cRes.ok) return err(`candidate query failed: ${JSON.stringify(cRes.data)?.slice(0, 160)}`, 502);
 
@@ -4984,12 +4990,14 @@ async function backfillEmailAttachments(body, auth, env) {
     messages++; files += res.stored;
   }
 
-  const remaining = await sb(
-    `/rest/v1/cs_wa_messages?channel=eq.email&direction=eq.inbound` +
-    `&raw_meta->attachments=not.is.null&raw_meta->>attachments_backfilled_at=is.null&select=id`, env);
+  // What's left (same filter) so the caller knows when to stop. Counted by returning the
+  // ids and measuring the array — sb() surfaces only {ok,status,data}, so a count=exact
+  // Prefer header would be read back as undefined and the row-length fallback would
+  // report a constant 1. The set drains, so this stays a small single page.
+  const remaining = await sb(`/rest/v1/cs_wa_messages?${ATT_FILTER}&select=id`, env);
   return ok({ messages_processed: messages, files_stored: files,
               remaining: Array.isArray(remaining.data) ? remaining.data.length : null,
-              budget_left: budget.left });
+              budget_left: budget.left, done: messages === 0 });
 }
 
 // NB attachment bodies are base64URL — decoded with the existing b64urlToBytes helper
