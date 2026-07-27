@@ -353,6 +353,15 @@ function mapAddToCart(body) {
 // volume events Shopflo has (~90.8k product page views / 24d in their own analytics), so
 // ingesting anonymous ones would flood the substrate with unreachable profiles for zero gain.
 // `source_surface:'shopflo'` distinguishes them from the pixel's copies of the same event names.
+// `/products/<handle>` → `<handle>`. Shopflo sends the full storefront URL (with query string)
+// on browse events; the WA template needs the bare handle to build its CTA link. Returns null on
+// anything that is not a product URL, so a collection view cannot smuggle a bogus handle through.
+function productHandle(url) {
+  if (!url) return null;
+  const m = String(url).split('?')[0].match(/\/products\/([^/]+)\/?$/);
+  return m ? m[1] : null;
+}
+
 function mapBrowse(eventName) {
   return function mapBrowseEvent(body) {
     const identifiers = identsFromShopflo(body);
@@ -360,13 +369,23 @@ function mapBrowse(eventName) {
     const b = body || {};
     const p = b.eventPayload || b.data || {};
     const pick = (...keys) => firstNonEmpty(...keys.map((k) => b[k] ?? p[k]));
+    const productUrl = pick('product_url', 'productUrl', 'url', 'page_url');
     const props = {
       product_name: pick('product_name', 'productName', 'title', 'product_title'),
       product_id: pick('product_id', 'productId'),
       variant_id: pick('variant_id', 'variantId'),
-      product_url: pick('product_url', 'productUrl', 'url', 'page_url'),
-      collection_name: pick('collection_name', 'collectionName', 'collection'),
-      price: num(pick('price', 'total_price')),
+      product_url: productUrl,
+      // The Browse Abandonment template binds `product_handle` with NO fallback and
+      // `product_image_url` behind an IMAGE header (which fails CLOSED when the link is empty),
+      // so both MUST come off the event or the journey cannot send. The live wire supplies
+      // neither directly — it sends `data.product_image` and a full `data.product_url`, so the
+      // handle is derived from the URL's `/products/<handle>` segment.
+      product_handle: productHandle(productUrl),
+      product_image_url: pick('product_image', 'product_image_url', 'productImage', 'image_url', 'image'),
+      product_type: pick('product_type', 'productType'),
+      collection_name: pick('collection_name', 'collectionName', 'collection', 'page_title'),
+      collection_url: pick('collection_page_url', 'collectionPageUrl'),
+      price: num(pick('product_price', 'price', 'total_price')),
       currency: pick('currency'),
       cart_token: cartToken(body),
       source_surface: 'shopflo',
@@ -403,6 +422,15 @@ const EVENT_MAP = {
   product_page_view: { event: 'product_viewed', map: mapBrowse('product_viewed') },
   collection_page_view: { event: 'collection_viewed', map: mapBrowse('collection_viewed') },
   checkout_clicked: { event: 'checkout_started', map: mapBrowse('checkout_started') },
+  // ⚠️ MEASURED ON THE LIVE WIRE 2026-07-27, the hour Shopflo enabled routing: they send the
+  // PAST-TENSE `product_page_viewed` / `collection_page_viewed`, not the `_view` spelling on
+  // their own written list. Third occurrence of this exact failure mode on this one feed (after
+  // the `?key=` cart-token suffix and `add_to_cart_ui` vs `added_to_cart_ui`) — 19 identity-
+  // bearing browse events were captured-and-dropped as UNMAPPED before this landed. Keep BOTH
+  // spellings: a vendor's documentation is a hypothesis, the wire is the fact.
+  product_page_viewed: { event: 'product_viewed', map: mapBrowse('product_viewed') },
+  collection_page_viewed: { event: 'collection_viewed', map: mapBrowse('collection_viewed') },
+  checkout_clicked_ui: { event: 'checkout_started', map: mapBrowse('checkout_started') },
   // Their list writes the abandonment event as `Abandoned_checkout`; the LIVE wire sends
   // `checkout_abandoned` (proven — 1,463 received). Rather than bet on which is authoritative,
   // accept both. This feed has already produced two silent-failure modes today (the `?key=`

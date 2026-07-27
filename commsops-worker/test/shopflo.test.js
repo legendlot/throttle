@@ -122,12 +122,17 @@ t('mapAddToCart emits add_to_cart from user_data', () => {
 });
 
 // ── EVENT_MAP dispatch ──
-t('EVENT_MAP maps only v1 events; browse events unmapped', () => {
+// Was 'browse events unmapped' — that was the v1 intent and is now SUPERSEDED: browse events
+// are deliberately mapped (S233 authored the keys, 2026-07-27 added the live past-tense
+// spellings). `store_page_view` remains the ONE deliberate exclusion — ~267k/24d of near-zero
+// intent signal — so it is the only thing this guard should still assert is absent.
+t('EVENT_MAP covers the decision-driving events; store_page_view stays excluded', () => {
   assert.equal(FLO.EVENT_MAP.checkout_abandoned.event, 'checkout_abandoned');
   assert.equal(FLO.EVENT_MAP.order_completed.event, 'shopflo_order_completed');
   assert.equal(FLO.EVENT_MAP.added_to_cart_ui.event, 'add_to_cart');
+  assert.equal(FLO.EVENT_MAP.product_page_viewed.event, 'product_viewed');
+  assert.equal(FLO.EVENT_MAP.collection_page_viewed.event, 'collection_viewed');
   assert.equal(FLO.EVENT_MAP.store_page_view, undefined);
-  assert.equal(FLO.EVENT_MAP.product_page_viewed, undefined);
 });
 
 // ── consent rows ──
@@ -366,17 +371,71 @@ t('browse mapper DROPS anonymous page views (no strong identity)', () => {
 // guard: if someone renames a key, this fails instead of a journey quietly never firing.
 t('all 5 Shopflo event names resolve to a mapped event', () => {
   const expected = {
+    // As DOCUMENTED by Pruthvi 2026-07-25 …
     'Product_page_view': 'product_viewed',
     'Collection_page_view': 'collection_viewed',
     'add_to_cart_ui': 'add_to_cart',
     'Checkout_clicked': 'checkout_started',
     'Abandoned_checkout': 'checkout_abandoned',
+    // … and as ACTUALLY SENT on the wire 2026-07-27 (past tense — 19 identity-bearing browse
+    // events were dropped as UNMAPPED before these two keys existed). Both spellings stay.
+    'product_page_viewed': 'product_viewed',
+    'collection_page_viewed': 'collection_viewed',
+    'added_to_cart_ui': 'add_to_cart',
+    'checkout_abandoned': 'checkout_abandoned',
   };
   for (const [wire, want] of Object.entries(expected)) {
     const spec = FLO.lookupEvent(wire);
     assert.ok(spec, `unmapped Shopflo event: ${wire}`);
     assert.equal(spec.event, want, `${wire} should map to ${want}`);
   }
+});
+
+// The Browse Abandonment template binds `product_handle` with NO fallback and an IMAGE header
+// that fails closed on a missing link — so a browse event that carries neither cannot send.
+// This asserts both come off the REAL wire shape captured 2026-07-27.
+t('browse mapper extracts handle + image from the live Shopflo wire shape', () => {
+  const spec = FLO.lookupEvent('product_page_viewed');
+  const out = spec.map({
+    event_name: 'product_page_viewed',
+    phone: '+918287063949',
+    session_id: 'd256c89a',
+    timestamp: 1785152871573,
+    data: {
+      user_data: { phone: '+918287063949', userId: '30cf64c5' },
+      product_url: 'https://www.legendoftoys.com/products/l-o-t-aviation-wisp?utm_source=fb',
+      product_name: 'L.O.T Aviation Wisp',
+      product_image: 'https://cdn.shopify.com/s/files/1/x/Asset_1.webp?v=1784630969',
+      product_price: '3999.00',
+      product_type: 'Aviation',
+    },
+  });
+  assert.ok(out, 'identity-bearing browse event must map');
+  assert.equal(out.name, 'product_viewed');
+  assert.equal(out.properties.product_handle, 'l-o-t-aviation-wisp');
+  assert.equal(out.properties.product_image_url, 'https://cdn.shopify.com/s/files/1/x/Asset_1.webp?v=1784630969');
+  assert.equal(out.properties.product_name, 'L.O.T Aviation Wisp');
+  assert.equal(out.properties.price, 3999);
+  assert.ok(out.identifiers.some((i) => i.type === 'phone'), 'phone identifier must be extracted');
+});
+
+// A collection view has no product URL — it must NOT invent a handle.
+t('collection view yields no product_handle', () => {
+  const spec = FLO.lookupEvent('collection_page_viewed');
+  const out = spec.map({
+    event_name: 'collection_page_viewed',
+    session_id: 'abc',
+    timestamp: 1785152871573,
+    data: {
+      user_data: { phone: '+919446792900', email: 'x@example.com' },
+      page_url: 'https://www.legendoftoys.com/collections/all?utm_source=fb',
+      collection_page_url: '/collections/all',
+    },
+  });
+  assert.ok(out, 'identity-bearing collection view must map');
+  assert.equal(out.name, 'collection_viewed');
+  assert.equal(out.properties.product_handle, null);
+  assert.equal(out.properties.collection_url, '/collections/all');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
