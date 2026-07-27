@@ -340,15 +340,19 @@ async function waAccountInfo(env, wabaIds) {
   // token can see its id, Relay can send using the existing phone_number_id — no re-registration
   // (the "one genuinely disruptive act"), no partner removal, no billing change. `id` here IS the
   // phone_number_id that `sender_identities` needs.
-  // `messaging_limit_tier` is the field that actually decides whether a number can carry a
-  // journey's daily volume — quality_rating does NOT gate sending (UNKNOWN just means "no traffic
-  // yet, nothing to rate"), the TIER caps business-initiated conversations per 24h. A freshly
-  // registered number starts low and scales on clean volume, so this is the number to watch during
-  // a ramp. Requested as an OPTIONAL extra: Graph rejects the WHOLE request if any single field is
-  // forbidden (the same trap that dragged the harmless WABA fields down with the BSP-only ones), so
-  // it falls back to the base set rather than losing the number read entirely.
+  // `quality_rating` does NOT gate sending — UNKNOWN merely means "no traffic yet, nothing to
+  // rate" (MEASURED 2026-07-27: the freshly registered 7338402888 and the warmed GREEN 9035697508
+  // return an identical `throughput` level, i.e. same send capability). What caps a journey's
+  // DAILY volume is the messaging-limit TIER — and ⚠️ **`messaging_limit_tier` is NOT returned by
+  // this node**: requesting it is accepted (no error, so the fallback never trips) but the field is
+  // silently omitted from the response. Measured 2026-07-27 on both numbers — do not re-try it,
+  // read the tier in WhatsApp Manager → the number instead. `throughput` IS returned and is a
+  // different axis (messages-per-second capacity, STANDARD vs HIGH_THROUGHPUT), not the daily cap.
+  // Extras stay in an EXT set with a fallback anyway, because Graph rejects the WHOLE request if
+  // any single field is FORBIDDEN (the trap that dragged the harmless WABA fields down with the
+  // BSP-only ones) — silently-omitted and forbidden are different failure modes.
   const NUM_FIELDS_BASE = 'id,display_phone_number,verified_name,quality_rating,platform_type,code_verification_status,status';
-  const NUM_FIELDS_EXT = `${NUM_FIELDS_BASE},messaging_limit_tier,throughput`;
+  const NUM_FIELDS_EXT = `${NUM_FIELDS_BASE},throughput`;
   const getFields = async (id, f) => {
     const res = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}?fields=${f}`,
       { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
