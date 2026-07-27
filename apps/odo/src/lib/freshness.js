@@ -21,7 +21,11 @@ const FAMILY_ADS = {
 };
 
 // Staleness thresholds. Every connector is driven by the same hourly cron, so one rule fits all.
-const AMBER_MS = 3 * 3600 * 1000;        // > 3h  → drifting
+// 4h is measured, not guessed: over a healthy week the worst gap between two SUCCESSFUL runs of
+// any connector was 3.00h (meta_ads, two consecutive transient Meta failures); every other
+// adapter stayed ≤2h. 4h therefore absorbs up to three consecutive missed ticks and still catches
+// a genuinely dead feed within four hours. Raised from 3h, which sat exactly on that observed max.
+const AMBER_MS = 4 * 3600 * 1000;        // > 4h  → drifting
 const RED_MS   = 24 * 3600 * 1000;       // > 24h → broken
 
 /**
@@ -71,9 +75,23 @@ export function scopeForRoute(pathname, feeds, manual = {}) {
   return { feeds: sale, manual: [] };
 }
 
-/** Per-feed health. `last_error` is authoritative (matches the cockpit's convention). */
+/**
+ * Per-feed health — driven by AGE, deliberately NOT by `last_error`.
+ *
+ * `last_error` records what the MOST RECENT poll did; health is about whether the DATA is behind.
+ * Those diverge constantly. Meta throttles this app several times a week (`is_transient: true`,
+ * plus "Service temporarily unavailable" and the odd 500) and the steady-state pull re-reads the
+ * same rolling 90-day window every hour, so a failed tick loses nothing — the next success
+ * overwrites it. Treating that as unhealthy flipped the whole shell to DATA DRIFTING at random
+ * hours for a condition that had already healed, which trains people to ignore the signal.
+ *
+ * Age is self-correcting and needs no special-casing: a feed that is genuinely broken stops
+ * advancing `last_ok_at` and crosses AMBER within 4h and RED within 24h on its own, while a blip
+ * that recovers on the next tick never moves the needle. `last_error` is still surfaced — the
+ * popover below names erroring feeds, and /connectors + the cockpit health strip key off it
+ * directly. It just no longer decides the roll-up.
+ */
 export function feedStatus(f, now = Date.now()) {
-  if (f.last_error) return 'error';
   if (!f.last_ok_at) return 'never';
   const age = now - Date.parse(f.last_ok_at);
   if (!isFinite(age)) return 'never';

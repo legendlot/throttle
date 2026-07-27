@@ -8,6 +8,7 @@ import {
   Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search,
 } from 'lucide-react';
 import { FreshnessProvider, FreshnessChip, useFreshness } from '../../components/Freshness.js';
+import { feedStatus } from '../../lib/freshness.js';
 import { CommandPalette, useCommandPalette, paletteEntries } from '../../components/CommandPalette.js';
 
 // ── IA (handoff §4) ──────────────────────────────────────────────────────────
@@ -234,7 +235,10 @@ function FreshnessCard({ onClick }) {
   const { feeds, loading, oldestOkAt } = useFreshness();
   const enabled = (feeds || []).filter(f => f.enabled);
   if (loading || !enabled.length) return null;
-  const healthy = enabled.filter(f => f.last_ok_at && !f.last_error).length;
+  // Health = "is this feed actually behind", via the SAME `feedStatus` the per-page chip uses —
+  // never `!last_error`, which reported the last poll's luck rather than the data's age and flipped
+  // this card amber for transient upstream blips that had already self-healed. See freshness.js.
+  const healthy = enabled.filter(f => feedStatus(f) === 'ok').length;
   const allWell = healthy === enabled.length;
   const hue = allWell ? '52,211,153' : '245,158,11';
   const fg = allWell ? '#34d399' : '#F59E0B';
