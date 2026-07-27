@@ -6,7 +6,7 @@
 // tests pin the fields those templates depend on.
 
 const assert = require('assert');
-const { mapOrderEvent } = require('../src/shopify.js');
+const { mapOrderEvent, mapFulfillmentEvent } = require('../src/shopify.js');
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -130,6 +130,54 @@ t('existing fields are unchanged (regression)', () => {
   assert.equal(e.properties.total, 2099);
   assert.equal(e.properties.currency, 'INR');
   assert.equal(e.name, 'order_placed');
+});
+
+// ── fulfillments/* → courier lifecycle (2026-07-27) ────────────────────────────
+// Parity with BiteSpeed's Delivered journey, which triggers off this same Shopify source.
+t('mapFulfillmentEvent maps delivered + out_for_delivery, ignores the rest', () => {
+  const base = { order_id: 6123, id: 99, created_at: new Date().toISOString(),
+                 updated_at: new Date().toISOString(), name: '#LOT43700.1' };
+  const d = mapFulfillmentEvent({ ...base, shipment_status: 'delivered' });
+  assert.equal(d.name, 'order_delivered');
+  assert.equal(d.properties.order_number, '43700');
+  assert.equal(d.properties.shopify_order_id, '6123');
+
+  const o = mapFulfillmentEvent({ ...base, shipment_status: 'out_for_delivery' });
+  assert.equal(o.name, 'order_out_for_delivery');
+
+  // in_transit is deliberately NOT mapped — Uniware already emits order_shipped.
+  assert.equal(mapFulfillmentEvent({ ...base, shipment_status: 'in_transit' }), null);
+  assert.equal(mapFulfillmentEvent({ ...base, shipment_status: 'failure' }), null);
+  assert.equal(mapFulfillmentEvent({ ...base, shipment_status: null }), null);
+  // no order id = nothing to key or attribute it to
+  assert.equal(mapFulfillmentEvent({ shipment_status: 'delivered' }), null);
+});
+
+// The dedupe contract with the Uniware emitter. If this key ever diverges from
+// shipment-events.js's `delivery:<order>:<lifecycle>`, one delivery messages the customer twice.
+t('mapFulfillmentEvent uses the ORDER-SCOPED key shared with the Uniware emitter', () => {
+  const e = mapFulfillmentEvent({ order_id: 6123, shipment_status: 'delivered',
+                                       created_at: new Date().toISOString() });
+  assert.equal(e.idempotency_key, 'delivery:6123:delivered');
+});
+
+// A delivered flag set weeks after dispatch is bookkeeping, not news.
+t('mapFulfillmentEvent drops transitions older than 30 days', () => {
+  const old = new Date(Date.now() - 31 * 86400000).toISOString();
+  assert.equal(mapFulfillmentEvent({ order_id: 1, shipment_status: 'delivered', created_at: old }), null);
+});
+
+// Identity is best-effort — the caller falls back to the order when there is no contact block.
+t('mapFulfillmentEvent extracts contact when present, empty when not', () => {
+  const withContact = mapFulfillmentEvent({
+    order_id: 7, shipment_status: 'delivered', created_at: new Date().toISOString(),
+    email: 'A@B.com', destination: { phone: '9876543210' } });
+  assert.deepEqual(withContact.identifiers.map((i) => i.type).sort(), ['email', 'phone']);
+  assert.equal(withContact.identifiers.find((i) => i.type === 'phone').value, '+919876543210');
+
+  const bare = mapFulfillmentEvent({ order_id: 8, shipment_status: 'delivered',
+                                          created_at: new Date().toISOString() });
+  assert.equal(bare.identifiers.length, 0);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

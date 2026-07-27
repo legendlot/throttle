@@ -156,6 +156,71 @@ function identsFromContact({ email, phone, customer } = {}) {
   return out;
 }
 
+// ── Shopify fulfillment shipment_status → the courier lifecycle events ──────────────────
+// WHY THIS EXISTS: `order_delivered` fired 2.4/day against ~80-105 real deliveries (~2.5%).
+// BiteSpeed's own Delivered journey does ~6.7/day (47 over 7 days, read off their canvas
+// 2026-07-27 — our records said "~47/day (~55%)", which was a 7-day total misread as daily).
+// Their trigger is `FULFILLMENT_DELIVERED` / "Shipment Delivered" = Shopify's fulfillment
+// shipment_status, which we simply never subscribed to. So this closes a parity gap, NOT the
+// real problem: Shopify's delivered status is largely the merchant's manual "Mark as delivered"
+// button, hence ~7% coverage for everyone. The durable fix is the Delhivery ScanPush feed.
+//
+// Only the two transitions a customer should hear about are mapped. `in_transit` is deliberately
+// NOT mapped — Uniware already emits order_shipped (11.9/day) and a second source would compete
+// with a working feed for no gain. attempted_delivery/failure have no journey.
+const FULFILLMENT_STATUS_EVENT = {
+  delivered: 'order_delivered',
+  out_for_delivery: 'order_out_for_delivery',
+};
+
+// Same 30-day guard the Uniware emitter applies: a delivered flag set weeks after dispatch is a
+// bookkeeping catch-up, not news — and "your order is on the way" for a month-old parcel is the
+// exact blast this codebase has already had to design against once.
+const FULFILLMENT_MAX_AGE_MS = 30 * 86400000;
+
+// mapFulfillmentEvent(payload) → an /ingest envelope, or null when there is nothing to say.
+// Identity is best-effort: a fulfillment payload often carries no contact at all, so the caller
+// falls back to resolving the profile from the order id (every delivered order necessarily had
+// an order_placed, and those are 100% phone-identified).
+function mapFulfillmentEvent(f) {
+  const status = String(f?.shipment_status || '').toLowerCase();
+  const name = FULFILLMENT_STATUS_EVENT[status];
+  if (!name) return null;
+  const orderId = f?.order_id != null ? String(f.order_id) : null;
+  if (!orderId) return null;                       // nothing to key or attribute it to
+
+  const born = new Date(f?.created_at || 0).getTime();
+  if (born && Date.now() - born > FULFILLMENT_MAX_AGE_MS) return null;
+
+  const occurredAt = f?.updated_at || f?.created_at || null;
+  const tracking = {
+    tracking_number: f?.tracking_number
+      || (Array.isArray(f?.tracking_numbers) ? f.tracking_numbers[0] : null) || null,
+    tracking_url: f?.tracking_url
+      || (Array.isArray(f?.tracking_urls) ? f.tracking_urls[0] : null) || null,
+    tracking_company: f?.tracking_company || null,
+  };
+  return {
+    identifiers: identsFromContact({ email: f?.email, phone: f?.destination?.phone }),
+    name,
+    source: 'shopify_webhook',
+    occurred_at: occurredAt ? new Date(occurredAt).toISOString() : null,
+    // ⚠️ ORDER-SCOPED AND SHARED WITH THE UNIWARE EMITTER ON PURPOSE. Both feeds can observe the
+    // same delivery; keying per-source would let one customer be messaged twice for one parcel.
+    // shipment-events.js emits the identical key for these two lifecycles, so whichever source
+    // sees it first wins and the second dedupes on arrival. Do not "namespace" this per source.
+    idempotency_key: `delivery:${orderId}:${status}`,
+    properties: {
+      shopify_order_id: orderId,
+      order_number: f?.name ? String(f.name).replace(/^#?(LOT)?/i, '').split('.')[0] : null,
+      shipment_status: status,
+      fulfillment_id: f?.id != null ? String(f.id) : null,
+      ...tracking,
+      source_surface: 'shopify_fulfillment',
+    },
+  };
+}
+
 // orders/* topic → comms event name. order_placed bumps lifetime in deriveAttributes;
 // orders/paid is intentionally NOT subscribed (would double-count order_placed).
 const ORDER_TOPIC_EVENT = {
@@ -370,6 +435,10 @@ const WEBHOOK_TOPICS = [
   'CUSTOMERS_CREATE', 'CUSTOMERS_UPDATE',
   'ORDERS_CREATE', 'ORDERS_FULFILLED', 'ORDERS_CANCELLED',
   'CHECKOUTS_CREATE', 'CHECKOUTS_UPDATE',
+  // Carries `shipment_status` — the ONLY Shopify-side delivered/out-for-delivery signal, and
+  // the source BiteSpeed's Delivered journey rides. Needs `read_fulfillments` on the app
+  // (added 2026-07-27); registration is a no-op until that scope is live.
+  'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE',
 ];
 
 async function listWebhooks(env) {
@@ -419,6 +488,7 @@ module.exports = {
   mapLastOrder, fetchLastOrderPage, backfillLastOrderPage,
   // M4 webhooks + pixel
   mapCustomerRest, identsFromContact, mapOrderEvent, mapCheckoutEvent, ORDER_TOPIC_EVENT,
+  mapFulfillmentEvent, FULFILLMENT_STATUS_EVENT,
   verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,
   // J3 order_modify (COD→prepaid reconciliation) — raw Admin API access
   shopifyGraphQL,

@@ -26,6 +26,17 @@ async function redactCustomer(env, payload) {
   return rows.length;
 }
 
+// Resolve the profile that owns a Shopify order, via the order_placed event we already store.
+// Cheap (one indexed-ish read at ~7 events/day) and it is the only reliable identity path for a
+// fulfillment payload that carries no contact block.
+async function profileFromOrder(env, shopifyOrderId) {
+  if (!shopifyOrderId) return null;
+  const q = `/rest/v1/events?select=profile_id&properties->>shopify_order_id=eq.${A.enc(String(shopifyOrderId))}`
+    + '&profile_id=not.is.null&order=occurred_at.asc&limit=1';
+  const r = await A.sbComms(q, env).catch(() => null);
+  return (r && r.ok && r.data && r.data[0] && r.data[0].profile_id) || null;
+}
+
 // POST /webhooks/shopify — HMAC-verified (raw body) before parse, like /webhooks/resend.
 async function handleShopifyWebhook(env, request) {
   const raw = await request.text();
@@ -58,6 +69,27 @@ async function handleShopifyWebhook(env, request) {
     if (!envlp) return { ok: true, topic, skipped: 'no_identifier' };
     const r = await ingest(env, envlp);
     return r.ok ? { ok: true, topic, profile_id: r.profile_id, deduped: r.deduped }
+                : { ok: false, error: r.error, status: 400 };
+  }
+
+  // Fulfillment shipment_status → the courier lifecycle (delivered / out-for-delivery).
+  // Parity with BiteSpeed's Delivered journey, which rides this exact source; see
+  // mapFulfillmentEvent for why this is a floor and not the fix.
+  if (topic === 'fulfillments/create' || topic === 'fulfillments/update') {
+    const envlp = SHOP.mapFulfillmentEvent(payload);
+    if (!envlp) return { ok: true, topic, skipped: 'no_customer_transition' };
+    // A fulfillment payload frequently carries NO contact block at all, so identity falls back
+    // to the order: every delivered order necessarily had an order_placed, and those resolve at
+    // 100% (measured 879/879 with a phone). Without this the event would silently drop and the
+    // journey would look broken for exactly the orders we most want to message.
+    if (!envlp.identifiers || !envlp.identifiers.length) {
+      const pid = await profileFromOrder(env, envlp.properties.shopify_order_id);
+      if (!pid) return { ok: true, topic, skipped: 'no_profile_for_order' };
+      delete envlp.identifiers;
+      envlp.profile_id = pid;
+    }
+    const r = await ingest(env, envlp);
+    return r.ok ? { ok: true, topic, event: envlp.name, profile_id: r.profile_id, deduped: r.deduped }
                 : { ok: false, error: r.error, status: 400 };
   }
 

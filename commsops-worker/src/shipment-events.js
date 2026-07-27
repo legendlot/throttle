@@ -28,6 +28,9 @@ const EMIT_EVENT = {
   delivered: 'order_delivered',
   rto: 'order_rto',
 };
+// The lifecycles Shopify's fulfillment webhook can ALSO observe — these share an
+// order-scoped idempotency key with that path so one delivery cannot message twice.
+const SHARED_KEY_LIFECYCLES = new Set(['delivered', 'out_for_delivery']);
 const MAX_PER_RUN = 15;   // keeps the cron tick well inside its subrequest budget
 // A courier event for a parcel dispatched more than this long ago is a late discovery /
 // reconciliation, not news a customer should be messaged about. See the age-cap filter below.
@@ -126,7 +129,16 @@ async function emitShipmentEvents(env, ingest) {
       source: 'uniware',
       // One event per (package, lifecycle): a retry after a partial failure can never
       // double-fire a customer message.
-      idempotency_key: `uniware:${s.uniware_package_code}:${s.lifecycle}`,
+      // ⚠️ SHARED WITH THE SHOPIFY FULFILLMENT PATH for the two lifecycles BOTH feeds can
+      // observe. Shopify's fulfillment shipment_status emits `delivery:<order_id>:<status>` for
+      // delivered / out_for_delivery, so keying those per-source would message one customer
+      // twice for one parcel. Whichever source sees it first wins; the second dedupes on
+      // arrival. in_transit / rto stay on the package key — Shopify's in_transit is deliberately
+      // not mapped, and rto is Uniware-only. Falls back to the package key when the row has no
+      // Shopify order id, which is the only case the shared key cannot express.
+      idempotency_key: (SHARED_KEY_LIFECYCLES.has(s.lifecycle) && s.shopify_order_id)
+        ? `delivery:${s.shopify_order_id}:${s.lifecycle}`
+        : `uniware:${s.uniware_package_code}:${s.lifecycle}`,
       properties: {
         // Uniware's displayOrderCode is '#LOT43700'; templates render "Order #{{n}}", so strip
         // both the hash and the LOT prefix to leave the bare number Shopify shows customers.
