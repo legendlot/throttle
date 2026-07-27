@@ -15,7 +15,7 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
-  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight,
+  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -137,6 +137,11 @@ export default function InboxPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);   // [{ name, mime, size, dataUrl }] — 1 for Meta, N for email (S162-C · S201)
   const [selectedIds, setSelectedIds] = useState(() => new Set());  // bulk-select thread ids (S164)
+  // Select mode gates the per-row checkboxes. They used to render on EVERY row all the
+  // time, which reads as permanent visual noise on a list an agent mostly just scrolls
+  // (Pruthvi #bugs 2026-07-25). Bulk-assign itself is unchanged — it's the same
+  // selectedIds/bulkAssign path, just entered deliberately.
+  const [selectMode, setSelectMode] = useState(false);
   const [bulkAgent, setBulkAgent] = useState('');         // target of the bulk assign action
   const [bulkBusy, setBulkBusy] = useState(false);
   const scrollRef = useRef(null);
@@ -543,13 +548,20 @@ export default function InboxPage() {
     const allSel = visible.length > 0 && visible.every(id => selectedIds.has(id));
     setSelectedIds(allSel ? new Set() : new Set(visible));
   }
+  // Single exit point: leaving select mode must never strand a selection behind hidden
+  // checkboxes (an invisible selection that a later bulk assign would still act on).
+  function exitSelectMode() {
+    setSelectedIds(new Set());
+    setBulkAgent('');
+    setSelectMode(false);
+  }
   async function bulkAssign() {
     if (selectedIds.size === 0 || !bulkAgent) return;
     setErr(null); setBulkBusy(true);
     const agent_id = bulkAgent === '__release__' ? null : bulkAgent;
     try {
       await csopsPost('bulkAssignThreads', { thread_ids: [...selectedIds], agent_id }, session);
-      setSelectedIds(new Set()); setBulkAgent('');
+      exitSelectMode();
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
     finally { setBulkBusy(false); }
@@ -753,7 +765,7 @@ export default function InboxPage() {
               </button>
             )}
           </div>
-          {/* Bulk multi-select + assign (S164, Pruthvi) */}
+          {/* Bulk multi-select + assign (S164, Pruthvi) — checkboxes gated behind Select mode (S236) */}
           {threads.length > 0 && (() => {
             const visible = threads.map(t => t.id);
             const allSel = visible.every(id => selectedIds.has(id));
@@ -762,12 +774,27 @@ export default function InboxPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
                 borderBottom: '1px solid var(--border)', flexWrap: 'wrap',
                 background: selectedIds.size > 0 ? 'var(--accent-bg)' : 'transparent' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={allSel}
-                    ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
-                    onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
-                  {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select'}
-                </label>
+                {!selectMode ? (
+                  <button onClick={() => setSelectMode(true)} title="Select conversations for bulk assign"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)',
+                      padding: '2px 8px 2px 2px', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                    <CheckSquare size={13} strokeWidth={1.75} /> Select
+                  </button>
+                ) : (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={allSel}
+                      ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
+                      onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                    {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select all'}
+                  </label>
+                )}
+                {selectMode && selectedIds.size === 0 && (
+                  <button onClick={exitSelectMode}
+                    style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                )}
                 {selectedIds.size > 0 && (
                   <>
                     <select value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} title="Assign selected to…" style={miniSelect}>
@@ -784,7 +811,7 @@ export default function InboxPage() {
                         cursor: (!bulkAgent || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkAgent || bulkBusy) ? 0.5 : 1 }}>
                       {bulkBusy ? '…' : 'Apply'}
                     </button>
-                    <button onClick={() => { setSelectedIds(new Set()); setBulkAgent(''); }}
+                    <button onClick={exitSelectMode}
                       style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
                         border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
                       Clear
@@ -805,10 +832,12 @@ export default function InboxPage() {
                 <div key={t.id} style={{ display: 'flex', alignItems: 'stretch',
                   borderBottom: '1px solid var(--border)',
                   background: checked ? 'var(--accent-bg)' : 'transparent' }}>
-                  <label onClick={e => e.stopPropagation()}
-                    style={{ display: 'flex', alignItems: 'center', padding: '0 4px 0 10px', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleSelect(t.id)} style={{ cursor: 'pointer' }} />
-                  </label>
+                  {selectMode && (
+                    <label onClick={e => e.stopPropagation()}
+                      style={{ display: 'flex', alignItems: 'center', padding: '0 4px 0 10px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleSelect(t.id)} style={{ cursor: 'pointer' }} />
+                    </label>
+                  )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <ThreadRow t={t} active={t.id === selectedId} myId={myId} onClick={() => setSelectedId(t.id)} noBorder />
                   </div>
