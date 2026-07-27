@@ -282,6 +282,79 @@ function computeSalesLine(l) {
     sort_order: Math.round(Number(l.sort_order) || 0),
   };
 }
+// ── HSN: default from the product master, and sync corrections back ────────────────
+// (Afshaan 2026-07-27.) Nobody should be typing a tax code from memory — 50 live
+// un-invoiced lines had none at all. So lines default their HSN + GST% from
+// public.product_master, the team confirms or corrects on the order, and a correction
+// flows BACK onto the master.
+//
+// Write-back is per product FAMILY, not per variant: 1,140 invoiced lines show exactly
+// ONE distinct HSN per product, so updating a single variant would leave its siblings
+// stale and silently wrong on the next order.
+const normHsn = v => String(v ?? '').replace(/\s+/g, '').trim();
+const isPlausibleHsn = v => /^\d{4,8}$/.test(normHsn(v));
+
+// One cheap read of the whole active master (~146 rows) — avoids per-product lookups
+// and any PostgREST in.() quoting trouble with names like "HP desk standee".
+async function hsnMasterAll() {
+  const out = new Map();
+  const pmR = await queryPublic('product_master', '?is_active=eq.true&select=product,hsn_code&limit=5000');
+  const rows = (pmR.ok && Array.isArray(pmR.data)) ? pmR.data : [];
+  const codes = new Set();
+  for (const r of rows) {
+    if (!r.hsn_code || out.has(r.product)) continue;
+    const h = normHsn(r.hsn_code);
+    out.set(r.product, { hsn: h, gst: null });
+    codes.add(h);
+  }
+  if (codes.size) {
+    const rR = await query('hsn_gst_rates', `?hsn_code=in.(${[...codes].join(',')})&select=hsn_code,gst_percent`);
+    const gst = new Map(((rR.ok && Array.isArray(rR.data)) ? rR.data : [])
+      .map(r => [normHsn(r.hsn_code), Number(r.gst_percent)]));
+    for (const [p, v] of out) if (gst.has(v.hsn)) v.gst = gst.get(v.hsn);
+  }
+  return out;
+}
+
+// Fill ONLY what the user left blank — never overwrite a code they actually typed.
+function applyHsnDefaults(lines, master) {
+  return (lines || []).map(l => {
+    const m = master.get(l.product);
+    if (!m) return l;
+    const out = { ...l };
+    if (!normHsn(out.hsn_code)) out.hsn_code = m.hsn;
+    const gstBlank = out.gst_pct === undefined || out.gst_pct === null || out.gst_pct === '';
+    if (gstBlank && m.gst != null) out.gst_pct = m.gst;
+    return out;
+  });
+}
+
+// Push corrected codes back onto every active variant of the family. Guarded so a
+// blank or a typo can never wipe/corrupt the master, and every write is logged.
+async function syncHsnToMaster(lines, master, actor, actorRole, orderNo) {
+  const changes = new Map();
+  for (const l of (lines || [])) {
+    const v = normHsn(l.hsn_code);
+    if (!v || !isPlausibleHsn(v)) continue;          // never blank the master, never store junk
+    const cur = master.get(l.product)?.hsn || null;
+    if (cur === v) continue;
+    changes.set(l.product, { from: cur, to: v });
+  }
+  const applied = [];
+  for (const [product, ch] of changes) {             // at most a few products per order
+    const r = await sbPublic(
+      `/rest/v1/product_master?product=eq.${encodeURIComponent(product)}&is_active=eq.true`,
+      { method: 'PATCH', body: JSON.stringify({ hsn_code: ch.to }), prefer: 'return=representation' });
+    if (!r.ok) continue;                             // never fail the order over the master sync
+    const n = Array.isArray(r.data) ? r.data.length : 0;
+    applied.push({ product, from: ch.from, to: ch.to, variants: n });
+    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', 'PRODUCT', product,
+      `HSN ${ch.from || '(none)'} → ${ch.to} for ${product} (${n} variant${n === 1 ? '' : 's'})${orderNo ? ` from ${orderNo}` : ''}`,
+      { product, from: ch.from, to: ch.to, variants: n, order_no: orderNo || null });
+  }
+  return applied;
+}
+
 // Map shipment.status → sales-facing fulfilment label.
 function fulfilmentFromShipment(sh) {
   if (!sh) return 'not_dispatched';
@@ -1087,6 +1160,18 @@ export default {
           }
 
           // ── OFFLINE SALES (reads) ────────────────────────────────────
+          // product → HSN + GST%, so the order form can pre-fill both the moment a
+          // product is picked and the team just confirms. Deliberately a snorkelops
+          // action rather than extending lotopsproxy's getProductCatalogue — that
+          // worker serves Garage + Redline + Scanner + Depot and is not worth a
+          // 4-system deploy for a dropdown default.
+          case 'getProductHsnMap': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const m = await hsnMasterAll();
+            return ok([...m.entries()].map(([product, v]) => ({
+              product, hsn_code: v.hsn, gst_pct: v.gst,
+            })));
+          }
           case 'getSalesChannels': {
             if (!canSalesView(P)) return err('No permission', 403);
             const all = url.searchParams.get('all') === '1';
@@ -2310,7 +2395,9 @@ export default {
             if (!pr.ok || !pr.data[0]) return err('Partner not found', 404);
             const partner = pr.data[0];
             const order_no = await nextSeq4('sales_order', 'SO-');
-            const lines = d.lines.map(computeSalesLine);
+            // HSN/GST default in from the product master, corrections sync back out.
+            const hsnMaster = await hsnMasterAll();
+            const lines = applyHsnDefaults(d.lines, hsnMaster).map(computeSalesLine);
             const subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
             const tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
             const grand_total = +(subtotal + tax_total).toFixed(2);
@@ -2331,7 +2418,9 @@ export default {
             const lineRows = lines.map((l, i) => ({ ...l, order_id: order.id, sort_order: l.sort_order || i }));
             const li = await insert('sales_order_lines', lineRows, false);
             if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
-            return ok({ id: order.id, order_no });
+            const hsnSynced = await syncHsnToMaster(lines, hsnMaster,
+              authResult?.fullName || postRole, postRole, order_no);
+            return ok({ id: order.id, order_no, hsn_synced: hsnSynced });
           }
 
           case 'updateSalesOrder': {
@@ -2379,7 +2468,7 @@ export default {
             // delete-and-reinsert: sales_order_lines.id is Odo's source line id for
             // stg_snorkel, so minting new ids would restage every line and double-count
             // sales_fact (RULE-SALES-001).
-            let frToSync = null, shipmentToSync = null, mergedLines = null;
+            let frToSync = null, shipmentToSync = null, mergedLines = null, hsnSyncedOnEdit = null;
             if (!isDraftEdit && Array.isArray(d.lines)) {
               const exR = await query('sales_order_lines',
                 `?order_id=eq.${encodeURIComponent(d.id)}&select=*&order=sort_order.asc`);
@@ -2428,10 +2517,16 @@ export default {
                 }
               }
 
-              mergedLines = existing.map(ex => {
-                const inc = d.lines.find(l => l.id === ex.id);
-                return { id: ex.id, ...computeSalesLine({ ...ex, ...(inc || {}) }), order_id: d.id };
-              });
+              // Same HSN contract as order-create: blanks fill from the master, and a
+              // correction typed here syncs back out to the family.
+              const hsnMasterU = await hsnMasterAll();
+              mergedLines = applyHsnDefaults(
+                existing.map(ex => {
+                  const inc = d.lines.find(l => l.id === ex.id);
+                  return { ...ex, ...(inc || {}) };
+                }), hsnMasterU
+              ).map(m => ({ id: m.id, ...computeSalesLine(m), order_id: d.id }));
+              hsnSyncedOnEdit = { master: hsnMasterU };
               updates.subtotal    = +mergedLines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
               updates.tax_total   = +mergedLines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
               updates.grand_total = +(updates.subtotal + updates.tax_total).toFixed(2);
@@ -2492,7 +2587,12 @@ export default {
                 if (!sl.ok) return err('Order saved, but the dispatch manifest could not be updated — tell dispatch before they pack: ' + JSON.stringify(sl.data), 502);
               }
             }
-            return ok({ updated: d.id, dispatch_synced: !!frToSync, manifest_synced: !!shipmentToSync });
+            const hsnSyncedU = hsnSyncedOnEdit
+              ? await syncHsnToMaster(mergedLines, hsnSyncedOnEdit.master,
+                  authResult?.fullName || postRole, postRole, null)
+              : [];
+            return ok({ updated: d.id, dispatch_synced: !!frToSync,
+                        manifest_synced: !!shipmentToSync, hsn_synced: hsnSyncedU });
           }
 
           case 'cancelOrder': {

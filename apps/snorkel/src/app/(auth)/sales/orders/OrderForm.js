@@ -1,6 +1,8 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Combobox, Modal } from '@throttle/ui';
+import { garageFetch } from '@throttle/db';
+import { useAuth } from '@throttle/auth';
 import { useProducts } from '@/hooks/useProducts';
 import {
   panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, selectStyle, labelStyle,
@@ -30,6 +32,7 @@ export function lineMath(l) {
 // "+ Add" partner quick-create — pass it only when the user can manage partners.
 export default function OrderForm({ partners, channels, initial, saving, onSubmit, onCancel, onCreatePartner }) {
   const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS } = useProducts();
+  const { session } = useAuth();
   const [partnerId, setPartnerId] = useState(initial?.partner_id || '');
   const [partnerModal, setPartnerModal] = useState(false);
   const [creatingPartner, setCreatingPartner] = useState(false);
@@ -44,6 +47,15 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
   });
   const [lines, setLines] = useState(initial?.lines?.length ? initial.lines.map(l => ({ ...blankLine(), ...l })) : [blankLine()]);
   const setM = (k, v) => setMeta(s => ({ ...s, [k]: v }));
+  // product -> { hsn_code, gst_pct } from the product master (Afshaan 2026-07-27).
+  const [hsnMap, setHsnMap] = useState({});
+  const [hsnTouched, setHsnTouched] = useState({});   // lines where the user edited HSN/GST themselves
+  useEffect(() => {
+    if (!session) return;
+    garageFetch('getProductHsnMap', {}, session)
+      .then(rows => setHsnMap(Object.fromEntries((Array.isArray(rows) ? rows : []).map(r => [r.product, r]))))
+      .catch(() => {});   // non-fatal: the field stays typeable, it just isn't pre-filled
+  }, [session]);
 
   const partner = useMemo(() => partners.find(p => p.id === partnerId), [partners, partnerId]);
 
@@ -90,8 +102,20 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
   const setLine = (i, k, v) => setLines(ls => ls.map((l, j) => {
     if (j !== i) return l;
     const next = { ...l, [k]: v };
-    if (k === 'product') { next.model = ''; next.color = ''; }
+    if (k === 'product') {
+      next.model = ''; next.color = '';
+      // Pre-fill HSN + GST from the product master so nobody types a tax code from
+      // memory (and so L.O.T Build lands on 5%, not the 18% blankLine default).
+      // Only fills what's still untouched — never overwrites a typed code. The team
+      // confirms it on screen; correcting it here syncs back to the master on save.
+      const m = hsnMap[v];
+      if (m) {
+        if (!String(l.hsn_code || '').trim()) next.hsn_code = m.hsn_code || '';
+        if (m.gst_pct != null && !hsnTouched[i]) next.gst_pct = m.gst_pct;
+      }
+    }
     if (k === 'model') { next.color = ''; }
+    if (k === 'gst_pct' || k === 'hsn_code') setHsnTouched(t => ({ ...t, [i]: true }));
     return next;
   }));
   const addLine = () => setLines(ls => [...ls, blankLine()]);

@@ -157,7 +157,9 @@ function OrderDetailInner() {
     try {
       const res = await workerFetch('updateSalesOrder', { data: { id, lines: lineEdit } }, session);
       if (!res.ok) throw new Error(res.error || 'Update failed');
-      showToast(res.data?.manifest_synced ? 'Items updated — dispatch manifest updated too'
+      const hs = res.data?.hsn_synced || [];
+      showToast(hs.length ? `Items updated — HSN ${hs[0].to} saved to ${hs.map(h => h.product).join(', ')} for future orders`
+              : res.data?.manifest_synced ? 'Items updated — dispatch manifest updated too'
               : res.data?.dispatch_synced ? 'Items updated — dispatch request updated too'
               : 'Items updated', 'success');
       setLineEdit(null);
@@ -354,6 +356,11 @@ function OrderDetailInner() {
               HSN and pricing can be changed right up to invoicing. Model, colour and quantity
               can only change while nothing has been packed — if dispatch has already packed
               against this order, save will be refused and tell you so.
+            </p>
+            <p style={{ ...pageSub, marginTop: 4 }}>
+              HSN is pre-filled from the product master — <b>please check it</b>. If you correct
+              it here, the product master is updated too, so every future order for that product
+              picks up the corrected code.
             </p>
           </div>
         )}
