@@ -826,7 +826,21 @@ async function checkJourneySendHealth(env) {
   const attempts = rows.filter((m) => m.status === 'sent' || m.status === 'failed');
   const failed = attempts.filter((m) => m.status === 'failed');
   const defects = failed.filter((m) => JOURNEY_DEFECT_RE.test(m.reason || ''));
-  const rateTrip = attempts.length >= 10 && (failed.length / attempts.length) > 0.20;
+  // Meta per-RECIPIENT blocks are excluded from the RATE trigger (still counted + reported).
+  // MEASURED 2026-07-27 over 14 days: `131049` ("not delivered to maintain healthy ecosystem
+  // engagement") runs at a FLAT 25-37%/day with no trend, spread across distinct profiles, and
+  // at the same rate for BiteSpeed-imported and organically-captured contacts alike. It is
+  // Meta's cap on how much marketing a given person receives ACROSS ALL BUSINESSES — not our
+  // frequency cap, not our sender reputation (quality stayed GREEN), and not configurable away.
+  // Leaving it in the rate meant the 20% threshold tripped essentially every day, and on
+  // 2026-07-27 a genuine defect (`unresolved_variables:cart_url_suffix`) landed in the same
+  // stream as two alerts of pure background noise. Defect-class still alerts at volume 1, which
+  // is the signal a human can actually act on.
+  const RECIPIENT_BLOCK_RE = /^wa_(131049|130472)/;
+  const actionable = failed.filter((m) => !RECIPIENT_BLOCK_RE.test(m.reason || ''));
+  const blocked = failed.length - actionable.length;
+  const rateBase = attempts.filter((m) => !RECIPIENT_BLOCK_RE.test(m.reason || ''));
+  const rateTrip = rateBase.length >= 10 && (actionable.length / rateBase.length) > 0.20;
   if (!defects.length && !rateTrip) return;
 
   const reasons = {};
@@ -834,8 +848,10 @@ async function checkJourneySendHealth(env) {
   const top = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3)
     .map(([k, n]) => `${k} ×${n}`).join(' · ');
   await AL.alert(env,
-    `🚨 *Relay — journey sends failing*\n${failed.length}/${attempts.length} journey sends failed in the last hour` +
-    `${defects.length ? ` (incl. ${defects.length} defect-class — these never self-heal)` : ''}.\nTop reasons: ${top}.\nCheck /journeys funnel + comms.messages.`);
+    `🚨 *Relay — journey sends failing*\n${actionable.length}/${rateBase.length} actionable journey sends failed in the last hour` +
+    `${defects.length ? ` (incl. ${defects.length} defect-class — these never self-heal)` : ''}.` +
+    `${blocked ? `\n_(+${blocked} Meta per-recipient blocks excluded — structural, ~30% baseline, not actionable.)_` : ''}` +
+    `\nTop reasons: ${top}.\nCheck /journeys funnel + comms.messages.`);
   await A.sbComms('/rest/v1/settings?id=eq.1', env,
     { method: 'PATCH', body: JSON.stringify({ journey_alert_at: nowIso() }) });
 }

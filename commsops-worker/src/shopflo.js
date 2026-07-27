@@ -203,6 +203,23 @@ function checkoutUrlSuffix(url) {
 // gift-box-icon incident). If the primary item carries no image, returns null so the
 // handler's catalog-cache lookup (keyed on the primary NAME) resolves it instead — a
 // wrong-product image is worse than a fallback.
+// WhatsApp rejects header media over ~5 MB with error 131053 ("Media upload error"). MEASURED
+// 2026-07-27: LOT's Shopify CDN originals run to 6.9 / 13.5 / 25.2 MB, and those three specific
+// product images accounted for ALL 17 media failures while 502 sends on smaller images succeeded.
+// So it is a SIZE limit, not a format one — note the files are named `.webp` yet served as
+// `image/png`, and webp sends fine, which is why "webp is unsupported" was the wrong diagnosis.
+// Shopify's CDN resizes on demand, so this is a URL change rather than a media pipeline:
+// underground_blue_1 measured 25.24 MB → 1.72 MB at width=1200, ample for a phone-screen header.
+// Only Shopify CDN hosts are touched; any other URL is returned untouched (we cannot assume a
+// third-party host honours `width`, and a bogus param could break an otherwise-working link).
+const CDN_IMAGE_WIDTH = 1200;
+function cdnImage(url) {
+  if (!url || typeof url !== 'string') return url || null;
+  if (!/^https?:\/\/[^/]*cdn\.shopify\.com\//i.test(url)) return url;
+  if (/[?&]width=/i.test(url)) return url;                 // already constrained — leave it
+  return url + (url.includes('?') ? '&' : '?') + `width=${CDN_IMAGE_WIDTH}`;
+}
+
 function payloadImageUrl(body, primaryName) {
   const items = Array.isArray(body?.line_items) ? body.line_items : [];
   if (!items.length) return null;
@@ -262,7 +279,7 @@ function mapCheckoutAbandoned(body) {
     // primary_product_name (display-ordered: add-ons last, highest line value first).
     checkout_url_suffix: checkoutUrlSuffix(checkoutUrl),
     primary_product_name: primaryName || null,
-    product_image_url: payloadImageUrl(body, primaryName),
+    product_image_url: cdnImage(payloadImageUrl(body, primaryName)),
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
@@ -349,7 +366,7 @@ function mapAddToCart(body) {
     primary_product_name: (namesOrdered || '').split(',')[0].trim() || null,
     // Opportunistic — the browse events carry these under `data.*`; if add_to_cart ever does
     // too, a per-product image/link works with no further change. Absent = template fallback.
-    product_image_url: body.product_image || p.product_image || p.product_image_url || null,
+    product_image_url: cdnImage(body.product_image || p.product_image || p.product_image_url || null),
     product_handle: productHandle(productUrl),
     source_surface: 'shopflo',
   };
@@ -405,7 +422,7 @@ function mapBrowse(eventName) {
       // neither directly — it sends `data.product_image` and a full `data.product_url`, so the
       // handle is derived from the URL's `/products/<handle>` segment.
       product_handle: productHandle(productUrl),
-      product_image_url: pick('product_image', 'product_image_url', 'productImage', 'image_url', 'image'),
+      product_image_url: cdnImage(pick('product_image', 'product_image_url', 'productImage', 'image_url', 'image')),
       product_type: pick('product_type', 'productType'),
       collection_name: pick('collection_name', 'collectionName', 'collection', 'page_title'),
       collection_url: pick('collection_page_url', 'collectionPageUrl'),
@@ -491,7 +508,7 @@ function consentRowsFrom(body, capturedAt) {
 
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
-  checkoutUrlSuffix, payloadImageUrl, SHOPFLO_CHECKOUT_BASE,
+  checkoutUrlSuffix, payloadImageUrl, cdnImage, productHandle, SHOPFLO_CHECKOUT_BASE,
   normalizeCartToken, cartToken, cartIdentifier, mapBrowse, lookupEvent,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };

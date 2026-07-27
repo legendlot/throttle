@@ -413,7 +413,8 @@ t('browse mapper extracts handle + image from the live Shopflo wire shape', () =
   assert.ok(out, 'identity-bearing browse event must map');
   assert.equal(out.name, 'product_viewed');
   assert.equal(out.properties.product_handle, 'l-o-t-aviation-wisp');
-  assert.equal(out.properties.product_image_url, 'https://cdn.shopify.com/s/files/1/x/Asset_1.webp?v=1784630969');
+  // cdnImage constrains width so the header stays under WhatsApp's 5MB media limit (131053).
+  assert.equal(out.properties.product_image_url, 'https://cdn.shopify.com/s/files/1/x/Asset_1.webp?v=1784630969&width=1200');
   assert.equal(out.properties.product_name, 'L.O.T Aviation Wisp');
   assert.equal(out.properties.price, 3999);
   assert.ok(out.identifiers.some((i) => i.type === 'phone'), 'phone identifier must be extracted');
@@ -453,6 +454,22 @@ t('add_to_cart orders add-ons last for display', () => {
   assert.ok(out);
   assert.equal(out.properties.primary_product_name, 'L.O.T Car Vortex - RC Drift Car - Overdrive Yellow');
   assert.equal(out.properties.total_display, '₹5,048');
+});
+
+// WhatsApp rejects header media >5MB (error 131053). Shopify originals hit 25MB; the CDN
+// resizes on demand, so we constrain width at map time. MEASURED: 25.24MB -> 1.72MB at w=1200.
+t('cdnImage constrains Shopify CDN images and leaves others alone', () => {
+  const big = 'https://cdn.shopify.com/s/files/1/0669/4721/9508/files/underground_blue_1.webp?v=1784635763';
+  assert.equal(FLO.cdnImage(big), big + '&width=1200');
+  // no query string
+  assert.equal(FLO.cdnImage('https://cdn.shopify.com/s/files/x.png'), 'https://cdn.shopify.com/s/files/x.png?width=1200');
+  // already constrained — do not double-append
+  const done = 'https://cdn.shopify.com/s/files/x.png?width=800';
+  assert.equal(FLO.cdnImage(done), done);
+  // non-Shopify host untouched (cannot assume it honours `width`)
+  const other = 'https://images.example.com/a.jpg?v=1';
+  assert.equal(FLO.cdnImage(other), other);
+  assert.equal(FLO.cdnImage(null), null);
 });
 
 // A collection view has no product URL — it must NOT invent a handle.
