@@ -51,15 +51,28 @@ async function capture(env, request, body) {
 // null on any failure: the template's static creative is the render-time fallback, a
 // missing image must never fail the webhook.
 const STOREFRONT_CATALOG_URL = 'https://www.legendoftoys.com/products.json?limit=250';
+
+// Shopify serves the public catalog fine to a browser, but a Worker fetch carries no
+// User-Agent and egresses from a datacenter IP — a combination storefronts commonly
+// challenge or 403. Send an explicit UA, and LOG the status on failure: the first cut of
+// this returned null silently on `!res.ok`, so a blocked fetch was indistinguishable from
+// "no image for that variant" and cost a debugging round.
+async function fetchCatalog() {
+  const res = await fetch(STOREFRONT_CATALOG_URL, {
+    headers: { 'User-Agent': 'commsops-relay/1.0 (+https://legendoftoys.com)', Accept: 'application/json' },
+  });
+  if (!res.ok) { console.log('catalog_fetch_failed', res.status); return null; }
+  try { return await res.json(); }
+  catch (e) { console.log('catalog_parse_failed', e?.message || String(e)); return null; }
+}
 async function resolveProductImage(env, namesCsv) {
   const title = String(namesCsv || '').split(',')[0].trim();
   if (!title) return null;
   try {
     const r = await A.sbComms(`/rest/v1/product_images?title=eq.${A.enc(title)}&select=image_url&limit=1`, env);
     if (r.ok && r.data?.[0]?.image_url) return r.data[0].image_url;
-    const res = await fetch(STOREFRONT_CATALOG_URL);
-    if (!res.ok) return null;
-    const cat = await res.json();
+    const cat = await fetchCatalog();
+    if (!cat) return null;
     const rows = (Array.isArray(cat.products) ? cat.products : [])
       .filter((p) => p && p.title && p.images?.[0]?.src)
       .map((p) => ({ title: p.title, image_url: p.images[0].src, updated_at: new Date().toISOString() }));
@@ -98,9 +111,9 @@ async function resolveVariantImage(env, variantIdsCsv, primaryName) {
     }
     // Miss → re-pull the public catalog and upsert EVERY variant, so one miss self-heals
     // the whole cache (a newly launched colourway is the common case).
-    const res = await fetch(STOREFRONT_CATALOG_URL);
-    if (!res.ok) return null;
-    const index = FLO.variantImageIndex(await res.json());
+    const cat = await fetchCatalog();
+    if (!cat) return null;
+    const index = FLO.variantImageIndex(cat);
     const rows = Object.entries(index).map(([variant_id, v]) => ({
       variant_id, title: v.title, image_url: v.image_url, updated_at: new Date().toISOString(),
     }));
