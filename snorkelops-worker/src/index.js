@@ -2351,7 +2351,6 @@ export default {
             if (!isDraftEdit && curO.status !== 'confirmed')
               return err('Only draft or confirmed (un-invoiced) orders can be edited', 422);
             if (!isDraftEdit) {
-              if (Array.isArray(d.lines)) return err('Lines are locked after confirmation', 422);
               const blocked = ['channel_key','destination_warehouse','credit_days'].filter(f => d[f] !== undefined);
               if (blocked.length) return err(`Locked after confirmation: ${blocked.join(', ')}`, 422);
             }
@@ -2363,7 +2362,85 @@ export default {
               if (d[f] !== undefined) updates[f] = d[f] || null;
             });
             if (isDraftEdit && d.credit_days !== undefined) updates.credit_days = Math.round(Number(d.credit_days) || 0);
-            if (Array.isArray(d.lines)) {
+
+            // ── Line edits on a CONFIRMED, un-invoiced order (Ram #bugs 2026-07-27) ──
+            // Requirements and fillability change after a partner PO lands but before it
+            // ships. Two field classes with very different blast radius:
+            //   · invoice-only (hsn_code/description/rate/discount_pct/gst_pct) — dispatch
+            //     never reads these, so they stay editable right up to invoicing. 50 live
+            //     lines across 21 un-invoiced orders had NO hsn at all, two of them on
+            //     orders already fully packed, so they could not be invoiced correctly.
+            //   · dispatch keys (product/model/color/sku/qty) — PACK matches manifest lines
+            //     on EXACT product+model+colour, so changing one without propagating is
+            //     precisely what broke Blinkit DSO-0258 (RULE-TAXONOMY-001, S231
+            //     "NOT IN MANIFEST"). Allowed only while nothing is packed, and always
+            //     propagated to the fulfilment-request + shipment lines in the same call.
+            // Edits are applied IN PLACE via upsert-on-id, never the draft path's
+            // delete-and-reinsert: sales_order_lines.id is Odo's source line id for
+            // stg_snorkel, so minting new ids would restage every line and double-count
+            // sales_fact (RULE-SALES-001).
+            let frToSync = null, shipmentToSync = null, mergedLines = null;
+            if (!isDraftEdit && Array.isArray(d.lines)) {
+              const exR = await query('sales_order_lines',
+                `?order_id=eq.${encodeURIComponent(d.id)}&select=*&order=sort_order.asc`);
+              if (!exR.ok) return err('Could not load existing lines', 500);
+              const existing = exR.data || [];
+              const byId = new Map(existing.map(l => [l.id, l]));
+              if (d.lines.some(l => !l.id || !byId.has(l.id)) || d.lines.length !== existing.length)
+                return err('Lines cannot be added or removed after confirmation — edit the existing lines, or cancel and re-raise the order', 422);
+
+              const norm = v => (v === undefined || v === null || v === '') ? null
+                              : (typeof v === 'string' ? v.trim() : v);
+              const asQty = v => Math.round(Number(v) || 0);
+              const dispatchChanged = d.lines.some(l => {
+                const ex = byId.get(l.id);
+                return ['product','model','color','sku','qty'].some(k => {
+                  if (l[k] === undefined) return false;
+                  return k === 'qty' ? asQty(l[k]) !== asQty(ex[k]) : norm(l[k]) !== norm(ex[k]);
+                });
+              });
+
+              if (dispatchChanged) {
+                const frR = await queryPublic('dispatch_fulfilment_requests',
+                  `?sales_order_id=eq.${encodeURIComponent(d.id)}&select=id,status&order=created_at.desc&limit=1`);
+                const fr = frR.ok ? frR.data?.[0] : null;
+                if (fr && fr.status === 'accepted') {
+                  const shR = await queryPublic('dispatch_shipments',
+                    `?fulfilment_request_id=eq.${encodeURIComponent(fr.id)}&select=id,status`);
+                  const shipments = (shR.ok && Array.isArray(shR.data)) ? shR.data : [];
+                  if (shipments.some(s => s.status === 'shipped'))
+                    return err('Already dispatched — handle as a return, not an edit', 422);
+                  if (shipments.length) {
+                    const slR = await queryPublic('dispatch_shipment_lines',
+                      `?shipment_id=in.(${shipments.map(s => s.id).join(',')})&select=packed_qty`);
+                    const packed = ((slR.ok && Array.isArray(slR.data)) ? slR.data : [])
+                      .reduce((s, x) => s + (Number(x.packed_qty) || 0), 0);
+                    if (packed > 0)
+                      return err('Units are already packed against this order — product, model, colour and quantity are locked. Ask dispatch to unpack first, or cancel and re-raise.', 422);
+                  }
+                  // A split was allocated by dispatch across N shipments; re-deriving that
+                  // allocation from changed lines would be guesswork, so refuse loudly.
+                  if (shipments.length > 1)
+                    return err('This order was split across more than one shipment — dispatch must redo the split before the items can change', 422);
+                  frToSync = fr; shipmentToSync = shipments[0]?.id || null;
+                } else if (fr && fr.status === 'pending') {
+                  frToSync = fr;   // not accepted yet — only the request lines need re-deriving
+                }
+              }
+
+              mergedLines = existing.map(ex => {
+                const inc = d.lines.find(l => l.id === ex.id);
+                return { id: ex.id, ...computeSalesLine({ ...ex, ...(inc || {}) }), order_id: d.id };
+              });
+              updates.subtotal    = +mergedLines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
+              updates.tax_total   = +mergedLines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
+              updates.grand_total = +(updates.subtotal + updates.tax_total).toFixed(2);
+              // Upsert on the PK — one subrequest, ids preserved.
+              const up = await insert('sales_order_lines', mergedLines, true);
+              if (!up.ok) return err('Line update failed: ' + JSON.stringify(up.data), 500);
+            }
+
+            if (isDraftEdit && Array.isArray(d.lines)) {
               const lines = d.lines.map(computeSalesLine);
               updates.subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
               updates.tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
@@ -2375,7 +2452,47 @@ export default {
             }
             const r = await update('sales_orders', updates, `id=eq.${encodeURIComponent(d.id)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
-            return ok({ updated: d.id });
+
+            // Propagate the new dispatch keys downstream. Only reached when a dispatch key
+            // actually changed AND nothing is packed, so replacing these rows is safe —
+            // they carry no packed state to lose. Without this the manifest keeps the OLD
+            // product/model/colour and PACK rejects the physical unit as NOT IN MANIFEST.
+            if (frToSync) {
+              const frLines = mergedLines.map((l, i) => ({
+                request_id: frToSync.id, product: l.product, model: l.model || null,
+                color: l.color || null, sku: l.sku || null,
+                qty: Math.round(Number(l.qty)) || 0, sort_order: l.sort_order ?? i,
+              }));
+              const requested_units = frLines.reduce((s, l) => s + l.qty, 0);
+              await sbPublic(`/rest/v1/dispatch_fulfilment_request_lines?request_id=eq.${encodeURIComponent(frToSync.id)}`,
+                { method: 'DELETE', prefer: 'return=minimal' });
+              const frl = await sbPublic('/rest/v1/dispatch_fulfilment_request_lines',
+                { method: 'POST', body: JSON.stringify(frLines), headers: { Prefer: 'return=minimal' } });
+              if (!frl.ok) return err('Order saved, but the dispatch request lines could not be updated — tell dispatch before they pack: ' + JSON.stringify(frl.data), 502);
+              await sbPublic(`/rest/v1/dispatch_fulfilment_requests?id=eq.${encodeURIComponent(frToSync.id)}`,
+                { method: 'PATCH', body: JSON.stringify({ requested_units }), prefer: 'return=minimal' });
+
+              if (shipmentToSync) {
+                // Collapse to product+model+colour: the manifest is keyed on the physical
+                // variant, and two order lines can legitimately name the same one.
+                const byVariant = new Map();
+                for (const l of frLines) {
+                  const k = `${l.product}|${l.model || ''}|${l.color || ''}`;
+                  byVariant.set(k, (byVariant.get(k) || 0) + l.qty);
+                }
+                const shipLines = [...byVariant.entries()].map(([k, qty]) => {
+                  const [product, model, color] = k.split('|');
+                  return { shipment_id: shipmentToSync, product, model: model || null,
+                           color: color || null, target_qty: qty, packed_qty: 0 };
+                });
+                await sbPublic(`/rest/v1/dispatch_shipment_lines?shipment_id=eq.${encodeURIComponent(shipmentToSync)}`,
+                  { method: 'DELETE', prefer: 'return=minimal' });
+                const sl = await sbPublic('/rest/v1/dispatch_shipment_lines',
+                  { method: 'POST', body: JSON.stringify(shipLines), headers: { Prefer: 'return=minimal' } });
+                if (!sl.ok) return err('Order saved, but the dispatch manifest could not be updated — tell dispatch before they pack: ' + JSON.stringify(sl.data), 502);
+              }
+            }
+            return ok({ updated: d.id, dispatch_synced: !!frToSync, manifest_synced: !!shipmentToSync });
           }
 
           case 'cancelOrder': {

@@ -42,6 +42,7 @@ function OrderDetailInner() {
   const [pay, setPay] = useState({ open: false, amount: '', received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' });
   // Metadata-only edit for CONFIRMED un-invoiced orders (S229): date / PO ref / expected dispatch / notes.
   const [metaEdit, setMetaEdit] = useState(null);   // null | { order_date, partner_po_ref, expected_dispatch_date, notes }
+  const [lineEdit, setLineEdit] = useState(null);   // null | [{ id, product, model, color, hsn_code, qty, rate, discount_pct, gst_pct }]
   const [creditNotes, setCreditNotes] = useState([]);
 
   const canManage = !!perms?.sales_order_manage;
@@ -131,6 +132,38 @@ function OrderDetailInner() {
     setPartners(prev => [np, ...prev]);
     showToast(`Partner ${np.partner_code} created`, 'success');
     return np;
+  }
+
+  // Editing items on a CONFIRMED order (Ram, 2026-07-27) — requirements change after a
+  // partner PO lands but before it ships. The worker owns the safety envelope: HSN and
+  // pricing stay open until invoicing, while model/colour/qty are refused once anything
+  // is packed and otherwise propagated to the dispatch manifest in the same call.
+  function startLineEdit() {
+    setLineEdit(lines.map(l => ({
+      id: l.id, product: l.product || '', model: l.model || '', color: l.color || '',
+      hsn_code: l.hsn_code || '', qty: l.qty ?? 0, rate: l.rate ?? 0,
+      discount_pct: l.discount_pct ?? 0, gst_pct: l.gst_pct ?? 0,
+    })));
+  }
+  function setLineField(id, field, value) {
+    setLineEdit(prev => prev.map(l => (l.id === id ? { ...l, [field]: value } : l)));
+  }
+  async function saveLineEdit() {
+    if (lineEdit.some(l => !String(l.model || '').trim() && !String(l.color || '').trim() && !l.hsn_code)) {
+      // not fatal — just avoids silently blanking a variant the manifest matches on
+    }
+    if (lineEdit.some(l => !(Math.round(Number(l.qty)) > 0))) { showToast('Every line needs a quantity above zero', 'error'); return; }
+    setBusy(true);
+    try {
+      const res = await workerFetch('updateSalesOrder', { data: { id, lines: lineEdit } }, session);
+      if (!res.ok) throw new Error(res.error || 'Update failed');
+      showToast(res.data?.manifest_synced ? 'Items updated — dispatch manifest updated too'
+              : res.data?.dispatch_synced ? 'Items updated — dispatch request updated too'
+              : 'Items updated', 'success');
+      setLineEdit(null);
+      await load();
+    } catch (e) { showToast(e.message || 'Update failed', 'error'); }
+    finally { setBusy(false); }
   }
 
   async function startEdit() { await loadFormMasters(); setEditing(true); }
@@ -235,7 +268,7 @@ function OrderDetailInner() {
             </div>
           </div>
           <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--t3)' }}>
-            Items, channel, warehouse and credit terms are locked after confirmation.
+            Channel, warehouse and credit terms are locked after confirmation. Items can still be edited — see Lines below.
           </div>
         </div>
       )}
@@ -302,7 +335,28 @@ function OrderDetailInner() {
 
       {/* Lines */}
       <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Lines ({lines.length})</span></div>
+        <div style={{ ...panelHeaderStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Lines ({lines.length})</span>
+          {isConfirmed && canManage && !o.invoice_generated && (
+            lineEdit ? (
+              <span style={{ display: 'flex', gap: 8 }}>
+                <button style={btnPrimary} onClick={saveLineEdit} disabled={busy}>Save items</button>
+                <button style={btnSecondary} onClick={() => setLineEdit(null)} disabled={busy}>Cancel</button>
+              </span>
+            ) : (
+              <button style={btnSecondary} onClick={startLineEdit} disabled={busy}>Edit items</button>
+            )
+          )}
+        </div>
+        {lineEdit && (
+          <div style={{ ...panelBodyStyle, paddingTop: 0, paddingBottom: 0 }}>
+            <p style={pageSub}>
+              HSN and pricing can be changed right up to invoicing. Model, colour and quantity
+              can only change while nothing has been packed — if dispatch has already packed
+              against this order, save will be refused and tell you so.
+            </p>
+          </div>
+        )}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead><tr>
@@ -311,21 +365,51 @@ function OrderDetailInner() {
               ))}
             </tr></thead>
             <tbody>
-              {lines.map((l, i) => (
-                <tr key={l.id || i}>
-                  <td style={{ ...tableTdStyle, color: 'var(--t3)' }}>{i + 1}</td>
-                  <td style={tableTdStyle}>{l.product || '—'}{l.sku ? <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}> · {l.sku}</span> : ''}</td>
-                  <td style={tableTdStyle}>{l.model || '—'}</td>
-                  <td style={tableTdStyle}>{l.color || '—'}</td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.hsn_code || '—'}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{l.qty}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.rate).toLocaleString('en-IN')}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.discount_pct) || 0}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.gst_pct) || 0}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.taxable_value).toLocaleString('en-IN')}</td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.line_total).toLocaleString('en-IN')}</td>
-                </tr>
-              ))}
+              {(lineEdit || lines).map((l, i) => {
+                if (!lineEdit) return (
+                  <tr key={l.id || i}>
+                    <td style={{ ...tableTdStyle, color: 'var(--t3)' }}>{i + 1}</td>
+                    <td style={tableTdStyle}>{l.product || '—'}{l.sku ? <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}> · {l.sku}</span> : ''}</td>
+                    <td style={tableTdStyle}>{l.model || '—'}</td>
+                    <td style={tableTdStyle}>{l.color || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.hsn_code || '—'}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{l.qty}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.rate).toLocaleString('en-IN')}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.discount_pct) || 0}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.gst_pct) || 0}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.taxable_value).toLocaleString('en-IN')}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.line_total).toLocaleString('en-IN')}</td>
+                  </tr>
+                );
+                const cell = (field, opts = {}) => (
+                  <input
+                    value={l[field] ?? ''}
+                    onChange={e => setLineField(l.id, field, e.target.value)}
+                    type={opts.numeric ? 'number' : 'text'}
+                    style={{ width: '100%', minWidth: opts.numeric ? 64 : 88, background: 'var(--bg-1)',
+                      border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px',
+                      color: 'var(--t1)', fontSize: 12,
+                      fontFamily: opts.numeric || field === 'hsn_code' ? 'var(--mono)' : 'inherit',
+                      textAlign: opts.numeric ? 'right' : 'left' }} />
+                );
+                // Taxable/total are derived server-side by computeSalesLine — showing a
+                // half-recomputed figure mid-edit would just be a second source of truth.
+                return (
+                  <tr key={l.id}>
+                    <td style={{ ...tableTdStyle, color: 'var(--t3)' }}>{i + 1}</td>
+                    <td style={tableTdStyle}>{l.product || '—'}</td>
+                    <td style={tableTdStyle}>{cell('model')}</td>
+                    <td style={tableTdStyle}>{cell('color')}</td>
+                    <td style={tableTdStyle}>{cell('hsn_code')}</td>
+                    <td style={tableTdStyle}>{cell('qty', { numeric: true })}</td>
+                    <td style={tableTdStyle}>{cell('rate', { numeric: true })}</td>
+                    <td style={tableTdStyle}>{cell('discount_pct', { numeric: true })}</td>
+                    <td style={tableTdStyle}>{cell('gst_pct', { numeric: true })}</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', color: 'var(--t3)' }}>—</td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right', color: 'var(--t3)' }}>—</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
