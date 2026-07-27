@@ -242,7 +242,23 @@ function cdnImage(url) {
 // The storefront origin is fixed rather than derived from SHOPIFY_STORE_DOMAIN: that env var
 // holds the `.myshopify.com` admin domain, which is NOT the domain a customer should be sent
 // to. This is customer-facing copy, so it is stated explicitly.
+// TWO TOKENS ARE EXPOSED, and binding the wrong one is the failure mode to design against.
+// A Meta URL button is `static base + ONE trailing {{1}}` — it is NOT a whole-URL slot. So a
+// WhatsApp button must be authored as `https://www.legendoftoys.com/cart/{{1}}` and bound to
+// `cart_link_suffix` (`47394784149556:1`). Binding the full `cart_link` there yields
+// `…/cart/https://www.legendoftoys.com/cart/…` — a dead link that still passes review, because
+// Meta only ever sees the base. `cart_link` (absolute) is for email bodies and any free-text
+// link. This mirrors the existing `cart_url_suffix` convention on checkout_abandoned, which
+// exists for exactly this reason.
 const STOREFRONT_BASE = 'https://www.legendoftoys.com';
+const CART_PATH = '/cart/';
+
+// The `<variant>:<qty>,…` tail on its own — what a Meta URL button binds.
+function cartLinkSuffix(cartVariantIds) {
+  const url = cartLink(cartVariantIds);
+  return url ? url.slice((STOREFRONT_BASE + CART_PATH).length) : null;
+}
+
 function cartLink(cartVariantIds) {
   if (cartVariantIds == null) return null;
   const seen = new Set();
@@ -259,7 +275,7 @@ function cartLink(cartVariantIds) {
   }
   // No usable id → null, so the template's own fallback URL applies. Never emit a bare
   // `/cart/` path, which would 404 rather than degrade to the normal cart page.
-  return lines.length ? `${STOREFRONT_BASE}/cart/${lines.join(',')}` : null;
+  return lines.length ? `${STOREFRONT_BASE}${CART_PATH}${lines.join(',')}` : null;
 }
 
 function payloadImageUrl(body, primaryName) {
@@ -396,8 +412,11 @@ function mapAddToCart(body) {
     cart_product_ids: body.cart_product_ids || null,
     cart_product_names: body.cart_product_names || null,
     cart_variant_ids: body.cart_variant_ids || null,
-    // Per-customer cart permalink for the recovery template's button — see cartLink().
+    // Per-customer cart permalink — see cartLink(). `cart_link` is absolute (email/free text);
+    // `cart_link_suffix` is the tail a Meta URL button binds. Binding the wrong one is the
+    // documented trap — see the note above cartLink().
     cart_link: cartLink(body.cart_variant_ids),
+    cart_link_suffix: cartLinkSuffix(body.cart_variant_ids),
     currency: body.currency || null,
     total_price: rawTotal,                // AS RECEIVED (paise) — see the unit note above
     total: totalRupees,                   // rupees, matching checkout_abandoned's `total`
@@ -553,7 +572,7 @@ function consentRowsFrom(body, capturedAt) {
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, cdnImage, productHandle, SHOPFLO_CHECKOUT_BASE,
-  cartLink, STOREFRONT_BASE,
+  cartLink, cartLinkSuffix, STOREFRONT_BASE,
   normalizeCartToken, cartToken, cartIdentifier, mapBrowse, lookupEvent,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };

@@ -360,6 +360,33 @@ t('mapAddToCart exposes cart_link for the recovery template button', () => {
   assert.equal(e.properties.cart_link, 'https://www.legendoftoys.com/cart/55589142888521:1');
 });
 
+// A Meta URL button is `static base + ONE trailing {{1}}`, never a whole-URL slot. Binding the
+// absolute cart_link to a button would render
+// `…/cart/https://www.legendoftoys.com/cart/…` — dead, and it would still PASS Meta review,
+// because Meta only ever sees the static base. Hence a separate suffix token.
+t('cartLinkSuffix is the button-bindable tail, with no origin', () => {
+  assert.equal(FLO.cartLinkSuffix('47394784149556'), '47394784149556:1');
+  assert.equal(FLO.cartLinkSuffix('111,222'), '111:1,222:1');
+  assert.ok(!String(FLO.cartLinkSuffix('111')).includes('http'));
+});
+
+t('cartLinkSuffix is null exactly when cartLink is', () => {
+  for (const v of [null, '', '   ', 'abc', '0']) {
+    assert.equal(FLO.cartLinkSuffix(v), null, `expected null for ${JSON.stringify(v)}`);
+  }
+});
+
+t('suffix appended to the authored button base reproduces the absolute link', () => {
+  // The invariant that keeps the two tokens honest: base + suffix === cart_link.
+  const ids = '47294771134516,47907123167284';
+  assert.equal(`https://www.legendoftoys.com/cart/${FLO.cartLinkSuffix(ids)}`, FLO.cartLink(ids));
+});
+
+t('mapAddToCart exposes cart_link_suffix alongside the absolute link', () => {
+  const e = FLO.mapAddToCart(ADDED_TO_CART);
+  assert.equal(e.properties.cart_link_suffix, '55589142888521:1');
+});
+
 t('mapAddToCart leaves cart_link null when variant ids are absent', () => {
   const e = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: null });
   assert.equal(e.properties.cart_link, null);
