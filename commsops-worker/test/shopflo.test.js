@@ -387,6 +387,72 @@ t('mapAddToCart exposes cart_link_suffix alongside the absolute link', () => {
   assert.equal(e.properties.cart_link_suffix, '55589142888521:1');
 });
 
+// ── per-variant header imagery (2026-07-27) ───────────────────────────────────────────
+// Shopflo sends NO product_image on add_to_cart (0 of 15 live events), so the WA image
+// header always fell back to the generic creative — confirmed on a real journey send:
+// Pruthvi added a Mac Gray at 21:43 and the 22:13 message carried the stock cart artwork.
+// The title-keyed comms.product_images cache cannot fix it: add_to_cart names are
+// VARIANT-level ("... - Tarmac Black") while the catalog holds the PRODUCT title, so only
+// 2 of 17 live titles matched. `cart_variant_ids` is the exact key and yields the
+// customer's own colourway.
+const CATALOG = { products: [
+  { title: 'L.O.T Cars Mac - 1:64 Scale Mini RC Car',
+    images: [{ src: 'https://cdn/mac-product.webp' }],
+    variants: [{ id: 47907665346612, title: 'Gray', featured_image: { src: 'https://cdn/mac-gray.webp' } }] },
+  { title: 'L.O.T Cars Shadow - RC Drift Car',
+    images: [{ src: 'https://cdn/shadow-product.webp' }],
+    variants: [
+      { id: 47394784149556, title: 'Tarmac Black', featured_image: { src: 'https://cdn/shadow-tarmac.webp' } },
+      { id: 111, title: 'Asphalt Silver', featured_image: null },   // falls back to product image
+    ] },
+  { title: 'Gift Wrapping', images: [{ src: 'https://cdn/giftwrap.webp' }],
+    variants: [{ id: 999, title: 'Default Title', featured_image: null }] },
+] };
+
+t('variantImageIndex keys on variant id and composes the cart-style title', () => {
+  const ix = FLO.variantImageIndex(CATALOG);
+  assert.equal(ix['47907665346612'].image_url, 'https://cdn/mac-gray.webp');
+  assert.equal(ix['47907665346612'].title, 'L.O.T Cars Mac - 1:64 Scale Mini RC Car - Gray');
+});
+
+t('variantImageIndex falls back to the product image when a variant has none', () => {
+  assert.equal(FLO.variantImageIndex(CATALOG)['111'].image_url, 'https://cdn/shadow-product.webp');
+});
+
+t("variantImageIndex does not suffix 'Default Title' onto single-variant products", () => {
+  // Otherwise the composed title never matches the cart name for single-variant products.
+  assert.equal(FLO.variantImageIndex(CATALOG)['999'].title, 'Gift Wrapping');
+});
+
+t('pickVariantImage returns the PRIMARY product image, not the first cart line', () => {
+  // Gift Wrapping is first in the cart; the customer's actual purchase must headline
+  // (same rule that keeps add-ons out of primary_product_name).
+  const ix = FLO.variantImageIndex(CATALOG);
+  assert.equal(
+    FLO.pickVariantImage('999,47394784149556', 'L.O.T Cars Shadow - RC Drift Car - Tarmac Black', ix),
+    'https://cdn/shadow-tarmac.webp');
+});
+
+t('pickVariantImage falls back to the first known variant when the name does not match', () => {
+  const ix = FLO.variantImageIndex(CATALOG);
+  assert.equal(FLO.pickVariantImage('47907665346612', 'Something Renamed', ix), 'https://cdn/mac-gray.webp');
+});
+
+t('pickVariantImage returns null for unknown or empty ids', () => {
+  const ix = FLO.variantImageIndex(CATALOG);
+  for (const v of [null, '', '   ', '123456789', 'abc']) {
+    assert.equal(FLO.pickVariantImage(v, 'X', ix), null, `expected null for ${JSON.stringify(v)}`);
+  }
+});
+
+t('pickVariantImage resolves the exact live case that shipped the wrong image', () => {
+  // Pruthvi's real 21:43 event: Mac Gray, variant 47907665346612.
+  const ix = FLO.variantImageIndex(CATALOG);
+  assert.equal(
+    FLO.pickVariantImage('47907665346612', 'L.O.T Cars Mac - 1:64 Scale Mini RC Car - Gray', ix),
+    'https://cdn/mac-gray.webp');
+});
+
 t('mapAddToCart leaves cart_link null when variant ids are absent', () => {
   const e = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: null });
   assert.equal(e.properties.cart_link, null);

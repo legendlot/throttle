@@ -278,6 +278,55 @@ function cartLink(cartVariantIds) {
   return lines.length ? `${STOREFRONT_BASE}${CART_PATH}${lines.join(',')}` : null;
 }
 
+// ── per-variant header imagery ────────────────────────────────────────────────────────
+// Shopflo sends NO product image on add_to_cart, so the WA image header always fell back
+// to the generic creative (confirmed on a real send: a Mac Gray cart produced the stock
+// cart artwork). The title-keyed product cache cannot close it — add_to_cart names are
+// VARIANT-level while the catalog holds PRODUCT titles, matching only 2 of 17 live names.
+// `cart_variant_ids` is an exact numeric key and resolves the customer's own colourway.
+//
+// Pure: the caller supplies the catalog (public storefront products.json) and does the I/O.
+
+// catalog → { "<variant_id>": {title, image_url} }. Variant image wins; product image is
+// the fallback (some variants carry none). Variants with no image at all are omitted, so a
+// hit always means a usable URL.
+function variantImageIndex(catalog) {
+  const out = {};
+  for (const p of (catalog && Array.isArray(catalog.products) ? catalog.products : [])) {
+    if (!p) continue;
+    const productImg = (Array.isArray(p.images) && p.images[0] && p.images[0].src) || null;
+    for (const v of (Array.isArray(p.variants) ? p.variants : [])) {
+      if (!v || v.id == null) continue;
+      const img = (v.featured_image && v.featured_image.src) || productImg;
+      if (!img) continue;
+      // Compose the name the CART uses, so it can be matched against primary_product_name.
+      // Shopify's synthetic 'Default Title' must not be appended or a single-variant
+      // product's composed name would never match the cart's.
+      const vt = String(v.title || '').trim();
+      const title = (vt && vt !== 'Default Title') ? `${p.title} - ${vt}` : p.title;
+      out[String(v.id)] = { title, image_url: img };
+    }
+  }
+  return out;
+}
+
+// Choose the image for the cart. Prefers the variant whose composed title equals
+// `primaryProductName` — that value already puts add-ons last, so this is what keeps
+// "Gift Wrapping" from headlining the message (the gift-box-icon incident). Falls back to
+// the first cart variant we actually know.
+function pickVariantImage(cartVariantIds, primaryProductName, index) {
+  const ids = String(cartVariantIds ?? '').split(',')
+    .map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
+  if (!ids.length || !index) return null;
+  if (primaryProductName) {
+    const want = String(primaryProductName).trim();
+    const hit = ids.find((id) => index[id] && index[id].title === want);
+    if (hit) return index[hit].image_url;
+  }
+  const first = ids.find((id) => index[id]);
+  return first ? index[first].image_url : null;
+}
+
 function payloadImageUrl(body, primaryName) {
   const items = Array.isArray(body?.line_items) ? body.line_items : [];
   if (!items.length) return null;
@@ -572,7 +621,7 @@ function consentRowsFrom(body, capturedAt) {
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, cdnImage, productHandle, SHOPFLO_CHECKOUT_BASE,
-  cartLink, cartLinkSuffix, STOREFRONT_BASE,
+  cartLink, cartLinkSuffix, STOREFRONT_BASE, variantImageIndex, pickVariantImage,
   normalizeCartToken, cartToken, cartIdentifier, mapBrowse, lookupEvent,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };
