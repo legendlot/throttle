@@ -1322,6 +1322,18 @@ async function getReports(params, auth, env) {
   if (!res.ok) return err('Failed to load reports data', 500);
   const rows = res.data || [];
 
+  // Conversations handled alongside tickets raised (Pruthvi #bugs 2026-07-25,
+  // clarified in-thread: not every conversation becomes a ticket — shipment and
+  // general queries often don't). Cheap counts RPC, NOT the full agent report,
+  // which does response-time math and would add ~2.5s to the default YTD load.
+  // Non-fatal: the ticket panels must still render if this one call fails.
+  let conversations = null;
+  const convR = await sb('/rest/v1/rpc/cs_conversation_counts', env, {
+    method: 'POST',
+    body: JSON.stringify({ p_from: from, p_to: to }),
+  });
+  if (convR.ok) conversations = convR.data || null;
+
   // Aggregate
   const monthly = {};
   const byDisposition = {};
@@ -1385,6 +1397,7 @@ async function getReports(params, auth, env) {
 
   return ok({
     range: { from, to, total_rows: rows.length },
+    conversations,   // { total, handled, outbound_only, no_history } | null
     monthly_trend: Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month)),
     by_disposition: Object.entries(byDisposition).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_issue_category: Object.entries(byIssueCategory).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),

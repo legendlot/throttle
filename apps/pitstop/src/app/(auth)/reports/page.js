@@ -88,6 +88,11 @@ export default function ReportsPage() {
     if (!data) return;
     const lines = [];
     lines.push(`Pitstop Report,${from} to ${to}`);
+    lines.push(`Tickets raised,${data.range.total_rows}`);
+    if (data.conversations) {
+      lines.push(`Conversations handled,${data.conversations.handled}`);
+      lines.push(`Conversations in range (incl. outbound-only),${data.conversations.total}`);
+    }
     lines.push('');
     lines.push('By Product,Total,Replacements,Refunds,Repairs');
     for (const r of data.by_product) {
@@ -202,8 +207,15 @@ export default function ReportsPage() {
           <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
-              <KpiCard label="Total cases"        value={data.range.total_rows.toLocaleString()}       sub={`${from} → ${to}`} tone="var(--accent)"  size={25} />
+            {/* "Total cases" always counted TICKETS, which is why the two tiles Pruthvi
+                asked for would have shown the same number. Relabelled to say what it
+                is, with conversations handled beside it — not every conversation
+                becomes a ticket (shipment / general queries often don't). */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+              <KpiCard label="Conversations handled" value={data.conversations ? data.conversations.handled.toLocaleString() : '—'}
+                       sub={data.conversations ? `of ${data.conversations.total.toLocaleString()} incl. outbound` : 'unavailable'}
+                       tone="var(--ok-fg)" size={25} />
+              <KpiCard label="Tickets raised"     value={data.range.total_rows.toLocaleString()}       sub={`${from} → ${to}`} tone="var(--accent)"  size={25} />
               <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}       sub="logistics in"    tone="var(--warn-fg)" size={25} />
               <KpiCard label="Replacement cost"   value={inr(data.cost_summary.replacement_cost_inr)}  sub="new units out"   tone="var(--info-fg)" size={25} />
               <KpiCard label="Refund payouts"     value={inr(data.cost_summary.refund_amount_inr)}     sub="money returned"  tone="var(--bad-fg)"  size={25} />
