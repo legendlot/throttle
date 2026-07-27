@@ -1256,11 +1256,15 @@ const amazonDspAdapter = {
       return { rows: r.rows, cursorAfter: nextDay(day), subreqs, partial: moreAfter(day) };
     }
 
-    // ── no pending → resolve the next day. Floor the start at today-14 so steady-state always
-    //    refreshes the trailing 14 days (DSP attributes conversions over a 14-day window). ──
+    // ── no pending → resolve the next day, walking the cursor forward. On catching up (cursor past
+    //    today) it loops back to today-14, so steady state is a rolling re-pull of the trailing 14
+    //    days — DSP keeps attributing conversions to a day for 14 days after it.
+    //    The old form clamped `startStr` DOWN to today-14 whenever the cursor was later than that,
+    //    which pins the connector on that single day forever once the backfill catches up: it would
+    //    re-fetch today-14, advance to today-13, get clamped back, and never reach the present. ──
     let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - 14 * 86400000)).slice(0, 10);
     const trailingStart = amzAdsDay(nowMs - 14 * 86400000);
-    if (startStr > trailingStart) startStr = trailingStart;
+    if (startStr > amzAdsDay(nowMs)) startStr = trailingStart;
     const day = startStr;
     let r;
     try { r = await resolveDay(day); }
