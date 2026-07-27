@@ -1081,6 +1081,25 @@ export default {
       const r = await WATPL.waSubscribeApp(env, b.wabaId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    // Shopify webhook subscriptions — list/register, same WA_SYNC_TOKEN gate as the /internal
+    // WA siblings and for the same reason: a topic registration should not be gated on an
+    // interactive Google-login session. `register` is IDEMPOTENT (it skips topics already bound
+    // to the callback), and neither op can send anything or touch customer data.
+    // NB a scope change (e.g. adding read_fulfillments for FULFILLMENTS_*) only takes effect on a
+    // token minted AFTER the app is re-released — getShopifyToken caches for ~24h, so if register
+    // returns an access-denied for a new topic, redeploy to reset the module-scope cache and retry.
+    if (url.pathname === '/internal/shopify-webhooks' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const cb = b.callbackUrl || `${env.PUBLIC_BASE_URL || 'https://commsops.afshaan.workers.dev'}/webhooks/shopify`;
+      try {
+        if (b.op === 'register') return ok(await SHOP.registerWebhooks(env, cb));
+        return ok({ callbackUrl: cb, subscriptions: await SHOP.listWebhooks(env) });
+      } catch (e) { return err(e?.message || 'shopify_error', 400); }
+    }
     // BSP→own-WABA number migration — the 4-call cutover flow (start/request_code/verify/register).
     // Same WA_SYNC_TOKEN bearer gate. State-changing and irreversible past `start` — see the
     // waMigrateNumber header comment. Errors preserve Meta's code/details (not just err()'s
