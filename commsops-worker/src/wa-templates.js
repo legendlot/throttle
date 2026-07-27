@@ -340,7 +340,15 @@ async function waAccountInfo(env, wabaIds) {
   // token can see its id, Relay can send using the existing phone_number_id — no re-registration
   // (the "one genuinely disruptive act"), no partner removal, no billing change. `id` here IS the
   // phone_number_id that `sender_identities` needs.
-  const numFields = 'id,display_phone_number,verified_name,quality_rating,platform_type,code_verification_status,status';
+  // `messaging_limit_tier` is the field that actually decides whether a number can carry a
+  // journey's daily volume — quality_rating does NOT gate sending (UNKNOWN just means "no traffic
+  // yet, nothing to rate"), the TIER caps business-initiated conversations per 24h. A freshly
+  // registered number starts low and scales on clean volume, so this is the number to watch during
+  // a ramp. Requested as an OPTIONAL extra: Graph rejects the WHOLE request if any single field is
+  // forbidden (the same trap that dragged the harmless WABA fields down with the BSP-only ones), so
+  // it falls back to the base set rather than losing the number read entirely.
+  const NUM_FIELDS_BASE = 'id,display_phone_number,verified_name,quality_rating,platform_type,code_verification_status,status';
+  const NUM_FIELDS_EXT = `${NUM_FIELDS_BASE},messaging_limit_tier,throughput`;
   const getFields = async (id, f) => {
     const res = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}?fields=${f}`,
       { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
@@ -381,9 +389,13 @@ async function waAccountInfo(env, wabaIds) {
 
       let numbers = null;
       try {
-        const nr = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/phone_numbers?fields=${numFields}`,
-          { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
-        const nd = await nr.json().catch(() => ({}));
+        const getNums = async (f) => {
+          const r = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/phone_numbers?fields=${f}`,
+            { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+          return { r, d: await r.json().catch(() => ({})) };
+        };
+        let { r: nr, d: nd } = await getNums(NUM_FIELDS_EXT);
+        if (!nr.ok) ({ r: nr, d: nd } = await getNums(NUM_FIELDS_BASE));   // drop the optional extras
         // Non-fatal: the WABA facts are still worth returning if the number read is denied.
         numbers = nr.ok ? (nd?.data || [])
                         : { error: nd?.error?.message || `http_${nr.status}`, status: nr.status };
