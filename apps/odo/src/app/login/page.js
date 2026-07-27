@@ -19,7 +19,7 @@ export default function LoginPage() {
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: CANVAS, fontFamily: MONO }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 360, padding: '0 20px' }}>
-        <img src="/favicon.svg" alt="Odo" style={{ height: 64, width: 64, marginBottom: 24, borderRadius: 16 }} />
+        <img src="/odo-mark-tile.svg" alt="Odo" style={{ height: 64, width: 64, marginBottom: 24 }} />
         <div style={{ fontFamily: COND, fontWeight: 800, fontSize: 34, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t1)', lineHeight: 1, marginBottom: 6 }}>ODO</div>
         <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.3em', textTransform: 'uppercase', color: 'var(--t4)', marginBottom: 36 }}>Consolidated Sales</div>
         <div style={{ width: '100%', height: 1, background: 'var(--border)', marginBottom: 28 }} />

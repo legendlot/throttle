@@ -1,10 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
-  <rect x="5" y="5" width="38" height="38" rx="4.5" fill="#F2CD1A"></rect>
-  <g transform="translate(24 24) scale(0.74) translate(-24 -24)"><rect x="7" y="16" width="34" height="16" rx="2" fill="#282828"></rect>
-  <rect x="8" y="19" width="5.45" height="10" rx="0.8" fill="#F2CD1A"></rect>
-  <rect x="16.85" y="19" width="5.45" height="10" rx="0.8" fill="#F2CD1A"></rect>
-  <rect x="25.7" y="19" width="5.45" height="10" rx="0.8" fill="#F2CD1A"></rect>
-  <rect x="33.55" y="18" width="7.45" height="12" rx="1" fill="#213CE2"></rect>
-  <rect x="33.55" y="23.5" width="7.45" height="1" fill="#282828"></rect>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Odo">
+  <rect width="48" height="48" rx="11" fill="#14161c"></rect>
+  <g transform="rotate(-90 24 24)" fill="none" stroke-width="7">
+    <circle cx="24" cy="24" r="13" stroke="#F2CD1A" stroke-dasharray="52.0 29.7"></circle>
+    <circle cx="24" cy="24" r="13" stroke="#4C63F0" stroke-dasharray="13.0 68.7" stroke-dashoffset="-54.50"></circle>
+    <circle cx="24" cy="24" r="13" stroke="#34D27B" stroke-dasharray="9.0 72.7" stroke-dashoffset="-70.00"></circle>
   </g>
 </svg>

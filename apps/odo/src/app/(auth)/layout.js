@@ -96,11 +96,17 @@ function Shell({ children }) {
           {collapsed ? (
             <button className="so-btn bare" onClick={toggleRail} title="Expand sidebar"
               style={{ display: 'flex', alignItems: 'center', padding: 3, borderRadius: 12 }}>
-              <img src="/favicon.svg" alt="Odo — expand sidebar" style={{ width: 34, height: 34, display: 'block', borderRadius: 11 }} />
+              <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 10, background: '#191b23',
+                display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src="/odo-mark.svg" alt="Odo — expand sidebar" width={29} height={29} style={{ display: 'block' }} />
+              </span>
             </button>
           ) : (
             <>
-              <img src="/favicon.svg" alt="Odo" style={{ width: 34, height: 34, flex: 'none', borderRadius: 11 }} />
+              <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 10, background: '#191b23',
+                display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src="/odo-mark.svg" alt="Odo" width={29} height={29} style={{ display: 'block' }} />
+              </span>
               <div style={{ flex: 1, minWidth: 0, lineHeight: 1 }}>
                 <div style={{ fontFamily: 'var(--cond)', fontWeight: 800, fontSize: 16, letterSpacing: '.1em', color: 'var(--t1)' }}>ODO</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.14em', color: 'var(--t4)', marginTop: 3 }}>SALES OPS</div>
