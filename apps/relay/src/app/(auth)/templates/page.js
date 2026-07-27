@@ -490,8 +490,12 @@ export default function TemplatesPage() {
                   template was approved on — templates are WABA-scoped, so a sender on another WABA
                   will be rejected by Meta as unknown.</>
                 : <>Sends the current (unsaved) draft as a transactional message.</>}
-              {' '}Test values fill any <code>{' {token} '}</code> (applied as constants + recipient).
-              Profile/event tokens won’t resolve in a test.
+              {' '}Test values fill any <code>{' {token} '}</code> — they are applied as constants,
+              recipient <b>and the event context</b>, so <b>event-sourced tokens DO resolve here</b>:
+              give each one a value, e.g. <code>{'{"cart_link_suffix":"47394784149556:1"}'}</code>.
+              A token with no fallback and no test value fails the send with
+              <code> unresolved_variables:&lt;token&gt;</code> — that is the gap, not a limitation.
+              Profile tokens still come from the profile (or their fallback).
             </div>
             <div className="form-grid">
               <div className="ff"><div className="kv-k">Test recipient</div>
