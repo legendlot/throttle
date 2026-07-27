@@ -21,10 +21,15 @@ const AMZ = '#4C63F0';
 const TRACK = 'rgba(255,255,255,.05)';
 const pct1 = (n, d) => (d > 0 ? (n / d) * 100 : 0);
 
+// 'rtv_reported' is the FBA customer-returns report — a physical-returns COUNT that stays current,
+// where the refund behind it can post weeks later. Kept in its own bucket, out of `total` and out of
+// `unknown`, so it can headline the RTV unit count without ever being added to returns value (the
+// same return is counted again in rtv/unknown once its refund posts).
 function aggReturns(rows) {
-  const k = { rto: { orders: 0, units: 0, value: 0 }, rtv: { orders: 0, units: 0, value: 0 }, unknown: { orders: 0, units: 0, value: 0 } };
+  const k = { rto: { orders: 0, units: 0, value: 0 }, rtv: { orders: 0, units: 0, value: 0 },
+              unknown: { orders: 0, units: 0, value: 0 }, rtvReported: { orders: 0, units: 0, value: 0 } };
   for (const r of (rows || [])) {
-    const t = k[r.return_kind] || k.unknown;
+    const t = r.return_kind === 'rtv_reported' ? k.rtvReported : (k[r.return_kind] || k.unknown);
     t.orders += Number(r.orders) || 0; t.units += Number(r.units) || 0; t.value += Number(r.value) || 0;
   }
   return { ...k, total: k.rto.value + k.rtv.value + k.unknown.value };
@@ -133,7 +138,10 @@ export default function AmazonPage() {
   const gross = seg.grossAll || 0, pGross = segP.grossAll || 0;
   const roas = spend > 0 ? attr / spend : 0,        pRoas = pSpend > 0 ? pAttr / pSpend : 0;
   const acos = attr > 0 ? (spend / attr) * 100 : 0,  pAcos = pAttr > 0 ? (pSpend / pAttr) * 100 : 0;
-  const tacos = gross > 0 ? (spend / gross) * 100 : 0, pTacos = pGross > 0 ? (pSpend / pGross) * 100 : 0;
+  // TACOS is total-ad-cost-of-sale, so its numerator is SPEND ACROSS EVERY AMAZON AD PRODUCT —
+  // Sponsored (SP+SB+SD) plus DSP. Only attributed SALES can't be summed across the two (they
+  // attribute the same purchases, which is why ROAS/ACOS below stay Sponsored-only); spend is
+  // simply money out. Defined further down once DSP is read, so declared here.
   const ctr = pct1(clicks, impr), cpc = clicks > 0 ? spend / clicks : 0, cvr = pct1(convs, clicks);
   const organic = Math.max(gross - attr, 0), organicPct = pct1(organic, gross);
   const pOrganic = Math.max(pGross - pAttr, 0);
@@ -146,6 +154,12 @@ export default function AmazonPage() {
   const dCtr = pct1(dClicks, dImpr), dCpm = dImpr > 0 ? dSpend / dImpr * 1000 : 0;
   const dPurchRate = dImpr > 0 ? dPurch / dImpr * 100 : 0;
   const dspHasData = dSpend > 0 || dImpr > 0 || dSales > 0;
+  // Total ad spend = Sponsored + DSP. This is what the e-commerce team means by "ad spend"
+  // (sp + sb + sd + dsp); the Sponsored-only figure below is kept beside it because ROAS/ACOS
+  // are computed on it.
+  const totalSpend = spend + dSpend, pTotalSpend = pSpend + dpSpend;
+  const tacos = gross > 0 ? (totalSpend / gross) * 100 : 0;
+  const pTacos = pGross > 0 ? (pTotalSpend / pGross) * 100 : 0;
 
   // Settlement (true payout & fees) — sum the by_date rollup. Fees are negative; take/ad rates vs principal.
   const settle = useMemo(() => {
@@ -216,11 +230,11 @@ export default function AmazonPage() {
             <Kpi hue={HUE.gross} lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
             <Kpi hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
             <Kpi hue={HUE.gross} lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
-            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order" now={seg.aov} prev={segP.aov} />
-            <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · ${inr(seg.cancelledValue)}`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
+            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order · excl. cancelled" now={seg.aov} prev={segP.aov} />
+            <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · orders, not units`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
-            <Kpi hue={HUE.returns} lbl="RTV" val={inr(ret.rtv.value)} sub={`${fmtInt(ret.rtv.units)}u · customer returns`} tone="neutral" />
+            <Kpi hue={HUE.returns} lbl="RTV" val={fmtInt(ret.rtvReported.units || ret.rtv.units)} sub={ret.rtvReported.units ? `units returned · ${inr(ret.rtv.value)} refunded so far` : `${inr(ret.rtv.value)} · customer returns`} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
           </div>
@@ -231,7 +245,8 @@ export default function AmazonPage() {
           {/* ── Sponsored Ads (SP · SB · SD) — platform 'amazon', DSP excluded ── */}
           <div className="so-eyebrow" style={{ marginTop: 4 }}>Sponsored Ads <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· SP · SB · SD</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
-            <Kpi hue={HUE.gross} lbl="Ad Spend" val={inr(spend)} now={spend} prev={pSpend} tone="neutral" />
+            <Kpi hue={HUE.gross} lbl="Ad Spend" val={inr(totalSpend)} sub="SP + SB + SD + DSP" now={totalSpend} prev={pTotalSpend} tone="neutral" />
+            <Kpi hue={HUE.neutral} lbl="Sponsored Spend" val={inr(spend)} sub="SP + SB + SD · basis for ROAS/ACOS" now={spend} prev={pSpend} tone="neutral" />
             <Kpi hue={HUE.primary} lbl="ROAS" val={roas.toFixed(2) + '×'} sub="attributed sales / spend" now={roas} prev={pRoas} />
             <Kpi hue={HUE.derived} lbl="ACOS" val={acos.toFixed(1) + '%'} sub="spend / attributed sales" now={acos} prev={pAcos} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="TACOS" val={tacos.toFixed(1) + '%'} sub="spend / total sales" now={tacos} prev={pTacos} tone="neutral" />

@@ -534,9 +534,14 @@ async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = A
 // (+ refund events). Stored in stg_amazon_fin; surfaced via the v_staged amazon_fin branch.
 // Own posted-date cursor (config.fin_cursor) — independent of the report cursor.
 const AMZ_FIN_WINDOW_MS = 5 * 24 * 3600 * 1000;   // posted-date windows
-const AMZ_FIN_MAX_PAGES = 15;                      // per window — financialEvents pages ALL event types, not just ours
-const AMZ_FIN_SUBREQ_BUDGET = 30;                  // finance budget/tick (report uses ~5; total stays <45). Loops windows to drain backfill.
-const AMZ_FIN_TRAILING_MS = 60 * 24 * 3600 * 1000; // always re-sweep the last 60d each tick (refunds/returns post weeks after the sale)
+// Page/subrequest caps were sized against the Cloudflare FREE-plan figure of 50 subrequests. The
+// real Paid-plan ceiling is 10,000 (CLAUDE.md, verified empirically 2026-07-20), and these two
+// constants were the binding throttle on the trailing sweep below — a 5-day window here needs
+// >15 pages, so every window page-capped, halved, and burned the tick's budget re-fetching.
+const AMZ_FIN_MAX_PAGES = 40;                      // per window — financialEvents pages ALL event types, not just ours
+const AMZ_FIN_SUBREQ_BUDGET = 120;                 // finance budget/tick. Loops windows to drain backfill.
+const AMZ_FIN_TRAILING_MS = 60 * 24 * 3600 * 1000; // trailing re-sweep floor (refunds/returns post weeks after the sale)
+const AMZ_FIN_RESWEEP_MS = 3 * 24 * 3600 * 1000;   // rolling overlap the trailing cursor gives back each tick
 const AMZ_FIN_MIN_WINDOW_MS = 24 * 3600 * 1000;    // shrink floor — a dense window halves down to 1 day so it can drain under the page cap
 function amzCharge(list, type) { let s = 0; for (const c of (list || [])) if (c.ChargeType === type) s += num(c.ChargeAmount?.CurrencyAmount); return s; }
 function amzPromo(list) { let s = 0; for (const p of (list || [])) s += num(p.PromotionAmount?.CurrencyAmount); return s; }
@@ -618,25 +623,40 @@ async function drainFinanceRange(host, H, fromISO, toISO, out, budget) {
   return { throughISO, subreqs, complete: true };
 }
 
-// Two passes, sharing the per-tick budget. (1) TRAILING — always re-sweep the last AMZ_FIN_TRAILING_MS
-// days so recent refunds/returns land promptly (they post weeks after the sale), INDEPENDENT of how far
-// the deep backfill has crawled. (2) BACKFILL — walk fin_cursor forward up to the trailing edge, with
-// adaptive shrink. Only pass 2 advances fin_cursor; pass 1 relies on idempotent upserts. PostedBefore
+// Two passes, sharing the per-tick budget. (1) TRAILING — sweep recent posted-dates so refunds/returns
+// land promptly (they post weeks after the sale), INDEPENDENT of how far the deep backfill has crawled.
+// (2) BACKFILL — walk fin_cursor forward up to the trailing floor, with adaptive shrink. PostedBefore
 // must be ≥2min ago.
+//
+// Pass 1 walks its OWN persisted cursor (`fin_trail_cursor`), it does NOT restart at the 60-day floor
+// every tick. That restart was a silent stall: one tick's budget drains only a few days, so the sweep
+// re-read the same first days forever and never reached the present. Live effect (found 2026-07-27) —
+// stg_amazon_fin was frozen at 2026-06-10, ~47 days behind, and since Returns / Returns-value / RTO /
+// RTV and the net-revenue ladder all read refunds from it, June showed 57 refunds against a real ~800
+// and Net Sales overstated by ~₹15L. The floor still bounds how far back a cold start reaches; the
+// cursor gives back AMZ_FIN_RESWEEP_MS each tick so late-posting adjustments inside the overlap are
+// re-read, and never moves backwards.
 async function fetchAmazonFinance(host, H, cfg, nowMs) {
-  const events = []; let subreqs = 0, advancedTo = null, partial = false;
+  const events = []; let subreqs = 0, advancedTo = null, trailAdvancedTo = null, partial = false;
   const endCap = nowMs - 120_000;
-  const trailStartMs = endCap - AMZ_FIN_TRAILING_MS;
-  // Pass 1 — trailing recent sweep (every tick).
-  const t = await drainFinanceRange(host, H, new Date(trailStartMs).toISOString(), new Date(endCap).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
-  subreqs += t.subreqs; if (!t.complete) partial = true;
-  // Pass 2 — historical backfill from fin_cursor up to the trailing edge (only with leftover budget).
+  const trailFloorMs = endCap - AMZ_FIN_TRAILING_MS;
+  // Pass 1 — trailing sweep, resuming where the last tick got to (floored at 60d back).
+  const trailStartMs = Math.max(trailFloorMs, Date.parse(cfg.fin_trail_cursor || '') || trailFloorMs);
+  if (trailStartMs < endCap) {
+    const t = await drainFinanceRange(host, H, new Date(trailStartMs).toISOString(), new Date(endCap).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
+    subreqs += t.subreqs; if (!t.complete) partial = true;
+    if (t.throughISO) {
+      const throughMs = Date.parse(t.throughISO) || 0;
+      trailAdvancedTo = new Date(Math.max(trailStartMs, throughMs - AMZ_FIN_RESWEEP_MS)).toISOString();
+    }
+  }
+  // Pass 2 — historical backfill from fin_cursor up to the trailing floor (only with leftover budget).
   const cursorISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
-  if (subreqs < AMZ_FIN_SUBREQ_BUDGET && (Date.parse(cursorISO) || nowMs) < trailStartMs) {
-    const b = await drainFinanceRange(host, H, cursorISO, new Date(trailStartMs).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
+  if (subreqs < AMZ_FIN_SUBREQ_BUDGET && (Date.parse(cursorISO) || nowMs) < trailFloorMs) {
+    const b = await drainFinanceRange(host, H, cursorISO, new Date(trailFloorMs).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
     subreqs += b.subreqs; if (b.throughISO) advancedTo = b.throughISO; if (!b.complete) partial = true;
   }
-  return { events, finCursorAfter: advancedTo, partial, subreqs };
+  return { events, finCursorAfter: advancedTo, finTrailCursorAfter: trailAdvancedTo, partial, subreqs };
 }
 
 // Report state machine (create→poll→ingest, one ≤30-day window/tick). Returns the rows for this
@@ -870,6 +890,7 @@ const amazonAdapter = {
       const fw = await fetchAmazonFinance(host, H, configAfter, nowMs);
       finSub = fw.subreqs; finance = { events: fw.events };
       if (fw.finCursorAfter) configAfter = { ...configAfter, fin_cursor: fw.finCursorAfter };
+      if (fw.finTrailCursorAfter) configAfter = { ...configAfter, fin_trail_cursor: fw.finTrailCursorAfter };
     } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
     // Returns phase (FBA customer returns → RTV source). Auxiliary; never breaks the pipeline.
     let returns = { rows: [] }, retSub = 0;
@@ -1219,6 +1240,12 @@ const amazonDspAdapter = {
     };
     // more history to cover after `day`? (anything before yesterday)
     const moreAfter = (day) => { const t = Date.parse((day || '') + 'T00:00:00Z') || 0; return !!(t && t < nowMs - 24 * 3600 * 1000); };
+    // The cursor is the NEXT day to fetch, so a resolved day must advance it past itself. Returning
+    // the day just fetched wedged the connector permanently: it re-requested the same date every
+    // step, `cursorAfter` equalled `cursor_before`, and every run logged `partial`. It only ever got
+    // as far as 2026-06-11 because the error path below skips a week at a time — the moment a day
+    // actually SUCCEEDED, the cursor froze there (found 2026-07-27; DSP spend missing since 11 Jun).
+    const nextDay = (day) => amzAdsDay((Date.parse((day || '') + 'T00:00:00Z') || nowMs) + 86400000);
 
     // ── resume a pending report first ──
     if (cfg.pending_report_id) {
@@ -1226,7 +1253,7 @@ const amazonDspAdapter = {
       const r = await resolveDay(day, cfg.pending_report_id);
       if (!r.done) return { rows: [], cursorAfter: null, subreqs, partial: true };   // still processing → poll again next step
       await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_day: null });
-      return { rows: r.rows, cursorAfter: day, subreqs, partial: moreAfter(day) };
+      return { rows: r.rows, cursorAfter: nextDay(day), subreqs, partial: moreAfter(day) };
     }
 
     // ── no pending → resolve the next day. Floor the start at today-14 so steady-state always
@@ -1249,7 +1276,7 @@ const amazonDspAdapter = {
       throw e;
     }
     if (!r.done) { await patchConnectorConfig(channelId, cfg, { pending_report_id: r.reportId, pending_day: day }); return { rows: [], cursorAfter: null, subreqs, partial: true }; }
-    return { rows: r.rows, cursorAfter: day, subreqs, partial: moreAfter(day) };
+    return { rows: r.rows, cursorAfter: nextDay(day), subreqs, partial: moreAfter(day) };
   },
   async stage(rows, runId, channelId) {
     if (!rows.length) return;

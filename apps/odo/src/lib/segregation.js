@@ -39,7 +39,11 @@ export function aggOrders(rows) {
   // real-time channels like Shopify); low = recent marketplace sales whose settlement hasn't posted.
   a.settledPct = a.tax > 0 ? Math.min(100, Math.round(a.gstSettled / a.tax * 100)) : null;
   a.totalOrders = a.orders + a.cancelledOrders;
-  a.aov = a.totalOrders ? a.grossAll / a.totalOrders : 0;
+  // AOV excludes cancellations on BOTH sides — the e-commerce team's definition (gross sales
+  // excl. cancellations ÷ orders excl. cancellations), and the only one that reads as a basket
+  // size. Dividing all-in gross by all-in orders understated Amazon's June AOV as ₹1,532 against
+  // Amazon's own ₹1,953, purely because ~22% of Amazon orders cancel and carry ~no value.
+  a.aov = a.orders ? a.gross / a.orders : 0;
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
   return a;
 }
