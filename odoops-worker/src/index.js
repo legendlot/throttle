@@ -1749,7 +1749,9 @@ const uniwareAggAdapter = {
     }
 
     const byChannelArr = {}; for (const k in byChannel) byChannelArr[k] = [...byChannel[k]];
-    return { rows, orderRows, cursorAfter, subreqs, partial, byChannel: byChannelArr };
+    // `stampChannelIds` = every allow-listed member, returned from FETCH (not recompute) so the
+    // freshness stamp survives a zero-row window — see the note in executeRun.
+    return { rows, orderRows, cursorAfter, subreqs, partial, byChannel: byChannelArr, stampChannelIds: Object.values(map) };
   },
   // Fan out staging by each row's resolved member channel_id.
   async stage(rows, runId, _aggChannelId, fetched) {
@@ -1778,19 +1780,8 @@ const uniwareAggAdapter = {
       const f = await rpcSales('recompute_facts', { p_channel: chId, p_dates: dates, p_run_id: runId });
       mapped += r.mapped; unmapped += r.unmapped; factsUpserted += (f.ok ? Number(f.data) : 0);
     }
-    // Stamp EVERY allow-listed member, not only the ones that happened to have rows this window.
-    // `last_ok_at` means "we checked this feed and the run succeeded" — the same contract every
-    // other adapter honours in executeRun (~L2273: "Always stamp success … even for adapters that
-    // return no cursor"). Stamping row-bearing members ONLY made a quiet channel drift stale purely
-    // for being quiet (Firstcry read 2h behind while healthy) and conflated "no orders" with "pipe
-    // broken" — the aggregator pulls every channel in ONE window, so a member with no rows WAS
-    // checked. Whether a channel has sales is a business fact, visible in its sales numbers.
-    // ONE PATCH via in.() — never a per-member await loop (50-subrequest limit).
-    const ids = Object.values(await this.memberMap());
-    if (ids.length) {
-      await sbSales(`/rest/v1/connector_config?channel_id=in.(${ids.join(',')})`,
-        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_ok_at: nowISO(), last_error: null }) });
-    }
+    // NB member freshness stamping does NOT live here — it moved to executeRun via
+    // `fetched.stampChannelIds`, because recompute only runs when the window produced rows.
     return { mapped, unmapped, factsUpserted };
   },
 };
@@ -2757,6 +2748,19 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     const okPatch = { last_ok_at: nowISO(), last_error: null };
     if (cursorAfter) okPatch.cursor = cursorAfter;
     await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(okPatch) });
+    // An aggregator adapter checks several member feeds in ONE pull, so a successful run means every
+    // member was checked — stamp them all. This MUST sit on the unconditional success path: it lived
+    // in uniwareAggAdapter.recompute, which only runs when `dates.length` (i.e. the window produced
+    // rows), so on a quiet hour the members were never stamped and drifted stale purely for having no
+    // orders — the exact "no orders ≠ pipe broken" conflation the S220 fix set out to kill, one level
+    // up. Live symptom: uniware_agg read 1h fresh while Firstcry/Cred/Flipkart read 6h, and the Odo
+    // shell showed DATA DRIFTING off the weakest link. Cursor is deliberately NOT written here —
+    // members keep their own. ONE PATCH via in.() — never a per-member await loop.
+    const memberIds = ((fetched && fetched.stampChannelIds) || []).filter(id => id && id !== cfg.channel_id);
+    if (memberIds.length) {
+      await sbSales(`/rest/v1/connector_config?channel_id=in.(${uniq(memberIds).join(',')})`,
+        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_ok_at: nowISO(), last_error: null }) });
+    }
     // Workflow loop hints (small, serializable — never return row arrays):
     //  partial → more work remains for this connector (another window, or a pending report)
     //  waitMs  → an async report is still processing (partial + no rows + no cursor advance);
