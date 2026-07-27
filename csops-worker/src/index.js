@@ -660,6 +660,10 @@ async function handleGet(action, params, auth, env) {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getTicketHistory(params, auth, env);
     }
+    case 'getAgentConversationReport': {
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getAgentConversationReport(params, auth, env);
+    }
     case 'getSupportAnalytics': {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getSupportAnalytics(params, auth, env);
@@ -1393,6 +1397,38 @@ async function getReports(params, auth, env) {
       refund_amount_inr:    +totalRefundAmount.toFixed(2),
     },
   });
+}
+
+// getAgentConversationReport — agent-wise CONVERSATION report (Pruthvi #bugs 2026-07-25).
+//
+// Distinct from getReports/getSupportAnalytics, which are TICKET-grain. This is
+// cs_wa_threads grain: it answers "how is each agent handling conversations" —
+// first-response / response / resolution times, waiting-on state, per channel and
+// per tag. Tags only exist on threads (cs_thread_tags), so this filter is not
+// expressible on the ticket-grain reports at all.
+//
+// The whole aggregation is ONE Postgres RPC on purpose: it spans ~12.4k threads x
+// ~47k messages, and paging that through the Worker to aggregate in JS is the
+// RULE-AUDIT-001 / S220 subrequest trap. One round trip, set-based.
+async function getAgentConversationReport(params, auth, env) {
+  const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
+  const to   = params.get('to')   || new Date().toISOString();
+  const channel = params.get('channel') || null;
+  const tagId   = params.get('tag_id')  || null;
+  // Anything but an explicit 'true' means 24x7 — the honest default, since a
+  // business-hours figure silently flatters every response time.
+  const businessHours = params.get('business_hours') === 'true';
+
+  const r = await sb('/rest/v1/rpc/cs_agent_conversation_report', env, {
+    method: 'POST',
+    body: JSON.stringify({
+      p_from: from, p_to: to,
+      p_channel: channel, p_tag_id: tagId,
+      p_business_hours: businessHours,
+    }),
+  });
+  if (!r.ok) return err('Failed to load agent conversation report', 500);
+  return ok(r.data || {});
 }
 
 // getSupportAnalytics — the Support Analytics Dashboard (Pruthvi #bugs 2026-07-14).

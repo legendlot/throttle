@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
-import { BarChart3, Download, Phone } from 'lucide-react';
+import { BarChart3, Download, Phone, Users } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { KpiCard, btnGhost } from '../../../components/kit/index.js';
 
@@ -32,31 +32,59 @@ export default function ReportsPage() {
   const today = new Date();
   const ytdStart = new Date(today.getFullYear(), 0, 1);
 
-  const [view, setView] = useState('tickets');   // 'tickets' | 'calls'
+  const [view, setView] = useState('tickets');   // 'tickets' | 'calls' | 'agents'
   const [from, setFrom] = useState(ytdStart.toISOString().slice(0, 10));
   const [to,   setTo]   = useState(today.toISOString().slice(0, 10));
   const [data, setData] = useState(null);
   const [callData, setCallData] = useState(null);
+  const [agentData, setAgentData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Agents-tab filters (Pruthvi #bugs 2026-07-25). businessHours defaults OFF —
+  // 24x7 is the honest basis; business hours flatters every response time, so it
+  // should be a deliberate choice, not the number you land on.
+  const [agChannel, setAgChannel] = useState('');
+  const [agTag, setAgTag] = useState('');
+  const [businessHours, setBusinessHours] = useState(false);
+  const [tags, setTags] = useState([]);
+
+  useEffect(() => {
+    if (!session || view !== 'agents' || tags.length) return;
+    csopsGet('getTags', {}, session)
+      .then(t => setTags((Array.isArray(t) ? t : t?.tags || []).filter(x => x.is_active !== false)))
+      .catch(() => {});   // a failed tag load must not block the report itself
+  }, [session, view, tags.length]);
 
   useEffect(() => {
     if (!session) return;
     let alive = true;
     setLoading(true);
-    const action = view === 'calls' ? 'getCallReports' : 'getReports';
-    csopsGet(action, { from: toIsoStart(from), to: toIsoEnd(to) }, session)
+    const action = view === 'calls' ? 'getCallReports'
+                 : view === 'agents' ? 'getAgentConversationReport'
+                 : 'getReports';
+    const args = { from: toIsoStart(from), to: toIsoEnd(to) };
+    if (view === 'agents') {
+      if (agChannel) args.channel = agChannel;
+      if (agTag) args.tag_id = agTag;
+      if (businessHours) args.business_hours = 'true';
+    }
+    csopsGet(action, args, session)
       .then(d => {
         if (!alive) return;
-        if (view === 'calls') setCallData(d); else setData(d);
+        if (view === 'calls') setCallData(d);
+        else if (view === 'agents') setAgentData(d);
+        else setData(d);
         setError(null);
       })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, from, to, view]);
+  }, [session, from, to, view, agChannel, agTag, businessHours]);
 
   function exportCsv() {
+    // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
+    if (view === 'agents') return exportAgentsCsv();
     if (!data) return;
     const lines = [];
     lines.push(`Pitstop Report,${from} to ${to}`);
@@ -90,6 +118,40 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   }
 
+  function exportAgentsCsv() {
+    if (!agentData?.by_agent?.length) return;
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const t = agentData.totals || {};
+    const lines = [];
+    lines.push(`Pitstop Agent Conversation Report,${from} to ${to}`);
+    // The basis and the cohort travel WITH the file — a CSV read a week later
+    // must not be ambiguous about whether times are 24x7 or business hours.
+    lines.push(`Basis,${agentData.range?.business_hours ? 'Business hours' : '24x7'}`);
+    lines.push(`Channel,${esc(agChannel || 'All')}`);
+    lines.push(`Tag,${esc(tags.find(x => x.id === agTag)?.name || 'All')}`);
+    lines.push(`Conversations in range,${t.total ?? ''}`);
+    lines.push(`Queries (customer-initiated),${t.queries ?? ''}`);
+    lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);
+    lines.push(`No stored history,${t.no_history ?? ''}`);
+    lines.push('');
+    lines.push('Agent,Queries,Open,Closed,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
+    for (const r of agentData.by_agent) {
+      lines.push([r.name, r.queries, r.open, r.closed, r.resolution_rate, r.answered, r.unanswered,
+        r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
+        r.waiting_agent, r.waiting_customer].map(esc).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pitstop-agents-${from}-to-${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (!canViewCosts && !loading) {
     return (
       <EmptyState
@@ -110,7 +172,7 @@ export default function ReportsPage() {
             <span>To</span>
             <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateInput} />
           </div>
-          <button onClick={exportCsv} disabled={!data} style={btnGhost}>
+          <button onClick={exportCsv} disabled={view === 'agents' ? !agentData?.by_agent?.length : !data} style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
           </button>
         </div>
@@ -120,6 +182,7 @@ export default function ReportsPage() {
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
         <SectionTab active={view==='tickets'} onClick={() => setView('tickets')} icon={<BarChart3 size={13} />} label="Tickets" />
         <SectionTab active={view==='calls'}   onClick={() => setView('calls')}   icon={<Phone size={13} />}    label="Calls" />
+        <SectionTab active={view==='agents'}  onClick={() => setView('agents')}  icon={<Users size={13} />}    label="Agents" />
       </div>
 
       {error && (
@@ -169,7 +232,143 @@ export default function ReportsPage() {
       {view === 'calls' && (
         loading || !callData ? <Spinner /> : <CallsPanel data={callData} />
       )}
+
+      {view === 'agents' && (
+        <>
+          <AgentFilters
+            channel={agChannel} onChannel={setAgChannel}
+            tag={agTag} onTag={setAgTag} tags={tags}
+            businessHours={businessHours} onBusinessHours={setBusinessHours}
+          />
+          {loading || !agentData ? <Spinner /> : <AgentsPanel data={agentData} />}
+        </>
+      )}
     </div>
+  );
+}
+
+// ── Agents tab ────────────────────────────────────────────────────────────────
+const CHANNEL_OPTS = [
+  { v: 'whatsapp',  l: 'WhatsApp' },
+  { v: 'instagram', l: 'Instagram' },
+  { v: 'email',     l: 'Email' },
+  { v: 'web',       l: 'Web' },
+  { v: 'messenger', l: 'Messenger' },
+];
+
+function AgentFilters({ channel, onChannel, tag, onTag, tags, businessHours, onBusinessHours }) {
+  const sel = {
+    background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)', padding: '4px 8px', fontSize: 12, minWidth: 130,
+  };
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 'var(--gap)' }}>
+      <select value={channel} onChange={e => onChannel(e.target.value)} style={sel} title="Filter by channel">
+        <option value="">All channels</option>
+        {CHANNEL_OPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+      </select>
+      <select value={tag} onChange={e => onTag(e.target.value)} style={sel} title="Filter by tag">
+        <option value="">All tags</option>
+        {tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
+        <input type="checkbox" checked={businessHours} onChange={e => onBusinessHours(e.target.checked)} style={{ cursor: 'pointer' }} />
+        Business hours only
+      </label>
+      <span style={{ fontSize: 11, color: 'var(--t4)' }}>
+        {businessHours
+          ? 'Times count only each agent’s rostered hours.'
+          : 'Times count around the clock (24×7).'}
+      </span>
+    </div>
+  );
+}
+
+// Minutes → a readable duration. Response times here run to days, and "2456.3 min"
+// is unreadable at a glance.
+function dur(min) {
+  if (min == null || isNaN(min)) return '—';
+  const m = Number(min);
+  if (m < 60) return `${m.toFixed(0)}m`;
+  if (m < 1440) return `${(m / 60).toFixed(1)}h`;
+  return `${(m / 1440).toFixed(1)}d`;
+}
+
+function AgentsPanel({ data }) {
+  const t = data?.totals;
+  if (!t || !t.total) {
+    return <EmptyState icon={Users} title="No conversations in range" message="Adjust the date range or filters." />;
+  }
+  const rows = data.by_agent || [];
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+        <KpiCard label="Queries"        value={t.queries.toLocaleString()}   sub="customer-initiated" tone="var(--accent)"  size={25} />
+        <KpiCard label="Answered"       value={t.answered.toLocaleString()}  sub={t.answer_rate != null ? `${t.answer_rate}% of queries` : ''} tone="var(--ok-fg)" size={25} />
+        <KpiCard label="Never answered" value={t.unanswered.toLocaleString()} sub="no agent reply"    tone={t.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
+        <KpiCard label="Avg first reply" value={dur(t.avg_frt_min)}          sub={data.range?.business_hours ? 'business hours' : '24×7'} tone="var(--warn-fg)" size={25} />
+        <KpiCard label="Resolution rate" value={t.resolution_rate != null ? `${t.resolution_rate}%` : '—'} sub={`${t.closed.toLocaleString()} closed`} tone="var(--info-fg)" size={25} />
+      </div>
+
+      {/* The cohort note is not decoration. Only ~a third of threads in a typical
+          range are two-way; without this the team reads "Queries" as "everything
+          in the inbox" and the numbers look wrong. */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 'var(--gap)',
+        padding: '8px 12px', fontSize: 11.5, color: 'var(--t3)',
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+        <span><strong style={{ color: 'var(--t2)' }}>{t.total.toLocaleString()}</strong> conversations in range</span>
+        <span>= <strong style={{ color: 'var(--t2)' }}>{t.queries.toLocaleString()}</strong> queries</span>
+        <span>+ <strong style={{ color: 'var(--t2)' }}>{t.outbound_only.toLocaleString()}</strong> outbound-only (notifications we sent — not queries)</span>
+        {t.no_history > 0 && <span>+ <strong style={{ color: 'var(--t2)' }}>{t.no_history.toLocaleString()}</strong> with no stored history</span>}
+      </div>
+
+      <Panel title="Waiting now">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--gap)', padding: 12 }}>
+          <KpiCard label="Waiting on us"       value={t.waiting_agent.toLocaleString()}    sub="customer replied last" tone={t.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={22} />
+          <KpiCard label="Waiting on customer" value={t.waiting_customer.toLocaleString()} sub="we replied last"       tone="var(--t3)" size={22} />
+          <KpiCard label="Open queries"        value={t.open.toLocaleString()}             sub="still open"            tone="var(--warn-fg)" size={22} />
+        </div>
+      </Panel>
+
+      <Panel title="By agent">
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', minWidth: 940, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <Th>Agent</Th>
+                <Th align="right">Queries</Th>
+                <Th align="right">Open</Th>
+                <Th align="right">Closed</Th>
+                <Th align="right">Resolution</Th>
+                <Th align="right">Answered</Th>
+                <Th align="right">Never ans.</Th>
+                <Th align="right">Avg 1st reply</Th>
+                <Th align="right">Avg reply</Th>
+                <Th align="right">Avg to close</Th>
+                <Th align="right">On us</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.agent_id || r.name} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <Td color="var(--t1)">{r.name}</Td>
+                  <Td mono align="right" color="var(--t1)">{r.queries.toLocaleString()}</Td>
+                  <Td mono align="right">{r.open.toLocaleString()}</Td>
+                  <Td mono align="right">{r.closed.toLocaleString()}</Td>
+                  <Td mono align="right">{r.resolution_rate != null ? `${r.resolution_rate}%` : '—'}</Td>
+                  <Td mono align="right">{r.answered.toLocaleString()}</Td>
+                  <Td mono align="right" color={r.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.unanswered.toLocaleString()}</Td>
+                  <Td mono align="right">{dur(r.avg_frt_min)}</Td>
+                  <Td mono align="right">{dur(r.avg_response_min)}</Td>
+                  <Td mono align="right">{dur(r.avg_resolution_min)}</Td>
+                  <Td mono align="right" color={r.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.waiting_agent.toLocaleString()}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </>
   );
 }
 
