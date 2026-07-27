@@ -355,6 +355,71 @@ async function syncHsnToMaster(lines, master, actor, actorRole, orderNo) {
   return applied;
 }
 
+// ── The same HSN contract for PARTS / POs (Afshaan 2026-07-27) ────────────────────
+// The PO form already pre-filled HSN (BOM-add, mould-add, part picker) and already
+// derived GST% from HSN — but every path read bom_register.hsn_code, which is EMPTY
+// for all 1,447 active parts, so the pre-fill always produced a blank. That is why
+// ~401 of 472 non-cancelled INR PO lines carry no HSN despite RULE-PO-001.
+// store.material_master.hsn_code is now the master (one row per part_code, vs
+// bom_register's one row per product+part which can disagree across products).
+async function partHsnMasterAll() {
+  const out = new Map();
+  const r = await query('material_master',
+    '?is_active=eq.true&hsn_code=not.is.null&select=part_code,hsn_code&limit=5000');
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  const codes = new Set();
+  for (const row of rows) {
+    if (!row.hsn_code || out.has(row.part_code)) continue;
+    const h = normHsn(row.hsn_code);
+    out.set(row.part_code, { hsn: h, gst: null });
+    codes.add(h);
+  }
+  if (codes.size) {
+    const rr = await query('hsn_gst_rates', `?hsn_code=in.(${[...codes].join(',')})&select=hsn_code,gst_percent`);
+    const gst = new Map(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
+      .map(x => [normHsn(x.hsn_code), Number(x.gst_percent)]));
+    for (const [, v] of out) if (gst.has(v.hsn)) v.gst = gst.get(v.hsn);
+  }
+  return out;
+}
+
+function applyPartHsnDefaults(lines, master) {
+  return (lines || []).map(l => {
+    const m = l.part_code ? master.get(l.part_code) : null;
+    if (!m) return l;
+    const out = { ...l };
+    if (!normHsn(out.hsn_code)) out.hsn_code = m.hsn;
+    const gstBlank = out.gst_percent === undefined || out.gst_percent === null || out.gst_percent === '';
+    if (gstBlank && m.gst != null) out.gst_percent = m.gst;
+    return out;
+  });
+}
+
+// Corrections flow back onto the part. Keyed on part_code, so — unlike the product
+// side — this touches exactly one row and no family fan-out is involved.
+async function syncPartHsnToMaster(lines, master, actor, actorRole, poNumber) {
+  const changes = new Map();
+  for (const l of (lines || [])) {
+    if (!l.part_code) continue;
+    const v = normHsn(l.hsn_code);
+    if (!v || !isPlausibleHsn(v)) continue;        // never blank the master, never store junk
+    const cur = master.get(l.part_code)?.hsn || null;
+    if (cur === v) continue;
+    changes.set(l.part_code, { from: cur, to: v });
+  }
+  const applied = [];
+  for (const [part_code, ch] of changes) {
+    const r = await update('material_master', { hsn_code: ch.to, updated_at: new Date().toISOString() },
+      `part_code=eq.${encodeURIComponent(part_code)}`);
+    if (!r.ok) continue;                            // never fail the PO over the master sync
+    applied.push({ part_code, from: ch.from, to: ch.to });
+    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', 'PART', part_code,
+      `HSN ${ch.from || '(none)'} → ${ch.to} for ${part_code}${poNumber ? ` from ${poNumber}` : ''}`,
+      { part_code, from: ch.from, to: ch.to, po_number: poNumber || null });
+  }
+  return applied;
+}
+
 // Map shipment.status → sales-facing fulfilment label.
 function fulfilmentFromShipment(sh) {
   if (!sh) return 'not_dispatched';
@@ -758,7 +823,7 @@ export default {
             // matches"). Manual lines must be able to order any catalogued part.
             const [matR, bomR] = await Promise.all([
               query('material_current',
-                `?select=part_code,part_name,product,part_category,part_type&order=part_code.asc`),
+                `?select=part_code,part_name,product,part_category,part_type,hsn_code&order=part_code.asc`),
               query('bom_register',
                 `?is_active=eq.true&select=part_code,part_name,issue_uom,hsn_code`),
             ]);
@@ -778,7 +843,10 @@ export default {
                 part_category: row.part_category || null,
                 part_type:     row.part_type || null,
                 issue_uom:     meta.issue_uom || null,
-                hsn_code:      meta.hsn_code || null,
+                // material_master is the HSN master now — bom_register.hsn_code is
+                // empty for all 1,447 active parts, which is exactly why the PO form's
+                // pre-fill always produced a blank. Kept as a fallback for safety.
+                hsn_code:      row.hsn_code || meta.hsn_code || null,
               });
             }
             // Defensive: keep any bom_register-only codes with no catalogue row
@@ -1170,6 +1238,15 @@ export default {
             const m = await hsnMasterAll();
             return ok([...m.entries()].map(([product, v]) => ({
               product, hsn_code: v.hsn, gst_pct: v.gst,
+            })));
+          }
+          // part → HSN + GST% for the PO form. The form's existing pre-fill paths read
+          // bom_register.hsn_code, which is empty for every part; this is the real source.
+          case 'getPartHsnMap': {
+            if (!canView(P)) return err('No permission', 403);
+            const m = await partHsnMasterAll();
+            return ok([...m.entries()].map(([part_code, v]) => ({
+              part_code, hsn_code: v.hsn, gst_percent: v.gst,
             })));
           }
           case 'getSalesChannels': {
@@ -1656,7 +1733,10 @@ export default {
               source_request_no: d.source_request_no || null,
             });
             if (!r.ok) return err('PO insert failed: '+JSON.stringify(r.data));
-            const lines = Array.isArray(d.lines) ? d.lines : [];
+            const rawLines = Array.isArray(d.lines) ? d.lines : [];
+            // HSN/GST default in from the part master; corrections sync back out below.
+            const partHsnMaster = rawLines.length ? await partHsnMasterAll() : new Map();
+            const lines = applyPartHsnDefaults(rawLines, partHsnMaster);
             if (lines.length>0) {
               const lineRows = lines.map((l,i) => ({
                 po_number: poNumber, line_no: i+1, product: l.product||null, variant: l.variant||null,
@@ -1672,6 +1752,8 @@ export default {
               }));
               const lr = await insert('po_lines', lineRows);
               if (!lr.ok) return err('PO lines insert failed: '+JSON.stringify(lr.data));
+              await syncPartHsnToMaster(lines, partHsnMaster,
+                authResult?.fullName || postRole, postRole, poNumber);
             }
             await insert('po_revisions', {
               po_number: poNumber, revision: 0, changed_by: postRole,
@@ -1809,7 +1891,9 @@ export default {
                 return err('This PO already has received quantities — a full line replace would rewrite that history. Use Add Line to append instead.', 409);
               }
               await sb(`/rest/v1/po_lines?po_number=eq.${encodeURIComponent(d.po_number)}`, { method: 'DELETE' });
-              const lineRows = d.lines.map((l,i) => ({
+              const partHsnMasterA = await partHsnMasterAll();
+              const aLines = applyPartHsnDefaults(d.lines, partHsnMasterA);
+              const lineRows = aLines.map((l,i) => ({
                 po_number: d.po_number, line_no: i+1, product: l.product||null, variant: l.variant||null,
                 item_type: l.item_type||'Other', description: l.description||null, part_code: l.part_code||null,
                 qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: parseFloat(l.qty_received)||0,
@@ -1822,6 +1906,8 @@ export default {
                 mould_no: l.mould_no || null,
               }));
               await insert('po_lines', lineRows);
+              await syncPartHsnToMaster(aLines, partHsnMasterA,
+                authResult?.fullName || postRole, postRole, d.po_number);
             }
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_AMENDED', 'PO', d.po_number,
               `PO ${d.po_number} amended to rev ${newRev} — ${String(d.change_summary).trim()}`,
@@ -1867,7 +1953,9 @@ export default {
             });
             // Append above the current highest line_no — never renumber what's there.
             const maxLineNo = curLines.reduce((m,l) => Math.max(m, parseInt(l.line_no)||0), 0);
-            const lineRows = newLines.map((l,i) => ({
+            const partHsnMasterL = await partHsnMasterAll();
+            const newLinesH = applyPartHsnDefaults(newLines, partHsnMasterL);
+            const lineRows = newLinesH.map((l,i) => ({
               po_number: d.po_number, line_no: maxLineNo + i + 1,
               product: l.product||null, variant: l.variant||null,
               item_type: l.item_type||'Part', description: l.description||null, part_code: l.part_code||null,
@@ -1882,6 +1970,8 @@ export default {
             }));
             const lr = await insert('po_lines', lineRows);
             if (!lr.ok) return err('PO line insert failed: '+JSON.stringify(lr.data));
+            await syncPartHsnToMaster(newLinesH, partHsnMasterL,
+              authResult?.fullName || postRole, postRole, d.po_number);
             await update('purchase_orders',
               { revision: newRev, updated_at: new Date().toISOString() },
               `po_number=eq.${encodeURIComponent(d.po_number)}`);

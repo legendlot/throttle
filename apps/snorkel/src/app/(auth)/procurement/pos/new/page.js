@@ -198,6 +198,7 @@ function NewPOPage() {
   // HSN → GST rate map (PO-GST feature). Loaded once on mount; powers
   // auto-fill + lock on the GST% column when a known HSN is entered.
   const [hsnMap, setHsnMap] = useState({});
+  const [partHsnMap, setPartHsnMap] = useState({});   // part_code -> { hsn_code, gst_percent }
 
   const [submitting, setSubmitting] = useState(false);
   const rrParam = searchParams?.get('rr') || null;
@@ -229,6 +230,14 @@ function NewPOPage() {
         if (r.hsn_code) map[r.hsn_code] = parseFloat(r.gst_percent);
       });
       setHsnMap(map);
+    }).catch(() => {});
+    // part -> HSN from the part master. The BOM-add path fills HSN from getBOM, i.e.
+    // bom_register.hsn_code, which is empty for every part — so without this the
+    // pre-fill silently produces a blank (the reason ~401 INR PO lines carry no HSN).
+    garageFetch('getPartHsnMap', {}, session).then((d) => {
+      const m = {};
+      (Array.isArray(d) ? d : []).forEach((r) => { if (r.part_code) m[r.part_code] = r; });
+      setPartHsnMap(m);
     }).catch(() => {});
   }, [session]);
 
@@ -340,7 +349,8 @@ function NewPOPage() {
     setLineItems((prev) => [
       ...prev,
       ...picked.map((r) => {
-        const hsn = r.hsn_code || '';
+        // Part master first — getBOM's hsn_code (bom_register) is empty for every part.
+        const hsn = partHsnMap[r.part_code]?.hsn_code || r.hsn_code || '';
         const gst = hsn && hsnMap[hsn] != null ? hsnMap[hsn] : '';
         return {
           part_code:    r.part_code,
