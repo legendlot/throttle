@@ -320,6 +320,51 @@ t('a cart token alone does NOT make an anonymous event ingestable', () => {
   assert.equal(FLO.mapAddToCart({ cartToken: 'abc?key=1' }), null);
 });
 
+// ── cart_link: the per-customer cart permalink (2026-07-27) ───────────────────────────
+// WHY: the add-to-cart recovery template needs a button that reopens the shopper's OWN cart.
+// `cart_url_suffix` cannot do it (a Shopflo CHECKOUT token, which does not exist yet at
+// add-to-cart — the CR1 failure), and a static /cart depends on the browser cookie, which
+// WhatsApp's in-app browser usually does not share. A Shopify cart permalink rebuilds the
+// cart from variant ids on ANY device, so it is the only option that actually works here.
+// `cart_variant_ids` is present on 100% of live add_to_cart events (44/44 measured).
+t('cartLink builds a Shopify cart permalink from variant ids', () => {
+  assert.equal(FLO.cartLink('47394784149556'),
+    'https://www.legendoftoys.com/cart/47394784149556:1');
+});
+
+t('cartLink keeps every line, in order, one unit each', () => {
+  // Shopflo gives no quantities, so each variant is requested once — see the qty note in src.
+  assert.equal(FLO.cartLink('47294771134516,47907123167284'),
+    'https://www.legendoftoys.com/cart/47294771134516:1,47907123167284:1');
+});
+
+t('cartLink tolerates spacing and dedupes a repeated variant', () => {
+  // A duplicate id would otherwise add the same product twice on open.
+  assert.equal(FLO.cartLink(' 111 , 222 , 111 '),
+    'https://www.legendoftoys.com/cart/111:1,222:1');
+});
+
+t('cartLink returns null when there is nothing to rebuild', () => {
+  // Null → the template's own fallback URL applies. Never emit a half-built /cart/ path.
+  for (const v of [null, undefined, '', '   ', ',,', 0]) assert.equal(FLO.cartLink(v), null);
+});
+
+t('cartLink rejects non-numeric ids rather than pasting them into a URL', () => {
+  // Variant ids are numeric; anything else is untrusted vendor input heading into a live link.
+  assert.equal(FLO.cartLink('abc'), null);
+  assert.equal(FLO.cartLink('47394784149556,../../evil'), 'https://www.legendoftoys.com/cart/47394784149556:1');
+});
+
+t('mapAddToCart exposes cart_link for the recovery template button', () => {
+  const e = FLO.mapAddToCart(ADDED_TO_CART);
+  assert.equal(e.properties.cart_link, 'https://www.legendoftoys.com/cart/55589142888521:1');
+});
+
+t('mapAddToCart leaves cart_link null when variant ids are absent', () => {
+  const e = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: null });
+  assert.equal(e.properties.cart_link, null);
+});
+
 
 
 // ── Shopflo's own event-name list (Pruthvi, 2026-07-25) ───────────────────────────────

@@ -220,6 +220,48 @@ function cdnImage(url) {
   return url + (url.includes('?') ? '&' : '?') + `width=${CDN_IMAGE_WIDTH}`;
 }
 
+// cartLink(cartVariantIds) → a Shopify CART PERMALINK that rebuilds the shopper's cart.
+//
+// WHY THIS EXISTS. The add-to-cart recovery template needs a button that reopens the
+// customer's OWN cart, and neither obvious option works:
+//  - `cart_url_suffix` is a Shopflo CHECKOUT token. It is minted at checkout, so at
+//    add-to-cart there is nothing to bind — the template renders empty and every send
+//    fails. (This is exactly what grounded CR1 on 2026-07-27.)
+//  - a static `/cart` reads the CART COOKIE of whatever browser opens it. A WhatsApp tap
+//    opens WhatsApp's in-app browser, which generally does NOT share cookies with the
+//    shopper's Chrome/Safari — so a large share of taps would land on an empty cart.
+// A permalink (`/cart/<variant>:<qty>`) carries the cart IN THE URL, so it reconstructs
+// the same cart on any device with no cookie dependency. Shopflo hands us the variant ids
+// on every add_to_cart (measured 44/44, 2026-07-27), so this needs nothing from them.
+//
+// QUANTITY IS ASSUMED 1 PER LINE — Shopflo's add_to_cart carries `cart_variant_ids` but no
+// quantities. Someone who added 2 of an item is offered 1 back. Deliberate: a recovery nudge
+// exists to return them to the cart, and they can adjust there. If Shopflo ever sends
+// quantities, pair them here rather than inventing a count from `total_price`.
+//
+// The storefront origin is fixed rather than derived from SHOPIFY_STORE_DOMAIN: that env var
+// holds the `.myshopify.com` admin domain, which is NOT the domain a customer should be sent
+// to. This is customer-facing copy, so it is stated explicitly.
+const STOREFRONT_BASE = 'https://www.legendoftoys.com';
+function cartLink(cartVariantIds) {
+  if (cartVariantIds == null) return null;
+  const seen = new Set();
+  const lines = [];
+  for (const raw of String(cartVariantIds).split(',')) {
+    const id = raw.trim();
+    // Numeric-only, and not an all-zero placeholder (`0` is never a real Shopify variant id;
+    // it appears as a falsy sentinel and would build a permalink that fails to open). These
+    // ids are untrusted vendor input being pasted into a link we send to a customer — anything
+    // else is dropped rather than escaped, so a malformed id can never become a path segment.
+    if (!/^\d+$/.test(id) || /^0+$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    lines.push(`${id}:1`);
+  }
+  // No usable id → null, so the template's own fallback URL applies. Never emit a bare
+  // `/cart/` path, which would 404 rather than degrade to the normal cart page.
+  return lines.length ? `${STOREFRONT_BASE}/cart/${lines.join(',')}` : null;
+}
+
 function payloadImageUrl(body, primaryName) {
   const items = Array.isArray(body?.line_items) ? body.line_items : [];
   if (!items.length) return null;
@@ -354,6 +396,8 @@ function mapAddToCart(body) {
     cart_product_ids: body.cart_product_ids || null,
     cart_product_names: body.cart_product_names || null,
     cart_variant_ids: body.cart_variant_ids || null,
+    // Per-customer cart permalink for the recovery template's button — see cartLink().
+    cart_link: cartLink(body.cart_variant_ids),
     currency: body.currency || null,
     total_price: rawTotal,                // AS RECEIVED (paise) — see the unit note above
     total: totalRupees,                   // rupees, matching checkout_abandoned's `total`
@@ -509,6 +553,7 @@ function consentRowsFrom(body, capturedAt) {
 module.exports = {
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, cdnImage, productHandle, SHOPFLO_CHECKOUT_BASE,
+  cartLink, STOREFRONT_BASE,
   normalizeCartToken, cartToken, cartIdentifier, mapBrowse, lookupEvent,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };
