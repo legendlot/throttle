@@ -419,6 +419,42 @@ t('browse mapper extracts handle + image from the live Shopflo wire shape', () =
   assert.ok(out.identifiers.some((i) => i.type === 'phone'), 'phone identifier must be extracted');
 });
 
+// Shopflo sends add_to_cart totals in PAISE but checkout_abandoned totals in RUPEES (measured
+// 2026-07-27). A template binding the raw value would render "₹219900" to a customer.
+t('add_to_cart total is normalised to rupees; raw paise preserved', () => {
+  const spec = FLO.lookupEvent('add_to_cart_ui');
+  const out = spec.map({
+    event_name: 'add_to_cart_ui',
+    phone: '+919876543210',
+    session_id: 's1',
+    timestamp: 1785152871573,
+    currency: 'INR',
+    total_price: 219900,
+    cart_product_names: 'L.O.T Cars Shadow - RC Drift Car - Tarmac Black',
+  });
+  assert.ok(out, 'identity-bearing add_to_cart must map');
+  assert.equal(out.properties.total_price, 219900, 'raw value preserved as received');
+  assert.equal(out.properties.total, 2199, 'normalised to rupees');
+  assert.equal(out.properties.total_display, '₹2,199');
+  assert.equal(out.properties.primary_product_name, 'L.O.T Cars Shadow - RC Drift Car - Tarmac Black');
+});
+
+// Add-ons must never headline a cart message (the live Gift Wrapping case).
+t('add_to_cart orders add-ons last for display', () => {
+  const spec = FLO.lookupEvent('add_to_cart_ui');
+  const out = spec.map({
+    event_name: 'add_to_cart_ui',
+    phone: '+919876543210',
+    session_id: 's2',
+    timestamp: 1785152871573,
+    total_price: 504800,
+    cart_product_names: 'Gift Wrapping,L.O.T Car Vortex - RC Drift Car - Overdrive Yellow',
+  });
+  assert.ok(out);
+  assert.equal(out.properties.primary_product_name, 'L.O.T Car Vortex - RC Drift Car - Overdrive Yellow');
+  assert.equal(out.properties.total_display, '₹5,048');
+});
+
 // A collection view has no product URL — it must NOT invent a handle.
 t('collection view yields no product_handle', () => {
   const spec = FLO.lookupEvent('collection_page_viewed');

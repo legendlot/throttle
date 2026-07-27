@@ -320,13 +320,37 @@ function mapOrderCompleted(body) {
 function mapAddToCart(body) {
   const identifiers = identsFromShopflo(body);
   if (!identifiers.length) return null;
+  // ⚠️ UNIT QUIRK, MEASURED 2026-07-27: Shopflo sends `total_price` in MINOR UNITS (paise) on
+  // add_to_cart but in RUPEES on checkout_abandoned — same field, same vendor, same day
+  // (Shadow: 219900 here vs 2199 there; Vortex+giftwrap: 504800 vs ₹5,048). Binding the raw
+  // value in a template would show a customer "₹219900". `total_price` is left EXACTLY as
+  // received (no silent semantic change to an existing field) and the display-ready `total` +
+  // `total_display` are normalised to rupees, so a template binds the same token name on both
+  // events and gets the right number either way.
+  const rawTotal = num(body.total_price);
+  const totalRupees = rawTotal == null ? null : rawTotal / 100;
+  const p = body.data || body.eventPayload || {};
+  const namesOrdered = orderedNames(body.cart_product_names, body.line_items);
+  const productUrl = body.product_url || p.product_url || null;
   const props = {
     cart_token: cartToken(body),          // normalised (casing + `?key=` stripped)
     cart_product_ids: body.cart_product_ids || null,
     cart_product_names: body.cart_product_names || null,
     cart_variant_ids: body.cart_variant_ids || null,
     currency: body.currency || null,
-    total_price: num(body.total_price),
+    total_price: rawTotal,                // AS RECEIVED (paise) — see the unit note above
+    total: totalRupees,                   // rupees, matching checkout_abandoned's `total`
+    total_display: totalRupees != null ? `₹${inrGroup(totalRupees)}` : null,
+    // Display-ready product fields, mirroring mapCheckoutAbandoned so ONE template shape works
+    // for both cart journeys (add-ons last, highest line value first — RULE: never headline
+    // "Gift Wrapping").
+    product_names: namesOrdered,
+    product_names_short: shortNames(namesOrdered),
+    primary_product_name: (namesOrdered || '').split(',')[0].trim() || null,
+    // Opportunistic — the browse events carry these under `data.*`; if add_to_cart ever does
+    // too, a per-product image/link works with no further change. Absent = template fallback.
+    product_image_url: body.product_image || p.product_image || p.product_image_url || null,
+    product_handle: productHandle(productUrl),
     source_surface: 'shopflo',
   };
   const cartId = cartIdentifier(body);
