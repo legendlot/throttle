@@ -249,9 +249,12 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       // buttons (the mid-flow confirm). With a template, the buttons are the ones Meta
       // already approved on it and must NOT be re-sent here.
       interactiveButtons: (s.interactive && !s.templateId) ? (s.buttons || []) : null,
-      // send() takes an INLINE template object when there is no stored templateId — the
-      // body text for a mid-flow confirm lives on the step, not in the template library.
-      ...((s.interactive && !s.templateId)
+      // send() takes an INLINE template object when there is no stored templateId — the body
+      // text for a session reply lives on the step, not in the template library. Applies to
+      // PLAIN free-text sends too, not just interactive ones: the first cut keyed this on
+      // `s.interactive`, so a plain text step resolved no template at all and could never
+      // send (the four confirmation replies in the COD→prepaid flow are exactly that shape).
+      ...((!s.templateId && (s.text || s.body))
         ? { template: { channel: 'whatsapp', name: `journey:${stepId}`,
                         content: { text: s.text || s.body || '' }, variables: s.variables || [] } }
         : {}),
