@@ -1138,7 +1138,12 @@ export default {
       const fn = ops[b.op];
       if (!fn) return err('unknown_op', 400);
       const r = await fn(env, b);
-      return r.ok ? ok(r) : err(r.error, 400);
+      // Pass `raw`/`hint` through on failure. err() keeps only the message, which threw away
+      // Meta's own error payload — and Meta's `message` is very often the bare, useless
+      // "Invalid parameter" while the reason sits in error_user_msg/error_subcode. This is a
+      // token-gated internal debugging route; losing the provider's error here is the whole
+      // reason a template rejection takes a session to diagnose.
+      return r.ok ? ok(r) : json({ ok: false, error: r.error, raw: r.raw, hint: r.hint }, 400);
     }
 
     const auth = await A.verifyJWT(request.headers.get('Authorization'), env);

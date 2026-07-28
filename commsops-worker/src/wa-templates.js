@@ -184,6 +184,24 @@ async function resolveMetaTemplateId(env, { wabaId, name, language }) {
 // Meta will not accept an edit while it is mid-review.
 const UNEDITABLE_STATUSES = new Set(['PENDING', 'IN_APPEAL', 'PENDING_DELETION', 'DELETED']);
 
+// Meta's template errors are famously opaque — `error.message` is very often the bare string
+// "Invalid parameter", while the ACTIONABLE text sits in `error_user_title`/`error_user_msg`
+// and the discriminator in `error_subcode`. Reading only `.message` has now cost two debugging
+// rounds (the body-must-not-end-with-{{n}} rejection, and the 2026-07-28 image-header edit).
+// Fold the whole lot into one readable line so the author sees WHY, not just THAT.
+function metaError(data, fallback) {
+  const e = (data && data.error) || {};
+  const parts = [];
+  if (e.message) parts.push(e.message);
+  if (e.error_user_title && e.error_user_title !== e.message) parts.push(e.error_user_title);
+  if (e.error_user_msg) parts.push(e.error_user_msg);
+  const tail = [];
+  if (e.code) tail.push(`code ${e.code}`);
+  if (e.error_subcode) tail.push(`subcode ${e.error_subcode}`);
+  const head = parts.length ? parts.join(' — ') : (fallback || 'wa_error');
+  return tail.length ? `${head} (${tail.join('/')})` : head;
+}
+
 // Edit an EXISTING Meta template in place (POST /{template_id}), which sends it back to
 // review under the SAME name. This is the only way to add/change a component — a header, a
 // button, body copy — on a template that is already approved.
@@ -239,7 +257,7 @@ async function waEditTemplate(env, body) {
     });
     data = await res.json().catch(() => ({}));
   } catch (e) { return { ok: false, error: `wa_fetch_error:${e?.message || e}` }; }
-  if (!res.ok) return { ok: false, error: data?.error?.message || `wa_http_${res.status}`, raw: data };
+  if (!res.ok) return { ok: false, error: metaError(data, `wa_http_${res.status}`), raw: data };
 
   // An accepted edit ALWAYS re-enters review, so the local mirror must go PENDING immediately.
   // Leaving it APPROVED would let the UI offer a test send of a template Meta is re-reviewing.
@@ -314,7 +332,7 @@ async function waSubmitTemplate(env, body) {
     data = await res.json().catch(() => ({}));
   } catch (e) { return { ok: false, error: `wa_fetch_error:${e?.message || e}` }; }
 
-  if (!res.ok) return { ok: false, error: data?.error?.message || `wa_http_${res.status}`, raw: data };
+  if (!res.ok) return { ok: false, error: metaError(data, `wa_http_${res.status}`), raw: data };
 
   if (stageWabaId) {
     // Pre-stage: Meta-side create only. The local row is deliberately untouched (see header).
