@@ -18,22 +18,22 @@
 
 :root {
   /* ── Surface ramp (layered — cards must separate from the bg) ── */
-  --bg:            #0d0e10;   /* app canvas / main content */
-  --bg-2:          #0a0b0d;   /* recessed: top bar, search field, number inputs */
-  --surface:       #141518;   /* panels, cards, KPI strip */
-  --surface-2:     #111214;   /* sidebar */
-  --surface-hover: #1a1c20;
-  --border:        #212227;   /* panel borders */
-  --border-sb:     #202128;   /* sidebar / header dividers */
+  --bg:            #101114;   /* app canvas / main content */
+  --bg-2:          #0c0d10;   /* recessed: top bar, search field, number inputs */
+  --surface:       #1c1f25;   /* panels, cards, KPI strip */
+  --surface-2:     #17191e;   /* sidebar */
+  --surface-hover: #272b32;
+  --border:        #363b45;   /* panel borders */
+  --border-sb:     #32363f;   /* sidebar / header dividers */
   --row-border:    #1a1b1f;   /* table row separators */
-  --border-strong: #2c2f36;   /* secondary-button borders */
+  --border-strong: #4a5059;   /* secondary-button borders */
 
   /* ── Text ramp (§3.4 contrast rules) ─────────────────────── */
   --t1: #f4f5f6;   /* primary — headings, values, key cells */
-  --t2: #a3a8af;   /* secondary — nav idle, secondary buttons */
-  --t3: #8b909a;   /* muted — descriptions, sub-labels, table dims */
-  --t4: #71767c;   /* micro — eyebrows, mono captions, breadcrumb */
-  --t5: #565b61;   /* faint — em-dash placeholders, group headers */
+  --t2: #adb2b9;   /* secondary — nav idle, secondary buttons */
+  --t3: #9aa0a8;   /* muted — descriptions, sub-labels, table dims */
+  --t4: #8d939c;   /* micro — eyebrows, mono captions, breadcrumb */
+  --t5: #838992;   /* faint — em-dash placeholders, group headers */
 
   /* ── Brand + semantic (bright fg on dark — never deep hues) ── */
   --accent:      #F2CD1A;
