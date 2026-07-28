@@ -239,6 +239,37 @@ function summariseItems(lineItems) {
   return names.length === 1 ? names[0] : `${names[0]} + ${names.length - 1} more`;
 }
 
+// Variant ids for the WA IMAGE header, and WHICH line the header should show.
+//
+// A header carries ONE image but an order can have many lines, so a rule is required. Rule:
+// the HIGHEST-VALUE line (price × quantity) — Afshaan, 2026-07-28. It is the most
+// representative thing the customer bought, and for a single-line order (the common case)
+// every candidate rule agrees, so this only ever differs where it matters.
+//
+// `price` is a STRING on the REST payload ("2249.00") and quantity may be absent — coerce
+// both, and treat a non-numeric price as 0 rather than NaN (NaN comparisons are always false,
+// which would silently make the FIRST line win and look like the rule was never applied).
+function headerLineFrom(lineItems) {
+  const lines = (Array.isArray(lineItems) ? lineItems : []).filter(Boolean);
+  if (!lines.length) return { variant_ids: null, primary_title: null };
+  const value = (li) => {
+    const p = Number(li?.price);
+    const q = Number(li?.quantity);
+    return (Number.isFinite(p) ? p : 0) * (Number.isFinite(q) && q > 0 ? q : 1);
+  };
+  let best = lines[0];
+  for (const li of lines) if (value(li) > value(best)) best = li;
+  // Every variant id goes on the event (the resolver matches the primary title against them
+  // and falls back to the first it can resolve), so a title mismatch still yields an image.
+  // The BEST line is listed FIRST so that fallback lands on the highest-value item too.
+  const ids = [best, ...lines.filter((li) => li !== best)]
+    .map((li) => li?.variant_id).filter((v) => v !== null && v !== undefined).map(String);
+  return {
+    variant_ids: ids.length ? ids.join(',') : null,
+    primary_title: best?.title || best?.name || null,
+  };
+}
+
 // Pull tracking off the fulfillments array. Shopify sends BOTH `tracking_number`/`tracking_url`
 // (singular, first entry) and `tracking_numbers`/`tracking_urls` (arrays) — prefer the singular,
 // fall back to the array. The LAST fulfillment is the most recent one.
@@ -308,6 +339,10 @@ function mapOrderEvent(o, name) {
     //    fall back to generic values): {items}, {order_url}, {tracking_url}.
     items: summariseItems(o.line_items),
     order_status_url: o.order_status_url || null,
+    // Feed the WA IMAGE header: the variant ids to resolve an image from, and which line the
+    // header should represent. The image URL itself is resolved in the webhook handler (it
+    // needs a DB/catalog round-trip; this mapper stays pure).
+    ...headerLineFrom(o.line_items),
     ...track,
   };
   const occurred = (name === 'order_cancelled' ? o.cancelled_at : o.created_at) || new Date().toISOString();

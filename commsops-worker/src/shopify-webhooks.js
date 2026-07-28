@@ -6,6 +6,7 @@ const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const SHOP = require('./shopify.js');
 const CAT = require('./product-category.js');
+const { resolveVariantImage } = require('./variant-images.js');
 
 // GDPR customers/redact — we hold no special PII store, so the compliant action is to
 // suppress every channel for the customer's contacts so nothing can ever reach them,
@@ -67,6 +68,15 @@ async function handleShopifyWebhook(env, request) {
   if (SHOP.ORDER_TOPIC_EVENT[topic]) {
     const envlp = SHOP.mapOrderEvent(payload, SHOP.ORDER_TOPIC_EVENT[topic]);
     if (!envlp) return { ok: true, topic, skipped: 'no_identifier' };
+    // Per-order product image for the WA IMAGE header (Order Placed et al). Resolved HERE
+    // rather than in the mapper because it needs a cache lookup + possible catalog refetch,
+    // and mapOrderEvent is pure/unit-tested. Fails soft to null on every path — the
+    // template's static creative is the render-time fallback, and no missing image may ever
+    // cost us the order event itself.
+    if (envlp.properties?.variant_ids) {
+      const img = await resolveVariantImage(env, envlp.properties.variant_ids, envlp.properties.primary_title);
+      if (img) envlp.properties.product_image_url = img;
+    }
     const r = await ingest(env, envlp);
     return r.ok ? { ok: true, topic, profile_id: r.profile_id, deduped: r.deduped }
                 : { ok: false, error: r.error, status: 400 };
