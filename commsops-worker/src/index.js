@@ -196,6 +196,20 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
+    case 'checkTemplateShape': {        // S241 — pre-send local-vs-Meta divergence check
+      // Three send-time incidents on 2026-07-28 were all local drift from Meta's approved
+      // copy, each surfacing only as an opaque Meta code on live traffic. This answers
+      // "will this actually send?" BEFORE anyone presses Send. Read-only (Graph GET).
+      const id = url.searchParams.get('template_id');
+      if (!id) return err('template_id_required', 400);
+      const tr = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=*&limit=1`, env);
+      const tpl = (tr.ok && tr.data?.[0]) || null;
+      if (!tpl) return err('template_not_found', 404);
+      if (tpl.channel !== 'whatsapp') return ok({ checked: false, reason: 'not_whatsapp' });
+      const r = await WATPL.waCheckTemplateShape(env, tpl);
+      return r.ok ? ok(r) : err(r.error || 'shape_check_failed', 502);
+    }
+
     case 'getTemplateVersions': {       // S241 — the per-version archive behind a template
       // `comms.messages.template_version` is stamped on every send; this is what resolves
       // it. Content is returned so "what exactly did this customer receive?" is answerable

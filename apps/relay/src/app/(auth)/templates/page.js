@@ -112,6 +112,11 @@ export default function TemplatesPage() {
   const [testing, setTesting] = useState(false);
   // Version history (S241). Loaded on demand — the archive only matters when someone is
   // actually asking "what changed?", and it is one row per save, not per page view.
+  // Pre-send shape check (S241) — local vs what Meta actually holds. Auto-runs when a
+  // submitted WA template is opened, because all three of the 2026-07-28 incidents were only
+  // discoverable by pressing Send on live traffic.
+  const [shape, setShape] = useState(null);
+  const [shapeLoading, setShapeLoading] = useState(false);
   const [versions, setVersions] = useState(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -165,7 +170,7 @@ export default function TemplatesPage() {
     .map((id) => ({ id, label: wabaLabel(id) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); resetVersions(); setEditorKey('new-' + Date.now()); setView('form'); }
+  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); resetVersions(); resetShape(); setEditorKey('new-' + Date.now()); setView('form'); }
   // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
   useNewParam(canEdit, startNew);
   function startEdit(r) {
@@ -195,11 +200,25 @@ export default function TemplatesPage() {
     setBaseline(waSnapshot(loaded));
     resetTest();
     resetVersions();
+    resetShape();
     setEditorKey('t-' + r.id);
     setView('form');
+    // Auto-run for anything already submitted to Meta. Deliberately not gated on canEdit —
+    // a viewer looking at a broken live template should see WHY it is broken.
+    if ((r.channel || 'email') === 'whatsapp' && r.provider_template_id) runShapeCheck(r.id);
   }
   function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); setNeedsAllow(false); }
   function resetVersions() { setVersions(null); setVersionsOpen(false); setVersionsLoading(false); }
+  function resetShape() { setShape(null); setShapeLoading(false); }
+  const runShapeCheck = useCallback(async (templateId) => {
+    if (!templateId || !session) return;
+    setShapeLoading(true);
+    try {
+      const r = await garageFetch('checkTemplateShape', { template_id: templateId }, session);
+      setShape(r || null);
+    } catch { setShape(null); }      // never block authoring on a Graph hiccup
+    finally { setShapeLoading(false); }
+  }, [session]);
   async function loadVersions(templateId) {
     setVersionsOpen((o) => !o);
     if (versions || !templateId) return;
@@ -389,7 +408,10 @@ export default function TemplatesPage() {
     if (!window.confirm(
       `Submit "${t.wa.meta_name}" to Meta for approval?\n\n`
       + `This creates a real template on LOT's WhatsApp Business Account and enters Meta's `
-      + `review queue. Review typically takes minutes to hours and can't be undone from here.`)) return;
+      + `review queue. Review typically takes minutes to hours and can't be undone from here.\n\n`
+      + `WARNING: while the review runs, EVERY send of this template fails (#132001). Measured, `
+      + `not theoretical — it took Order Placed down for 18 minutes on 2026-07-28. If a LIVE `
+      + `journey uses this template, pause it or cover it elsewhere first.`)) return;
     setSubmitting(true);
     try {
       const r = await workerFetch('waSubmitTemplate', { templateId: t.id }, session);
@@ -398,6 +420,7 @@ export default function TemplatesPage() {
       set('provider_template_id', d.provider_template_id || null);
       showToast(`Submitted — Meta says ${d.status || 'PENDING'}`, 'success');
       load();
+      runShapeCheck(t.id);   // refresh the banner — it now reports the mid-review send block
     } catch (e) { showToast(e.message || 'Submit failed', 'error'); }
     finally { setSubmitting(false); }
   }
@@ -465,6 +488,40 @@ export default function TemplatesPage() {
             Email keeps the single column — its GrapesJS editor has its own canvas + preview. */}
         <div className={isWa ? 'tpl-split' : undefined}>
         <div className={isWa ? 'tpl-main' : undefined}>
+        {/* PRE-SEND SHAPE CHECK (S241). Three incidents on 2026-07-28 — a stale WABA pin and
+            twice an IMAGE header Meta had not approved — were each discoverable only by
+            pressing Send on live traffic, and each surfaced as an opaque Meta code that named
+            the wrong thing. This says plainly whether the template will send, before anyone
+            tries. Refuses to be reassuring: silence only when it genuinely matched. */}
+        {t.channel === 'whatsapp' && t.id && t.provider_template_id && (
+          shapeLoading ? (
+            <div className="tw-note" style={{ marginBottom: 12 }}>Checking against Meta…</div>
+          ) : shape && shape.checked && !shape.match ? (
+            <div className="tw-note" style={{ marginBottom: 12, borderLeft: '3px solid var(--danger, #dc2626)' }}>
+              <b>This template will not send as it stands.</b>
+              <span className="dim"> — local differs from the copy Meta holds
+                {shape.meta_status ? ` (Meta: ${shape.meta_status})` : ''}.</span>
+              <ul style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                {(shape.issues || []).map((iss, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}>
+                    <code style={{ fontSize: 11 }}>{iss.code}</code> — {iss.detail}
+                  </li>
+                ))}
+              </ul>
+              <div style={{ marginTop: 8 }}>
+                <Btn onClick={() => runShapeCheck(t.id)}><RefreshCw size={14} /> Re-check</Btn>
+              </div>
+            </div>
+          ) : shape && shape.checked && shape.match ? (
+            <div className="tw-note" style={{ marginBottom: 12, borderLeft: '3px solid var(--ok, #16a34a)' }}>
+              <b>Matches Meta.</b>
+              <span className="dim"> — approved on the pinned account and the shapes agree, so a
+                send will not be rejected for structure.</span>
+              <Btn kind="ghost" style={{ marginLeft: 8 }} onClick={() => runShapeCheck(t.id)}>Re-check</Btn>
+            </div>
+          ) : null
+        )}
+
         <Panel title="Details" pad>
           <div className="form-grid">
             <div className="ff"><div className="kv-k">Name</div>

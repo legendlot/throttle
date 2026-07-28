@@ -212,6 +212,114 @@ function sameAsMeta(localComponents, metaComponents) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+// ── PRE-SEND SHAPE CHECK (S241) ───────────────────────────────────────────────
+//
+// WHY: three separate incidents on 2026-07-28, all the same shape — the LOCAL template
+// drifted from the copy Meta actually holds, and the only symptom was an opaque Meta code
+// at send time, on live traffic:
+//   · Order Placed   — stale `content.waba_id` (BiteSpeed WABA)  → #200   (2 customers lost)
+//   · Order Cancelled — IMAGE header Meta had not approved       → #132018
+//   · COD Confirm     — IMAGE header Meta had not approved       → #132018
+// Every one was answerable in seconds by diffing local components against Meta's, which we
+// could already do. This turns that into a check anybody can run BEFORE pressing Send.
+//
+// Reports the SEND-BREAKING divergences specifically, not a generic text diff — copy wording
+// differs harmlessly all the time (Meta normalises whitespace), but the SHAPE must match
+// exactly or the send is rejected wholesale.
+async function waCheckTemplateShape(env, template) {
+  const content = template?.content || {};
+  const metaName = content.meta_name;
+  const wabaId = wabaFor(env, template);
+  if (!metaName) return { ok: true, checked: false, reason: 'not_submitted_to_meta' };
+  if (!wabaId) return { ok: true, checked: false, reason: 'no_waba_pinned', issues: [{
+    severity: 'error', code: 'no_waba',
+    detail: 'No WhatsApp Business Account pinned — the send cannot resolve a sender.' }] };
+
+  const list = await waListTemplates(env, [wabaId], { search: metaName, withComponents: true });
+  const waba = list?.wabas?.[wabaId];
+  if (!waba?.ok) {
+    return { ok: false, checked: false, error: waba?.error || 'waba_read_failed', waba_id: wabaId };
+  }
+  const remote = (waba.templates || []).find((t) => t.name === metaName) || null;
+  const issues = [];
+
+  if (!remote) {
+    issues.push({ severity: 'error', code: 'not_on_waba',
+      detail: `"${metaName}" does not exist on the pinned account ${wabaId}. Sends are rejected `
+            + 'as an unknown template (#132001 / #200). Either the WABA pin is wrong or it was '
+            + 'never submitted here.' });
+    return { ok: true, checked: true, match: false, meta_status: null, waba_id: wabaId, issues };
+  }
+
+  // A template mid-review cannot be sent AT ALL — proven live 2026-07-28: every send during an
+  // 18-minute review window failed #132001. This is the single most misread state, so it leads.
+  if (remote.status !== 'APPROVED') {
+    issues.push({ severity: 'error', code: 'meta_status_' + String(remote.status || '').toLowerCase(),
+      detail: `Meta currently has this template as ${remote.status}. While an edit is in review `
+            + 'EVERY send fails with #132001 ("template name does not exist in the translation"), '
+            + 'which reads like the template is missing — it is not. Wait for APPROVED.' });
+  }
+
+  const comp = (t) => (Array.isArray(remote.components) ? remote.components : [])
+    .find((c) => String(c.type || '').toUpperCase() === t) || null;
+  const remoteHeader = comp('HEADER');
+  const remoteBody = comp('BODY');
+  const remoteButtons = comp('BUTTONS');
+
+  // 1. HEADER — the incident that fired twice today.
+  const localHeaderFmt = String(content.header_format || (content.header ? 'TEXT' : '')).toUpperCase();
+  const remoteHeaderFmt = String(remoteHeader?.format || '').toUpperCase();
+  if (localHeaderFmt !== remoteHeaderFmt) {
+    issues.push({ severity: 'error', code: 'header_mismatch',
+      detail: `Header differs — local "${localHeaderFmt || 'none'}" vs approved `
+            + `"${remoteHeaderFmt || 'none'}". The send attaches whatever the LOCAL template `
+            + 'declares; if Meta\'s copy has no matching slot the whole message is rejected '
+            + '(#132018). Submit the change and wait for approval.' });
+  }
+  // A media header needs an asset at SEND time — either a mapped header slot or a static url.
+  if (MEDIA_HEADERS.has(localHeaderFmt)) {
+    const mapped = (content.mapping || []).some((m) => m.component === 'header');
+    if (!mapped && !content.header_media_url) {
+      issues.push({ severity: 'error', code: 'media_header_no_asset',
+        detail: 'Media header with neither a mapped header variable nor a static '
+              + 'header_media_url — every send fails closed with media_header_missing_url.' });
+    }
+  }
+
+  // 2. BODY placeholders — local mapping count must equal Meta's {{n}} count exactly.
+  const remotePlaceholders = new Set(
+    [...String(remoteBody?.text || '').matchAll(/\{\{(\d+)\}\}/g)].map((m) => m[1]));
+  const localBodySlots = (content.mapping || []).filter((m) => (m.component || 'body') === 'body').length;
+  if (remoteBody && localBodySlots !== remotePlaceholders.size) {
+    issues.push({ severity: 'error', code: 'body_param_count',
+      detail: `Body parameter count differs — local supplies ${localBodySlots}, approved copy `
+            + `expects ${remotePlaceholders.size}. Meta rejects the send (#132000).` });
+  }
+
+  // 3. BUTTONS — a mapped button slot is only valid when THAT button's URL carries {{n}}.
+  //    Sending a parameter for a static button is rejected; buildComponents uses the same test.
+  const remoteBtns = Array.isArray(remoteButtons?.buttons) ? remoteButtons.buttons : [];
+  for (const slot of (content.mapping || []).filter((m) => m.component === 'button')) {
+    const idx = Number(slot.index ?? 0);
+    const btn = remoteBtns[idx];
+    if (!btn) {
+      issues.push({ severity: 'error', code: 'button_slot_missing',
+        detail: `Mapping fills button #${idx} ("${slot.token}") but the approved template has `
+              + `${remoteBtns.length} button(s).` });
+    } else if (!/\{\{\d+\}\}/.test(String(btn.url || ''))) {
+      issues.push({ severity: 'error', code: 'button_slot_static',
+        detail: `Button #${idx} ("${btn.text}") is STATIC at Meta, but the mapping supplies a `
+              + `value for it ("${slot.token}"). Meta rejects a parameter for a static button — `
+              + 'remove the button mapping, or make the URL end in {{1}} and re-submit.' });
+    }
+  }
+
+  return {
+    ok: true, checked: true, match: issues.length === 0,
+    meta_status: remote.status, waba_id: wabaId, meta_name: metaName, issues,
+  };
+}
+
 // Meta will not accept an edit while it is mid-review.
 const UNEDITABLE_STATUSES = new Set(['PENDING', 'IN_APPEAL', 'PENDING_DELETION', 'DELETED']);
 
@@ -703,6 +811,7 @@ async function waMigrateNumber(env, body) {
 
 module.exports = {
   waSubmitTemplate, waEditTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia,
+  waCheckTemplateShape,
   waAccountInfo, waTokenScopes, waSubscribeApp, waMigrateNumber,
   buildComponents, categoryFor, wabaFor, resolveMetaTemplateId, UNEDITABLE_STATUSES, sameAsMeta,
 };
