@@ -397,7 +397,10 @@ function restoreFetch() { global.fetch = realFetch; }
     assert.ok(idx('hero.png') < idx('/uploads?'), 'must fetch the asset before opening an upload session');
     assert.ok(idx('/uploads?') < idx('/upload:SESS1'), 'must open the session before uploading bytes');
     assert.ok(idx('/upload:SESS1') < idx('/message_templates'), 'must have a handle before submitting to Meta');
-    const submitCall = calls.find((c) => c.u.includes('/message_templates'));
+    // Must match the POST specifically: since 2026-07-28 submit first does a GET
+    // /message_templates to see whether the name already exists on the WABA (auto-routing to
+    // the edit path if so), so "the first /message_templates call" is now that lookup.
+    const submitCall = calls.find((c) => c.u.includes('/message_templates') && c.method === 'POST');
     const submitted = JSON.parse(submitCall.body);
     const header = submitted.components.find((c) => c.type === 'HEADER');
     assert.equal(header.format, 'IMAGE');

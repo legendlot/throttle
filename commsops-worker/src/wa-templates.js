@@ -156,6 +156,105 @@ function categoryFor(template) {
 //   does not hold the number yet, breaking WABA-scoped sender routing. Check a staged copy's
 //   approval via the /internal/wa-templates catalog pull on the destination WABA (sync only
 //   follows the pin).
+// Resolve a template's Meta id ON A SPECIFIC WABA, by name+language.
+//
+// ⚠️ NEVER trust the stored `templates.provider_template_id` for this. Templates are
+// WABA-scoped and non-transferable: the id was minted on whichever WABA the template was
+// first created on, so after a WABA re-pin (the 2026-07-28 transactional flip) the stored id
+// still points at the OLD account's copy. Editing that id would silently edit a template on
+// the WABA we are leaving, while the pinned copy — the one that actually sends — stayed
+// unchanged. Resolving by name on the pinned WABA is both correct and self-healing: callers
+// write the resolved id back, so a stale one repairs itself on first use.
+//
+// Returns { id, status, category } | null (not found on that WABA).
+async function resolveMetaTemplateId(env, { wabaId, name, language }) {
+  const res = await fetch(
+    `${graphBase(env)}/${encodeURIComponent(wabaId)}/message_templates`
+    + `?name=${encodeURIComponent(name)}&fields=id,name,language,status,category`,
+    { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: data?.error?.message || `http_${res.status}` };
+  // Exact name AND language (same discipline as waSyncTemplateStatus review M10) — Meta's
+  // `name=` filter is a prefix/contains match, so it happily returns lot_order_placed_02
+  // when asked for lot_order_placed_01.
+  const hit = (data?.data || []).find((x) => x.name === name && x.language === language) || null;
+  return hit ? { id: hit.id, status: hit.status, category: hit.category } : null;
+}
+
+// Meta will not accept an edit while it is mid-review.
+const UNEDITABLE_STATUSES = new Set(['PENDING', 'IN_APPEAL', 'PENDING_DELETION', 'DELETED']);
+
+// Edit an EXISTING Meta template in place (POST /{template_id}), which sends it back to
+// review under the SAME name. This is the only way to add/change a component — a header, a
+// button, body copy — on a template that is already approved.
+//
+// Why not just create a new one: Meta rejects a create whose name already exists on the WABA,
+// and a delete blocks that name for ~30 days, so "delete and recreate" is a trap. Editing
+// keeps the name, so every journey/campaign binding (which addresses Meta by `meta_name`,
+// render.js:145) keeps working with no re-pointing.
+//
+// `name` and `language` are NOT editable by Meta's API and are deliberately not sent.
+async function waEditTemplate(env, body) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const tpl = await getTemplate(env, body.templateId);
+  if (!tpl) return { ok: false, error: 'template_not_found' };
+  if (tpl.channel !== 'whatsapp') return { ok: false, error: 'not_a_whatsapp_template' };
+  let content = tpl.content || {};
+  if (!content.meta_name || !content.body) return { ok: false, error: 'meta_name_and_body_required' };
+
+  const wabaId = wabaFor(env, tpl);
+  if (!wabaId) return { ok: false, error: 'wa_waba_not_configured' };
+  const language = content.language || tpl.language || 'en';
+
+  const found = await resolveMetaTemplateId(env, { wabaId, name: content.meta_name, language });
+  if (found && found.error) return { ok: false, error: `lookup_failed:${found.error}` };
+  if (!found) return { ok: false, error: `not_on_waba:${wabaId}`, hint: 'submit it as a new template first' };
+  if (UNEDITABLE_STATUSES.has(String(found.status || '').toUpperCase()))
+    return { ok: false, error: `cannot_edit_while_${String(found.status).toLowerCase()}`,
+             hint: 'wait for Meta to finish reviewing, then edit' };
+
+  // Same self-serve media discipline as submit: mint the upload handle here so the author
+  // never touches a separate step, and never send a media template without one.
+  const headerFormat = String(content.header_format || 'TEXT').toUpperCase();
+  if (MEDIA_HEADERS.has(headerFormat) && content.header_media_url && !content.header_handle) {
+    const up = await waUploadHeaderMedia(env, { templateId: tpl.id, url: content.header_media_url });
+    if (!up.ok) return { ok: false, error: `header_upload_failed:${up.error}` };
+    content = { ...content, header_handle: up.handle };
+  }
+
+  const graphBody = { components: buildComponents(content) };
+  // Only send `category` when it actually changed. Sending it unchanged is harmless, but
+  // sending it AT ALL on a template whose WABA disallows category changes is an error — and
+  // a category change re-opens the utility→marketing pricing/consent question, so it must be
+  // a deliberate act, never a side effect of editing a header.
+  const wantCategory = categoryFor(tpl);
+  if (body.changeCategory && wantCategory && wantCategory !== found.category) graphBody.category = wantCategory;
+
+  let res, data;
+  try {
+    res = await fetch(`${graphBase(env)}/${encodeURIComponent(found.id)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.WA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(graphBody),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) { return { ok: false, error: `wa_fetch_error:${e?.message || e}` }; }
+  if (!res.ok) return { ok: false, error: data?.error?.message || `wa_http_${res.status}`, raw: data };
+
+  // An accepted edit ALWAYS re-enters review, so the local mirror must go PENDING immediately.
+  // Leaving it APPROVED would let the UI offer a test send of a template Meta is re-reviewing.
+  await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(tpl.id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      provider_template_id: found.id,          // self-heal a stale/other-WABA id
+      approval_status: 'PENDING',
+      content: { ...content, waba_id: wabaId },
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  return { ok: true, edited: true, provider_template_id: found.id, status: 'PENDING', waba_id: wabaId };
+}
+
 async function waSubmitTemplate(env, body) {
   if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
   const tpl = await getTemplate(env, body.templateId);
@@ -183,6 +282,21 @@ async function waSubmitTemplate(env, body) {
   }
   const wabaId = stageWabaId || wabaFor(env, tpl);
   if (!wabaId) return { ok: false, error: 'wa_waba_not_configured' };
+
+  // AUTO-ROUTE TO EDIT when this name already exists on the pinned WABA. Meta rejects a create
+  // on a duplicate name, so without this the UI's "Submit to Meta" button was a dead end for
+  // every already-approved template: the only way to add a header was a new `_02` name plus
+  // re-pointing every journey that bound the old one. Now the one button does the right thing.
+  //
+  // NOT when staging (`stageWabaId`) — staging onto another WABA is deliberately create-only.
+  // `mode:'create'` forces the old behaviour if a caller ever needs the raw create.
+  if (!stageWabaId && body.mode !== 'create') {
+    const language = content.language || tpl.language || 'en';
+    const existing = await resolveMetaTemplateId(env, { wabaId, name: content.meta_name, language });
+    if (existing && !existing.error && existing.id) {
+      return await waEditTemplate(env, { ...body, templateId: tpl.id });
+    }
+  }
 
   const graphBody = {
     name: content.meta_name,
@@ -533,7 +647,7 @@ async function waMigrateNumber(env, body) {
 }
 
 module.exports = {
-  waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia, waAccountInfo,
-  waTokenScopes, waSubscribeApp, waMigrateNumber,
-  buildComponents, categoryFor, wabaFor,
+  waSubmitTemplate, waEditTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia,
+  waAccountInfo, waTokenScopes, waSubscribeApp, waMigrateNumber,
+  buildComponents, categoryFor, wabaFor, resolveMetaTemplateId, UNEDITABLE_STATUSES,
 };

@@ -1124,7 +1124,8 @@ export default {
       let b = {}; try { b = await request.json(); } catch {}
       // shipmentEvents: drain the courier-lifecycle → substrate emission on demand (the same
       // pass the */5 cron runs) so bring-up doesn't wait on a tick.
-      const ops = { submit: WATPL.waSubmitTemplate, sync: WATPL.waSyncTemplateStatus,
+      const ops = { submit: WATPL.waSubmitTemplate, edit: WATPL.waEditTemplate,
+                    sync: WATPL.waSyncTemplateStatus,
                     upload: WATPL.waUploadHeaderMedia,
                     shipmentEvents: (e) => SHIPEV.emitShipmentEvents(e, ingest),
                     // Cutover pre-flight: prove the csops binding resolves. A 401 from csops's
