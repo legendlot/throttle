@@ -8,7 +8,8 @@ import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, 
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
-import WaEditor from '@/components/wa-editor/WaEditor.js';
+import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
+import WaPreview from '@/components/wa-editor/WaPreview.js';
 import { validateWaTemplate } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 
@@ -342,6 +343,7 @@ export default function TemplatesPage() {
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
   if (view === 'form') {
+    const isWa = t.channel === 'whatsapp';
     return (
       <div className="pg">
         <div className="po-head">
@@ -363,6 +365,12 @@ export default function TemplatesPage() {
           </div>
         </div>
 
+        {/* WhatsApp authoring is a split view: form left, preview PINNED right. Editing copy
+            while watching the bubble is the whole job of this screen, and the old stacked
+            layout meant scrolling away from the preview to reach the field you were editing.
+            Email keeps the single column — its GrapesJS editor has its own canvas + preview. */}
+        <div className={isWa ? 'tpl-split' : undefined}>
+        <div className={isWa ? 'tpl-main' : undefined}>
         <Panel title="Details" pad>
           <div className="form-grid">
             <div className="ff"><div className="kv-k">Name</div>
@@ -537,6 +545,15 @@ export default function TemplatesPage() {
             </div>
           </Panel>
         )}
+        </div>
+        {isWa && (
+          <aside className="tpl-side">
+            <Panel title="Preview" pad>
+              <WaPreview {...waPreviewProps(t.wa, t.variables)} senderLabel="Legend of Toys" />
+            </Panel>
+          </aside>
+        )}
+        </div>
       </div>
     );
   }

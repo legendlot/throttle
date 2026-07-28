@@ -255,42 +255,24 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
           )}
       </Panel>
 
-      <Panel title="Preview" pad>
-        <div style={{ background: '#ECE5DD', padding: 20, borderRadius: 8, display: 'flex', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 10px', maxWidth: 380, width: '100%',
-            boxShadow: '0 1px 1px rgba(0,0,0,.13)', fontSize: 14, lineHeight: 1.4, color: '#111' }}>
-            {headerType === 'IMAGE' && c.header_media_url && (
-              <img src={c.header_media_url} alt="" style={{ width: '100%', display: 'block', borderRadius: 6, marginBottom: 6 }} />
-            )}
-            {c.header && <div style={{ fontWeight: 700, marginBottom: 4 }}>{previewText(c.header, mapping, 'header')}</div>}
-            <div style={{ whiteSpace: 'pre-wrap' }}>{previewText(c.body, mapping, 'body') || <span style={{ color: '#999' }}>Body preview…</span>}</div>
-            {c.footer && <div style={{ color: '#8696A0', fontSize: 12, marginTop: 6 }}>{c.footer}</div>}
-            {buttons.length > 0 && (
-              <div style={{ borderTop: '1px solid #E9EDEF', marginTop: 8, paddingTop: 4 }}>
-                {buttons.map((b, i) => (
-                  <div key={i} style={{ color: '#00A5F4', textAlign: 'center', padding: '6px 0', fontSize: 13.5 }}>{b.text || 'Button'}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        {errs.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div className="kv-k" style={{ marginBottom: 6 }}><Badge label={`${errs.length} to fix before submitting`} tone="yellow" /></div>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--text-3)' }}>
-              {errs.map((e, i) => <li key={i} style={{ marginBottom: 3 }}>{e}</li>)}
-            </ul>
-          </div>
-        )}
-        {errs.length === 0 && (c.body || '').trim() && (
-          <div style={{ marginTop: 14 }}>
-            <Badge label="Ready to submit to Meta" tone="green" />
-            <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>
-              {placeholdersIn(c.body).length} body placeholder{placeholdersIn(c.body).length === 1 ? '' : 's'}
-            </span>
-          </div>
-        )}
-      </Panel>
     </>
   );
+}
+
+// The preview moved OUT of this component (2026-07-28) so the page can pin it beside the form
+// — see WaPreview.js. This derives exactly what the preview needs from the same `wa` object,
+// so the page doesn't have to duplicate WaEditor's normalisation (mapping/buttons/validation
+// drifting between the editor and the preview is the bug this avoids).
+export function waPreviewProps(wa, variables) {
+  const c = wa || {};
+  // validateWaTemplate takes TOKEN STRINGS, not variable rows — passing the rows makes every
+  // placeholder read as unbound and the preview would cry "fix before submitting" on a valid
+  // template. Mirrors the derivation above exactly.
+  const tokens = (variables || []).map((v) => v.token).filter(Boolean);
+  return {
+    wa: c,
+    mapping: Array.isArray(c.mapping) ? c.mapping : [],
+    buttons: Array.isArray(c.buttons) ? c.buttons : [],
+    errs: validateWaTemplate(c, tokens),
+  };
 }
