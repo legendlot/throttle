@@ -32,6 +32,21 @@ const json = (data, status = 200) =>
 const ok  = (data) => json({ ok: true, data });
 const err = (msg, status = 400) => json({ ok: false, error: msg }, status);
 const nowIso = () => new Date().toISOString();
+
+// Order-independent JSON for change detection. A plain JSON.stringify compares KEY ORDER, and
+// the template editor rebuilds `content`/`variables` from form state on every render — so the
+// same data serialises differently between loads and every save would look like a change,
+// which is the bug this exists to kill. Arrays keep their order (slot order is load-bearing).
+function stableJson(v) {
+  const norm = (x) => {
+    if (Array.isArray(x)) return x.map(norm);
+    if (x && typeof x === 'object') {
+      return Object.keys(x).sort().reduce((o, k) => { o[k] = norm(x[k]); return o; }, {});
+    }
+    return x;
+  };
+  return JSON.stringify(norm(v ?? null));
+}
 const enc2 = (p) => String(p).split('/').map(encodeURIComponent).join('/');
 
 // ── GET actions ──────────────────────────────────────────────────────────────
@@ -388,7 +403,9 @@ async function handlePost(body, auth, env) {
       const { id, channel, name, purpose, language, content, variables, status } = body;
       if (!name) return err('name_required', 400);
       if (id) {
-        const cur = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=version,content&limit=1`, env);
+        const cur = await A.sbComms(
+          `/rest/v1/templates?id=eq.${A.enc(id)}`
+          + `&select=id,version,content,variables,channel,name,purpose,language,status,approval_status,provider_template_id&limit=1`, env);
         const v = (cur.ok && Number(cur.data?.[0]?.version)) || 1;
         // The UI rebuilds `content` from form state and historically DROPPED worker-owned /
         // UI-omitted keys (waba_id pin, header_handle, header_format, header_media_url) —
@@ -400,6 +417,22 @@ async function handlePost(body, auth, env) {
         const mergedContent = { ...(content || {}) };
         for (const k of ['waba_id', 'header_handle', 'header_format', 'header_media_url']) {
           if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
+        }
+        // NO-OP ON NO CHANGES. `version` was bumped on EVERY save, so simply opening a
+        // template and pressing Save inflated it — live rows had reached v5–v7 on a handful
+        // of real edits, which makes the version meaningless exactly when you need it (which
+        // save introduced a regression?). A save that changes nothing must not publish a
+        // version. Compare on the MERGED content, so a carried-over worker-owned key
+        // (waba_id/header_handle/…) does not read as a change.
+        const prevRow = (cur.ok && cur.data?.[0]) || null;
+        if (prevRow && stableJson(prevRow.content) === stableJson(mergedContent)
+          && stableJson(prevRow.variables || []) === stableJson(variables || [])
+          && (prevRow.channel || null) === (channel || null)
+          && (prevRow.name || null) === (name || null)
+          && (prevRow.purpose || null) === (purpose || null)
+          && (prevRow.language || 'en') === (language || 'en')
+          && (prevRow.status || 'active') === (status || 'active')) {
+          return ok({ ...prevRow, noop: true });
         }
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({

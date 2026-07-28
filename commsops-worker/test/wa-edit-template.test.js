@@ -116,6 +116,38 @@ const t = (n, f) => Promise.resolve().then(f).then(() => { pass++; console.log('
     assert.ok(ex.includes('h:abc'), 'the upload handle must ride in the header example');
   });
 
+
+  // ── no-op guard: never burn the once-per-24h edit on an unchanged template ──────────────
+  await t('identical components → sameAsMeta true (edit is skipped)', () => {
+    const local = [{ type: 'HEADER', format: 'IMAGE', example: { header_handle: ['h:AAA'] } },
+                   { type: 'BODY', text: 'Hi {{1}}', example: { body_text: [['Rahul']] } }];
+    const meta  = [{ type: 'HEADER', format: 'IMAGE', example: { header_handle: ['h:ZZZ'] } },
+                   { type: 'BODY', text: 'Hi {{1}}' }];
+    assert.strictEqual(WATPL.sameAsMeta(local, meta), true, 'a rotated header_handle is not a change');
+  });
+
+  await t('changed body text → false (edit proceeds)', () => {
+    assert.strictEqual(WATPL.sameAsMeta(
+      [{ type: 'BODY', text: 'Hi {{1}}, new copy' }], [{ type: 'BODY', text: 'Hi {{1}}' }]), false);
+  });
+
+  await t('ADDING a header → false (the image-header case)', () => {
+    assert.strictEqual(WATPL.sameAsMeta(
+      [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Hi' }],
+      [{ type: 'BODY', text: 'Hi' }]), false);
+  });
+
+  await t('changed button url → false', () => {
+    assert.strictEqual(WATPL.sameAsMeta(
+      [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Track', url: 'https://a/{{1}}' }] }],
+      [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Track', url: 'https://b/{{1}}' }] }]), false);
+  });
+
+  await t('case/format differences alone are not a change', () => {
+    assert.strictEqual(WATPL.sameAsMeta(
+      [{ type: 'header', format: 'image' }], [{ type: 'HEADER', format: 'IMAGE' }]), true);
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

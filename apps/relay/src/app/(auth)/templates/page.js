@@ -31,6 +31,33 @@ const VAR_SOURCES = ['profile', 'event', 'constant', 'recipient', 'system'];
 const STATUS_TONE = { active: 'green', draft: 'gray', archived: 'red' };
 const APPROVAL_TONE = { APPROVED: 'green', PENDING: 'yellow', REJECTED: 'red', PAUSED: 'yellow', DISABLED: 'red' };
 
+// Canonical snapshot of the editable state, for "has anything actually changed?".
+//
+// WHATSAPP ONLY — deliberately. An email template's real content lives inside the GrapesJS
+// canvas and is only materialised by export() at save time, so it is NOT in React state:
+// diffing `t` for email would report "no changes" while the author was actively editing and
+// would DISABLE THEIR SAVE. Email instead relies on the worker-side no-change guard, which is
+// authoritative for both channels. Key order is normalised because the form rebuilds these
+// objects on every render.
+function stableJson(v) {
+  const norm = (x) => {
+    if (Array.isArray(x)) return x.map(norm);
+    if (x && typeof x === 'object') {
+      return Object.keys(x).sort().reduce((o, k) => { o[k] = norm(x[k]); return o; }, {});
+    }
+    return x;
+  };
+  return JSON.stringify(norm(v ?? null));
+}
+function waSnapshot(t) {
+  if (!t || t.channel !== 'whatsapp') return null;
+  return stableJson({
+    channel: t.channel, name: t.name, purpose: t.purpose,
+    language: t.language, status: t.status,
+    variables: t.variables || [], wa: t.wa || {},
+  });
+}
+
 function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
@@ -80,6 +107,8 @@ export default function TemplatesPage() {
   // yet (an uploaded-but-unsaved image lints clean in memory but ships headerless from the
   // DB row Meta actually reads). Set on any WA editor change, cleared on load/save.
   const [waDirty, setWaDirty] = useState(false);
+  // Baseline of the last loaded/saved state, for the unchanged-template guards below.
+  const [baseline, setBaseline] = useState(null);
 
   const canEdit = !perms || perms.template_manage;
   const canTest = !perms || perms.campaign_build;
@@ -112,12 +141,12 @@ export default function TemplatesPage() {
     })();
   }, [session]);
 
-  function startNew() { setT(emptyTemplate()); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
+  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
   // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
   useNewParam(canEdit, startNew);
   function startEdit(r) {
     const c = r.content || {};
-    setT({
+    const loaded = {
       id: r.id, channel: r.channel || 'email', name: r.name || '', purpose: r.purpose || 'marketing',
       language: r.language || 'en', status: r.status || 'draft',
       subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
@@ -133,11 +162,13 @@ export default function TemplatesPage() {
       },
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
-    });
+    };
+    setT(loaded);
     // M13 — flag templates authored outside the visual editor (html_body present, no
     // design_json) so save() can warn before the canvas's blank scaffold overwrites it.
     setHtmlOnly((r.channel || 'email') === 'email' && !!(c.html_body || c.html) && !c.design_json);
     setWaDirty(false);
+    setBaseline(waSnapshot(loaded));
     resetTest();
     setEditorKey('t-' + r.id);
     setView('form');
@@ -249,7 +280,13 @@ export default function TemplatesPage() {
       // saved content now carries the editor's real design_json — no longer html-only.
       if (t.channel === 'email') setHtmlOnly(false);
       setWaDirty(false);
-      showToast(t.id ? 'Template saved (new version)' : 'Template created', 'success');
+      // Re-baseline so the Save button greys out again until something actually changes.
+      setBaseline(waSnapshot(t));
+      // The worker no-ops a save that changes nothing (it used to publish a version anyway),
+      // so don't claim "new version" when none was published.
+      showToast(!t.id ? 'Template created'
+        : saved?.noop ? 'No changes to save'
+        : 'Template saved (new version)', 'success');
       if (saved?.id && !t.id) set('id', saved.id);
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
@@ -344,6 +381,15 @@ export default function TemplatesPage() {
 
   if (view === 'form') {
     const isWa = t.channel === 'whatsapp';
+    // Unsaved-change tracking. WhatsApp only — see waSnapshot: an email's content lives in the
+    // GrapesJS canvas, not in `t`, so a diff of `t` would report "clean" mid-edit and disable
+    // the author's Save. Email keeps Save always enabled and leans on the worker's no-op guard.
+    const snap = isWa ? waSnapshot(t) : null;
+    const dirty = !isWa || baseline === null || snap !== baseline;
+    // Submit reads the SAVED row from the DB, never the editor — so submitting while dirty
+    // ships the OLD content to Meta and burns the once-per-24h edit doing it (waDirty already
+    // encoded this for the WA editor; this generalises it to any unsaved field).
+    const submitBlocked = dirty || waDirty;
     return (
       <div className="pg">
         <div className="po-head">
@@ -358,10 +404,20 @@ export default function TemplatesPage() {
             {t.channel === 'whatsapp' && canEdit && t.id && (
               <>
                 <Btn onClick={syncStatus} disabled={submitting}><RefreshCw size={14} /> Sync status</Btn>
-                <Btn onClick={submitToMeta} disabled={submitting}><Upload size={14} /> {submitting ? 'Working…' : 'Submit to Meta'}</Btn>
+                <Btn onClick={submitToMeta} disabled={submitting || submitBlocked}
+                  title={submitBlocked
+                    ? 'Save your changes first — Submit sends the saved template, not what is on screen.'
+                    : 'Send this template to Meta for review'}>
+                  <Upload size={14} /> {submitting ? 'Working…' : 'Submit to Meta'}
+                </Btn>
               </>
             )}
-            {canEdit && <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save template'}</Btn>}
+            {canEdit && (
+              <Btn kind="primary" onClick={save} disabled={saving || !dirty}
+                title={dirty ? 'Save this template' : 'No changes to save'}>
+                <Check size={14} /> {saving ? 'Saving…' : dirty ? 'Save template' : 'Saved'}
+              </Btn>
+            )}
           </div>
         </div>
 

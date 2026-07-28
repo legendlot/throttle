@@ -170,7 +170,7 @@ function categoryFor(template) {
 async function resolveMetaTemplateId(env, { wabaId, name, language }) {
   const res = await fetch(
     `${graphBase(env)}/${encodeURIComponent(wabaId)}/message_templates`
-    + `?name=${encodeURIComponent(name)}&fields=id,name,language,status,category`,
+    + `?name=${encodeURIComponent(name)}&fields=id,name,language,status,category,components`,
     { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return { error: data?.error?.message || `http_${res.status}` };
@@ -178,7 +178,38 @@ async function resolveMetaTemplateId(env, { wabaId, name, language }) {
   // `name=` filter is a prefix/contains match, so it happily returns lot_order_placed_02
   // when asked for lot_order_placed_01.
   const hit = (data?.data || []).find((x) => x.name === name && x.language === language) || null;
-  return hit ? { id: hit.id, status: hit.status, category: hit.category } : null;
+  return hit ? { id: hit.id, status: hit.status, category: hit.category, components: hit.components || [] } : null;
+}
+
+// Would this edit actually CHANGE the template Meta already holds?
+//
+// Meta allows one edit per active template per 24 hours (subcode 2388124), so a submit that
+// changes nothing is not merely wasteful — it BURNS the day's single edit and returns a bare
+// "Invalid parameter" for the real edit that follows.
+//
+// Compares only what the RECIPIENT sees: component type/format, text, and button
+// type/text/url/phone. Deliberately NOT `example` — the header_handle rotates on every upload
+// and examples never alter the delivered message, so including them would make every compare
+// read as "changed" and defeat the guard. Bias is toward returning false (proceed with the
+// edit): a false "changed" costs an edit, a false "unchanged" would BLOCK a real one.
+function sameAsMeta(localComponents, metaComponents) {
+  const norm = (list) => (Array.isArray(list) ? list : []).map((c) => {
+    const o = { type: String(c.type || '').toUpperCase() };
+    if (c.format) o.format = String(c.format).toUpperCase();
+    if (typeof c.text === 'string') o.text = c.text;
+    if (Array.isArray(c.buttons)) {
+      o.buttons = c.buttons.map((b) => ({
+        type: String(b.type || '').toUpperCase(),
+        text: b.text ?? null,
+        url: b.url ?? null,
+        phone_number: b.phone_number ?? null,
+      }));
+    }
+    return o;
+  });
+  const a = norm(localComponents), b = norm(metaComponents);
+  if (a.length !== b.length) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 // Meta will not accept an edit while it is mid-review.
@@ -240,7 +271,13 @@ async function waEditTemplate(env, body) {
     content = { ...content, header_handle: up.handle };
   }
 
-  const graphBody = { components: buildComponents(content) };
+  const localComponents = buildComponents(content);
+  // Spend the once-per-24h edit only on a real change (unless the caller forces it).
+  if (!body.force && sameAsMeta(localComponents, found.components)) {
+    return { ok: true, noop: true, reason: 'no_changes', provider_template_id: found.id,
+             status: found.status, waba_id: wabaId };
+  }
+  const graphBody = { components: localComponents };
   // Only send `category` when it actually changed. Sending it unchanged is harmless, but
   // sending it AT ALL on a template whose WABA disallows category changes is an error — and
   // a category change re-opens the utility→marketing pricing/consent question, so it must be
@@ -667,5 +704,5 @@ async function waMigrateNumber(env, body) {
 module.exports = {
   waSubmitTemplate, waEditTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia,
   waAccountInfo, waTokenScopes, waSubscribeApp, waMigrateNumber,
-  buildComponents, categoryFor, wabaFor, resolveMetaTemplateId, UNEDITABLE_STATUSES,
+  buildComponents, categoryFor, wabaFor, resolveMetaTemplateId, UNEDITABLE_STATUSES, sameAsMeta,
 };
