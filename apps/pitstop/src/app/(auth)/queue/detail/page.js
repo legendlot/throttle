@@ -385,6 +385,21 @@ function AdvanceButton({ label, ticket, nextStage, session, onAdvanced }) {
   );
 }
 
+// Ticket close outcomes. 'resolved' leads because it is the common case; everything
+// below it is an operational close. Must stay in lockstep with ALLOWED_CLOSED_REASONS
+// in csops-worker/src/index.js.
+const TICKET_CLOSE_OUTCOMES = [
+  ['resolved',     'Resolved — issue sorted'],
+  ['no_response',  'No response from customer'],
+  ['no_evidence',  'No evidence provided'],
+  ['no_payment',   'Payment not completed'],
+  ['duplicate',    'Duplicate ticket'],
+  ['wrong_system', 'Wrong team / system'],
+  ['goodwill',     'Closed as goodwill'],
+  ['no_action',    'No action needed'],
+  ['other',        'Other (add a note)'],
+];
+
 function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced }) {
   const [form, setForm] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -420,11 +435,24 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
       case 'handed_to_production':   return [
         { name: 'repair_run_id', label: 'Production run ID (optional)', type: 'number' },
       ];
+      // Resolve vs Close (2026-07-28, Pruthvi) — the same distinction conversations
+      // now carry, so a ticket and a conversation end the same way. Required, so
+      // "Closed" stops silently meaning "resolved" for every ticket.
+      case 'closed':                 return [
+        { name: 'closed_reason', label: 'Outcome', required: true, type: 'select',
+          options: TICKET_CLOSE_OUTCOMES },
+        { name: 'closed_note', label: 'Note (optional)', multiline: true },
+      ];
       default: return [];
     }
   }, [targetStage]);
 
   async function submit() {
+    // Required fields are enforced here, not just server-side: advanceStage falls back
+    // to closed_reason='resolved' when none is sent, which would quietly undo the whole
+    // point of asking for the outcome.
+    const missing = fields.filter(f => f.required && !String(form[f.name] ?? '').trim());
+    if (missing.length) { setError(`${missing[0].label} is required`); return; }
     setSubmitting(true);
     setError(null);
     try {
@@ -480,7 +508,16 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
               <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>
                 {f.label}{f.required && <span style={{ color: 'var(--state-error-fg)' }}> *</span>}
               </span>
-              {f.multiline ? (
+              {f.type === 'select' ? (
+                <select
+                  value={form[f.name] || ''}
+                  onChange={e => setForm(s => ({ ...s, [f.name]: e.target.value }))}
+                  style={inputStyle}
+                >
+                  <option value="">Select…</option>
+                  {f.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              ) : f.multiline ? (
                 <textarea
                   value={form[f.name] || ''}
                   onChange={e => setForm(s => ({ ...s, [f.name]: e.target.value }))}

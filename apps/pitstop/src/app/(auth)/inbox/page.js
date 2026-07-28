@@ -15,7 +15,7 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
-  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare,
+  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -67,6 +67,22 @@ const PRIORITIES = {
 };
 const PRIORITY_OPTS = ['urgent', 'high', 'normal', 'low'];
 
+// Operational close reasons (2026-07-28, Pruthvi). 'resolved' is deliberately NOT
+// here — that is the separate Resolve action, not something you pick from a list.
+// Must stay in lockstep with CONVO_CLOSE_REASONS in csops-worker/src/index.js.
+const CLOSE_REASONS = [
+  ['no_response',  'No response from customer'],
+  ['no_evidence',  'No evidence provided'],
+  ['no_payment',   'Payment not completed'],
+  ['duplicate',    'Duplicate conversation'],
+  ['wrong_system', 'Wrong team / system'],
+  ['goodwill',     'Closed as goodwill'],
+  ['no_action',    'No action needed'],
+  ['other',        'Other (add a note)'],
+];
+const CLOSE_REASON_LABEL = Object.fromEntries(CLOSE_REASONS);
+CLOSE_REASON_LABEL.resolved = 'Resolved';
+
 const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const relTime = (iso) => {
   if (!iso) return '';
@@ -100,6 +116,9 @@ export default function InboxPage() {
   const [sort, setSort] = useState('recent');               // recent | oldest | priority (S164)
   const [searchInput, setSearchInput] = useState('');       // phone/name search box (S178, Pruthvi)
   const [search, setSearch] = useState('');                 // debounced → server query
+  const [closeOpen, setCloseOpen] = useState(false);         // Close-with-reason popover (2026-07-28)
+  const [closeReason, setCloseReason] = useState('');
+  const [closeNote, setCloseNote] = useState('');
   const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
   const [listLimit, setListLimit] = useState(PAGE);   // conversation-list window; "Load more" grows it (S202)
@@ -567,12 +586,28 @@ export default function InboxPage() {
     finally { setBulkBusy(false); }
   }
 
-  // Mark the conversation Done (closed) / Reopen (open) — the work-queue toggle (S163).
-  async function setThreadStateAction(state) {
+  // Work-queue toggle (S163), split into Resolve vs Close 2026-07-28 (Pruthvi).
+  // Resolve = the issue was actually addressed. Close = shut for an operational
+  // reason, which must be picked. Reopen clears whichever it was.
+  async function setThreadStateAction(state, closed_reason = null, closed_note = null) {
     if (!convo?.thread) return;
     setErr(null);
     try {
-      await csopsPost('setThreadState', { thread_id: convo.thread.id, state }, session);
+      await csopsPost('setThreadState',
+        { thread_id: convo.thread.id, state, closed_reason, closed_note }, session);
+      setCloseOpen(false); setCloseReason(''); setCloseNote('');
+      await loadConvo(selectedId);
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+  }
+
+  // "Not a collab" — sticky dismissal so a support thread that keeps saying
+  // "charges" is only ever flagged once.
+  async function dismissCollab() {
+    if (!convo?.thread) return;
+    setErr(null);
+    try {
+      await csopsPost('dismissCollabFlag', { thread_id: convo.thread.id }, session);
       await loadConvo(selectedId);
       loadThreads();
     } catch (e) { setErr(e.message); }
@@ -914,13 +949,65 @@ export default function InboxPage() {
                   )}
                   {canManage && (
                     thread.thread_state === 'closed' ? (
-                      <button onClick={() => setThreadStateAction('open')} style={{ ...btnGhost, padding: '6px 10px' }} title="Reopen this conversation">
-                        <RotateCcw size={12} /> Reopen
-                      </button>
+                      <>
+                        {thread.closed_reason && (
+                          <span title={thread.closed_note || ''}
+                            style={{ fontSize: 10.5, fontWeight: 700, padding: '5px 8px', borderRadius: 'var(--radius-sm)',
+                              border: '1px solid', whiteSpace: 'nowrap',
+                              borderColor: thread.closed_reason === 'resolved' ? 'var(--ok-bd)' : 'var(--border)',
+                              background:  thread.closed_reason === 'resolved' ? 'var(--ok-bg)' : 'var(--surface-2)',
+                              color:       thread.closed_reason === 'resolved' ? 'var(--ok-fg)' : 'var(--t3)' }}>
+                            {CLOSE_REASON_LABEL[thread.closed_reason] || thread.closed_reason}
+                          </span>
+                        )}
+                        <button onClick={() => setThreadStateAction('open')} style={{ ...btnGhost, padding: '6px 10px' }} title="Reopen this conversation">
+                          <RotateCcw size={12} /> Reopen
+                        </button>
+                      </>
                     ) : (
-                      <button onClick={() => setThreadStateAction('closed')} style={{ ...btnGhost, padding: '6px 10px' }} title="Mark this conversation done">
-                        <CheckCircle2 size={12} /> Done
-                      </button>
+                      <>
+                        <button onClick={() => setThreadStateAction('closed', 'resolved')}
+                          style={{ ...btnGhost, padding: '6px 10px', color: 'var(--ok-fg)', borderColor: 'var(--ok-bd)' }}
+                          title="The customer's issue was sorted">
+                          <CheckCircle2 size={12} /> Resolve
+                        </button>
+                        <div style={{ position: 'relative' }}>
+                          <button onClick={() => setCloseOpen(v => !v)} style={{ ...btnGhost, padding: '6px 10px' }}
+                            title="Close without resolving — pick a reason">
+                            <XCircle size={12} /> Close
+                          </button>
+                          {closeOpen && (
+                            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 40,
+                              width: 260, padding: 10, borderRadius: 'var(--radius)', background: 'var(--surface)',
+                              border: '1px solid var(--border)', boxShadow: '0 10px 30px rgba(0,0,0,0.28)' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t3)', marginBottom: 7 }}>
+                                Why is this being closed?
+                              </div>
+                              <select value={closeReason} onChange={e => setCloseReason(e.target.value)}
+                                style={{ width: '100%', fontSize: 12, padding: '7px 8px', marginBottom: 7,
+                                  borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+                                  background: 'var(--surface-2)', color: 'var(--t1)' }}>
+                                <option value="">Select a reason…</option>
+                                {CLOSE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                              </select>
+                              <input value={closeNote} onChange={e => setCloseNote(e.target.value)}
+                                placeholder="Note (optional)" maxLength={300}
+                                style={{ width: '100%', fontSize: 12, padding: '7px 8px', marginBottom: 8,
+                                  borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+                                  background: 'var(--surface-2)', color: 'var(--t1)' }} />
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                <button onClick={() => { setCloseOpen(false); setCloseReason(''); setCloseNote(''); }}
+                                  style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }}>Cancel</button>
+                                <button disabled={!closeReason}
+                                  onClick={() => setThreadStateAction('closed', closeReason, closeNote)}
+                                  style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5,
+                                    opacity: closeReason ? 1 : 0.45, cursor: closeReason ? 'pointer' : 'default',
+                                    color: 'var(--t1)' }}>Close</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </>
                     )
                   )}
                   {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
@@ -942,6 +1029,32 @@ export default function InboxPage() {
                   )}
                 </div>
               </div>
+
+              {/* Collab pre-flag (2026-07-28, Pruthvi). A suggestion, never an automatic
+                  move — the agent decides. Hidden once transferred or dismissed. */}
+              {thread.collab_flagged && !thread.collab_dismissed && !isIgnitionThread && canManage && (
+                <div style={{ padding: '9px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
+                  alignItems: 'center', gap: 10, flexWrap: 'wrap', background: 'var(--warn-bg)' }}>
+                  <Sparkles size={13} style={{ color: 'var(--warn-fg)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12.5, color: 'var(--warn-fg)', fontWeight: 600 }}>
+                    Looks like a collab enquiry
+                  </span>
+                  <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>
+                    matched “{thread.collab_keyword}”
+                  </span>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                    <button onClick={() => transferToIgnition(`Collab pre-flag: matched "${thread.collab_keyword}"`)}
+                      style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }}
+                      title="Hand this conversation to the Influencer team">
+                      <ExternalLink size={11} /> Transfer to Ignition
+                    </button>
+                    <button onClick={dismissCollab} style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }}
+                      title="Not a collab — stop flagging this conversation">
+                      Not a collab
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Tags */}
               <div style={{ padding: '7px 16px', borderBottom: '1px solid var(--border)', display: 'flex',

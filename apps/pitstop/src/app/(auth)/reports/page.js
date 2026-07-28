@@ -142,9 +142,10 @@ export default function ReportsPage() {
     lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);
     lines.push(`No stored history,${t.no_history ?? ''}`);
     lines.push('');
-    lines.push('Agent,Queries,Open,Closed,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
+    lines.push('Agent,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Resolution rate %,Resolve rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
     for (const r of agentData.by_agent) {
-      lines.push([r.name, r.queries, r.open, r.closed, r.resolution_rate, r.answered, r.unanswered,
+      lines.push([r.name, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
+        r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
         r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
         r.waiting_agent, r.waiting_customer].map(esc).join(','));
     }
@@ -334,6 +335,22 @@ function AgentsPanel({ data }) {
         {t.no_history > 0 && <span>+ <strong style={{ color: 'var(--t2)' }}>{t.no_history.toLocaleString()}</strong> with no stored history</span>}
       </div>
 
+      {/* Resolved vs Closed only exists from 2026-07-28. Everything closed before that
+          has no reason recorded, so it is shown as its own bucket rather than being
+          guessed into Resolved — otherwise the resolve rate would read as a cliff. */}
+      {t.closed > 0 && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 'var(--gap)',
+          padding: '8px 12px', fontSize: 11.5, color: 'var(--t3)',
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+          <span><strong style={{ color: 'var(--t2)' }}>{t.closed.toLocaleString()}</strong> closed</span>
+          <span>= <strong style={{ color: 'var(--ok-fg)' }}>{(t.resolved ?? 0).toLocaleString()}</strong> resolved</span>
+          <span>+ <strong style={{ color: 'var(--t2)' }}>{(t.closed_ops ?? 0).toLocaleString()}</strong> closed for an operational reason</span>
+          {(t.closed_unspecified ?? 0) > 0 && (
+            <span>+ <strong style={{ color: 'var(--t2)' }}>{t.closed_unspecified.toLocaleString()}</strong> closed before Resolve/Close existed (no reason recorded)</span>
+          )}
+        </div>
+      )}
+
       <Panel title="Waiting now">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--gap)', padding: 12 }}>
           <KpiCard label="Waiting on us"       value={t.waiting_agent.toLocaleString()}    sub="customer replied last" tone={t.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={22} />
@@ -350,6 +367,8 @@ function AgentsPanel({ data }) {
                 <Th>Agent</Th>
                 <Th align="right">Queries</Th>
                 <Th align="right">Open</Th>
+                <Th align="right">Resolved</Th>
+                <Th align="right">Closed (ops)</Th>
                 <Th align="right">Closed</Th>
                 <Th align="right">Resolution</Th>
                 <Th align="right">Answered</Th>
@@ -366,6 +385,8 @@ function AgentsPanel({ data }) {
                   <Td color="var(--t1)">{r.name}</Td>
                   <Td mono align="right" color="var(--t1)">{r.queries.toLocaleString()}</Td>
                   <Td mono align="right">{r.open.toLocaleString()}</Td>
+                  <Td mono align="right" color={r.resolved > 0 ? 'var(--ok-fg)' : 'var(--t3)'}>{(r.resolved ?? 0).toLocaleString()}</Td>
+                  <Td mono align="right">{(r.closed_ops ?? 0).toLocaleString()}</Td>
                   <Td mono align="right">{r.closed.toLocaleString()}</Td>
                   <Td mono align="right">{r.resolution_rate != null ? `${r.resolution_rate}%` : '—'}</Td>
                   <Td mono align="right">{r.answered.toLocaleString()}</Td>

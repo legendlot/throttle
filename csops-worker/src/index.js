@@ -733,6 +733,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setShift':             return setShift(body, auth, env);
     case 'setAgentShift':        return setAgentShift(body, auth, env);
     case 'setThreadState':       return setThreadState(body, auth, env);
+    case 'dismissCollabFlag':    return dismissCollabFlag(body, auth, env);
     case 'markThreadRead':       return markThreadRead(body, auth, env);
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
     case 'createTag':            return createTag(body, auth, env);
@@ -2000,6 +2001,21 @@ async function setThreadState(body, auth, env) {
   });
   if (!r.ok) return err('failed to set thread state', 500);
   return ok({ thread_state: state, closed_reason: patch.closed_reason ?? null });
+}
+
+// Dismiss the collab pre-flag — "not a collab, stop showing this". Sticky: the
+// dismissal survives later inbound messages, so a support conversation that keeps
+// saying "charges" is only ever flagged once.
+async function dismissCollabFlag(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id } = body || {};
+  if (!thread_id) return err('thread_id required');
+  const r = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ collab_flagged: false, collab_dismissed: true }),
+  });
+  if (!r.ok) return err('failed to dismiss collab flag', 500);
+  return ok({ collab_flagged: false, collab_dismissed: true });
 }
 
 // Mark a conversation read (S222, Pruthvi) — stamps last_read_at=now() so the generated
@@ -4756,6 +4772,28 @@ async function resolveMetaHandle(extUserId, channel, env) {
   } catch { return null; }
 }
 
+// Collab pre-flag keywords (Pruthvi's list, #bugs 2026-07-27). Ordered most-specific
+// first so the stored label names the strongest match ('paid collab' beats 'collab').
+// Matched on WORD BOUNDARIES, never as bare substrings — 'fee' would otherwise hit
+// "coffee" and every "free". Even so, 'fee'/'charges' will catch genuine support
+// questions about delivery charges; that is tolerable precisely because this only
+// RAISES A FLAG and never moves the conversation.
+// The collab family is a PREFIX match so collab / collabs / collaboration(s) /
+// collaborate / collaborating all land; the others are exact words + optional plural.
+const COLLAB_KEYWORDS = [
+  ['paid collab',   /(^|[^a-z0-9])paid\s+collab[a-z]*($|[^a-z0-9])/i],
+  ['collaboration', /(^|[^a-z0-9])collaborat[a-z]*($|[^a-z0-9])/i],
+  ['collab',        /(^|[^a-z0-9])collabs?($|[^a-z0-9])/i],
+  ['charges',       /(^|[^a-z0-9])charges?($|[^a-z0-9])/i],
+  ['fee',           /(^|[^a-z0-9])fees?($|[^a-z0-9])/i],
+];
+function collabKeywordHit(text) {
+  if (!text) return null;
+  const t = String(text).toLowerCase();
+  for (const [label, re] of COLLAB_KEYWORDS) if (re.test(t)) return label;
+  return null;
+}
+
 async function metaHandleMessage(channel, ev, env) {
   const msg = ev.message || {};
   const mid = msg.mid != null ? String(msg.mid) : null;
@@ -4815,6 +4853,20 @@ async function metaHandleMessage(channel, ev, env) {
       patch.closed_at = null;
       patch.closed_by_user_id = null;
       patch.snoozed_until = null;
+      patch.closed_reason = null;
+      patch.closed_note = null;
+    }
+    // Collab pre-flag (Pruthvi, agreed shape 2026-07-27). Flag only — the
+    // conversation is NOT moved, because the keyword is the CUSTOMER's wording and a
+    // complaint that merely mentions a collab must not silently land with the
+    // Influencer team. The agent sees the flag and clicks the existing transfer.
+    // Not re-flagged once an agent has dismissed it.
+    const hit = collabKeywordHit(msg.text);
+    if (hit && !thread.collab_flagged && !thread.collab_dismissed && !thread.ignition_connect
+        && (channel === 'instagram' || channel === 'messenger')) {
+      patch.collab_flagged    = true;
+      patch.collab_keyword    = hit;
+      patch.collab_flagged_at = ts;
     }
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
