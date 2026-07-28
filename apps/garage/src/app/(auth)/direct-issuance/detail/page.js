@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch, garageFetch } from '@throttle/db';
 import { Spinner, EmptyState, useToast, Modal, ConfirmModal, printWindow } from '@throttle/ui';
+import QRCode from 'qrcode';
 import { PURPOSES, STATUSES, StatusBadge, fmtTs, purposeLabel } from '../page.js';
 
 const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
@@ -175,9 +176,16 @@ function DetailInner() {
     finally { setBusy(false); }
   }
 
-  function printSticker() {
+  // The sticker MUST carry a scannable code: the DSP_ISSUE station is what actually
+  // moves the stock (RULE-DSP-001), and it resolves the issue on the raw DI-NNN string.
+  // Printing the number as text only left the operator with nothing to scan.
+  async function printSticker() {
     if (!header) return;
-    printWindow(buildStickerHtml({ ...header, items }), `${header.issue_no} sticker`);
+    let qr = null;
+    try {
+      qr = await QRCode.toDataURL(String(header.issue_no), { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+    } catch (_) { /* fall back to the text-only sticker rather than blocking the print */ }
+    printWindow(buildStickerHtml({ ...header, items, qr }), `${header.issue_no} sticker`);
   }
 
   function addPartLine() {
@@ -600,6 +608,8 @@ function buildStickerHtml(di) {
   @page { size: 100mm 150mm; margin: 5mm; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; color: #000; margin: 0; padding: 0; font-size: 11pt; }
   .header { border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
+  .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .qr { width: 26mm; height: 26mm; flex-shrink: 0; }
   .di-no { font-size: 22pt; font-weight: 800; letter-spacing: 0.05em; }
   .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.1em; color: #555; margin-bottom: 2px; }
   .value { font-size: 11pt; font-weight: 600; margin-bottom: 6px; }
@@ -611,8 +621,13 @@ function buildStickerHtml(di) {
 </style>
 </head><body>
   <div class="header">
-    <div class="di-no">${di.issue_no}</div>
-    <div class="label" style="margin-top:4px">${purpose}</div>
+    <div class="head-row">
+      <div>
+        <div class="di-no">${di.issue_no}</div>
+        <div class="label" style="margin-top:4px">${purpose}</div>
+      </div>
+      ${di.qr ? `<img class="qr" src="${di.qr}" alt="${di.issue_no}" />` : ''}
+    </div>
   </div>
   <div class="label">Recipient</div>
   <div class="value">${dest}</div>
