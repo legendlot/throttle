@@ -2706,7 +2706,7 @@ async function closeTicket(body, auth, env) {
   if (!terminalReady.includes(t.stage)) {
     // Mid-flight close requires admin perm + reason
     const g = require('cs_ticket_admin', auth); if (g) return g;
-    if (!reason) return err('reason required for mid-flight close (duplicate / wrong_system / goodwill)');
+    if (!reason) return err(`reason required for mid-flight close (one of: ${ALLOWED_CLOSED_REASONS.join(', ')})`);
   } else {
     const g = require('cs_ticket_manage', auth); if (g) return g;
   }
