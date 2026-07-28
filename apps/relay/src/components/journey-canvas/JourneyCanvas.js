@@ -42,6 +42,15 @@ function TriggerNode({ data, selected }) {
           : t.type === 'segment_entry' ? `enters: ${t.segment_name || t.segment_id || '?'}`
           : (t.type || 'not set')}
       </div>
+      {/* An enrolment filter narrows the audience to a slice — often a single test product
+          during a staged rollout. It has to be visible ON the canvas: someone glancing at a
+          live money-moving journey must be able to see it is still pinned, without opening
+          the trigger form (S241). */}
+      {t.type === 'event' && t.filter && Object.keys(t.filter).length > 0 && (
+        <div className="mono" style={{ marginTop: 3, fontSize: 10, color: '#B45309' }}>
+          {Object.entries(t.filter).map(([k, v]) => `${k}=${v}`).join(' & ')}
+        </div>
+      )}
       <Handle type="source" position={Position.Right} id="entry" />
     </div>
   );

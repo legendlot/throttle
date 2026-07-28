@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { Plus, Minus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
+import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
@@ -60,16 +60,39 @@ const REENROL = [
 // fallback that used to live here is now FALLBACK_EVENT_DEFS in that module — one list,
 // one place.
 
+// Trigger-property suggestions for the enrolment filter — the properties `order_placed` and
+// the cart events actually carry. Mirrors NodeDrawer's EVENT_PROP_SUGGEST, plus the two that
+// make a staged rollout possible: `variant_ids` (pin to a single test product) and
+// `order_number` (pin to one specific order).
+const TRIGGER_PROP_SUGGEST = ['is_cod', 'financial_status', 'total', 'variant_ids',
+  'order_number', 'primary_category', 'primary_title', 'line_item_count', 'currency'];
+
 function emptyJourney() {
   return { id: null, name: '', status: 'draft', active_version: null,
     triggerType: 'event', triggerEvent: 'checkout_started', triggerSegmentId: '',
+    triggerFilter: [],
     reenrolment: 'once_while_active', reenrolCooldown: 24,
     max_duration: '30 days', exit_rules: [], versions: [] };
 }
 
+// Trigger-property filter rows ⇄ the stored `trigger.filter` object. The worker
+// (ingest.js:106) ANDs simple equality over the EVENT's properties and string-compares, so
+// the UI deliberately offers equality only — anything richer belongs on a condition node,
+// where the operators already exist.
+const filterRowsToObj = (rows) => (rows || [])
+  .filter((r) => r && String(r.prop || '').trim())
+  .reduce((o, r) => { o[String(r.prop).trim()] = String(r.value ?? '').trim(); return o; }, {});
+const objToFilterRows = (f) => (f && typeof f === 'object' && !Array.isArray(f))
+  ? Object.entries(f).map(([prop, value]) => ({ prop, value: String(value ?? '') }))
+  : [];
+
 function triggerSummary(t, segments) {
   if (!t || !t.type) return '—';
-  if (t.type === 'event') return `event: ${t.name || '?'}`;
+  if (t.type === 'event') {
+    const f = t.filter && typeof t.filter === 'object' ? Object.entries(t.filter) : [];
+    const suffix = f.length ? ` where ${f.map(([k, v]) => `${k}=${v}`).join(' & ')}` : '';
+    return `event: ${t.name || '?'}${suffix}`;
+  }
   if (t.type === 'segment_entry') {
     const s = (segments || []).find((x) => x.id === t.segment_id);
     return `enters: ${s ? s.name : (t.segment_id || '?')}`;
@@ -79,10 +102,18 @@ function triggerSummary(t, segments) {
 
 // Build the stored trigger jsonb from form state — the shape ingest.js (event) and
 // segment-entry.js (segment_entry) each match on.
+//
+// ⚠️ This function is the SOLE writer of `journeys.trigger` — every save replaces the whole
+// object. Before S241 it emitted only {type,name}, so a `filter` set out-of-band (SQL) was
+// silently dropped the next time anyone opened the journey and pressed Save — turning a
+// deliberately narrowed rollout into a full-audience one with no warning and no diff. Any
+// future trigger key MUST be round-tripped here, not just read.
 function buildTrigger(j) {
-  return j.triggerType === 'segment_entry'
-    ? { type: 'segment_entry', segment_id: j.triggerSegmentId }
-    : { type: 'event', name: (j.triggerEvent || '').trim() };
+  if (j.triggerType === 'segment_entry') return { type: 'segment_entry', segment_id: j.triggerSegmentId };
+  const t = { type: 'event', name: (j.triggerEvent || '').trim() };
+  const filter = filterRowsToObj(j.triggerFilter);
+  if (Object.keys(filter).length) t.filter = filter;   // omit entirely when empty — {} would be a no-op key
+  return t;
 }
 
 export default function JourneysPage() {
@@ -225,6 +256,7 @@ export default function JourneysPage() {
       triggerType: t.type === 'segment_entry' ? 'segment_entry' : 'event',
       triggerEvent: t.name || 'checkout_started',
       triggerSegmentId: t.segment_id || '',
+      triggerFilter: objToFilterRows(t.filter),   // round-trip: buildTrigger replaces the whole object
       reenrolment: r.reenrolment || 'once_while_active',
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
       max_duration: r.max_duration || '30 days',
@@ -264,7 +296,7 @@ export default function JourneysPage() {
     }
     setNodesRaw((ns) => ns.map((n) => n.id === TRIGGER_ID ? { ...n, data: { trigger: t } } : n));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [j.triggerType, j.triggerEvent, j.triggerSegmentId, segments]);
+  }, [j.triggerType, j.triggerEvent, j.triggerSegmentId, j.triggerFilter, segments]);
 
   const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
 
@@ -415,6 +447,53 @@ export default function JourneysPage() {
                 />
                 <div className="kpi-sub" style={{ marginTop: 4, whiteSpace: 'normal' }}>
                   {eventDefs.length} registered event{eventDefs.length === 1 ? '' : 's'} — click to browse, type to filter
+                </div>
+
+                {/* Trigger-property filter (S241). Narrows WHO enrols, at the trigger — the
+                    only place that stops an enrolment before it happens. Built for staged
+                    rollouts: point a money-moving journey at one test product first, prove it
+                    with a real order, then remove the row. Equality only, ANDed, string-compared
+                    — matching ingest.js exactly. */}
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+                  <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Only enrol when…
+                    <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>
+                      optional — blank means every {j.triggerEvent || 'event'} enrols
+                    </span>
+                  </div>
+                  {(j.triggerFilter || []).map((row, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                      <input className="f-inp" style={{ flex: '1 1 160px' }} list="trigger-prop-suggest"
+                        value={row.prop} placeholder="event property (e.g. is_cod)"
+                        disabled={busy || !editable}
+                        onChange={(e) => set('triggerFilter', (j.triggerFilter || []).map((r, k) =>
+                          k === i ? { ...r, prop: e.target.value } : r))} />
+                      <span className="dim" style={{ fontSize: 12 }}>=</span>
+                      <input className="f-inp" style={{ flex: '1 1 160px' }}
+                        value={row.value} placeholder="value (e.g. true)"
+                        disabled={busy || !editable}
+                        onChange={(e) => set('triggerFilter', (j.triggerFilter || []).map((r, k) =>
+                          k === i ? { ...r, value: e.target.value } : r))} />
+                      <Btn kind="ghost" disabled={busy || !editable}
+                        onClick={() => set('triggerFilter', (j.triggerFilter || []).filter((_, k) => k !== i))}>
+                        <Trash2 size={14} />
+                      </Btn>
+                    </div>
+                  ))}
+                  <datalist id="trigger-prop-suggest">
+                    {TRIGGER_PROP_SUGGEST.map((p) => <option key={p} value={p} />)}
+                  </datalist>
+                  <Btn kind="ghost" disabled={busy || !editable} style={{ marginTop: 6 }}
+                    onClick={() => set('triggerFilter', [...(j.triggerFilter || []), { prop: '', value: '' }])}>
+                    <Plus size={14} /> Add condition
+                  </Btn>
+                  {(j.triggerFilter || []).some((r) => String(r.prop || '').trim()) && (
+                    <div className="tw-note" style={{ marginTop: 8 }}>
+                      Enrols only when <b>every</b> condition matches the event, compared as text
+                      (<code>true</code>, not <code>True</code>). Everything else is skipped
+                      silently — it never enters the journey, so it will not appear as a skip.
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
