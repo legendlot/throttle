@@ -49,6 +49,47 @@ function stableJson(v) {
 }
 const enc2 = (p) => String(p).split('/').map(encodeURIComponent).join('/');
 
+// Snapshot a template row into comms.template_versions (S241). Templates were UPDATEd in
+// place with only a `version` counter to show for it, while comms.messages stamped
+// `template_version` on every send — so that number pointed at content nobody had kept, and
+// "what did this customer actually receive?" was unanswerable. This is the journey_versions
+// pattern applied to templates: one immutable row per version.
+//
+// Identity fields ride along, not just `content`: a template can be renamed or re-pointed to
+// a different WABA between versions, and silent `content.waba_id` drift is precisely the
+// regression this is meant to make visible (S241 — a stale editor tab re-pinned a template
+// to the BiteSpeed WABA and every send failed with a misleading Meta permissions error).
+//
+// NON-FATAL by design: a failed archive write must not fail the author's save. It returns a
+// boolean that rides back on the response so a silent archiving failure is visible rather
+// than assumed-fine — the exact trap that made the missing history hard to notice at all.
+async function archiveTemplateVersion(env, row, userId) {
+  if (!row?.id) return false;
+  try {
+    const r = await A.sbComms('/rest/v1/template_versions', env, {
+      method: 'POST',
+      // ignore-duplicates makes a re-archive of the same (template_id, version) a no-op
+      // rather than a 409 — the UNIQUE is the idempotency guard, not an error path.
+      prefer: 'resolution=ignore-duplicates,return=minimal',
+      body: JSON.stringify({
+        template_id: row.id,
+        version: row.version ?? 1,
+        channel: row.channel,
+        name: row.name,
+        purpose: row.purpose,
+        language: row.language,
+        status: row.status,
+        approval_status: row.approval_status,
+        provider_template_id: row.provider_template_id,
+        content: row.content || {},
+        variables: row.variables || [],
+        created_by: userId || null,
+      }),
+    });
+    return !!r.ok;
+  } catch { return false; }
+}
+
 // ── GET actions ──────────────────────────────────────────────────────────────
 async function handleGet(url, auth, env) {
   const action = url.searchParams.get('action');
@@ -152,6 +193,18 @@ async function handleGet(url, auth, env) {
 
     case 'getTemplates': {             // M5
       const r = await A.sbComms('/rest/v1/templates?select=*&order=updated_at.desc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
+    case 'getTemplateVersions': {       // S241 — the per-version archive behind a template
+      // `comms.messages.template_version` is stamped on every send; this is what resolves
+      // it. Content is returned so "what exactly did this customer receive?" is answerable
+      // and a bad edit can be read back verbatim. Newest first.
+      const id = url.searchParams.get('template_id');
+      if (!id) return err('template_id_required', 400);
+      const r = await A.sbComms(
+        `/rest/v1/template_versions?template_id=eq.${A.enc(id)}`
+        + '&select=*&order=version.desc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
@@ -440,7 +493,9 @@ async function handlePost(body, auth, env) {
             variables: variables || [], status: status || 'active', version: v + 1, updated_at: nowIso(),
           }),
         });
-        return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
+        if (!r.ok) return err('db_error', 500);
+        const archived = await archiveTemplateVersion(env, r.data?.[0], auth.userId);
+        return ok({ ...r.data?.[0], archived });
       }
       const r = await A.sbComms('/rest/v1/templates', env, {
         method: 'POST', body: JSON.stringify({
@@ -449,7 +504,9 @@ async function handlePost(body, auth, env) {
           status: status || 'active', created_by: auth.userId,
         }),
       });
-      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      const archived = await archiveTemplateVersion(env, r.data?.[0], auth.userId);
+      return ok({ ...r.data?.[0], archived });
     }
 
     case 'createEmailAssetUploadUrl': {   // email authoring v1 — signed upload into the public relay-email-assets bucket

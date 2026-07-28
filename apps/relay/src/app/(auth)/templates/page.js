@@ -10,7 +10,7 @@ import { fmtDate } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
 import WaPreview from '@/components/wa-editor/WaPreview.js';
-import { validateWaTemplate } from '@/components/wa-editor/waTemplate.js';
+import { validateWaTemplate, WA_WABAS } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
@@ -72,6 +72,16 @@ export default function TemplatesPage() {
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
   const [chanFilter, setChanFilter] = useState('all');
+  // Combo filter (S241). The library outgrew a channel-only chip row the moment the
+  // transactional set landed — 36 templates across 5 WhatsApp Business Accounts, where the
+  // load-bearing question is usually "which account is this pinned to?" (a template on the
+  // wrong WABA fails every send with a misleading Meta permissions error). Every facet is
+  // ANDed and derived from data already on the row — no extra fetch.
+  const [q, setQ] = useState('');
+  const [purposeFilter, setPurposeFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [approvalFilter, setApprovalFilter] = useState('all');
+  const [wabaFilter, setWabaFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
   const [t, setT] = useState(emptyTemplate());
@@ -100,6 +110,11 @@ export default function TemplatesPage() {
   };
   const [testVals, setTestVals] = useState('{}');
   const [testing, setTesting] = useState(false);
+  // Version history (S241). Loaded on demand — the archive only matters when someone is
+  // actually asking "what changed?", and it is one row per save, not per page view.
+  const [versions, setVersions] = useState(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [needsAllow, setNeedsAllow] = useState(false);   // recipient not on the test allowlist → offer add-and-resend
   const [submitting, setSubmitting] = useState(false);
@@ -141,7 +156,16 @@ export default function TemplatesPage() {
     })();
   }, [session]);
 
-  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
+  // Accounts present in the library, labelled from the live sender list (falls back to the
+  // raw id so a template pinned to a WABA with no sender is still selectable — that state is
+  // itself a bug worth being able to filter for).
+  const wabaLabel = (id) => (wabas.find((w) => w.id === id)?.hint)
+    || (WA_WABAS.find((w) => w.id === id)?.label) || id;
+  const wabaOptions = [...new Set(rows.map((r) => r.content?.waba_id).filter(Boolean))]
+    .map((id) => ({ id, label: wabaLabel(id) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  function startNew() { const n = emptyTemplate(); setT(n); setBaseline(waSnapshot(n)); setHtmlOnly(false); setWaDirty(false); resetTest(); resetVersions(); setEditorKey('new-' + Date.now()); setView('form'); }
   // ⌘K "New template" — cross-screen ?new=1 + same-screen relay:new event.
   useNewParam(canEdit, startNew);
   function startEdit(r) {
@@ -170,10 +194,24 @@ export default function TemplatesPage() {
     setWaDirty(false);
     setBaseline(waSnapshot(loaded));
     resetTest();
+    resetVersions();
     setEditorKey('t-' + r.id);
     setView('form');
   }
   function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); setNeedsAllow(false); }
+  function resetVersions() { setVersions(null); setVersionsOpen(false); setVersionsLoading(false); }
+  async function loadVersions(templateId) {
+    setVersionsOpen((o) => !o);
+    if (versions || !templateId) return;
+    setVersionsLoading(true);
+    try {
+      const v = await garageFetch('getTemplateVersions', { template_id: templateId }, session);
+      setVersions(Array.isArray(v) ? v : []);
+    } catch (e) {
+      showToast(e.message || 'Could not load version history', 'error');
+      setVersions([]);
+    } finally { setVersionsLoading(false); }
+  }
   function set(k, v) { setT((p) => ({ ...p, [k]: v })); }
 
   function addVar() { setT((p) => ({ ...p, variables: [...p.variables, { token: '', source: 'profile', field: '', fallback: '' }] })); }
@@ -531,6 +569,43 @@ export default function TemplatesPage() {
             )}
         </Panel>
 
+        {/* Version history (S241). Saves used to bump a counter and overwrite the row, while
+            every sent message recorded the version it used — so "what exactly did this
+            customer receive?" had no answer and a bad edit could not be read back. One
+            immutable row per save now, newest first. Versions predating 2026-07-28 were
+            overwritten in place and are genuinely gone; they are not reconstructed here. */}
+        {t.id && (
+          <Panel title="Version history"
+            action={<Btn onClick={() => loadVersions(t.id)}>{versionsOpen ? 'Hide' : 'Show'}</Btn>}>
+            {!versionsOpen ? null : versionsLoading ? (
+              <div style={{ padding: 18, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+            ) : !versions || versions.length === 0 ? (
+              <div style={{ padding: 18, color: 'var(--text-4)', fontSize: 12.5 }}>
+                No archived versions yet. The next save records one.
+              </div>
+            ) : (
+              <table className="dt">
+                <thead><tr><th>Ver</th><th>Status</th><th>Meta</th><th>Account</th><th>Saved</th><th>By</th></tr></thead>
+                <tbody>
+                  {versions.map((v) => (
+                    <tr key={v.id}>
+                      <td className="mono">v{v.version}</td>
+                      <td><Badge label={v.status} tone={STATUS_TONE[v.status] || 'gray'} /></td>
+                      <td>{v.approval_status
+                        ? <Badge label={v.approval_status} tone={APPROVAL_TONE[v.approval_status] || 'gray'} />
+                        : <span className="dim">—</span>}</td>
+                      <td className="mono dim" style={{ fontSize: 11.5 }}>
+                        {v.content?.waba_id ? wabaLabel(v.content.waba_id) : '—'}</td>
+                      <td className="mono dim">{fmtDate(v.created_at)}</td>
+                      <td className="dim" style={{ fontSize: 12 }}>{v.created_by || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+        )}
+
         {/* The blocker for WhatsApp is APPROVAL, not the channel. An un-approved template
             genuinely cannot be sent (Meta only ships templates it has reviewed) — but an
             APPROVED one can, and forcing that through a throwaway campaign just to see it on a
@@ -614,7 +689,28 @@ export default function TemplatesPage() {
     );
   }
 
-  const filteredRows = chanFilter === 'all' ? rows : rows.filter((r) => (r.channel || 'email') === chanFilter);
+  const needle = q.trim().toLowerCase();
+  const filteredRows = rows.filter((r) => {
+    if (chanFilter !== 'all' && (r.channel || 'email') !== chanFilter) return false;
+    if (purposeFilter !== 'all' && (r.purpose || '') !== purposeFilter) return false;
+    if (statusFilter !== 'all' && (r.status || '') !== statusFilter) return false;
+    if (wabaFilter !== 'all' && (r.content?.waba_id || '') !== wabaFilter) return false;
+    // Approval is a WhatsApp-only concept (email has no Meta review), so "Not approved"
+    // scopes to WhatsApp rather than sweeping every email template in as a false positive.
+    if (approvalFilter === 'approved' && r.approval_status !== 'APPROVED') return false;
+    if (approvalFilter === 'not_approved'
+      && !(r.channel === 'whatsapp' && r.approval_status !== 'APPROVED')) return false;
+    // Name search also covers the Meta template name — that is the identifier that appears
+    // in logs, in comms.messages and on Meta's side, so it is often what you actually have.
+    if (needle && !`${r.name || ''} ${r.content?.meta_name || ''}`.toLowerCase().includes(needle)) return false;
+    return true;
+  });
+  const filtersOn = chanFilter !== 'all' || purposeFilter !== 'all' || statusFilter !== 'all'
+    || approvalFilter !== 'all' || wabaFilter !== 'all' || !!needle;
+  const clearFilters = () => {
+    setQ(''); setChanFilter('all'); setPurposeFilter('all');
+    setStatusFilter('all'); setApprovalFilter('all'); setWabaFilter('all');
+  };
 
   return (
     <div className="pg">
@@ -633,8 +729,46 @@ export default function TemplatesPage() {
                   ))}
                 </span>
               }>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+                padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>
+                <input className="f-inp" value={q} onChange={(e) => setQ(e.target.value)}
+                  placeholder="Search name or Meta name…"
+                  style={{ flex: '1 1 220px', minWidth: 180, maxWidth: 340 }} />
+                <select className="f-inp" value={purposeFilter} onChange={(e) => setPurposeFilter(e.target.value)}
+                  style={{ width: 'auto', minWidth: 130 }}>
+                  <option value="all">Any purpose</option>
+                  {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <select className="f-inp" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+                  style={{ width: 'auto', minWidth: 120 }}>
+                  <option value="all">Any status</option>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select className="f-inp" value={approvalFilter} onChange={(e) => setApprovalFilter(e.target.value)}
+                  style={{ width: 'auto', minWidth: 150 }}>
+                  <option value="all">Any Meta state</option>
+                  <option value="approved">Approved</option>
+                  <option value="not_approved">Not approved (WA)</option>
+                </select>
+                {wabaOptions.length > 0 && (
+                  <select className="f-inp" value={wabaFilter} onChange={(e) => setWabaFilter(e.target.value)}
+                    style={{ width: 'auto', minWidth: 170 }}>
+                    <option value="all">Any account</option>
+                    {wabaOptions.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+                  </select>
+                )}
+                {filtersOn && (
+                  <Btn kind="ghost" onClick={clearFilters}>
+                    Clear · {filteredRows.length}/{rows.length}
+                  </Btn>
+                )}
+              </div>
+              {filteredRows.length === 0 ? (
+                <EmptyState icon="file-text" title="No templates match"
+                  hint="Nothing in the library fits every filter. Clear one to widen the search." />
+              ) : (
               <table className="dt">
-                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
                   {filteredRows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
@@ -649,6 +783,15 @@ export default function TemplatesPage() {
                         </span>
                       </td>
                       <td className="dim" style={{ fontSize: 12.5 }}>{r.purpose}</td>
+                      {/* Which WhatsApp Business Account this template is pinned to. Sends are
+                          WABA-scoped, so a template on the wrong account fails every time with
+                          an opaque Meta permissions error — worth seeing at a glance (S241). */}
+                      <td className="mono dim" style={{ fontSize: 11.5 }}>
+                        {r.channel === 'whatsapp'
+                          ? (r.content?.waba_id ? wabaLabel(r.content.waba_id)
+                            : <span style={{ color: 'var(--warn, #f59e0b)' }}>unpinned</span>)
+                          : '—'}
+                      </td>
                       <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td>{r.channel === 'whatsapp'
                         ? (r.approval_status
@@ -662,6 +805,7 @@ export default function TemplatesPage() {
                   ))}
                 </tbody>
               </table>
+              )}
             </Panel>
           )}
     </div>
