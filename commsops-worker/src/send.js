@@ -248,6 +248,9 @@ async function send(env, opts) {
       const body = renderWhatsapp(template, {
         profile, event: opts.eventContext, constants: opts.constants,
         recipient: opts.recipient, system: {},
+        // Interactive reply-buttons ride on the CALL, not the template — they are declared on
+        // the journey send step. Only meaningful for a non-template (session) send.
+        interactiveButtons: isTemplate ? null : (opts.interactiveButtons || null),
       });
       rendered = {
         ...body, to,

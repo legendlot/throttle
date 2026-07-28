@@ -147,6 +147,23 @@ function renderWhatsapp(template, ctx) {
   }
 
   const body = applyTokens(content.text_body || content.text || content.body || '', values);
+
+  // INTERACTIVE mode — free-form body + reply buttons, no template. Declared on the journey
+  // SEND STEP (`interactive` + `buttons[]`), not on a stored template, because these confirms
+  // are flow-shaped rather than reusable content ("Are you sure?" belongs to one branch of one
+  // journey). Tokens are applied to button labels too, so a button can carry an order number.
+  // Falls back to plain text when no buttons were supplied — a misconfigured node still says
+  // something rather than failing closed.
+  if (Array.isArray(ctx?.interactiveButtons) && ctx.interactiveButtons.length) {
+    return {
+      mode: 'interactive',
+      text: body,
+      buttons: ctx.interactiveButtons.slice(0, 3).map((b, i) => ({
+        id: String(b.id || b.key || b.text || `btn_${i}`),
+        text: applyTokens(String(b.text || b.label || b.id || ''), values),
+      })),
+    };
+  }
   return { mode: 'text', text: body };
 }
 

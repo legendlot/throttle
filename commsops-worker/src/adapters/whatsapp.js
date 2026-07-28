@@ -43,6 +43,36 @@ async function send(rendered, env) {
         ...(Array.isArray(t.components) && t.components.length ? { components: t.components } : {}),
       },
     };
+  } else if (rendered.mode === 'interactive') {
+    // Interactive reply-buttons, free-form (NOT a template) — the second-step confirm that a
+    // COD→prepaid cancel branch needs ("Are you sure?" → Yes / No). Same 24h-window rule as
+    // text: it is a session message, so the customer must have messaged us first — which in
+    // a journey they always have, by tapping the button on the step before.
+    //
+    // Meta caps this at THREE buttons, 20 chars of title each, and requires a stable `id`
+    // per button: that id is what comes back on `interactive.button_reply.id`, and it is what
+    // the journey graph routes on. Titles are truncated rather than rejected — a silent
+    // 400 from Meta mid-journey is worse than a clipped label.
+    if (rendered.window_open !== true)
+      return { provider_message_id: null, status: 'skipped', reason: 'window_closed' };
+    const bodyText = rendered.text;
+    const btns = Array.isArray(rendered.buttons) ? rendered.buttons.slice(0, 3) : [];
+    if (!bodyText) return { provider_message_id: null, status: 'failed', reason: 'empty_text' };
+    if (!btns.length) return { provider_message_id: null, status: 'failed', reason: 'interactive_no_buttons' };
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText },
+        action: {
+          buttons: btns.map((b, i) => ({
+            type: 'reply',
+            reply: { id: String(b.id || b.text || `btn_${i}`).slice(0, 256),
+                     title: String(b.text || b.id || `Option ${i + 1}`).slice(0, 20) },
+          })),
+        },
+      },
+    };
   } else {
     // free-form text — only inside the 24h window
     if (rendered.window_open !== true)

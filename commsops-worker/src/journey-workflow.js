@@ -245,6 +245,16 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       channel, purpose: s.purpose || 'marketing', profileId, to,
       senderId: s.senderId || s.sender_id || undefined,   // optional per-node pin (routes to a specific number)
       templateId: s.templateId, constants: s.constants || {}, eventContext: triggerProps || {},
+      // Interactive step with NO template = a free-form session message carrying reply
+      // buttons (the mid-flow confirm). With a template, the buttons are the ones Meta
+      // already approved on it and must NOT be re-sent here.
+      interactiveButtons: (s.interactive && !s.templateId) ? (s.buttons || []) : null,
+      // send() takes an INLINE template object when there is no stored templateId — the
+      // body text for a mid-flow confirm lives on the step, not in the template library.
+      ...((s.interactive && !s.templateId)
+        ? { template: { channel: 'whatsapp', name: `journey:${stepId}`,
+                        content: { text: s.text || s.body || '' }, variables: s.variables || [] } }
+        : {}),
       tracking: { campaign: journeyName },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
