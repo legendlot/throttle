@@ -107,13 +107,42 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             <option value="utility">utility</option>
           </select>
         </Field>
-        <Field label="Template (must be active)">
-          <select className="f-inp" value={config.templateId || ''} disabled={disabled}
-            onChange={(e) => set({ templateId: e.target.value })}>
-            <option value="">— pick a template —</option>
-            {channelTemplates.map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
-          </select>
-        </Field>
+        {/* WhatsApp can send either an approved template (valid any time) or a free-text
+            SESSION reply (valid only inside the 24h window the customer's own reply opens).
+            Mid-flow confirmations — "we've cancelled your order" — are session replies, and
+            forcing them through Meta review would put a 4-message flow behind 4 approvals
+            for no benefit. Email has no such split, so the choice is WA-only. */}
+        {config.channel === 'whatsapp' && (
+          <Field label="Message">
+            <select className="f-inp" value={config.text ? 'text' : 'template'} disabled={disabled}
+              onChange={(e) => set(e.target.value === 'text'
+                ? { text: config.text || ' ', templateId: '' }
+                : { text: undefined })}>
+              <option value="template">Approved template — sendable any time</option>
+              <option value="text">Free text — reply inside the 24h window only</option>
+            </select>
+          </Field>
+        )}
+        {config.channel === 'whatsapp' && config.text !== undefined ? (
+          <Field label="Message text">
+            <textarea className="f-inp" rows={3} value={config.text || ''} disabled={disabled}
+              onChange={(e) => set({ text: e.target.value })}
+              placeholder="Great! We have your order confirmed." />
+            <div className="tw-note" style={{ marginTop: 6 }}>
+              Only delivers if this customer messaged us in the last 24 hours — true straight
+              after they tap a button, <b>not</b> as a journey&apos;s first step (it would skip
+              with <span className="mono">window_closed</span>). No Meta approval needed.
+            </div>
+          </Field>
+        ) : (
+          <Field label="Template (must be active)">
+            <select className="f-inp" value={config.templateId || ''} disabled={disabled}
+              onChange={(e) => set({ templateId: e.target.value })}>
+              <option value="">— pick a template —</option>
+              {channelTemplates.map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="If skipped (not sent — e.g. suppressed/unsubscribed)">
           <select className="f-inp" value={config.on_skip || 'continue'} disabled={disabled}
             onChange={(e) => set({ on_skip: e.target.value })}>
@@ -220,7 +249,7 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
       )}
 
       {t === 'send' && config.interactive && (<>
-        <div className="tw-note" style={{ margin: '0 0 10px' }}>WhatsApp quick-reply buttons. Each button becomes an outcome handle; the reply routes there. Inert until WhatsApp is live (send skips → <span className="mono">no_reply</span>).</div>
+        <div className="tw-note" style={{ margin: '0 0 10px' }}>WhatsApp quick-reply buttons. Each button becomes an outcome handle; the reply routes there, and a customer who never taps takes <span className="mono">no_reply</span> when the wait expires.</div>
         <Field label="Purpose">
           <select className="f-inp" value={config.purpose || 'utility'} disabled={disabled}
             onChange={(e) => set({ purpose: e.target.value })}>
@@ -228,18 +257,52 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             <option value="marketing">marketing</option>
           </select>
         </Field>
-        <Field label="Template (WA, with buttons — must be active)">
-          <select className="f-inp" value={config.templateId || ''} disabled={disabled}
-            onChange={(e) => set({ templateId: e.target.value })}>
-            <option value="">— pick a WhatsApp template —</option>
-            {(templates || []).filter((x) => x.channel === 'whatsapp').map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
+        {/* Two shapes of interactive send, and the difference is load-bearing:
+            · TEMPLATE — the buttons are the ones Meta approved on it. Sendable any time, so
+              this is what OPENS a flow (the C2P first touch).
+            · FREE TEXT — buttons defined here, sent as a session message. Only valid inside
+              the 24h window, i.e. as a MID-flow confirm ("Are you sure?") after the customer
+              has already tapped something. */}
+        <Field label="Message">
+          <select className="f-inp" value={config.text !== undefined ? 'text' : 'template'} disabled={disabled}
+            onChange={(e) => set(e.target.value === 'text'
+              ? { text: config.text || ' ', templateId: '' }
+              : { text: undefined })}>
+            <option value="template">Approved template with buttons — opens a flow</option>
+            <option value="text">Free text + buttons — mid-flow confirm, 24h window only</option>
           </select>
         </Field>
+        {config.text !== undefined ? (
+          <Field label="Message text">
+            <textarea className="f-inp" rows={3} value={config.text || ''} disabled={disabled}
+              onChange={(e) => set({ text: e.target.value })}
+              placeholder="Are you sure that you want to cancel your order?" />
+            <div className="tw-note" style={{ marginTop: 6 }}>
+              Session message — delivers only if the customer messaged us in the last 24h,
+              which tapping a button on the previous step guarantees. No Meta approval needed.
+              Button labels are capped at 20 characters by WhatsApp.
+            </div>
+          </Field>
+        ) : (
+          <Field label="Template (WA, with buttons — must be active)">
+            <select className="f-inp" value={config.templateId || ''} disabled={disabled}
+              onChange={(e) => set({ templateId: e.target.value })}>
+              <option value="">— pick a WhatsApp template —</option>
+              {(templates || []).filter((x) => x.channel === 'whatsapp').map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Wait for reply within">
           <DurationInput value={config.within || ''} disabled={disabled}
             onChange={(v) => set({ within: v })} />
         </Field>
-        <Field label="Buttons (id must match the template's button payload · max 3)">
+        {/* For a TEMPLATE send, Meta echoes the button's TEXT as the payload when the template
+            carries no payload parameter — so the id here must equal the button label exactly
+            (verified against live whatsapp_reply events). For a free-text send the id is ours
+            to choose and is returned verbatim. */}
+        <Field label={config.text !== undefined
+          ? 'Buttons (id is yours; label is what the customer sees · max 3)'
+          : "Buttons (id must equal the template's button TEXT exactly · max 3)"}>
           {(config.buttons || []).map((b, i) => (
             <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
               <input className="f-inp mono" style={{ flex: 1 }} value={b.id || ''} disabled={disabled} placeholder="make_payment"
