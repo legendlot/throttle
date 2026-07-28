@@ -87,8 +87,17 @@ export default function UpcPage() {
     setLoadingHist(true);
     setRefreshing(true);
     try {
-      const data = await garageFetch('getUpcBatches', { limit: '50' }, session);
-      setBatches(Array.isArray(data) ? data : []);
+      // Pending batches are fetched separately and pinned to the top: the recent
+      // window alone used to drop un-received batches off the page entirely, which
+      // left their stickers unscannable with no way to mark them received.
+      const [recent, pending] = await Promise.all([
+        garageFetch('getUpcBatches', { limit: '50' }, session),
+        garageFetch('getUpcBatches', { pending: 'true' }, session),
+      ]);
+      const recentArr  = Array.isArray(recent)  ? recent  : [];
+      const pendingArr = Array.isArray(pending) ? pending : [];
+      const seen = new Set(pendingArr.map(b => b.batch_id));
+      setBatches([...pendingArr, ...recentArr.filter(b => !seen.has(b.batch_id))]);
     } catch (_) { setBatches([]); }
     finally {
       setLoadingHist(false);
@@ -99,6 +108,8 @@ export default function UpcPage() {
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const pendingCount = batches.filter(b => ['generated', 'sent_to_print', 'printed'].includes(b.status)).length;
 
   function clearSelection() {
     setSelectedCode('');
@@ -317,7 +328,7 @@ export default function UpcPage() {
         </button>
       </Panel>
 
-      {/* Recent batches */}
+      {/* Recent batches — every un-received batch is pinned above the recent window */}
       <Panel
         title="Recent batches" icon="layers" pad={8}
         action={
@@ -334,6 +345,14 @@ export default function UpcPage() {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
+            {pendingCount > 0 && (
+              <div style={{ margin: '0 12px 10px', padding: '9px 12px', borderRadius: 8,
+                background: 'var(--warn-bg)', border: '1px solid var(--warn-bd)',
+                fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--warn-fg)' }}>
+                {pendingCount} {pendingCount === 1 ? 'batch is' : 'batches are'} still awaiting receipt — listed first below.
+                Their stickers can&apos;t be scanned until you mark them Received.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, padding: '4px 12px 9px',
               borderBottom: '1px solid var(--border)', minWidth: 1140 }}>
               {['Batch', 'Code', 'Product', 'Variant', 'Qty', 'Seq range', 'Status', 'Generated', 'Actions'].map(h => (
