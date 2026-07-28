@@ -480,7 +480,16 @@ const SIDE_EXITS = ['cancelled', 'rejected', 'escalated'];
 // closed_reason is a constrained enum (cs_tickets_closed_reason_check). Free-text
 // reasons (e.g. the cancel modal's note) must never be written into it — they get
 // coerced to the stage default and preserved as a history note instead.
-const ALLOWED_CLOSED_REASONS = ['resolved', 'duplicate', 'no_response', 'wrong_system', 'goodwill', 'rejected', 'no_action', 'historical_import'];
+const ALLOWED_CLOSED_REASONS = ['resolved', 'duplicate', 'no_response', 'no_evidence', 'no_payment', 'wrong_system', 'goodwill', 'other', 'rejected', 'no_action', 'historical_import'];
+
+// Resolve vs Close (Pruthvi #bugs 2026-07-25, built 2026-07-28). ONE vocabulary
+// shared by tickets and conversations so the two objects end the same way:
+//   'resolved'  → the customer's issue was actually addressed  (the Resolve action)
+//   everything else → shut for an operational reason           (the Close action)
+// Kept OUT of this list on purpose: 'rejected' / 'historical_import' are ticket-only
+// stage artefacts, never offered as a conversation close reason.
+const CONVO_CLOSE_REASONS = ['resolved', 'no_response', 'no_evidence', 'no_payment',
+                             'duplicate', 'wrong_system', 'goodwill', 'no_action', 'other'];
 
 // Returns the next allowed stages for a given (current, disposition)
 function allowedTransitions(current, disposition) {
@@ -1958,25 +1967,39 @@ async function setAgentShift(body, auth, env) {
 // 'open' is also auto-set by the webhook on any new inbound (auto-reopen).
 async function setThreadState(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
-  const { thread_id, state, snoozed_until } = body || {};
+  const { thread_id, state, snoozed_until, closed_reason, closed_note } = body || {};
   if (!thread_id) return err('thread_id required');
   if (!['open', 'snoozed', 'closed'].includes(state)) return err('invalid state');
+  // The reason is OPTIONAL here on purpose: the UI is the only caller and always
+  // sends one, but leaving it optional means the worker and the app can deploy in
+  // either order without a window where closing a conversation 500s. A reasonless
+  // close lands in the same "no reason recorded" bucket as pre-2026-07-28 history.
+  if (state === 'closed' && closed_reason && !CONVO_CLOSE_REASONS.includes(closed_reason)) {
+    return err(`invalid closed_reason (expected one of: ${CONVO_CLOSE_REASONS.join(', ')})`, 422);
+  }
   const patch = { thread_state: state };
   if (state === 'closed') {
     patch.closed_at = new Date().toISOString();
     patch.closed_by_user_id = auth.userId;
     patch.snoozed_until = null;
+    patch.closed_reason = closed_reason || null;
+    patch.closed_note = (closed_note && String(closed_note).trim()) || null;
   } else if (state === 'snoozed') {
     patch.snoozed_until = snoozed_until || null;
     patch.closed_at = null; patch.closed_by_user_id = null;
+    patch.closed_reason = null; patch.closed_note = null;
   } else {                                  // open
     patch.closed_at = null; patch.closed_by_user_id = null; patch.snoozed_until = null;
+    // An OPEN conversation must not carry a closing outcome — it would show a stale
+    // reason in the detail pane. (The report is safe either way: it filters on
+    // thread_state='closed' before it ever reads closed_reason.)
+    patch.closed_reason = null; patch.closed_note = null;
   }
   const r = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
     method: 'PATCH', body: JSON.stringify(patch),
   });
   if (!r.ok) return err('failed to set thread state', 500);
-  return ok({ thread_state: state });
+  return ok({ thread_state: state, closed_reason: patch.closed_reason ?? null });
 }
 
 // Mark a conversation read (S222, Pruthvi) — stamps last_read_at=now() so the generated

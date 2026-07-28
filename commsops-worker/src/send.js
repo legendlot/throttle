@@ -60,10 +60,42 @@ function pickSender(rows, { purpose, senderId, wabaId } = {}) {
   }
   const wild = rows.find((s) => isWild(s.purpose));
   if (wild) return wild;                                              // oldest wildcard sender
-  // Fallback only when the CHANNEL genuinely has one sender — a WABA-narrowed single row is
-  // NOT unambiguous, it's a mis-pinned/mis-purposed template about to leave the wrong number
-  // (review H5 part 2: the old code judged this on the POST-filter count).
-  return channelCount === 1 ? rows[0] : null;
+
+  // Genuinely single sender on the whole channel — unchanged (review H5 part 2 kept this
+  // judged on the PRE-filter count, not the WABA-narrowed one).
+  if (channelCount === 1) return rows[0];
+
+  // WABA-narrowed to EXACTLY ONE active sender → route it, with one carve-out below.
+  //
+  // WHY (2026-07-28): the old rule refused here, and that refusal fired on essentially every
+  // WABA-pinned template ever tested from the UI — `no_sender_on_waba` on a sender that was
+  // active, correctly pinned, and the ONLY number Meta would accept. The purpose vocabularies
+  // simply don't line up: templates + journey send-steps carry Meta's category (`utility`),
+  // while sender rows carry a routing label (`transactional`), so the exact-match and wildcard
+  // branches both miss and the pre-filter count is >1 whenever more than one number exists.
+  //
+  // A WABA-scoped set of one is unambiguous BY CONSTRUCTION: WhatsApp templates are WABA-scoped,
+  // so that sender is the only number that can possibly send this template. There is no second
+  // candidate to mis-route to — refusing doesn't prevent a wrong send, it prevents ALL sends.
+  //
+  // THE CARVE-OUT — the MARKETING BOUNDARY, refused in BOTH directions (H5 part 2 protected
+  // both and still does). Marketing must not leave a number designated for order updates
+  // (someone who opted into transactional must not be marketed to from it), and transactional
+  // must not leave the marketing number (it reads as marketing to the recipient and muddies
+  // that number's quality rating). So: if exactly ONE side is 'marketing', refuse.
+  //
+  // Everything else — `utility` vs `transactional` — is a VOCABULARY artifact, not a real
+  // distinction: both are non-marketing, Meta bills both as utility, and our own templates and
+  // sender rows just happen to label them differently. That mismatch is what was breaking every
+  // send, and it is now allowed through.
+  if (wabaId && rows.length === 1) {
+    const only = rows[0];
+    const sendIsMkt = purpose === 'marketing';
+    const senderIsMkt = only.purpose === 'marketing';
+    if (!isWild(only.purpose) && sendIsMkt !== senderIsMkt) return null;   // crosses the marketing boundary
+    return only;
+  }
+  return null;
 }
 
 // Route to the right sender for (channel, purpose), honoring an explicit opts.senderId.
