@@ -6,10 +6,31 @@ const A = require('./auth.js');
 // are indistinguishable in latestConsent's public 'unknown' return value, which gate.js
 // depends on and which this helper does NOT change. { ok, state } where state is null
 // when there is no prior row (or the read failed); ok is false only on a read failure.
+// `unknown` rows are EXCLUDED here — the latest KNOWN state is what matters.
+//
+// An `unknown` means "we have no information". An append-only ledger entry that carries no
+// information must not be able to change the effective state, yet ordering by captured_at let
+// exactly that happen. The 2026-07-22 write-guard stopped an `unknown` landing ON TOP of a
+// known row, but could not stop the reverse race, which is what still bit us:
+//
+//   Shopify's webhook stamps captured_at = now(); Shopflo's genuine opt-in carries its OWN
+//   (earlier) timestamp and often arrives a few seconds LATER. At the moment the `unknown` was
+//   written no opt-in existed, so the guard correctly allowed it — then the opt-in landed
+//   underneath it and the `unknown` won the sort. Measured live: a customer who opted in at
+//   00:28:40 was buried by an `unknown` stamped 00:28:59, 19 seconds later.
+//
+// Excluding `unknown` from the read makes the ordering race unlosable, and needs no backfill:
+// the buried opt-ins simply become visible again.
+//
+// Fail-closed is preserved. A profile whose ONLY rows are `unknown` still resolves to null
+// here, and latestConsent still returns the string 'unknown', which the gate blocks on. And a
+// withdrawal is always written as `opted_out` (optout.js applyOptOut rejects anything else), so
+// no real opt-out can hide behind this filter.
 async function _latestConsentRaw(env, profile_id, channel, purpose) {
   const r = await A.sbComms(
     `/rest/v1/consent?profile_id=eq.${A.enc(profile_id)}&channel=eq.${A.enc(channel)}` +
-    `&purpose=eq.${A.enc(purpose)}&select=state,captured_at&order=captured_at.desc&limit=1`, env);
+    `&purpose=eq.${A.enc(purpose)}&state=neq.unknown` +
+    `&select=state,captured_at&order=captured_at.desc,created_at.desc&limit=1`, env);
   if (!r.ok) return { ok: false, state: null };
   return { ok: true, state: r.data?.[0] ? (r.data[0].state || 'unknown') : null };
 }
@@ -56,11 +77,12 @@ async function recordConsent(env, { profile_id, channel, purpose, state, source,
   return A.sbComms('/rest/v1/consent', env, { method: 'POST', body: JSON.stringify(row) });
 }
 
-// Latest consent state for (profile, channel, purpose). Returns the state string or
-// 'unknown' — on either a genuinely-empty result OR a failed read. Unchanged contract;
-// gate.js depends on this exact fail-to-'unknown' shape (fail-closed at the SEND gate,
-// where 'unknown' already blocks). Do not use this inside recordConsent's guard — use
-// _latestConsentRaw, which can distinguish the two cases.
+// Latest KNOWN consent state for (profile, channel, purpose) — see _latestConsentRaw for why
+// `unknown` rows are skipped. Returns the state string, or 'unknown' when there is no known
+// row at all OR the read failed. Return SHAPE is unchanged; gate.js depends on this exact
+// fail-to-'unknown' behaviour (fail-closed at the SEND gate, where 'unknown' blocks). Do not
+// use this inside recordConsent's guard — use _latestConsentRaw, which distinguishes
+// "no row" from "read failed".
 async function latestConsent(env, profile_id, channel, purpose) {
   const r = await _latestConsentRaw(env, profile_id, channel, purpose);
   return r.state || 'unknown';

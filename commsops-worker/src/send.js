@@ -213,6 +213,27 @@ async function send(env, opts) {
   const profile = await getProfile(env, opts.profileId);
   const to = opts.to || null;
 
+  // TEST SENDS ONLY — accept a variable's TOKEN as an alias for its source FIELD.
+  //
+  // An event-sourced variable resolves on `field` (render.js resolveVar), but the Test-values
+  // box shows the author the TOKEN, and the failure names the TOKEN too. Where the two differ
+  // — e.g. token `order_total` reading field `total` — the error points at a key that does not
+  // work, so you retype the name it just gave you and it fails again. That misdirection has
+  // cost two people a round each (2026-07-28), which is two more than it should.
+  //
+  // Test-only on purpose: a real send's event is the true wire payload and must keep failing
+  // loudly when a field is genuinely absent. This only widens what a human may type by hand.
+  if (opts.isTest && opts.eventContext && typeof opts.eventContext === 'object') {
+    const ev = { ...opts.eventContext };
+    for (const v of (Array.isArray(template.variables) ? template.variables : [])) {
+      const field = v.field || v.token;
+      if (field !== v.token && ev[field] === undefined && ev[v.token] !== undefined) {
+        ev[field] = ev[v.token];
+      }
+    }
+    opts = { ...opts, eventContext: ev };
+  }
+
   // render — channel-branched. Both share the variable engine + unresolved-token discipline.
   let rendered;
   let waMeta = null;   // {mode, window_open, hasTemplate} — WA-only gate inputs

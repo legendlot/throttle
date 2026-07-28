@@ -16,7 +16,7 @@
 
 const assert = require('assert');
 const A = require('../src/auth.js');
-const { recordConsent } = require('../src/consent.js');
+const { recordConsent, latestConsent } = require('../src/consent.js');
 
 let pass = 0, fail = 0;
 const t = (n, f) => Promise.resolve().then(f).then(
@@ -118,6 +118,58 @@ function stub(latestState) {
     assert.equal(spy.wasPosted(), true);
     assert.equal(r.ok, true);
     assert.equal(spy.getBody().state, 'opted_out');
+  });
+
+
+  // ── 2026-07-28: the ORDERING race the write-guard cannot catch ──────────────────────────
+  // Shopify stamps captured_at=now(); Shopflo's genuine opt-in carries its own EARLIER
+  // timestamp and lands a few seconds later. No opt-in existed when the unknown was written,
+  // so the guard correctly allowed it — then the opt-in arrived underneath and lost the sort.
+  // Fix: exclude `unknown` from the effective-state read entirely.
+  await t('the read EXCLUDES unknown rows (state=neq.unknown on the query)', async () => {
+    let seenPath = null;
+    A.sbComms = async (path) => { seenPath = path; return { ok: true, data: [] }; };
+    await latestConsent(ENV, 'P-ord', 'whatsapp', 'marketing');
+    A.sbComms = orig;
+    assert.ok(seenPath.includes('state=neq.unknown'),
+      'unknown rows must not be able to win the effective state');
+  });
+
+  await t('a buried opt-in is visible again (unknown on top no longer wins)', async () => {
+    // The filtered query can only return the opted_in, which is the whole point.
+    A.sbComms = async () => ({ ok: true, data: [{ state: 'opted_in', captured_at: '2026-07-28T00:28:40Z' }] });
+    const s = await latestConsent(ENV, 'P-buried', 'whatsapp', 'marketing');
+    A.sbComms = orig;
+    assert.equal(s, 'opted_in');
+  });
+
+  await t('FAIL-CLOSED preserved: only-unknown rows still resolve to unknown', async () => {
+    A.sbComms = async () => ({ ok: true, data: [] });   // filtered out → empty
+    const s = await latestConsent(ENV, 'P-only-unknown', 'whatsapp', 'marketing');
+    A.sbComms = orig;
+    assert.equal(s, 'unknown', 'must still block at the gate');
+  });
+
+  await t('a real opt-out is NEVER hidden by the filter', async () => {
+    A.sbComms = async () => ({ ok: true, data: [{ state: 'opted_out', captured_at: '2026-07-27T12:59:45Z' }] });
+    const s = await latestConsent(ENV, 'P-out', 'whatsapp', 'marketing');
+    A.sbComms = orig;
+    assert.equal(s, 'opted_out');
+  });
+
+  await t('read failure still fails closed to unknown', async () => {
+    A.sbComms = async () => ({ ok: false, status: 500, data: null });
+    const s = await latestConsent(ENV, 'P-err', 'whatsapp', 'marketing');
+    A.sbComms = orig;
+    assert.equal(s, 'unknown');
+  });
+
+  await t('created_at tiebreaker present (same-ms rows must be deterministic)', async () => {
+    let seenPath = null;
+    A.sbComms = async (path) => { seenPath = path; return { ok: true, data: [] }; };
+    await latestConsent(ENV, 'P-tie', 'email', 'marketing');
+    A.sbComms = orig;
+    assert.ok(seenPath.includes('created_at.desc'), 'same-timestamp rows resolved non-deterministically');
   });
 
   A.sbComms = orig;
