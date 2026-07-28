@@ -259,6 +259,18 @@ function headerLineFrom(lineItems) {
   };
   let best = lines[0];
   for (const li of lines) if (value(li) > value(best)) best = li;
+  // Compose the VARIANT-level title, because that is what comms.variant_images stores
+  // ("{product} - {variant}", per shopflo.js variantImageIndex). A REST line item's `title`
+  // is PRODUCT-level ("L.O.T Cars Ghost - RC Drift Car") while the cache key carries the
+  // colourway ("… - Burnout Red"), so passing `title` straight through would miss the title
+  // match on every single order and leave us silently relying on the resolver's positional
+  // fallback. `name` already contains the composed form, so it is used as-is when present.
+  // Shopify's synthetic 'Default Title' must never be appended (single-variant products).
+  const composedTitle = (li) => {
+    const vt = String(li?.variant_title || '').trim();
+    if (li?.title) return (vt && vt !== 'Default Title') ? `${li.title} - ${vt}` : li.title;
+    return li?.name || null;
+  };
   // Every variant id goes on the event (the resolver matches the primary title against them
   // and falls back to the first it can resolve), so a title mismatch still yields an image.
   // The BEST line is listed FIRST so that fallback lands on the highest-value item too.
@@ -266,7 +278,7 @@ function headerLineFrom(lineItems) {
     .map((li) => li?.variant_id).filter((v) => v !== null && v !== undefined).map(String);
   return {
     variant_ids: ids.length ? ids.join(',') : null,
-    primary_title: best?.title || best?.name || null,
+    primary_title: composedTitle(best),
   };
 }
 

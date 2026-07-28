@@ -71,6 +71,33 @@ const props = (line_items) => SHOP.mapOrderEvent(ORDER(line_items), 'order_place
     assert.strictEqual(p.variant_ids, '222');   // undefined must not become "undefined"
   });
 
+  // ── the title must match comms.variant_images, which is VARIANT-level ────────────────────
+  // "{product} - {variant}" per shopflo.js variantImageIndex. A REST line item's `title` is
+  // product-level, so passing it through would miss on every order and leave the resolver
+  // silently depending on its positional fallback.
+  await t('primary_title is composed to VARIANT level, matching the image cache key', () => {
+    const p = props([{ variant_id: 111, title: 'L.O.T Cars Ghost - RC Drift Car',
+      variant_title: 'Burnout Red', price: '2249.00', quantity: 1 }]);
+    assert.strictEqual(p.primary_title, 'L.O.T Cars Ghost - RC Drift Car - Burnout Red');
+  });
+
+  await t("Shopify's synthetic 'Default Title' is never appended", () => {
+    const p = props([{ variant_id: 111, title: 'Gift Wrapping',
+      variant_title: 'Default Title', price: '99.00', quantity: 1 }]);
+    assert.strictEqual(p.primary_title, 'Gift Wrapping');
+  });
+
+  await t('a line with no variant_title composes to the product title alone', () => {
+    const p = props([{ variant_id: 111, title: 'Repairs', price: '500.00', quantity: 1 }]);
+    assert.strictEqual(p.primary_title, 'Repairs');
+  });
+
+  await t('`name` already carries the composed form and is not double-suffixed', () => {
+    const p = props([{ variant_id: 111, name: 'L.O.T Cars Ghost - RC Drift Car - Street Blue',
+      variant_title: 'Street Blue', price: '2249.00', quantity: 1 }]);
+    assert.strictEqual(p.primary_title, 'L.O.T Cars Ghost - RC Drift Car - Street Blue');
+  });
+
   await t('existing item/order fields are untouched by the addition', () => {
     const p = props([li(111, 'Shadow', '2249.00')]);
     assert.strictEqual(p.items, 'Shadow');
