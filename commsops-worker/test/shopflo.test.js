@@ -504,6 +504,37 @@ t('browse mapper DROPS anonymous page views (no strong identity)', () => {
   assert.equal(FLO.mapBrowse('collection_viewed')({ collection_name: 'Drift' }), null);
 });
 
+// The payload guard (2026-07-29). Shopflo sends ~2.5% of product_page_view events with an
+// identified user but EVERY product field null. The identity guard above lets those through, so
+// we were emitting "someone viewed a product" events naming no product — Browse Abandonment
+// enrolled on them, slept 30 minutes, then failed the send (14 of 95) on
+// `unresolved_variables:product_handle`.
+t('browse mapper DROPS a product_viewed with an identified user but NO product at all', () => {
+  const empty = FLO.mapBrowse('product_viewed')({
+    userData: { phone: '9876543210' }, cartToken: 'tok123',
+    // exactly the live shape: identity present, product entirely absent
+  });
+  assert.equal(empty, null, 'a product view naming no product must not be emitted');
+});
+
+t('the guard is scoped to product_viewed — collection + checkout still map without a product', () => {
+  const coll = FLO.mapBrowse('collection_viewed')({
+    userData: { phone: '9876543210' }, collection_name: 'Drift Cars', cartToken: 'tok123' });
+  assert.ok(coll && coll.name === 'collection_viewed', 'collection views legitimately have no product');
+  const chk = FLO.mapBrowse('checkout_started')({
+    userData: { phone: '9876543210' }, cartToken: 'tok123' });
+  assert.ok(chk && chk.name === 'checkout_started', 'checkout_started legitimately has no product');
+});
+
+t('a product_viewed with ANY product signal still maps (guard is not over-tightened)', () => {
+  // Live data has zero of these, but dropping real signal would be worse than the bug —
+  // so a partially-populated event must survive.
+  const partial = FLO.mapBrowse('product_viewed')({
+    userData: { phone: '9876543210' }, product_name: 'L.O.T Cars Dash', cartToken: 'tok123' });
+  assert.ok(partial && partial.name === 'product_viewed');
+  assert.equal(partial.properties.product_name, 'L.O.T Cars Dash');
+});
+
 
 // Shopflo's five named events (Pruthvi, 2026-07-25) must ALL resolve. This is the coverage
 // guard: if someone renames a key, this fails instead of a journey quietly never firing.

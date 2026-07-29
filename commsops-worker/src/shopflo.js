@@ -543,6 +543,37 @@ function mapBrowse(eventName) {
       cart_token: cartToken(body),
       source_surface: 'shopflo',
     };
+    // DROP a `product_viewed` that names no product (2026-07-29). Shopflo sends ~2.5% of its
+    // product_page_view events with an identified user but NO product payload at all — every
+    // product field null. The only guard above is on IDENTITY, so we were emitting "someone
+    // viewed a product" events that name no product.
+    //
+    // That is not a usable event, and it is actively harmful: Browse Abandonment enrolled on it,
+    // burned a Workflow instance and a 30-minute sleep, then failed the send with
+    // `unresolved_variables:product_handle` — 14 of 95 sends. The template binds product_handle
+    // into a URL button (`/products/<handle>`), so it is the one variable that CANNOT have a
+    // sensible fallback: any placeholder would send a real customer "you were looking at one of
+    // our legends" with a link to a product that does not exist.
+    //
+    // Scoped to product_viewed ONLY — `collection_viewed` and `checkout_started` share this
+    // mapper and legitimately carry no product handle.
+    //
+    // The test is "NO product identity at all", not "no handle", on evidence: over 24h the live
+    // split is 2,641 with a handle / 67 with nothing / **0 with a product but no handle**. Both
+    // guards would behave identically on real traffic, so this takes the narrower one — it drops
+    // exactly the observed garbage and leaves a partially-populated event (real signal for
+    // analytics and segments) alone, rather than tightening the contract past the evidence.
+    // ⚠️ If a partial event ever does appear, Browse Abandonment will fail on it again — that
+    // template binds product_handle into a `/products/<handle>` URL button, so it is the one
+    // variable that cannot take a fallback: any placeholder sends a real customer a link to a
+    // product that does not exist.
+    //
+    // Side effect worth knowing: `product_viewed` volume drops ~2.5%. Those events carried no
+    // product, so anything counting them was counting noise.
+    if (eventName === 'product_viewed'
+        && !props.product_handle && !props.product_id && !props.product_name && !props.product_url) {
+      return null;
+    }
     const key = firstNonEmpty(cartToken(body), b.session_id, b.longSessionId, p.longSessionId) || '';
     const ts = toIso(firstNonEmpty(b.timestamp, b.updated_at, b.created_at));
     const cartId = cartIdentifier(body);
