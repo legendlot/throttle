@@ -21,6 +21,7 @@ const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
 const SHIPEV = require('./shipment-events.js');
+const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -819,6 +820,15 @@ async function runScheduled(env) {
     if (r?.sent) console.log('shipment_events', JSON.stringify(r));
   } catch (e) { console.log('shipment_events_error', e?.message || String(e)); }
 
+  // 0b. RTO stages 2+3 (return leg). Driven off the courier SCAN CODE, not `lifecycle` — the
+  // return leg has three customer-visible stages but only one lifecycle value, and widening
+  // that enum would break Depot, which reads the same column. Separate watermark
+  // (`rto_stage_emit_from`), fail-closed when unset. Same best-effort contract as above.
+  try {
+    const r = await RTOEV.emitRtoStageEvents(env, ingest);
+    if (r?.sent) console.log('rto_stage_events', JSON.stringify(r));
+  } catch (e) { console.log('rto_stage_events_error', e?.message || String(e)); }
+
   // 1. due scheduled campaigns
   try {
     const due = await A.sbComms(
@@ -1232,6 +1242,9 @@ export default {
                     sync: WATPL.waSyncTemplateStatus,
                     upload: WATPL.waUploadHeaderMedia,
                     shipmentEvents: (e) => SHIPEV.emitShipmentEvents(e, ingest),
+                    // rtoStages: drain the RTO stage-2/3 scan-code emission on demand, so
+                    // bring-up + verification don't wait on a */5 tick.
+                    rtoStages: (e) => RTOEV.emitRtoStageEvents(e, ingest),
                     // Cutover pre-flight: prove the csops binding resolves. A 401 from csops's
                     // own auth is a PASS — it means the request was delivered rather than 1042'd.
                     pingCsops: async (e) => {
