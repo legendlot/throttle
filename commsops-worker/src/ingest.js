@@ -100,6 +100,45 @@ async function ingest(env, payload) {
     try {
       const jr = await A.sbComms('/rest/v1/journeys?status=eq.active&select=id,trigger', env);
       const journeys = (jr.ok && jr.data) || [];
+
+      // REACHABILITY PRECONDITION — `trigger.requires_identifier` (2026-07-29).
+      //
+      // WHY. A journey whose only step is a WhatsApp send is pointless for a profile with no
+      // phone number, but it still costs a Workflow instance, a queue message, and a 30-minute
+      // durable sleep before the send step discovers that. Measured on the add-to-cart journey:
+      // 1,525 pixel-triggered enrolments, 1,374 skipped `no_phone_identifier`, and ZERO messages
+      // that ever reached a customer — ~80% of all enrolment volume on the platform, burnt.
+      //
+      // Anonymous browsing is the norm (the pixel identifies ~1.3% of visitors; Shopflo carries
+      // identity on essentially all of its events), so this is structural, not a blip.
+      //
+      // The cost is real but measured: 3 of 1,525 profiles gained a phone DURING the 30-minute
+      // wait, so enrolling early does occasionally catch a late identification. None of those
+      // produced a message that reached anyone — but if identity coverage improves, revisit this
+      // rather than assuming it stays free.
+      //
+      // Deliberately a REACHABILITY test, not "is this event from the pixel": the pixel is only
+      // today's proxy for anonymous, and a source-based filter would silently keep excluding the
+      // pixel path even once it starts identifying people.
+      //
+      // Lazily resolved and memoised: journeys that don't declare it pay nothing, and a profile
+      // is looked up at most once per ingest no matter how many journeys ask.
+      let idTypes = null;
+      const isReachable = async (want) => {
+        const need = (Array.isArray(want) ? want : [want]).map((s) => String(s).toLowerCase());
+        if (!need.length) return true;
+        if (!profileId) return false;
+        if (idTypes === null) {
+          const ir = await A.sbComms(
+            `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&select=type`, env);
+          // Fail OPEN on a read error: a transient blip must not silently stop enrolling. The
+          // send gate re-checks reachability anyway, so the worst case is the old behaviour.
+          if (!ir.ok) { idTypes = null; return true; }
+          idTypes = new Set((ir.data || []).map((r) => String(r.type).toLowerCase()));
+        }
+        return need.some((t) => idTypes.has(t));
+      };
+
       for (const j of journeys) {
         const t = j.trigger || {};
         if (t.type !== 'event' || t.name !== name) continue;
@@ -107,6 +146,7 @@ async function ingest(env, payload) {
         const f = t.filter;
         if (f && typeof f === 'object' &&
             !Object.entries(f).every(([k, v]) => String((properties || {})[k]) === String(v))) continue;
+        if (t.requires_identifier && !(await isReachable(t.requires_identifier))) continue;
         await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId, eventId });
       }
     } catch (e) { /* triggers are best-effort; never fail the ingest write on a trigger error */ }
