@@ -38,11 +38,26 @@ const MAX_EVENT_AGE_MS = 30 * 86400000;
 
 // When did this lifecycle transition actually HAPPEN upstream? Deliberately not "when did we
 // poll it" — see the watermark note below. `delivered` carries a real delivery stamp (populated
-// on 9,884 of 9,885 live rows); the other states have none of their own, so Uniware's own
-// last-touch stamp is the closest proxy for the transition.
+// on 9,884 of 9,885 live rows).
+//
+// `lifecycle_changed_at` (migration 0036, added 2026-07-29) is the transition clock for every
+// OTHER state. Before it, this read `uniware_updated_at` — a column only the Uniware poller
+// writes. That was correct until the Delhivery ScanPush APPLY flip (2026-07-28) made ScanPush a
+// second writer of `lifecycle`: its transitions were then dated by Uniware's stale last-touch
+// stamp, fell below the watermark, and were dropped as `stale`. Measured before the fix: 150 of
+// 153 live `rto` rows silently dropped, 2 order_rto events ever. `delivered` was unaffected
+// because ScanPush stamps `delivered_at`.
+//
+// The fallback to `uniware_updated_at` is LOAD-BEARING, not just back-compat: `lifecycle_changed_at`
+// is NULL on every pre-fix row by design (never backfill it — see 0036). That null is what keeps
+// ~208 historical transitions silent instead of firing them at customers in one burst.
+//
+// NOT `updated_at`: that bumps on ANY write, including a reconcile that changes nothing, so it
+// would turn every housekeeping touch into "your order is on the way".
 function occurredAt(s) {
-  const raw = s.lifecycle === 'delivered' ? (s.delivered_at || s.uniware_updated_at)
-                                          : s.uniware_updated_at;
+  const raw = s.lifecycle === 'delivered'
+    ? (s.delivered_at || s.lifecycle_changed_at || s.uniware_updated_at)
+    : (s.lifecycle_changed_at || s.uniware_updated_at);
   const t = Date.parse(raw || '');
   return Number.isNaN(t) ? null : t;
 }
@@ -67,11 +82,18 @@ async function emitShipmentEvents(env, ingest) {
   // channels Uniware also fulfils (CRED / FirstCry) do not have in this substrate.
   // Coarse gate in the query (index-friendly, and stops the 300-row window filling with ancient
   // rows and starving live ones); the precise per-lifecycle check happens below on occurredAt.
+  // The coarse gate must accept EITHER clock, or the ScanPush rows this fix exists for never
+  // reach occurredAt() — their `uniware_updated_at` is stale by construction.
+  // Ordered by `updated_at`, which BOTH feeds bump (verified 2026-07-29: non-null and >=
+  // uniware_updated_at on 179/179 recent rows), so neither feed can starve the other out of the
+  // 300-row window. Ordering only — `updated_at` is never the transition clock, see occurredAt().
+  const fromIso = encodeURIComponent(new Date(fromMs).toISOString());
   const q = `/rest/v1/ecom_shipments?lifecycle=in.(${want.join(',')})&shopify_order_id=not.is.null`
-    + `&uniware_updated_at=gte.${encodeURIComponent(new Date(fromMs).toISOString())}`
+    + `&or=(uniware_updated_at.gte.${fromIso},lifecycle_changed_at.gte.${fromIso})`
     + `&select=id,uniware_package_code,shopify_order_name,shopify_order_id,lifecycle,courier,`
-    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,dispatched_at,uniware_updated_at,first_seen_at`
-    + `&order=uniware_updated_at.desc.nullslast&limit=300`;
+    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,dispatched_at,uniware_updated_at,`
+    + `lifecycle_changed_at,first_seen_at,updated_at`
+    + `&order=updated_at.desc.nullslast&limit=300`;
   const r = await sbPublic(q, env);
   if (!r.ok) return { ok: false, error: `select_failed_${r.status}` };
 
@@ -86,8 +108,10 @@ async function emitShipmentEvents(env, ingest) {
       const at = occurredAt(s);
       if (at === null || at < fromMs) { stale++; return false; }
       // AGE CAP (2026-07-23, shipped with the poller seconds-vs-ms fix). For rto/in_transit/
-      // out_for_delivery, occurredAt IS uniware_updated_at — the very stamp a late Uniware
-      // re-touch bumps past the watermark. ~6k parcels sit at in_transit with dispatch weeks
+      // out_for_delivery, occurredAt is the transition clock — `lifecycle_changed_at` since
+      // 2026-07-29, `uniware_updated_at` on older rows — and BOTH can be pushed past the
+      // watermark by a late upstream re-touch (a Uniware reconcile, or a courier back-filling
+      // an old scan). ~6k parcels sit at in_transit with dispatch weeks
       // in the past; a bulk reconciliation on Uniware's side would otherwise turn each into a
       // fresh "your order is on the way / being returned" message. A courier message about a
       // parcel DISPATCHED >30 days ago is never news — drop WITHOUT marking (same rationale

@@ -16,9 +16,18 @@ Module._load = function (req, parent, isMain) {
     sbProfile: () => async (url, env, opts) => {
       if (opts && opts.method === 'PATCH') { state.patched.push(url); return { ok: true }; }
       // Emulate the coarse PostgREST gate so the test exercises the real two-stage filter.
-      const m = url.match(/uniware_updated_at=gte\.([^&]+)/);
-      const floor = m ? Date.parse(decodeURIComponent(m[1])) : -Infinity;
-      return { ok: true, data: state.rows.filter((r) => Date.parse(r.uniware_updated_at) >= floor) };
+      // The gate is an OR over BOTH clocks (2026-07-29): a ScanPush row has a fresh
+      // lifecycle_changed_at and a stale uniware_updated_at, and must still get through.
+      // THROW on no-match rather than defaulting the floor — the previous version fell back to
+      // -Infinity, so when the query shape changed the gate silently stopped being emulated and
+      // every test kept passing while testing nothing.
+      const m = url.match(/or=\(uniware_updated_at\.gte\.([^,]+),lifecycle_changed_at\.gte\.([^)]+)\)/);
+      if (!m) throw new Error('test stub: coarse-gate filter not recognised in URL — ' + url);
+      const floorU = Date.parse(decodeURIComponent(m[1]));
+      const floorL = Date.parse(decodeURIComponent(m[2]));
+      const at = (v) => { const t = Date.parse(v || ''); return Number.isNaN(t) ? -Infinity : t; };
+      return { ok: true, data: state.rows.filter((r) => at(r.uniware_updated_at) >= floorU
+                                                     || at(r.lifecycle_changed_at) >= floorL) };
     },
     sbComms: async (url) => {
       if (url.startsWith('/rest/v1/settings')) return { ok: true, data: state.settings };
@@ -39,6 +48,7 @@ const ingest = async (env, ev) => { state.ingested.push(ev); return { ok: true }
 const row = (o) => Object.assign({
   id: 'r1', uniware_package_code: 'SP/1', shopify_order_id: '123', shopify_order_name: '#LOT1',
   lifecycle: 'delivered', emitted_lifecycles: [], delivered_at: null, uniware_updated_at: null,
+  lifecycle_changed_at: null,   // NULL on every pre-2026-07-29 row, by design — see migration 0036
   dispatched_at: null, first_seen_at: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
 }, o);
 const reset = () => { state.rows = []; state.patched = []; state.ingested = []; state.orderPlaced = true; state.eventsOk = true; state.settings = [{ courier_emit_from: '2026-07-25T00:00:00+05:30' }]; };
@@ -80,6 +90,47 @@ const reset = () => { state.rows = []; state.patched = []; state.ingested = []; 
   state.rows = [row({ lifecycle: 'rto', delivered_at: null, uniware_updated_at: '2026-07-26T09:00:00Z' })];
   await SE.emitShipmentEvents({}, ingest);
   ok(state.ingested.length === 1 && state.ingested[0].name === 'order_rto', 'rto (no own stamp) emits off uniware_updated_at');
+
+  // ── THE SCANPUSH REGRESSION (found 2026-07-29) ──────────────────────────────────────────
+  // ScanPush advances `lifecycle` but cannot touch `uniware_updated_at` (odoops owns it and
+  // uses it as a poll cursor). Before `lifecycle_changed_at`, such a transition was dated by
+  // Uniware's stale stamp and dropped as `stale`: 150 of 153 live rto rows, silently.
+  reset();
+  state.rows = [row({ lifecycle: 'rto', delivered_at: null,
+    uniware_updated_at: '2026-07-15T09:00:00Z',            // stale — Uniware last touched it in the past
+    lifecycle_changed_at: '2026-07-28T16:00:00Z' })];       // fresh — the courier scan that flipped it
+  await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 1 && state.ingested[0].name === 'order_rto',
+    'SCANPUSH: rto with fresh lifecycle_changed_at + STALE uniware_updated_at emits');
+
+  // The other half of the same fix: the NULL fallback is what keeps history silent. If
+  // lifecycle_changed_at were ever backfilled from updated_at, ~208 held transitions would fire
+  // at once — 57 of them into LIVE journeys. Never backfill it (migration 0036).
+  // NB it is excluded by the COARSE gate (both clocks below the watermark), so it never reaches
+  // the `stale` counter — silence is the invariant, not which stage produced it.
+  reset();
+  state.rows = [row({ lifecycle: 'rto', delivered_at: null,
+    uniware_updated_at: '2026-07-15T09:00:00Z', lifecycle_changed_at: null })];
+  await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && state.patched.length === 0,
+    'SCANPUSH: pre-fix row (lifecycle_changed_at NULL, stale uniware) stays SILENT + unmarked');
+
+  // in_transit rides the same clock — the fix is not rto-specific.
+  reset();
+  state.rows = [row({ lifecycle: 'in_transit', delivered_at: null,
+    uniware_updated_at: '2026-07-15T09:00:00Z', lifecycle_changed_at: '2026-07-28T16:00:00Z' })];
+  await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 1 && state.ingested[0].name === 'order_shipped',
+    'SCANPUSH: in_transit emits off lifecycle_changed_at too');
+
+  // delivered keeps its OWN stamp as the authority — a late scan-push flip must not re-date a
+  // delivery that already has a real delivered_at behind the watermark.
+  reset();
+  state.rows = [row({ lifecycle: 'delivered', delivered_at: '2026-05-10T09:00:00Z',
+    uniware_updated_at: '2026-07-15T09:00:00Z', lifecycle_changed_at: '2026-07-28T16:00:00Z' })];
+  let rD = await SE.emitShipmentEvents({}, ingest);
+  ok(state.ingested.length === 0 && rD.stale === 1,
+    'delivered still governed by delivered_at, NOT lifecycle_changed_at');
 
   // AGE CAP — shipped with the 2026-07-23 poller seconds-vs-ms fix. Once re-polling works,
   // a bulk Uniware reconciliation can bump uniware_updated_at past the watermark on parcels

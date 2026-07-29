@@ -116,11 +116,28 @@ async function persistScans(env, scans, request, rawBody) {
   // transition up on its next tick. We deliberately do NOT emit events here — `emitted_lifecycles`
   // over there is the single idempotency guard, and it is what stops this feed and the Uniware
   // poller from both firing order_delivered for the same shipment.
+  //
+  // ⚠️ `lifecycle` ALONE IS NOT ENOUGH FOR THE EMITTER (fixed 2026-07-29). commsops'
+  // occurredAt() needs to know WHEN the transition happened, and for in_transit /
+  // out_for_delivery / rto it read `uniware_updated_at` — a column only the Uniware poller
+  // writes. So a ScanPush transition was dated by Uniware's stale last-touch stamp, fell below
+  // `courier_emit_from`, and was dropped as `stale`: 150 of 153 live rto rows, silently. Only
+  // `delivered` escaped, because it has its own real stamp below. We cannot stamp
+  // `uniware_updated_at` here — odoops writes it from Uniware's own `updated` field and uses it
+  // as a poll cursor — so this feed stamps `lifecycle_changed_at`, which occurredAt() now
+  // prefers (migration 0036). Use the SCAN's own timestamp, not now(): the courier telling us
+  // late must not read as a fresh event.
   for (const r of rows) {
     if (!r.matched_shipment_id || !r.mapped_lifecycle) continue;
     const cur = byAwb.get(r.awb);
     if (cur && cur.lifecycle === r.mapped_lifecycle) continue;      // no transition, nothing to do
-    const patch = { lifecycle: r.mapped_lifecycle, courier_status: r.status, updated_at: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const patch = {
+      lifecycle: r.mapped_lifecycle,
+      courier_status: r.status,
+      updated_at: now,
+      lifecycle_changed_at: r.status_at || now,
+    };
     if (r.mapped_lifecycle === 'delivered' && r.status_at) patch.delivered_at = r.status_at;
     const u = await sb(key, `/rest/v1/ecom_shipments?id=eq.${enc(r.matched_shipment_id)}`,
       { method: 'PATCH', body: JSON.stringify(patch) });
