@@ -505,6 +505,35 @@ const WEBHOOK_TOPICS = [
   'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE',
 ];
 
+// ── C2P pre-flight stock check (pure) ────────────────────────────────────────
+// WHY THIS EXISTS AT ALL, and why it runs BEFORE the pay-link is minted:
+// `draftOrderComplete` reserves its OWN inventory, and the original COD order is still holding
+// its units at that moment — so a conversion transiently needs the replacement's quantity to be
+// available ON TOP of what the original already took. If it isn't, the draft fails to complete
+// and we are holding the customer's money against an order that is still COD. That state is
+// recoverable but ugly, and it is entirely avoidable: check first, and simply don't offer the
+// payment. Checking at recreate time would be too late — the money is already taken by then.
+//
+// `inventoryQuantity` here is the CURRENT figure, i.e. already net of the original order's
+// decrement, which is exactly the number the replacement has to come out of.
+//
+// Untracked variants report null; those are treated as available (Shopify itself will not block
+// them), because refusing a conversion on missing data would be a worse failure than allowing it.
+function stockShortfall(order) {
+  const lines = (order?.lineItems?.edges || []).map((e) => e.node).filter(Boolean);
+  const short = [];
+  for (const n of lines) {
+    const need = Number(n?.quantity) || 0;
+    const have = n?.variant?.inventoryQuantity;
+    if (have == null) continue;                      // untracked → not our call to block
+    if (Number(have) < need) {
+      short.push({ variant_id: n?.variant?.id || null, title: n?.title || null,
+                   need, have: Number(have) });
+    }
+  }
+  return short;
+}
+
 // ── C2P draft-order replication (pure) ───────────────────────────────────────
 // Kept pure and exported so the risky part — faithfully copying line items, prices and
 // addresses onto a replacement order — is unit-testable. `journey-workflow.js` cannot be
@@ -648,6 +677,6 @@ module.exports = {
   verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,
   // J3 order_modify (COD→prepaid reconciliation) — raw Admin API access
   shopifyGraphQL, accessScopes,
-  // C2P cancel-and-recreate — pure replication builder (unit-tested)
-  buildC2PDraftInput,
+  // C2P cancel-and-recreate — pure builders (unit-tested)
+  buildC2PDraftInput, stockShortfall,
 };

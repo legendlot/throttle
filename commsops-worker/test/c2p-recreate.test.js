@@ -132,6 +132,59 @@ t('currency follows the order, not a hardcoded INR', () => {
   assert.strictEqual(b.input.lineItems[0].priceOverride.currencyCode, 'USD');
 });
 
+// ── pre-flight stock check ──
+// The replacement order reserves its OWN inventory while the original still holds its units, so
+// this decides whether we are allowed to ask for money at all.
+const stockOrder = (lines) => ({ id: 'gid://shopify/Order/1', name: '#LOT1',
+  lineItems: { edges: lines.map((l) => ({ node: l })) } });
+
+t('no shortfall when stock covers the replacement', () => {
+  assert.deepStrictEqual(SH.stockShortfall(stockOrder([
+    { quantity: 1, title: 'Tyres', variant: { id: 'v1', inventoryQuantity: 3 } },
+  ])), []);
+});
+
+t('exactly enough is enough (>= not >)', () => {
+  assert.deepStrictEqual(SH.stockShortfall(stockOrder([
+    { quantity: 2, title: 'Tyres', variant: { id: 'v1', inventoryQuantity: 2 } },
+  ])), []);
+});
+
+t('flags a shortfall, reporting need vs have', () => {
+  const short = SH.stockShortfall(stockOrder([
+    { quantity: 2, title: 'Tyres', variant: { id: 'v1', inventoryQuantity: 1 } },
+  ]));
+  assert.strictEqual(short.length, 1);
+  assert.deepStrictEqual(short[0], { variant_id: 'v1', title: 'Tyres', need: 2, have: 1 });
+});
+
+t('ZERO stock is a shortfall — the exact case that strands a payment', () => {
+  assert.strictEqual(SH.stockShortfall(stockOrder([
+    { quantity: 1, title: 'Tyres', variant: { id: 'v1', inventoryQuantity: 0 } },
+  ])).length, 1);
+});
+
+t('untracked inventory (null) does NOT block — refusing on missing data is the worse failure', () => {
+  assert.deepStrictEqual(SH.stockShortfall(stockOrder([
+    { quantity: 5, title: 'Untracked', variant: { id: 'v1', inventoryQuantity: null } },
+  ])), []);
+});
+
+t('checks EVERY line, not just the first', () => {
+  const short = SH.stockShortfall(stockOrder([
+    { quantity: 1, title: 'Fine',  variant: { id: 'v1', inventoryQuantity: 9 } },
+    { quantity: 3, title: 'Short', variant: { id: 'v2', inventoryQuantity: 1 } },
+  ]));
+  assert.strictEqual(short.length, 1);
+  assert.strictEqual(short[0].title, 'Short');
+});
+
+t('an empty / missing order yields no shortfall (fails open)', () => {
+  assert.deepStrictEqual(SH.stockShortfall(null), []);
+  assert.deepStrictEqual(SH.stockShortfall({}), []);
+  assert.deepStrictEqual(SH.stockShortfall(stockOrder([])), []);
+});
+
 // ── compile validator ──
 const journeyWith = (op) => ({
   entry: 'a',

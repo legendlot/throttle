@@ -52,6 +52,10 @@ const DRAFT_UPDATE_M = `mutation($id:ID!,$input:DraftOrderInput!){ draftOrderUpd
 // out-of-band via Cashfree.
 const DRAFT_COMPLETE_M = `mutation($id:ID!){ draftOrderComplete(id:$id){
   draftOrder{ id order{ id name } } userErrors{ field message } } }`;
+// Pre-flight for the C2P pay-link: can the REPLACEMENT order actually be stocked? Needs
+// read_products for `variant`. See SH.stockShortfall for why this must run before the money.
+const ORDER_STOCK_Q = `query($id:ID!){ order(id:$id){ id name
+  lineItems(first:100){ edges{ node{ quantity title variant{ id inventoryQuantity } } } } } }`;
 
 const money = (amount, currencyCode) => ({ amount: String(amount), currencyCode });
 // Shopify money arrives as a string; compare in paise to dodge float drift.
@@ -384,6 +388,34 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           saving: Math.round((codTotal - amount) * 100) / 100,
           saving_display: `₹${(Math.round((codTotal - amount) * 100) / 100).toLocaleString('en-IN')}`,
         };
+      }
+      // PRE-FLIGHT STOCK CHECK (2026-07-29) — C2P only, and deliberately BEFORE the link is
+      // minted. `draftOrderComplete` reserves its own inventory while the original order is
+      // still holding its units, so a conversion needs the replacement's quantity available on
+      // top. Without it the draft cannot complete and we end up holding the customer's money
+      // against a still-COD order. That happened once (for a different reason — a missing
+      // scope), and the lesson generalises: never ask for money we cannot convert.
+      //
+      // Fails the step (→ the journey's `failed` branch) rather than throwing, and alerts,
+      // because a declined conversion is an ops signal — it means a SKU is too thin for C2P.
+      // Fails OPEN on an unreadable order: a transient Shopify blip must not silently switch
+      // C2P off, and the recreate path still verifies before committing anything.
+      if (s.pricing === 'c2p_prepaid') {
+        const soid = triggerProps?.shopify_order_id ?? triggerProps?.order_id ?? null;
+        if (soid) {
+          const sgid = String(soid).startsWith('gid://') ? String(soid) : `gid://shopify/Order/${soid}`;
+          try {
+            const sq = await SH.shopifyGraphQL(env, ORDER_STOCK_Q, { id: sgid });
+            const short = SH.stockShortfall(sq?.order);
+            if (short.length) {
+              const detail = short.map((x) => `${x.title || x.variant_id}: need ${x.need}, have ${x.have}`).join('; ');
+              await AL.alert(env, `:warning: C2P declined on ${sq?.order?.name || soid} — not enough stock to build the replacement (${detail}). NO money was taken. The order stays COD.`);
+              return { outcome: 'failed', reason: `insufficient_stock:${detail}`.slice(0, 160) };
+            }
+          } catch (e) {
+            console.log('c2p_stock_precheck_skipped', String(e?.message || e).slice(0, 120));
+          }
+        }
       }
       const idr = await A.sbComms(`/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.phone&select=value&order=last_seen.desc&limit=1`, env);
       const phone = idr.ok ? idr.data?.[0]?.value : null;
