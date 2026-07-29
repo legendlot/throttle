@@ -347,6 +347,23 @@ function mapOrderEvent(o, name) {
       : (Array.isArray(o.payment_gateway_names) || o.financial_status) ? false
       : null,
     line_item_count: Array.isArray(o.line_items) ? o.line_items.length : null,
+    // ORDER TAGS (2026-07-29) — carried so a journey can branch on how an order came to be.
+    //
+    // WHY: one C2P conversion fired SIX WhatsApp messages, three of them wrong — Order Placed on
+    // the replacement order, and Order Cancelled on the original, the latter arriving ~15s after
+    // "payment received" and reading "your order has been cancelled". Neither is distinguishable
+    // from a genuine order/cancellation on any other property: the C2P cancellation carries
+    // is_cod=true + financial_status=voided + a COD gateway, exactly like a real one. The ONLY
+    // marker is the tag Relay itself writes (`relay-c2p-replaced-by-…` / `relay-c2p-converted`),
+    // and it was being dropped here.
+    //
+    // Shopify sends `tags` as a COMMA-SEPARATED STRING on REST webhooks (an array on some GraphQL
+    // shapes), and `evalEventProperty`'s `contains` stringifies either — so a condition node with
+    // op `contains` works on both without normalising. Left as-received for that reason.
+    //
+    // The recreate path tags the original BEFORE cancelling it (that ordering exists for
+    // idempotency), which is what puts the tag in the cancelled-webhook payload at all.
+    tags: o.tags ?? null,
     // ── message-copy bindings (these were being dropped, leaving WA/email templates to
     //    fall back to generic values): {items}, {order_url}, {tracking_url}.
     items: summariseItems(o.line_items),

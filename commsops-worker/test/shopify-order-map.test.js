@@ -180,5 +180,56 @@ t('mapFulfillmentEvent extracts contact when present, empty when not', () => {
   assert.equal(bare.identifiers.length, 0);
 });
 
+// ── order tags → the C2P self-message suppression (2026-07-29) ──
+// A journey has to be able to tell a C2P-generated order/cancellation from a real one, and the
+// ONLY signal is the tag Relay writes. These pin the whole chain: the mapper carries tags
+// through untouched, and `contains` matches them in either shape Shopify sends.
+const G = require('../src/journey-graph.js');
+
+t('mapOrderEvent carries order tags through (the C2P suppression signal)', () => {
+  const ev = mapOrderEvent({
+    id: 1, email: 'a@b.com', created_at: new Date().toISOString(), total_price: '241.53',
+    tags: 'relay-c2p-converted, relay-c2p-from-#LOT45010',
+  }, 'order_placed');
+  assert.equal(ev.properties.tags, 'relay-c2p-converted, relay-c2p-from-#LOT45010');
+});
+
+t('mapOrderEvent leaves tags null when Shopify sends none (never an empty-string false match)', () => {
+  const ev = mapOrderEvent({ id: 2, email: 'a@b.com', created_at: new Date().toISOString() }, 'order_placed');
+  assert.strictEqual(ev.properties.tags, null);
+});
+
+t('contains matches a C2P tag in Shopify\'s comma-STRING shape', () => {
+  const props = { tags: 'relay-c2p-replaced-by-#LOT45012, something-else' };
+  assert.strictEqual(G.evalEventProperty({ field: 'tags', op: 'contains', value: 'relay-c2p-replaced-by' }, props), true);
+});
+
+t('contains matches a C2P tag in the ARRAY shape too (String() joins on commas)', () => {
+  const props = { tags: ['relay-c2p-converted', 'x'] };
+  assert.strictEqual(G.evalEventProperty({ field: 'tags', op: 'contains', value: 'relay-c2p-converted' }, props), true);
+});
+
+t('a genuine order/cancellation does NOT match — suppression must not eat real messages', () => {
+  for (const tags of [null, undefined, '', 'vip, gift-wrap']) {
+    assert.strictEqual(
+      G.evalEventProperty({ field: 'tags', op: 'contains', value: 'relay-c2p-replaced-by' }, { tags }), false,
+      `tags=${JSON.stringify(tags)} must not be treated as a C2P order`);
+  }
+});
+
+t('the replacement order is identifiable by gateway "manual" — no tag needed', () => {
+  // draftOrderComplete records gateway "manual"; a real storefront order never does. This is the
+  // independent signal, so the Order Placed suppression does not depend on tag propagation.
+  assert.strictEqual(G.evalEventProperty(
+    { field: 'payment_gateway_names', op: 'contains', value: 'manual' },
+    { payment_gateway_names: ['manual'] }), true);
+  assert.strictEqual(G.evalEventProperty(
+    { field: 'payment_gateway_names', op: 'contains', value: 'manual' },
+    { payment_gateway_names: ['Cash on Delivery (COD)'] }), false);
+  assert.strictEqual(G.evalEventProperty(
+    { field: 'payment_gateway_names', op: 'contains', value: 'manual' },
+    { payment_gateway_names: ['shopflo'] }), false);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
