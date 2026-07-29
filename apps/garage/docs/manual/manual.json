@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
-  "version": "1.9.0",
-  "date": "2026-06-27",
+  "version": "1.10.0",
+  "date": "2026-07-29",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -328,6 +328,14 @@
           "id": "scan-direct-issue",
           "title": "Direct Issue",
           "file": "scan-direct-issue.html",
+          "roles": [
+            "sto"
+          ]
+        },
+        {
+          "id": "scan-cycle-count",
+          "title": "Cycle Count",
+          "file": "scan-cycle-count.html",
           "roles": [
             "sto"
           ]

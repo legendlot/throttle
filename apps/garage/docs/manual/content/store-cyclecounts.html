@@ -1,4 +1,4 @@
-<p class="lead">Cycle Counts keep recorded stock honest against the shelf. The store picks which due parts to count, prints a sheet, enters counted quantities <strong>blind</strong> (the system figure is hidden until you enter yours), and on completion the system proposes stock adjustments for any variance.</p>
+<p class="lead">Cycle Counts keep recorded stock honest against the shelf. The everyday way to run one is to <strong>scan the QR on each part bag</strong>: one scan counts a whole bag, so nobody types a quantity. On completion the system proposes stock adjustments for anything that does not match.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Verifying shelf stock against the system.</div></div>
@@ -7,16 +7,34 @@
   <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Proposes adjustments.</div></div>
 </div>
 
-<h2 class="sec">Running a count</h2>
+<h2 class="sec">Two ways to start a count</h2>
+<p><strong>Bag-Scan Count</strong> is the one to use day to day. Press it and the count opens straight away with no parts chosen, because an audit should record what is actually on the shelf rather than what you expected to find. Every bag you scan adds its part to the count the first time that part is seen.</p>
+<p><strong>Pick Parts</strong> is the planned route. It lists the parts that are due a count (classed A, B or C by how much they move and what they cost), you tick the ones you want, and the count opens with exactly those lines. Use it when you are working through the due list rather than walking a rack.</p>
+
+<h2 class="sec">Running a bag-scan count</h2>
 <ol class="steps">
-  <li><span class="s-title">+ New Count.</span> The screen lists parts due (classed A / B / C by how much they move and cost). Pick the parts, name the area and counter, and create.</li>
-  <li><span class="s-title">Print the sheet</span> and count the shelf.</li>
-  <li><span class="s-title">Enter each counted quantity</span> and press Enter to save that line. The variance for that one line is then revealed.</li>
-  <li><span class="s-title">Complete the count</span> once every line has a figure. The system proposes a stock adjustment for each variance.</li>
+  <li><span class="s-title">Press + Bag-Scan Count.</span> The count opens immediately and is ready to receive scans.</li>
+  <li><span class="s-title">On the scanner, choose Store, then Cycle Count.</span> The station itself is covered in the Cycle Count chapter of the Scanner part.</li>
+  <li><span class="s-title">Scan the QR on each bag.</span> One scan counts the whole bag. The part appears on this screen as soon as its first bag is scanned.</li>
+  <li><span class="s-title">Watch it fill in.</span> The Bags Scanned tile and the Bags column refresh on their own every few seconds, so you can follow the floor without reloading.</li>
+  <li><span class="s-title">Complete the count</span> when the shelves are done. The system proposes a stock adjustment for each part that does not match.</li>
 </ol>
-<p>If a line looks wrong you can flag it for <strong>recount</strong> (with a reason); a fresh recount is expected to be done by a different counter.</p>
+
+<div class="callout floor">
+  <div class="c-title">&#9874; Scanning the same bag twice is safe</div>
+  <p>A bag only ever counts once per count. Scan it again and the number does not move; the scanner says <strong>Already counted</strong> rather than showing an error. This is deliberate, and it is what makes the count workable on a real floor: you can re-walk a rack you lost your place on, or put two people on the same aisle, without inflating the figure.</p>
+</div>
+
+<h2 class="sec">Typing a count instead</h2>
+<p>You can still enter a figure by hand on any line, which is the right thing to do for parts that are not bagged, or for a loose remainder. Type the quantity and press Enter to save that line. Where a part has both, the typed figure replaces the scanned total on that line, so enter the full quantity rather than only the loose extra.</p>
+<p>If a line looks wrong you can flag it for <strong>recount</strong> with a reason; a fresh recount is expected to be done by a different counter.</p>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Blind counting, and completing only proposes</div>
-  <p>While a count is in progress the system quantity is hidden until you save your figure on that line; this is deliberate, to stop the count being biased. <strong>Completing a count does not change stock</strong>: it only <em>proposes</em> adjustments, which still need approval and posting on the Stock Adjustments screen. Watch the variance colours: over (counted more than the system) shows red, under shows yellow.</p>
+  <p>While a count is in progress the system quantity is hidden until that line has a figure; this is deliberate, to stop the count being biased. <strong>Completing a count does not change stock</strong>: it only <em>proposes</em> adjustments, which still need approval and posting on the Stock Adjustments screen. Scanning on its own never moves stock either. Watch the variance colours: over (counted more than the system) shows red, under shows yellow.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; You do not have to count everything at once</div>
+  <p>A bag-scan count has no fixed scope. Count one rack, one product, or the whole store, and complete it when you stop. Only the parts you actually scanned are on the count, so nothing you did not look at is ever reported as missing.</p>
 </div>

@@ -1,0 +1,39 @@
+<p class="lead">Cycle Count is the scanner station for the store shelf audit. Start a count in Garage, then scan the QR printed on each part bag. The bag record already holds the part code and how many are in the bag, so one scan counts the whole bag and you never type a quantity.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Station</div><div class="g-val"><span class="mono">Cycle Count</span> &middot; no line.</div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Each part <strong>bag QR</strong> (BAG- code).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Feeds</div><div class="g-val">The open count in Garage.</div></div>
+</div>
+
+<h2 class="sec">The flow</h2>
+<ol class="steps">
+  <li><span class="s-title">Start the count in Garage first.</span> Cycle Counts, then + Bag-Scan Count. Without an open count the station has nowhere to put the scans and will tell you so.</li>
+  <li><span class="s-title">Set the device to Store, then Cycle Count</span> and sign in with your badge as usual.</li>
+  <li><span class="s-title">Scan the QR on each bag.</span> A green flash and a beep mean it counted. The toast shows the part, how many that bag added, and the running total for that part.</li>
+  <li><span class="s-title">Keep going until the shelves are done</span>, then complete the count back in Garage.</li>
+</ol>
+
+<div class="callout floor">
+  <div class="c-title">&#9874; Re-scanning a bag is safe, and says so</div>
+  <p>Each bag counts once per count. If it is scanned again you get an amber <strong>Already counted</strong> with the unchanged total, not a red reject. Nothing is broken and nothing is lost. Scan freely: re-walk a rack, or work an aisle with someone else, without worrying about counting anything twice.</p>
+</div>
+
+<h2 class="sec">What the messages mean</h2>
+<ul class="bullets">
+  <li><span class="mono">&#10003; PART +50 &rarr; 320</span> counted. That bag added 50, and 320 of that part have been counted so far.</li>
+  <li><span class="mono">Already counted</span> that exact bag was scanned before on this count. The total is unchanged, which is correct.</li>
+  <li><span class="mono">No count in progress</span> nobody has started a count in Garage yet, or the one you were on has been completed or cancelled. Start one and carry on.</li>
+  <li><span class="mono">Unknown bag label</span> the code is not a bag we hold. Check you scanned a bag QR and not a car sticker or a box label.</li>
+</ul>
+
+<div class="callout note">
+  <div class="c-title">&#9432; This station never changes stock</div>
+  <p>Scanning only records what you found. Nothing moves until the count is completed in Garage and the resulting adjustments are approved and posted on the Stock Adjustments screen. That means a mis-scan here can never quietly alter stock; it can only be corrected before anyone approves anything.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A part that is not bagged still needs a hand count</div>
+  <p>Only bagged stock can be scanned. Loose parts, opened bags and part-full remainders are not counted by this station, so enter those quantities by hand on the count in Garage. If you scan a part&rsquo;s bags but ignore a loose pile of the same part, the count will read low and will be raised as a variance.</p>
+</div>

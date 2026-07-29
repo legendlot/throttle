@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.10.0] - 2026-07-29
+
+### Added
+- **Cycle Count** scanner chapter (Scanner part). The new Store station for the shelf audit: scan the QR on each part bag and one scan counts the whole bag, so nobody types a quantity. Covers what each on-screen message means, that a re-scan is safe and reports "Already counted" rather than an error, and that the station never moves stock on its own.
+
+### Changed
+- **Cycle Counts** chapter rewritten around the bag-scan flow, which is now the everyday way to run a count. Documents the two entry points (**Bag-Scan Count** for walking a rack, **Pick Parts** for working the due list), the live Bags Scanned tile and Bags column, that a bag-scan count has no fixed scope so only what you scanned is on the count, and that typing a figure by hand replaces the scanned total on that line (so enter the full quantity, not just the loose remainder). Blind counting and "completing only proposes" are unchanged and still called out.
+
 ## [1.9.0] - 2026-06-27
 
 ### Changed
