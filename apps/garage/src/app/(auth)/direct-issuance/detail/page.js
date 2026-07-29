@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch, garageFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast, Modal, ConfirmModal, printWindow } from '@throttle/ui';
+import { Spinner, EmptyState, useToast, Modal, ConfirmModal, printWindow, Combobox } from '@throttle/ui';
 import QRCode from 'qrcode';
 import { PURPOSES, STATUSES, StatusBadge, fmtTs, purposeLabel } from '../page.js';
 
@@ -75,11 +75,24 @@ function DetailInner() {
   }, [session, canRequest, id, toast]);
 
   useEffect(() => { load(); }, [load]);
+  // Two sources, merged. `getProcurementParts` reads bom_register only, so any part
+  // not on an active BOM was absent (347 of 1,780 active parts, incl. all of LOT Build
+  // which is catalogue-only by RULE-LOTBUILD-001). `getPartsCatalog` reads
+  // material_master and includes non-BOM parts, but carries no `product` — so the BOM
+  // source stays FIRST for its product hint and the catalogue only fills the gaps.
   useEffect(() => {
     if (!session) return;
-    garageFetch('getProcurementParts', {}, session)
-      .then(rows => setPartsCat(Array.isArray(rows) ? rows : []))
-      .catch(() => setPartsCat([]));
+    Promise.all([
+      garageFetch('getProcurementParts', {}, session).catch(() => []),
+      garageFetch('getPartsCatalog',     {}, session).catch(() => []),
+    ]).then(([bomParts, catalogue]) => {
+      const merged = new Map();
+      for (const p of (Array.isArray(bomParts) ? bomParts : [])) merged.set(p.part_code, p);
+      for (const p of (Array.isArray(catalogue) ? catalogue : [])) {
+        if (!merged.has(p.part_code)) merged.set(p.part_code, p);
+      }
+      setPartsCat([...merged.values()].sort((a, b) => String(a.part_code).localeCompare(String(b.part_code))));
+    }).catch(() => setPartsCat([]));
   }, [session]);
 
   const isDraft    = header?.status === 'draft';
@@ -203,11 +216,20 @@ function DetailInner() {
   function pickPart(idx, partCode) {
     const p = partsCat.find(x => x.part_code === partCode);
     updateItem(idx, {
-      part_code: partCode,
+      part_code: partCode || '',
       part_name: p?.part_name || '',
       product:   p?.product   || '',
     });
   }
+
+  // Standard part-picker options (PATTERN-160). `label` carries the part NAME so typing
+  // a name matches, which is the whole point of Piyush's request; `hint` adds product /
+  // category / type so "flare tray" or "ghost spoiler" resolves too.
+  const partOptions = useMemo(() => partsCat.map(p => ({
+    value: p.part_code,
+    label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+    hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
+  })), [partsCat]);
 
   if (!canRequest) {
     return <div style={{ padding: 16 }}><EmptyState title="Access denied" /></div>;
@@ -368,12 +390,14 @@ function DetailInner() {
                           <td style={td}>
                             {isDraft ? (
                               it.kind === 'part' ? (
-                                <input
-                                  list={`parts-list-${idx}`}
+                                // `portal` is REQUIRED here: the picker lives in a table cell,
+                                // so without it the dropdown is clipped inside the cell (CORE.md).
+                                <Combobox
+                                  options={partOptions}
                                   value={it.part_code || ''}
-                                  onChange={e => pickPart(idx, e.target.value)}
-                                  placeholder="part_code"
-                                  style={{ ...input, fontFamily: 'var(--mono)', fontSize: 11 }}
+                                  onChange={(v) => pickPart(idx, v)}
+                                  placeholder="Search part code or name…"
+                                  portal
                                 />
                               ) : (
                                 <input
@@ -387,13 +411,6 @@ function DetailInner() {
                               <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
                                 {it.kind === 'part' ? it.part_code : it.unit_upc}
                               </span>
-                            )}
-                            {isDraft && it.kind === 'part' && (
-                              <datalist id={`parts-list-${idx}`}>
-                                {partsCat.slice(0, 500).map(p => (
-                                  <option key={p.part_code} value={p.part_code}>{p.part_name}</option>
-                                ))}
-                              </datalist>
                             )}
                           </td>
                           <td style={td}>
