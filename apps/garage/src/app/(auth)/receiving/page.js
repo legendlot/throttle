@@ -123,6 +123,9 @@ export default function ReceivingPage() {
 
   // Box intake
   const [boxQtys,      setBoxQtys]       = useState({});    // key: `${lineId}:OK` or `${lineId}:Damaged`
+  const [boxExpects,   setBoxExpects]    = useState({});    // key: line_id → expected qty IN THIS BOX
+  const [varReport,    setVarReport]     = useState(null);  // inward variance report payload
+  const [varBusy,      setVarBusy]       = useState(false);
   const [unexpected,   setUnexpected]    = useState([]);    // [{desc, ok, damaged}]
   const [boxSubmitting, setBoxSubmitting] = useState(false);
   const [isAmendMode,  setIsAmendMode]   = useState(false); // true when reopening a box that already has entries
@@ -365,6 +368,81 @@ export default function ReceivingPage() {
     } catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
+  // Persist what was expected in this box alongside the count. Best-effort: a failure
+  // here must never lose the counts the operator just entered, so it is logged and
+  // swallowed rather than surfaced as a failed intake.
+  async function saveBoxExpectations(markId) {
+    const expectations = (lines || [])
+      .filter(l => l.line_type !== 'unexpected')
+      .map(l => ({ part_code: l.part_code, qty_expected: boxExpects[l.line_id] }))
+      .filter(e => e.part_code && Number.isFinite(Number(e.qty_expected)));
+    if (!expectations.length) return;
+    try {
+      await workerFetch('setBoxExpectations', { data: { mark_id: markId, expectations } }, session);
+    } catch (e) {
+      console.warn('[receiving] box expectations not saved:', e?.message);
+    }
+  }
+
+  // ── Inward variance report ────────────────────────────────────────────────────
+  // Scope is "boxes counted since the last report", so it needs no tranche object and
+  // copes with boxes turning up days apart.
+  async function loadVarianceReport() {
+    if (!currentShipmentId) return;
+    setVarBusy(true);
+    try {
+      const r = await workerFetch('getInwardVarianceReport', { data: { shipment_id: currentShipmentId } }, session);
+      if (!r?.ok) { showToast(r?.data?.error || 'Could not build report', 'error'); return; }
+      setVarReport(r.data);
+    } catch (e) {
+      showToast(e.message || 'Could not build report', 'error');
+    } finally { setVarBusy(false); }
+  }
+
+  async function sendVarianceReport() {
+    if (!varReport) return;
+    const markCodes = varReport.boxes?.codes || [];
+    setVarBusy(true);
+    try {
+      // Slack delivery is a later step (the channel does not exist yet). Until it does,
+      // sending copies the report to the clipboard so it can be pasted, and stamps the
+      // boxes so the next report starts clean.
+      const text = varianceReportText(varReport);
+      try { await navigator.clipboard.writeText(text); } catch { /* clipboard blocked */ }
+      const ids = (shipmentData?.marks || [])
+        .filter(m => markCodes.includes(m.mark_code) || markCodes.includes(m.mark_id))
+        .map(m => m.mark_id);
+      if (ids.length) {
+        await workerFetch('markVarianceReported', { data: { shipment_id: currentShipmentId, mark_ids: ids } }, session);
+      }
+      showToast(`Report copied — ${ids.length} box${ids.length === 1 ? '' : 'es'} marked as reported`, 'success');
+      setVarReport(null);
+      await refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Send failed', 'error');
+    } finally { setVarBusy(false); }
+  }
+
+  function varianceReportText(r) {
+    const L = [];
+    L.push(`Inward variance — ${r.shipment_id}${r.po_reference ? ` (PO ${r.po_reference})` : ''}`);
+    L.push(`${r.supplier || ''} · ${r.boxes.in_this_report} box(es) this inward · ${r.boxes.counted}/${r.boxes.total} counted overall`);
+    L.push('');
+    for (const p of (r.inward || [])) {
+      const v = p.variance;
+      const tag = v == null ? 'no expected qty set' : v === 0 ? 'matches' : (v > 0 ? `+${v} over` : `${v} short`);
+      L.push(`${p.part_code} ${p.part_name} — expected ${p.expected}, received ${p.received}${p.damaged ? `, damaged ${p.damaged}` : ''} (${tag})`);
+    }
+    if (r.po_complete && r.po_summary) {
+      L.push('');
+      L.push('PO complete:');
+      for (const p of r.po_summary) {
+        L.push(`  ${p.part_code} — ordered ${p.ordered}, received ${p.received}${p.delta === 0 ? ' (in full)' : p.delta > 0 ? ` (+${p.delta} extra)` : ` (${-p.delta} short)`}`);
+      }
+    }
+    return L.join('\n');
+  }
+
   // ── Box intake ────────────────────────────────────────────────────────────────
   function openBoxIntake(markId) {
     // Pre-fill from already-loaded line entries (refreshDetail loads them per line).
@@ -386,11 +464,38 @@ export default function ReceivingPage() {
     setUnexpected([]);
     setIsAmendMode(hasPrior);
     if (!reconExpanded) setReconExpanded(true);
+    seedBoxExpectations(markId);
+  }
+
+  // Expected qty IN THIS BOX. The PO figure on the line is the whole order, which is
+  // why a per-inward variance could never be computed from it (boxes arrive over days).
+  // Auto-fill = outstanding ÷ remaining boxes, per Afshaan; always overridable, and a
+  // value already saved for this box always wins over the auto-fill.
+  async function seedBoxExpectations(markId) {
+    const allMarks   = shipmentData?.marks || [];
+    const countedIds = new Set((lines || []).flatMap(l => l._entries || []).map(e => e.mark_id).filter(Boolean));
+    // This box counts as remaining even if it already has counts (we are re-opening it).
+    const remaining  = Math.max(1, allMarks.filter(m => !countedIds.has(m.mark_id) || m.mark_id === markId).length);
+
+    let saved = {};
+    try {
+      const r = await workerFetch('getBoxExpectations', { data: { mark_id: markId } }, session);
+      if (r?.ok) for (const row of (r.data?.expectations || [])) saved[row.part_code] = Number(row.qty_expected);
+    } catch { /* first box on this shipment — nothing saved yet */ }
+
+    const next = {};
+    (lines || []).filter(l => l.line_type !== 'unexpected').forEach(l => {
+      if (saved[l.part_code] != null) { next[l.line_id] = saved[l.part_code]; return; }
+      const outstanding = Math.max(0, (parseInt(l.qty_expected) || 0) - (parseInt(l.qty_counted) || 0));
+      next[l.line_id] = Math.round(outstanding / remaining);
+    });
+    setBoxExpects(next);
   }
 
   function closeBoxIntake() {
     setActiveMarkId(null);
     setBoxQtys({});
+    setBoxExpects({});
     setUnexpected([]);
     setIsAmendMode(false);
   }
@@ -430,6 +535,7 @@ export default function ReceivingPage() {
         const res = await workerFetch('amendBoxIntake', {
           data: { shipment_id: currentShipmentId, mark_id: activeMarkId, lines: amendLines }
         }, session);
+        await saveBoxExpectations(activeMarkId);
         const cleaned = res.data?.bags_cleaned_up || 0;
         const topup   = !!res.data?.bags_topped_up_needed;
         let msg = 'Box updated — ' + res.data.entries_created + ' entries';
@@ -465,6 +571,7 @@ export default function ReceivingPage() {
       const res = await workerFetch('postBoxIntake', {
         data: { shipment_id: currentShipmentId, mark_id: activeMarkId, entries, unexpected: unexpectedItems }
       }, session);
+      await saveBoxExpectations(activeMarkId);
       showToast('Box recorded — ' + res.data.entries_created + ' entries', 'success');
       closeBoxIntake();
       await refreshDetail();
@@ -501,6 +608,7 @@ export default function ReceivingPage() {
       await workerFetch('postBoxIntake', {
         data: { shipment_id: currentShipmentId, mark_id: activeMarkId, entries, unexpected: unexpectedItems }
       }, session);
+      await saveBoxExpectations(activeMarkId);
 
       if (okLineIds.length === 0) {
         showToast('Box recorded — no OK qty, no labels to print', 'info');
@@ -1075,6 +1183,85 @@ export default function ReceivingPage() {
             )}
           </div>
 
+          {/* Inward variance report — expected vs received for the boxes counted since
+              the last report. Deliberately separate from the PO totals above, which only
+              become conclusive once nothing is outstanding. */}
+          <div style={{ ...panel, marginBottom: 16 }}>
+            <div style={panelHdr}>
+              <span>Inward Variance</span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button onClick={loadVarianceReport} disabled={varBusy} style={btnSec}>
+                  {varBusy ? 'WORKING…' : (varReport ? '↻ REFRESH' : 'BUILD REPORT')}
+                </button>
+                {varReport && !varReport.nothing_to_report && (
+                  <button onClick={sendVarianceReport} disabled={varBusy} style={btnPri}>SEND REPORT</button>
+                )}
+              </span>
+            </div>
+            <div style={{ padding: 12 }}>
+              {!varReport ? (
+                <div style={{ fontSize: 11, color: 'var(--t3)' }}>
+                  Build a report after an inward to compare what was <strong>expected in the boxes you just counted</strong> against what actually arrived.
+                  It covers only boxes counted since the last report, so run it after each arrival.
+                </div>
+              ) : varReport.nothing_to_report ? (
+                <div style={{ fontSize: 11, color: 'var(--t3)' }}>No newly counted boxes since the last report.</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
+                    <strong>{varReport.boxes.in_this_report}</strong> box(es) in this report · {varReport.boxes.counted}/{varReport.boxes.total} counted overall
+                    {varReport.po_reference ? <> · PO <span style={{ fontFamily: 'var(--mono)' }}>{varReport.po_reference}</span></> : null}
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr>
+                      <th style={th}>Part</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Expected</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Received</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Variance</th>
+                      <th style={{ ...th, textAlign: 'right' }}>PO outstanding</th>
+                    </tr></thead>
+                    <tbody>
+                      {varReport.inward.map(p => {
+                        const po = (varReport.po || []).find(x => x.part_code === p.part_code);
+                        const v  = p.variance;
+                        const tone = v == null ? 'var(--t3)' : v === 0 ? 'var(--state-success-fg)' : '#f59e0b';
+                        return (
+                          <tr key={p.part_code}>
+                            <td style={td}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)' }}>{p.part_code}</span>
+                              <span style={{ marginLeft: 6, fontSize: 11 }}>{p.part_name}</span>
+                            </td>
+                            <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)' }}>{p.expected || (v == null ? '—' : 0)}</td>
+                            <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)' }}>
+                              {p.received}{p.damaged ? <span style={{ color: 'var(--state-error-fg)', fontSize: 10 }}> +{p.damaged} dmg</span> : null}
+                            </td>
+                            <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: tone }}>
+                              {v == null ? 'not set' : v === 0 ? 'match' : (v > 0 ? `+${v}` : v)}
+                            </td>
+                            <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{po ? po.outstanding : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {varReport.po_complete && (
+                    <div style={{ marginTop: 10, padding: '8px 10px', background: 'rgba(16,140,90,.08)', border: '1px solid rgba(16,140,90,.25)', borderRadius: 3, fontSize: 11 }}>
+                      <strong>PO fully received.</strong>{' '}
+                      {(varReport.po_summary || []).map(p => (
+                        <span key={p.part_code} style={{ marginRight: 10, fontFamily: 'var(--mono)' }}>
+                          {p.part_code}: {p.delta === 0 ? 'in full' : p.delta > 0 ? `+${p.delta} extra` : `${-p.delta} short`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 10, color: 'var(--t3)' }}>
+                    Send copies the report to your clipboard and marks these boxes as reported. Posting it to Slack automatically is a later step.
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* Marks panel */}
           <div style={{ ...panel, marginBottom: 16 }}>
             <div style={panelHdr}>
@@ -1251,7 +1438,7 @@ export default function ReceivingPage() {
                   if (!expectedLines.length) {
                     return <p style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 12 }}>No expected items. Link a PO when creating the shipment, or use + Add Unexpected below.</p>;
                   }
-                  const cols = isFbu ? '1.2fr 1fr 1fr 80px 80px 80px' : '90px 1fr 80px 80px 80px';
+                  const cols = isFbu ? '1.2fr 1fr 1fr 80px 80px 80px 80px' : '90px 1fr 80px 80px 80px 80px';
                   return (
                     <div>
                       <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '4px 0', marginBottom: 2 }}>
@@ -1260,7 +1447,8 @@ export default function ReceivingPage() {
                         ) : (
                           <><span style={lbl}>Code</span><span style={lbl}>Part Name</span></>
                         )}
-                        <span style={{ ...lbl, textAlign: 'right' }}>Expected</span>
+                        <span style={{ ...lbl, textAlign: 'right' }} title="Total ordered on the PO">PO Qty</span>
+                        <span style={{ ...lbl, textAlign: 'center' }} title="Expected in THIS box — auto-filled as outstanding ÷ remaining boxes, override as needed">Exp/box</span>
                         <span style={{ ...lbl, textAlign: 'center', color: 'var(--state-success-fg)' }}>✓ OK</span>
                         <span style={{ ...lbl, textAlign: 'center', color: 'var(--state-error-fg)'   }}>✕ Dmg</span>
                       </div>
@@ -1287,11 +1475,36 @@ export default function ReceivingPage() {
                           <div>
                             <input
                               type="number" min="0"
-                              value={boxQtys[`${l.line_id}:OK`] || ''}
-                              onChange={e => setBoxQty(l.line_id, 'OK', e.target.value)}
-                              style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 2, padding: '4px 6px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
+                              value={boxExpects[l.line_id] ?? ''}
+                              onChange={e => setBoxExpects(prev => ({ ...prev, [l.line_id]: Math.max(0, parseInt(e.target.value) || 0) }))}
+                              title="Expected in this box. Auto-filled from outstanding ÷ remaining boxes — change it if this box is different."
+                              style={{ background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 2, padding: '4px 6px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
                             />
                           </div>
+                          {(() => {
+                            // Flag only, never block — Piyush's explicit answer: "just flag it
+                            // and let the counter carry on."
+                            const exp = boxExpects[l.line_id];
+                            const got = parseInt(boxQtys[`${l.line_id}:OK`]) || 0;
+                            const typed = boxQtys[`${l.line_id}:OK`] !== undefined && boxQtys[`${l.line_id}:OK`] !== '';
+                            const off = typed && exp != null && exp > 0 && got !== exp;
+                            return (
+                              <div style={{ position: 'relative' }}>
+                                <input
+                                  type="number" min="0"
+                                  value={boxQtys[`${l.line_id}:OK`] || ''}
+                                  onChange={e => setBoxQty(l.line_id, 'OK', e.target.value)}
+                                  title={off ? `Expected ${exp} in this box, counted ${got} (${got > exp ? '+' : ''}${got - exp})` : undefined}
+                                  style={{ background: off ? 'rgba(245,158,11,.10)' : 'var(--surface2)', border: `1px solid ${off ? 'rgba(245,158,11,.55)' : 'var(--border)'}`, borderRadius: 2, padding: '4px 6px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
+                                />
+                                {off && (
+                                  <span style={{ position: 'absolute', right: 3, top: -8, fontFamily: 'var(--mono)', fontSize: 9, color: '#f59e0b', background: 'var(--surface)', padding: '0 3px', borderRadius: 2 }}>
+                                    {got > exp ? '+' : ''}{got - exp}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <div>
                             <input
                               type="number" min="0"
