@@ -542,14 +542,42 @@ function buildC2PDraftInput(order, enrolmentId) {
 }
 
 // What the app can actually DO, straight from Shopify. A scope claim in a design doc is not
-// evidence — `recreate_as_prepaid` needs write_draft_orders + read_draft_orders on top of
-// write_orders, and a missing grant surfaces only as an ACCESS_DENIED mid-conversion.
+// evidence — a missing grant surfaces only as an ACCESS_DENIED mid-conversion.
+//
+// ⚠️ C2P_SCOPES IS DERIVED FROM WHAT THE QUERIES TOUCH, AND THAT LIST IS LOAD-BEARING.
+// 2026-07-29: this check returned `c2p_ready: true` and the very first real conversion then died
+// on `read_products` — because ORDER_FOR_RECREATE_Q reads `lineItems { variant { id } }`, and
+// `variant` on a line item is a PRODUCTS-scoped field, not an Orders one. A customer had already
+// paid ₹241.53 by the time that surfaced. The list below had been copied from the design doc's
+// four scopes instead of read off the query, so the check verified the wrong set — which is
+// worse than not checking, because it was reported as proof.
+//
+// If you add a field to ORDER_FOR_RECREATE_Q or the draft mutations, re-derive this list. The
+// non-obvious ones are the cross-object reads: `variant` → read_products,
+// `customer` → read_customers.
+const C2P_SCOPES = [
+  'read_orders',        // read the original order
+  'write_orders',       // cancel it
+  'read_draft_orders',  // read the draft back to verify its total
+  'write_draft_orders', // create + complete the replacement
+  'read_products',      // lineItems { variant { id } } — the one that was missed
+  'read_customers',     // order.customer { id } → purchasingEntity
+];
+
 async function accessScopes(env) {
   const d = await shopifyGraphQL(env, `{ currentAppInstallation{ accessScopes{ handle } } }`, {});
   const have = (d.currentAppInstallation?.accessScopes || []).map((s) => s.handle).sort();
-  const needed = ['write_orders', 'read_orders', 'write_draft_orders', 'read_draft_orders'];
-  return { scopes: have, c2p_ready: needed.every((n) => have.includes(n)),
-           missing_for_c2p: needed.filter((n) => !have.includes(n)) };
+  const missing = C2P_SCOPES.filter((n) => !have.includes(n));
+  return {
+    scopes: have,
+    c2p_required: C2P_SCOPES,
+    c2p_ready: missing.length === 0,
+    missing_for_c2p: missing,
+    // Spelled out because "ready: false" alone sent someone hunting the wrong thing once.
+    note: missing.length
+      ? `NOT ready — grant ${missing.join(', ')} on the app AND REINSTALL it (adding a scope to the app config does not change the installation's grant), then re-run this.`
+      : 'ready — every scope the recreate path touches is granted.',
+  };
 }
 
 async function listWebhooks(env) {

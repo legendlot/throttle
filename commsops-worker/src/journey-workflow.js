@@ -56,6 +56,12 @@ const DRAFT_COMPLETE_M = `mutation($id:ID!){ draftOrderComplete(id:$id){
 const money = (amount, currencyCode) => ({ amount: String(amount), currencyCode });
 // Shopify money arrives as a string; compare in paise to dodge float drift.
 const paise = (v) => Math.round(Number(v) * 100);
+// What the customer actually paid, for the alert text. Best-effort and never throws — an alert
+// must not be the thing that fails while reporting a failure.
+const runCtxAmount = (ctx) => {
+  const a = ctx?.prepaid_amount_display || ctx?.prepaid_amount;
+  return a ? `₹${String(a).replace(/^₹/, '')}` : 'the prepaid amount';
+};
 
 class JourneyWorkflow extends WorkflowEntrypoint {
   // params: { enrolmentId, journeyId, journeyVersion, profileId }
@@ -459,7 +465,25 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: ['relay-cod-cancelled'] }).catch(() => {});
           return { outcome: 'done', op };
         }
-        if (recreate) return await this.#recreateAsPrepaid(env, s, gid, order, triggerProps, enrolmentId);
+        if (recreate) {
+          const r = await this.#recreateAsPrepaid(env, s, gid, order, triggerProps, enrolmentId);
+          // MONEY IS ALREADY COLLECTED BY THE TIME THIS RUNS — the journey only reaches
+          // `recreate_as_prepaid` after `payment_link_paid`. So ANY not_done here means we hold the
+          // customer's money against an order that is still COD. That must page a human.
+          //
+          // 2026-07-29: it didn't, and the very first real conversion failed on a missing
+          // `read_products` scope. The customer got the do-not-pay-the-courier message and the
+          // order got tagged, but nobody was told — it was caught only because a colleague happened
+          // to be watching the test. Silent + money = the one combination worth alerting on
+          // unconditionally, even though a tag and a message already exist.
+          if (r && r.outcome === 'not_done') {
+            await AL.alert(env, `:rotating_light: C2P PAID BUT NOT CONVERTED — ${order.name} `
+              + `(${triggerProps?.order_number ?? '?'}). Customer has PAID `
+              + `${runCtxAmount(triggerProps)} and the order is still COD. Reason: ${r.reason}. `
+              + `Tagged relay-c2p-paid-not-recreated. Convert or refund by hand.`);
+          }
+          return r;
+        }
         return { outcome: 'not_done', reason: `unknown_op:${op}` };
       } catch (e) {
         // write_orders missing / API error → graceful not_done (never throws).
