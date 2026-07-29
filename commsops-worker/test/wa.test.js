@@ -436,7 +436,11 @@ function restoreFetch() { global.fetch = realFetch; }
       if (u.includes('/rest/v1/templates')) {
         return { ok: true, status: 200, text: async () => JSON.stringify([{ id: 'T1', channel: 'whatsapp',
           purpose: 'utility', language: 'en',
-          content: { meta_name: 'lot_x', body: 'Hello {{1}}, bye.', waba_id: 'LIVE_WABA' } }]) };
+          // NB the mapping is not incidental: a {{1}} with no mapping entry has no `example` to
+          // submit and would fail the pre-submit lint (and Meta), so the fixture must be a
+          // template that could really be submitted.
+          content: { meta_name: 'lot_x', body: 'Hello {{1}}, bye.', waba_id: 'LIVE_WABA',
+            mapping: [{ component: 'body', pos: 1, token: 'first_name', example: 'Asha' }] } }]) };
       }
       if (u.includes('/message_templates')) {
         return { ok: true, status: 200, json: async () => ({ id: 'STAGED_ID', status: 'PENDING' }) };

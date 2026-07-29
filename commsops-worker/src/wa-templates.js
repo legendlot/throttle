@@ -17,6 +17,7 @@
 
 const A = require('./auth.js');
 
+const LINT = require('./wa-template-lint.js');   // pre-submit gate — see waSubmitTemplate
 const MEDIA_HEADERS = new Set(['IMAGE', 'VIDEO', 'DOCUMENT']);
 
 function graphBase(env) {
@@ -425,6 +426,20 @@ async function waSubmitTemplate(env, body) {
   if (tpl.channel !== 'whatsapp') return { ok: false, error: 'not_a_whatsapp_template' };
   let content = tpl.content || {};
   if (!content.meta_name || !content.body) return { ok: false, error: 'meta_name_and_body_required' };
+
+  // PRE-SUBMIT LINT — refuse locally rather than spend a Meta review round-trip.
+  //
+  // Meta allows ONE edit per active template per 24 hours (subcode 2388124), so a rejected or
+  // wrong-first-time submit burns the day — and the rejection is usually a bare "Invalid
+  // parameter" with the actionable detail buried in error_user_title/error_user_msg, so the
+  // author iterates blind. Every rule in the linter is one we have already paid for or a
+  // published limit, so failing here is strictly cheaper than failing at Meta.
+  // `force: true` is the deliberate escape hatch for a rule we believe has gone stale — logged.
+  const lint = LINT.lintWaTemplate(content);
+  if (!lint.ok && body.force !== true) {
+    return { ok: false, error: 'lint_failed', issues: lint.errors, warnings: lint.warnings };
+  }
+  if (!lint.ok) console.log('wa_submit_lint_forced', tpl.id, JSON.stringify(lint.errors));
 
   // Self-serve image headers: the author uploads an asset + saves, but the Meta-side upload
   // handle (`h:…`) is only minted here, at submit time — so a marketer never has to touch a
