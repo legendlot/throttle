@@ -84,6 +84,24 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     const exitEventSet = new Set(jcfg.exitRules.map((r) => r && r.event).filter(Boolean));
     const exitOutcomeFor = (evName) => (jcfg.exitRules.find((r) => r.event === evName) || {}).outcome || 'exited';
 
+    // RUN CONTEXT — the trigger event's properties PLUS anything actions have since produced.
+    //
+    // WHY. `triggerProps` is loaded once at boot and is immutable, so a send step could only ever
+    // bind what the triggering event carried. That makes whole classes of message unwritable: the
+    // C2P payment message cannot state the amount (the pay-link action computes it) and the
+    // "paid" message cannot give the new order id (the recreate action mints it). An undeclared
+    // token throws `unresolved_variables` and the send fails, so those facts simply had to be
+    // left out of the copy.
+    //
+    // Actions opt IN by returning a `context` object — a blanket spread of the action's result
+    // would leak control keys (`outcome`, `reason`) into the customer-facing variable namespace
+    // and could silently shadow a trigger property of the same name.
+    //
+    // REPLAY-SAFE: every action runs inside `step.do(cur, …)`, so a durable retry replays the
+    // memoised result rather than re-executing. The merge order is the (deterministic) graph
+    // walk, so runCtx reconstructs identically on resume.
+    let runCtx = { ...(triggerProps || {}) };
+
     let cur = def.entry;
     for (let i = 0; i < MAX_TRANSITIONS; i++) {
       const s = def.steps[cur];
@@ -164,11 +182,11 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         if (terminateOutcome) { await this.#end(env, step, enrolmentId, terminateOutcome, cur); return; }
         cur = G.resolveTarget(s, outHandle);
       } else if (s.type === 'condition') {
-        const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt, triggerProps));
+        const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt, runCtx));
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps, journeyName));
+        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, runCtx, journeyName));
         if (s.interactive) {
           // Interactive send (WA quick-reply buttons): after sending, park on the reply
           // event and route by which button was tapped (else no_reply on timeout). Inert
@@ -199,7 +217,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
               const woke = await this.#park(step, `qhwait:${cur}`, deferMs);
               if (woke.kind === 'exit') { await this.#end(env, step, enrolmentId, woke.outcome, cur); return; }
               finalRes = await step.do(`${cur}:qhretry`, async () =>
-                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, triggerProps, journeyName));
+                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, runCtx, journeyName));
               deferred = true;
             }
           }
@@ -212,7 +230,9 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         // J3: side-effect nodes. Memoized by step id (step.do(cur)) so a durable retry
         // never re-executes the side effect. #doAction NEVER throws — it returns an
         // outcome handle ('next'|'failed') the graph routes on.
-        const res = await step.do(cur, async () => this.#doAction(env, s, profileId, enrolmentId, cur, triggerProps));
+        const res = await step.do(cur, async () => this.#doAction(env, s, profileId, enrolmentId, cur, runCtx));
+        // Opt-in only: an action exposes values to later sends via `context`. See runCtx above.
+        if (res && typeof res.context === 'object' && res.context) runCtx = { ...runCtx, ...res.context };
         await this.#logStep(env, step, enrolmentId, cur, s.type, { kind: s.kind || null, ...res });
         cur = G.resolveTarget(s, res.outcome || 'next');
       } else if (s.type === 'exit') {
@@ -286,7 +306,39 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       const setR = await A.sbComms('/rest/v1/settings?id=eq.1&select=payment_links_enabled&limit=1', env);
       if (!(setR.ok && setR.data?.[0]?.payment_links_enabled === true)) return { outcome: 'failed', reason: 'payment_links_disabled' };
       // Amount: a fixed step amount, else the trigger order's total (COD order → pay-link).
-      const amount = Number(s.amount) || Number(triggerProps?.total ?? triggerProps?.total_price ?? triggerProps?.total_payable ?? triggerProps?.order_amount) || null;
+      const codTotal = Number(triggerProps?.total ?? triggerProps?.total_price ?? triggerProps?.total_payable ?? triggerProps?.order_amount) || null;
+      let amount = Number(s.amount) || codTotal || null;
+      let pricing = null;
+      // C2P PRICING (`pricing: 'c2p_prepaid'` on the step). A COD→prepaid customer must pay what
+      // a PREPAID customer pays, not the COD total — charging the COD amount would silently bill
+      // them the ₹50 COD fee plus the 3% they were promised for paying up front.
+      //
+      //     prepaid = (COD total − cod_fee) × (1 − discount_pct/100)
+      //
+      // Verified to the paisa against 24 live COD price points (Afshaan + Pruthvi, 2026-07-29).
+      // The fee is per ORDER, and because it is added AFTER any coupon, a coupon order carries
+      // through automatically — no coupon lookup is needed or wanted here.
+      // Both constants are SETTINGS: a pricing change must never require a deploy.
+      if (s.pricing === 'c2p_prepaid' && codTotal) {
+        const cfg = await A.sbComms('/rest/v1/settings?id=eq.1&select=c2p_cod_fee,c2p_prepaid_discount_pct&limit=1', env);
+        const fee = Number(cfg.ok ? cfg.data?.[0]?.c2p_cod_fee : null);
+        const pct = Number(cfg.ok ? cfg.data?.[0]?.c2p_prepaid_discount_pct : null);
+        // Fail CLOSED on unreadable/absurd settings rather than charging a guessed amount.
+        if (!Number.isFinite(fee) || !Number.isFinite(pct) || pct < 0 || pct >= 100 || fee < 0) {
+          return { outcome: 'failed', reason: 'c2p_pricing_unavailable' };
+        }
+        const base = codTotal - fee;
+        if (base <= 0) return { outcome: 'failed', reason: 'c2p_base_not_positive' };
+        amount = Math.round(base * (1 - pct / 100) * 100) / 100;
+        pricing = {
+          cod_amount: codTotal,
+          cod_amount_display: `₹${codTotal.toLocaleString('en-IN')}`,
+          prepaid_amount: amount,
+          prepaid_amount_display: `₹${amount.toLocaleString('en-IN')}`,
+          saving: Math.round((codTotal - amount) * 100) / 100,
+          saving_display: `₹${(Math.round((codTotal - amount) * 100) / 100).toLocaleString('en-IN')}`,
+        };
+      }
       const idr = await A.sbComms(`/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.phone&select=value&order=last_seen.desc&limit=1`, env);
       const phone = idr.ok ? idr.data?.[0]?.value : null;
       if (!phone) return { outcome: 'failed', reason: 'no_phone' };
@@ -306,7 +358,10 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       attrs.payment_link_url = r.link_url; attrs.payment_link_id = r.link_id;
       await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}`, env,
         { method: 'PATCH', body: JSON.stringify({ attributes: attrs, updated_at: new Date().toISOString() }) });
-      return { outcome: 'next', link_id: r.link_id };
+      // Expose the priced amounts to LATER send steps (see runCtx). Without this the payment
+      // message cannot state what the customer is being asked to pay.
+      return { outcome: 'next', link_id: r.link_id,
+               context: { payment_link_url: r.link_url, ...(pricing || {}) } };
     }
     if (kind === 'order_modify') {
       // The Shopify COD→prepaid reconciliation (mirrors BiteSpeed's Modify Order node —
