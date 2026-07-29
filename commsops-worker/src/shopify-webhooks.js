@@ -6,6 +6,7 @@ const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const SHOP = require('./shopify.js');
 const CAT = require('./product-category.js');
+const SF = require('./shopflo.js');   // cartLinkSuffix/STOREFRONT_BASE — one cart-permalink impl
 const { resolveVariantImage } = require('./variant-images.js');
 
 // GDPR customers/redact — we hold no special PII store, so the compliant action is to
@@ -183,6 +184,34 @@ async function handlePixel(env, request) {
   // absolute https URL, so normalize here (server-side, so the pasted pixel needn't change).
   if (typeof props.product_image_url === 'string' && props.product_image_url.startsWith('//'))
     props.product_image_url = 'https:' + props.product_image_url;
+  // CART PERMALINK on pixel add_to_cart (2026-07-29). The pixel carries `variant_id` +
+  // `quantity` — everything needed to build the same `/cart/<variant>:<qty>` permalink the
+  // Shopflo path emits — but never built it: measured 0 of 4,119 pixel add_to_cart events had
+  // `cart_link_suffix`, vs 90.8% of Shopflo's. Any cart template bound to that token therefore
+  // hard-failed at render (`unresolved_variables:cart_link_suffix`) on a pixel-triggered send.
+  //
+  // Reuses shopflo.js `cartLinkSuffix` rather than re-deriving: that function already drops
+  // non-numeric and all-zero ids, which matters because these values become a path segment in
+  // a link we send to a customer. One implementation, one set of rules.
+  //
+  // SCOPE DIFFERENCE, stated because it is easy to misread: the pixel fires per ADDED ITEM, so
+  // this permalink holds just that variant, whereas Shopflo's `cart_variant_ids` is the whole
+  // cart. For a recovery nudge that is the right target anyway (it is the item they were
+  // looking at), but do not treat the two tokens as interchangeable cart snapshots.
+  //
+  // NB with `requires_identifier` now gating the add-to-cart journey, pixel-triggered
+  // enrolments are rare — this closes the latent trap rather than a live fire, and is what
+  // makes the pixel path usable if identity coverage ever improves.
+  if (name === 'add_to_cart' && !props.cart_link_suffix && props.variant_id != null) {
+    const qty = Number(props.quantity);
+    const suffix = SF.cartLinkSuffix(String(props.variant_id));
+    if (suffix) {
+      // cartLinkSuffix hardcodes `:1` per line; carry the real quantity when we have one.
+      const withQty = Number.isFinite(qty) && qty > 1 ? suffix.replace(/:1$/, `:${Math.floor(qty)}`) : suffix;
+      props.cart_link_suffix = withQty;
+      props.cart_link = `${SF.STOREFRONT_BASE}/cart/${withQty}`;
+    }
+  }
   // Category enrichment (S232): stamp primary_category so journeys can branch voice by
   // product line (L.O.T Cars vs Build — RULE-TAXONOMY-001). Best-effort; null on no match
   // (add-ons like "Gift Wrapping" deliberately classify to nothing).
