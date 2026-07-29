@@ -55,6 +55,22 @@ export default function CycleCountsPage() {
   const [detail,      setDetail]      = useState(null);  // { header, lines }
   const [detailLoading, setDetailLoading] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [startingScan, setStartingScan] = useState(false);
+
+  // One-click count for the everyday shelf audit: no parts picked up front, because
+  // the point of an audit is to record what is physically there. Each bag scanned on
+  // the floor adds its part on first sight (worker postCycleCountScan).
+  async function startScanCount() {
+    setStartingScan(true);
+    try {
+      const r = await workerFetch('createCycleCount',
+        { data: { count_type: 'ad_hoc', scan_mode: true, notes: 'Bag-scan shelf count' } }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Could not start count', 'error'); return; }
+      toast(`${r.data.count_no} started — scan bags on the Cycle Count station`, 'success');
+      await loadList();
+      openDetail(r.data.count_no, { blind: true });
+    } finally { setStartingScan(false); }
+  }
 
   async function loadList() {
     if (!session) return;
@@ -94,7 +110,12 @@ export default function CycleCountsPage() {
       <div style={panel}>
         <div style={phdr}>
           <span>Cycle Counts</span>
-          {canRecord && <button onClick={() => setNewOpen(true)} style={btnP}>+ NEW COUNT</button>}
+          <span style={{ display: 'flex', gap: 6 }}>
+            {canRecord && <button onClick={startScanCount} disabled={startingScan} style={btnP}>
+              {startingScan ? 'STARTING…' : '+ BAG-SCAN COUNT'}
+            </button>}
+            {canRecord && <button onClick={() => setNewOpen(true)} style={btnS}>+ PICK PARTS</button>}
+          </span>
         </div>
         <div style={pbody}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -317,6 +338,28 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   const isInProgress = header.status === 'in_progress';
   const isBlind      = isInProgress; // server already redacted
 
+  // Bags scanned on the floor, polled while the count is open so the person at the
+  // desk watches it fill in without refreshing. Keyed by part_code → { bags, qty }.
+  const [scanByPart, setScanByPart] = useState({});
+  const [totalScans, setTotalScans] = useState(0);
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const pull = async () => {
+      const r = await workerFetch('getCycleCountScans', { data: { count_no: header.count_no } }, session).catch(() => null);
+      if (cancelled || !r?.ok) return;
+      const map = {};
+      for (const p of (r.data.by_part || [])) map[p.part_code] = p;
+      setScanByPart(map);
+      setTotalScans(r.data.total_scans || 0);
+    };
+    pull();
+    // Only poll while the count is still being scanned — a finished count is static.
+    if (!isInProgress) return () => { cancelled = true; };
+    const iv = setInterval(pull, 10000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [session, header.count_no, isInProgress, lines.length]);
+
   async function saveLine(line) {
     const val = entries[line.part_code];
     if (val == null || val === '') { toast('Enter a count', 'error'); return; }
@@ -419,7 +462,24 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
             <KpiTile label="Recount" value={stats.recount} tone="orange" />
             <KpiTile label="Reconciled" value={stats.reconciled} tone="green" />
             {!isBlind && stats.variance_lines > 0 && <KpiTile label="With Variance" value={stats.variance_lines} tone="red" />}
+            <KpiTile label="Bags Scanned" value={totalScans} tone={totalScans > 0 ? 'green' : 'gray'} />
           </div>
+
+          {isInProgress && (
+            <div style={{ marginBottom: 10, padding: '10px 12px', background: 'rgba(16,140,90,.08)', border: '1px solid rgba(16,140,90,.25)', borderRadius: 3, fontSize: 11, color: 'var(--t2)', lineHeight: 1.65 }}>
+              <strong style={{ color: 'var(--t1)' }}>Counting by bag scan</strong> — this count is live, {totalScans === 0 ? 'waiting for the first scan.' : `${totalScans} bag${totalScans === 1 ? '' : 's'} in so far.`}
+              <div style={{ marginTop: 6 }}>
+                On the scanner: <strong>Store → Cycle Count</strong>, then scan the QR on each bag.
+                One scan counts the whole bag, so nobody types a quantity. Scanning the same bag twice
+                is safe — it is ignored, so a shelf can be re-walked without inflating the count.
+              </div>
+              <div style={{ marginTop: 6 }}>
+                Parts appear here as they are scanned. This list updates on its own every 10 seconds.
+                When the shelves are done, press <strong>Complete Count</strong> — anything that does not
+                match the system is raised as an adjustment for approval.
+              </div>
+            </div>
+          )}
 
           {isBlind && (
             <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(33,60,226,.08)', border: '1px solid rgba(33,60,226,.2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
@@ -435,6 +495,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
                   <th style={th}>Part</th>
                   <th style={{ ...th, textAlign: 'center', width: 36 }}>ABC</th>
                   <th style={{ ...th, textAlign: 'right' }}>ERP Qty</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Bags</th>
                   <th style={{ ...th, textAlign: 'right' }}>Counted</th>
                   <th style={{ ...th, textAlign: 'right' }}>Variance</th>
                   <th style={{ ...th, textAlign: 'right' }}>Value (₹)</th>
@@ -468,6 +529,14 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
                       <td style={{ ...td, textAlign: 'center', fontWeight: 700, fontSize: 10, color: l.abc_class === 'A' ? '#ff7070' : l.abc_class === 'B' ? '#fbbf24' : l.abc_class === 'C' ? '#7b93ff' : 'var(--t3)' }}>{l.abc_class || '—'}</td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: erpVisible ? 'var(--t2)' : 'var(--t3)' }}>
                         {erpVisible ? fmtNum(l.erp_qty_at_print) : <span style={{ filter: 'blur(4px)', userSelect: 'none' }}>—</span>}
+                      </td>
+                      {/* Where the number came from: bag scans vs typed by hand. */}
+                      <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                        {scanByPart[l.part_code]
+                          ? <span title={`${scanByPart[l.part_code].bags} bag(s) scanned totalling ${fmtNum(scanByPart[l.part_code].qty)}`}>
+                              {scanByPart[l.part_code].bags}
+                            </span>
+                          : '—'}
                       </td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)' }}>
                         {isPending && canRecord ? (
