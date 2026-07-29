@@ -81,12 +81,33 @@ export default function PartJourneyPage() {
   const [typeFilter, setTypeFilter] = useState(() => new Set(['GRN','ISSUE','FLUSH','DAMAGE','DAMAGE_ACTION'])); // hide BAG_GEN + RUN_PICK by default
   const [showBalance, setShowBalance] = useState(true);
 
-  // Parts catalogue for combobox (re-uses getProcurementParts — 1120 parts).
+  // Parts catalogue for the combobox — TWO sources, merged.
+  //
+  // `getProcurementParts` reads `bom_register` only, so a part that is in no active
+  // BOM was simply absent from this picker and its journey was unreachable even
+  // though the events existed. Measured 2026-07-29: **347 of 1,780 active parts were
+  // missing, 258 of them with real GRN/issue history** — every catalog-only part,
+  // which by RULE-LOTBUILD-001 is all of LOT Build (Piyush couldn't open
+  // LB-WD-PINE-3, which has 1 GRN and 5 issues).
+  //
+  // `getPartsCatalog` reads `material_master` and deliberately includes non-BOM
+  // parts, but carries no `product`. So: keep the BOM source FIRST (its `product`
+  // powers searches like "flare para" — see the hint note below) and append only the
+  // parts it didn't already have. Frontend-only; no worker change, so no lotopsproxy
+  // deploy and no 4-system blast radius.
   useEffect(() => {
     if (!session) return;
-    garageFetch('getProcurementParts', {}, session)
-      .then(d => setPartsCat(Array.isArray(d) ? d : []))
-      .catch(() => {});
+    Promise.all([
+      garageFetch('getProcurementParts', {}, session).catch(() => []),
+      garageFetch('getPartsCatalog',     {}, session).catch(() => []),
+    ]).then(([bomParts, catalogue]) => {
+      const merged = new Map();
+      for (const p of (Array.isArray(bomParts) ? bomParts : [])) merged.set(p.part_code, p);
+      for (const p of (Array.isArray(catalogue) ? catalogue : [])) {
+        if (!merged.has(p.part_code)) merged.set(p.part_code, p);
+      }
+      setPartsCat([...merged.values()].sort((a, b) => String(a.part_code).localeCompare(String(b.part_code))));
+    }).catch(() => {});
   }, [session]);
 
   async function loadJourney(code) {
