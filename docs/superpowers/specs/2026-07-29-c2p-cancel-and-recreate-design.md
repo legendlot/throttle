@@ -1,9 +1,20 @@
 # COD → Prepaid (C2P) — cancel-and-recreate design
 
-> Status: **DESIGN — not built.** Decided by Afshaan 2026-07-28 ~00:30 IST (S241).
+> Status: **BUILT + DEPLOYED 2026-07-29 (S243)** — op `recreate_as_prepaid` is live in commsops
+> (version `f40723e5`), inert behind `settings.payment_links_enabled=false` and the journey's
+> draft status. Decided by Afshaan 2026-07-28 ~00:30 IST (S241).
 > Supersedes the `convert_to_prepaid` (mark-as-paid) approach for the C2P journey.
-> Journey `COD → Prepaid (C2P)` (`1fe1c833-9d1c-43e3-8e9f-66c39ef73929`) exists as **draft**
-> on the mark-as-paid shape and must be re-pointed once this is built.
+> Journey `COD → Prepaid (C2P)` (`1fe1c833-9d1c-43e3-8e9f-66c39ef73929`) is still **draft** on
+> the mark-as-paid shape — **re-pointing `pay_convert` to the new op is now the open step.**
+>
+> **Two sections are superseded by the build — read the notes inline:**
+> - **§6 (the prepaid price rule) is RESOLVED**, not blocking. Settled + paisa-verified in S242:
+>   `prepaid = (COD total − c2p_cod_fee) × (1 − c2p_prepaid_discount_pct/100)` = `(COD − ₹50) × 0.97`,
+>   both **settings**. §6's "not a flat percentage" reasoning was drawn from a mis-paired sample
+>   (₹2089.05 is the post-fee base of a *coupon* order, not the prepaid total of a ₹2199 one) — the
+>   fixed ₹50 subtracted *first* is exactly what makes the effective percentage vary with order value.
+> - **§3's single-shot draft flow was refined** to a 3-phase create → discount → **verify before
+>   commit**. See the note in §3.
 
 ---
 
@@ -84,6 +95,40 @@ pricing, which is the whole point here.
 ## 3. Mechanism
 
 New `order_modify` op: **`recreate_as_prepaid`**.
+
+> **⚠️ AS BUILT (2026-07-29) the flow below was refined in three ways. The built shape is:**
+> ```
+> read original order  (ORDER_FOR_RECREATE_Q)
+>       ↓   idempotency check FIRST (see below), then: not cancelled · UNFULFILLED · within_hours
+> draftOrderCreate     replica, NO discount — tags + note ride here (draft tags carry to the order)
+>       ↓              read back Shopify's OWN computed total
+> draftOrderUpdate     ONE FIXED_AMOUNT order-level discount = draftTotal − prepaidAmount
+>       ↓
+> VERIFY               draft total == what the customer paid (±1 paisa) — else STOP + alert
+> draftOrderComplete   `paymentPending` OMITTED (deprecated; default false = PAID)
+>       ↓              ── commit point ──
+> tagsAdd              original: relay-c2p-replaced-by-<new name>   ← BEFORE the cancel
+>       ↓
+> orderCancel          original: reason CUSTOMER, refund:false, restock:FALSE
+> ```
+> 1. **The concession is sized off the DRAFT's total, not the original's.** Shopify recomputes tax
+>    and shipping on the replica, so a discount sized against the original order's total could leave
+>    the final total off by that delta. Deriving it from the draft makes the arithmetic exact by
+>    construction. This is why there is a `draftOrderUpdate` phase at all.
+> 2. **Verify before commit.** If the draft does not total what the customer actually paid, the draft
+>    is NOT completed — a wrong-priced *live* order is worse than a failed conversion, because the
+>    failure path leaves the original intact and recoverable. The orphan draft is left in admin as
+>    evidence and an ops alert fires.
+> 3. **The idempotency tag lands BEFORE the cancel attempt**, and the tag *check* runs before the
+>    `already_cancelled` guard. Both matter: a completed recreate leaves the original cancelled, so
+>    checking cancelled-first would report `not_done` on a retry of a run that fully succeeded; and
+>    tagging only after a successful cancel would let a retry after a *failed* cancel mint a second
+>    replacement.
+>
+> **API shapes verified against live Shopify docs, not assumed** — several differ from what a
+> reasonable guess would use: `priceOverride` (not `originalUnitPrice`), `purchasingEntity` (not the
+> deprecated top-level `customerId`), `priceWithCurrency` (not `price`), `countryCode`/`provinceCode`
+> (not `country`/`province`), and `paymentPending` is deprecated so it is omitted entirely.
 
 ```
 read original order  (ORDER_FOR_RECREATE_Q)
@@ -173,9 +218,25 @@ nothing (two live orders for one purchase). It needs an ops alert, not just a `n
 
 ---
 
-## 6. ⛔ OPEN — the prepaid price rule
+## 6. ~~⛔ OPEN~~ ✅ RESOLVED (S242, 2026-07-29) — the prepaid price rule
 
-**This blocks the build and nothing else does.** We do not know how the prepaid price is
+> **This section is kept for its reasoning trail; its conclusion was WRONG and it no longer blocks
+> anything.** The rule is `prepaid = (COD total − c2p_cod_fee) × (1 − c2p_prepaid_discount_pct/100)`
+> — `(COD − ₹50) × 0.97` — with both values as **`comms.settings`** so a pricing change never needs a
+> deploy. Confirmed by Afshaan + Pruthvi and verified to the paisa on 5 live cases (2249→2133.03,
+> 2139.05→2026.38 coupon, 2049→1939.03, 2299→2181.53 two-item, 2186.55→2072.45). The ₹50 is **per
+> order** and applied **before** the 3%, so a coupon carries through automatically and no coupon or
+> `read_discounts` lookup is needed. It is a Shopify-side arithmetic rule, not a Shopflo secret.
+>
+> **Why the analysis below reached the wrong answer, worth remembering:** it compared ₹2199→₹2089.05
+> against ₹2249→₹2133.03 and concluded "not a flat percentage". But ₹2089.05 is the *post-fee base* of
+> a **coupon** order, not the prepaid total of a ₹2199 order — the pairs were not comparable. And a
+> fixed ₹50 subtracted before a percentage *necessarily* makes the effective percentage vary with
+> order value, which is precisely the pattern that looked like "no rule". The 12-different-prices
+> observation was the spread across **coupon users**. Lesson: look at the no-coupon price before
+> declaring a rule absent.
+
+**~~This blocks the build and nothing else does.~~** We do not know how the prepaid price is
 derived, and getting it wrong charges real customers the wrong amount.
 
 Evidence it is not a flat percentage of the total: ₹2199 → ₹2089.05 is exactly 5%, but
