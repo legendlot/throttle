@@ -154,4 +154,4 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   return { pass: true, reason: null };
 }
 
-module.exports = { runGate, inQuietHours, testModeAllows, testRecipientAllowed, testUnion, _clearSettingsCache: () => { _settingsCache = null; } };
+module.exports = { runGate, getSettings, inQuietHours, testModeAllows, testRecipientAllowed, testUnion, _clearSettingsCache: () => { _settingsCache = null; } };

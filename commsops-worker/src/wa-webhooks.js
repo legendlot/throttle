@@ -15,6 +15,7 @@ const wa = require('./adapters/whatsapp.js');
 const { ingest } = require('./ingest.js');
 const { detectOptOut, applyOptOut } = require('./optout.js');
 const AL = require('./alerts.js');
+const WAM = require('./wa-media.js');   // media-id cache invalidation on a 131052/131053
 
 // Canonical message status is monotonic — an out-of-order webhook must never regress it
 // (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
@@ -103,6 +104,15 @@ async function handleStatuses(env, payload) {
       }
       await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
         { method: 'PATCH', body: JSON.stringify(patch) });
+      // A MEDIA error is the one failure that can be caused by our own cached media id going
+      // bad (Meta expires uploaded media after ~30 days, and an id is only valid for the phone
+      // number that uploaded it). Drop that number's cache so the next send re-uploads instead
+      // of replaying a dead id. Harmless when the send used a link — the cache is then empty
+      // for that number, and re-uploading is cheap. Best-effort: never fail the webhook, which
+      // must 200 or Meta redelivers.
+      if (typeof u.reason === 'string' && /^wa_13105[23]/.test(u.reason)) {
+        await WAM.invalidate(env, u.phone_number_id || null);
+      }
     }
     if (msg?.profile_id && u.engagement_event) {
       await A.sbComms('/rest/v1/events', env, {

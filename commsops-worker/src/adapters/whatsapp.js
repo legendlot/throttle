@@ -1,7 +1,7 @@
 // WhatsApp adapter — Meta WhatsApp Cloud API (Graph). The second channel adapter.
 // Mirrors the email contract:
 //   send(rendered, env)          → {provider_message_id, status, reason, cost?, raw}
-//   parseStatusWebhook(payload)  → [{provider_message_id, canonical_status, engagement_event, at, reason, cost?, to}]
+//   parseStatusWebhook(payload)  → [{provider_message_id, canonical_status, engagement_event, at, reason, cost?, to, phone_number_id}]
 //   parseInbound(payload)        → [{provider_message_id, from, wa_id, name, text, type, media?, ts, phone_number_id}]
 //
 // Two send modes, decided upstream by renderWhatsapp:
@@ -12,6 +12,9 @@
 //
 // Rendered carries the routing bits send.js copies off the sender identity:
 //   rendered.to (E.164, no '+'), rendered.phone_number_id, rendered.window_open.
+
+const WAM = require('../wa-media.js');   // send-time media ids (131053 fix)
+const GATE = require('../gate.js');      // settings (the wa_media_id_enabled flag)
 
 const GRAPH_VERSION = 'v21.0';
 
@@ -35,12 +38,27 @@ async function send(rendered, env) {
   if (rendered.mode === 'template') {
     const t = rendered.template || {};
     if (!t.name) return { provider_message_id: null, status: 'failed', reason: 'no_template_name' };
+    // MEDIA HEADER: prefer a Meta-hosted media id over a link Meta must fetch per send.
+    // A `link` header makes Meta download the asset on EVERY send, and that download fails
+    // ASYNCHRONOUSLY (131053) — the API returns 200 + a wamid, then the status webhook flips the
+    // message to failed, so there is nothing to retry and the message is simply lost. Measured
+    // 2026-07-29: 4 of 113 Order Placed sends, i.e. real order confirmations.
+    //
+    // Gated on `settings.wa_media_id_enabled` (default FALSE) because this is a live
+    // transactional path and the Meta upload cannot be exercised from a test run. Every failure
+    // inside applyMediaIds returns the components untouched, so with the flag on and the upload
+    // broken the behaviour is exactly today's link send — never worse.
+    let components = Array.isArray(t.components) ? t.components : [];
+    try {
+      const s = await GATE.getSettings(env);
+      if (s?.wa_media_id_enabled === true) components = await WAM.applyMediaIds(env, components, phoneId);
+    } catch { /* flag/settings unreadable → keep the link path */ }
     payload = {
       messaging_product: 'whatsapp', to, type: 'template',
       template: {
         name: t.name,
         language: { code: t.language || 'en' },
-        ...(Array.isArray(t.components) && t.components.length ? { components: t.components } : {}),
+        ...(components.length ? { components } : {}),
       },
     };
   } else if (rendered.mode === 'interactive') {
@@ -153,6 +171,9 @@ function parseStatusWebhook(payload) {
         cost: priced ? 1 : null,               // conversation count (Meta bills per conversation, not per message)
         pricing: s.pricing || null,
         to: s.recipient_id || null,
+        // Which of our numbers sent it — needed to invalidate that number's media cache on a
+        // media error (a Meta media id is only valid for the phone number that uploaded it).
+        phone_number_id: value?.metadata?.phone_number_id || null,
       });
     }
   }
