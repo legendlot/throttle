@@ -143,6 +143,32 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             </select>
           </Field>
         )}
+        {/* No variable reference existed until S243. A token the run context can't supply throws
+            `unresolved_variables`, which FAILS the send and raises a defect alert — so "which
+            tokens may I use, and when?" is a correctness question, not a convenience one. The
+            ordering rule is the part that isn't guessable: context is accumulated by the graph
+            walk, so a token only resolves if an EARLIER step produced it. */}
+        <details style={{ marginBottom: 10 }}>
+          <summary className="kv-k" style={{ cursor: 'pointer' }}>Variables I can use in this message</summary>
+          <div className="tw-note" style={{ marginTop: 8 }}>
+            <b>Always:</b> whatever the trigger event carries — e.g.{' '}
+            <span className="mono">{'{order_number}'}</span> <span className="mono">{'{total}'}</span>{' '}
+            <span className="mono">{'{product_title}'}</span>.
+            <br /><br />
+            <b>Only if an earlier step produced it</b> — context builds up as the journey runs, so a
+            token from a step <i>below</i> this one will not resolve:
+            <br />
+            after a <b>Payment link</b> step → <span className="mono">{'{payment_link_url}'}</span>, and with
+            prepaid pricing also <span className="mono">{'{prepaid_amount_display}'}</span>{' '}
+            <span className="mono">{'{cod_amount_display}'}</span> <span className="mono">{'{saving_display}'}</span>
+            <br />
+            after a <b>Recreate as prepaid</b> step → <span className="mono">{'{new_order_number}'}</span>
+            <br /><br />
+            ⚠️ A token nothing supplies <b>fails the whole send</b> (<span className="mono">unresolved_variables</span>) —
+            it does not fall back to blank. Send yourself a test before activating.
+          </div>
+        </details>
+
         <Field label="If skipped (not sent — e.g. suppressed/unsubscribed)">
           <select className="f-inp" value={config.on_skip || 'continue'} disabled={disabled}
             onChange={(e) => set({ on_skip: e.target.value })}>
@@ -362,11 +388,38 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
           <input className="f-inp" value={config.purpose || ''} disabled={disabled}
             onChange={(e) => set({ purpose: e.target.value })} placeholder="Complete your order payment" />
         </Field>
-        <Field label="Amount (₹) — blank = use the trigger order's total">
+        {/* `pricing` was data-only until S243, so the canvas could ONLY mint a link for the raw
+            COD total — which for a COD→prepaid flow overcharges by the ₹50 fee plus the 3% the
+            customer was just promised. A UI that can only produce the wrong number is worse than
+            a missing field, so the choice is explicit and the C2P option is the default hint. */}
+        <Field label="How much to charge">
+          <select className="f-inp" value={config.pricing || ''} disabled={disabled}
+            onChange={(e) => set({ pricing: e.target.value || undefined })}>
+            <option value="">The order total as-is</option>
+            <option value="c2p_prepaid">Prepaid price — COD→prepaid conversion (recommended for C2P)</option>
+          </select>
+        </Field>
+        <Field label="Fixed amount (₹) — overrides the above; blank = use the order">
           <input className="f-inp mono" type="number" min="1" value={config.amount ?? ''} disabled={disabled}
             onChange={(e) => set({ amount: e.target.value === '' ? undefined : Number(e.target.value) })}
-            placeholder="(order total)" />
+            placeholder="(from the order)" />
         </Field>
+        {config.pricing === 'c2p_prepaid' ? (
+          <div className="tw-note" style={{ margin: '0 0 10px' }}>
+            Charges <span className="mono">(order total − COD fee) × (1 − prepaid discount)</span>, both
+            read live from <strong>Settings</strong> — so a pricing change never needs a deploy or a
+            journey edit. The COD fee is per <b>order</b> and comes off <b>before</b> the percentage,
+            so a customer&apos;s own coupon carries through automatically. Pair this with the{' '}
+            <span className="mono">Recreate as prepaid</span> order op, which charges exactly what this
+            link collected and refuses to run without it.
+          </div>
+        ) : (
+          <div className="tw-note" style={{ margin: '0 0 10px' }}>
+            ⚠️ For a <strong>COD→prepaid</strong> flow this is the wrong choice — it bills the COD
+            total, i.e. the COD fee plus the discount the customer was promised for paying up front.
+            Pick the prepaid option above.
+          </div>
+        )}
         <div className="tw-note" style={{ margin: 0 }}>
           Mints a Cashfree pay-link (<strong>inert</strong> until <span className="mono">payment_links_enabled</span> is on).
           Follow it with a <strong>Send</strong> node delivering <span className="mono">{'{payment_link_url}'}</span>,

@@ -8,6 +8,7 @@ import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitB
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
@@ -70,51 +71,17 @@ const TRIGGER_PROP_SUGGEST = ['is_cod', 'financial_status', 'total', 'variant_id
 function emptyJourney() {
   return { id: null, name: '', status: 'draft', active_version: null,
     triggerType: 'event', triggerEvent: 'checkout_started', triggerSegmentId: '',
-    triggerFilter: [],
+    triggerFilter: [], triggerRequiresIdentifier: '',
     reenrolment: 'once_while_active', reenrolCooldown: 24,
     max_duration: '30 days', exit_rules: [], versions: [] };
 }
 
-// Trigger-property filter rows ⇄ the stored `trigger.filter` object. The worker
-// (ingest.js:106) ANDs simple equality over the EVENT's properties and string-compares, so
-// the UI deliberately offers equality only — anything richer belongs on a condition node,
-// where the operators already exist.
-const filterRowsToObj = (rows) => (rows || [])
-  .filter((r) => r && String(r.prop || '').trim())
-  .reduce((o, r) => { o[String(r.prop).trim()] = String(r.value ?? '').trim(); return o; }, {});
-const objToFilterRows = (f) => (f && typeof f === 'object' && !Array.isArray(f))
-  ? Object.entries(f).map(([prop, value]) => ({ prop, value: String(value ?? '') }))
-  : [];
-
-function triggerSummary(t, segments) {
-  if (!t || !t.type) return '—';
-  if (t.type === 'event') {
-    const f = t.filter && typeof t.filter === 'object' ? Object.entries(t.filter) : [];
-    const suffix = f.length ? ` where ${f.map(([k, v]) => `${k}=${v}`).join(' & ')}` : '';
-    return `event: ${t.name || '?'}${suffix}`;
-  }
-  if (t.type === 'segment_entry') {
-    const s = (segments || []).find((x) => x.id === t.segment_id);
-    return `enters: ${s ? s.name : (t.segment_id || '?')}`;
-  }
-  return t.type;
-}
-
-// Build the stored trigger jsonb from form state — the shape ingest.js (event) and
-// segment-entry.js (segment_entry) each match on.
-//
-// ⚠️ This function is the SOLE writer of `journeys.trigger` — every save replaces the whole
-// object. Before S241 it emitted only {type,name}, so a `filter` set out-of-band (SQL) was
-// silently dropped the next time anyone opened the journey and pressed Save — turning a
-// deliberately narrowed rollout into a full-audience one with no warning and no diff. Any
-// future trigger key MUST be round-tripped here, not just read.
-function buildTrigger(j) {
-  if (j.triggerType === 'segment_entry') return { type: 'segment_entry', segment_id: j.triggerSegmentId };
-  const t = { type: 'event', name: (j.triggerEvent || '').trim() };
-  const filter = filterRowsToObj(j.triggerFilter);
-  if (Object.keys(filter).length) t.filter = filter;   // omit entirely when empty — {} would be a no-op key
-  return t;
-}
+// Trigger ⇄ form mapping lives in @/lib/journeyTrigger.js — extracted S243 so the
+// round-trip is unit-tested. `buildTrigger` is the SOLE writer of `journeys.trigger` and
+// every save REPLACES the whole object, so a key it forgets is DELETED, not left stale.
+// That has silently widened a staged rollout (S241) and silently removed a reachability
+// gate (S242). Adding a trigger key now breaks journeyTrigger.test.js until it is
+// round-tripped, which is the point — the previous guard was a comment, and it did not hold.
 
 export default function JourneysPage() {
   const { session, perms } = useAuth();
@@ -250,13 +217,11 @@ export default function JourneysPage() {
   }
 
   function seed(r, def) {
-    const t = r.trigger || {};
     setJ({
       id: r.id, name: r.name || '', status: r.status || 'draft', active_version: r.active_version ?? null,
-      triggerType: t.type === 'segment_entry' ? 'segment_entry' : 'event',
-      triggerEvent: t.name || 'checkout_started',
-      triggerSegmentId: t.segment_id || '',
-      triggerFilter: objToFilterRows(t.filter),   // round-trip: buildTrigger replaces the whole object
+      // Every trigger field comes from the tested mapper — never spelled out here, so a new
+      // trigger key cannot be read in one place and forgotten in the other.
+      ...triggerToForm(r.trigger),
       reenrolment: r.reenrolment || 'once_while_active',
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
       max_duration: r.max_duration || '30 days',
@@ -494,6 +459,42 @@ export default function JourneysPage() {
                       silently — it never enters the journey, so it will not appear as a skip.
                     </div>
                   )}
+
+                  {/* Reachability gate (S242 engine, exposed here S243). Was data-only, which is
+                      how TWO journeys shipped enrolling anonymous browsers: nothing in the UI
+                      hinted the field existed, so nobody set it. Pixel events identify ~1.3% of
+                      visitors, so for any pixel-fired trigger this is the difference between a
+                      journey that works and one that burns a Workflow instance + a 30-minute
+                      sleep per anonymous browser to reach nobody. */}
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+                    <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      Only enrol if we can actually message them
+                      <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>
+                        strongly recommended for pixel-fired events
+                      </span>
+                    </div>
+                    <select className="f-inp" style={{ marginTop: 6 }}
+                      value={j.triggerRequiresIdentifier || ''}
+                      disabled={busy || !editable}
+                      onChange={(e) => set('triggerRequiresIdentifier', e.target.value)}>
+                      <option value="">No check — enrol anyone (incl. anonymous visitors)</option>
+                      <option value="phone">Needs a phone number (WhatsApp / SMS journeys)</option>
+                      <option value="email">Needs an email address (email journeys)</option>
+                      <option value="phone,email">Needs either a phone or an email</option>
+                    </select>
+                    <div className="tw-note" style={{ marginTop: 8 }}>
+                      {j.triggerRequiresIdentifier ? (<>
+                        Profiles with no <b>{(j.triggerRequiresIdentifier || '').replace(',', ' or ')}</b> never
+                        enrol. Checked at enrolment, so it costs nothing — the send gate would have
+                        skipped them anyway, just 30 minutes and a Workflow instance later.
+                      </>) : (<>
+                        <b>Leave this off only for events that always carry identity</b> (Shopify /
+                        Shopflo order events). For a <b>pixel</b> event like{' '}
+                        <span className="mono">product_viewed</span> or <span className="mono">add_to_cart</span>,
+                        roughly <b>4 in 5 enrolments will reach nobody</b>.
+                      </>)}
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
