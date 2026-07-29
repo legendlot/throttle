@@ -571,15 +571,30 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     try {
       const r = await SH.shopifyGraphQL(env, ORDER_CANCEL_M, {
         orderId: gid, reason: 'CUSTOMER', refund: false,
-        // restock:false is LOAD-BEARING and differs from the plain `cancel` op: the replacement
-        // order holds these same units, so restocking here returns the stock twice and oversells.
-        restock: false });
+        // restock:TRUE — corrected 2026-07-29. The design doc said false, reasoning that "the
+        // replacement order holds the same units", and that is simply not how Shopify works:
+        // `draftOrderComplete` RESERVES ITS OWN INVENTORY ("inventory is reserved for the items
+        // in the order" — Shopify docs, verified). So by the time we cancel, TWO units are
+        // committed for ONE physical sale. Leaving the original decremented (restock:false)
+        // would leak exactly one unit per conversion, silently, forever — the sort of drift
+        // nobody traces back to a comms journey.
+        //
+        // Releasing the original's units is therefore correct, not a double-restock: the
+        // replacement already took its own. NB this means a conversion transiently needs ONE
+        // SPARE UNIT (original still committed while the replacement completes) — on a
+        // low-stock SKU `draftOrderComplete` can fail for want of it, which is why the
+        // pre-flight stock check is on the backlog.
+        restock: true });
       const errs = (r?.orderCancel?.orderCancelUserErrors || []).concat(r?.orderCancel?.userErrors || []);
       if (errs.length) { cancelled = false; cancelError = errs.map((e) => e.message).join('; ').slice(0, 120); }
     } catch (e) { cancelled = false; cancelError = String(e?.message || e).slice(0, 120); }
 
     if (!cancelled) {
-      await AL.alert(env, `:rotating_light: C2P DUPLICATE ORDERS — ${order.name} could NOT be cancelled after replacement ${newOrder.name} went live (${cancelError}). Cancel ${order.name} by hand, WITHOUT restocking.`);
+      // "WITH restocking" for the same reason the automated cancel above uses restock:true — the
+      // replacement order has already reserved its own units, so the original's must come back or
+      // stock silently drifts down by one. (This line said WITHOUT until 2026-07-29, which would
+      // have had a human faithfully reproduce the bug by hand.)
+      await AL.alert(env, `:rotating_light: C2P DUPLICATE ORDERS — ${order.name} could NOT be cancelled after replacement ${newOrder.name} went live (${cancelError}). Cancel ${order.name} by hand, WITH restocking (the replacement already took its own stock).`);
     }
 
     return {
