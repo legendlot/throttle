@@ -7,6 +7,7 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useProducts } from '../../../../../hooks/useProducts.js';
 import { computeTax } from '@/lib/poTax';
+import { partDescription } from '@/lib/partDesc';
 import { Car, Wrench, Package, Cog, BatteryFull, Bolt, FileText, Tag, Pencil } from 'lucide-react';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
@@ -354,7 +355,10 @@ function NewPOPage() {
         const gst = hsn && hsnMap[hsn] != null ? hsnMap[hsn] : '';
         return {
           part_code:    r.part_code,
-          description:  r.part_name,
+          // Product-qualify so the vendor sees "Flare Ecomm Box", not "Ecomm Box".
+          // The BOM was fetched for bomProduct, so that is this line's owner;
+          // partDescription skips the cross-product codes (RULE-003).
+          description:  partDescription(r.part_code, bomProduct, r.part_name),
           item_type:    'Part',
           qty_ordered:  String(r.qty),
           unit:         'pcs',
@@ -1130,6 +1134,7 @@ function ManualMode({
     label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
     hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
     part_name: p.part_name || '',
+    product:   p.product || '',
     issue_uom: p.issue_uom || '',
     hsn_code:  p.hsn_code || '',
   })), [partsCache]);
@@ -1168,7 +1173,7 @@ function ManualMode({
                   setLineItems((prev) => prev.map((row, j) => {
                     if (j !== i) return row;
                     if (!opt) return { ...row, part_code: '' };
-                    const next = { ...row, part_code: opt.value, description: opt.part_name || '' };
+                    const next = { ...row, part_code: opt.value, description: partDescription(opt.value, opt.product, opt.part_name) };
                     if (!row.unit || row.unit === 'pcs') {
                       next.unit = opt.issue_uom === 'EA' ? 'pcs' : (opt.issue_uom || 'pcs');
                     }

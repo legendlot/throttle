@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback, Suspense } from 'react';
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -50,19 +50,28 @@ function OrderDetailInner() {
   const canPay = !!perms?.sales_payment_manage;
   const canCN = !!perms?.sales_credit_note;
 
+  // A tab switch or token refresh hands us a NEW session OBJECT with the same user.
+  // Keying `load` on it re-ran the fetch, which flipped `loading` and unmounted an
+  // open edit form mid-typing (Vinayram, 2026-07-29). Hold the live session in a ref
+  // so every fetch still uses a current token, and key the load on the stable user id.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const userId = session?.user?.id ?? null;
+
   const load = useCallback(async () => {
-    if (!session || !id) return;
+    const s = sessionRef.current;
+    if (!s || !id) return;
     setLoading(true);
     try {
-      const o = await garageFetch('getSalesOrder', { id }, session);
+      const o = await garageFetch('getSalesOrder', { id }, s);
       setData(o || null);
       if (o?.invoice_generated) {
-        const cns = await garageFetch('getCreditNotes', { order_id: id }, session).catch(() => []);
+        const cns = await garageFetch('getCreditNotes', { order_id: id }, s).catch(() => []);
         setCreditNotes(Array.isArray(cns) ? cns : []);
       } else setCreditNotes([]);
     } catch (e) { showToast(e.message || 'Failed to load order', 'error'); }
     finally { setLoading(false); }
-  }, [session, id, showToast]);
+  }, [userId, id, showToast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -78,7 +87,9 @@ function OrderDetailInner() {
   if (perms && !perms.sales_view && !perms.sales_order_manage && !perms.sales_partner_manage) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
-  if (loading) return <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
+  // Never swap an open edit surface for the spinner — a background refetch must not
+  // discard what the user is typing (full edit form, or the inline meta/line editors).
+  if (loading && !editing && !metaEdit && !lineEdit) return <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
   if (!data) return <div style={{ padding: 24, color: 'var(--t3)' }}>Order not found.</div>;
 
   const o = data;

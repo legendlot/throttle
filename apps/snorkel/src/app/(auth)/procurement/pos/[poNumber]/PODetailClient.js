@@ -5,6 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { computeTax } from '@/lib/poTax';
+import { partDescription } from '@/lib/partDesc';
 import { Panel, Badge, Btn } from '@/components/ui.js';
 import { sourceTone } from '@/components/format.js';
 import { ArrowLeft, Printer, Pencil, Check, Send, ClipboardList, Plus, Trash2 } from 'lucide-react';
@@ -523,6 +524,7 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
     label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
     hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
     part_name: p.part_name || '',
+    product:   p.product || '',
     issue_uom: p.issue_uom || '',
     hsn_code:  p.hsn_code || '',
   }));
@@ -530,7 +532,7 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
   const selectPart = (i, opt) => setRows((prev) => prev.map((l, j) => (j === i ? {
     ...l,
     part_code: opt?.value || '',
-    description: opt?.part_name || l.description,
+    description: opt ? partDescription(opt.value, opt.product, opt.part_name) : l.description,
     unit: opt?.issue_uom || l.unit || 'pcs',
     hsn_code: opt?.hsn_code || l.hsn_code,
   } : l)));
