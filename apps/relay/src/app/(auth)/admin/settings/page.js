@@ -23,6 +23,19 @@ const FIELDS = [
     hint: 'Conversions within this window after a send are attributed to it.' },
   { key: 'daily_send_budget', label: 'Daily send budget (marketing)', type: 'number',
     hint: 'Warm-up throttle — max marketing sends per day (IST). Blank = unlimited. Ramp 500 → 2k → 5k → blank.' },
+  // ── COD→prepaid (C2P) + WhatsApp media ─────────────────────────────────────
+  // These four existed as columns and were documented as operational switches, but were absent
+  // from the worker's saveRelaySettings allow-list until S243 — so every change, including the
+  // documented wa_media revert, needed an engineer running SQL. Exposed here so the runbook
+  // ends with the team, not with Claude.
+  { key: 'payment_links_enabled', label: 'COD→prepaid: collect real payments', type: 'toggle',
+    hint: 'THE C2P go-live gate. Off = pay-links are never minted and the Shopify cancel/recreate ops no-op, so the journey is safe to run end-to-end with no money moving. Turn on only for a real conversion test.' },
+  { key: 'c2p_cod_fee', label: 'COD fee to deduct (₹ per order)', type: 'number',
+    hint: 'Charged prepaid = (COD total − this) × (1 − discount %). Per ORDER, not per item, and applied BEFORE the percentage — which is what lets a customer\'s coupon carry through automatically. Currently ₹50.' },
+  { key: 'c2p_prepaid_discount_pct', label: 'Prepaid discount (%)', type: 'number',
+    hint: 'The prepaid saving, applied after the COD fee is deducted. Must be 0–99. Currently 3.' },
+  { key: 'wa_media_id_enabled', label: 'WhatsApp: send images by media ID', type: 'toggle',
+    hint: 'On = upload each header image to Meta once and reuse the ID. Off = send the image URL, which makes Meta re-fetch it on every send and fail asynchronously (error 131053 — looks sent, arrives never). Leave ON; this is the revert switch if the ID path ever misbehaves.' },
 ];
 
 export default function SettingsPage() {
@@ -58,6 +71,22 @@ export default function SettingsPage() {
       if (!ok) return;
     }
     set('test_mode', turningOff ? false : true);
+  }
+
+  // `payment_links_enabled` turning ON is the one toggle on this page that starts taking real
+  // money from real customers, and it lives in a bulk save alongside quiet hours — so it gets the
+  // same deliberate confirmation `test_mode` has, rather than being a stray click away.
+  function toggleField(key) {
+    const next = !form[key];
+    if (key === 'payment_links_enabled' && next) {
+      const ok = window.confirm(
+        'Turn ON real payment collection?\n\n'
+        + 'The COD→prepaid journey will start minting live Cashfree payment links, cancelling real '
+        + 'Shopify orders and creating real prepaid replacements.\n\n'
+        + 'Only do this when you are ready for a real conversion test.');
+      if (!ok) return;
+    }
+    set(key, next);
   }
 
   async function save() {
@@ -137,7 +166,7 @@ export default function SettingsPage() {
                 <div className="perm-row" key={f.key}>
                   <div className="perm-l"><span className="perm-lbl">{f.label}</span><span className="perm-key">{f.hint}</span></div>
                   {f.type === 'toggle' ? (
-                    <button className={`tgl ${form[f.key] ? 'on' : ''}`} onClick={() => set(f.key, !form[f.key])} disabled={saving}>
+                    <button className={`tgl ${form[f.key] ? 'on' : ''}`} onClick={() => toggleField(f.key)} disabled={saving}>
                       <span className="tgl-knob" /><span className="tgl-txt">{form[f.key] ? 'ON' : 'OFF'}</span>
                     </button>
                   ) : (

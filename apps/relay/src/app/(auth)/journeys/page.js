@@ -89,6 +89,7 @@ export default function JourneysPage() {
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});   // journey_id → journey_stats_list row (campaign-style analytics)
   const [templates, setTemplates] = useState([]);
+  const [senders, setSenders] = useState([]);
   const [segments, setSegments] = useState([]);
   const [eventDefs, setEventDefs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -130,7 +131,7 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp, sg, ev, st, ov] = await Promise.all([
+      const [js, tp, sg, ev, st, ov, sd] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
         garageFetch('getSegments', {}, session),
@@ -143,9 +144,13 @@ export default function JourneysPage() {
         // ONE set-based call for every journey's metrics — never per-row funnel calls.
         // Non-fatal: the list still renders (with — in the metric columns) if analytics fail.
         garageFetch('getJourneysOverview', {}, session).catch(() => null),
+        // Senders, for the send-node "send from" picker. Non-fatal: without it the picker shows
+        // only "auto", which is the pre-S243 behaviour rather than a broken page.
+        garageFetch('getSenderIdentities', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
+      setSenders(Array.isArray(sd) ? sd.filter((s) => s.status === 'active') : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setEventDefs(normalizeEventDefs(ev));
       setSettings(st || null);
@@ -562,7 +567,7 @@ export default function JourneysPage() {
         <Panel title="Flow" pad>
           <JourneyCanvas nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
             onSelect={setSelected} readOnly={busy || !editable} />
-          <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates}
+          <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates} senders={senders}
             eventDefs={eventDefs}
             onChange={updateSelectedConfig} onDelete={deleteSelected} disabled={busy || !editable} />
         </Panel>

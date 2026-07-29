@@ -48,6 +48,38 @@ function Field({ label, children }) {
   return <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">{label}</div>{children}</div>;
 }
 
+// SEND-FROM PIN. Data-only until S243, and load-bearing for any FREE-TEXT step: a free-text send
+// carries no template, so there is no WABA to scope senders by, and routing falls through to
+// "first active sender whose purpose matches". For a `utility` step that is the SUPPORT number —
+// not the number the customer just replied to. The 24h session window is keyed per
+// phone_number_id, so the send then finds no open window and is silently skipped as
+// `window_closed`: the customer taps a button and gets nothing back. Rendered for both the plain
+// and interactive send blocks, because a mid-flow confirm is interactive AND free-text.
+function SenderPicker({ config, senders, set, disabled }) {
+  if (config.channel !== 'whatsapp') return null;
+  const isFreeText = config.text !== undefined;
+  return (
+    <Field label="Send from">
+      <select className="f-inp" value={config.senderId || ''} disabled={disabled}
+        onChange={(e) => set({ senderId: e.target.value || undefined })}>
+        <option value="">Auto — pick by purpose (fine for template sends)</option>
+        {(senders || []).filter((s) => s.channel === 'whatsapp').map((s) => (
+          <option key={s.id} value={s.id}>{s.address} · {s.purpose}</option>
+        ))}
+      </select>
+      {isFreeText && !config.senderId && (
+        <div className="tw-note" style={{ marginTop: 6, borderColor: 'var(--danger, #DE2A2A)' }}>
+          ⚠️ <b>Free-text message with no number pinned.</b> It will be routed by purpose, which
+          usually resolves to the <b>support</b> number — not the number the customer replied to.
+          The 24-hour reply window belongs to that other number, so this message would be{' '}
+          <b>silently skipped</b> and the customer would get nothing. Pin the same number the
+          flow&apos;s opening template goes out from.
+        </div>
+      )}
+    </Field>
+  );
+}
+
 // Number + unit selector composing the engine's "N unit" duration string (journey-graph.js
 // durationToMs: second|minute|hour|day|week, plural optional). Free-text durations depended
 // on people typing "min/hr/days" correctly — a typo saved fine and only failed at runtime.
@@ -72,7 +104,7 @@ function DurationInput({ value, onChange, disabled }) {
   );
 }
 
-export default function NodeDrawer({ nodeId, config, templates, onChange, onDelete, disabled, eventDefs }) {
+export default function NodeDrawer({ nodeId, config, templates, senders, onChange, onDelete, disabled, eventDefs }) {
   if (!nodeId || !config) return null;
   // Defaulted through normalizeEventDefs so the drawer still renders a usable list if it is
   // ever mounted without the prop (fallback set), never an empty picker.
@@ -143,6 +175,8 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             </select>
           </Field>
         )}
+        <SenderPicker config={config} senders={senders} set={set} disabled={disabled} />
+
         {/* No variable reference existed until S243. A token the run context can't supply throws
             `unresolved_variables`, which FAILS the send and raises a defect alert — so "which
             tokens may I use, and when?" is a correctness question, not a convenience one. The
@@ -283,6 +317,7 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             <option value="marketing">marketing</option>
           </select>
         </Field>
+        <SenderPicker config={config} senders={senders} set={set} disabled={disabled} />
         {/* Two shapes of interactive send, and the difference is load-bearing:
             · TEMPLATE — the buttons are the ones Meta approved on it. Sendable any time, so
               this is what OPENS a flow (the C2P first touch).

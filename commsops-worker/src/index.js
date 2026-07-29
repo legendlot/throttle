@@ -393,15 +393,38 @@ async function handlePost(body, auth, env) {
     }
     case 'saveRelaySettings': {        // approval thresholds, freq caps, quiet hours (M2)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      // S243 added the last four. They existed as columns and were documented as operational
+      // switches — the C2P go-live gate, its pricing ("settings, so a pricing change never needs
+      // a deploy") and the wa_media_id revert path — but none were reachable from the UI, so all
+      // of them were SQL-only and every change needed an engineer. Exposing a documented switch
+      // is the difference between a runbook the team can follow and one that ends in "ask Claude".
       const allowed = ['approval_required_marketing', 'approval_audience_threshold',
         'frequency_cap_per_day', 'frequency_cap_window_hours', 'quiet_hours_start',
         'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow',
-        'daily_send_budget'];
+        'daily_send_budget',
+        'payment_links_enabled', 'c2p_cod_fee', 'c2p_prepaid_discount_pct', 'wa_media_id_enabled'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
       // Disabling test mode = unlocking real-customer sends. Make it a deliberate,
       // explicit act: only when the caller affirms it AND only ever to a boolean.
       if ('test_mode' in patch) patch.test_mode = (patch.test_mode === true);
+      // Same posture for the two other switches that change what reaches a customer or a card:
+      // coerce strictly, so a stray truthy string can never turn on real payment collection.
+      if ('payment_links_enabled' in patch) patch.payment_links_enabled = (patch.payment_links_enabled === true);
+      if ('wa_media_id_enabled' in patch) patch.wa_media_id_enabled = (patch.wa_media_id_enabled === true);
+      // C2P PRICING — validate to exactly the range journey-workflow's `c2p_prepaid` branch will
+      // accept, so a bad value is refused HERE with a clear error rather than silently failing
+      // every conversion later as `c2p_pricing_unavailable`. Mirrors that fail-closed check.
+      if ('c2p_cod_fee' in patch) {
+        const fee = Number(patch.c2p_cod_fee);
+        if (!Number.isFinite(fee) || fee < 0) return err('c2p_cod_fee must be a number >= 0', 422);
+        patch.c2p_cod_fee = fee;
+      }
+      if ('c2p_prepaid_discount_pct' in patch) {
+        const pct = Number(patch.c2p_prepaid_discount_pct);
+        if (!Number.isFinite(pct) || pct < 0 || pct >= 100) return err('c2p_prepaid_discount_pct must be a number >= 0 and < 100', 422);
+        patch.c2p_prepaid_discount_pct = pct;
+      }
       const r = await A.sbComms('/rest/v1/settings?id=eq.1', env, {
         method: 'PATCH', body: JSON.stringify(patch),
       });
