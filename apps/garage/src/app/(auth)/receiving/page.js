@@ -404,20 +404,27 @@ export default function ReceivingPage() {
     const markCodes = varReport.boxes?.codes || [];
     setVarBusy(true);
     try {
-      // Slack delivery is a later step (the channel does not exist yet). Until it does,
-      // sending copies the report to the clipboard so it can be pasted, and stamps the
-      // boxes so the next report starts clean.
       const text = varianceReportText(varReport);
-      try { await navigator.clipboard.writeText(text); } catch { /* clipboard blocked */ }
       const ids = (shipmentData?.marks || [])
         .filter(m => markCodes.includes(m.mark_code) || markCodes.includes(m.mark_id))
         .map(m => m.mark_id);
-      if (ids.length) {
-        await workerFetch('markVarianceReported', { data: { shipment_id: currentShipmentId, mark_ids: ids } }, session);
+
+      // Posts to #inwarding-reports. The worker stamps the boxes ONLY on a confirmed
+      // 200, so a Slack outage leaves the inward still reportable rather than silently
+      // swallowing it — which is why this reads the reply instead of assuming success.
+      const r = await workerFetch('sendInwardVarianceReport',
+        { data: { shipment_id: currentShipmentId, mark_ids: ids, text } }, session);
+
+      if (r?.ok && r.data?.posted) {
+        showToast(`Sent to Slack — ${r.data.marked} box${r.data.marked === 1 ? '' : 'es'} marked as reported`, 'success');
+        setVarReport(null);
+        await refreshDetail();
+        return;
       }
-      showToast(`Report copied — ${ids.length} box${ids.length === 1 ? '' : 'es'} marked as reported`, 'success');
-      setVarReport(null);
-      await refreshDetail();
+      // Not delivered: fall back to the clipboard and leave the boxes unreported, so
+      // nothing is lost and the same report can be sent again once Slack is reachable.
+      try { await navigator.clipboard.writeText(text); } catch { /* clipboard blocked */ }
+      showToast(`${r?.data?.message || 'Slack not reachable'} — report copied to clipboard instead; boxes left unreported`, 'info');
     } catch (e) {
       showToast(e.message || 'Send failed', 'error');
     } finally { setVarBusy(false); }
@@ -1255,7 +1262,7 @@ export default function ReceivingPage() {
                     </div>
                   )}
                   <div style={{ marginTop: 8, fontSize: 10, color: 'var(--t3)' }}>
-                    Send copies the report to your clipboard and marks these boxes as reported. Posting it to Slack automatically is a later step.
+                    Send posts to <span style={{ fontFamily: 'var(--mono)' }}>#inwarding-reports</span> and marks these boxes as reported. If Slack cannot be reached it copies to your clipboard instead and leaves the boxes unreported, so nothing is lost.
                   </div>
                 </>
               )}
