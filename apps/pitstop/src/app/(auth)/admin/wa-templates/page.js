@@ -28,7 +28,9 @@ export default function WaTemplatesPage() {
   useEffect(() => { if (session) load(); /* eslint-disable-line */ }, [session]);
 
   if (!perms?.cs_ticket_admin) return <EmptyState icon="🔒" message="Admin permission required." />;
-  if (loading) return <Spinner />;
+  // Never swap an open form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !editing && !showCreate) return <Spinner />;
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto' }}>

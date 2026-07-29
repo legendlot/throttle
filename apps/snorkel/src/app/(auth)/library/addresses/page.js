@@ -136,7 +136,9 @@ export default function AddressesPage() {
       </div>
     );
   }
-  if (loading) return <Spinner label="Loading addresses…" />;
+  // Never swap an open form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !formOpen) return <Spinner label="Loading addresses…" />;
 
   const fld = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 

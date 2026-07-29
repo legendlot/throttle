@@ -41,7 +41,9 @@ export default function MyopAccountsPage() {
   if (!perms?.cs_ticket_admin) {
     return <EmptyState icon="🔒" message="Admin permission required to manage MyOp accounts." />;
   }
-  if (loading) return <Spinner />;
+  // Never swap an open form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !showCreate && !editId) return <Spinner />;
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto' }}>

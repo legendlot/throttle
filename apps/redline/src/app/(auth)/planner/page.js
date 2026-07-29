@@ -776,7 +776,9 @@ export default function PlannerPage() {
   const totalDemand = activeDates.reduce((a, d) => a + (Number(d.total_demand) || 0), 0);
   const totalGap    = activeDates.reduce((a, d) => a + (Number(d.total_gap)    || 0), 0);
 
-  if (loading) return <div style={{ padding: 32 }}><Spinner /></div>;
+  // Never swap an in-progress batch-size edit for the spinner — a background reload
+  // (a real token refresh re-keys any effect on `session`) must not discard it.
+  if (loading && !Object.keys(editingBatch).length) return <div style={{ padding: 32 }}><Spinner /></div>;
 
   const { upload } = planData || {};
 

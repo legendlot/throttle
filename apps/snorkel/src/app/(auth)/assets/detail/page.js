@@ -199,7 +199,9 @@ function AssetDetail() {
     } catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
-  if (loading) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
+  // Never swap an open edit form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !editing) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
   if (!data?.asset) return <div style={{ padding: 24, color: 'var(--t3)' }}>Asset not found. <button style={btnSecondary} onClick={() => router.push('/assets')}>Back</button></div>;
 
   const a = data.asset;

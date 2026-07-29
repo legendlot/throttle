@@ -167,7 +167,9 @@ function DetailContent() {
   }
 
   if (!canUse) return <div style={{ padding: 24, color: 'var(--t3)' }}>You don&apos;t have access to Gate Pass.</div>;
-  if (loading) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
+  // Never swap an open edit form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !editing) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
   if (!gp?.id) return <div style={{ padding: 24, color: 'var(--t3)' }}>Gate pass not found. <button style={btnS} onClick={() => router.push('/gate-pass')}>Back</button></div>;
 
   const isVoid = gp.status === 'void';

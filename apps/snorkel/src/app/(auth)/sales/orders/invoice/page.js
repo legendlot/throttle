@@ -4,7 +4,8 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
-import { inr, amountInWords, fmtDate } from '@/lib/sales';
+import { inr, amountInWords } from '@/lib/sales';
+import { fmtDate } from '@/lib/snorkelui';   // NOT '@/lib/sales' — it has never exported fmtDate
 
 function fmtDateLocal(raw) { return fmtDate(raw); }
 function money(n) { return Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

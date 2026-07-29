@@ -79,7 +79,27 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, nextSession) => {
         if (cancelled) return;
-        setSession(nextSession);
+        // Keep the session OBJECT IDENTITY stable when the token hasn't actually
+        // changed. As the comment above records, onAuthStateChange re-fires on tab
+        // switch, back-navigation and hard refresh — carrying the SAME token in a
+        // NEW object. Setting it unconditionally made `session` a fresh value on
+        // every tab switch, so every consumer keying an effect on it re-fetched;
+        // and any page rendering a form under an `if (loading) return <Spinner/>`
+        // gate unmounted that form mid-typing and lost what the user had entered
+        // (Snorkel Edit Order / Edit Partner — Vinayram, 2026-07-29; the same shape
+        // was found on 11 pages across 7 apps).
+        //
+        // A genuine TOKEN_REFRESHED carries a NEW access_token and still propagates —
+        // it must, because consumers pass `session` straight to garageFetch /
+        // workerFetch and a stale token 401s. So this narrows the churn to real
+        // token changes (~hourly) instead of every tab switch; it does not eliminate
+        // it. Pages holding unsaved input should also not unmount that input on a
+        // background reload — prefer keying loads on `userId` below.
+        setSession(prev => {
+          const sameToken = prev?.access_token && nextSession?.access_token
+            && prev.access_token === nextSession.access_token;
+          return sameToken ? prev : nextSession;
+        });
         if (nextSession) {
           await loadIdentity(nextSession);
         } else {
@@ -227,8 +247,16 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     setBrandUser(null);
   }
 
+  // Stable effect key. `session` is a new object on every real token refresh, so
+  // `useEffect(..., [session])` re-runs roughly hourly even after the guard above —
+  // fine for a plain data fetch, destructive for a page holding unsaved user input.
+  // `userId` changes only on an actual sign-in/sign-out, so a load keyed on it fires
+  // once per user. Read the token inside the callback (from a ref, or getValidSession)
+  // rather than closing over `session`, which would go stale.
+  const userId = session?.user?.id ?? null;
+
   return (
-    <AuthContext.Provider value={{ session, user, role, perms, loading, brandUser, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ session, userId, user, role, perms, loading, brandUser, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -136,7 +136,9 @@ function DetailInner() {
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
 
-  if (loading) return <Spinner />;
+  // Never swap an open edit form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !editing) return <Spinner />;
   if (!task) return <div style={{ color: 'var(--text-3)' }}>Task not found.</div>;
   const od = isOverdue(task);
   const deptOpts = departments.map(d => ({ value: d.id, label: d.name }));

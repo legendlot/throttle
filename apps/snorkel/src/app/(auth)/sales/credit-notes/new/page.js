@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -62,6 +62,8 @@ function NewCreditNoteInner() {
     return res;
   }, [session]);
 
+  const firstLoadDone = useRef(false);
+
   // Initial load: edit mode, preselected order, or empty picker.
   useEffect(() => {
     if (!session) return;
@@ -87,7 +89,7 @@ function NewCreditNoteInner() {
           setLines(linesFromOrder(res?.lines));
         }
       } catch (e) { showToast(e.message || 'Failed to load', 'error'); }
-      finally { setLoading(false); }
+      finally { firstLoadDone.current = true; setLoading(false); }
     })();
   }, [session, editId, preOrder, loadOrder, linesFromOrder, router, showToast]);
 
@@ -133,7 +135,11 @@ function NewCreditNoteInner() {
   }
 
   if (perms && !canManage) return <div style={{ padding: 24, color: 'var(--text-3)' }}>You do not have permission to raise credit notes.</div>;
-  if (loading) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
+  // The whole page IS a form, so there is no "is a form open" flag to test — the
+  // spinner is an INITIAL-load affordance only. A background reload (a real token
+  // refresh re-keys the effect on `session`) must not blank the page and discard
+  // the quantities/rates already typed.
+  if (loading && !firstLoadDone.current) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
 
   const cell = { ...inputStyle, width: '100%', padding: '4px 6px' };
   const numCell = { ...cell, textAlign: 'right' };

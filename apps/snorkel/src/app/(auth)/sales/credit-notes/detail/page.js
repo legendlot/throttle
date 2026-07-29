@@ -5,8 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { panelStyle, panelHeaderStyle, panelBodyStyle, btnPrimary, btnSecondary, tableThStyle, tableTdStyle, labelStyle } from '@/lib/snorkelui';
-import { inr, fmtDate, creditReasonLabel, cnStatusLabel } from '@/lib/sales';
+import { panelStyle, panelHeaderStyle, panelBodyStyle, btnPrimary, btnSecondary, tableThStyle, tableTdStyle, labelStyle, fmtDate } from '@/lib/snorkelui';
+import { inr, creditReasonLabel, cnStatusLabel } from '@/lib/sales';
 
 const money = (n) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 

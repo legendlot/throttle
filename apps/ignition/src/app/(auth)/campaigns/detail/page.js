@@ -39,7 +39,9 @@ export default function CampaignDetailPage() {
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  if (loading) return <Spinner />;
+  // Never swap an open edit form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.
+  if (loading && !editing) return <Spinner />;
   if (!campaign) return <div style={{ padding: 16, color: 'var(--text-3)' }}>Campaign not found.</div>;
 
   const r = campaign.rollup || {};

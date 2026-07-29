@@ -67,7 +67,10 @@ export default function TagsAdminPage() {
   }
 
   if (!perms?.cs_ticket_admin) return <EmptyState icon="🔒" message="Admin permission required to curate tags." />;
-  if (loading) return <Spinner />;
+  // Never swap an open form for the spinner — a background reload (a real token
+  // refresh re-keys any effect on `session`) must not discard unsaved input.  Here that is a half-typed
+  // tag name in `draft`, which sits in an always-visible inline row.
+  if (loading && !draft.name) return <Spinner />;
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
