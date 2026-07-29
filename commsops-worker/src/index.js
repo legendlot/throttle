@@ -762,6 +762,11 @@ async function handlePost(body, auth, env) {
       try { return ok(await SHOP.listWebhooks(env)); }
       catch (e) { return err(e?.message || 'shopify_error', 400); }
     }
+    case 'shopifyAccessScopes': {        // what the app can actually do (C2P draft-order readiness)
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      try { return ok(await SHOP.accessScopes(env)); }
+      catch (e) { return err(e?.message || 'shopify_error', 400); }
+    }
 
     case 'waSubmitTemplate': {           // M14 — submit a WA template to Meta for approval
       if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);

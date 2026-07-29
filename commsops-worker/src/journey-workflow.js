@@ -8,6 +8,7 @@ const { send } = require('./send.js');
 const G = require('./journey-graph.js');
 const CF = require('./cashfree.js');
 const SH = require('./shopify.js');
+const AL = require('./alerts.js');
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -16,6 +17,45 @@ const ORDER_STATUS_Q = `query($id:ID!){ order(id:$id){ id displayFulfillmentStat
 const ORDER_MARK_PAID_M = `mutation($input:OrderMarkAsPaidInput!){ orderMarkAsPaid(input:$input){ order{ id displayFinancialStatus } userErrors{ field message } } }`;
 const ORDER_CANCEL_M = `mutation($orderId:ID!,$reason:OrderCancelReason!,$refund:Boolean!,$restock:Boolean!){ orderCancel(orderId:$orderId,reason:$reason,refund:$refund,restock:$restock){ job{ id } orderCancelUserErrors{ field message } userErrors{ field message } } }`;
 const TAGS_ADD_M = `mutation($id:ID!,$tags:[String!]!){ tagsAdd(id:$id,tags:$tags){ userErrors{ field message } } }`;
+
+// ── C2P cancel-and-recreate (op `recreate_as_prepaid`) ────────────────────────
+// Needs write_draft_orders + read_draft_orders on top of write_orders. Design:
+// docs/superpowers/specs/2026-07-29-c2p-cancel-and-recreate-design.md.
+//
+// WHY a NEW order rather than orderMarkAsPaid: LOT charges COD and prepaid customers
+// DIFFERENT prices, and mark-as-paid cannot change what an order owes — it would settle
+// the COD total, billing the customer the ₹50 COD fee plus the 3% they were promised for
+// paying up front (~₹113 worse than checking out prepaid). A new order is the only way to
+// deliver the prepaid price. It also makes the courier question moot: the original is
+// cancelled outright, so no stale COD amount rides an AWB.
+//
+// Addresses use countryCode/provinceCode — `country`/`province` are deprecated on
+// MailingAddressInput. Line prices use `priceOverride` (MoneyInput), which is the
+// non-deprecated per-unit override and is honoured alongside `variantId`.
+const ORDER_FOR_RECREATE_Q = `query($id:ID!){ order(id:$id){
+  id name tags createdAt cancelledAt displayFulfillmentStatus displayFinancialStatus
+  email phone
+  currentTotalPriceSet{ shopMoney{ amount currencyCode } }
+  customer{ id }
+  shippingAddress{ firstName lastName address1 address2 city provinceCode countryCode zip phone company }
+  billingAddress{ firstName lastName address1 address2 city provinceCode countryCode zip phone company }
+  shippingLine{ title originalPriceSet{ shopMoney{ amount currencyCode } } }
+  lineItems(first:100){ edges{ node{ quantity title sku variant{ id }
+    discountedUnitPriceSet{ shopMoney{ amount currencyCode } } } } }
+} }`;
+const DRAFT_CREATE_M = `mutation($input:DraftOrderInput!){ draftOrderCreate(input:$input){
+  draftOrder{ id totalPriceSet{ shopMoney{ amount currencyCode } } } userErrors{ field message } } }`;
+const DRAFT_UPDATE_M = `mutation($id:ID!,$input:DraftOrderInput!){ draftOrderUpdate(id:$id,input:$input){
+  draftOrder{ id totalPriceSet{ shopMoney{ amount currencyCode } } } userErrors{ field message } } }`;
+// `paymentPending` is DEPRECATED and defaults to false, so it is omitted: the default
+// completes the draft as a PAID order, which is exactly right for money already collected
+// out-of-band via Cashfree.
+const DRAFT_COMPLETE_M = `mutation($id:ID!){ draftOrderComplete(id:$id){
+  draftOrder{ id order{ id name } } userErrors{ field message } } }`;
+
+const money = (amount, currencyCode) => ({ amount: String(amount), currencyCode });
+// Shopify money arrives as a string; compare in paise to dodge float drift.
+const paise = (v) => Math.round(Number(v) * 100);
 
 class JourneyWorkflow extends WorkflowEntrypoint {
   // params: { enrolmentId, journeyId, journeyVersion, profileId }
@@ -383,9 +423,20 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         // convert_to_prepaid + cancel: guard on the order NOT being fulfilled yet (mirrors
         // "Disable Modify Order on Fulfillment" — once shipped, COD is locked to the courier)
         // + an optional within-hours window (mirrors "Disable Modify Order After X Hours").
-        const q = await SH.shopifyGraphQL(env, ORDER_STATUS_Q, { id: gid });
+        const recreate = op === 'recreate_as_prepaid';
+        const q = await SH.shopifyGraphQL(env, recreate ? ORDER_FOR_RECREATE_Q : ORDER_STATUS_Q, { id: gid });
         const order = q?.order;
         if (!order) return { outcome: 'not_done', reason: 'order_not_found' };
+        // IDEMPOTENCY, and it MUST precede the cancelled guard. A completed recreate leaves the
+        // original CANCELLED, so checking `already_cancelled` first would report `not_done` on a
+        // durable retry of a run that fully succeeded — routing the customer down the failure
+        // branch ("do not pay the courier") after a clean conversion. step.do memoisation makes
+        // the retry unlikely; this is the belt-and-braces the design doc asks for.
+        if (recreate) {
+          const prior = (Array.isArray(order.tags) ? order.tags : [])
+            .find((t) => /^relay-c2p-replaced-by-/i.test(String(t)));
+          if (prior) return { outcome: 'done', op, already_recreated: true, replaced_by: prior };
+        }
         if (order.cancelledAt) return { outcome: 'not_done', reason: 'already_cancelled' };
         if (order.displayFulfillmentStatus && order.displayFulfillmentStatus !== 'UNFULFILLED')
           return { outcome: 'not_done', reason: `fulfilled:${order.displayFulfillmentStatus}` };
@@ -408,6 +459,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: ['relay-cod-cancelled'] }).catch(() => {});
           return { outcome: 'done', op };
         }
+        if (recreate) return await this.#recreateAsPrepaid(env, s, gid, order, triggerProps, enrolmentId);
         return { outcome: 'not_done', reason: `unknown_op:${op}` };
       } catch (e) {
         // write_orders missing / API error → graceful not_done (never throws).
@@ -415,6 +467,106 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       }
     }
     return { outcome: 'failed', reason: `unknown_action_kind:${kind}` };
+  }
+
+  // C2P — build a PAID replacement order at the prepaid price, then cancel the COD original.
+  //
+  // ORDERING IS LOAD-BEARING: the replacement must exist and be confirmed paid BEFORE the
+  // original is cancelled. If the draft dance fails we are left with the COD original intact —
+  // the customer has paid and we owe them a manual fix, which is recoverable. The reverse order
+  // risks cancelling the original and THEN failing to create the replacement, leaving a paying
+  // customer with no order at all. `draftOrderComplete` returning an order id is the commit point.
+  async #recreateAsPrepaid(env, s, gid, order, runCtx, enrolmentId) {
+    // The amount is NOT recomputed here — it is what the pay-link actually billed, exposed by
+    // the `payment_link` step through runCtx (`pricing:'c2p_prepaid'`). Recomputing would risk
+    // the new order disagreeing with money already taken if a setting changed mid-enrolment.
+    // Fail closed rather than guess.
+    const prepaid = Number(runCtx?.prepaid_amount) || null;
+    if (!prepaid || prepaid <= 0) return { outcome: 'not_done', reason: 'no_prepaid_amount' };
+
+    // Replication is a pure, unit-tested builder in shopify.js — see buildC2PDraftInput.
+    const built = SH.buildC2PDraftInput(order, enrolmentId);
+    if (built.error) return { outcome: 'not_done', reason: built.error };
+    const { input, currencyCode: cur } = built;
+
+    // PHASE A — create the replica with NO discount and read back what Shopify actually totals
+    // it at. The concession is derived from THAT, never from the original order's total: Shopify
+    // recomputes tax and shipping, so a discount sized against the original could leave the
+    // final total off. This makes the arithmetic exact by construction, not by assumption.
+    const c = await SH.shopifyGraphQL(env, DRAFT_CREATE_M, { input });
+    const cErr = c?.draftOrderCreate?.userErrors || [];
+    if (cErr.length) return { outcome: 'not_done', reason: `draft_create:${cErr.map((e) => e.message).join('; ')}`.slice(0, 160) };
+    const draftId = c?.draftOrderCreate?.draftOrder?.id;
+    const replicated = c?.draftOrderCreate?.draftOrder?.totalPriceSet?.shopMoney?.amount;
+    if (!draftId || replicated == null) return { outcome: 'not_done', reason: 'draft_create_no_id' };
+
+    const concession = Math.round((Number(replicated) - prepaid) * 100) / 100;
+    if (concession <= 0) return { outcome: 'not_done', reason: `concession_not_positive:${replicated}->${prepaid}` };
+
+    // PHASE B — apply the concession as ONE explicit order-level discount. Line prices stay
+    // truthful, the C2P giveaway is a visible auditable line rather than smeared across items
+    // (which would also not sum exactly after per-line rounding), and refunds pro-rate off it.
+    const u = await SH.shopifyGraphQL(env, DRAFT_UPDATE_M, { id: draftId, input: {
+      appliedDiscount: {
+        valueType: 'FIXED_AMOUNT', value: concession, amountWithCurrency: money(concession, cur),
+        title: 'COD → Prepaid', description: `Prepaid pricing for ${order.name}`,
+      } } });
+    const uErr = u?.draftOrderUpdate?.userErrors || [];
+    if (uErr.length) return { outcome: 'not_done', reason: `draft_discount:${uErr.map((e) => e.message).join('; ')}`.slice(0, 160) };
+    const finalTotal = u?.draftOrderUpdate?.draftOrder?.totalPriceSet?.shopMoney?.amount;
+
+    // VERIFY BEFORE COMMITTING. If the draft does not total what the customer paid, do NOT
+    // complete it: a wrong-priced LIVE order is worse than a failed conversion, because the
+    // failure path leaves the original intact and recoverable. One paisa of tolerance absorbs
+    // tax-inclusive rounding; anything larger is a real mismatch and wants a human.
+    if (finalTotal == null || Math.abs(paise(finalTotal) - paise(prepaid)) > 1) {
+      await AL.alert(env, `:warning: C2P aborted before commit on ${order.name} — draft totalled ${finalTotal} but the customer paid ${prepaid}. Draft ${draftId} left for inspection; original NOT cancelled.`);
+      return { outcome: 'not_done', reason: `total_mismatch:${finalTotal}!=${prepaid}` };
+    }
+
+    // PHASE C — commit. Omitting the deprecated `paymentPending` takes its default (false),
+    // completing the draft as a PAID order: correct for money already collected via Cashfree,
+    // and the same posture the old mark-as-paid op had.
+    const done = await SH.shopifyGraphQL(env, DRAFT_COMPLETE_M, { id: draftId });
+    const dErr = done?.draftOrderComplete?.userErrors || [];
+    if (dErr.length) return { outcome: 'not_done', reason: `draft_complete:${dErr.map((e) => e.message).join('; ')}`.slice(0, 160) };
+    const newOrder = done?.draftOrderComplete?.draftOrder?.order;
+    if (!newOrder?.id) return { outcome: 'not_done', reason: 'draft_complete_no_order' };
+
+    // ── past the commit point ──────────────────────────────────────────────────
+    // Stamp the idempotency marker on the original FIRST, before attempting the cancel. The
+    // marker records "a replacement exists", which is the thing that must never happen twice —
+    // tagging it only on a successful cancel would let a retry after a failed cancel mint a
+    // SECOND replacement.
+    await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: [`relay-c2p-replaced-by-${newOrder.name}`] }).catch(() => {});
+
+    // Every remaining failure still reports `done` — the customer's conversion did succeed — but
+    // must page ops, because the residue is two live orders for one purchase, the only outcome
+    // that leaves LOT worse off than having done nothing.
+    let cancelled = true, cancelError = null;
+    try {
+      const r = await SH.shopifyGraphQL(env, ORDER_CANCEL_M, {
+        orderId: gid, reason: 'CUSTOMER', refund: false,
+        // restock:false is LOAD-BEARING and differs from the plain `cancel` op: the replacement
+        // order holds these same units, so restocking here returns the stock twice and oversells.
+        restock: false });
+      const errs = (r?.orderCancel?.orderCancelUserErrors || []).concat(r?.orderCancel?.userErrors || []);
+      if (errs.length) { cancelled = false; cancelError = errs.map((e) => e.message).join('; ').slice(0, 120); }
+    } catch (e) { cancelled = false; cancelError = String(e?.message || e).slice(0, 120); }
+
+    if (!cancelled) {
+      await AL.alert(env, `:rotating_light: C2P DUPLICATE ORDERS — ${order.name} could NOT be cancelled after replacement ${newOrder.name} went live (${cancelError}). Cancel ${order.name} by hand, WITHOUT restocking.`);
+    }
+
+    return {
+      outcome: 'done', op: 'recreate_as_prepaid',
+      new_order_id: newOrder.id, new_order_name: newOrder.name,
+      charged: prepaid, concession, original_cancelled: cancelled,
+      ...(cancelError ? { cancel_error: cancelError } : {}),
+      // Makes `{new_order_number}` bindable in the downstream "payment received" message —
+      // the token that had to be left out of the copy while the recreate action didn't exist.
+      context: { new_order_number: newOrder.name, new_order_id: newOrder.id },
+    };
   }
 
   // Interactive send → branch. Reuses the J1 wait machinery: register a response wait on

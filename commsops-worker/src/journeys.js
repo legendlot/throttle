@@ -36,7 +36,7 @@ async function compile(env, definition, journey) {
     if (s.type === 'action') {
       if (!['payment_link', 'set_attr', 'order_modify'].includes(s.kind)) errors.push(`bad_action_kind:${id}:${s.kind}`);
       if (s.kind === 'set_attr' && !s.attr) errors.push(`set_attr_no_attr:${id}`);
-      if (s.kind === 'order_modify' && !['convert_to_prepaid', 'cancel', 'add_tag'].includes(s.op)) errors.push(`bad_order_op:${id}:${s.op}`);
+      if (s.kind === 'order_modify' && !['convert_to_prepaid', 'recreate_as_prepaid', 'cancel', 'add_tag'].includes(s.op)) errors.push(`bad_order_op:${id}:${s.op}`);
       // every outcome handle the kind declares must route somewhere (no dangling branch)
       for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`action_handle_missing:${id}:${h}`);
     }

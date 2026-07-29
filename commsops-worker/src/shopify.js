@@ -488,6 +488,70 @@ const WEBHOOK_TOPICS = [
   'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE',
 ];
 
+// ── C2P draft-order replication (pure) ───────────────────────────────────────
+// Kept pure and exported so the risky part — faithfully copying line items, prices and
+// addresses onto a replacement order — is unit-testable. `journey-workflow.js` cannot be
+// required from Node (it esm-imports `cloudflare:workers`), so logic left in there is
+// effectively untested.
+//
+// Returns { input } for draftOrderCreate, or { error } when the order cannot be replicated
+// faithfully. NO discount is applied here: the caller sizes the concession off the draft's
+// own Shopify-computed total (see #recreateAsPrepaid PHASE A).
+const c2pMoney = (amount, currencyCode) => ({ amount: String(amount), currencyCode });
+
+function buildC2PDraftInput(order, enrolmentId) {
+  if (!order) return { error: 'order_missing' };
+  const cur = order.currentTotalPriceSet?.shopMoney?.currencyCode || 'INR';
+  const edges = order.lineItems?.edges || [];
+  const lines = edges.map((e) => e.node).filter((n) => n?.variant?.id);
+  if (!lines.length) return { error: 'no_replicable_line_items' };
+  // A custom line item carries no variant, so it cannot be replicated. Refuse outright rather
+  // than silently ship a replacement missing part of what the customer bought.
+  if (lines.length !== edges.length) return { error: 'custom_line_item_present' };
+
+  const addr = (a) => (a ? {
+    firstName: a.firstName, lastName: a.lastName, address1: a.address1, address2: a.address2,
+    city: a.city, provinceCode: a.provinceCode, countryCode: a.countryCode,
+    zip: a.zip, phone: a.phone, company: a.company,
+  } : null);
+
+  const input = {
+    // Replicate at the price the customer was ACTUALLY charged per unit, so any coupon on the
+    // original carries through with no discount-code lookup. `priceOverride` is the
+    // non-deprecated per-unit override and is honoured alongside `variantId`.
+    lineItems: lines.map((n) => ({
+      variantId: n.variant.id,
+      quantity: n.quantity,
+      priceOverride: c2pMoney(n.discountedUnitPriceSet?.shopMoney?.amount ?? 0, cur),
+    })),
+    tags: ['relay-c2p-converted', `relay-c2p-from-${order.name}`],
+    note: `COD→Prepaid conversion of ${order.name} (Relay enrolment ${enrolmentId}).`,
+  };
+  // `customerId` is deprecated at the top level of DraftOrderInput.
+  if (order.customer?.id) input.purchasingEntity = { customerId: order.customer.id };
+  if (order.email) input.email = order.email;
+  if (order.phone) input.phone = order.phone;
+  const sa = addr(order.shippingAddress); if (sa) input.shippingAddress = sa;
+  const ba = addr(order.billingAddress);  if (ba) input.billingAddress = ba;
+  if (order.shippingLine) input.shippingLine = {
+    title: order.shippingLine.title || 'Shipping',
+    // `price` is deprecated in favour of `priceWithCurrency`.
+    priceWithCurrency: c2pMoney(order.shippingLine.originalPriceSet?.shopMoney?.amount ?? 0, cur),
+  };
+  return { input, currencyCode: cur };
+}
+
+// What the app can actually DO, straight from Shopify. A scope claim in a design doc is not
+// evidence — `recreate_as_prepaid` needs write_draft_orders + read_draft_orders on top of
+// write_orders, and a missing grant surfaces only as an ACCESS_DENIED mid-conversion.
+async function accessScopes(env) {
+  const d = await shopifyGraphQL(env, `{ currentAppInstallation{ accessScopes{ handle } } }`, {});
+  const have = (d.currentAppInstallation?.accessScopes || []).map((s) => s.handle).sort();
+  const needed = ['write_orders', 'read_orders', 'write_draft_orders', 'read_draft_orders'];
+  return { scopes: have, c2p_ready: needed.every((n) => have.includes(n)),
+           missing_for_c2p: needed.filter((n) => !have.includes(n)) };
+}
+
 async function listWebhooks(env) {
   const q = `{ webhookSubscriptions(first:100){ edges{ node{ id topic
     endpoint{ __typename ... on WebhookHttpEndpoint{ callbackUrl } } } } } }`;
@@ -538,5 +602,7 @@ module.exports = {
   mapFulfillmentEvent, FULFILLMENT_STATUS_EVENT,
   verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,
   // J3 order_modify (COD→prepaid reconciliation) — raw Admin API access
-  shopifyGraphQL,
+  shopifyGraphQL, accessScopes,
+  // C2P cancel-and-recreate — pure replication builder (unit-tested)
+  buildC2PDraftInput,
 };

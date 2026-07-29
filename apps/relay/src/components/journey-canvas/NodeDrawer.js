@@ -322,11 +322,23 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
         <Field label="Operation">
           <select className="f-inp" value={config.op || 'convert_to_prepaid'} disabled={disabled}
             onChange={(e) => set({ op: e.target.value })}>
+            <option value="recreate_as_prepaid">Recreate as prepaid (cancel COD + new paid order)</option>
             <option value="convert_to_prepaid">Convert to prepaid (mark Shopify order paid)</option>
             <option value="cancel">Cancel order (on Shopify)</option>
             <option value="add_tag">Add tag only</option>
           </select>
         </Field>
+        {config.op === 'recreate_as_prepaid' && (
+          <div className="tw-note" style={{ margin: '0 0 10px' }}>
+            Builds a <strong>new paid order at the prepaid price</strong>, then cancels the COD original
+            (without restocking — the replacement holds the same units). Use this, not Convert, for
+            COD→prepaid: <span className="mono">Convert</span> can only settle the COD total, so it bills
+            the customer the ₹50 fee plus the 3% they were promised. Requires an upstream{' '}
+            <span className="mono">payment_link</span> step with <span className="mono">c2p_prepaid</span>{' '}
+            pricing — it charges exactly what that link collected and refuses to run without it.
+            Exposes <span className="mono">{'{new_order_number}'}</span> to later sends.
+          </div>
+        )}
         {config.op === 'add_tag' && (
           <Field label="Tags (comma-separated)">
             <input className="f-inp mono" value={(config.tags || []).join(', ')} disabled={disabled}
@@ -341,7 +353,7 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
           </Field>
         )}
         <div className="tw-note" style={{ margin: 0 }}>
-          Shopify order op (mirrors BiteSpeed's Modify Order). Convert/cancel are <strong>guarded to UNFULFILLED orders</strong> (once shipped, COD is locked to the courier) and <strong>gated by the go-live switch</strong> + need <span className="mono">write_orders</span>. Outcomes: <span className="mono">done</span> · <span className="mono">not_done</span>.
+          Shopify order op (mirrors BiteSpeed's Modify Order). Convert/recreate/cancel are <strong>guarded to UNFULFILLED orders</strong> (once shipped, COD is locked to the courier) and <strong>gated by the go-live switch</strong> + need <span className="mono">write_orders</span> (recreate also needs <span className="mono">write_draft_orders</span>). Outcomes: <span className="mono">done</span> · <span className="mono">not_done</span>.
         </div>
       </>)}
 
