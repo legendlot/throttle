@@ -25,7 +25,7 @@ const scan = (o) => Object.assign({
   nsl_code: 'X-DDD3FD', status_at: iso(NOW - 60000), matched_shipment_id: 'ship-1',
 }, o);
 const ship = (o) => Object.assign({
-  id: 'ship-1', shopify_order_id: '999', shopify_order_name: '#LOT43700',
+  id: 'ship-1', lifecycle: 'rto', shopify_order_id: '999', shopify_order_name: '#LOT43700',
   courier: 'Delhivery', tracking_number: 'AWB1', tracking_link: 'http://t/1',
   uniware_package_code: 'SP/1', dispatched_at: iso(NOW - 3 * 86400000), first_seen_at: iso(NOW - 3 * 86400000),
 }, o);
@@ -89,6 +89,39 @@ const ingest = async (env, ev) => { state.ingested.push(ev); return { ok: true }
     restore();
     assert.equal(state.ingested.length, 0);
     assert.equal(r.candidates, 0);
+  });
+
+  // ── 3b. THE FORWARD-LEG TRAP — the bug this emitter nearly shipped ─────────────────────
+  // X-DDD3FD reads "Dispatched for RTO" but Delhivery reuses it for ordinary forward dispatch.
+  // Measured: 64 AWBs/24h with status_type='UD' on parcels still in_transit TO the customer.
+  // Emitting on those tells someone their order is going back while it is on its way to them.
+  await t('TRAP: X-DDD3FD with status_type=UD (forward dispatch) emits NOTHING', async () => {
+    const M = stub({
+      scans: [scan({ status_type: 'UD' })],
+      ships: [ship({ lifecycle: 'in_transit' })],
+    });
+    const r = await M.emitRtoStageEvents({}, ingest);
+    restore();
+    assert.equal(state.ingested.length, 0);
+    assert.equal(r.candidates, 0, 'rejected at the scan-code stage, before any lookup');
+  });
+
+  await t('TRAP: PU (pickup) scan on X-DDD3FD emits nothing', async () => {
+    const M = stub({ scans: [scan({ status_type: 'PU' })], ships: [ship()] });
+    const r = await M.emitRtoStageEvents({}, ingest);
+    restore();
+    assert.equal(state.ingested.length, 0);
+    assert.equal(r.candidates, 0);
+  });
+
+  // The SECOND, independent guard: even a correctly-typed RT scan is dropped if the parcel
+  // itself is not on the return leg. This alone would have caught the trap above.
+  await t('GUARD 2: RT scan but shipment lifecycle != rto ⇒ dropped', async () => {
+    const M = stub({ scans: [scan()], ships: [ship({ lifecycle: 'in_transit' })] });
+    const r = await M.emitRtoStageEvents({}, ingest);
+    restore();
+    assert.equal(state.ingested.length, 0);
+    assert.equal(r.notRto, 1);
   });
 
   // ── 4. guards ──────────────────────────────────────────────────────────────────────────

@@ -9,10 +9,13 @@
 //
 // THE MAPPING (measured 2026-07-29 against BiteSpeed's live Shiprocket journeys):
 //
-//   BiteSpeed (Shiprocket)              →  Delhivery ScanPush signal        seen
+//   BiteSpeed (Shiprocket)              →  Delhivery ScanPush signal
 //   SHIPROCKET_…_RTO_IN_TRANSIT         →  lifecycle 'rto'  (stage 1, already live elsewhere)
-//   SHIPROCKET_…_RTO_OUT_FOR_DELIVERY   →  nsl_code X-DDD3FD "Dispatched for RTO"      89
-//   SHIPROCKET_…_RTO_DELIVERED          →  nsl_code RD-AC   "RETURN Accepted"           1
+//   SHIPROCKET_…_RTO_OUT_FOR_DELIVERY   →  nsl X-DDD3FD **AND status_type='RT'**
+//   SHIPROCKET_…_RTO_DELIVERED          →  nsl RD-AC     **AND status='RTO'**
+//
+// The status_type/status qualifiers are NOT optional — see the warning above STAGES. Both codes
+// are reused by Delhivery for non-return events, and the instruction text lies.
 //
 // The semantics line up exactly: BiteSpeed's OFD copy reads "out for delivery to our warehouse
 // as part of the return", which is what "Dispatched for RTO" means; "RETURN Accepted" is the
@@ -33,14 +36,40 @@ const A = require('./auth.js');
 
 const sbPublic = A.sbProfile('public');
 
-// nsl_code → the event we emit. Keyed on the code, not the coarse `status` text, because the
-// code is the stable identifier and the same status string appears on unrelated scans.
-const STAGE_BY_NSL = {
-  'X-DDD3FD': 'order_rto_out_for_delivery',
-  'RD-AC': 'order_rto_delivered',
-};
-// Stage 3 only: RD-AC is reused for DTO (see the note above), so the status must confirm RTO.
-const REQUIRED_STATUS = { 'RD-AC': 'RTO' };
+// ⚠️⚠️ THE NSL CODE ALONE IS NOT THE RETURN LEG. This is the trap that nearly shipped.
+//
+// `X-DDD3FD` reads "Dispatched for RTO" in the instructions text, but Delhivery reuses it for
+// ORDINARY FORWARD DISPATCH. Measured over 24h: 66 AWBs with status_type='RT' (genuine return
+// leg) against 64 with 'UD' + lifecycle in_transit, 13 'UD' + delivered, 16 'PU' (pickup), 6
+// 'UD' + pending. Keying on the code alone would have told ~100 customers/day that their order
+// was "on its way back to our warehouse" WHILE IT WAS ON ITS WAY TO THEM — the exact opposite
+// message, at scale, on a transactional number.
+//
+// The return leg is carried by **status_type='RT'**, not by the instructions text. Never key a
+// customer-facing return message on the instruction string.
+const STAGES = [
+  { event: 'order_rto_out_for_delivery', nsl: 'X-DDD3FD', statusType: 'RT' },
+  // RD-AC is ALSO reused: it carries status='DTO' (a customer-initiated return coming home) as
+  // well as 'RTO' (a failed delivery). Require RTO explicitly — see the header note.
+  { event: 'order_rto_delivered', nsl: 'RD-AC', status: 'RTO' },
+];
+const NSL_CODES = [...new Set(STAGES.map((s) => s.nsl))];
+
+// Which stage (if any) a scan belongs to. Returns null unless EVERY declared condition matches,
+// so a new Delhivery reuse of either code fails closed rather than mis-messaging.
+function stageFor(scan) {
+  for (const st of STAGES) {
+    if (scan.nsl_code !== st.nsl) continue;
+    if (st.statusType && String(scan.status_type || '').toUpperCase() !== st.statusType) continue;
+    if (st.status && String(scan.status || '').toUpperCase() !== st.status) continue;
+    return st.event;
+  }
+  return null;
+}
+
+// Kept exported under the old name for callers/tests that only need code → event.
+const STAGE_BY_NSL = Object.fromEntries(STAGES.map((s) => [s.nsl, s.event]));
+const REQUIRED_STATUS = Object.fromEntries(STAGES.filter((s) => s.status).map((s) => [s.nsl, s.status]));
 
 const MAX_PER_RUN = 15;                       // matches shipment-events; keeps the tick bounded
 const MAX_EVENT_AGE_MS = 30 * 86400000;       // never message about an ancient parcel
@@ -58,19 +87,16 @@ async function emitRtoStageEvents(env, ingest) {
   if (!fromRaw || Number.isNaN(fromMs)) return { ok: true, skipped: 'no_watermark', sent: 0 };
 
   const since = new Date(Math.max(fromMs, Date.now() - LOOKBACK_MS)).toISOString();
-  const codes = Object.keys(STAGE_BY_NSL).join(',');
   const scans = await sbPublic(
-    `/rest/v1/courier_scan_captures?nsl_code=in.(${codes})&matched_shipment_id=not.is.null`
+    `/rest/v1/courier_scan_captures?nsl_code=in.(${NSL_CODES.join(',')})&matched_shipment_id=not.is.null`
     + `&status_at=gte.${encodeURIComponent(since)}`
     + `&select=id,awb,status,status_type,nsl_code,status_at,matched_shipment_id`
     + `&order=status_at.asc&limit=200`, env);
   if (!scans.ok) return { ok: false, error: `scan_select_failed_${scans.status}` };
 
   const candidates = (scans.data || [])
-    .filter((s) => {
-      const need = REQUIRED_STATUS[s.nsl_code];
-      return !need || String(s.status || '').toUpperCase() === need;
-    })
+    .map((s) => ({ ...s, _stage: stageFor(s) }))
+    .filter((s) => s._stage)
     .slice(0, MAX_PER_RUN);
   if (!candidates.length) return { ok: true, candidates: 0, sent: 0 };
 
@@ -78,17 +104,24 @@ async function emitRtoStageEvents(env, ingest) {
   const ids = [...new Set(candidates.map((s) => s.matched_shipment_id))];
   const shipRes = await sbPublic(
     `/rest/v1/ecom_shipments?id=in.(${ids.join(',')})`
-    + `&select=id,shopify_order_id,shopify_order_name,courier,tracking_number,tracking_link,`
+    + `&select=id,lifecycle,shopify_order_id,shopify_order_name,courier,tracking_number,tracking_link,`
     + `uniware_package_code,dispatched_at,first_seen_at`, env);
   if (!shipRes.ok) return { ok: false, error: `shipment_select_failed_${shipRes.status}` };
   const byId = new Map((shipRes.data || []).map((r) => [r.id, r]));
 
-  let sent = 0, skipped = 0, aged = 0, unresolved = 0, failed = 0;
+  let sent = 0, skipped = 0, aged = 0, unresolved = 0, failed = 0, notRto = 0;
   for (const s of candidates) {
     const ship = byId.get(s.matched_shipment_id);
     // Website parcels only — identity resolves through the Shopify order, which the marketplace
     // channels Uniware also fulfils do not have in this substrate.
     if (!ship?.shopify_order_id) { skipped++; continue; }
+
+    // SECOND, INDEPENDENT GUARD on the scan-code check above. The parcel itself must be on the
+    // return leg. This is deliberate belt-and-braces: it is what would have caught the X-DDD3FD
+    // forward-dispatch trap on its own, without anyone having to notice the status_type nuance.
+    // Two agreeing signals (scan says return, parcel says return) before we tell a customer
+    // their order is going back.
+    if (String(ship.lifecycle || '').toLowerCase() !== 'rto') { notRto++; continue; }
 
     const born = Date.parse(ship.dispatched_at || ship.first_seen_at || '');
     if (!Number.isNaN(born) && Date.now() - born > MAX_EVENT_AGE_MS) { aged++; continue; }
@@ -105,12 +138,12 @@ async function emitRtoStageEvents(env, ingest) {
 
     const res = await ingest(env, {
       profile_id: profileId,
-      name: STAGE_BY_NSL[s.nsl_code],
+      name: s._stage,
       source: 'delhivery_scanpush',
       // Idempotency is the ONLY dedup guard here (comms.events.idempotency_key is UNIQUE), which
       // is why the lookback window can overlap freely across ticks. Keyed per (awb, stage) so a
       // courier re-sending the same scan — which Delhivery does — can never double-message.
-      idempotency_key: `delhivery:${s.awb}:${STAGE_BY_NSL[s.nsl_code]}`,
+      idempotency_key: `delhivery:${s.awb}:${s._stage}`,
       properties: {
         // Same normalisation as shipment-events: '#LOT43700' → '43700', because the template
         // renders "Order #{{2}}" and would otherwise print "#LOT" twice.
@@ -120,7 +153,7 @@ async function emitRtoStageEvents(env, ingest) {
         tracking_number: ship.tracking_number,
         tracking_url: ship.tracking_link,
         shipping_package: ship.uniware_package_code,
-        rto_stage: STAGE_BY_NSL[s.nsl_code],
+        rto_stage: s._stage,
         nsl_code: s.nsl_code,
         scan_at: s.status_at,
       },
@@ -128,7 +161,7 @@ async function emitRtoStageEvents(env, ingest) {
     if (!res?.ok) { failed++; continue; }
     sent++;
   }
-  return { ok: true, candidates: candidates.length, sent, skipped, aged, unresolved, failed };
+  return { ok: true, candidates: candidates.length, sent, skipped, notRto, aged, unresolved, failed };
 }
 
-module.exports = { emitRtoStageEvents, STAGE_BY_NSL, REQUIRED_STATUS };
+module.exports = { emitRtoStageEvents, stageFor, STAGES, STAGE_BY_NSL, REQUIRED_STATUS };
