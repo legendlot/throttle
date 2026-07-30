@@ -6387,7 +6387,9 @@ async function getMessagingStats(params, auth, env) {
   const stats = {
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
-    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
+    // whatsapp.awaiting starts at 0, not null, so it accumulates below (S245 — it is a real
+    // two-way channel now). email/web stay null: no per-thread awaiting is computed for them.
+    whatsapp:  { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
     email:     { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
     web:       { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
   };
@@ -6396,11 +6398,20 @@ async function getMessagingStats(params, auth, env) {
   // NONEMPTY (S229): tile counts must match the list, which hides guaranteed-empty
   // threads (never messaged + no provider ref) — see getMessagingThreads.
   const NONEMPTY = `&and=(or(last_message_at.not.is.null,provider_thread_ref.not.is.null))`;
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&thread_state=in.(open,snoozed)${NONEMPTY}&select=id,channel,assigned_agent_id&limit=1000`, env);
+  // WhatsApp joined this set in S245. It was excluded as a "read-only BiteSpeed mirror" whose
+  // awaiting was tracked in BiteSpeed — true until the Relay cutover, after which inbound lands
+  // in cs_wa_messages and WhatsApp is fully two-way. Leaving it out meant the busiest channel
+  // contributed NOTHING to "awaiting reply", so an agent had no signal that a customer was
+  // waiting — the one number that matters on the night the inbox becomes the only place
+  // customer messages exist.
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger,whatsapp)&ignition_connect=is.false&thread_state=in.(open,snoozed)${NONEMPTY}&select=id,channel,assigned_agent_id&limit=1500`, env);
   const tw = twRes.data || [];
   const chById = {};
   for (const t of tw) {
     chById[t.id] = t.channel;
+    // WhatsApp's total/mine/unassigned come from the exact sbCount() calls further down;
+    // incrementing them here as well would double every WhatsApp tile.
+    if (t.channel === 'whatsapp') continue;
     const s = stats[t.channel];
     if (!s) continue;
     s.total += 1;
@@ -6409,8 +6420,14 @@ async function getMessagingStats(params, auth, env) {
   }
   if (tw.length) {
     // Exclude internal notes — "awaiting reply" means the customer's last message is unanswered.
+    // Newest-N across the whole thread set, then first-seen-per-thread = that thread's latest.
+    // CAVEAT (pre-existing, widened by adding WhatsApp): ordering is GLOBAL desc, so a thread
+    // still 'open' but last messaged long ago can fall outside the page and be missed, slightly
+    // UNDER-counting awaiting. Acceptable here — the signal agents need is "someone is waiting
+    // now", and recent activity is exactly what this ordering captures. A set-based RPC is the
+    // proper fix if the tile ever needs to be exact.
     const mRes = await sb(
-      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=3000`,
+      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=6000`,
       env,
     );
     const lastDir = {};

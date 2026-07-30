@@ -16,6 +16,7 @@ import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
+  Bell, BellOff,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -51,6 +52,28 @@ function tplPreview(tpl, vals) {
     s = s.split(`{{${f.pos}}}`).join(f.auto ? `{${f.label}}` : (typed || `{${f.label}}`));
   }
   return s;
+}
+
+// Short two-tone chime, synthesised via WebAudio (S245). Deliberately no audio asset — nothing
+// to host, cache-bust or 404. Fully wrapped: browsers block audio until the page has been
+// interacted with, and a blocked chime must never break a render or throw into the poll loop.
+function chime() {
+  try {
+    const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const tone = (freq, at, dur) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(ctx.currentTime + at); o.stop(ctx.currentTime + at + dur + 0.02);
+    };
+    tone(880, 0, 0.12); tone(1174, 0.13, 0.16);
+    setTimeout(() => { try { ctx.close(); } catch {} }, 900);
+  } catch { /* autoplay blocked / no WebAudio — the tab badge still does the work */ }
 }
 
 function fmtBytes(n) {
@@ -158,6 +181,13 @@ export default function InboxPage() {
   const [tplId, setTplId]           = useState('');
   const [tplVals, setTplVals]       = useState({});
   const [tplSending, setTplSending] = useState(false);
+  // Agent alerting (S245). Until the cutover the WhatsApp inbox was a mirror agents never
+  // watched — they worked in BiteSpeed — so a backgrounded tab costing nothing was fine. From
+  // the cutover Pitstop is the ONLY place customer messages exist, and the inbox had no active
+  // signal of any kind: no tab badge, no sound, nothing. Polling alone doesn't help someone
+  // looking at another tab.
+  const [soundOn, setSoundOn] = useState(false);
+  const prevAwaitingRef = useRef(null);
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
   const [mode, setMode] = useState('reply');          // reply | note (S162-B/C)
@@ -364,9 +394,29 @@ export default function InboxPage() {
     setEmailCc(''); setEmailBcc(''); setShowCcBcc(false);
   }, [convo?.thread?.id, convo?.thread?.channel]);
 
-  // "Awaiting reply" is only meaningful for the two-way channels (IG/FB) — WhatsApp
-  // is a read-only BiteSpeed mirror so its awaiting is not tracked here.
-  const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0);
+  // "Awaiting reply" spans the two-way channels. WhatsApp joined in S245: it used to be a
+  // read-only BiteSpeed mirror whose awaiting lived in BiteSpeed, but after the Relay cutover
+  // inbound lands locally and it is the busiest channel of the three.
+  const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0)
+                      + (stats.whatsapp.awaiting || 0);
+
+  // Restore the sound preference (per browser, per agent) and reset the tab title on unmount.
+  useEffect(() => {
+    try { setSoundOn(localStorage.getItem('pitstop_inbox_sound') === '1'); } catch {}
+    return () => { document.title = 'Pitstop · Customer Support'; };
+  }, []);
+
+  // Tab-title badge + chime. The BADGE is the load-bearing half — it is visible while the tab is
+  // backgrounded, which is exactly when a message gets missed; polling alone cannot help someone
+  // looking at a different tab.
+  useEffect(() => {
+    const prev = prevAwaitingRef.current;
+    prevAwaitingRef.current = totalAwaiting;
+    document.title = totalAwaiting > 0 ? `(${totalAwaiting}) Pitstop · Inbox` : 'Pitstop · Customer Support';
+    // Only on a genuine INCREASE, and never on first paint (prev === null) — otherwise every
+    // agent gets chimed at for the backlog that was already sitting there when they opened it.
+    if (soundOn && prev !== null && totalAwaiting > prev) chime();
+  }, [totalAwaiting, soundOn]);
   const allTotal = useMemo(
     () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0) + (stats.web?.total || 0),
     [stats],
@@ -785,6 +835,19 @@ export default function InboxPage() {
                     background: ignitionScope ? 'var(--accent-bg)' : 'transparent',
                     color: ignitionScope ? 'var(--accent)' : 'var(--t3)' }}>
                   <ExternalLink size={10} /> Ignition
+                </button>
+              )}
+              {/* Chime toggle (S245). Opt-in and per-browser: a shared desk with several agents
+                  does not want a chorus. The tab badge is always on and needs no permission. */}
+              {!listCollapsed && (
+                <button onClick={() => { const v = !soundOn; setSoundOn(v); try { localStorage.setItem('pitstop_inbox_sound', v ? '1' : '0'); } catch {} if (v) chime(); }}
+                  title={soundOn ? 'Chime on new customer message — click to mute' : 'Muted — click to chime on new customer messages'}
+                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
+                    display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
+                    border: '1px solid', borderColor: soundOn ? 'var(--accent)' : 'var(--border)',
+                    background: soundOn ? 'var(--accent-bg)' : 'transparent',
+                    color: soundOn ? 'var(--accent)' : 'var(--t3)' }}>
+                  {soundOn ? <Bell size={10} /> : <BellOff size={10} />}
                 </button>
               )}
             </div>
