@@ -694,6 +694,7 @@ async function handleGet(action, params, auth, env) {
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
+    case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
     case 'getMessagingThreads': return getMessagingThreads(params, auth, env);
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
@@ -748,6 +749,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendWaReply':              return sendWaReply(body, auth, env);
     case 'sendWaAttachment':         return sendWaAttachment(body, auth, env);
+    case 'sendWaTemplateReply':      return sendWaTemplateReply(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -3489,6 +3491,118 @@ async function getWaTemplates(_params, _auth, env) {
   );
   if (!r.ok) return err('failed to load WA templates', 500);
   return ok(r.data || []);
+}
+
+// ── Agent template send (S245, BiteSpeed exit) ───────────────────────────────
+// THE CUTOVER BLOCKER THIS FIXES. A template is the ONLY way to speak to a customer once the
+// 24h window has closed — and every window closes the moment a number migrates, because the
+// window is keyed on (recipient, phone_number_id) and the phone_number_id changes. Until now
+// the inbox told the agent "templates coming soon" and offered nothing, and the legacy
+// sendWaMessage path only ever recorded a row (status_error = WA_PROVIDER_NOT_WIRED_ERROR) —
+// it never called a provider, so nothing reached the customer.
+//
+// Source of truth is RELAY's comms.templates, NOT store.cs_wa_templates: the latter holds two
+// local drafts that were never registered with Meta and therefore can never send. Restricted to
+// APPROVED + active, since Meta refuses anything else at send time.
+async function getWaSendTemplates(_params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb(
+    `/rest/v1/templates?channel=eq.whatsapp&approval_status=eq.APPROVED&status=eq.active`
+    + `&select=id,name,variables,content&order=name.asc`,
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  if (!r.ok) return err('Failed to load WhatsApp templates', 500);
+  // Agent-facing set only. Journey templates (order placed, RTO, C2P…) are machine-triggered and
+  // would be wrong — and often harmful — for a human to fire by hand from a support thread.
+  const rows = (r.data || []).filter((t) => String(t.content?.meta_name || '').startsWith('lot_support'));
+  return ok(rows.map((t) => ({
+    id: t.id,
+    name: t.name,
+    meta_name: t.content?.meta_name || null,
+    // Only ask the agent for constant-sourced values. `first_name` comes off the customer
+    // profile and carries a "there" fallback, so it can never block a send.
+    fields: (Array.isArray(t.variables) ? t.variables : [])
+      .filter((v) => v && v.source === 'constant')
+      .map((v) => ({ token: v.token, label: String(v.token).replace(/_/g, ' ') })),
+  })));
+}
+
+async function sendWaTemplateReply(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, template_id, variables } = body;
+  if (!thread_id || !template_id) return err('thread_id and template_id required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if ((thread.channel || 'whatsapp') !== 'whatsapp') return err('Template send is WhatsApp-only', 422);
+  if (!thread.customer_phone) return err('Thread has no customer phone', 422);
+  // Deliberately NO window check — sending outside the window is the entire purpose.
+
+  // Resolve the template up front: it validates that the agent picked something Meta will
+  // actually accept, and gives us a real name for the recorded row (a bare uuid in the inbox
+  // timeline tells the next agent nothing about what the customer was sent).
+  const tpl = await sb(
+    `/rest/v1/templates?id=eq.${encodeURIComponent(template_id)}&select=name,content,approval_status,status&limit=1`,
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  const tplRow = tpl.data?.[0];
+  if (!tplRow) return err('Template not found', 404);
+  if (tplRow.approval_status !== 'APPROVED') return err(`Template is ${tplRow.approval_status} — Meta only accepts APPROVED templates`, 422);
+
+  const consts = (variables && typeof variables === 'object') ? variables : {};
+  let resp, data;
+  try {
+    resp = await callWorker(env.COMMSOPS, env, '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        templateId: template_id,
+        constants: consts,
+        phoneNumberId: thread.waba_phone_number_id || undefined,   // reply on the same number
+        dedupKey: `pitstop:tpl:${thread.id}:${Date.now()}`, source: 'pitstop_agent',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) { return err(`Relay send failed: ${e.message}`, 502); }
+  if (!resp.ok || data?.ok === false)
+    return err(`Relay send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status || 502);
+
+  const msg = data?.data || data?.message || data || {};
+  // An unresolved variable or a Meta rejection comes back 200-with-status-failed. Surface it,
+  // rather than showing the agent a message that never left.
+  if (msg.status === 'failed' || msg.status === 'skipped')
+    return err(`WhatsApp refused the template (${msg.reason || msg.status})`, 422);
+
+  const pmid = msg.provider_message_id || msg.id || null;
+  const now = new Date().toISOString();
+  const senderName = auth.fullName || auth.name || auth.email || null;
+
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+  const tplName = tplRow.content?.meta_name || tplRow.name || null;
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'template',
+      // Relay does not echo the rendered text back, so fall back to the friendly template name —
+      // an empty bubble in the timeline reads as a failed send to the next agent.
+      body: msg.rendered_text || tplRow.name || null, template_name: tplName,
+      provider_message_id: pmid, status: msg.status || 'sent', is_internal: false,
+      sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
+    }),
+  }).catch((e) => console.error('[relay-wa] template insert failed', e?.message));
+
+  if (ticketId) await insertHistory(ticketId, 'wa_message_sent', null, 'template', String(tplName || '').slice(0, 140), auth, env).catch(() => {});
+  return ok({ message: { direction: 'outbound', kind: 'template', template_name: tplName, provider_message_id: pmid, status: msg.status || 'sent' }, via: 'relay' });
 }
 
 async function sendWaMessage(body, auth, env) {

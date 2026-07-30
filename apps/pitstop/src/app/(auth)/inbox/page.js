@@ -137,6 +137,14 @@ export default function InboxPage() {
   const [loadingList, setLoadingList] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [convo, setConvo] = useState(null);          // { thread, messages, linked_ticket, within_customer_window }
+  // WhatsApp template send (S245). The ONLY way to speak to a customer once the 24h window has
+  // closed — and every window closes when a number migrates, so this is what keeps the inbox
+  // usable at the BiteSpeed cutover rather than showing the agent a dead end.
+  const [tplList, setTplList]       = useState([]);
+  const [tplOpen, setTplOpen]       = useState(false);
+  const [tplId, setTplId]           = useState('');
+  const [tplVals, setTplVals]       = useState({});
+  const [tplSending, setTplSending] = useState(false);
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
   const [mode, setMode] = useState('reply');          // reply | note (S162-B/C)
@@ -520,6 +528,32 @@ export default function InboxPage() {
     finally { setSending(false); }
   }
 
+  // Lazy-load on first open: the list is tiny and static, and fetching it for every thread the
+  // agent merely clicks through would be pure noise.
+  async function openTemplates() {
+    setErr(null);
+    setTplOpen(true);
+    if (tplList.length || !session) return;
+    try {
+      const r = await csopsGet('getWaSendTemplates', {}, session);
+      setTplList(Array.isArray(r) ? r : []);
+    } catch (e) { setErr(e.message); }
+  }
+
+  async function sendTemplate() {
+    if (!convo?.thread || !tplId) return;
+    setTplSending(true); setErr(null);
+    try {
+      await csopsPost('sendWaTemplateReply', {
+        thread_id: convo.thread.id, template_id: tplId, variables: tplVals,
+      }, session);
+      setTplOpen(false); setTplId(''); setTplVals({});
+      await loadConvo(selectedId);
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+    finally { setTplSending(false); }
+  }
+
   async function assign(agentId) {
     if (!convo?.thread) return;
     setErr(null); setAssignOpen(false);
@@ -675,6 +709,7 @@ export default function InboxPage() {
   const isWa = thread?.channel === 'whatsapp';
   const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
+  const tplSel = tplList.find((t) => t.id === tplId) || null;
   const canAttach = ['instagram', 'messenger', 'email', 'whatsapp', 'web'].includes(thread?.channel);   // IG/FB = Graph URL; email = MIME parts (S201); WA/Web = Chatwoot multipart
   const attachAccept = isEmail
     ? 'image/png,image/jpeg,image/webp,image/gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/msword,application/vnd.ms-excel,text/csv,text/plain,application/zip'
@@ -1111,10 +1146,65 @@ export default function InboxPage() {
                       <Lock size={11} /> Internal note — only your team can see this. Never sent to the customer.
                     </div>
                   ) : !windowOpen && (
-                    <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <Clock size={11} /> {isWa
-                        ? 'Outside the 24h window — free-text replies are blocked until the customer messages again (templates coming soon).'
-                        : 'Outside the 24h window — sends with a HUMAN_AGENT tag.'}
+                    <div style={{ marginBottom: 7 }}>
+                      <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Clock size={11} /> {isWa
+                          ? 'Outside the 24h window — free-text replies are blocked. Send an approved template to reopen the conversation.'
+                          : 'Outside the 24h window — sends with a HUMAN_AGENT tag.'}
+                      </div>
+                      {isWa && canManage && !tplOpen && (
+                        <button onClick={openTemplates}
+                          style={{ ...btnGhost, marginTop: 7, fontSize: 11, padding: '5px 10px',
+                            display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <FileText size={12} /> Send template
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Approved WhatsApp templates (Relay). Available whether or not the window is
+                      open — an agent may legitimately want a structured message either way. */}
+                  {isWa && tplOpen && !noteMode && (
+                    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10,
+                      marginBottom: 8, background: 'var(--surface-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t2)',
+                          display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <FileText size={12} /> Send an approved template
+                        </span>
+                        <button onClick={() => { setTplOpen(false); setTplId(''); setTplVals({}); }}
+                          style={{ ...btnGhost, padding: '2px 6px' }} aria-label="Close template panel">
+                          <X size={13} />
+                        </button>
+                      </div>
+
+                      <select value={tplId} style={{ ...selectStyle, width: '100%', marginBottom: 8 }}
+                        onChange={(e) => { setTplId(e.target.value); setTplVals({}); }}>
+                        <option value="">
+                          {tplList.length ? 'Choose a template…' : 'Loading templates…'}
+                        </option>
+                        {tplList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+
+                      {/* Only constant-sourced fields are asked for — the customer's first name
+                          is resolved from their profile and never blocks the send. */}
+                      {tplSel?.fields?.map((f) => (
+                        <input key={f.token} style={{ ...inputStyle, width: '100%', marginBottom: 6 }}
+                          placeholder={f.label}
+                          value={tplVals[f.token] || ''}
+                          onChange={(e) => setTplVals((v) => ({ ...v, [f.token]: e.target.value }))} />
+                      ))}
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                        <button onClick={sendTemplate}
+                          disabled={!tplId || tplSending || (tplSel?.fields || []).some((f) => !String(tplVals[f.token] || '').trim())}
+                          style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px', opacity: (!tplId || tplSending) ? 0.5 : 1 }}>
+                          {tplSending ? 'Sending…' : 'Send template'}
+                        </button>
+                        {tplSel && (
+                          <span style={{ fontSize: 10, color: 'var(--t3)' }}>{tplSel.meta_name}</span>
+                        )}
+                      </div>
                     </div>
                   )}
 
