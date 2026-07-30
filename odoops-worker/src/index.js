@@ -518,6 +518,8 @@ const AMZ_REPORT_TYPE = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL';
 // HARD LIMIT: this report can only be requested for ≤30 days per call ("Date range exceeded"
 // otherwise). So we chunk: one ≤30-day window per report, walking the cursor forward.
 const AMZ_WINDOW_MS = 30 * 24 * 3600 * 1000;
+const ORDERS_TRAIL_DAYS = 30;                       // once caught up, re-walk this many trailing days to refresh order status
+const ORDERS_TRAIL_INTERVAL_MS = 24 * 3600 * 1000;  // ...at most once per day (one extra report/day)
 async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = AMZ_REPORT_TYPE) {
   const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
     method: 'POST', headers: H,
@@ -687,11 +689,25 @@ async function amazonReportPhase(host, H, mkt, columns, cfg, channelId, nowMs, c
     }
     return { rows, cursorAfter: windowEnd, subreqs, partial, configAfter: { ...cfg, ...next } };
   }
-  const startISO = cursor || cfg.backfill_start || BACKFILL_START;
+  // Trailing re-walk: once the backfill has caught up to real time, the fresh path otherwise creates a
+  // near-empty [cursor, now] sliver each tick and NEVER re-reads older windows — so a cancellation /
+  // delivery / RTO that posts AFTER an order's window was pulled is frozen forever (why a closed-month
+  // cancellation count can't be trusted). Once per day, rewind the window start by ORDERS_TRAIL_DAYS to
+  // re-pull recent history with fresh statuses. Idempotent: stg_amazon upserts by (channel, order, sku),
+  // so re-staging only overwrites status/cancellation; and the window still ends at `now`, so cursorAfter
+  // lands at now and the live cursor never regresses. Only fires when caught up (cursor within 2 days of
+  // now) → the deep backfill is untouched.
+  const caughtUp = cursor && (nowMs - (Date.parse(cursor) || 0)) < 2 * 24 * 3600 * 1000;
+  const trailDue = caughtUp && (nowMs - (Date.parse(cfg.orders_trail_at || '') || 0)) > ORDERS_TRAIL_INTERVAL_MS;
+  const startISO = trailDue
+    ? new Date(nowMs - ORDERS_TRAIL_DAYS * 24 * 3600 * 1000).toISOString()
+    : (cursor || cfg.backfill_start || BACKFILL_START);
   const startMs = Date.parse(startISO) || nowMs;
   const endISO = new Date(Math.min(startMs + AMZ_WINDOW_MS, nowMs)).toISOString();
   const rid = await createAmazonReport(host, H, mkt, startISO, endISO); subreqs++;
-  return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: { ...cfg, pending_report_id: rid, pending_through: endISO } };
+  const cfgOut = { ...cfg, pending_report_id: rid, pending_through: endISO };
+  if (trailDue) cfgOut.orders_trail_at = new Date(nowMs).toISOString();  // stamp when we START the trailing report so it can't re-fire while pending
+  return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: cfgOut };
 }
 
 // ── Amazon FBA customer-returns report → stg_amazon_returns (the RTV classification source) ──
