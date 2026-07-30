@@ -114,7 +114,13 @@ async function getActiveSender(env, channel, purpose, senderId, wabaId, phoneNum
   // by purpose alone they would resolve to the support sender and fail closed.
   if (phoneNumberId) {
     const exact = rows.find((s) => String(s.metadata?.phone_number_id || '') === String(phoneNumberId));
-    if (exact) return exact;
+    // ⚠️ Must NOT override WABA scope. Templates are WABA-scoped, so honouring the pin blindly
+    // would send a support template from, say, the marketing number — Meta then rejects it with an
+    // opaque "template does not exist", replacing the clear `no_sender_on_waba` this used to give.
+    // Free-text replies are unaffected: an inline template carries no waba_id, so wabaId is null
+    // and the pin applies exactly as intended. When the two genuinely conflict, fall through and
+    // let the WABA rule win — failing loudly beats sending something Meta will refuse.
+    if (exact && (!wabaId || String(exact.metadata?.waba_id || '') === String(wabaId))) return exact;
   }
   return pickSender(rows, { purpose, senderId, wabaId });
 }
