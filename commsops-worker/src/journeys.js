@@ -217,18 +217,31 @@ async function enrol(env, { journeyId, profileId, eventId }) {
       status: 'active', context: { trigger_event_id: eventId || null, enrolled_at: new Date().toISOString() } }),
   });
   const enrolment = ins.data?.[0];
-  // A failed/empty insert is transient (or a schema surprise) — throw so the queue retries
-  // (review H10). The unique index added alongside this fix (see migration 0026) means a
-  // retry that races a still-active duplicate now fails at the DB with a constraint
-  // violation (ins.ok === false) rather than silently double-enrolling.
+  // A 23505 here is NOT transient and must NEVER be retried. The insert lost a race against an
+  // enrolment the dedup check above could not see — and for policy 'always' there is no dedup
+  // check at all, so a legitimate second concurrent enrolment lands here every time. Retrying
+  // replays the same losing insert 3× and dead-letters the message, writing a queue_failures
+  // row and paging #relay-alerts for a state that is already settled. Ack it as a skip instead.
+  // NB a `queue_failures` row with kind='enrol' meant "a 2nd concurrent enrolment was refused",
+  // NOT a dropped customer — the profile's first enrolment always exists.
+  if (!ins.ok && ins.status === 409 && ins.data?.code === '23505') {
+    console.log('enrol_duplicate_skipped', journeyId, profileId,
+      String(ins.data?.message || '').slice(0, 160));
+    return { ok: false, skipped: 'concurrent_active_enrolment' };
+  }
+  // Any OTHER failed/empty insert is transient (or a schema surprise) — throw so the queue
+  // retries (review H10).
   if (!ins.ok || !enrolment?.id) throw new Error('enrolment_insert_failed:' + ins.status);
 
   // start the durable Workflow — instance id = enrolment id (unique → idempotent against
-  // double-fan-out AND against a queue redelivery of this same enrol() message: a retry
-  // reaches this point with the SAME enrolment row already inserted — no, actually a
-  // retried enrol() call re-runs the dedup check above first, which will now find that
-  // very enrolment row (status='active') and skip before ever reaching the insert. So the
-  // insert path only runs once per successful enrolment; a THROW here still leaves the
+  // double-fan-out AND against a queue redelivery of this same enrol() message: a retried
+  // enrol() call re-runs the dedup check above first, which will now find that very
+  // enrolment row (status='active') and skip before ever reaching the insert.
+  // ⚠️ THAT IS TRUE FOR once_while_active / once_ever / cooldown ONLY — policy 'always'
+  // runs NO dedup check, so a retry goes straight back to the insert and hits the unique
+  // index again. That gap is why a 2nd concurrent enrolment used to dead-letter, and it is
+  // handled explicitly by the 23505 branch above. Do not "simplify" that branch away.
+  // So the insert path only runs once per successful enrolment; a THROW here still leaves the
   // enrolment row 'active' with no workflow instance — mark it 'failed' and rethrow so the
   // queue retries. On retry, dedup sees the 'failed' row (once_while_active only matches
   // status=active) and proceeds to insert a fresh enrolment + create() attempt — no
