@@ -1028,7 +1028,8 @@ export default {
       // mean coordinating three workers for no security gain. Scoped to /ingest only — odoops
       // feeds the substrate; it must never be able to reach /send or /campaign/send.
       if (!tok || !((env.INGEST_TOKEN && tok === env.INGEST_TOKEN)
-                 || (env.ODOOPS_INGEST_TOKEN && tok === env.ODOOPS_INGEST_TOKEN))) return err('unauthorised', 401);
+                 || (env.ODOOPS_INGEST_TOKEN && tok === env.ODOOPS_INGEST_TOKEN)
+                 || (env.CSOPS_INGEST_TOKEN && tok === env.CSOPS_INGEST_TOKEN))) return err('unauthorised', 401);
       const body = await request.json().catch(() => ({}));
       const r = await ingest(env, body);
       return r.ok ? ok(r) : err(r.error, 400);
@@ -1039,7 +1040,18 @@ export default {
     if (url.pathname === '/send' && request.method === 'POST') {
       const hdr = request.headers.get('Authorization') || '';
       const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
-      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      // Accept csops's own service token alongside INGEST_TOKEN — a SECOND accepted token
+      // rather than a rotation, for the same reason ODOOPS_INGEST_TOKEN exists on /ingest:
+      // INGEST_TOKEN may be held by callers we cannot enumerate, so rotating it to fix one
+      // caller risks silently breaking event ingestion fleet-wide.
+      // WHY (2026-07-30, support-number cutover): csops sends `Bearer env.INGEST_TOKEN` on
+      // every agent reply and its value had drifted from commsops', so the moment
+      // WA_TRANSPORT flipped to 'relay' EVERY agent reply 401'd — inbound arrived fine, the
+      // inbox simply could not answer. Same shape as the S245 failure, one layer down.
+      // Deliberately NOT extended to /campaign/send below: this token belongs to the support
+      // inbox and must not be able to fire a marketing broadcast.
+      if (!tok || !((env.INGEST_TOKEN && tok === env.INGEST_TOKEN)
+                 || (env.CSOPS_INGEST_TOKEN && tok === env.CSOPS_INGEST_TOKEN))) return err('unauthorised', 401);
       const body = await request.json().catch(() => ({}));
       // The internal gateway must never GUESS intent: an omitted purpose used to default to
       // 'marketing', silently withholding support replies behind consent/quiet-hours (review M1).
