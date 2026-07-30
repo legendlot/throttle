@@ -6,6 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { fmtDate } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
@@ -63,7 +64,7 @@ function emptyTemplate() {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
     wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', header_format: '', header_media_url: '', body: '', footer: '', buttons: [], mapping: [] },
-    approval_status: null, provider_template_id: null,
+    approval_status: null, provider_template_id: null, utm: null,
   };
 }
 
@@ -191,6 +192,9 @@ export default function TemplatesPage() {
       },
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
+      // Stored in its OWN column, not inside content — content is rebuilt from form state on
+      // every save, which is the stale-tab overwrite hazard the worker's merge guards against.
+      utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
     };
     setT(loaded);
     // M13 — flag templates authored outside the visual editor (html_body present, no
@@ -283,6 +287,7 @@ export default function TemplatesPage() {
     return {
       channel: t.channel, name: t.name.trim(), purpose: t.purpose, language: t.language || 'en',
       status: t.status, content, variables,
+      utm: t.utm || null,
     };
   }
 
@@ -546,6 +551,19 @@ export default function TemplatesPage() {
               </select>
             </div>
           </div>
+
+          {t.purpose === 'marketing' && (
+            <div style={{ marginTop: 14 }}>
+              <UtmFields
+                scope="template"
+                value={t.utm}
+                onChange={(next) => set('utm', next)}
+                disabled={saving || !canEdit}
+                auto={{ utm_source: 'relay', utm_medium: t.channel, utm_campaign: 'the journey / campaign name', utm_content: t.name || 'the template name' }}
+              />
+              <UtmMarketingNote />
+            </div>
+          )}
         </Panel>
 
         {t.channel === 'whatsapp' ? (

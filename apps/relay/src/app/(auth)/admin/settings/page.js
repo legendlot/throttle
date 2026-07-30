@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
+import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Check, Lock, Unlock, ShieldAlert } from 'lucide-react';
@@ -107,6 +108,8 @@ export default function SettingsPage() {
       });
       payload.test_mode = form.test_mode !== false; // fail-safe: anything but explicit false = ON
       payload.test_mode_allow = allowText.split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
+      // jsonb, not one of the flat FIELDS — null means "no account floor, auto-derive".
+      payload.utm_defaults = form.utm_defaults || null;
       await workerFetch('saveRelaySettings', payload, session);
       showToast('Settings saved', 'success');
       load();
@@ -188,6 +191,20 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
+            <div className="form-foot">
+              <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save settings'}</Btn>
+            </div>
+          </Panel>
+
+          <Panel title="Link tracking — account defaults" pad>
+            <UtmFields
+              scope="account"
+              value={form.utm_defaults}
+              onChange={(next) => set('utm_defaults', next)}
+              disabled={saving}
+              auto={{ utm_source: 'relay', utm_medium: 'the send channel', utm_campaign: 'the journey / campaign name', utm_content: 'the template name' }}
+            />
+            <UtmMarketingNote />
             <div className="form-foot">
               <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save settings'}</Btn>
             </div>

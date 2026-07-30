@@ -10,6 +10,7 @@ import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
+import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 
@@ -73,7 +74,7 @@ function emptyJourney() {
     triggerType: 'event', triggerEvent: 'checkout_started', triggerSegmentId: '',
     triggerFilter: [], triggerRequiresIdentifier: '',
     reenrolment: 'once_while_active', reenrolCooldown: 24,
-    max_duration: '30 days', exit_rules: [], versions: [] };
+    max_duration: '30 days', exit_rules: [], versions: [], utm: null };
 }
 
 // Trigger ⇄ form mapping lives in @/lib/journeyTrigger.js — extracted S243 so the
@@ -231,6 +232,7 @@ export default function JourneysPage() {
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
       max_duration: r.max_duration || '30 days',
       exit_rules: Array.isArray(r.exit_rules) ? r.exit_rules : [],
+      utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
       versions: r.versions || [],
     });
     seedCanvas(r, def);
@@ -304,6 +306,7 @@ export default function JourneysPage() {
         reenrol_cooldown_hours: j.reenrolment === 'cooldown' ? (Number(j.reenrolCooldown) || null) : null,
         max_duration: (j.max_duration || '').trim() || null,
         exit_rules: (j.exit_rules || []).filter((r) => (r.event || '').trim() && (r.outcome || '').trim()),
+        utm: j.utm || null,
         definition,
       };
       if (j.id) payload.id = j.id;
@@ -525,6 +528,17 @@ export default function JourneysPage() {
             <div className="ff"><div className="kv-k">Max duration (auto-exit after)</div>
               <input className="f-inp mono" value={j.max_duration} onChange={(e) => set('max_duration', e.target.value)} placeholder="30 days" disabled={busy || !editable} />
             </div>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <UtmFields
+              scope="journey"
+              value={j.utm}
+              onChange={(next) => set('utm', next)}
+              disabled={busy || !editable}
+              auto={{ utm_source: 'relay', utm_medium: 'whatsapp / email', utm_campaign: j.name || 'the journey name', utm_content: 'the template name' }}
+            />
+            <UtmMarketingNote />
           </div>
 
           {j.triggerType === 'segment_entry' && (

@@ -404,7 +404,9 @@ async function handlePost(body, auth, env) {
         'daily_send_budget',
         'payment_links_enabled', 'c2p_cod_fee', 'c2p_prepaid_discount_pct', 'wa_media_id_enabled',
         // "Wrong number" redirect (S245) — read by csops on every relay-transported inbound.
-        'wrong_number_redirect_enabled', 'wrong_number_redirect_phone_ids', 'wrong_number_redirect_text'];
+        'wrong_number_redirect_enabled', 'wrong_number_redirect_phone_ids', 'wrong_number_redirect_text',
+        // Account-wide utm_* floor, overridden per journey/campaign and per template.
+        'utm_defaults'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
       // Disabling test mode = unlocking real-customer sends. Make it a deliberate,
@@ -414,6 +416,8 @@ async function handlePost(body, auth, env) {
       // coerce strictly, so a stray truthy string can never turn on real payment collection.
       if ('payment_links_enabled' in patch) patch.payment_links_enabled = (patch.payment_links_enabled === true);
       if ('wa_media_id_enabled' in patch) patch.wa_media_id_enabled = (patch.wa_media_id_enabled === true);
+      // Normalized by the same helper the send path uses, so what is stored is what will be sent.
+      if ('utm_defaults' in patch) patch.utm_defaults = J.sanitizeUtm(patch.utm_defaults);
       // C2P PRICING — validate to exactly the range journey-workflow's `c2p_prepaid` branch will
       // accept, so a bad value is refused HERE with a clear error rather than silently failing
       // every conversion later as `c2p_pricing_unavailable`. Mirrors that fail-closed check.
@@ -493,7 +497,7 @@ async function handlePost(body, auth, env) {
 
     case 'saveTemplate': {             // M5 — editing an active template publishes a new version
       if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
-      const { id, channel, name, purpose, language, content, variables, status } = body;
+      const { id, channel, name, purpose, language, content, variables, status, utm } = body;
       if (!name) return err('name_required', 400);
       if (id) {
         const cur = await A.sbComms(
@@ -524,13 +528,17 @@ async function handlePost(body, auth, env) {
           && (prevRow.name || null) === (name || null)
           && (prevRow.purpose || null) === (purpose || null)
           && (prevRow.language || 'en') === (language || 'en')
-          && (prevRow.status || 'active') === (status || 'active')) {
+          && (prevRow.status || 'active') === (status || 'active')
+          // utm MUST be in this comparison: it is a real, savable field, and omitting it made a
+          // utm-only edit return noop:true and silently never persist.
+          && stableJson(prevRow.utm ?? null) === stableJson(utm !== undefined ? J.sanitizeUtm(utm) : (prevRow.utm ?? null))) {
           return ok({ ...prevRow, noop: true });
         }
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({
             channel, name, purpose, language: language || 'en', content: mergedContent,
             variables: variables || [], status: status || 'active', version: v + 1, updated_at: nowIso(),
+            ...(utm !== undefined ? { utm: J.sanitizeUtm(utm) } : {}),
           }),
         });
         if (!r.ok) return err('db_error', 500);
@@ -541,7 +549,7 @@ async function handlePost(body, auth, env) {
         method: 'POST', body: JSON.stringify({
           channel: channel || 'email', name, purpose: purpose || 'marketing',
           language: language || 'en', content: content || {}, variables: variables || [],
-          status: status || 'active', created_by: auth.userId,
+          status: status || 'active', created_by: auth.userId, utm: J.sanitizeUtm(utm),
         }),
       });
       if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
@@ -672,10 +680,13 @@ async function handlePost(body, auth, env) {
     // ── M6: campaigns + approval lifecycle ──
     case 'saveCampaign': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at } = body;
+      const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at, utm } = body;
       if (!name) return err('name_required', 400);
       const row = { name, channel: channel || 'email', purpose: purpose || 'marketing',
         segment_id: segment_id || null, template_id: template_id || null, vars: vars || {},
+        // Normalized server-side by the same helper the send path uses: blanks dropped (blank
+        // means inherit), non-utm_ keys discarded, all-blank collapsed to NULL.
+        utm: J.sanitizeUtm(utm),
         scheduled_at: scheduled_at || null, updated_at: nowIso() };
       // Setting a schedule ARMS the cron to send with no further human action — that is
       // activation, and requires send_activate (review H7: build → schedule → auto-approve →

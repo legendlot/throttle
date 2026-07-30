@@ -7,6 +7,7 @@ import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mai
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
+import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
@@ -120,7 +121,7 @@ function campaignStatus(r) {
 }
 
 function emptyCampaign() {
-  return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null };
+  return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null };
 }
 
 export default function CampaignsPage() {
@@ -187,6 +188,7 @@ export default function CampaignsPage() {
       segment_id: r.segment_id || '', template_id: r.template_id || '',
       vars: JSON.stringify(r.vars || {}, null, 0), scheduled_at: r.scheduled_at ? String(r.scheduled_at).slice(0, 16) : '',
       status: r.status || 'draft', audience_snapshot: r.audience_snapshot ?? null, reject_reason: r.reject_reason || null,
+      utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
     };
   }
   function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
@@ -265,6 +267,7 @@ export default function CampaignsPage() {
         name: c.name.trim(), channel: c.channel, purpose: c.purpose,
         segment_id: c.segment_id || null, template_id: c.template_id || null,
         vars, scheduled_at: c.scheduled_at ? new Date(c.scheduled_at).toISOString() : null,
+        utm: c.utm || null,
       };
       if (c.id) payload.id = c.id;
       const r = await workerFetch('saveCampaign', payload, session);
@@ -450,6 +453,19 @@ export default function CampaignsPage() {
                 : <div className="kv-v">{tplName || <span className="dim">—</span>}</div>}
             </div>
           </div>
+
+          {c.purpose === 'marketing' && (
+            <div style={{ marginTop: 14 }}>
+              <UtmFields
+                scope="campaign"
+                value={c.utm}
+                onChange={(next) => set('utm', next)}
+                disabled={busy || !isDraft || !canBuild}
+                auto={{ utm_source: 'relay', utm_medium: c.channel, utm_campaign: c.name || 'the campaign name', utm_content: 'the template name' }}
+              />
+              <UtmMarketingNote />
+            </div>
+          )}
         </Panel>
 
         {/* Fill the template's variables as labelled fields and watch the message render, instead

@@ -44,13 +44,15 @@ function tagLinks(body, { params, skip, mode } = {}) {
     skipSet.has(url) ? m : `${pre}${q}${appendUtm(url, p)}${q}`);
 }
 
-// The five standard utm_* keys, plus any extra utm_* key an author supplies. Anything not
-// starting with utm_ is ignored — this builds query params on customer-facing links, so an
-// arbitrary key would be a silent injection surface.
+// The five standard utm_* keys. An author may also supply extra keys: anything without the
+// prefix is FORCED into the utm_ namespace (`ref` -> `utm_ref`) rather than passed through.
+// These values become query params on customer-facing links, so a key that could land outside
+// utm_* would be an injection surface — namespacing them is what makes custom keys safe.
 const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
 
-// Accept either {utm_source: 'x'} or the shorthand {source: 'x'} an author is likely to type,
-// and drop blanks so an empty field never overrides a more general layer.
+// Accept either {utm_source: 'x'} or the shorthand {source: 'x'} an author is likely to type;
+// every key comes back utm_-prefixed. Blanks are dropped so an empty field never overrides a
+// more general layer.
 function normalizeUtm(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj || {})) {

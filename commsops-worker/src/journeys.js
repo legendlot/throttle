@@ -1,6 +1,18 @@
 // Journey CRUD + versioning + step-graph validation + enrol (enrol() added in a later task).
 const A = require('./auth.js');
 const G = require('./journey-graph.js');
+const { normalizeUtm } = require('./tracking.js');
+
+// Server-side normalization of author-supplied utm_*. Reuses the SAME normalizeUtm the send path
+// uses, so what is stored is exactly what will be sent. Enforced here and not only in the UI
+// because saveJourney/saveCampaign are ordinary authed API actions anyone can call directly:
+// blanks are dropped (blank means inherit) and every key is forced into the utm_ namespace, since
+// these values become query params on customer-facing links and must never escape utm_*. All-blank collapses to NULL = inherit everything.
+function sanitizeUtm(u) {
+  if (u === null || u === undefined) return null;
+  const clean = normalizeUtm(u);
+  return Object.keys(clean).length ? clean : null;
+}
 const nowIso = () => new Date().toISOString();
 
 async function listJourneys(env) {
@@ -129,7 +141,7 @@ async function compile(env, definition, journey) {
 
 // Save = upsert journey header + (if definition changed) publish a NEW immutable version.
 async function saveJourney(env, body, userId) {
-  const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status, exit_rules, max_duration } = body;
+  const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status, exit_rules, max_duration, utm } = body;
   if (definition) {
     const c = await compile(env, definition, body);
     if (!c.ok) return { ok: false, error: 'invalid_definition', details: c.errors };
@@ -141,6 +153,7 @@ async function saveJourney(env, body, userId) {
       body: JSON.stringify({ name, trigger: trigger || {}, reenrolment: reenrolment || 'once_while_active',
         reenrol_cooldown_hours: reenrol_cooldown_hours || null, status: 'draft', created_by: userId,
         exit_rules: Array.isArray(exit_rules) ? exit_rules : [],
+        utm: sanitizeUtm(utm),
         max_duration: max_duration || '30 days' }),
     });
     journeyId = ins.data?.[0]?.id;
@@ -153,6 +166,8 @@ async function saveJourney(env, body, userId) {
     if (reenrol_cooldown_hours !== undefined) patch.reenrol_cooldown_hours = reenrol_cooldown_hours;
     if (status !== undefined) patch.status = status;
     if (exit_rules !== undefined) patch.exit_rules = Array.isArray(exit_rules) ? exit_rules : [];
+    // nullable jsonb: an all-blank UI form sends null, which correctly means "inherit".
+    if (utm !== undefined) patch.utm = sanitizeUtm(utm);
     if (max_duration !== undefined) patch.max_duration = max_duration || '30 days'; // coalesce: column is NOT NULL (a cleared field → default, never a 23502 that silently drops the whole PATCH)
     await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   }
@@ -285,4 +300,4 @@ async function enrol(env, { journeyId, profileId, eventId }) {
   return { ok: true, enrolment_id: enrolment.id };
 }
 
-module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol };
+module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol, sanitizeUtm };

@@ -11,8 +11,9 @@ assert.deepEqual(normalizeUtm({ utm_campaign: 'diwali' }), { utm_campaign: 'diwa
 // Blanks are DROPPED, so an empty UI field never overrides a more general layer.
 assert.deepEqual(normalizeUtm({ utm_campaign: '', utm_content: '   ', utm_term: 'x' }), { utm_term: 'x' });
 assert.deepEqual(normalizeUtm({ utm_source: null, utm_medium: undefined }), {});
-// Non-utm keys are dropped: these become query params on customer-facing links, so an
-// arbitrary key would be a silent injection surface.
+// A key without the prefix is FORCED into the utm_ namespace rather than passed through: these
+// become query params on customer-facing links, so nothing may escape utm_*. That is what makes
+// author-supplied custom keys safe.
 assert.deepEqual(normalizeUtm({ ref: 'abc', gclid: '123' }), { utm_ref: 'abc', utm_gclid: '123' });
 assert.deepEqual(normalizeUtm(null), {});
 assert.deepEqual(normalizeUtm({ utm_campaign: '  spaced  ' }), { utm_campaign: 'spaced' });
