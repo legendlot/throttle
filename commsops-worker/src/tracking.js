@@ -44,4 +44,49 @@ function tagLinks(body, { params, skip, mode } = {}) {
     skipSet.has(url) ? m : `${pre}${q}${appendUtm(url, p)}${q}`);
 }
 
-module.exports = { appendUtm, tagLinks, isLotHost, LOT_HOSTS };
+// The five standard utm_* keys, plus any extra utm_* key an author supplies. Anything not
+// starting with utm_ is ignored — this builds query params on customer-facing links, so an
+// arbitrary key would be a silent injection surface.
+const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+
+// Accept either {utm_source: 'x'} or the shorthand {source: 'x'} an author is likely to type,
+// and drop blanks so an empty field never overrides a more general layer.
+function normalizeUtm(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v === undefined || v === null || String(v).trim() === '') continue;
+    const key = String(k).toLowerCase();
+    const full = key.startsWith('utm_') ? key : `utm_${key}`;
+    if (!full.startsWith('utm_') || full === 'utm_') continue;
+    out[full] = String(v).trim();
+  }
+  return out;
+}
+
+/**
+ * Resolve the utm_* params for ONE send. Single resolver for every channel so email and
+ * WhatsApp can never drift apart (they did: WhatsApp had no tagging at all).
+ *
+ * Precedence, most specific wins — each LAYER overrides per-key, so setting utm_campaign on a
+ * journey does not wipe the auto-derived utm_content:
+ *   template.utm  >  journey/campaign (tracking.utm)  >  account defaults  >  auto-derived
+ *
+ * Auto-derived is the pre-existing behaviour and stays the floor, so a send with nothing
+ * configured anywhere is tagged exactly as it was before authors could set anything.
+ */
+function resolveUtm({ channel, tracking, template, defaults } = {}) {
+  const auto = {
+    utm_source: 'relay',
+    utm_medium: channel,
+    utm_campaign: tracking?.campaign,
+    utm_content: tracking?.content ?? template?.name,
+  };
+  return {
+    ...normalizeUtm(auto),
+    ...normalizeUtm(defaults),
+    ...normalizeUtm(tracking?.utm),
+    ...normalizeUtm(template?.utm ?? template?.content?.utm),
+  };
+}
+
+module.exports = { appendUtm, tagLinks, isLotHost, LOT_HOSTS, resolveUtm, normalizeUtm, UTM_KEYS };

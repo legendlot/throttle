@@ -96,7 +96,7 @@ async function processQueueMessage(env, body) {
       await send(env, {
         channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
         templateId: camp.template_id, constants: camp.vars || {},
-        tracking: { campaign: camp.name },
+        tracking: { campaign: camp.name, utm: camp.utm },
         source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
       });
     } catch (e) {
@@ -196,7 +196,7 @@ async function sendCampaignTest(env, { id, to, draft }) {
         profileId, to: addr,
         templateId: camp.template_id,
         constants: camp.vars || {},
-        tracking: { campaign: `${camp.name} (test)` },
+        tracking: { campaign: `${camp.name} (test)`, utm: camp.utm },
         source: `campaign_test:${id}`,
       });
       results.push({ to: addr, profile_matched: !!profileId, status: r?.status || 'unknown', reason: r?.reason || null });

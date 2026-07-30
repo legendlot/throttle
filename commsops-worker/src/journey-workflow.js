@@ -107,6 +107,18 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return r.data?.[0]?.name || null;
     });
 
+    // Author-supplied utm_* for this journey (Relay UI → journeys.utm). Overrides the account
+    // defaults and the auto-derived utm_campaign; a template's own utm still wins over it.
+    // ⚠️ Deliberately a SEPARATE step rather than widening `load-journey-name` above: Workflows
+    // cache step results BY NAME, so an in-flight instance replaying a widened step would be
+    // handed its cached OLD value (the bare name string) and the utm would silently never apply.
+    // A brand-new step name has no cache entry, so replaying instances execute it normally.
+    const journeyUtm = await step.do('load-journey-utm', async () => {
+      const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=utm&limit=1`, env);
+      if (!r.ok) return null;   // fail-soft: attribution config must never strand an enrolment
+      return r.data?.[0]?.utm || null;
+    });
+
     // J1: journey-level escalation config (exit rules + lifetime cap).
     const jcfg = await step.do('load-journey-cfg', async () => {
       const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=exit_rules,max_duration&limit=1`, env);
@@ -236,7 +248,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, runCtx, journeyName));
+        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, runCtx, journeyName, journeyUtm));
         if (s.interactive) {
           // Interactive send (WA quick-reply buttons): after sending, park on the reply
           // event and route by which button was tapped (else no_reply on timeout). Inert
@@ -267,7 +279,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
               const woke = await this.#park(step, `qhwait:${cur}`, deferMs);
               if (woke.kind === 'exit') { await this.#end(env, step, enrolmentId, woke.outcome, cur); return; }
               finalRes = await step.do(`${cur}:qhretry`, async () =>
-                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, runCtx, journeyName));
+                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, runCtx, journeyName, journeyUtm));
               deferred = true;
             }
           }
@@ -301,7 +313,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   // rendering; the adapter + gate use opts.to verbatim). So we resolve the identifier per the
   // step's channel (journey-graph ID_TYPE_FOR_CHANNEL: email→email, WA/SMS/voice→phone) and pass
   // it as `to`. No matching identifier → skip WITHOUT calling send().
-  async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps, journeyName) {
+  async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps, journeyName, journeyUtm) {
     const channel = s.channel || 'email';
     // spec §4.2: resolve the identifier TYPE the channel needs (email→email, WA/SMS/voice→phone).
     // Previously hardcoded email — a WA journey send could never resolve a recipient.
@@ -328,7 +340,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         ? { template: { channel: 'whatsapp', name: `journey:${stepId}`,
                         content: { text: s.text || s.body || '' }, variables: s.variables || [] } }
         : {}),
-      tracking: { campaign: journeyName },
+      tracking: { campaign: journeyName, utm: journeyUtm },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
   }

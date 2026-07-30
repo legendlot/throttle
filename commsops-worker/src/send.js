@@ -3,7 +3,7 @@
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
 const { renderEmail, renderWhatsapp } = require('./render.js');
-const { tagLinks } = require('./tracking.js');
+const { tagLinks, resolveUtm } = require('./tracking.js');
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
 const whatsappAdapter = require('./adapters/whatsapp.js');
@@ -252,6 +252,19 @@ async function send(env, opts) {
     opts = { ...opts, eventContext: ev };
   }
 
+  // Account-wide UTM defaults. Read ONLY for marketing sends, because nothing else is tagged —
+  // so transactional/utility pay nothing for this. The gate loads the same settings row but runs
+  // AFTER render, so it cannot be reused here without reordering the send path.
+  // Fail-soft: no column / unreadable settings ⇒ null ⇒ the auto-derived values still apply, so
+  // a send is never lost over an attribution nicety.
+  let utmDefaults = null;
+  if (purpose === 'marketing') {
+    try {
+      const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=utm_defaults&limit=1', env);
+      utmDefaults = (s.ok && s.data?.[0]?.utm_defaults) || null;
+    } catch { utmDefaults = null; }
+  }
+
   // render — channel-branched. Both share the variable engine + unresolved-token discipline.
   let rendered;
   let waMeta = null;   // {mode, window_open, hasTemplate} — WA-only gate inputs
@@ -270,6 +283,33 @@ async function send(env, opts) {
         // the journey send step. Only meaningful for a non-template (session) send.
         interactiveButtons: isTemplate ? null : (opts.interactiveButtons || null),
       });
+      // UTM-tag LOT-owned links on MARKETING sends. Until now this happened on the EMAIL path
+      // only, so 100% of real volume (WhatsApp) went out untagged — 2,985 marketing sends in the
+      // 30d before this shipped, none attributable in GA4/Odo.
+      //
+      // WhatsApp needs a different treatment from email: a TEMPLATE send transmits variable
+      // VALUES, not prose, so there is no body to rewrite — the URL lives inside a parameter
+      // (e.g. the cart link passed as a body variable). So tag per-parameter for template mode,
+      // and tag the free-text body for session modes (text/interactive/media).
+      //
+      // ⚠️ BUTTON parameters are deliberately EXCLUDED. A WA url-button's base URL is fixed at
+      // Meta approval and the variable is only a SUFFIX appended to it, so a button param is
+      // usually a bare id/path fragment, not a URL — appending utm_* there would either no-op or
+      // corrupt the resolved link. Buttons need the Phase-B `/r/<code>` redirect (or template
+      // re-approval), not this. `tagLinks` is safe on non-URL values (returns them unchanged),
+      // but excluding buttons keeps the intent explicit rather than relying on that.
+      if (purpose === 'marketing') {
+        const utm = resolveUtm({ channel, tracking: opts.tracking, template, defaults: utmDefaults });
+        const tagText = (v) => (typeof v === 'string' ? tagLinks(v, { params: utm, mode: 'text' }) : v);
+        if (body.mode === 'template' && body.template?.components) {
+          for (const comp of body.template.components) {
+            if (comp.type === 'button') continue;          // see note above
+            for (const p of comp.parameters || []) if (p.type === 'text') p.text = tagText(p.text);
+          }
+        } else if (typeof body.text === 'string') {
+          body.text = tagText(body.text);
+        }
+      }
       rendered = {
         ...body, to,
         phone_number_id: senderPhoneId,
@@ -289,11 +329,8 @@ async function send(env, opts) {
       // UTM-tag LOT-owned links on MARKETING sends → GA4 attributes the landing session
       // → Odo /funnel by-source. Transactional/utility left untouched (keeps attribution clean).
       if (purpose === 'marketing') {
-        const utm = {
-          utm_source: 'relay', utm_medium: channel,
-          utm_campaign: opts.tracking?.campaign,
-          utm_content: opts.tracking?.content ?? template.name,
-        };
+        // Same resolver as the WhatsApp path above — one precedence chain for every channel.
+        const utm = resolveUtm({ channel, tracking: opts.tracking, template, defaults: utmDefaults });
         const skip = sys.unsubscribe_url ? [sys.unsubscribe_url] : [];
         body.html = tagLinks(body.html, { params: utm, skip, mode: 'html' });
         body.text = tagLinks(body.text, { params: utm, skip, mode: 'text' });
