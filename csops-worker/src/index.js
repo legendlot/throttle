@@ -3702,7 +3702,7 @@ async function getWaConversation(params, auth, env) {
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
   // WS-D: WhatsApp threads on the Relay transport read from local cs_wa_messages.
-  if ((thread.channel || 'whatsapp') === 'whatsapp' && waTransport(env) === 'relay') return getWaConversationLocal(thread, env);
+  if (isRelayThread(thread, env)) return getWaConversationLocal(thread, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) {
     return ok({ messages: [], within_customer_window: false, window_until: null, live: false,
                 note: 'No BiteSpeed conversation reference on this thread yet.' });
@@ -3787,7 +3787,7 @@ async function sendWaReply(body, auth, env) {
   const wchan = thread.channel || 'whatsapp';
   if (wchan !== 'whatsapp' && wchan !== 'web') return err('Not a WhatsApp/Web thread — use sendMetaMessage', 422);
   // WS-D: WhatsApp threads on the Relay transport send via Relay /send (no Chatwoot ref).
-  if (wchan === 'whatsapp' && waTransport(env) === 'relay') return sendWaReplyViaRelay(thread, text, auth, env);
+  if (isRelayThread(thread, env)) return sendWaReplyViaRelay(thread, text, auth, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) {
     return err('Thread has no BiteSpeed conversation reference yet', 422);
   }
@@ -3911,7 +3911,7 @@ async function sendWaAttachment(body, auth, env) {
   // shipment screenshots and PDFs, so a 501 here was a functional regression at cutover, not a
   // rough edge). Branch BEFORE the BiteSpeed-only provider-ref requirement below: a Relay thread
   // has no Chatwoot conversation and would fail that check.
-  if (wchan === 'whatsapp' && waTransport(env) === 'relay')
+  if (isRelayThread(thread, env))
     return sendWaAttachmentViaRelay(thread, { bytes, mime_type, filename, caption, spec }, auth, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) return err('Thread has no BiteSpeed conversation reference yet', 422);
 
@@ -4504,6 +4504,26 @@ function waTransport(env) {
   return String(env.WA_TRANSPORT || 'bitespeed').toLowerCase() === 'relay' ? 'relay' : 'bitespeed';
 }
 
+// Is THIS thread a Relay thread, regardless of the worker-wide default?
+//
+// WA_TRANSPORT is a single global switch, which is the wrong granularity: numbers move to Relay
+// ONE AT A TIME, so both transports are live at once for the whole migration. The marketing number
+// has been on Relay since 21 Jul while the flag still says 'bitespeed', and the consequence was
+// silent — 330 real customer replies landed in Pitstop, then every read fell through to the
+// BiteSpeed branch, found no conversation ref and returned an EMPTY thread, and every reply 422'd.
+// The messages were there; agents just could not see or answer them. (This is exactly the
+// "redirect marketing/transactional replies to Support" ask — the redirect worked, the inbox
+// half did not.)
+//
+// Discriminated on a POSITIVE marker rather than the absence of a Chatwoot ref:
+// relayWaFindOrCreateThread always stamps waba_phone_number_id, and BiteSpeed threads never carry
+// one. Testing only for a missing provider ref would also capture a BiteSpeed thread whose refs
+// had not landed yet and wrongly answer it through Relay.
+function isRelayThread(thread, env) {
+  if ((thread?.channel || 'whatsapp') !== 'whatsapp') return false;   // web stays on Chatwoot
+  return waTransport(env) === 'relay' || !!(thread?.waba_phone_number_id && !thread?.provider_thread_ref);
+}
+
 // Bearer match for Relay's forward (mirrors commsops CSOPS_WA_FORWARD_TOKEN).
 function verifyRelayWaAuth(request, env) {
   const want = env.CSOPS_WA_FORWARD_TOKEN;
@@ -4655,6 +4675,10 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
       body: JSON.stringify({
         channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        // Reply from the number the customer actually wrote to. Without this a reply to the
+        // MARKETING or TRANSACTIONAL number resolves to the support sender by purpose, and the
+        // 24h window (keyed on recipient + phone_number_id) is then closed → every reply refused.
+        phoneNumberId: thread.waba_phone_number_id || undefined,
         template: { content: { text_body: String(text) } },
         dedupKey: `pitstop:reply:${thread.id}:${Date.now()}`, source: 'pitstop_agent',
       }),
@@ -4725,6 +4749,7 @@ async function sendWaAttachmentViaRelay(thread, file, auth, env) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
       body: JSON.stringify({
         channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        phoneNumberId: thread.waba_phone_number_id || undefined,   // same-number reply — see sendWaReplyViaRelay
         template: { content: { media: { url: publicUrl, mime_type, filename: filename || null },
                                text_body: caption ? String(caption) : '' } },
         dedupKey: `pitstop:attach:${thread.id}:${Date.now()}`, source: 'pitstop_agent',

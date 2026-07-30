@@ -100,10 +100,22 @@ function pickSender(rows, { purpose, senderId, wabaId } = {}) {
 
 // Route to the right sender for (channel, purpose), honoring an explicit opts.senderId.
 // Fetches ALL active senders for the channel (tiny set) ordered oldest-first, then picks.
-async function getActiveSender(env, channel, purpose, senderId, wabaId) {
+async function getActiveSender(env, channel, purpose, senderId, wabaId, phoneNumberId) {
   const r = await A.sbComms(
     `/rest/v1/sender_identities?channel=eq.${A.enc(channel)}&status=eq.active&select=*&order=created_at.asc`, env);
   const rows = (r.ok && r.data) || [];
+  // REPLY-ON-THE-SAME-NUMBER (S245). An agent answering an inbound message must send from the
+  // number the customer actually wrote to, and this outranks purpose/WABA scoring because it is
+  // not a preference — it is the only correct answer, for two independent reasons:
+  //   1. the 24h window is keyed on (recipient, phone_number_id), so replying from any other
+  //      number is outside the window and the gate refuses it;
+  //   2. the customer would get an answer from a number they never messaged.
+  // This is what makes replies to the MARKETING and TRANSACTIONAL numbers answerable at all —
+  // by purpose alone they would resolve to the support sender and fail closed.
+  if (phoneNumberId) {
+    const exact = rows.find((s) => String(s.metadata?.phone_number_id || '') === String(phoneNumberId));
+    if (exact) return exact;
+  }
   return pickSender(rows, { purpose, senderId, wabaId });
 }
 
@@ -204,7 +216,7 @@ async function send(env, opts) {
   if (!template) return await finalize(env, opts, { status: 'failed', reason: 'template_not_found' }, null, channel, purpose);
 
   const wabaId = channel === 'whatsapp' ? ((template.content && template.content.waba_id) || null) : null;
-  const sender = await getActiveSender(env, channel, purpose, opts.senderId, wabaId);
+  const sender = await getActiveSender(env, channel, purpose, opts.senderId, wabaId, opts.phoneNumberId);
   if (!sender) return await finalize(env, opts,
     // Name the WABA in the reason — "no active sender" would send someone hunting the wrong problem.
     { status: 'failed', reason: wabaId ? `no_sender_on_waba:${wabaId}` : 'no_active_sender' },
