@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build"
+    "build": "next build",
+    "verify:xlsx": "node scripts/verify-xlsx.mjs && python3 scripts/verify_xlsx.py"
   },
   "dependencies": {
     "next": "14.2.35",

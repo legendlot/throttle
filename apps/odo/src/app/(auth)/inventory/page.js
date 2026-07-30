@@ -13,6 +13,7 @@ import { Spinner, Combobox } from '@throttle/ui';
 import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea } from 'recharts';
 import { salesGet, fmtInt, istToday, istDaysAgo, downloadCsv } from '../../../lib/api.js';
+import { downloadXlsx } from '../../../lib/xlsx.js';
 import { Kpi, SegmentedToggle, RangePicker, useTableSort, SortHeader } from '../../../components/kit.js';
 import { PageHead, PanelHead, Pill, Nil } from '../../../components/prism.js';
 import { HUE } from '../../../lib/hues.js';
@@ -273,6 +274,13 @@ function Watch({ session }) {
 
   // `every` on an empty array is true, which would label the master toggle "Collapse all" over an
   // empty table — require at least one group.
+  // Shared by both export buttons so the two formats can never drift apart.
+  const exportRows = () => sortedGroups.flatMap(g => g.rows).map(r => ({
+    product: r.family, variant: r.variant_name, sku: r.sku,
+    product_code: r.product_code || '', qty: r.available_qty,
+    status: r.status, purchasable: r.purchasable, since: r.since || '',
+  }));
+
   const allOpen = sortedGroups.length > 0 && sortedGroups.every(g => isOpen(g.family));
   const toggleAll = () => setTouched(Object.fromEntries(sortedGroups.map(g => [g.family, !allOpen])));
 
@@ -298,14 +306,11 @@ function Watch({ session }) {
             Show unmapped SKUs
           </label>
           <button className="so-btn ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            onClick={() => downloadCsv(
-              sortedGroups.flatMap(g => g.rows).map(r => ({
-                product: r.family, variant: r.variant_name, sku: r.sku,
-                product_code: r.product_code || '', qty: r.available_qty,
-                status: r.status, purchasable: r.purchasable, since: r.since || '',
-              })), 'inventory-watch.csv')}>
-            <Download size={14} strokeWidth={1.75} />Export CSV
+            onClick={() => downloadXlsx(exportRows(), 'inventory-watch.xlsx', 'Inventory')}>
+            <Download size={14} strokeWidth={1.75} />Export Excel
           </button>
+          <button className="so-btn ghost"
+            onClick={() => downloadCsv(exportRows(), 'inventory-watch.csv')}>CSV</button>
           {/* Expand/collapse-all lives in the Product column header, not out here — see the table
               head below. It belongs beside the column it acts on, at the start of the reading line. */}
         </div>

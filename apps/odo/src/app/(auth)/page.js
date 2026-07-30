@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
+import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
@@ -226,8 +227,15 @@ export default function Dashboard() {
   const applyPreset = (p) => { setPreset(p.key); setFrom(p.from); setTo(p.to); };
   const setCustomFrom = v => { setFrom(v); setPreset(''); };
   const setCustomTo = v => { setTo(v); setPreset(''); };
-  const exportCsv = () => salesGet('getSalesExport', { from, to, group, channel_id: sel.join(',') }, session)
-    .then(r => downloadCsv(r?.rows || [], `odo_${group}_${from}_${to}.csv`)).catch(() => {});
+  // One fetch, two formats. XLSX is preferred by finance (types survive: a 13-digit
+  // EAN stays text instead of turning into 5.9e+12, and numbers arrive summable).
+  const exportRows = (fmt) => salesGet('getSalesExport', { from, to, group, channel_id: sel.join(',') }, session)
+    .then(r => {
+      const rows = r?.rows || [];
+      const base = `odo_${group}_${from}_${to}`;
+      if (fmt === 'xlsx') downloadXlsx(rows, `${base}.xlsx`, `Odo ${group}`);
+      else downloadCsv(rows, `${base}.csv`);
+    }).catch(() => {});
   const toggleCh = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
   const ppLabel = preset ? `prior ${PRESETS.find(p => p.key === preset)?.label || ''}` : 'prior period';
@@ -246,7 +254,8 @@ export default function Dashboard() {
         onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); }}
         right={<>
           <ChannelFilter channels={orderedChannels} value={sel} onChange={setSel} />
-          <button className="so-btn ghost" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
+          <button className="so-btn ghost" onClick={() => exportRows('xlsx')} disabled={!rows.length}>Export Excel</button>
+          <button className="so-btn ghost" onClick={() => exportRows('csv')} disabled={!rows.length}>CSV</button>
         </>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
