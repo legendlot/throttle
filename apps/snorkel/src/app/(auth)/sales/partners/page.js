@@ -7,6 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, Download, ArrowRight } from 'lucide-react';
 import { csvCell } from '@/lib/sales';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { todayStr } from '@throttle/domain';
 
 export default function SalesPartnersPage() {
   const { session, perms } = useAuth();
@@ -65,7 +66,7 @@ export default function SalesPartnersPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-sales-partners-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `lot-sales-partners-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 

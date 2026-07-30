@@ -1,4 +1,5 @@
 /**
+import { dateStr } from '@throttle/domain';
  * Sprint utilities
  * Sprints run Thursday → Wednesday (6 days)
  * DB enforces this with CHECK constraints
@@ -33,7 +34,7 @@ export function getSprintEndDate(startDate) {
  * Format a date to YYYY-MM-DD (for Supabase date columns)
  */
 export function toDateString(date) {
-  return date.toISOString().split('T')[0];
+  return dateStr(date);
 }
 
 /**

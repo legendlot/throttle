@@ -7,6 +7,7 @@ import { Camera, History } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 import OrgChart from '../../../components/OrgChart.js';
 import { fmtDate } from '../../../lib/format.js';
+import { todayStr } from '@throttle/domain';
 
 export default function OrgPage() {
   const { session, perms } = useAuth();
@@ -35,7 +36,7 @@ export default function OrgPage() {
   async function capture() {
     setBusy(true);
     try {
-      const label = prompt('Snapshot label?', `Snapshot ${new Date().toISOString().slice(0, 10)}`);
+      const label = prompt('Snapshot label?', `Snapshot ${todayStr()}`);
       if (label === null) { setBusy(false); return; }
       await podiumopsPost('captureOrgSnapshot', { label }, session);
       showToast('Snapshot captured', 'success');

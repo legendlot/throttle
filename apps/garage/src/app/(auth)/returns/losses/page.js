@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, useEscapeClose } from '@throttle/ui';
-import { todayStr } from '@throttle/domain';
+import { todayStr, dateStr } from '@throttle/domain';
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -69,7 +69,7 @@ function formatDate(raw) {
 function defaultFromDate() {
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  return d.toISOString().slice(0, 10);
+  return dateStr(d);
 }
 
 export default function LossesPage() {

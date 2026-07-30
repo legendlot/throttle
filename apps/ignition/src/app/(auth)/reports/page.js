@@ -7,6 +7,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell,
 } from 'recharts';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
+import { dateStr } from '@throttle/domain';
 
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 const TIER_LABELS = { nano: 'Nano', micro: 'Micro', macro: 'Macro', brand: 'Brand', store: 'Store', untyped: 'Untyped' };
@@ -20,8 +21,8 @@ export default function ReportsPage() {
 
   const today = new Date();
   const yearStart = new Date(today.getFullYear(), 0, 1);
-  const [from, setFrom] = useState(yearStart.toISOString().slice(0, 10));
-  const [to, setTo] = useState(today.toISOString().slice(0, 10));
+  const [from, setFrom] = useState(dateStr(yearStart));
+  const [to, setTo] = useState(dateStr(today));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

@@ -5,6 +5,7 @@ import { garageFetch } from '@throttle/db';
 import { EmptyState, Spinner, Combobox, Panel, Chip, StatusBadge, ProductTag } from '@throttle/ui';
 import { Search, Download } from 'lucide-react';
 import { useProducts } from '../../../hooks/useProducts.js';
+import { todayStr } from '@throttle/domain';
 
 // Stock Ledger — restyled to the S128 visual system. All filter / tab / CSV /
 // common-parts logic is unchanged; only the chrome (type roles, chips, panel,
@@ -243,7 +244,7 @@ export default function StockPage() {
   }
 
   function handleDownloadCsv() {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayStr();
     const slug = productFilter
       ? productFilter.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       : 'all';

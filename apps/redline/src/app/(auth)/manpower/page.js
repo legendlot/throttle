@@ -19,6 +19,7 @@ import {
   Icon, Panel, ToneBadge, lineColor, lineRgb, btnPrimary, btnGhost,
   inputStyle as kitInput,
 } from '../../../components/kit/index.js';
+import { dateStr } from '@throttle/domain';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const LINE_ORDER          = ['L1', 'L2', 'L3'];
@@ -792,7 +793,7 @@ function analyticsRange(winKey) {
   const days = (ANALYTICS_WINDOWS.find((w) => w.key === winKey)?.days) || 60;
   const d = new Date(end + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() - (days - 1));
-  return { start: d.toISOString().slice(0, 10), end };
+  return { start: dateStr(d), end };
 }
 function fmtMin(m) {
   if (m === null || m === undefined) return null;

@@ -5,6 +5,7 @@ import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { DIRECTION_LABEL, purposeLabel, returnState } from '../../../lib/gatePass.js';
+import { todayStr } from '@throttle/domain';
 
 const TONE = {
   green:  { bg: 'rgba(34,197,94,.12)',  fg: '#4ade80', border: 'rgba(34,197,94,.25)'  },
@@ -82,7 +83,7 @@ export default function GatePassListPage() {
     const blob = new Blob([head + '\n' + body], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `gate-passes-${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `gate-passes-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   }

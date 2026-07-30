@@ -8,6 +8,7 @@ import { Plus, Download, ArrowRight } from 'lucide-react';
 import { ASSET_STATUSES, ACQ_TYPES, statusLabel, statusTone, acqLabel, assetExpiry, isExpiring } from '@/lib/assets';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
+import { todayStr } from '@throttle/domain';
 
 function costCell(a) {
   if (a.acquisition_type === 'rented') {
@@ -89,7 +90,7 @@ export default function AssetListPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-asset-register-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `lot-asset-register-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 

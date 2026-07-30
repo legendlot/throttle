@@ -6,6 +6,7 @@
    never blank or broken. */
 import { supabaseBrand, workerFetch } from '@throttle/db';
 import { STAGES, REQ_TYPES, initialsOf, PRODUCTS } from './throttleData';
+import { dateStr } from '@throttle/domain';
 
 const ACTIVE_STAGES = STAGES.map(s => s.value);
 
@@ -252,7 +253,7 @@ const DT_COL = { graphic: 'graphic', video: 'video', photo: 'photo', listing_ima
 export async function fetchDeliverablesChart(session) {
   try {
     const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6);
-    const fmt = d => d.toISOString().slice(0, 10);
+    const fmt = d => dateStr(d);
     const r = await workerFetch('getDeliverablesReport', { startDate: fmt(start), endDate: fmt(end) }, session.access_token);
     const rows = r?.rows || r?.data?.rows;
     if (!rows) return null;

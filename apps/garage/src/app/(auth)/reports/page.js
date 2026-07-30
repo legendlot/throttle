@@ -9,6 +9,7 @@ import {
   BarChart3, Scale, PackageX, Wrench, Undo2, PackageOpen,
   ShieldAlert, AlertOctagon, ListChecks,
 } from 'lucide-react';
+import { todayStr } from '@throttle/domain';
 
 // Lucide-react icons replace decorative emoji per DESIGN.md "mechanical not
 // decorative" rule. Rendered as outline icons at size 28 in --t2 so they
@@ -168,7 +169,7 @@ function downloadCsv(rows, type) {
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), {
     href: url,
-    download: `LOT_${type.toUpperCase()}_${new Date().toISOString().split('T')[0]}.csv`,
+    download: `LOT_${type.toUpperCase()}_${todayStr()}.csv`,
   });
   document.body.appendChild(a);
   a.click();

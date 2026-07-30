@@ -8,6 +8,7 @@ import { Plus, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { inr, csvCell, creditReasonLabel, CN_STATUS_TONES, cnStatusLabel } from '@/lib/sales';
+import { todayStr } from '@throttle/domain';
 
 export default function CreditNotesPage() {
   const { session, perms } = useAuth();
@@ -60,7 +61,7 @@ export default function CreditNotesPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-credit-notes-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `lot-credit-notes-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 

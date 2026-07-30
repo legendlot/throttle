@@ -1,4 +1,5 @@
 // Gate Pass — shared constants/helpers (Garage). Mirrors the worker's GP_PURPOSES
+import { todayStr } from '@throttle/domain';
 // (01_worker/worker.js). Keep the purpose keys in lockstep with the worker validator.
 
 export const GP_PURPOSES = {
@@ -30,7 +31,7 @@ export function purposeLabel(direction, key) {
 export function returnState(gp) {
   if (!gp || !gp.is_returnable) return null;
   if (gp.returned_at) return 'returned';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   if (gp.expected_return_date && gp.expected_return_date < today) return 'overdue';
   return 'pending';
 }

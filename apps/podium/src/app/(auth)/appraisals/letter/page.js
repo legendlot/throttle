@@ -7,6 +7,7 @@ import { Printer } from 'lucide-react';
 import { podiumopsGet } from '../../../../lib/podiumopsFetch.js';
 import { RATING_LABELS } from '../../../../lib/appraisals.js';
 import { fmtDate } from '../../../../lib/format.js';
+import { todayStr } from '@throttle/domain';
 
 export default function Page() {
   return <Suspense fallback={<Spinner />}><LetterPage /></Suspense>;
@@ -45,7 +46,7 @@ function LetterPage() {
           <div style={{ fontSize: 12, color: '#555' }}>{isIncrement ? 'Salary Revision Letter' : 'Performance Appraisal'}</div>
         </div>
 
-        <p style={p}>Date: {fmtDate(a.shared_at) || fmtDate(new Date().toISOString().slice(0, 10))}</p>
+        <p style={p}>Date: {fmtDate(a.shared_at) || fmtDate(todayStr())}</p>
         <p style={p}><b>{name}</b>{role ? `, ${role}` : ''}{dept ? ` — ${dept}` : ''}</p>
 
         {!isIncrement ? (

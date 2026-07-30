@@ -12,6 +12,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Copy, Download } from 'lucide-react';
 import { useRefreshState } from '../layout.js';
 import { Icon, Panel, FilterChip, ToneBadge, fmt, btnGhost, inputStyle } from '../../../components/kit/index.js';
+import { todayStr } from '@throttle/domain';
 
 const TYPE_TABS = [
   { value: '',       label: 'All'     },
@@ -92,7 +93,7 @@ export default function ProductsPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `product-ean-directory-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.href = url; a.download = `product-ean-directory-${todayStr()}.csv`;
     a.click(); URL.revokeObjectURL(url);
   }, [filtered]);
 

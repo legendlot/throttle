@@ -5,8 +5,9 @@ import { Plus, Pencil, Trash2, Lock, Check } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 import { fmtDate } from '../lib/format.js';
 import { SENTIMENTS, VISIBILITIES, sentimentMeta, visibilityMeta, parseTags, joinTags } from '../lib/performance.js';
+import { todayStr as domainToday } from '@throttle/domain';
 
-function todayStr() { return new Date().toISOString().slice(0, 10); }
+function todayStr() { return domainToday(); }
 
 // ── shared atoms ──────────────────────────────────────────────────────────────
 

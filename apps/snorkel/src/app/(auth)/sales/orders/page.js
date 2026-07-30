@@ -8,6 +8,7 @@ import { Plus, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
+import { todayStr } from '@throttle/domain';
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -56,7 +57,7 @@ export default function SalesOrdersPage() {
     });
   }
 
-  const thisFy = fyLabel(new Date().toISOString().slice(0, 10));
+  const thisFy = fyLabel(todayStr());
   const kpi = {
     open: rows.filter(r => r.status === 'confirmed' && !['fulfilled', 'fully_fulfilled'].includes(r.fulfilment_status)).length,
     toDispatch: rows.filter(r => r.status === 'confirmed' && ['pending', 'in_progress', 'awaiting_acceptance', 'in_fulfilment'].includes(r.fulfilment_status)).reduce((s, r) => s + Number(r.grand_total || 0), 0),
@@ -73,7 +74,7 @@ export default function SalesOrdersPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-sales-orders-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `lot-sales-orders-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
