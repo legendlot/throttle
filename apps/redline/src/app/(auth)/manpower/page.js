@@ -623,7 +623,10 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
   // can't collapse to the avatar width. The header row and each data row are separate
   // grids; a bare `fr` whose body content has overflow:hidden (min-content 0) would
   // size differently between header and body and drift the columns out of sync.
-  const cols = '102px minmax(160px, 1.4fr) 104px 84px 80px 102px 74px 56px 80px 104px 124px 88px';
+  // 'Away' sits beside Duration deliberately: it is read ALONGSIDE hours worked, never
+  // subtracted from it (Afshaan — break tracking is visibility only, so RULE-COST-001's
+  // productivity and OT figures are unaffected).
+  const cols = '102px minmax(160px, 1.4fr) 104px 84px 80px 102px 74px 78px 56px 80px 104px 124px 88px';
 
   return (
     <div>
@@ -660,9 +663,9 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
             sub={dept ? `No ${capitalize(dept)} records for ${fmtIstDate(date)}.` : `Nothing logged for ${fmtIstDate(date)}.`} />
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 1320 }}>
+            <div style={{ minWidth: 1410 }}>
               <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
-                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Streak', 'Absent (mo)', 'Device', 'Day status', ''].map((h, i) => (
+                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Away', 'Streak', 'Absent (mo)', 'Device', 'Day status', ''].map((h, i) => (
                   <div key={h || `c${i}`} className="eyebrow">{h}</div>
                 ))}
               </div>
@@ -709,6 +712,27 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
                         )
                         : <ToneBadge tone="warn" style={{ justifySelf: 'start' }}>Open</ToneBadge>}
                       <span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>
+                      {/* Away = summed CLOSED breaks. An open break has no duration yet, so
+                          it is flagged rather than counted — on a still-open shift that is
+                          "Away now", and on a closed shift it means the operator never
+                          tapped back, which would otherwise silently read as zero. */}
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <span className="num" style={{ fontSize: 12, color: row.away_minutes > 0 ? 'var(--t1)' : 'var(--t3)' }}
+                          title={row.breaks_taken
+                            ? `${row.breaks_taken} break${row.breaks_taken === 1 ? '' : 's'} — recorded for visibility only, never deducted from hours worked`
+                            : 'No breaks recorded'}>
+                          {row.away_minutes > 0 ? `${row.away_minutes}m` : '—'}
+                        </span>
+                        {row.break_open_since && !row.clock_out ? (
+                          <ToneBadge tone="warn" style={{ fontSize: 9 }}
+                            title={`Away since ${fmtIstTime(row.break_open_since)} IST`}>Away now</ToneBadge>
+                        ) : row.breaks_incomplete > 0 ? (
+                          <span className="num" style={{ fontSize: 9.5, color: 'var(--bad-fg)' }}
+                            title="A break was started but never closed, so this total under-reports the real away time">
+                            not closed
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="num" style={{ fontSize: 12.5, fontWeight: 600, color: st && st.streak > 0 ? 'var(--ok-fg)' : 'var(--t3)' }}
                         title={st ? `${st.streak} consecutive working day${st.streak === 1 ? '' : 's'} (Mon–Sat)` : ''}>
                         {st ? `${st.streak}d` : '—'}
