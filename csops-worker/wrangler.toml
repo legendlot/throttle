@@ -5,6 +5,19 @@ workers_dev = true
 
 [vars]
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
+# Pitstop's WhatsApp agent-reply transport. Flipped to "relay" at the support-number
+# cutover on 2026-07-30 20:1x IST, when +91 98802 12323 moved off BiteSpeed onto LOT
+# WABA 1350960337019398 (new phone_number_id 1266501519877668).
+#
+# Why this flag still matters even though routing is per-thread: isRelayThread() treats a
+# thread as Relay when the GLOBAL flag is "relay" OR it carries waba_phone_number_id with
+# no provider_thread_ref. The ~10,405 pre-existing threads DO carry a provider_thread_ref,
+# so without this they route to BiteSpeed — which no longer owns the number — and every
+# agent reply on an existing conversation fails. Messages visible, unanswerable: the exact
+# S245 failure that cost 342 customer messages nine days of silence.
+#
+# channel='web' always stays on Chatwoot regardless of this value.
+WA_TRANSPORT = "relay"
 
 # Inbound email poll (Pitstop email channel, S175) — scheduled() polls carecrew@
 # via the Gmail API every 2 min. Inert (no-op) until the GMAIL_SA_* secrets are set.
