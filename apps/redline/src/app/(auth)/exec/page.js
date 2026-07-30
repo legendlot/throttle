@@ -38,8 +38,11 @@ function getMondayISO() {
   return new Date(new Date().setDate(diff)).toISOString().split('T')[0];
 }
 function getFirstOfMonthISO() {
+  // Build the local Y-M-01 string directly — going via new Date(y,m,1).toISOString() renders
+  // LOCAL midnight of the 1st as UTC, which in IST (+5:30) rolls back to the prev month's last
+  // day (e.g. "This Month" showing 2026-06-30 instead of 07-01, and pulling one extra day of data).
   const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
 /* ── snooze persistence (client-side triage convenience) ────── */
