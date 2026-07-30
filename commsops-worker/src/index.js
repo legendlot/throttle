@@ -515,6 +515,20 @@ async function handlePost(body, auth, env) {
         for (const k of ['waba_id', 'header_handle', 'header_format', 'header_media_url']) {
           if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
         }
+        // ...but "carry it over when absent" is NOT enough for `waba_id`, because WaEditor always
+        // SENDS one from client state — it keeps the value even while the select is `disabled`
+        // (`locked = !!provider_template_id`). So the branch above never fired for it, and any tab
+        // opened before a WABA flip wrote the OLD id back on its next Save. That is what reverted
+        // the S240 flip within hours: `lot_order_placed_01` landed back on the BiteSpeed WABA and
+        // every send failed `wa_200 (#200) … permissions … on behalf of this WhatsApp Business
+        // Account`, which reads as a Meta permissions fault and is not — it is `pickSender`
+        // correctly refusing a WABA we cannot send on.
+        //
+        // Once Meta has ever approved this template, the pin is WORKER-OWNED: it moves by the
+        // migration-day UPDATE or by stage mode (`waSubmitTemplate({stageWabaId})`), never by a
+        // form post. Take the stored value unconditionally — matching what the UI already claims
+        // by greying the field out. A stale tab now cannot re-route a live template's sends.
+        if (cur.data?.[0]?.provider_template_id && prev.waba_id != null) mergedContent.waba_id = prev.waba_id;
         // NO-OP ON NO CHANGES. `version` was bumped on EVERY save, so simply opening a
         // template and pressing Save inflated it — live rows had reached v5–v7 on a handful
         // of real edits, which makes the version meaningless exactly when you need it (which

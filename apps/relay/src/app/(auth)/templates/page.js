@@ -685,7 +685,10 @@ export default function TemplatesPage() {
             genuinely cannot be sent (Meta only ships templates it has reviewed) — but an
             APPROVED one can, and forcing that through a throwaway campaign just to see it on a
             handset is exactly the friction that stops anyone checking 18 templates. */}
-        {canTest && t.channel === 'whatsapp' && t.approval_status !== 'APPROVED' && (
+        {/* The two panels must stay mutually exclusive, so this one now excludes anything Meta has
+            ever approved — otherwise a template with an edit in review would show BOTH the
+            "you cannot test yet" note and the working test-send panel. */}
+        {canTest && t.channel === 'whatsapp' && !t.provider_template_id && (
           <Panel title="Send a test" pad>
             <div className="tw-note" style={{ marginTop: 0 }}>
               WhatsApp templates can only be sent once Meta has <b>approved</b> them, so there is no
@@ -695,11 +698,18 @@ export default function TemplatesPage() {
           </Panel>
         )}
 
-        {canTest && (t.channel !== 'whatsapp' || t.approval_status === 'APPROVED') && (
+        {/* Gate on "Meta has EVER approved this" (`provider_template_id` is set), not on the
+            CURRENT approval_status. Submitting an edit flips that status to PENDING, so gating on
+            APPROVED meant our own submit disarmed our own diagnostic — and a previously-approved
+            template with an edit in review is the single most important state to be able to test.
+            Meta keeps serving the last approved version meanwhile, so the send is valid. */}
+        {canTest && (t.channel !== 'whatsapp' || !!t.provider_template_id) && (
           <Panel title="Send a test" pad>
             <div className="tw-note" style={{ marginTop: 0, marginBottom: 12 }}>
               {t.channel === 'whatsapp'
-                ? <>Sends the <b>approved</b> template as Meta holds it. The recipient must be on the
+                ? <>Sends the <b>approved</b> template as Meta holds it — if an edit is in review,
+                  that means the previously approved version, not your unsaved draft.
+                  The recipient must be on the
                   test-mode allow list, and the sending number must sit on the <b>same WABA</b> this
                   template was approved on — templates are WABA-scoped, so a sender on another WABA
                   will be rejected by Meta as unknown.</>

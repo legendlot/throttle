@@ -143,9 +143,16 @@ async function ingest(env, payload) {
         const t = j.trigger || {};
         if (t.type !== 'event' || t.name !== name) continue;
         // optional simple property filter: trigger.filter = {prop: value} (all must match)
+        // Case-INSENSITIVE, matching what condition nodes already do (`evalEventProperty`
+        // lowercases both sides). They disagreed until 2026-07-31: a filter value of `True` or
+        // `L.O.T CARS` matched nothing here while working fine in a condition, and the failure is
+        // completely silent — the journey simply enrols zero, with no error anywhere to explain it.
+        // A filter that matches nothing is indistinguishable from a feed that is not arriving,
+        // which is the expensive kind of bug. Trim too: a trailing space is the same trap.
+        const norm = (x) => String(x ?? '').trim().toLowerCase();
         const f = t.filter;
         if (f && typeof f === 'object' &&
-            !Object.entries(f).every(([k, v]) => String((properties || {})[k]) === String(v))) continue;
+            !Object.entries(f).every(([k, v]) => norm((properties || {})[k]) === norm(v))) continue;
         if (t.requires_identifier && !(await isReachable(t.requires_identifier))) continue;
         await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId, eventId });
       }

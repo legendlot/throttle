@@ -101,9 +101,14 @@ async function persistScans(env, scans, request, rawBody) {
     };
   });
 
+  // return=representation so the inserted rows come back WITH their ids — the apply loop below
+  // needs them to stamp `applied`, and the local objects have no id (the DB generates it).
   const ins = await sb(key, '/rest/v1/courier_scan_captures',
-    { method: 'POST', body: JSON.stringify(rows) });
+    { method: 'POST', body: JSON.stringify(rows), prefer: 'return=representation' });
   if (!ins.ok) { console.error('scanpush: capture insert failed', ins.status, ins.data); return; }
+  // Fall back to the local rows if representation is ever absent: the apply still runs, only the
+  // `applied` stamp is skipped (its `r.id` guard). Applying matters; the audit flag does not.
+  const saved = (Array.isArray(ins.data) && ins.data.length === rows.length) ? ins.data : rows;
 
   console.log(`scanpush: captured ${rows.length}`,
     `matched=${rows.filter((r) => r.matched_shipment_id).length}`,
@@ -127,7 +132,7 @@ async function persistScans(env, scans, request, rawBody) {
   // as a poll cursor — so this feed stamps `lifecycle_changed_at`, which occurredAt() now
   // prefers (migration 0036). Use the SCAN's own timestamp, not now(): the courier telling us
   // late must not read as a fresh event.
-  for (const r of rows) {
+  for (const r of saved) {
     if (!r.matched_shipment_id || !r.mapped_lifecycle) continue;
     const cur = byAwb.get(r.awb);
     if (cur && cur.lifecycle === r.mapped_lifecycle) continue;      // no transition, nothing to do
@@ -141,7 +146,17 @@ async function persistScans(env, scans, request, rawBody) {
     if (r.mapped_lifecycle === 'delivered' && r.status_at) patch.delivered_at = r.status_at;
     const u = await sb(key, `/rest/v1/ecom_shipments?id=eq.${enc(r.matched_shipment_id)}`,
       { method: 'PATCH', body: JSON.stringify(patch) });
-    if (!u.ok) console.error('scanpush: lifecycle patch failed', r.awb, u.status, u.data);
+    if (!u.ok) { console.error('scanpush: lifecycle patch failed', r.awb, u.status, u.data); continue; }
+    // Stamp `applied` — it was hardcoded `false` on insert and never set true, so it read false on
+    // all 4,930 rows even where the scan HAD advanced the shipment, and nearly caused a false
+    // "ScanPush isn't working" call at go-live. A column that always says no is worse than no
+    // column. Now it means exactly one thing: this scan changed `ecom_shipments.lifecycle`.
+    // Best-effort — a failed stamp must never look like a failed apply, so it only logs.
+    if (r.id) {
+      const a = await sb(key, `/rest/v1/courier_scan_captures?id=eq.${enc(r.id)}`,
+        { method: 'PATCH', body: JSON.stringify({ applied: true, apply_note: `lifecycle → ${r.mapped_lifecycle}` }) });
+      if (!a.ok) console.error('scanpush: applied stamp failed', r.awb, a.status);
+    }
   }
 }
 

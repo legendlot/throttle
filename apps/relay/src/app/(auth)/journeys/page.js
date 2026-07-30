@@ -435,7 +435,14 @@ export default function JourneysPage() {
                     </span>
                   </div>
                   {(j.triggerFilter || []).map((row, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                    <div key={i}>
+                    {/* The ANDing was only described in the note underneath, so a two-row filter
+                        read as if it might be an either/or. Say it between the rows instead. */}
+                    {i > 0 && (
+                      <div style={{ margin: '6px 0 0 2px', fontSize: 10.5, fontWeight: 700,
+                        letterSpacing: '.06em', color: 'var(--dim, #8a8a8a)' }}>AND</div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
                       <input className="f-inp" style={{ flex: '1 1 160px' }} list="trigger-prop-suggest"
                         value={row.prop} placeholder="event property (e.g. is_cod)"
                         disabled={busy || !editable}
@@ -452,19 +459,24 @@ export default function JourneysPage() {
                         <Trash2 size={14} />
                       </Btn>
                     </div>
+                    </div>
                   ))}
                   <datalist id="trigger-prop-suggest">
                     {TRIGGER_PROP_SUGGEST.map((p) => <option key={p} value={p} />)}
                   </datalist>
                   <Btn kind="ghost" disabled={busy || !editable} style={{ marginTop: 6 }}
                     onClick={() => set('triggerFilter', [...(j.triggerFilter || []), { prop: '', value: '' }])}>
-                    <Plus size={14} /> Add condition
+                    {/* "filter", NOT "condition" — the canvas has its own "+ Condition" NODE, and
+                        the collision already sent Afshaan looking in the wrong place. These are
+                        enrolment filters on the trigger; a Condition node is a branch mid-journey. */}
+                    <Plus size={14} /> Add filter
                   </Btn>
                   {(j.triggerFilter || []).some((r) => String(r.prop || '').trim()) && (
                     <div className="tw-note" style={{ marginTop: 8 }}>
-                      Enrols only when <b>every</b> condition matches the event, compared as text
-                      (<code>true</code>, not <code>True</code>). Everything else is skipped
-                      silently — it never enters the journey, so it will not appear as a skip.
+                      Enrols only when <b>every</b> filter matches the event, compared as text and
+                      ignoring case (<code>true</code> and <code>True</code> both work). Everything
+                      else is skipped silently — it never enters the journey, so it will not appear
+                      as a skip.
                     </div>
                   )}
 
