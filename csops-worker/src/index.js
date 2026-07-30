@@ -572,6 +572,12 @@ export default {
     if (url.pathname === '/webhooks/relay-wa' && request.method === 'POST') {
       return handleRelayWaWebhook(request, env);
     }
+    // BiteSpeed history backfill (S245) — token-gated, before the JWT gate like the webhooks
+    // so it can be driven without a Google login. Time-boxed: only works while the vendor
+    // token still authenticates.
+    if (url.pathname === '/internal/wa-history-backfill' && request.method === 'POST') {
+      return handleWaHistoryBackfill(request, env);
+    }
     // Meta (Instagram + Facebook Messenger DMs) — GET verify handshake + POST events.
     if (url.pathname === '/webhooks/meta') {
       if (request.method === 'GET')  return handleMetaVerify(url, env);
@@ -4770,6 +4776,163 @@ async function relayWaIngestInbound(m, env) {
 // behaviour. Set it before subscribing a WABA that BiteSpeed still serves; clear it at the flip.
 function bitespeedHeldNumbers(env) {
   return String(env.BITESPEED_WA_PHONE_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BITESPEED HISTORY BACKFILL (S245) — own the WhatsApp conversation history before
+// the vendor account dies.
+//
+// WHY THIS EXISTS. The WhatsApp history shown in Pitstop is NOT stored: opening a
+// thread calls Chatwoot's API live (getWaConversation → loadWaLive → chatwootGetMessages)
+// and renders the result. What we hold locally is the thread record, our OUTBOUND
+// messages, and 83 stray inbound rows in total. So the customer's half of 6,835
+// conversations exists only inside BiteSpeed, and the moment that account lapses every
+// one of those threads becomes our side talking to nobody.
+//
+// The fix needs no vendor cooperation and no manual export: the same token the inbox is
+// using right now can page the full history, so we copy it into cs_wa_messages ourselves.
+// TIME-BOXED BY THE VENDOR, not by us — it only works while that token authenticates.
+//
+// Idempotent: dedupes on Chatwoot's message id per thread, so it is safe to re-run, safe
+// to run while agents work, and safe to resume after a stop.
+//
+// Media is RE-HOSTED, not just referenced: Chatwoot's data_url dies with the account, so a
+// copied URL would be a dead link — and attachments (damage photos, invoices) are the least
+// replaceable part of a support history. Re-hosted files land on the PRIVATE cs-wa-media
+// bucket with media_url left NULL, which makes signInboundWaMedia mint a signed URL per
+// read; if the copy fails we keep the original URL so the message still records that a file
+// existed, plus the reason.
+const BACKFILL_BUCKET = 'cs-wa-media';
+const BACKFILL_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+
+async function backfillRehostMedia(url, threadId, msgId, env) {
+  try {
+    // Chatwoot's data_url is usually directly fetchable; fall back to the API token.
+    let r = await fetch(url);
+    if (!r.ok) r = await fetch(url, { headers: { api_access_token: env.BITESPEED_API_TOKEN } });
+    if (!r.ok) return { ok: false, error: `fetch_${r.status}` };
+    const buf = await r.arrayBuffer();
+    if (!buf?.byteLength) return { ok: false, error: 'empty' };
+    if (buf.byteLength > BACKFILL_MEDIA_MAX_BYTES) return { ok: false, error: 'too_large' };
+    const mime = (r.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim().toLowerCase();
+    const ext = (url.split('?')[0].split('.').pop() || 'bin').slice(0, 5).replace(/[^a-z0-9]/gi, '') || 'bin';
+    const path = `backfill/${threadId}/${msgId}.${ext}`;
+    const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${BACKFILL_BUCKET}/${path}`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': mime, 'x-upsert': 'true',
+      },
+      body: buf,
+    });
+    if (!up.ok) return { ok: false, error: `upload_${up.status}` };
+    return { ok: true, path, mime, size: buf.byteLength };
+  } catch (e) { return { ok: false, error: `error:${(e?.message || e).toString().slice(0, 50)}` }; }
+}
+
+async function backfillOneThread(thread, env, maxPages, doMedia) {
+  const out = { messages: 0, media_ok: 0, media_failed: 0, reached_start: false };
+
+  // What we already hold for this thread, so a re-run inserts nothing.
+  const ex = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}`
+    + `&provider_message_id=not.is.null&select=provider_message_id&limit=3000`, env);
+  const have = new Set((ex.data || []).map((r) => String(r.provider_message_id)));
+
+  const res = await chatwootGetMessages(thread, env, maxPages);
+  if (!res.ok) return { ...out, error: `chatwoot_${res.status}` };
+  out.reached_start = res.reachedStart === true;
+
+  const mapped = (res.raw || []).map(mapChatwootMessage).filter(Boolean)
+    .filter((m) => m.provider_message_id && !have.has(String(m.provider_message_id)));
+  if (!mapped.length) return out;
+
+  const rows = [];
+  for (const m of mapped) {
+    let mediaUrl = m.media_url, rawMeta = null;
+    if (doMedia && m.media_url) {
+      const h = await backfillRehostMedia(m.media_url, thread.id, m.provider_message_id, env);
+      if (h.ok) {
+        mediaUrl = null;                                     // signer fills it from the path
+        rawMeta = { media_storage_bucket: BACKFILL_BUCKET, media_storage_path: h.path, backfilled: true };
+        out.media_ok++;
+      } else {
+        rawMeta = { media_host_error: h.error, media_source_url: m.media_url, backfilled: true };
+        out.media_failed++;
+      }
+    }
+    rows.push({
+      thread_id: thread.id,
+      // ticket_id deliberately NULL: the conversation view keys on thread_id, and guessing a
+      // ticket for a months-old message would corrupt per-ticket reporting.
+      ticket_id: null,
+      direction: m.direction, kind: m.kind, body: m.body,
+      template_name: m.template_name,
+      media_url: mediaUrl, media_filename: m.media_filename,
+      media_size_bytes: null,
+      raw_meta: rawMeta,
+      provider_message_id: m.provider_message_id,
+      status: m.status, is_internal: m.is_internal,
+      sent_by_user_id: null, sent_by_name: m.sent_by_name,
+      received_at: m.received_at, sent_at: m.sent_at,
+      // Explicit created_at — the whole point is preserving WHEN it was said.
+      created_at: m.created_at,
+    });
+  }
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows),
+  });
+  if (!ins.ok) return { ...out, error: `insert_${ins.status}:${JSON.stringify(ins.data)?.slice(0, 120)}` };
+  out.messages = rows.length;
+  return out;
+}
+
+// POST /internal/wa-history-backfill — token-gated, cursor-driven, resumable.
+// Keyset on thread `id` ASC (a uuid, so it is stable): ordering on last_message_at would
+// let a thread that receives a new message during the run jump the cursor and be skipped.
+async function handleWaHistoryBackfill(request, env) {
+  const want = env.INGEST_TOKEN;
+  const a = request.headers.get('Authorization') || '';
+  const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+  if (!want || bearer !== want) return err('unauthorised', 401);
+  if (!env.BITESPEED_API_TOKEN) return err('BITESPEED_API_TOKEN not set — nothing to pull from', 503);
+
+  let b = {}; try { b = await request.json(); } catch {}
+  const sinceDays = Number(b.sinceDays) > 0 ? Number(b.sinceDays) : 7;
+  const since = b.since || new Date(Date.now() - sinceDays * 86400000).toISOString();
+  const limit = Math.min(Math.max(Number(b.limit) || 20, 1), 40);
+  const maxPages = Math.min(Math.max(Number(b.maxPages) || 12, 1), 36);
+  const doMedia = b.media !== false;
+  const cursor = b.cursor || '00000000-0000-0000-0000-000000000000';
+
+  let q = `/rest/v1/cs_wa_threads?provider_thread_ref=not.is.null`
+    + `&or=(channel.is.null,channel.eq.whatsapp)`
+    + `&last_message_at=gte.${encodeURIComponent(since)}`
+    + `&id=gt.${encodeURIComponent(cursor)}`
+    + `&select=id,provider_account_id,provider_thread_ref,customer_phone,last_message_at`
+    + `&order=id.asc&limit=${limit}`;
+  const tRes = await sb(q, env);
+  if (!tRes.ok) return err(`thread query failed: ${JSON.stringify(tRes.data)?.slice(0, 200)}`, 500);
+  const threads = tRes.data || [];
+
+  const totals = { threads: 0, messages: 0, media_ok: 0, media_failed: 0, errors: [] };
+  let lastId = cursor;
+  for (const t of threads) {
+    const r = await backfillOneThread(t, env, maxPages, doMedia);
+    totals.threads++;
+    totals.messages += r.messages;
+    totals.media_ok += r.media_ok;
+    totals.media_failed += r.media_failed;
+    if (r.error && totals.errors.length < 8) totals.errors.push({ thread: t.id, phone: t.customer_phone, error: r.error });
+    lastId = t.id;
+  }
+
+  return json({
+    ok: true, since, ...totals,
+    next_cursor: lastId,
+    done: threads.length < limit,   // a short page = the window is exhausted
+  });
 }
 
 async function handleRelayWaWebhook(request, env) {
