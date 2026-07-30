@@ -701,6 +701,7 @@ async function handleGet(action, params, auth, env) {
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
+    case 'getWaNumbers':     return getWaNumbers(params, auth, env);
     case 'getMessagingThreads': return getMessagingThreads(params, auth, env);
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
@@ -3528,6 +3529,40 @@ async function getWaTemplates(_params, _auth, env) {
 // Source of truth is RELAY's comms.templates, NOT store.cs_wa_templates: the latter holds two
 // local drafts that were never registered with Meta and therefore can never send. Restricted to
 // APPROVED + active, since Meta refuses anything else at send time.
+// getWaNumbers — which LOT WhatsApp numbers exist, keyed by the phone_number_id that lands on a
+// thread. The inbox shows the agent WHICH of our numbers a conversation is on (Pruthvi: "display
+// to which number the incoming WhatsApp message is coming to"), which matters because support,
+// marketing and transactional read completely differently to a customer.
+//
+// Resolved from comms.sender_identities, NEVER hardcoded: a phone_number_id CHANGES every time a
+// number is migrated between WABAs (support's changed on 2026-07-30), so a constant map would
+// quietly mislabel the inbox the day after any migration — the same trap startWaConversation
+// documents for the send path.
+async function getWaNumbers(_params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb('/rest/v1/sender_identities?channel=eq.whatsapp&select=address,purpose,status,metadata',
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  if (!r.ok) return err('Failed to load WhatsApp numbers', 500);
+  const out = [];
+  for (const s of r.data || []) {
+    const pid = s.metadata?.phone_number_id;
+    if (!pid) continue;
+    // Label with the NUMBER, not the purpose. The team refers to these by digits ("2323"), and
+    // `purpose` would actively mislead here: the support number's purpose is `utility`, so a
+    // purpose-labelled inbox would tag every support conversation "Utility". Purpose still rides
+    // along for anyone who wants it. National digits only — the +91 is noise on every row.
+    const addr = String(s.address || '');
+    out.push({
+      phone_number_id: String(pid),
+      address: s.address || null,
+      purpose: String(s.purpose || '').trim() || null,
+      label: addr ? addr.replace(/^\+91/, '') : 'WhatsApp',
+      active: s.status === 'active',
+    });
+  }
+  return ok(out);
+}
+
 async function getWaSendTemplates(_params, auth, env) {
   const g = require('cs_ticket_view', auth); if (g) return g;
   const r = await sb(

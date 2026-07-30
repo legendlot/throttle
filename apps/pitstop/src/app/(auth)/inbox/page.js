@@ -16,11 +16,12 @@ import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
-  Bell, BellOff,
+  Bell, BellOff, ShoppingBag, ChevronDown,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import TagPicker, { TagChip } from '../../../components/TagPicker.js';
+import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 
 // Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
 const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
@@ -156,6 +157,8 @@ export default function InboxPage() {
   const [closeReason, setCloseReason] = useState('');
   const [closeNote, setCloseNote] = useState('');
   const [allTags, setAllTags] = useState([]);
+  const [waNumbers, setWaNumbers] = useState([]);
+  const [ordersOpen, setOrdersOpen] = useState(false);
   const [threads, setThreads] = useState([]);
   const [listLimit, setListLimit] = useState(PAGE);   // conversation-list window; "Load more" grows it (S202)
   const [stats, setStats] = useState({
@@ -355,6 +358,11 @@ export default function InboxPage() {
     if (!session) return;
     if (canManage) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
     csopsGet('getTags', {}, session).then(d => setAllTags(d?.tags || [])).catch(() => {});
+    // Which LOT number is which. Loaded once, never hardcoded — a phone_number_id changes on every
+    // WABA migration, so a constant map would mislabel the inbox the day after one.
+    csopsGet('getWaNumbers', {}, session)
+      .then(d => setWaNumbers(Array.isArray(d) ? d : (d?.data || [])))
+      .catch(() => {});
     loadCanned();
   }, [session, canManage, loadCanned]);
 
@@ -396,6 +404,10 @@ export default function InboxPage() {
     waPagesRef.current = Math.min(waPagesRef.current + 12, 36);
     loadConvo(selectedId);
   }
+
+  // Past-orders strip collapses again on every conversation change — an agent should open it
+  // deliberately for the customer they are looking at, not inherit it from the last thread.
+  useEffect(() => { setOrdersOpen(false); }, [selectedId]);
 
   // Prefill the email composer fields when an email thread is opened — To = the
   // customer, Subject = the thread subject (Re:-prefixed). Cleared/reset per thread.
@@ -831,6 +843,12 @@ export default function InboxPage() {
 
   const thread = convo?.thread;
   const ch = thread ? chanOf(thread.channel) : null;
+  // Which of OUR numbers this thread is on. Null on non-WhatsApp threads, on legacy threads that
+  // predate per-number attribution, and until getWaNumbers resolves — the chip simply does not
+  // render, rather than guessing a number and being confidently wrong about who we are speaking as.
+  const waLabel = (thread?.channel === 'whatsapp' && thread?.waba_phone_number_id)
+    ? (waNumbers.find(n => n.phone_number_id === String(thread.waba_phone_number_id))?.label || null)
+    : null;
   // Transferred to the Influencer team (Ignition) — full handoff (S177). CS keeps a
   // read-only oversight view: no reply/compose, no re-transfer. The flag rides on the
   // thread object when present; the oversight scope view is read-only regardless.
@@ -1106,9 +1124,26 @@ export default function InboxPage() {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap',
                       overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(thread)}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1, flexWrap: 'wrap' }}>
                       <ch.Glyph size={11} style={{ color: ch.color }} />
                       <span style={{ fontSize: 11, color: 'var(--t3)' }}>{ch.label}</span>
+                      {/* The customer's number, ALONGSIDE the name rather than instead of it.
+                          displayName() falls back to the phone, so the moment WhatsApp names
+                          started resolving the number vanished from the header — and an agent
+                          who needs to CALL the customer had nowhere to read it (Pruthvi). */}
+                      {thread.customer_phone && thread.customer_handle
+                        && thread.customer_handle !== thread.customer_phone && (
+                        <span style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}
+                          title="Customer's number">· {thread.customer_phone}</span>
+                      )}
+                      {/* WHICH OF OUR NUMBERS this conversation is on. Support, marketing and
+                          transactional read completely differently to a customer, so an agent
+                          replying needs to know which one they are speaking as. */}
+                      {waLabel && (
+                        <span style={{ fontSize: 10.5, color: 'var(--t3)', background: 'var(--surface-2, rgba(127,127,127,.12))',
+                          border: '1px solid var(--border)', borderRadius: 4, padding: '0 5px', whiteSpace: 'nowrap' }}
+                          title={`This conversation is on our ${waLabel} number`}>to {waLabel}</span>
+                      )}
                       {thread.channel === 'email' && thread.external_user_id && (
                         <span style={{ fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           · {thread.external_user_id}</span>
@@ -1259,6 +1294,41 @@ export default function InboxPage() {
                 <TagPicker session={session} value={convo?.tags || []} onSave={setThreadTagsAction}
                   canManage={canManage} canCreate={canManage} small />
               </div>
+
+              {/* Past orders (Pruthvi) — collapsed by default and loaded ON CLICK, never on open.
+                  ShopifyPanel without `autoLoad` renders its own Search button, so mounting it here
+                  costs nothing until an agent asks. Deliberate: this hits Shopify live, and the
+                  inbox is already the surface agents call slow — auto-loading it on every
+                  conversation would make the thing they complained about worse. */}
+              {/* NB there is no `customer_email` on a thread — an email thread carries the address
+                  in `external_user_id`, so the lookup key is channel-dependent. */}
+              {(() => {
+                const oPhone = thread.customer_phone || '';
+                const oEmail = thread.channel === 'email' ? (thread.external_user_id || '') : '';
+                if (!oPhone && !oEmail) return null;
+                return (
+                  <div style={{ borderBottom: '1px solid var(--border)' }}>
+                    <button onClick={() => setOrdersOpen(v => !v)}
+                      style={{ ...btnGhost, width: '100%', justifyContent: 'flex-start', gap: 6, border: 'none',
+                        borderRadius: 0, padding: '8px 16px', fontSize: 11.5, color: 'var(--t3)' }}
+                      title="This customer's previous orders">
+                      <ShoppingBag size={12} />
+                      Past orders
+                      <ChevronDown size={12} style={{ marginLeft: 'auto',
+                        transform: ordersOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+                    </button>
+                    {ordersOpen && (
+                      <div style={{ padding: '0 16px 12px' }}>
+                        {/* key=thread.id forces a REMOUNT per conversation. ShopifyPanel holds its
+                            result in internal state and (deliberately) does not auto-refetch when
+                            props change, so without this an agent switching threads would be shown
+                            the PREVIOUS customer's orders under the new customer's name. */}
+                        <ShopifyPanel key={thread.id} session={session} phone={oPhone} email={oEmail} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Link-ticket inline row */}
               {linkOpen && !convo?.linked_ticket && (
