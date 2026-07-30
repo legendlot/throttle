@@ -3158,6 +3158,76 @@ async function sendStockAlerts(env) {
   return { sent: fresh.length, stale: stale.length };
 }
 
+// ── Connector health alerts: feed-down (stale pipe) + channel-silent (regular channel gone quiet) ──
+// Detection lives in the DB (sales.detect_connector_alerts, set-based + per-(channel,kind) cooldown);
+// this drains sales.connector_alert_outbox to Slack. Same convention as sendStockAlerts: an Incoming
+// Webhook URL in a secret (SLACK_WEBHOOK_OPS), POST { text }, FAIL-OPEN — no webhook ⇒ hold pending,
+// never mark sent, so the feature is inert until the secret exists and nothing posts by accident.
+function connectorAlertText(rows) {
+  const nameOf = r => (r.detail && r.detail.channel_name) || r.adapter_kind || 'unknown';
+  const down = rows.filter(r => r.alert_kind === 'stale');
+  const silent = rows.filter(r => r.alert_kind === 'silent');
+  const parts = ['*Odo connector alerts*'];
+  if (down.length) {
+    parts.push(`:red_circle: *Feed down* (${down.length})`);
+    parts.push(down.map(r => {
+      const h = r.detail && r.detail.hours_stale;
+      const err = (r.detail && r.detail.last_error) ? ` — last error: ${String(r.detail.last_error).slice(0, 120)}` : '';
+      return `   • *${nameOf(r)}* (${r.adapter_kind}) — no successful run in ${h != null ? h + 'h' : '>24h'}${err}`;
+    }).join('\n'));
+  }
+  if (silent.length) {
+    parts.push(`:warning: *Channel silent* (${silent.length})`);
+    parts.push(silent.map(r => {
+      const d = r.detail || {};
+      return `   • *${nameOf(r)}* — no sales in ${d.days_silent} days (normally ~every ${d.typical_gap_days}d; last sale ${d.last_sale})`;
+    }).join('\n'));
+  }
+  return parts.join('\n');
+}
+
+async function sendConnectorAlerts(env) {
+  // Detect first (enqueues live issues, per-(channel,kind) cooldown), then drain what's pending.
+  try { await rpcSales('detect_connector_alerts', {}); }
+  catch (e) { console.error('[Slack:ops] detect_connector_alerts failed:', e?.message || e); }
+  const pend = await sbSales('/rest/v1/connector_alert_outbox?status=eq.pending&order=detected_at.asc&limit=200');
+  if (!pend.ok) return { skipped: 'outbox read failed' };
+  const rows = pend.data || [];
+  if (!rows.length) return { sent: 0 };
+
+  // Retire pending alerts older than 12h unsent, so the first run after the webhook is set doesn't
+  // dump a backlog of by-then-stale detections — detection re-enqueues any still-live issue on its
+  // own cooldown with a fresh timestamp.
+  const cutoff = Date.now() - 12 * 3600 * 1000;
+  const stale = rows.filter(r => new Date(r.detected_at).getTime() < cutoff);
+  const fresh = rows.filter(r => new Date(r.detected_at).getTime() >= cutoff);
+  if (stale.length) {
+    await sbSales(`/rest/v1/connector_alert_outbox?id=in.(${stale.map(r => r.id).join(',')})`, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ status: 'skipped', sent_at: new Date().toISOString(), error: 'stale: >12h unsent when sender ran' }) });
+  }
+  if (!fresh.length) return { sent: 0, stale: stale.length };
+
+  if (!env.SLACK_WEBHOOK_OPS) {
+    console.log('[Slack:ops] no SLACK_WEBHOOK_OPS —', fresh.length, 'connector alert(s) held pending');
+    return { sent: 0, stale: stale.length, held: fresh.length };
+  }
+
+  const text = connectorAlertText(fresh);
+  let posted = false;
+  try {
+    const r = await fetch(env.SLACK_WEBHOOK_OPS, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    posted = r.ok; if (!r.ok) console.error('[Slack:ops] webhook', r.status);
+  } catch (e) { console.error('[Slack:ops] post failed:', e?.message || e); }
+
+  // Mark sent ONLY on a confirmed 200 — a failed post must retry next tick, not vanish.
+  if (!posted) return { sent: 0, stale: stale.length, held: fresh.length, error: 'post failed' };
+  await sbSales(`/rest/v1/connector_alert_outbox?id=in.(${fresh.map(r => r.id).join(',')})`, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ status: 'sent', sent_at: new Date().toISOString() }) });
+  return { sent: fresh.length, stale: stale.length };
+}
+
 // The ShopifyQL for daily online-store sessions. Kept as a one-liner so it's trivial to adjust if
 // the live probe shows a different keyword works (day vs date, SINCE window form, metric name).
 const SHOPIFYQL_SESSIONS = (lookbackDays) =>
@@ -3268,6 +3338,13 @@ export default {
       const s = await sendStockAlerts(env);
       if (s?.sent || s?.stale) console.log('odoops cron: stock alerts', JSON.stringify(s));
     } catch (e) { console.error('odoops cron (stock alerts) failed:', e?.message || e); }
+    // Connector health: feed-down (a pipe stopped succeeding >24h) + channel-silent (a channel that
+    // was REGULAR has gone quiet — the Flipkart-hidden-3-weeks class). Detect + drain to #ops; inert
+    // until SLACK_WEBHOOK_OPS is set. Best-effort; never disturbs the rest of the cron.
+    try {
+      const c = await sendConnectorAlerts(env);
+      if (c?.sent || c?.held) console.log('odoops cron: connector alerts', JSON.stringify(c));
+    } catch (e) { console.error('odoops cron (connector alerts) failed:', e?.message || e); }
     // Hourly readings are pruned to the retention window ONCE a day (not every tick) — 19:00 UTC
     // = 00:30 IST, just after the IST date rolls. Best-effort.
     try {
@@ -3851,6 +3928,11 @@ export default {
           case 'sendStockAlertsNow': {   // manual outbox drain (super-admin) — Slack sender test trigger
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { return ok(await sendStockAlerts(env)); }
+            catch (e) { return err(String(e?.message || e), 502); }
+          }
+          case 'sendConnectorAlertsNow': {   // manual detect+drain (super-admin) — connector-health Slack test
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { return ok(await sendConnectorAlerts(env)); }
             catch (e) { return err(String(e?.message || e), 502); }
           }
           case 'previewStockAlert': {   // DRY RUN (super-admin): render the message, post NOTHING.
