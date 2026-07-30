@@ -187,6 +187,10 @@ export default function InboxPage() {
   const [newTplId, setNewTplId]     = useState('');
   const [newVals, setNewVals]       = useState({});
   const [newSending, setNewSending] = useState(false);
+  const [newChannel, setNewChannel] = useState('whatsapp');   // 'whatsapp' | 'email'
+  const [newEmail, setNewEmail]     = useState('');
+  const [newSubject, setNewSubject] = useState('');
+  const [newBody, setNewBody]       = useState('');
   const [newNote, setNewNote]       = useState(null);
   const [tplVals, setTplVals]       = useState({});
   const [tplSending, setTplSending] = useState(false);
@@ -634,24 +638,33 @@ export default function InboxPage() {
   // needed: if the customer already has an open 24h window it returns window_open and sends
   // NOTHING, because a free session message is the right tool there and burning a template
   // would read oddly mid-conversation.
+  function resetCompose() {
+    setNewPhone(''); setNewTplId(''); setNewVals({});
+    setNewEmail(''); setNewSubject(''); setNewBody('');
+  }
+
   async function startConversation() {
-    if (!newPhone.trim()) return;
+    if (newChannel === 'whatsapp' ? !newPhone.trim() : !newEmail.trim()) return;
     setNewSending(true); setErr(null); setNewNote(null);
     try {
-      const r = await csopsPost('startWaConversation', {
-        phone: newPhone.trim(),
-        template_id: newTplId || undefined,
-        variables: newVals,
-      }, session);
+      const r = newChannel === 'email'
+        ? await csopsPost('startEmailConversation', {
+            to: newEmail.trim(), subject: newSubject.trim(), text: newBody,
+          }, session)
+        : await csopsPost('startWaConversation', {
+            phone: newPhone.trim(),
+            template_id: newTplId || undefined,
+            variables: newVals,
+          }, session);
       if (r?.window_open) {
         // Not an error — the conversation exists and is live. Take the agent straight to it.
         setNewNote(r.message || 'That customer already has an open window — opening the conversation.');
-        setNewOpen(false); setNewPhone(''); setNewTplId(''); setNewVals({});
+        setNewOpen(false); resetCompose();
         if (r.thread_id) { setSelectedId(r.thread_id); await loadConvo(r.thread_id); }
         loadThreads();
         return;
       }
-      setNewOpen(false); setNewPhone(''); setNewTplId(''); setNewVals({});
+      setNewOpen(false); resetCompose();
       if (r?.thread_id) { setSelectedId(r.thread_id); await loadConvo(r.thread_id); }
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
@@ -1948,11 +1961,52 @@ function Bubble({ m, accent }) {
           <div style={{ width: 460, maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)' }}>New WhatsApp conversation</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)' }}>New conversation</div>
               <button onClick={() => setNewOpen(false)} style={{ background: 'transparent', border: 'none',
                 color: 'var(--t3)', cursor: 'pointer' }}><X size={15} /></button>
             </div>
 
+            {/* Channel first: it changes every field below it, and email is the one agents will
+                actually reach for — WhatsApp compose is a rare "can't find the conversation" tool. */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {[['whatsapp', 'WhatsApp'], ['email', 'Email']].map(([id, label]) => (
+                <button key={id} onClick={() => { setNewChannel(id); setErr(null); }} style={{
+                  flex: 1, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '6px 8px',
+                  borderRadius: 'var(--radius-sm)', border: '1px solid',
+                  borderColor: newChannel === id ? 'var(--accent)' : 'var(--border)',
+                  background: newChannel === id ? 'var(--accent-bg)' : 'transparent',
+                  color: newChannel === id ? 'var(--accent)' : 'var(--t2)' }}>{label}</button>
+              ))}
+            </div>
+
+            {newChannel === 'email' ? (
+              <>
+                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>TO</div>
+                <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="customer@example.com"
+                  value={newEmail} onChange={(e) => setNewEmail(e.target.value)} autoFocus />
+
+                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>SUBJECT</div>
+                <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="Subject"
+                  value={newSubject} onChange={(e) => setNewSubject(e.target.value)} />
+
+                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>MESSAGE</div>
+                <textarea style={{ ...inputStyle, width: '100%', minHeight: 130, resize: 'vertical', marginBottom: 6 }}
+                  placeholder="Write the email…" value={newBody} onChange={(e) => setNewBody(e.target.value)} />
+                <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 12 }}>
+                  If this customer already has an open email conversation from the last 7 days,
+                  this is added to it rather than starting a second one.
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={startConversation}
+                    disabled={newSending || !newEmail.trim() || !newSubject.trim() || !newBody.trim()}
+                    style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
+                    {newSending ? 'Sending…' : 'Send & open'}
+                  </button>
+                </div>
+              </>
+            ) : (
+            <>
             <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>PHONE</div>
             <input style={{ ...inputStyle, width: '100%', marginBottom: 4 }} placeholder="9880212323 or +919880212323"
               value={newPhone} onChange={(e) => setNewPhone(e.target.value)} autoFocus />
@@ -2003,6 +2057,8 @@ function Bubble({ m, accent }) {
                 </>
               );
             })()}
+            </>
+            )}
           </div>
         </div>
       )}

@@ -757,6 +757,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendWaAttachment':         return sendWaAttachment(body, auth, env);
     case 'sendWaTemplateReply':      return sendWaTemplateReply(body, auth, env);
     case 'startWaConversation':      return startWaConversation(body, auth, env);
+    case 'startEmailConversation':   return startEmailConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -3679,6 +3680,67 @@ async function startWaConversation(body, auth, env) {
   const j = await resp.json().catch(() => null);
   if (!resp.ok || j?.ok === false) return json(j || { ok: false, error: 'send_failed' }, resp.status || 502);
   return ok({ ...(j?.data || {}), thread_id: thread.id, sent: true });
+}
+
+// POST startEmailConversation — open a NEW email conversation with a customer who has not
+// written in. The email twin of startWaConversation, and the one that will actually get used:
+// email has no 24-hour window and no template requirement, so it is just To + Subject + Body.
+async function startEmailConversation(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { to, subject, text, html, cc, bcc, name, attachments } = body;
+
+  const addr = String(to || '').trim().toLowerCase();
+  if (!addr) return err('to (email address) required');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) return err(`"${to}" is not a valid email address`, 422);
+  // A REPLY can inherit the thread's subject; a new conversation has nothing to inherit, and a
+  // blank-subject cold email is both worse for the customer and more likely to be filtered.
+  if (!String(subject || '').trim()) return err('subject required for a new conversation', 422);
+  if (!text && !html && !(Array.isArray(attachments) && attachments.length))
+    return err('text, html, or an attachment required', 422);
+
+  // Suppression is checked BEFORE creating anything. sendEmailReply would catch it too, but by
+  // then we would have created an empty thread for someone we are never allowed to email —
+  // permanent litter in the inbox that looks like a real conversation.
+  const sup = await emailSuppressed(env, addr);
+  if (sup.suppressed)
+    return err(`${addr} is suppressed (${sup.reason}) — do not email. Reach out another way.`, 409);
+
+  // Reuse the customer's ACTIVE email conversation when there is one, on the same 7-day rule the
+  // inbound path uses to fold a customer's new mail into their existing thread. Without this an
+  // agent composing to someone already being handled silently opens a SECOND conversation, and
+  // two agents end up answering the same person from different threads.
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const recent = await sb(
+    `/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&external_user_id=eq.${encodeURIComponent(addr)}`
+    + `&thread_state=in.(open,snoozed)&last_message_at=gte.${encodeURIComponent(since)}`
+    + '&order=last_message_at.desc&select=*&limit=1', env);
+  let thread = recent.data?.[0] || null;
+  const reused = !!thread;
+
+  if (!thread) {
+    // No provider_thread_ref: there is no Gmail thread yet. sendEmailReply derives its
+    // In-Reply-To/References from the latest INBOUND message, finds none, and correctly sends a
+    // fresh mail rather than threading it onto something that does not exist.
+    const ins = await sb('/rest/v1/cs_wa_threads', env, {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'email', external_user_id: addr,
+        customer_handle: (name && String(name).trim()) || addr,
+        subject: String(subject).trim(),
+      }),
+    });
+    if (!ins.ok) return err(`Could not open an email conversation (${ins.status})`, 500);
+    thread = ins.data?.[0];
+  }
+  if (!thread) return err('Could not open an email conversation', 500);
+
+  // Delegate: recipient validation, suppression, threading headers, attachments, the outbound
+  // message row and ticket linking all already live in sendEmailReply.
+  const resp = await sendEmailReply(
+    { thread_id: thread.id, text, html, cc, bcc, subject, attachments }, auth, env);
+  const j = await resp.json().catch(() => null);
+  if (!resp.ok || j?.ok === false) return json(j || { ok: false, error: 'send_failed' }, resp.status || 502);
+  return ok({ ...(j?.data || {}), thread_id: thread.id, reused_existing_thread: reused, sent: true });
 }
 
 async function sendWaMessage(body, auth, env) {
