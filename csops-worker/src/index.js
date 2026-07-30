@@ -4164,10 +4164,12 @@ async function sendWaAttachment(body, auth, env) {
   const spec = ATTACH_MIME[mime_type];
   if (!spec) return err(`Unsupported file type: ${mime_type} (images + PDF only)`, 415);
 
-  let bytes;
-  try { bytes = b64ToBytes(data_base64); } catch { return err('Invalid file data'); }
-  if (!bytes.length) return err('Empty file');
-  if (bytes.length > ATTACH_MAX_BYTES) return err('File too large (max 8MB)', 413);
+  const dec = decodeAttachment(data_base64, spec, 'whatsapp');
+  if (dec.error) return dec.error;
+  const bytes = dec.bytes;
+  // Release the ~2.67x-of-file base64 string before the upload: `body` is the only thing keeping it
+  // alive, and the upload is the long-lived part of this request. Halves the peak while on the wire.
+  body.data_base64 = null;
 
   if (waTransport(env) !== 'relay' && !env.BITESPEED_API_TOKEN) return err('WhatsApp send not configured (no BiteSpeed API token)', 503);
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
@@ -5700,12 +5702,69 @@ const ATTACH_MIME = {
   'image/gif':       { ext: 'gif',  kind: 'image',    graph: 'image' },
   'application/pdf': { ext: 'pdf',  kind: 'document', graph: 'file'  },
 };
-const ATTACH_MAX_BYTES = 8 * 1024 * 1024;
+// Per-PLATFORM, per-KIND caps. A single flat 8 MB number (what this was until 2026-07-30) is wrong
+// in BOTH directions at once: it let a 6 MB image through for Meta to reject with a cryptic error,
+// while blocking a 10 MB PDF catalogue that WhatsApp would have accepted (Maria, cutover night).
+// The real ceilings — WhatsApp Cloud API: image 5 MB, document 100 MB. Messenger/IG: image 8 MB.
+// We do NOT go near 100 MB: the binding constraint is the Worker's 128 MB, not Meta's limit. The
+// file arrives base64-in-JSON, so the parsed string alone costs ~2.67x the file (1.33x inflation,
+// and JS strings are UTF-16), and the decoded array costs another 1x on top. 20 MB keeps the
+// decode peak near ~75 MB with room for the request source string. Going meaningfully past that
+// needs the transport to stop being base64-in-JSON, which is a client change, not a constant.
+const ATTACH_MAX_BYTES = {
+  whatsapp: { image: 5 * 1024 * 1024, document: 20 * 1024 * 1024 },
+  meta:     { image: 8 * 1024 * 1024, document: 20 * 1024 * 1024 },
+};
+const MB = (n) => `${Math.round((n / (1024 * 1024)) * 10) / 10}MB`;
 
+// Decode + size-gate an inbound base64 attachment. ONE home for the rule, because the size check
+// is the memory guard and it MUST happen before the decode — the version this replaces decoded
+// first and checked second, so an oversized payload was fully materialised in memory and only
+// then rejected. The guard could not protect the thing it existed to protect.
+// Returns { bytes } or { error } (an err() response).
+function decodeAttachment(dataB64, spec, platform) {
+  const cap = (ATTACH_MAX_BYTES[platform] || ATTACH_MAX_BYTES.whatsapp)[spec.kind]
+    ?? ATTACH_MAX_BYTES.whatsapp.document;
+  const raw = dataB64.includes(',') ? dataB64.split(',')[1] : dataB64;
+  // Decoded size from the base64 length — O(1), no allocation. 4 base64 chars -> 3 bytes, minus padding.
+  const approx = Math.floor((raw.length * 3) / 4) - (raw.endsWith('==') ? 2 : raw.endsWith('=') ? 1 : 0);
+  if (approx > cap) {
+    return { error: err(`File too large: ${MB(approx)} (max ${MB(cap)} for ${spec.kind === 'image' ? 'images' : 'documents'})`, 413) };
+  }
+  let bytes;
+  try { bytes = b64ToBytes(raw); } catch { return { error: err('Invalid file data') }; }
+  if (!bytes.length) return { error: err('Empty file') };
+  // Belt-and-braces: `approx` is derived from the encoded length, so a malformed payload could
+  // still decode larger than predicted. Cheap to re-assert now that it is a plain integer compare.
+  if (bytes.length > cap) return { error: err(`File too large: ${MB(bytes.length)} (max ${MB(cap)})`, 413) };
+  return { bytes };
+}
+
+// Decodes in CHUNKS. `atob` returns a binary STRING, and JS strings are UTF-16 — so decoding an
+// N-byte file in one call transiently holds 2N bytes of string ALONGSIDE the N-byte output, on top
+// of the ~2.67N base64 string still referenced by the request body. Slicing keeps that intermediate
+// to one chunk and is what makes the raised document cap fit in the Worker's memory budget.
+// The slice length is a multiple of 4 so no base64 quantum is split across chunks.
 function b64ToBytes(b64) {
-  const bin = atob(b64.includes(',') ? b64.split(',')[1] : b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  let raw = b64.includes(',') ? b64.split(',')[1] : b64;
+  // `atob` tolerates embedded whitespace across a WHOLE string, but slicing does not: a newline
+  // inside the payload shifts every following quantum, so a 4-aligned cut would land mid-quantum
+  // and throw. Some encoders wrap at 76 chars, so strip first — the test is allocation-free and
+  // the copy only happens for payloads that actually contain whitespace.
+  if (/\s/.test(raw)) raw = raw.replace(/\s+/g, '');
+  const CHUNK = 32768;                       // 32K base64 chars -> 24KB out
+  const parts = [];
+  let total = 0;
+  for (let off = 0; off < raw.length; off += CHUNK) {
+    const bin = atob(raw.slice(off, off + CHUNK));
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    parts.push(buf);
+    total += buf.length;
+  }
+  const bytes = new Uint8Array(total);
+  let p = 0;
+  for (const buf of parts) { bytes.set(buf, p); p += buf.length; }
   return bytes;
 }
 
@@ -5919,10 +5978,10 @@ async function sendMetaAttachment(body, auth, env) {
   const spec = ATTACH_MIME[mime_type];
   if (!spec) return err(`Unsupported file type: ${mime_type} (images + PDF only)`, 415);
 
-  let bytes;
-  try { bytes = b64ToBytes(data_base64); } catch { return err('Invalid file data'); }
-  if (!bytes.length) return err('Empty file');
-  if (bytes.length > ATTACH_MAX_BYTES) return err('File too large (max 8MB)', 413);
+  const dec = decodeAttachment(data_base64, spec, 'meta');
+  if (dec.error) return dec.error;
+  const bytes = dec.bytes;
+  body.data_base64 = null;                   // see sendWaAttachment — free the base64 before the upload
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];

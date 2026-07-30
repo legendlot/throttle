@@ -513,16 +513,36 @@ export default function InboxPage() {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/msword', 'application/vnd.ms-excel', 'text/csv', 'text/plain', 'application/zip'];
+  // Per-file cap, matched to whatever will actually accept the file downstream. A single flat
+  // number here used to reject a 10MB+ catalogue before it ever reached the worker (Maria, WhatsApp
+  // cutover night) while simultaneously ACCEPTING a 6MB image that WhatsApp itself caps at 5MB —
+  // so the agent got the failure late and in Meta's words. Real ceilings: WhatsApp image 5MB /
+  // document 20MB (our Worker-memory limit, not Meta's 100MB); Messenger+IG image 8MB; email stays
+  // 10MB/file because the Gmail send path re-encodes and is capped at 15MB total server-side.
+  // Mirrors ATTACH_MAX_BYTES in csops — keep the two in step.
+  function attachCapFor(channel, mime) {
+    if (channel === 'email') return 10 * 1024 * 1024;
+    const isImage = String(mime || '').startsWith('image/');
+    if (channel === 'instagram' || channel === 'messenger') return isImage ? 8 * 1024 * 1024 : 20 * 1024 * 1024;
+    return isImage ? 5 * 1024 * 1024 : 20 * 1024 * 1024;      // whatsapp / web
+  }
+  const capLabel = (n) => `${Math.round((n / (1024 * 1024)) * 10) / 10}MB`;
+
   function onPickFile(e) {
     const files = Array.from(e.target.files || []);
     e.target.value = '';
     if (!files.length) return;
-    const emailCh = convo?.thread?.channel === 'email';
+    const chNow = convo?.thread?.channel;
+    const emailCh = chNow === 'email';
     const allow = emailCh ? EMAIL_ATTACH_MIMES : META_ATTACH_MIMES;
     const picked = [];
     for (const f of files) {
       if (!allow.includes(f.type)) { setErr(`Can't attach ${f.name} — unsupported file type.`); return; }
-      if (f.size > 10 * 1024 * 1024) { setErr(`${f.name} is too large — max 10MB per file.`); return; }
+      const cap = attachCapFor(chNow, f.type);
+      if (f.size > cap) {
+        setErr(`${f.name} is ${capLabel(f.size)} — too large. Max ${capLabel(cap)} for ${String(f.type).startsWith('image/') ? 'images' : 'documents'} on this channel.`);
+        return;
+      }
       picked.push(f);
       if (!emailCh) break;   // Meta takes a single file
     }
