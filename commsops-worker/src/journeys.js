@@ -211,18 +211,33 @@ async function enrol(env, { journeyId, profileId, eventId }) {
     if (ex.data?.length) return { ok: false, skipped: 'cooldown' };
   }
 
+  // Concurrency key for the unique index enrolments_one_active_per_journey_profile_dedup
+  // (journey_id, profile_id, dedup_key) WHERE status='active'.
+  //   every policy but 'always' → the constant, so the index enforces one active enrolment per
+  //     journey+profile exactly as it has since migration 0026. Unchanged behaviour.
+  //   'always' → one key per TRIGGERING ENTITY, so a customer's 2nd COD order enrols and gets
+  //     its own C2P ask instead of being silently refused, while a REPLAYED webhook carrying
+  //     the same event id still collides and is skipped by the 23505 branch below.
+  // The no-event-id fallback must be unique, never a shared constant: collapsing those onto one
+  // key would re-introduce the very refusal this fixes for any 'always' trigger without an event.
+  const dedupKey = policy !== 'always' ? 'one_active'
+    : (eventId ? `evt:${eventId}`
+               : `uniq:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.round(Math.random() * 1e9)}`}`);
+
   const ins = await A.sbComms('/rest/v1/enrolments', env, {
     method: 'POST', headers: { Prefer: 'return=representation' },
     body: JSON.stringify({ journey_id: journeyId, journey_version: j.active_version, profile_id: profileId,
-      status: 'active', context: { trigger_event_id: eventId || null, enrolled_at: new Date().toISOString() } }),
+      status: 'active', dedup_key: dedupKey,
+      context: { trigger_event_id: eventId || null, enrolled_at: new Date().toISOString() } }),
   });
   const enrolment = ins.data?.[0];
-  // A 23505 here is NOT transient and must NEVER be retried. The insert lost a race against an
-  // enrolment the dedup check above could not see — and for policy 'always' there is no dedup
-  // check at all, so a legitimate second concurrent enrolment lands here every time. Retrying
-  // replays the same losing insert 3× and dead-letters the message, writing a queue_failures
-  // row and paging #relay-alerts for a state that is already settled. Ack it as a skip instead.
-  // NB a `queue_failures` row with kind='enrol' meant "a 2nd concurrent enrolment was refused",
+  // A 23505 here is NOT transient and must NEVER be retried: retrying replays the same losing
+  // insert 3×, dead-letters the message, writes a comms.queue_failures row and pages
+  // #relay-alerts for a state that is already settled. It means either the insert lost a race
+  // against an enrolment the dedup check above could not yet see, or — on policy 'always' — a
+  // REPLAYED trigger event whose event id already has an active enrolment. In both cases the
+  // customer is already enrolled, so ack it as a skip.
+  // NB a `queue_failures` row with kind='enrol' meant "a concurrent enrolment was refused",
   // NOT a dropped customer — the profile's first enrolment always exists.
   if (!ins.ok && ins.status === 409 && ins.data?.code === '23505') {
     console.log('enrol_duplicate_skipped', journeyId, profileId,
