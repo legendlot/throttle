@@ -34,6 +34,12 @@ const FIELDS = [
     hint: 'Charged prepaid = (COD total − this) × (1 − discount %). Per ORDER, not per item, and applied BEFORE the percentage — which is what lets a customer\'s coupon carry through automatically. Currently ₹50.' },
   { key: 'c2p_prepaid_discount_pct', label: 'Prepaid discount (%)', type: 'number',
     hint: 'The prepaid saving, applied after the COD fee is deducted. Must be 0–99. Currently 3.' },
+  { key: 'wrong_number_redirect_enabled', label: 'Marketing/transactional replies: redirect to support', type: 'toggle',
+    hint: 'Replaces the BiteSpeed automation that stops at the support cutover. A customer who replies to the marketing or transactional number gets ONE reply pointing them at the support line, and their message raises a ticket so it is not invisible to the queue. Redirect rather than answer: those numbers carry no support templates, so once the 24h window shuts that thread can never be reopened. Never fires on a C2P button tap, on someone mid-journey, or on STOP.' },
+  { key: 'wrong_number_redirect_phone_ids', label: 'Numbers that redirect (Meta phone number IDs, comma-separated)', type: 'text',
+    hint: 'ALLOW-LIST, deliberately not "everything except support". After migration support is itself a Relay thread with a new ID, and an exclusion-shaped rule would start telling support customers to go to support. Anything not listed here never redirects.' },
+  { key: 'wrong_number_redirect_text', label: 'Redirect message', type: 'text',
+    hint: 'Sent as a normal message (the customer just wrote, so the 24h window is open) — no Meta template approval needed, so you can edit this freely and it takes effect on the next reply.' },
   { key: 'wa_media_id_enabled', label: 'WhatsApp: send images by media ID', type: 'toggle',
     hint: 'On = upload each header image to Meta once and reuse the ID. Off = send the image URL, which makes Meta re-fetch it on every send and fail asynchronously (error 131053 — looks sent, arrives never). Leave ON; this is the revert switch if the ID path ever misbehaves.' },
 ];

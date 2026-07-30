@@ -402,7 +402,9 @@ async function handlePost(body, auth, env) {
         'frequency_cap_per_day', 'frequency_cap_window_hours', 'quiet_hours_start',
         'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow',
         'daily_send_budget',
-        'payment_links_enabled', 'c2p_cod_fee', 'c2p_prepaid_discount_pct', 'wa_media_id_enabled'];
+        'payment_links_enabled', 'c2p_cod_fee', 'c2p_prepaid_discount_pct', 'wa_media_id_enabled',
+        // "Wrong number" redirect (S245) — read by csops on every relay-transported inbound.
+        'wrong_number_redirect_enabled', 'wrong_number_redirect_phone_ids', 'wrong_number_redirect_text'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
       // Disabling test mode = unlocking real-customer sends. Make it a deliberate,

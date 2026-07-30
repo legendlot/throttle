@@ -4753,14 +4753,32 @@ async function relayWaIngestInbound(m, env) {
   if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
-  if (linkedTicketId) {
+  // S245 — marketing/txn "wrong number" handling: raise a ticket + send ONE redirect. Flag-gated
+  // and allow-listed inside, so this is a no-op for support and while the switch is off. Wrapped:
+  // a failure here must never lose the customer's message, which is already safely stored above.
+  let effectiveTicketId = linkedTicketId;
+  try {
+    const wn = await maybeWrongNumberRedirect(thread, m, phone, linkedTicketId, env);
+    if (wn?.ticket_id) {
+      effectiveTicketId = wn.ticket_id;
+      // Back-link the inbound message we just wrote (it was inserted with a null ticket_id,
+      // because the ticket did not exist yet) so the ticket opens with the customer's actual words.
+      const insertedId = ins.data?.[0]?.id;
+      if (insertedId) {
+        await sb(`/rest/v1/cs_wa_messages?id=eq.${insertedId}`, env,
+          { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ticket_id: wn.ticket_id }) }).catch(() => {});
+      }
+    }
+  } catch (e) { console.error('[relay-wa] wrong-number redirect failed', e?.message || e); }
+
+  if (effectiveTicketId) {
     await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
-      ticket_id: linkedTicketId, field_name: 'wa_message_received', old_value: null,
+      ticket_id: effectiveTicketId, field_name: 'wa_message_received', old_value: null,
       new_value: kind, note: (content || '').slice(0, 140), changed_by_user_id: null,
       changed_by_name: m?.name || 'Relay (auto)',
     }) }).catch(() => {});
   }
-  return { thread_id: thread.id, ticket_id: linkedTicketId };
+  return { thread_id: thread.id, ticket_id: effectiveTicketId };
 }
 
 // Numbers still served by BiteSpeed, as Meta phone_number_ids (comma-separated).
@@ -4936,6 +4954,148 @@ async function handleWaHistoryBackfill(request, env) {
     next_cursor: lastId,
     done: threads.length < limit,   // a short page = the window is exhausted
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// "WRONG NUMBER" REDIRECT (S245) — replaces the BiteSpeed automation that stops at the support
+// cutover ("Thank you for reaching out. This number is only used for transactional updates…",
+// 445 sends/30d). Two jobs on a reply to the MARKETING or TRANSACTIONAL number:
+//   1. raise a ticket, because until now these raised NONE — relayWaIngestInbound only LINKED to
+//      an already-open ticket, so 219 of 232 such threads over 14 days sat in the inbox and in
+//      nobody's worklist: no queue, no SLA, no reporting;
+//   2. reply once, pointing the customer at the support line.
+//
+// WHY REDIRECT INSTEAD OF JUST ANSWERING (Afshaan): answering there invites a repeat conversation
+// on a number that cannot sustain one. Templates are WABA-scoped, so the lot_support_* templates
+// live ONLY on the support WABA — the moment the customer's 24h window on the marketing/txn number
+// shuts, that thread can never be reopened. A structural dead end, so send them somewhere real.
+//
+// The reply is a plain session message (they just wrote, so the window is open) → no Meta template
+// approval, and the copy is editable in Relay settings without a deploy.
+const WRONG_NUMBER_TAG = 'wrong_number_redirect';   // stamped on template_name — also the 24h key
+// Conservative: only unambiguous opt-out/opt-in keywords. optout.js in commsops owns the real
+// handling; this exists purely so we never answer a withdrawal with marketing-adjacent chatter.
+const OPTOUT_WORDS = new Set(['stop', 'unsubscribe', 'unsub', 'start', 'cancel subscription', 'opt out', 'optout']);
+
+async function wrongNumberConfig(env) {
+  const r = await sb(
+    `/rest/v1/settings?id=eq.1&select=wrong_number_redirect_enabled,wrong_number_redirect_phone_ids,wrong_number_redirect_text&limit=1`,
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  return r.ok ? (r.data?.[0] || null) : null;
+}
+
+// Raise a ticket for an inbound that has none, so it enters the queue. Mirrors linkMessagingThread's
+// insert but with no acting user — this is machine-created, and attributing it to an agent would put
+// it in that person's name and their assigned count.
+async function ensureTicketForThread(thread, firstText, env) {
+  const year = String(new Date().getFullYear());
+  const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
+  if (!seqRes.ok) return null;
+  const ticket_no = `CS-${year}-${String(Number(seqRes.data)).padStart(5, '0')}`;
+  const ins = await sb(`/rest/v1/cs_tickets`, env, {
+    method: 'POST', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      ticket_no,
+      created_by_user_id: null, created_by_name: 'Relay (auto)',
+      intake_channel: 'whatsapp',
+      customer_name: thread.customer_handle || thread.customer_phone || 'WhatsApp customer',
+      customer_phone: thread.customer_phone || null,
+      disposition: 'pending',
+      // Left UNASSIGNED on purpose: it must surface in the Unassigned queue for whoever picks it
+      // up, not be silently parked on an agent who has never seen it.
+      assigned_agent_id: null, assigned_agent_name: null,
+      stage: 'intake',
+      issue_description: String(firstText || '').slice(0, 500),
+      due_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+    }),
+  });
+  return ins.ok ? (ins.data?.[0] || null) : null;
+}
+
+// Is this customer mid-journey? A C2P customer may answer with FREE TEXT ("yes confirm") rather
+// than tapping, so the button_id check alone is not enough — and cutting across a live money
+// journey with "please use the support number" is the worst outcome this feature could produce.
+async function hasActiveEnrolment(phone, env) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return false;
+  const idr = await sb(
+    `/rest/v1/identifiers?type=eq.phone&value=eq.${encodeURIComponent('+' + digits)}&select=profile_id&limit=1`,
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  const pid = idr.ok ? idr.data?.[0]?.profile_id : null;
+  if (!pid) return false;
+  const en = await sb(`/rest/v1/enrolments?profile_id=eq.${pid}&status=eq.active&select=id&limit=1`,
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  return !!(en.ok && en.data?.[0]);
+}
+
+async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
+  const cfg = await wrongNumberConfig(env);
+  if (!cfg?.wrong_number_redirect_enabled) return { skipped: 'disabled' };
+
+  // ALLOW-LIST, never "everything except support": after migration support is itself a Relay
+  // thread with a NEW phone_number_id, and an exclusion rule would start telling support
+  // customers to go to support. Unknown id ⇒ never redirect.
+  const ids = String(cfg.wrong_number_redirect_phone_ids || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!thread.waba_phone_number_id || !ids.includes(String(thread.waba_phone_number_id)))
+    return { skipped: 'not_a_redirect_number' };
+
+  if (m?.button_id) return { skipped: 'button_tap' };                       // C2P / interactive reply
+  const txt = String(m?.text || '').trim().toLowerCase();
+  if (OPTOUT_WORDS.has(txt)) return { skipped: 'optout_keyword' };
+  if (await hasActiveEnrolment(phone, env)) return { skipped: 'mid_journey' };
+
+  // Raise the ticket only once every guard has passed — i.e. only for a genuine "wrong number"
+  // contact. A mid-journey reply is not a support case, and a repeat message inside 24h already
+  // has the ticket the first one created.
+  let ticket = null;
+  if (!ticketId) {
+    ticket = await ensureTicketForThread(thread, m?.text, env);
+    if (ticket?.id) ticketId = ticket.id;
+  }
+
+  // Once per thread per 24h — a customer sending three messages gets one redirect, not three.
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const recent = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}`
+    + `&template_name=eq.${WRONG_NUMBER_TAG}&created_at=gte.${encodeURIComponent(since)}&select=id&limit=1`, env);
+  if (recent.data?.[0]) return { skipped: 'already_sent_24h' };
+
+  const text = cfg.wrong_number_redirect_text
+    || 'For help with an order or other queries, message us on +91 98802 12323 — https://wa.me/919880212323';
+
+  let resp, data;
+  try {
+    resp = await callWorker(env.COMMSOPS, env, '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        phoneNumberId: thread.waba_phone_number_id,   // answer on the number they wrote to
+        template: { content: { text_body: text } },
+        dedupKey: `pitstop:wrongnum:${thread.id}:${Math.floor(Date.now() / 3600000)}`,
+        source: 'pitstop_wrong_number_redirect',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+    // ticket_id is returned on the failure paths too: the ticket was already created above, so the
+    // caller must still back-link it. Losing that link would leave a ticket whose opening message
+    // is missing — the customer's actual words — which is worse than the failed redirect itself.
+  } catch (e) { return { error: `send_failed:${e.message}`, ticket_id: ticket?.id || null }; }
+  const msg = data?.data || data?.message || data || {};
+  if (!resp.ok || data?.ok === false || msg.status === 'failed')
+    return { error: `send_rejected:${msg.reason || resp.status}`, ticket_id: ticket?.id || null };
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text',
+      body: text, template_name: WRONG_NUMBER_TAG,
+      provider_message_id: msg.provider_message_id || null, status: msg.status || 'sent',
+      is_internal: false, sent_by_user_id: null, sent_by_name: 'Relay (auto)',
+      sent_at: new Date().toISOString(),
+    }),
+  }).catch(() => {});
+  return { sent: true, ticket_id: ticket?.id || null };
 }
 
 async function handleRelayWaWebhook(request, env) {
