@@ -101,6 +101,14 @@ export default function StoreHistoryPage() {
   const [flushRows, setFlushRows] = useState([]);
   const [flushStatus, setFlushStatus] = useState('');
   const [flushesLoading, setFlushesLoading] = useState(false);
+  // Flush detail (Piyush, 2026-07-30): the Flush ID was styled as a link but had
+  // no handler — clicking an Issue No. opened its contents, clicking a Flush ID
+  // did nothing. Unlike issues (whose lines all arrive in the list payload and
+  // are aggregated client-side), getFlushes returns header rows only, so the
+  // detail is fetched per flush from the existing getFlush handler.
+  const [detailFlushId, setDetailFlushId] = useState(null);
+  const [flushDetail, setFlushDetail] = useState(null);
+  const [flushDetailLoading, setFlushDetailLoading] = useState(false);
 
   const loadIssues = useCallback(async () => {
     if (!session) return;
@@ -134,6 +142,22 @@ export default function StoreHistoryPage() {
   useEffect(() => {
     if (activeTab === 'flushes') loadFlushes();
   }, [activeTab, loadFlushes]);
+
+  useEffect(() => {
+    if (!detailFlushId || !session) { setFlushDetail(null); return; }
+    let cancelled = false;
+    setFlushDetailLoading(true);
+    setFlushDetail(null);
+    garageFetch('getFlush', { flush_id: detailFlushId }, session)
+      .then((d) => { if (!cancelled) setFlushDetail(d || null); })
+      .catch((e) => {
+        if (cancelled) return;
+        showToast(e.message || 'Failed to load flush', 'error');
+        setDetailFlushId(null);
+      })
+      .finally(() => { if (!cancelled) setFlushDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [detailFlushId, session, showToast]);
 
   const filteredIssues = useMemo(() => {
     const filtered = issueRows.filter((r) => {
@@ -296,7 +320,10 @@ export default function StoreHistoryPage() {
                 <tbody>
                   {flushRows.map((r) => (
                     <tr key={r.flush_id}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.flush_id}</td>
+                      <td
+                        style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)', cursor: 'pointer' }}
+                        onClick={() => setDetailFlushId(r.flush_id)}
+                      >{r.flush_id}</td>
                       <td style={tableTdStyle}>{r.flush_date || '—'}</td>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{r.run_no || r.wo_no || 'Standalone'}</td>
                       <td style={tableTdStyle}>{r.line_no || '—'}</td>
@@ -319,6 +346,15 @@ export default function StoreHistoryPage() {
           issueNo={detailIssueNo}
           rows={detailRows}
           onClose={() => setDetailIssueNo(null)}
+        />
+      )}
+
+      {detailFlushId && (
+        <FlushDetailModal
+          flushId={detailFlushId}
+          detail={flushDetail}
+          loading={flushDetailLoading}
+          onClose={() => setDetailFlushId(null)}
         />
       )}
     </div>
@@ -411,5 +447,129 @@ function IssueDetailModal({ issueNo, rows, onClose }) {
         </table>
       </div>
     </div>
+  );
+}
+
+// Flush detail — the Line Flushes twin of IssueDetailModal (Piyush, 2026-07-30).
+// Shows what was raised per part and, where the flush has been verified, what
+// each part was actually dispositioned to (Return to Stock / Damaged / Rework /
+// Rejected, with bin). Dispositions are grouped by line_id: one raised line can
+// split across several dispositions, which is the whole point of verification.
+function FlushDetailModal({ flushId, detail, loading, onClose }) {
+  useEscapeClose(true, onClose);
+
+  const shell = (children) => (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 720, maxWidth: 980, maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+
+  if (loading) {
+    return shell(<div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>);
+  }
+  if (!detail || !detail.flush) {
+    return shell(
+      <>
+        Flush {flushId} not found.
+        <div style={{ marginTop: 12, textAlign: 'right' }}>
+          <button onClick={onClose} style={btnSecondary}>Close</button>
+        </div>
+      </>
+    );
+  }
+
+  const head  = detail.flush;
+  const lines = Array.isArray(detail.lines) ? detail.lines : [];
+  const disps = Array.isArray(detail.dispositions) ? detail.dispositions : [];
+
+  const dispsByLine = {};
+  disps.forEach((d) => {
+    if (!dispsByLine[d.line_id]) dispsByLine[d.line_id] = [];
+    dispsByLine[d.line_id].push(d);
+  });
+
+  const totalRaised = lines.reduce((s, l) => s + (parseFloat(l.qty_raised) || 0), 0);
+  const totalDisp   = disps.reduce((s, d) => s + (parseFloat(d.qty) || 0), 0);
+  const hasDisps    = disps.length > 0;
+  const totalDiff   = Math.round((totalDisp - totalRaised) * 100) / 100;
+
+  return shell(
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 16 }}>{head.flush_id}</h3>
+        <button onClick={onClose} style={btnSecondary}>✕ Close</button>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 14 }}>
+        {head.flush_date || '—'} · <StatusBadge label={head.status || '—'} tone={LF_STATUS_TONES[head.status] || 'gray'} />
+        {(head.run_no || head.wo_no) && <> · {head.run_no || head.wo_no}</>}
+        {head.line_no && <> · Line {head.line_no}</>}
+        {head.shift && <> · {head.shift}</>}
+        {head.raised_by && <> · Raised by {head.raised_by}</>}
+        {head.verified_by && <> · Verified by {head.verified_by}</>}
+      </div>
+      {head.notes && (
+        <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 14, fontStyle: 'italic' }}>{head.notes}</div>
+      )}
+
+      {lines.length === 0 ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>This flush has no parts recorded.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={tableThStyle}>Part Code</th>
+              <th style={tableThStyle}>Part Name</th>
+              <th style={tableThStyle}>Return Type</th>
+              <th style={tableThStyle}>Qty Raised</th>
+              <th style={tableThStyle}>Where It Went</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => {
+              const mine = dispsByLine[l.line_id] || [];
+              return (
+                <tr key={`${l.line_id}-${i}`}>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.part_code}</td>
+                  <td style={tableTdStyle}>{l.part_name || '—'}</td>
+                  <td style={tableTdStyle}>{l.return_type || '—'}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{parseFloat(l.qty_raised) || 0}</td>
+                  <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                    {mine.length === 0 ? (
+                      <span style={{ color: 'var(--t3)' }}>Not yet verified</span>
+                    ) : (
+                      mine.map((d, di) => (
+                        <div key={`${d.disp_id}-${di}`} style={{ fontSize: 11 }}>
+                          <span style={{ fontFamily: 'var(--mono)' }}>{parseFloat(d.qty) || 0}</span>
+                          {' → '}{d.disposition || '—'}
+                          {d.bin_code && <span style={{ color: 'var(--t3)' }}> · bin {d.bin_code}</span>}
+                          {d.rework_wo_no && <span style={{ color: 'var(--t3)' }}> · {d.rework_wo_no}</span>}
+                        </div>
+                      ))
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{ background: 'var(--surface2)' }}>
+              <td style={{ ...tableTdStyle, fontWeight: 700 }} colSpan={3}>TOTALS</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{Math.round(totalRaised * 100) / 100}</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: !hasDisps ? 'var(--t3)' : totalDiff === 0 ? 'var(--t3)' : totalDiff > 0 ? '#ffaa33' : '#ff7070' }}>
+                {hasDisps ? `${Math.round(totalDisp * 100) / 100}${totalDiff === 0 ? '' : ` (${totalDiff > 0 ? '+' : ''}${totalDiff})`}` : '—'}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+    </>
   );
 }
