@@ -888,9 +888,13 @@ const amazonAdapter = {
     let finance = { events: [] }, finSub = 0, configAfter = rep.configAfter;
     try {
       const fw = await fetchAmazonFinance(host, H, configAfter, nowMs);
-      finSub = fw.subreqs; finance = { events: fw.events };
-      if (fw.finCursorAfter) configAfter = { ...configAfter, fin_cursor: fw.finCursorAfter };
-      if (fw.finTrailCursorAfter) configAfter = { ...configAfter, fin_trail_cursor: fw.finTrailCursorAfter };
+      finSub = fw.subreqs;
+      // Carry the finance cursors on `finance` (NOT folded into configAfter) so they are persisted
+      // in stage() ONLY AFTER stageAmazonFinance succeeds. Advancing them here — before staging —
+      // meant a crash/throw between this fetch and stage() marked those days done but never staged:
+      // a permanent silent gap. Staging is idempotent upsert, so a re-run that re-stages before the
+      // deferred persist is harmless.
+      finance = { events: fw.events, finCursorAfter: fw.finCursorAfter || null, finTrailCursorAfter: fw.finTrailCursorAfter || null };
     } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
     // Returns phase (FBA customer returns → RTV source). Auxiliary; never breaks the pipeline.
     let returns = { rows: [] }, retSub = 0;
@@ -954,7 +958,21 @@ const amazonAdapter = {
     // Finance: stg_amazon_fin (+ order-grain return rows) and record the dates recompute must touch.
     const ev = (fetched && fetched.finance && fetched.finance.events) || [];
     const affected = await stageAmazonFinance(ev, runId, channelId);
-    if (fetched && fetched.finance) fetched.finance.affectedDates = affected;
+    if (fetched && fetched.finance) {
+      fetched.finance.affectedDates = affected;
+      // Persist the finance cursors ONLY now that the events are staged (see the note in fetch()).
+      // Read the config fresh so this merge can't clobber the report/returns/settlement cursors that
+      // fetch() already wrote for this tick — same read-then-patch pattern as settlement_seen above.
+      const fin = fetched.finance;
+      if (fin.finCursorAfter || fin.finTrailCursorAfter) {
+        const cur = await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}&select=config`);
+        const baseCfg = (cur.ok && cur.data && cur.data[0] && cur.data[0].config) || {};
+        const patch = {};
+        if (fin.finCursorAfter) patch.fin_cursor = fin.finCursorAfter;
+        if (fin.finTrailCursorAfter) patch.fin_trail_cursor = fin.finTrailCursorAfter;
+        await patchConnectorConfig(channelId, baseCfg, patch);
+      }
+    }
     // FBA customer returns → stg_amazon_returns (supersede the window by actual return-date range,
     // robust whether or not the report honours dataStart/EndTime), then (re)classify refund return_kind.
     const retRows = (fetched && fetched.returns && fetched.returns.rows) || [];
