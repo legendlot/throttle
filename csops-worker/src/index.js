@@ -6580,18 +6580,26 @@ async function getMessagingStats(params, auth, env) {
   }
   if (tw.length) {
     // Exclude internal notes — "awaiting reply" means the customer's last message is unanswered.
-    // Newest-N across the whole thread set, then first-seen-per-thread = that thread's latest.
-    // CAVEAT (pre-existing, widened by adding WhatsApp): ordering is GLOBAL desc, so a thread
-    // still 'open' but last messaged long ago can fall outside the page and be missed, slightly
-    // UNDER-counting awaiting. Acceptable here — the signal agents need is "someone is waiting
-    // now", and recent activity is exactly what this ordering captures. A set-based RPC is the
-    // proper fix if the tile ever needs to be exact.
-    const mRes = await sb(
-      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=6000`,
-      env,
-    );
+    // CHUNKED, and that is not an optimisation — it is a correctness fix (S245). All the ids used
+    // to go into ONE `thread_id=in.(…)` URL: at 571 open threads that is a ~21KB URL, and it grows
+    // with the open-thread count. When such a request is refused the failure is SILENT — `data` is
+    // empty, every `awaiting` computes 0, and the tile reports "nothing waiting", which is the
+    // exact inverse of the truth on the channel agents now rely on. Chunking bounds each URL to
+    // ~7KB regardless of volume.
+    //
+    // It also shrinks the pre-existing ordering caveat: `order=created_at.desc` is global, so a
+    // long-idle but still-open thread could fall outside a single page and be under-counted.
+    // Scoping each page to 200 threads makes that far less likely (a full RPC is the exact fix).
+    const CHUNK = 200;
     const lastDir = {};
-    for (const m of (mRes.data || [])) if (!(m.thread_id in lastDir)) lastDir[m.thread_id] = m.direction;
+    for (let i = 0; i < tw.length; i += CHUNK) {
+      const ids = tw.slice(i, i + CHUNK).map((t) => t.id).join(',');
+      const mRes = await sb(
+        `/rest/v1/cs_wa_messages?thread_id=in.(${ids})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=2000`,
+        env,
+      );
+      for (const m of (mRes.data || [])) if (!(m.thread_id in lastDir)) lastDir[m.thread_id] = m.direction;
+    }
     for (const [tid, dir] of Object.entries(lastDir)) {
       if (dir === 'inbound' && stats[chById[tid]]) stats[chById[tid]].awaiting += 1;
     }

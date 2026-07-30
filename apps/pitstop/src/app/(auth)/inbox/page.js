@@ -187,6 +187,7 @@ export default function InboxPage() {
   // signal of any kind: no tab badge, no sound, nothing. Polling alone doesn't help someone
   // looking at another tab.
   const [soundOn, setSoundOn] = useState(false);
+  const [statsReady, setStatsReady] = useState(false);   // first successful stats load — see the chime effect
   const prevAwaitingRef = useRef(null);
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
@@ -278,7 +279,7 @@ export default function InboxPage() {
     if (!session) return;
     try {
       const d = await csopsGet('getMessagingStats', {}, session);
-      if (d?.stats) setStats(d.stats);
+      if (d?.stats) { setStats(d.stats); setStatsReady(true); }
     } catch { /* tiles are best-effort */ }
   }, [session]);
 
@@ -410,13 +411,16 @@ export default function InboxPage() {
   // backgrounded, which is exactly when a message gets missed; polling alone cannot help someone
   // looking at a different tab.
   useEffect(() => {
+    document.title = totalAwaiting > 0 ? `(${totalAwaiting}) Pitstop · Inbox` : 'Pitstop · Customer Support';
+    // ⚠️ Gate on statsReady, NOT on `prev !== null`. `stats` initialises to zeros, so the pre-data
+    // render already establishes prev = 0; the first real load then looks like 0 → 67 and chimes
+    // for the backlog that was sitting there before the agent even opened the page. Waiting for
+    // the first successful load makes the FIRST real value the baseline instead of a comparison.
+    if (!statsReady) return;
     const prev = prevAwaitingRef.current;
     prevAwaitingRef.current = totalAwaiting;
-    document.title = totalAwaiting > 0 ? `(${totalAwaiting}) Pitstop · Inbox` : 'Pitstop · Customer Support';
-    // Only on a genuine INCREASE, and never on first paint (prev === null) — otherwise every
-    // agent gets chimed at for the backlog that was already sitting there when they opened it.
     if (soundOn && prev !== null && totalAwaiting > prev) chime();
-  }, [totalAwaiting, soundOn]);
+  }, [totalAwaiting, soundOn, statsReady]);
   const allTotal = useMemo(
     () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0) + (stats.web?.total || 0),
     [stats],
