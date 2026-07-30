@@ -227,7 +227,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                       <div style={{ padding: 8 }}>
                         <Combobox value={task.program_id || ''} options={programCellOpts} placeholder="Pick or type to create…" allowClear={false} style={{ width: 220 }}
                           onChange={(v, opt) => { if (!opt) return; saveField('program_id', opt.value || null); setEdit(null); }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); setEdit(null); } } }} />
+                          onCreateOption={(text) => { createProgramInline(text); setEdit(null); }} />
                       </div>}>
                     {task.program ? <span className="chip">{task.program.name}</span> : (canEdit ? 'Set program' : '—')}
                   </EditTrigger>

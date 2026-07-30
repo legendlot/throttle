@@ -60,6 +60,18 @@ export function Combobox({
   // component does NOT client-filter `options` — the parent owns matching. Selection
   // still flows through onChange(value, option) with the option's extra fields intact.
   onQueryChange,
+  // Creatable mode. When provided, a trailing "+ Create …" row appears whenever the
+  // typed query is non-empty and does NOT exactly match an existing option's label.
+  // Fires (query: string) — the parent creates the record and sets `value`; the input
+  // snaps to the new label once `options` updates. Replaces the parent-side onKeyDown
+  // create hack, which was non-deterministic (Enter could select a highlighted option
+  // OR create, depending on highlight state the parent couldn't see).
+  //
+  // NB deliberately NOT wired into blur: clicking away must never create a record.
+  // NB when the query partially matches exactly one option, Enter still SELECTS that
+  // option (the pre-existing contract) — arrow down to the create row to create instead.
+  onCreateOption,
+  createLabel,
   // When true, the dropdown renders position:fixed (anchored to the input's
   // viewport rect) instead of position:absolute. Use inside scroll/overflow
   // containers (e.g. a horizontally-scrollable table) where an absolute
@@ -133,6 +145,20 @@ export function Combobox({
     });
   }, [options, query, selectedOption, onQueryChange]);
 
+  // Creatable mode: offer a "+ Create …" row unless the typed text already names an
+  // existing option. Matched against ALL options, not the filtered set — a query that
+  // exactly names an option the current filter happens to exclude is still not new.
+  const trimmedQuery = (query || '').trim();
+  const canCreate = useMemo(() => {
+    if (!onCreateOption || !trimmedQuery) return false;
+    const q = trimmedQuery.toLowerCase();
+    return !options.some((o) => (o.label || '').trim().toLowerCase() === q);
+  }, [onCreateOption, trimmedQuery, options]);
+
+  // The create row is the last keyboard-navigable row, one past the real options.
+  const createIndex = canCreate ? filtered.length : -1;
+  const rowCount = filtered.length + (canCreate ? 1 : 0);
+
   // Scroll the highlighted option into view during keyboard navigation.
   useEffect(() => {
     if (open && highlight >= 0 && highlightedRef.current) {
@@ -152,19 +178,36 @@ export function Combobox({
     if (inputRef.current) inputRef.current.blur();
   }
 
+  function doCreate() {
+    if (!canCreate) return;
+    onCreateOption?.(trimmedQuery);
+    setOpen(false);
+    setHighlight(-1);
+    if (inputRef.current) inputRef.current.blur();
+  }
+
   function handleKeyDown(e) {
     if (disabled) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setOpen(true);
-      setHighlight((i) => Math.min((i < 0 ? -1 : i) + 1, filtered.length - 1));
+      setHighlight((i) => Math.min((i < 0 ? -1 : i) + 1, rowCount - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setHighlight((i) => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
-      if (open && highlight >= 0 && filtered[highlight]) {
+      // Order matters, and it is what makes this deterministic: an explicitly
+      // highlighted create row wins; then a highlighted option; then create when
+      // nothing matched at all (typed a genuinely new name); then the sole match.
+      if (open && canCreate && highlight === createIndex) {
+        e.preventDefault();
+        doCreate();
+      } else if (open && highlight >= 0 && filtered[highlight]) {
         e.preventDefault();
         selectOption(filtered[highlight]);
+      } else if (open && canCreate && filtered.length === 0) {
+        e.preventDefault();
+        doCreate();
       } else if (open && filtered.length === 1) {
         e.preventDefault();
         selectOption(filtered[0]);
@@ -333,7 +376,7 @@ export function Combobox({
             boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
           }}
         >
-          {filtered.length === 0 ? (
+          {filtered.length === 0 && !canCreate ? (
             <div style={{
               padding: '8px 10px',
               color: 'var(--t3)',
@@ -411,6 +454,29 @@ export function Combobox({
                 </Fragment>
               );
             })
+          )}
+          {canCreate && (
+            <div
+              ref={highlight === createIndex ? highlightedRef : null}
+              onMouseDown={(e) => { e.preventDefault(); doCreate(); }}
+              onMouseEnter={() => setHighlight(createIndex)}
+              style={{
+                padding: '7px 10px',
+                cursor: 'pointer',
+                fontSize: 12,
+                color: '#f2cd1a',
+                background: highlight === createIndex ? 'var(--surface)' : 'transparent',
+                borderTop: filtered.length ? '1px solid rgba(42,42,42,.9)' : 'none',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+              }}
+            >
+              <span style={{ flex: 1 }}>
+                {createLabel ? createLabel(trimmedQuery) : <>+ Create “{trimmedQuery}”</>}
+              </span>
+              <span style={{ color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)' }}>new</span>
+            </div>
           )}
         </div>
         );

@@ -230,7 +230,7 @@ function DetailInner() {
               {editing
                 ? <Combobox value={form.program_id || ''} options={programCellOpts} allowClear={false} placeholder="Set program…" style={input}
                     onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, program_id: opt.value || null })); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); } } }} />
+                    onCreateOption={createProgramInline} />
                 : (task.program?.name || '—')}
             </Field>
             <Field label="Space">

@@ -32,12 +32,8 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
     if (!opt) return;                      // ignore mid-type clears
     setProgramId(opt.value || '');
   }
-  async function maybeCreateProgram(e) {
-    if (e.key !== 'Enter' || !onCreateProgram) return;
-    const text = (e.target.value || '').trim();
-    if (!text || programOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) return;
-    e.preventDefault();
-    try { const prog = await onCreateProgram(text); if (prog?.id) setProgramId(prog.id); } catch { /* parent toasts */ }
+  async function createProgram(name) {
+    try { const prog = await onCreateProgram(name); if (prog?.id) setProgramId(prog.id); } catch { /* parent toasts */ }
   }
 
   function addCollab() {
@@ -103,7 +99,8 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
         </div>
         <div>
           <label style={lbl}>Program</label>
-          <Combobox value={programId} options={programOpts} onChange={pickProgram} onKeyDown={maybeCreateProgram}
+          <Combobox value={programId} options={programOpts} onChange={pickProgram}
+            onCreateOption={onCreateProgram ? createProgram : undefined}
             placeholder={onCreateProgram ? 'Pick or type to create…' : 'Select program…'} allowClear={false} disabled={saving} style={input} />
         </div>
       </div>
