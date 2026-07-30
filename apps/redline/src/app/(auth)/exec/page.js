@@ -377,13 +377,22 @@ export default function OverviewPage() {
       a.disp += (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0);
       a.rtr += Number(r.actual_rtr) || 0; a.rte += Number(r.actual_rte) || 0;
       a.pass += Number(r.actual_qc_pass) || 0;
+      a.fail += Number(r.actual_qc_fail) || 0;
       return a;
-    }, { disp: 0, rtr: 0, rte: 0, pass: 0 });
+    }, { disp: 0, rtr: 0, rte: 0, pass: 0, fail: 0 });
     const label = preset === 'week' ? 'Mon → today' : '1st → today';
+    // Pass Rate + QC Fail over the range, now that get_plan_vs_actual carries actual_qc_fail
+    // (previously hardcoded '—' for non-today presets). All range KPIs derive from rangePva so
+    // the rail is internally consistent (pass, fail, rate one source).
+    const denom = agg.pass + agg.fail;
+    const rate = denom > 0 ? Math.round((agg.pass / denom) * 100) : null;
     return {
       dispatched: fmt(agg.disp), subR: `${fmt(agg.rtr)} retail · ${fmt(agg.rte)} ecom`,
-      qcPass: fmt(preset === 'week' ? s.wtd_pass : s.mtd_pass),
-      passRate: '—', passTone: undefined, qcFail: '—', failSub: label,
+      qcPass: fmt(agg.pass),
+      passRate: rate != null ? rate + '%' : '—',
+      passTone: rate >= 95 ? 'ok' : rate != null ? 'warn' : undefined,
+      qcFail: fmt(agg.fail),
+      failSub: label,
     };
   }, [preset, s, rangePva]);
 
@@ -559,7 +568,7 @@ export default function OverviewPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)',
             borderRadius: 'var(--r-sm)', padding: '6px 11px', color: 'var(--t2)' }}>
-            <Icon name="clock" size={14} /><span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{todayStr()}</span>
+            <Icon name="clock" size={14} /><span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{preset === 'today' ? todayStr() : `${rangeFor(preset).from} → ${rangeFor(preset).to}`}</span>
           </div>
           <div style={{ display: 'flex', gap: 4, padding: 3, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
             {presetBtn('today', 'Today')}{presetBtn('week', 'This Week')}{presetBtn('month', 'This Month')}
