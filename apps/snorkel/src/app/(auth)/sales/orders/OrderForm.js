@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Combobox, Modal } from '@throttle/ui';
 import { garageFetch } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
+import { todayStr } from '@throttle/domain';
 import { useProducts } from '@/hooks/useProducts';
 import {
   panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, selectStyle, labelStyle,
@@ -38,7 +39,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
   const [creatingPartner, setCreatingPartner] = useState(false);
   const [meta, setMeta] = useState({
     channel_key: initial?.channel_key || '',
-    order_date: initial?.order_date || new Date().toISOString().slice(0, 10),
+    order_date: initial?.order_date || todayStr(),
     credit_days: initial?.credit_days ?? 45,
     partner_po_ref: initial?.partner_po_ref || '',
     expected_dispatch_date: initial?.expected_dispatch_date || '',

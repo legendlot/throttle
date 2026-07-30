@@ -3,12 +3,14 @@ import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox, useEscapeClose, useSearchShortcut } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
+// GRN dates are written to grn_register + stock_ledger, so they must be the LOCAL
+// calendar day. The old `new Date().toISOString().slice(0,10)` returned YESTERDAY for
+// any GRN raised between 00:00 and 05:30 IST. See PATTERN-221.
+const todayISO = todayStr;
 
 function formatDisplayDate(raw) {
   if (!raw) return '—';

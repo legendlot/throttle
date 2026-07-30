@@ -19,16 +19,24 @@ import {
 } from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
+// Build the LOCAL Y-M-D string directly. Going via .toISOString() renders a local
+// wall-clock moment as UTC, which in IST (+5:30) rolls back a day — always for local
+// midnight (This Month started on the prev month's last day) and between 00:00–05:30
+// IST for a now-timestamped one (This Week started on Sunday). See PATTERN-221.
+function localISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function getMondayISO() {
   const d = new Date();
   const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(new Date().setDate(diff)).toISOString().split('T')[0];
+  d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
+  return localISO(d);
 }
 
 function getFirstOfMonthISO() {
   const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
 function formatTime(ts) {

@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import {
   panelStyle, panelHeaderStyle, panelBodyStyle, tableThStyle, tableTdStyle, inputStyle, selectStyle, labelStyle,
   btnPrimary, btnSecondary, btnDanger, pageH1, pageSub, StatusBadge, fmtDate,
@@ -39,7 +40,7 @@ function OrderDetailInner() {
   const [editing, setEditing] = useState(false);
   const [partners, setPartners] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [pay, setPay] = useState({ open: false, amount: '', received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' });
+  const [pay, setPay] = useState({ open: false, amount: '', received_date: todayStr(), mode: 'bank', reference: '', note: '' });
   // Metadata-only edit for CONFIRMED un-invoiced orders (S229): date / PO ref / expected dispatch / notes.
   const [metaEdit, setMetaEdit] = useState(null);   // null | { order_date, partner_po_ref, expected_dispatch_date, notes }
   const [lineEdit, setLineEdit] = useState(null);   // null | [{ id, product, model, color, hsn_code, qty, rate, discount_pct, gst_pct }]
@@ -129,7 +130,7 @@ function OrderDetailInner() {
   async function recordPayment() {
     if (!(Number(pay.amount) > 0)) { showToast('Enter an amount', 'error'); return; }
     const res = await act('recordSalesPayment', { data: { order_id: id, amount: pay.amount, received_date: pay.received_date, mode: pay.mode, reference: pay.reference, note: pay.note } }, 'Payment recorded');
-    if (res?.ok) setPay({ open: false, amount: '', received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' });
+    if (res?.ok) setPay({ open: false, amount: '', received_date: todayStr(), mode: 'bank', reference: '', note: '' });
   }
   async function delPayment(pid) {
     if (!window.confirm('Delete this receipt?')) return;

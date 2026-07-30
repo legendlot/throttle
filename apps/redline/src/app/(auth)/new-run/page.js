@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Combobox, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import { useRefreshState } from '../layout.js';
 import {
   Icon, Panel, lineColor, lineRgb, btnPrimary, btnGhost, inputStyle,
@@ -136,7 +137,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
   const [vendorId, setVendorId] = useState('');
   const [line, setLine] = useState('L1');
   const [shift, setShift] = useState('Morning');
-  const [runDate, setRunDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [runDate, setRunDate] = useState(() => todayStr());
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]);
   // FBU run-model refinement (S180): production declares the run format; FBU surfaced +
@@ -249,7 +250,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
 // ── Repair ────────────────────────────────────────────────────
 function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
   const [line, setLine] = useState('L1');
-  const [runDate, setRunDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [runDate, setRunDate] = useState(() => todayStr());
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ product: '', model: '', color: '', target_car_qty: '', target_remote_qty: '' }]);
   // FBU run-model refinement (S180): repair format is a CLASSIFICATION — FBU = repair-by-
@@ -384,7 +385,7 @@ function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
   const [lines, setLines] = useState([]);
   const [line, setLineNo] = useState('L1');
   const [shift, setShift] = useState('Morning');
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayStr());
   const [repairRuns, setRepairRuns] = useState([]);
   const [repairRunId, setRepairRunId] = useState('');
   const [mat, setMat] = useState(null);

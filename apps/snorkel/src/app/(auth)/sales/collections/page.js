@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import { Download } from 'lucide-react';
 import { inputStyle, selectStyle, labelStyle } from '@/lib/snorkelui';
 import { paymentMeta, PAYMENT_MODES, inr, csvCell } from '@/lib/sales';
@@ -77,7 +78,7 @@ export default function CollectionsPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-collections-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    a.href = url; a.download = `lot-collections-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -143,7 +144,7 @@ export default function CollectionsPage() {
                       <td className="mono dim">{o.due_date ? fmtDateShort(o.due_date) : '—'}</td>
                       <td className="num mono">{od > 0 ? <span style={{ color: 'var(--red-fg)' }}>{od}d over</span> : <span className="dim">on time</span>}</td>
                       <td><Badge label={pm.label} tone={pm.tone} /></td>
-                      <td className="num">{canPay && <Btn kind="primary" onClick={() => setPay({ order_id: o.id, _order_no: o.order_no, amount: o.balance, received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' })}>Collect</Btn>}</td>
+                      <td className="num">{canPay && <Btn kind="primary" onClick={() => setPay({ order_id: o.id, _order_no: o.order_no, amount: o.balance, received_date: todayStr(), mode: 'bank', reference: '', note: '' })}>Collect</Btn>}</td>
                     </tr>
                   );
                 })}

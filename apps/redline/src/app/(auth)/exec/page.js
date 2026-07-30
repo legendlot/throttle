@@ -32,10 +32,12 @@ const SHIFT_START = 9, SHIFT_END = 18, SHIFT_HRS = 9;
 const REPAIR_CAP = 50;
 
 function getMondayISO() {
+  // Same IST trap as getFirstOfMonthISO below: .toISOString() on a now-timestamped date
+  // rolls back a day between 00:00–05:30 IST, making "This Week" start on Sunday.
   const d = new Date();
   const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(new Date().setDate(diff)).toISOString().split('T')[0];
+  d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function getFirstOfMonthISO() {
   // Build the local Y-M-01 string directly — going via new Date(y,m,1).toISOString() renders

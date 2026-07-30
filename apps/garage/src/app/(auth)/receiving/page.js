@@ -3,11 +3,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Spinner, useToast, printWindow, buildBagLabelsHtml } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
+// arrival_date is persisted on the shipment — must be the LOCAL calendar day.
+// `new Date().toISOString().slice(0,10)` returned YESTERDAY between 00:00–05:30 IST.
+const todayISO = todayStr;
 
 function formatDisplayDate(raw) {
   if (!raw) return '—';

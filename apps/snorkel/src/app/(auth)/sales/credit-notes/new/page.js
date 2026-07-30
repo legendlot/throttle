@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, Combobox, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import {
   panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, selectStyle, labelStyle,
   btnPrimary, btnSecondary, tableThStyle, tableTdStyle,
@@ -32,7 +33,7 @@ function NewCreditNoteInner() {
   const [lines, setLines] = useState([]);
   const [reason, setReason] = useState('under_supply');
   const [reasonNote, setReasonNote] = useState('');
-  const [cnDate, setCnDate] = useState(new Date().toISOString().slice(0, 10));
+  const [cnDate, setCnDate] = useState(todayStr());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 

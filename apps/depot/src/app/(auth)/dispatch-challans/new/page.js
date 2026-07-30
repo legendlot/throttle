@@ -18,6 +18,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Panel } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
 import { Plus, Trash2, Search, AlertTriangle, Info } from 'lucide-react';
 
 const GST_RATES = [
@@ -89,7 +90,7 @@ function NewChallanInner() {
   const [addresses, setAddresses] = useState([]);
   const [fromId, setFromId] = useState('');
 
-  const [challanDate, setChallanDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [challanDate, setChallanDate] = useState(() => todayStr());
 
   const [fromName, setFromName]       = useState('');
   const [fromAddress, setFromAddress] = useState('');
