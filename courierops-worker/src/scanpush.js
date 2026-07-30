@@ -45,6 +45,19 @@ const STATUS_TEXT = [
   [/pending|not picked/i,                                         'pending'],
 ];
 
+// `Instructions` is Delhivery's own free-text description of the scan, and for out-for-delivery it
+// is the ONLY field that says so. `Status` is far too coarse: measured over 7 days, a single
+// `Status: "Dispatched"` covers FIVE different events, separated only by Instructions —
+//   X-DDD3FD/UD "Out for delivery" 269 · ST-114/UD "Call placed to consignee" 165 ·
+//   PL-105/UD "Paid through link" 37 · X-DDD3FD/RT "Dispatched for RTO" 84 ·
+//   X-DDD3FP/PP "Out for pickup" 27
+// So mapping OFD off `Status`+`StatusType` (the shape this fix was first scoped as) would have told
+// 202 customers in 7 days that their parcel was out for delivery when Delhivery had actually placed
+// a phone call or received a payment-link settlement. We read the vendor's words instead of
+// inferring from a status string, and we consult Instructions ONLY for out_for_delivery so that
+// every other lifecycle classification is byte-identical to before.
+const OFD_TEXT = /out for delivery|\bofd\b/i;
+
 // Delhivery NSL codes carry the RT-*/DL-*/UD-* family prefix. Used as a tie-breaker only — the
 // suffix vocabulary is long and undocumented in the form, so we read ONLY the family prefix.
 function nslLifecycle(nsl) {
@@ -59,7 +72,7 @@ function nslLifecycle(nsl) {
  * unclassifiable — the caller CAPTURES it rather than guessing, so an unseen code shows up as a
  * discovery row instead of a wrong customer message.
  */
-export function scanLifecycle({ status, statusType, nslCode } = {}) {
+export function scanLifecycle({ status, statusType, nslCode, instructions } = {}) {
   // RTO detection outranks everything: a return leg still emits "delivered"-ish text
   // ("RTO Delivered"), and calling that a delivery would tell a customer their order arrived
   // when it actually came back to us. Check the RT family first, always.
@@ -70,6 +83,14 @@ export function scanLifecycle({ status, statusType, nslCode } = {}) {
   if (/\brto\b|return/i.test(String(status || ''))) return 'rto';
 
   if (STATUS_TYPE[st]) return STATUS_TYPE[st];
+
+  // Out-for-delivery, from the vendor's own wording. Deliberately placed AFTER the coarse
+  // StatusType buckets (so a DL/CN/PP scan keeps its bucket) and BEFORE the Status text ladder
+  // (whose `dispatched` → in_transit rule is what swallowed every OFD scan until now). Reached
+  // only on UD and on an unrecognised StatusType, which is exactly the forward-leg case — the RT
+  // return leg has already returned 'rto' above and stays on its own emitter (rto-stages.js).
+  if (OFD_TEXT.test(String(instructions || ''))) return 'out_for_delivery';
+
   for (const [re, life] of STATUS_TEXT) if (re.test(String(status || ''))) return life;
   if (nsl) return nsl;
   if (st === 'UD') return 'in_transit';   // undelivered-but-moving is the UD default
@@ -111,16 +132,20 @@ export function parseScanPush(body) {
   const status = pick('Status', 'status');
   const statusType = pick('StatusType', 'statusType', 'status_type');
   const nslCode = pick('NSLCode', 'nslCode', 'nsl_code');
+  // Hoisted (rather than read inline below) because the lifecycle mapper needs it: Instructions is
+  // the only field that distinguishes out-for-delivery from the four other things Delhivery calls
+  // "Dispatched". It was already being persisted and simply never handed to scanLifecycle.
+  const instructionsRaw = pick('Instructions', 'instructions') || null;
   return {
     awb: awb == null ? null : String(awb).trim(),
     status: status == null ? null : String(status),
     statusType: statusType == null ? null : String(statusType),
     nslCode: nslCode == null ? null : String(nslCode),
     statusLocation: pick('StatusLocation', 'statusLocation') || null,
-    instructions: pick('Instructions', 'instructions') || null,
+    instructions: instructionsRaw,
     referenceNo: pick('ReferenceNo', 'referenceNo', 'reference_no') || null,
     statusAt: scanTimestamp(pick('StatusDateTime', 'statusDateTime', 'status_datetime')),
-    lifecycle: scanLifecycle({ status, statusType, nslCode }),
+    lifecycle: scanLifecycle({ status, statusType, nslCode, instructions: instructionsRaw }),
   };
 }
 

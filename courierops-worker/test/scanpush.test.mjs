@@ -20,6 +20,54 @@ test('scanLifecycle refines UD via the free-text Status', () => {
   assert.equal(scanLifecycle({ status: 'Pending', statusType: 'UD' }), 'pending');
 });
 
+// THE out-for-delivery case. Delhivery calls FIVE different events `Status: "Dispatched"` and
+// separates them only in `Instructions`. Mapping OFD off Status+StatusType (the shape this was
+// first scoped as) would have fired "out for delivery" on a phone call and on a payment-link
+// receipt — 202 scans in 7 measured days, 43% of the branch. These are the real wire shapes.
+test('out_for_delivery comes from Instructions, not from Status', () => {
+  const disp = (statusType, nslCode, instructions) =>
+    scanLifecycle({ status: 'Dispatched', statusType, nslCode, instructions });
+
+  // the ONE that is genuinely out for delivery
+  assert.equal(disp('UD', 'X-DDD3FD', 'Out for delivery'), 'out_for_delivery');
+
+  // ...and the four that are NOT, all of which must stay exactly as they were
+  assert.equal(disp('UD', 'ST-114', 'Call placed to consignee'), 'in_transit');
+  assert.equal(disp('UD', 'PL-105', 'Paid through link'), 'in_transit');
+  assert.equal(disp('PP', 'X-DDD3FP', 'Out for pickup'), 'manifested');
+  assert.equal(disp('RT', 'X-DDD3FD', 'Dispatched for RTO'), 'rto');
+  // the PU spelling of the return leg carries the same nsl code
+  assert.equal(disp('PU', 'X-DDD3FD', 'Dispatched for RTO'), 'in_transit');
+});
+
+test('Instructions never overrides a settled StatusType bucket', () => {
+  // a delivered scan stays delivered even if the instruction text still mentions the attempt
+  assert.equal(
+    scanLifecycle({ status: 'Delivered', statusType: 'DL', instructions: 'Out for delivery' }),
+    'delivered',
+  );
+  // and the return leg still outranks everything
+  assert.equal(
+    scanLifecycle({ status: 'Dispatched', statusType: 'RT', instructions: 'Out for delivery' }),
+    'rto',
+  );
+});
+
+test('parseScanPush feeds Instructions into the lifecycle (the actual defect)', () => {
+  const scan = parseScanPush({
+    Shipment: {
+      AWB: '1234567890',
+      NSLCode: 'X-DDD3FD',
+      Status: {
+        Status: 'Dispatched', StatusType: 'UD', Instructions: 'Out for delivery',
+        StatusDateTime: '2026-07-30T09:15:00',
+      },
+    },
+  });
+  assert.equal(scan.instructions, 'Out for delivery');
+  assert.equal(scan.lifecycle, 'out_for_delivery');   // was 'in_transit' before this fix
+});
+
 // THE load-bearing case: an RTO leg still says "Delivered". Calling that a delivery would tell a
 // customer their order arrived when it actually came back to us.
 test('RTO always outranks delivered', () => {
