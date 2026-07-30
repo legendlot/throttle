@@ -125,7 +125,25 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     const m = lineMath(l); acc.taxable += m.taxable; acc.gst += m.gstAmt; acc.total += m.total; return acc;
   }, { taxable: 0, gst: 0, total: 0 });
 
+  // Guard at the source (Afshaan's standing rule): a STARTED line (has a product or a qty)
+  // must carry a model when the product has variants, and a colour when that product+model
+  // has colours. A null model/colour rides silently through the fulfilment request into the
+  // shipment manifest and only hard-rejects days later at the PACK station. Data-driven off
+  // the same PRODUCT_VARIANTS/PRODUCT_COLORS maps the pickers use — so a genuinely
+  // model-less / colour-less product is never falsely blocked.
+  const lineErrors = useMemo(() => lines.map((l, i) => {
+    const started = l.product || Number(l.qty) > 0;
+    if (!started) return null;
+    const miss = [];
+    if (!l.product) miss.push('product');
+    if (!(Number(l.qty) > 0)) miss.push('quantity');
+    if (l.product && (PRODUCT_VARIANTS[l.product] || []).length && !l.model) miss.push('model');
+    if (l.product && ((PRODUCT_COLORS[l.product] || {})[l.model] || []).length && !l.color) miss.push('colour');
+    return miss.length ? { i, miss } : null;
+  }).filter(Boolean), [lines, PRODUCT_VARIANTS, PRODUCT_COLORS]);
+
   function submit() {
+    if (lineErrors.length) return;   // Save is disabled on this, but never trust the button alone
     onSubmit({
       partner_id: partnerId,
       channel_key: meta.channel_key || null,
@@ -146,7 +164,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     });
   }
 
-  const valid = partnerId && lines.some(l => l.product && Number(l.qty) > 0);
+  const valid = partnerId && lines.some(l => l.product && Number(l.qty) > 0) && lineErrors.length === 0;
   const grid = { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 };
 
   return (
@@ -209,9 +227,13 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                 const m = lineMath(l);
                 const models = PRODUCT_VARIANTS[l.product] || [];
                 const colors = (PRODUCT_COLORS[l.product] || {})[l.model] || [];
+                const started = l.product || Number(l.qty) > 0;
+                const needModel = started && models.length && !l.model;
+                const needColor = started && colors.length && !l.color;
                 const cell = { ...inputStyle, width: '100%', padding: '4px 6px' };
                 const numCell = { ...cell, textAlign: 'right' };
                 const cbInput = { padding: '4px 6px', fontSize: 12 };
+                const cbInputBad = { ...cbInput, borderColor: '#ff7070' };
                 return (
                   <tr key={i}>
                     <td style={tableTdStyle}>
@@ -231,9 +253,9 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                         value={l.model || ''}
                         options={models.map(mm => ({ value: mm, label: mm }))}
                         onChange={v => setLine(i, 'model', v)}
-                        placeholder={models.length ? 'Search…' : 'n/a'}
+                        placeholder={models.length ? (needModel ? 'Required' : 'Search…') : 'n/a'}
                         emptyLabel="No match"
-                        inputStyle={cbInput}
+                        inputStyle={needModel ? cbInputBad : cbInput}
                         maxDropdownHeight={220}
                         disabled={!models.length}
                         portal
@@ -244,9 +266,9 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                         value={l.color || ''}
                         options={colors.map(c => ({ value: c, label: c }))}
                         onChange={v => setLine(i, 'color', v)}
-                        placeholder={colors.length ? 'Search…' : 'n/a'}
+                        placeholder={colors.length ? (needColor ? 'Required' : 'Search…') : 'n/a'}
                         emptyLabel="No match"
-                        inputStyle={cbInput}
+                        inputStyle={needColor ? cbInputBad : cbInput}
                         maxDropdownHeight={220}
                         disabled={!colors.length}
                         portal
@@ -279,6 +301,12 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
           <span style={{ color: 'var(--t3)' }}>Grand total <b style={{ color: 'var(--yellow)' }}>{inr(totals.total)}</b></span>
         </div>
       </div>
+
+      {lineErrors.length > 0 && (
+        <div style={{ marginBottom: 8, fontSize: 12, color: '#ff7070' }}>
+          {lineErrors.map(e => `Line ${e.i + 1} needs ${e.miss.join(' + ')}`).join('  ·  ')}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={btnPrimary} onClick={submit} disabled={saving || !valid}>{saving ? 'Saving…' : 'Save Order'}</button>
