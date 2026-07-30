@@ -3632,6 +3632,7 @@ async function sendWaTemplateReply(body, auth, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'template',
+      waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       // Relay does not echo the rendered text back, so fall back to the friendly template name —
       // an empty bubble in the timeline reads as a failed send to the next agent.
       body: msg.rendered_text || tplRow.name || null, template_name: tplName,
@@ -4827,15 +4828,53 @@ function relayWaKind(type) {
 // Meta only sends the profile name ALONGSIDE a message, so historical threads cannot be
 // backfilled from anywhere. Instead the name is filled in opportunistically on every inbound:
 // each existing thread gains one the next time that customer writes in.
+// A conversation is (customer, OUR NUMBER) — never the customer alone.
+//
+// This keyed on `customer_phone` + `channel` ALONE until 2026-07-30, and all three LOT numbers
+// (marketing · transactional · support) funnel their inbound through this one function, so the
+// most recently touched thread absorbed the next message from ANY of them: a customer's COD
+// confirmation from the transactional number and their support query landed in one chat with no
+// segregation (Pruthvi, cutover night). The merge was the visible half. The damaging half was the
+// line below it, which re-stamped `waba_phone_number_id` to whatever number had just arrived —
+// that column is what `sendWaReplyViaRelay` sends ON, so a thread's identity flipped to the
+// customer's most recent touch and an agent answering a SUPPORT query could reply from the
+// TRANSACTIONAL number. Templates are WABA-scoped too, so a `lot_support_*` send on a flipped
+// thread fails closed. 38 of 355 active customers had touched more than one number.
+//
+// Resolution order, and each step earns its place:
+//   1. exact (phone, channel, number)      — the correct thread, when one exists
+//   2. a thread with NO number yet         — ADOPT it and stamp it. 9,365 legacy/BiteSpeed-era
+//                                            threads carry NULL here and hold the 25k backfilled
+//                                            inbound messages; keying strictly would orphan every
+//                                            one and agents would lose all visible history.
+//   3. otherwise                           — a genuinely new conversation for this number
+// A thread already carrying a DIFFERENT non-null number is never re-pointed — that is the flip.
 async function relayWaFindOrCreateThread(phone, phoneNumberId, env, name) {
   if (!phone) return null;
   const clean = name && String(name).trim() ? String(name).trim().slice(0, 120) : null;
-  const found = await sb(
-    `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(phone)}&channel=eq.whatsapp&select=*&order=last_message_at.desc.nullslast&limit=1`, env);
-  if (found.data?.[0]) {
-    const t = found.data[0];
+  const base = `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(phone)}&channel=eq.whatsapp`;
+  const tail = '&select=*&order=last_message_at.desc.nullslast&limit=1';
+
+  let t = null;
+  if (phoneNumberId) {
+    const exact = await sb(`${base}&waba_phone_number_id=eq.${encodeURIComponent(phoneNumberId)}${tail}`, env);
+    t = exact.data?.[0] || null;
+    if (!t) {
+      const unclaimed = await sb(`${base}&waba_phone_number_id=is.null${tail}`, env);
+      t = unclaimed.data?.[0] || null;
+    }
+  } else {
+    // No number forwarded (older commsops payloads). Fall back to the pre-2026-07-30 behaviour
+    // rather than minting a duplicate thread per message — a merge is recoverable, a split
+    // inbox is not.
+    const any = await sb(`${base}${tail}`, env);
+    t = any.data?.[0] || null;
+  }
+
+  if (t) {
     const patch = {};
-    if (phoneNumberId && t.waba_phone_number_id !== phoneNumberId) patch.waba_phone_number_id = phoneNumberId;
+    // Stamp ONLY when the thread has no number yet (case 2). Never overwrite a different one.
+    if (phoneNumberId && !t.waba_phone_number_id) patch.waba_phone_number_id = phoneNumberId;
     // Only fill a MISSING name. A customer can rename themselves on WhatsApp at any time, and
     // letting that overwrite a handle an agent may have corrected would make the inbox churn.
     if (clean && (!t.customer_handle || t.customer_handle === t.customer_phone)) patch.customer_handle = clean;
@@ -4887,6 +4926,10 @@ async function relayWaIngestInbound(m, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: linkedTicketId, direction: 'inbound', kind, body: content,
+      // Which LOT number this arrived on. Recorded per MESSAGE, not just per thread, because the
+      // threads that merged before 2026-07-30 cannot be un-picked — the rows carry no attribution
+      // to split them by. Never let that be true again.
+      waba_phone_number_id: m?.phone_number_id || thread.waba_phone_number_id || null,
       // media_url stays NULL: commsops parks inbound bytes on a PRIVATE bucket (customer-sent
       // files), so there is no durable public URL to store. getWaConversationLocal mints a
       // short-lived signed URL from storage_path at read time instead.
@@ -5315,6 +5358,7 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text', body: String(text),
+      waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       provider_message_id: pmid, status: msg.status || 'sent', is_internal: false,
       sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
     }),
@@ -5392,6 +5436,7 @@ async function sendWaAttachmentViaRelay(thread, file, auth, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: spec.kind,
+      waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       body: caption ? String(caption) : null,
       media_url: publicUrl, media_filename: filename || null, media_mime_type: mime_type,
       media_size_bytes: bytes.length ?? bytes.byteLength ?? null,
