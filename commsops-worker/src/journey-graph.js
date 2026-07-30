@@ -22,10 +22,14 @@ function resolveTarget(step, handle) {
 // interpreter, and the canvas all read handles through here so they can't drift.
 function handlesFor(step) {
   if (!step) return [];
-  // Interactive send (WA quick-reply buttons): one handle per button + no_reply on timeout.
+  // Interactive send (WA quick-reply buttons): one handle per button + no_reply on timeout
+  // + send_failed when the message never reached the customer. send_failed is OPTIONAL to wire:
+  // left undeclared, the interpreter terminates the enrolment with outcome 'send_failed' rather
+  // than routing it — what it must never do is fall through to no_reply, which would tag a
+  // customer No-Response for a message they never received.
   if (step.type === 'send' && step.interactive) {
     const ids = Array.isArray(step.buttons) ? step.buttons.map((b) => b && b.id).filter(Boolean) : [];
-    return [...ids, 'no_reply'];
+    return [...ids, 'no_reply', 'send_failed'];
   }
   if (step.type === 'action') {
     if (step.kind === 'payment_link') return ['next', 'failed'];

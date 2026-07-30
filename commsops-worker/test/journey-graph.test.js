@@ -121,9 +121,12 @@ console.log('msUntilIstHour ok');
 
 // order_modify + interactive send dynamic handles
 assert.deepEqual(G.handlesFor({ type: 'action', kind: 'order_modify' }), ['done', 'not_done']);
+// `send_failed` joined the interactive handles: a send Meta 200s and then flips to `failed`
+// must be routable, and must never be scored as no_reply. Optional to wire — undeclared, the
+// interpreter terminates with outcome 'send_failed' instead of routing.
 assert.deepEqual(
   G.handlesFor({ type: 'send', interactive: true, buttons: [{ id: 'pay' }, { id: 'cancel' }] }),
-  ['pay', 'cancel', 'no_reply']);
-assert.deepEqual(G.handlesFor({ type: 'send', interactive: true, buttons: [] }), ['no_reply']);
+  ['pay', 'cancel', 'no_reply', 'send_failed']);
+assert.deepEqual(G.handlesFor({ type: 'send', interactive: true, buttons: [] }), ['no_reply', 'send_failed']);
 assert.deepEqual(G.handlesFor({ type: 'send' }), ['next']);   // non-interactive send unchanged
 console.log('handlesFor order_modify + interactive ok');

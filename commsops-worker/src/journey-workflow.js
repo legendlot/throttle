@@ -663,6 +663,14 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return true;
     });
     if (woke.kind === 'exit') return { terminate: woke.outcome };
+    // The send FAILED — "we never reached them" is not "they ignored us", so this must never
+    // fall through to the no_reply timeout below (that is what applies the No-Response tag and
+    // inflates every no-response funnel number). Route it only if the author wired a
+    // send_failed branch; otherwise TERMINATE with that outcome, because resolveTarget returns
+    // null for an undeclared handle and the enrolment would otherwise end as a plain completion.
+    if (woke.kind === 'send_failed') {
+      return G.resolveTarget(s, 'send_failed') ? { handle: 'send_failed' } : { terminate: 'send_failed' };
+    }
     if (woke.kind !== 'response') return { handle: 'no_reply' };   // timeout
     const btn = await step.do(`ibtn:${stepId}`, async () => this.#latestButtonId(env, profileId, replyEvent, since));
     const declared = new Set((s.buttons || []).map((b) => b && b.id).filter(Boolean));
@@ -702,6 +710,13 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       const ev = await step.waitForEvent(stepName, { type: 'signal', timeout: within });
       const p = (ev && ev.payload) || {};
       if (p.kind === 'exit') return { kind: 'exit', outcome: p.outcome || 'exited', event: p.event };
+      // An async send failure (Meta 200s the send, then the status webhook flips it to `failed`
+      // minutes later). Only ever reachable from the INTERACTIVE park: wa-webhooks only signals
+      // when an `enrolment_waits` row exists whose step_id equals the failed send's own step,
+      // and #interactiveBranch is the only place that registers one. A plain `wait`/
+      // `wait_response` park therefore cannot receive this kind — which matters, because those
+      // callers treat any non-exit wake as "advance", and an early advance would cut a wait short.
+      if (p.kind === 'send_failed') return { kind: 'send_failed', reason: p.reason || null };
       return { kind: 'response', event: p.event };
     } catch (e) {
       // waitForEvent signals BOTH timeout and infra errors by throwing. Compile-time duration

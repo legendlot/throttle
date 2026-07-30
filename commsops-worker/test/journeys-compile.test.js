@@ -168,6 +168,19 @@ const { compile } = require('../src/journeys.js');
       ex: { type: 'exit', outcome: 'completed' } } };
     assert.deepEqual((await compile({}, def)).errors, []);
   }
+  // interactive send — `send_failed` is OPTIONAL (above compiles clean without it) and ACCEPTED
+  // when wired. It must never be required: doing so would fail compilation for every interactive
+  // journey already live, C2P included. Unwired, the interpreter terminates with that outcome
+  // rather than falling through to no_reply (which would tag a No-Response we never earned).
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours',
+           buttons: [{ id: 'pay', label: 'Pay' }],
+           outcomes: { pay: 'ex', no_reply: 'ex', send_failed: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    assert.deepEqual((await compile({}, def)).errors, []);
+    console.log('interactive send_failed handle optional + wireable ok');
+  }
   // interactive send — no buttons
   {
     const def = { entry: 's', steps: {

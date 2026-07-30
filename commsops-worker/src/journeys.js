@@ -45,7 +45,15 @@ async function compile(env, definition, journey) {
       if (!btns.length) errors.push(`interactive_send_no_buttons:${id}`);
       if (btns.length > 3) errors.push(`interactive_send_too_many_buttons:${id}`);   // WA quick-reply cap
       if (!s.within || G.durationToMs(s.within) === null) errors.push(`interactive_send_bad_within:${id}`);
-      for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`interactive_handle_missing:${id}:${h}`);
+      // Every declared handle must route somewhere (no dangling branch) — EXCEPT `send_failed`,
+      // which is deliberately OPTIONAL: it exists so the canvas can offer a "message never
+      // reached them" branch, but leaving it unwired is the normal case and the interpreter
+      // terminates the enrolment with outcome 'send_failed' instead of routing. Requiring it
+      // would break compilation of every interactive journey already live, C2P included.
+      for (const h of G.handlesFor(s)) {
+        if (h === 'send_failed') continue;
+        if (!steps[G.resolveTarget(s, h)]) errors.push(`interactive_handle_missing:${id}:${h}`);
+      }
     }
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))

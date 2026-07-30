@@ -81,7 +81,7 @@ async function handleStatuses(env, payload) {
     if (!u.provider_message_id) continue;
     const m = await A.sbComms(
       `/rest/v1/messages?provider=eq.whatsapp&provider_message_id=eq.${A.enc(u.provider_message_id)}` +
-      `&select=id,profile_id,channel,to_address,status&limit=1`, env);
+      `&select=id,profile_id,channel,to_address,status,source,dedup_key&limit=1`, env);
     const msg = m.ok ? m.data?.[0] : null;
     if (msg && u.canonical_status) {
       const patch = { status: u.canonical_status, provider_status: u.canonical_status };
@@ -114,6 +114,42 @@ async function handleStatuses(env, payload) {
         await WAM.invalidate(env, u.phone_number_id || null);
       }
     }
+    // A JOURNEY send that failed must WAKE its enrolment. Meta answers the send with 200 + a
+    // wamid, so #doSend already returned 'sent', G.sendWentOut() passed, and the interpreter
+    // parked for the full `within`. This webhook is the ONLY place the failure is ever known —
+    // and it previously did nothing beyond patching the row, so the enrolment slept out its
+    // timer, took no_reply, ran noresp_tag and exited: a customer tagged No-Response on a
+    // message that never reached them. Recurs at the wa_131026 rate (~33/24h fleet-wide).
+    //
+    // `source` is stamped `journey:<enrolmentId>` and the enrolment id IS the Workflow instance
+    // id, so the instance is directly addressable (same mechanism as the button-tap wake in
+    // ingest.js). SCOPED DELIBERATELY: signal only when an `enrolment_waits` row exists whose
+    // step_id equals THIS send's own step — that row is registered only by #interactiveBranch,
+    // so a plain wait/wait_response park can never receive the signal and be cut short.
+    // Best-effort throughout: this webhook MUST 200 or Meta redelivers.
+    if (msg && u.canonical_status === 'failed' && typeof msg.source === 'string'
+        && msg.source.startsWith('journey:')) {
+      try {
+        const enrolmentId = msg.source.slice('journey:'.length);
+        const prefix = `journey:${enrolmentId}:`;
+        const stepId = typeof msg.dedup_key === 'string' && msg.dedup_key.startsWith(prefix)
+          ? msg.dedup_key.slice(prefix.length) : null;
+        if (enrolmentId && stepId) {
+          const w = await A.sbComms(
+            `/rest/v1/enrolment_waits?enrolment_id=eq.${A.enc(enrolmentId)}` +
+            `&kind=eq.response&step_id=eq.${A.enc(stepId)}&select=instance_id&limit=1`, env);
+          if (w.ok && w.data?.length) {
+            const inst = await env.JOURNEY_WORKFLOW.get(w.data[0].instance_id || enrolmentId);
+            await inst.sendEvent({ type: 'signal', payload: { kind: 'send_failed', reason: u.reason || null } });
+            console.log('journey_send_failed_signalled', enrolmentId, stepId, u.reason || '');
+          }
+        }
+      } catch (e) {
+        // instance already ended / not parked → benign. Never fail the webhook.
+        console.log('journey_send_failed_signal_error', e?.message || String(e));
+      }
+    }
+
     if (msg?.profile_id && u.engagement_event) {
       await A.sbComms('/rest/v1/events', env, {
         method: 'POST',
