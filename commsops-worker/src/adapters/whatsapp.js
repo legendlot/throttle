@@ -91,6 +91,27 @@ async function send(rendered, env) {
         },
       },
     };
+  } else if (rendered.mode === 'media') {
+    // Agent attachment (Pitstop composer). A session message, so the same 24h-window rule as
+    // text and interactive — the gate checks it too; this is the belt-and-braces half.
+    if (rendered.window_open !== true)
+      return { provider_message_id: null, status: 'skipped', reason: 'window_closed' };
+    const m = rendered.media || {};
+    const up = await WAM.uploadInlineMedia(env, { url: m.url, mime: m.mime_type, filename: m.filename }, phoneId);
+    // Deliberately NO link fallback (unlike the template-header path) — see uploadInlineMedia.
+    // A failed upload must surface to the agent, not send an empty-looking message.
+    if (!up.ok) return { provider_message_id: null, status: 'failed', reason: up.error };
+    // Meta caps a media caption at 1024 chars and rejects the whole send if it is longer.
+    const caption = rendered.text ? String(rendered.text).slice(0, 1024) : '';
+    payload = {
+      messaging_product: 'whatsapp', to, type: up.kind,
+      [up.kind]: {
+        id: up.id,
+        ...(caption ? { caption } : {}),
+        // `filename` is document-only; on an image Meta rejects the extra key.
+        ...(up.kind === 'document' && m.filename ? { filename: String(m.filename) } : {}),
+      },
+    };
   } else {
     // free-form text — only inside the 24h window
     if (rendered.window_open !== true)

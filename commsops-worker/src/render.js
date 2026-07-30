@@ -148,6 +148,24 @@ function renderWhatsapp(template, ctx) {
 
   const body = applyTokens(content.text_body || content.text || content.body || '', values);
 
+  // MEDIA mode — free-form image/document with an optional caption (a Pitstop agent attachment,
+  // S245). Like text and interactive this is a SESSION message, valid only inside the 24h window;
+  // it is listed explicitly in gate.js for exactly that reason. The asset arrives as a URL the
+  // caller already hosts, and the adapter uploads it to Meta and sends by media ID rather than by
+  // link — a link makes Meta re-fetch on every send, which is the async 131053 failure class.
+  // Checked BEFORE interactive: buttons and an attachment are not combinable on one message.
+  if (content.media && (content.media.url || content.media.link)) {
+    return {
+      mode: 'media',
+      text: body,
+      media: {
+        url: content.media.url || content.media.link,
+        mime_type: content.media.mime_type || content.media.mime || null,
+        filename: content.media.filename || null,
+      },
+    };
+  }
+
   // INTERACTIVE mode — free-form body + reply buttons, no template. Declared on the journey
   // SEND STEP (`interactive` + `buttons[]`), not on a stored template, because these confirms
   // are flow-shaped rather than reusable content ("Are you sure?" belongs to one branch of one

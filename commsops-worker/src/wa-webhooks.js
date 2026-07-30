@@ -221,9 +221,67 @@ async function handleInbound(env, payload) {
       }).catch((e) => { console.log('wa_reply_ingest_error', e?.message || String(e)); return null; });
     }
   }
+  // 2d. park any attachment's bytes somewhere Pitstop can actually open (S245).
+  await hostInboundMedia(env, inbound);
+
   // 3. hand the conversation to Pitstop
   await forwardToCsops(env, inbound);
   return inbound.length;
+}
+
+// ── inbound attachments ──────────────────────────────────────────────────────
+// Meta gives us a media ID, not a file: the bytes need a token-authed two-step fetch and the
+// CDN URL expires within minutes. BiteSpeed used to hand Pitstop a ready-hosted Chatwoot URL,
+// so without this every inbound damage photo arrives as a dead chip — the same unopenable-chip
+// bug already fixed once for inbound email attachments, and support is the channel where photos
+// matter most.
+//
+// PRIVATE bucket, deliberately: these are files customers sent US. That mirrors the
+// cs-email-attachments decision rather than the public cs-inbox-media bucket, which holds
+// assets WE authored. csops mints a short-lived signed URL per read.
+const INBOUND_BUCKET = 'cs-wa-media';
+const INBOUND_MAX_BYTES = 16 * 1024 * 1024;   // above Cloud API's largest inbound; guards Worker memory
+const INBOUND_MAX_PER_BATCH = 8;              // subrequest budget — 2 fetches + 1 upload per file
+const MIME_EXT = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'application/pdf': 'pdf', 'video/mp4': 'mp4', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3',
+  'audio/aac': 'aac', 'audio/amr': 'amr',
+};
+
+async function hostInboundMedia(env, messages) {
+  if (!env?.SUPABASE_SERVICE_ROLE_KEY || !env?.SUPABASE_URL) return;
+  let handled = 0;
+  for (const m of messages) {
+    const id = m?.media?.id;
+    if (!id) continue;
+    // Every failure below is recorded on the message and then skipped. The conversation text
+    // must reach Pitstop regardless — a missing photo is a degraded message, a dropped forward
+    // is a customer waiting on a reply nobody can see.
+    if (handled >= INBOUND_MAX_PER_BATCH) { m.media.host_error = 'batch_limit'; continue; }
+    handled++;
+    const got = await WAM.fetchInboundMedia(env, id);
+    if (!got) { m.media.host_error = 'fetch_failed'; continue; }
+    if (got.size > INBOUND_MAX_BYTES) { m.media.host_error = 'too_large'; continue; }
+    const mime = String(m.media.mime_type || got.mime || '').split(';')[0].toLowerCase();
+    const path = `${wa.toWaId(m.from)}/${id}.${MIME_EXT[mime] || 'bin'}`;
+    try {
+      const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${INBOUND_BUCKET}/${path}`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': mime || 'application/octet-stream',
+          'x-upsert': 'true',   // a Meta redelivery re-uploads the same id → same path, no dupes
+        },
+        body: got.bytes,
+      });
+      if (!up.ok) { m.media.host_error = `upload_${up.status}`; continue; }
+      m.media.storage_bucket = INBOUND_BUCKET;
+      m.media.storage_path = path;
+      m.media.size = got.size;
+      if (!m.media.mime_type) m.media.mime_type = mime;
+    } catch (e) { m.media.host_error = `upload_error:${(e?.message || e).toString().slice(0, 60)}`; }
+  }
 }
 
 // Merge Meta's quality/limit state onto the matching whatsapp sender_identity's metadata.

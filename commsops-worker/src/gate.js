@@ -138,7 +138,10 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
     // `interactive` (reply-buttons, no template) is a SESSION message exactly like text and
     // carries the same restriction — listing it explicitly rather than inverting the test on
     // `hasTemplate`, so a future mode has to opt IN to being sendable outside the window.
-    if (wa && (wa.mode === 'text' || wa.mode === 'interactive') && wa.window_open !== true)
+    // 'media' (agent attachment, S245) is a session message exactly like the other two. It is
+    // listed here rather than inferred, per the note above — a new mode must opt IN to being
+    // sendable outside the window, and this one must not be.
+    if (wa && (wa.mode === 'text' || wa.mode === 'interactive' || wa.mode === 'media') && wa.window_open !== true)
       return { pass: false, reason: 'window_closed' };
   }
 

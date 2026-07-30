@@ -131,4 +131,91 @@ async function applyMediaIds(env, components, phoneNumberId) {
   return changed ? out : components;
 }
 
-module.exports = { resolveMediaId, applyMediaIds, invalidate, MAX_AGE_MS, MAX_BYTES };
+// ── AGENT ATTACHMENTS (Pitstop → WhatsApp, S245) ─────────────────────────────
+// A separate path from the template-header one above, in three ways that matter:
+//
+//  1. NO CACHE. An agent attachment is one-shot — csops hosts each file under a fresh UUID, so
+//     a cache lookup can never hit and a cache write would grow wa_media_cache without bound.
+//  2. WIDER TYPE SET. Header images are jpeg/png; agents send screenshots and PDFs.
+//  3. IT FAILS LOUD. applyMediaIds() falls back to a link on every error because a degraded
+//     template send still reaches the customer. There is NO fallback here — a media message IS
+//     the media. On failure we return the reason so csops can surface a real error to the agent;
+//     silently sending nothing would show as "sent" in the inbox while the customer got nothing.
+//
+// Cloud API accepts ONLY image/jpeg + image/png as an `image` message (webp is sticker-only and
+// gif is unsupported), so anything else we allow rides as a `document` — the file still arrives,
+// just as an attachment chip instead of an inline preview. That beats a 400 on the send.
+function sendKindFor(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m === 'image/jpeg' || m === 'image/png') return 'image';
+  if (m === 'image/webp' || m === 'image/gif' || m === 'application/pdf') return 'document';
+  return null;
+}
+
+// Meta's own caps: image 5MB, document 100MB. csops already refuses >8MB upstream, so the
+// document ceiling here just mirrors that rather than inventing a second limit.
+const SEND_MAX = { image: 5 * 1024 * 1024, document: 8 * 1024 * 1024 };
+
+async function uploadInlineMedia(env, { url, mime, filename }, phoneNumberId) {
+  if (!env?.WA_TOKEN || !phoneNumberId) return { ok: false, error: 'media_not_configured' };
+  if (!url || !/^https:\/\//i.test(String(url))) return { ok: false, error: 'media_bad_url' };
+  const kind = sendKindFor(mime);
+  if (!kind) return { ok: false, error: `media_unsupported_type:${mime || 'unknown'}` };
+
+  let bytes;
+  try {
+    const res = await fetch(String(url));
+    if (!res.ok) return { ok: false, error: `media_fetch_failed:${res.status}` };
+    const buf = await res.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return { ok: false, error: 'media_empty' };
+    if (buf.byteLength > SEND_MAX[kind]) return { ok: false, error: 'media_too_large' };
+    bytes = buf;
+  } catch (e) { return { ok: false, error: `media_fetch_failed:${e?.message || e}` }; }
+
+  try {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', String(mime));
+    form.append('file', new Blob([bytes], { type: String(mime) }), filename || 'attachment');
+    const res = await fetch(`${graphBase(env)}/${encodeURIComponent(phoneNumberId)}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.WA_TOKEN}` },   // NO Content-Type — FormData sets the boundary
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.id)
+      return { ok: false, error: `media_upload_failed:${JSON.stringify(data?.error || data).slice(0, 180)}` };
+    return { ok: true, id: String(data.id), kind };
+  } catch (e) { return { ok: false, error: `media_upload_failed:${e?.message || e}` }; }
+}
+
+// ── INBOUND media (customer → Pitstop, S245) ─────────────────────────────────
+// Meta hands us only a media ID; the bytes sit behind a two-step, token-authed fetch and the
+// URL expires in minutes. BiteSpeed used to hand Pitstop a ready hosted URL (Chatwoot's
+// data_url), so without this an inbound damage photo lands as an unopenable chip — the exact
+// dead-chip bug already fixed once for inbound email attachments.
+//
+// Customer-sent files go to a PRIVATE bucket, matching that email decision: these are things
+// customers sent US (IDs, invoices, addresses), not assets we authored. csops mints a signed
+// URL per read. Returns null on any failure — the message itself must still reach the inbox.
+async function fetchInboundMedia(env, mediaId) {
+  if (!env?.WA_TOKEN || !mediaId) return null;
+  try {
+    const metaRes = await fetch(`${graphBase(env)}/${encodeURIComponent(mediaId)}`, {
+      headers: { Authorization: `Bearer ${env.WA_TOKEN}` },
+    });
+    const meta = await metaRes.json().catch(() => ({}));
+    if (!metaRes.ok || !meta?.url) return null;
+    // The CDN URL is itself token-authed — a bare GET returns 401.
+    const binRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+    if (!binRes.ok) return null;
+    const buf = await binRes.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return null;
+    return { bytes: buf, mime: meta.mime_type || 'application/octet-stream', size: buf.byteLength };
+  } catch { return null; }
+}
+
+module.exports = {
+  resolveMediaId, applyMediaIds, invalidate, MAX_AGE_MS, MAX_BYTES,
+  uploadInlineMedia, fetchInboundMedia, sendKindFor,
+};

@@ -3907,8 +3907,12 @@ async function sendWaAttachment(body, auth, env) {
   if (!thread) return err('Thread not found', 404);
   const wchan = thread.channel || 'whatsapp';
   if (wchan !== 'whatsapp' && wchan !== 'web') return err('Not a WhatsApp/Web thread — use sendMetaAttachment', 422);
-  // WS-D Relay transport for WhatsApp doesn't carry outbound media yet (fetch-and-host follow-up).
-  if (wchan === 'whatsapp' && waTransport(env) === 'relay') return err('WhatsApp media send not available on the Relay transport yet', 501);
+  // WS-D Relay transport carries outbound media as of S245 (BiteSpeed exit — support agents send
+  // shipment screenshots and PDFs, so a 501 here was a functional regression at cutover, not a
+  // rough edge). Branch BEFORE the BiteSpeed-only provider-ref requirement below: a Relay thread
+  // has no Chatwoot conversation and would fail that check.
+  if (wchan === 'whatsapp' && waTransport(env) === 'relay')
+    return sendWaAttachmentViaRelay(thread, { bytes, mime_type, filename, caption, spec }, auth, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) return err('Thread has no BiteSpeed conversation reference yet', 422);
 
   // 24h customer-window gate (whatsapp only; web has no window) — same as sendWaReply.
@@ -4576,7 +4580,14 @@ async function relayWaIngestInbound(m, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: linkedTicketId, direction: 'inbound', kind, body: content,
+      // media_url stays NULL: commsops parks inbound bytes on a PRIVATE bucket (customer-sent
+      // files), so there is no durable public URL to store. getWaConversationLocal mints a
+      // short-lived signed URL from storage_path at read time instead.
       media_url: null, media_filename: media.filename || media.id || null, media_mime_type: media.mime_type || null,
+      media_size_bytes: Number.isFinite(media.size) ? media.size : null,
+      raw_meta: media.storage_path
+        ? { media_storage_bucket: media.storage_bucket || 'cs-wa-media', media_storage_path: media.storage_path }
+        : (media.host_error ? { media_host_error: media.host_error } : null),
       provider_message_id: pmid, status: null, sent_by_user_id: null, sent_by_name: m?.name || null,
       received_at: ts,
     }),
@@ -4597,11 +4608,28 @@ async function relayWaIngestInbound(m, env) {
   return { thread_id: thread.id, ticket_id: linkedTicketId };
 }
 
+// Numbers still served by BiteSpeed, as Meta phone_number_ids (comma-separated).
+// THE DOUBLE-WRITE GUARD. Subscribing our app to a WABA is ADDITIVE — it does not unsubscribe
+// TrustSignal — so during any window where BiteSpeed still delivers a number AND our app is
+// subscribed to its WABA, every inbound message arrives twice: once via /webhooks/bitespeed and
+// once via this forward. The two carry different provider_message_ids (Chatwoot's numeric id vs
+// Meta's wamid), so message-level dedup cannot catch it.
+//
+// Deliberately a per-NUMBER blocklist and not a global `waTransport(env) !== 'relay'` gate: the
+// marketing number is already cut over and its inbound is landing here today, so a global gate
+// would silently drop live customer messages. Unset = allow everything = exactly today's
+// behaviour. Set it before subscribing a WABA that BiteSpeed still serves; clear it at the flip.
+function bitespeedHeldNumbers(env) {
+  return String(env.BITESPEED_WA_PHONE_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 async function handleRelayWaWebhook(request, env) {
   if (!verifyRelayWaAuth(request, env)) return err('Invalid forward token', 401);
   let body = {};
   try { body = await request.json(); } catch { return err('Bad JSON', 400); }
-  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const held = bitespeedHeldNumbers(env);
+  const messages = (Array.isArray(body?.messages) ? body.messages : [])
+    .filter((m) => !(m?.phone_number_id && held.includes(String(m.phone_number_id))));
   const results = [];
   for (const m of messages) {
     try { results.push(await relayWaIngestInbound(m, env)); }
@@ -4665,15 +4693,125 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
   return ok({ message: { direction: 'outbound', body: String(text), provider_message_id: pmid, status: msg.status || 'sent' }, via: 'relay' });
 }
 
+// Agent attachment on a Relay-transported WA thread (S245). Two hops by design:
+// we host the bytes on the PUBLIC cs-inbox-media bucket (same bucket the IG/FB attachment path
+// already uses for agent-authored files), then hand commsops the URL — commsops uploads it to
+// Meta and sends by media ID. Passing a URL rather than base64 keeps the service-binding body
+// small and reuses the upload+cache logic that already lives on the Relay side.
+async function sendWaAttachmentViaRelay(thread, file, auth, env) {
+  const { bytes, mime_type, filename, caption, spec } = file;
+  // Media is a session message — same 24h rule as a free-text reply. Checked here so the agent
+  // gets a clear error instead of burning an upload on a send the gate will refuse.
+  const until = thread.customer_window_until ? new Date(thread.customer_window_until).getTime() : 0;
+  if (!(until > Date.now()))
+    return err('Outside the 24h customer window — attachments are blocked until the customer messages again', 422);
+
+  const path = `${thread.id}/${crypto.randomUUID()}.${spec.ext}`;
+  const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/cs-inbox-media/${path}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'Content-Type': mime_type, 'x-upsert': 'true',
+    },
+    body: bytes,
+  });
+  if (!up.ok) { const t = await up.text().catch(() => ''); return err(`Upload failed: ${t.slice(0, 200)}`, up.status || 500); }
+  const publicUrl = `${env.SUPABASE_URL}/storage/v1/object/public/cs-inbox-media/${path}`;
+
+  let resp, data;
+  try {
+    resp = await callWorker(env.COMMSOPS, env, '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        template: { content: { media: { url: publicUrl, mime_type, filename: filename || null },
+                               text_body: caption ? String(caption) : '' } },
+        dedupKey: `pitstop:attach:${thread.id}:${Date.now()}`, source: 'pitstop_agent',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) { return err(`Relay send failed: ${e.message}`, 502); }
+  if (!resp.ok || data?.ok === false)
+    return err(`Relay send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status || 502);
+
+  // A media upload that Meta refused comes back 200-with-status-failed, not as an HTTP error —
+  // surface it as a real failure so the agent retries rather than believing it sent.
+  const msg = data?.data || data?.message || data || {};
+  if (msg.status === 'failed' || msg.status === 'skipped')
+    return err(`WhatsApp refused the attachment (${msg.reason || msg.status})`, 422);
+
+  const pmid = msg.provider_message_id || msg.id || null;
+  const now = new Date().toISOString();
+  const senderName = auth.fullName || auth.name || auth.email || null;
+
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: spec.kind,
+      body: caption ? String(caption) : null,
+      media_url: publicUrl, media_filename: filename || null, media_mime_type: mime_type,
+      media_size_bytes: bytes.length ?? bytes.byteLength ?? null,
+      provider_message_id: pmid, status: msg.status || 'sent', is_internal: false,
+      sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
+    }),
+  }).catch((e) => console.error('[relay-wa] outbound media insert failed', e?.message));
+
+  if (ticketId) await insertHistory(ticketId, 'wa_message_sent', null, spec.kind, String(filename || spec.kind).slice(0, 140), auth, env).catch(() => {});
+  return ok({ message: { direction: 'outbound', kind: spec.kind, media_url: publicUrl, provider_message_id: pmid, status: msg.status || 'sent' }, via: 'relay' });
+}
+
 // Read a Relay-transported WA thread from LOCAL cs_wa_messages (Relay is the capture
 // source → full local history; no Chatwoot pull, no attribution overlay). Window from
 // the local authoritative column.
 async function getWaConversationLocal(thread, env) {
   const r = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&select=*&order=created_at.asc&limit=1000`, env);
   const messages = r.data || [];
+  await signInboundWaMedia(messages, env);
   const until = thread.customer_window_until || null;
   const open = until ? (new Date(until).getTime() > Date.now()) : false;
   return ok({ messages, within_customer_window: open, window_until: until, live: true, transport: 'relay' });
+}
+
+// Inbound attachments on the Relay transport live on a PRIVATE bucket (commsops parks them
+// there — they are files customers sent us). The inbox bubble renders `media_url`, so mint a
+// short-lived signed URL per read rather than persisting one: a stored URL would expire and
+// leave the same dead chip this exists to prevent. Batched into ONE storage call.
+const WA_MEDIA_SIGN_TTL = 3600;   // 1h — comfortably longer than an agent reads a thread
+
+async function signInboundWaMedia(messages, env) {
+  const targets = (messages || []).filter((m) => m?.raw_meta?.media_storage_path && !m.media_url);
+  if (!targets.length) return;
+  const bucket = targets[0].raw_meta.media_storage_bucket || 'cs-wa-media';
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/sign/${bucket}`, {
+      method: 'POST',
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expiresIn: WA_MEDIA_SIGN_TTL, paths: targets.map((m) => m.raw_meta.media_storage_path) }),
+    });
+    if (!res.ok) return;   // unsigned → chip stays inert; never fail the whole conversation read
+    const signed = await res.json().catch(() => []);
+    const byPath = new Map((Array.isArray(signed) ? signed : []).map((s) => [s.path, s.signedURL || s.signedUrl]));
+    for (const m of targets) {
+      const rel = byPath.get(m.raw_meta.media_storage_path);
+      if (rel) m.media_url = `${env.SUPABASE_URL}/storage/v1${rel}`;
+    }
+  } catch { /* leave media_url null — the message body still renders */ }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
