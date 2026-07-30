@@ -4892,10 +4892,13 @@ async function backfillOneThread(thread, env, maxPages, doMedia) {
 // Keyset on thread `id` ASC (a uuid, so it is stable): ordering on last_message_at would
 // let a thread that receives a new message during the run jump the cursor and be skipped.
 async function handleWaHistoryBackfill(request, env) {
-  const want = env.INGEST_TOKEN;
+  // Accept INGEST_TOKEN or WA_SYNC_TOKEN — both are internal service secrets, mirroring
+  // commsops' /internal/backfill-last-order. Neither carries user credentials.
   const a = request.headers.get('Authorization') || '';
   const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
-  if (!want || bearer !== want) return err('unauthorised', 401);
+  const okTok = bearer && ((env.INGEST_TOKEN && bearer === env.INGEST_TOKEN)
+                        || (env.WA_SYNC_TOKEN && bearer === env.WA_SYNC_TOKEN));
+  if (!okTok) return err('unauthorised', 401);
   if (!env.BITESPEED_API_TOKEN) return err('BITESPEED_API_TOKEN not set — nothing to pull from', 503);
 
   let b = {}; try { b = await request.json(); } catch {}
