@@ -93,7 +93,11 @@ export default function OverviewPage() {
         )
       );
       const rows = results.filter(r => r.kit.length > 0).map(({ product, kit }) => {
-        const items = kit.map(r => ({
+        // RULE-LUMP-001: a lump-sum consumable (the elastic band) is issued flat per picklist,
+        // so its stock can never cap how many units are buildable. Dropped here for the same
+        // reason getProducibility scores it `possible: 999999` — leaving it in let one low bag
+        // of elastic read as the bottleneck for every product at once.
+        const items = kit.filter(r => !r.is_lump_sum).map(r => ({
           part_name: r.part_name,
           max_units: r.bom_qty > 0 ? Math.floor((r.available || 0) / r.bom_qty) : 0,
         }));
