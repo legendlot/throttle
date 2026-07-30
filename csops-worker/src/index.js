@@ -4800,22 +4800,38 @@ function relayWaKind(type) {
 // Find-or-create the WhatsApp thread for a phone. Relay threads carry no Chatwoot
 // provider refs; match an existing whatsapp thread by phone (continues a thread that
 // may have started on BiteSpeed pre-cutover) else create a fresh one.
-async function relayWaFindOrCreateThread(phone, phoneNumberId, env) {
+// `name` is the customer's WhatsApp profile name. commsops has always forwarded it
+// (adapters/whatsapp.js `nameFor(m.from)` reads Meta's contacts[].profile.name) and this
+// function simply threw it away — so ALL 9,680 WhatsApp threads showed a bare phone number and
+// agents had no way to tell who they were talking to. Reported by Dhiraj at the cutover, but it
+// was never a migration artifact: no WA thread has ever carried a name.
+//
+// Meta only sends the profile name ALONGSIDE a message, so historical threads cannot be
+// backfilled from anywhere. Instead the name is filled in opportunistically on every inbound:
+// each existing thread gains one the next time that customer writes in.
+async function relayWaFindOrCreateThread(phone, phoneNumberId, env, name) {
   if (!phone) return null;
+  const clean = name && String(name).trim() ? String(name).trim().slice(0, 120) : null;
   const found = await sb(
     `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(phone)}&channel=eq.whatsapp&select=*&order=last_message_at.desc.nullslast&limit=1`, env);
   if (found.data?.[0]) {
     const t = found.data[0];
-    if (phoneNumberId && t.waba_phone_number_id !== phoneNumberId) {
+    const patch = {};
+    if (phoneNumberId && t.waba_phone_number_id !== phoneNumberId) patch.waba_phone_number_id = phoneNumberId;
+    // Only fill a MISSING name. A customer can rename themselves on WhatsApp at any time, and
+    // letting that overwrite a handle an agent may have corrected would make the inbox churn.
+    if (clean && (!t.customer_handle || t.customer_handle === t.customer_phone)) patch.customer_handle = clean;
+    if (Object.keys(patch).length) {
       await sb(`/rest/v1/cs_wa_threads?id=eq.${t.id}`, env,
-        { method: 'PATCH', body: JSON.stringify({ waba_phone_number_id: phoneNumberId }) }).catch(() => {});
-      t.waba_phone_number_id = phoneNumberId;
+        { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+      Object.assign(t, patch);
     }
     return t;
   }
   const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
     method: 'POST',
-    body: JSON.stringify({ customer_phone: phone, channel: 'whatsapp', waba_phone_number_id: phoneNumberId || null }),
+    body: JSON.stringify({ customer_phone: phone, channel: 'whatsapp',
+      waba_phone_number_id: phoneNumberId || null, customer_handle: clean }),
   });
   return ins.data?.[0] || null;
 }
@@ -4837,7 +4853,8 @@ async function relayWaIngestInbound(m, env) {
     if (ex.data?.[0]) return { deduped: true };
   }
 
-  const thread = await relayWaFindOrCreateThread(phone, m?.phone_number_id, env);
+  // m.name is Meta's contacts[].profile.name, forwarded by commsops and previously discarded.
+  const thread = await relayWaFindOrCreateThread(phone, m?.phone_number_id, env, m?.name);
   if (!thread) return { skipped: 'no_thread' };
 
   const tRes = await sb(`/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(phone)}&closed_at=is.null&select=id&order=created_at.desc&limit=1`, env);
