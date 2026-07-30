@@ -756,6 +756,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendWaReply':              return sendWaReply(body, auth, env);
     case 'sendWaAttachment':         return sendWaAttachment(body, auth, env);
     case 'sendWaTemplateReply':      return sendWaTemplateReply(body, auth, env);
+    case 'startWaConversation':      return startWaConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -3624,6 +3625,60 @@ async function sendWaTemplateReply(body, auth, env) {
 
   if (ticketId) await insertHistory(ticketId, 'wa_message_sent', null, 'template', String(tplName || '').slice(0, 140), auth, env).catch(() => {});
   return ok({ message: { direction: 'outbound', kind: 'template', template_name: tplName, provider_message_id: pmid, status: msg.status || 'sent' }, via: 'relay' });
+}
+
+// POST startWaConversation — open a NEW WhatsApp conversation with a customer who has never
+// written to us (or whose 24h window has closed). BiteSpeed's "Compose WhatsApp" equivalent.
+//
+// Pitstop had no way to do this at all: relayWaFindOrCreateThread was only ever reached from the
+// INBOUND path, so a thread could only be BORN from a customer message. An agent holding a phone
+// number and a reason to reach out had no entry point. That is a capability REGRESSION against
+// BiteSpeed introduced by the support cutover, not a new feature request.
+//
+// WhatsApp permits a business-initiated message only via an approved TEMPLATE, so that is the only
+// send mode here — but when a window IS open we refuse to burn one and hand the thread back
+// instead: a session message is free, unconstrained, and reads far better mid-conversation.
+async function startWaConversation(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { phone: rawPhone, template_id, variables } = body;
+  if (!rawPhone) return err('phone required');
+
+  // toE164 is deliberately permissive (it prefixes '+' to whatever digits it is handed), so the
+  // SHAPE is validated here. Without this a fat-fingered number silently creates a junk thread
+  // and then fails at Meta, leaving a dead conversation in the inbox that nobody can explain.
+  const phone = toE164(rawPhone);
+  if (!/^\+\d{10,15}$/.test(phone || '')) return err(`"${rawPhone}" is not a valid phone number`, 422);
+
+  // Resolve the support number instead of hardcoding it: its phone_number_id CHANGES on every
+  // WABA migration (it changed tonight), and a stale constant would quietly send from the wrong
+  // number. Exactly one active utility WhatsApp sender is expected — anything else is ambiguous
+  // and fails loudly rather than guessing and messaging customers from the marketing number.
+  const sRes = await sb(
+    '/rest/v1/sender_identities?channel=eq.whatsapp&purpose=eq.utility&status=eq.active&select=id,address,metadata',
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  const senders = sRes.data || [];
+  if (senders.length !== 1)
+    return err(`Cannot resolve the support WhatsApp number — found ${senders.length} active utility senders, expected exactly 1`, 500);
+  const supportPhoneId = senders[0].metadata?.phone_number_id || null;
+
+  const thread = await relayWaFindOrCreateThread(phone, supportPhoneId, env);
+  if (!thread) return err('Could not open a conversation for that number', 500);
+
+  const openUntil = thread.customer_window_until ? new Date(thread.customer_window_until) : null;
+  if (openUntil && openUntil > new Date())
+    return ok({ thread_id: thread.id, sent: false, window_open: true,
+      message: 'This customer already has an open 24-hour window — open the conversation and reply normally instead of spending a template.' });
+
+  if (!template_id)
+    return err('template_id required — there is no open 24-hour window, so WhatsApp only allows an approved template', 422);
+
+  // Delegate the send. Template validation, the send gate, the cs_wa_messages row, ticket linking
+  // and agent assignment all already live in sendWaTemplateReply; duplicating them here is exactly
+  // how two send paths drift apart and one quietly stops recording messages.
+  const resp = await sendWaTemplateReply({ thread_id: thread.id, template_id, variables }, auth, env);
+  const j = await resp.json().catch(() => null);
+  if (!resp.ok || j?.ok === false) return json(j || { ok: false, error: 'send_failed' }, resp.status || 502);
+  return ok({ ...(j?.data || {}), thread_id: thread.id, sent: true });
 }
 
 async function sendWaMessage(body, auth, env) {
