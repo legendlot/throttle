@@ -24,7 +24,10 @@ jobs:
         run: npm ci
 
       - name: Build Redline
-        run: npx turbo build --filter=@throttle/redline
+        run: |
+          set -o pipefail
+          npx turbo build --filter=@throttle/redline 2>&1 | tee /tmp/build-output.log
+          bash .github/scripts/check-build-output.sh /tmp/build-output.log
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -40,3 +43,11 @@ jobs:
           cname: redline.legendoftoys.com
           commit_message: 'deploy: Redline React app (LOT Monorepo)'
           force_orphan: true
+
+      # PATTERN-168 — a green gh-pages push is NOT a live deploy. Pages builds
+      # asynchronously and can silently ERROR, serving the old build for days.
+      # Fail-soft on auth: a monitoring gap must not become a deploy outage.
+      - name: Verify GitHub Pages published
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: bash .github/scripts/verify-pages.sh legendlot/dashboard
