@@ -1574,6 +1574,124 @@ export default function InboxPage() {
           )}
         </div>
       </div>
+      {/* Compose lives HERE, in the component that OWNS `newOpen` — it was written inside the
+          Bubble component, which renders a single message. The inbox LIST has no Bubbles, so the
+          page looked fine; opening any conversation rendered a Bubble, hit an out-of-scope
+          `newOpen`, and white-screened the whole inbox (ReferenceError, live 2026-07-30 22:43).
+          A clean `next build` cannot catch this — identifier resolution is a RUNTIME step. */}
+        {/* ── New conversation (Compose) ────────────────────────────────────────────────
+            A business-initiated WhatsApp message is only allowed via an APPROVED template, so the
+            template picker is the body of this dialog rather than an afterthought. The same live
+            preview as the in-thread picker is used deliberately: the agent should see the exact
+            words a stranger is about to receive from us. */}
+        {newOpen && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'grid', placeItems: 'center',
+            background: 'rgba(0,0,0,0.55)' }}
+            onClick={(e) => { if (e.target === e.currentTarget) setNewOpen(false); }}>
+            <div style={{ width: 460, maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)',
+              border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)' }}>New conversation</div>
+                <button onClick={() => setNewOpen(false)} style={{ background: 'transparent', border: 'none',
+                  color: 'var(--t3)', cursor: 'pointer' }}><X size={15} /></button>
+              </div>
+
+              {/* Channel first: it changes every field below it, and email is the one agents will
+                  actually reach for — WhatsApp compose is a rare "can't find the conversation" tool. */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                {[['whatsapp', 'WhatsApp'], ['email', 'Email']].map(([id, label]) => (
+                  <button key={id} onClick={() => { setNewChannel(id); setErr(null); }} style={{
+                    flex: 1, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '6px 8px',
+                    borderRadius: 'var(--radius-sm)', border: '1px solid',
+                    borderColor: newChannel === id ? 'var(--accent)' : 'var(--border)',
+                    background: newChannel === id ? 'var(--accent-bg)' : 'transparent',
+                    color: newChannel === id ? 'var(--accent)' : 'var(--t2)' }}>{label}</button>
+                ))}
+              </div>
+
+              {newChannel === 'email' ? (
+                <>
+                  <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>TO</div>
+                  <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="customer@example.com"
+                    value={newEmail} onChange={(e) => setNewEmail(e.target.value)} autoFocus />
+
+                  <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>SUBJECT</div>
+                  <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="Subject"
+                    value={newSubject} onChange={(e) => setNewSubject(e.target.value)} />
+
+                  <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>MESSAGE</div>
+                  <textarea style={{ ...inputStyle, width: '100%', minHeight: 130, resize: 'vertical', marginBottom: 6 }}
+                    placeholder="Write the email…" value={newBody} onChange={(e) => setNewBody(e.target.value)} />
+                  <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 12 }}>
+                    If this customer already has an open email conversation from the last 7 days,
+                    this is added to it rather than starting a second one.
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button onClick={startConversation}
+                      disabled={newSending || !newEmail.trim() || !newSubject.trim() || !newBody.trim()}
+                      style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
+                      {newSending ? 'Sending…' : 'Send & open'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+              <>
+              <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>PHONE</div>
+              <input style={{ ...inputStyle, width: '100%', marginBottom: 4 }} placeholder="9880212323 or +919880212323"
+                value={newPhone} onChange={(e) => setNewPhone(e.target.value)} autoFocus />
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 12 }}>
+                A 10-digit number is treated as Indian (+91). If this customer already has an open
+                24-hour window we&apos;ll just open that conversation instead of spending a template.
+              </div>
+
+              <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>TEMPLATE</div>
+              <select value={newTplId} style={{ ...selectStyle, width: '100%', marginBottom: 10 }}
+                onChange={(e) => { setNewTplId(e.target.value); setNewVals({}); }}>
+                <option value="">{tplList.length ? 'Choose a template…' : 'Loading templates…'}</option>
+                {tplList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+
+              {(() => {
+                const sel = tplList.find((t) => t.id === newTplId) || null;
+                if (!sel) return null;
+                return (
+                  <>
+                    <div style={{ fontSize: 9.5, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>PREVIEW</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--t2)', whiteSpace: 'pre-wrap',
+                      background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6,
+                      padding: 8, marginBottom: 10, maxHeight: 180, overflowY: 'auto' }}>
+                      {tplPreview(sel, newVals)}
+                    </div>
+                    {sel.fields.filter((f) => !f.auto).map((f) => (
+                      <div key={f.token} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: 10, color: 'var(--t3)', background: 'var(--surface-2)',
+                          border: '1px solid var(--border)', borderRadius: 4, padding: '3px 7px', minWidth: 22, textAlign: 'center' }}>
+                          {f.pos}
+                        </span>
+                        <input style={{ ...inputStyle, flex: 1 }}
+                          placeholder={f.example ? `${f.label} — e.g. ${f.example}` : f.label}
+                          value={newVals[f.token] || ''}
+                          onChange={(e) => setNewVals((v) => ({ ...v, [f.token]: e.target.value }))} />
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+                      <span style={{ fontSize: 9.5, color: 'var(--t3)' }}>{sel.meta_name}</span>
+                      <button onClick={startConversation}
+                        disabled={newSending || !newPhone.trim()
+                          || sel.fields.some((f) => !f.auto && !String(newVals[f.token] || '').trim())}
+                        style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
+                        {newSending ? 'Sending…' : 'Send & open'}
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+              </>
+              )}
+            </div>
+          </div>
+        )}
     </div>
   );
 }
@@ -2039,119 +2157,6 @@ function Bubble({ m, accent }) {
         </div>
       </div>
 
-      {/* ── New conversation (Compose) ────────────────────────────────────────────────
-          A business-initiated WhatsApp message is only allowed via an APPROVED template, so the
-          template picker is the body of this dialog rather than an afterthought. The same live
-          preview as the in-thread picker is used deliberately: the agent should see the exact
-          words a stranger is about to receive from us. */}
-      {newOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'grid', placeItems: 'center',
-          background: 'rgba(0,0,0,0.55)' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setNewOpen(false); }}>
-          <div style={{ width: 460, maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)',
-            border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)' }}>New conversation</div>
-              <button onClick={() => setNewOpen(false)} style={{ background: 'transparent', border: 'none',
-                color: 'var(--t3)', cursor: 'pointer' }}><X size={15} /></button>
-            </div>
-
-            {/* Channel first: it changes every field below it, and email is the one agents will
-                actually reach for — WhatsApp compose is a rare "can't find the conversation" tool. */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-              {[['whatsapp', 'WhatsApp'], ['email', 'Email']].map(([id, label]) => (
-                <button key={id} onClick={() => { setNewChannel(id); setErr(null); }} style={{
-                  flex: 1, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '6px 8px',
-                  borderRadius: 'var(--radius-sm)', border: '1px solid',
-                  borderColor: newChannel === id ? 'var(--accent)' : 'var(--border)',
-                  background: newChannel === id ? 'var(--accent-bg)' : 'transparent',
-                  color: newChannel === id ? 'var(--accent)' : 'var(--t2)' }}>{label}</button>
-              ))}
-            </div>
-
-            {newChannel === 'email' ? (
-              <>
-                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>TO</div>
-                <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="customer@example.com"
-                  value={newEmail} onChange={(e) => setNewEmail(e.target.value)} autoFocus />
-
-                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>SUBJECT</div>
-                <input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} placeholder="Subject"
-                  value={newSubject} onChange={(e) => setNewSubject(e.target.value)} />
-
-                <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>MESSAGE</div>
-                <textarea style={{ ...inputStyle, width: '100%', minHeight: 130, resize: 'vertical', marginBottom: 6 }}
-                  placeholder="Write the email…" value={newBody} onChange={(e) => setNewBody(e.target.value)} />
-                <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 12 }}>
-                  If this customer already has an open email conversation from the last 7 days,
-                  this is added to it rather than starting a second one.
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={startConversation}
-                    disabled={newSending || !newEmail.trim() || !newSubject.trim() || !newBody.trim()}
-                    style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
-                    {newSending ? 'Sending…' : 'Send & open'}
-                  </button>
-                </div>
-              </>
-            ) : (
-            <>
-            <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>PHONE</div>
-            <input style={{ ...inputStyle, width: '100%', marginBottom: 4 }} placeholder="9880212323 or +919880212323"
-              value={newPhone} onChange={(e) => setNewPhone(e.target.value)} autoFocus />
-            <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 12 }}>
-              A 10-digit number is treated as Indian (+91). If this customer already has an open
-              24-hour window we&apos;ll just open that conversation instead of spending a template.
-            </div>
-
-            <div style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>TEMPLATE</div>
-            <select value={newTplId} style={{ ...selectStyle, width: '100%', marginBottom: 10 }}
-              onChange={(e) => { setNewTplId(e.target.value); setNewVals({}); }}>
-              <option value="">{tplList.length ? 'Choose a template…' : 'Loading templates…'}</option>
-              {tplList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-
-            {(() => {
-              const sel = tplList.find((t) => t.id === newTplId) || null;
-              if (!sel) return null;
-              return (
-                <>
-                  <div style={{ fontSize: 9.5, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>PREVIEW</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--t2)', whiteSpace: 'pre-wrap',
-                    background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6,
-                    padding: 8, marginBottom: 10, maxHeight: 180, overflowY: 'auto' }}>
-                    {tplPreview(sel, newVals)}
-                  </div>
-                  {sel.fields.filter((f) => !f.auto).map((f) => (
-                    <div key={f.token} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: 10, color: 'var(--t3)', background: 'var(--surface-2)',
-                        border: '1px solid var(--border)', borderRadius: 4, padding: '3px 7px', minWidth: 22, textAlign: 'center' }}>
-                        {f.pos}
-                      </span>
-                      <input style={{ ...inputStyle, flex: 1 }}
-                        placeholder={f.example ? `${f.label} — e.g. ${f.example}` : f.label}
-                        value={newVals[f.token] || ''}
-                        onChange={(e) => setNewVals((v) => ({ ...v, [f.token]: e.target.value }))} />
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
-                    <span style={{ fontSize: 9.5, color: 'var(--t3)' }}>{sel.meta_name}</span>
-                    <button onClick={startConversation}
-                      disabled={newSending || !newPhone.trim()
-                        || sel.fields.some((f) => !f.auto && !String(newVals[f.token] || '').trim())}
-                      style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
-                      {newSending ? 'Sending…' : 'Send & open'}
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-            </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
