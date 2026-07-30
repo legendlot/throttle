@@ -1976,6 +1976,23 @@ async function setAgentShift(body, auth, env) {
 
 // Mark a DM thread open / snoozed / closed (the inbox "Done"/"Reopen"/"Snooze").
 // 'open' is also auto-set by the webhook on any new inbound (auto-reopen).
+// Reopening a conversation must clear the ENTIRE closed/snoozed footprint, not just flip the
+// state. There are four reopen sites (agent action, BiteSpeed inbound, Gmail inbound, Relay
+// inbound, agent transfer) and each one re-deriving the list is how they drift: the Relay-inbound
+// path shipped setting `thread_state='open'` alone, so from the support cutover every
+// inbound-reopened thread carried a stale `closed_at` (17 rows, 7 of them on cutover day) — and a
+// stale `snoozed_until` would re-hide an active conversation. One helper, one invariant.
+// (`thread_state` is authoritative for open/closed; this keeps the other columns from contradicting it.)
+function clearClosedFields(patch) {
+  patch.thread_state = 'open';
+  patch.closed_at = null;
+  patch.closed_by_user_id = null;
+  patch.snoozed_until = null;
+  patch.closed_reason = null;
+  patch.closed_note = null;
+  return patch;
+}
+
 async function setThreadState(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, state, snoozed_until, closed_reason, closed_note } = body || {};
@@ -2000,11 +2017,10 @@ async function setThreadState(body, auth, env) {
     patch.closed_at = null; patch.closed_by_user_id = null;
     patch.closed_reason = null; patch.closed_note = null;
   } else {                                  // open
-    patch.closed_at = null; patch.closed_by_user_id = null; patch.snoozed_until = null;
     // An OPEN conversation must not carry a closing outcome — it would show a stale
     // reason in the detail pane. (The report is safe either way: it filters on
     // thread_state='closed' before it ever reads closed_reason.)
-    patch.closed_reason = null; patch.closed_note = null;
+    clearClosedFields(patch);
   }
   const r = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
     method: 'PATCH', body: JSON.stringify(patch),
@@ -3606,7 +3622,7 @@ async function sendWaTemplateReply(body, auth, env) {
     threadPatch.assigned_agent_name = senderName;
     threadPatch.assigned_at = now;
   }
-  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
@@ -4081,7 +4097,7 @@ async function sendWaReply(body, auth, env) {
     threadPatch.assigned_agent_name = auth.fullName || auth.name || auth.email || null;
     threadPatch.assigned_at = now;
   }
-  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
@@ -4197,7 +4213,7 @@ async function sendWaAttachment(body, auth, env) {
     threadPatch.assigned_agent_name = senderName;
     threadPatch.assigned_at = now;
   }
-  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
   const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
 
@@ -4707,7 +4723,7 @@ async function biteSpeedMessageCreated(body, env) {
     // Reopen a closed/snoozed thread when the customer messages again (standard helpdesk
     // behaviour). Also makes the empty-phantom cleanup safe — any real message resurfaces
     // a previously-closed thread into the active inbox. (S185)
-    if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+    if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
     method: 'PATCH',
@@ -4884,7 +4900,7 @@ async function relayWaIngestInbound(m, env) {
   if (!ins.ok) { console.error(`[relay-wa] cs_wa_messages insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return { error: 'insert_failed' }; }
 
   const patch = { last_message_at: ts, last_inbound_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
-  if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
   // S245 — marketing/txn "wrong number" handling: raise a ticket + send ONE redirect. Flag-gated
@@ -5288,7 +5304,7 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
     threadPatch.assigned_agent_name = senderName;
     threadPatch.assigned_at = now;
   }
-  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
@@ -5365,7 +5381,7 @@ async function sendWaAttachmentViaRelay(thread, file, auth, env) {
     threadPatch.assigned_agent_name = senderName;
     threadPatch.assigned_at = now;
   }
-  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
@@ -5600,14 +5616,7 @@ async function metaHandleMessage(channel, ev, env) {
     patch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     // Auto-reopen (Q1=B work-queue): any inbound makes the conversation active again,
     // clearing a prior Done/Snooze. The prior assignee (if any) is kept for continuity.
-    if (thread.thread_state && thread.thread_state !== 'open') {
-      patch.thread_state = 'open';
-      patch.closed_at = null;
-      patch.closed_by_user_id = null;
-      patch.snoozed_until = null;
-      patch.closed_reason = null;
-      patch.closed_note = null;
-    }
+    if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
     // Collab pre-flag (Pruthvi, agreed shape 2026-07-27). Flag only — the
     // conversation is NOT moved, because the keyword is the CUSTOMER's wording and a
     // complaint that merely mentions a collab must not silently land with the
@@ -6293,9 +6302,7 @@ async function ingestInboundEmail(env, p, budget = { left: EMAIL_INBOUND_MAX_PER
   const patch = { last_message_at: p.internal_date, last_inbound_at: p.internal_date };   // last_inbound_at = unread watermark
   if (!thread.comms_profile_id && profileId) patch.comms_profile_id = profileId;
   if (!thread.subject && p.subject) patch.subject = p.subject;
-  if (thread.thread_state && thread.thread_state !== 'open') {
-    patch.thread_state = 'open'; patch.closed_at = null; patch.closed_by_user_id = null; patch.snoozed_until = null;
-  }
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
   // 5. Round-robin assign an unassigned thread (config-gated per channel in the RPC).
@@ -7028,7 +7035,7 @@ async function transferThread(body, auth, env) {
 
   const now = new Date().toISOString();
   const patch = { assigned_agent_id: agent.id, assigned_agent_name: agent.full_name, assigned_at: now };
-  if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';   // a transfer = active work
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);   // a transfer = active work
   const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!upd.ok) return err('Transfer failed', upd.status || 500);
 
