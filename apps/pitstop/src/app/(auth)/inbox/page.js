@@ -40,6 +40,19 @@ const ATT_SKIP_REASON = {
   run_budget: 'Not fetched yet — it will appear shortly',
   error: 'Couldn’t be retrieved — open the email in Gmail',
 };
+// Live preview of an approved WhatsApp template body (S245). Substitutes each {{pos}} with what
+// the agent has typed, or a braced label while empty, so the composer shows the real message
+// rather than a template name. `auto` slots (first_name, resolved from the customer profile
+// server-side) always render as a label — the agent never types them.
+function tplPreview(tpl, vals) {
+  let s = String(tpl?.body || '');
+  for (const f of (tpl?.fields || [])) {
+    const typed = String(vals?.[f.token] || '').trim();
+    s = s.split(`{{${f.pos}}}`).join(f.auto ? `{${f.label}}` : (typed || `{${f.label}}`));
+  }
+  return s;
+}
+
 function fmtBytes(n) {
   const b = Number(n) || 0;
   if (b < 1024) return `${b} B`;
@@ -1162,51 +1175,6 @@ export default function InboxPage() {
                     </div>
                   )}
 
-                  {/* Approved WhatsApp templates (Relay). Available whether or not the window is
-                      open — an agent may legitimately want a structured message either way. */}
-                  {isWa && tplOpen && !noteMode && (
-                    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10,
-                      marginBottom: 8, background: 'var(--surface-2)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t2)',
-                          display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                          <FileText size={12} /> Send an approved template
-                        </span>
-                        <button onClick={() => { setTplOpen(false); setTplId(''); setTplVals({}); }}
-                          style={{ ...btnGhost, padding: '2px 6px' }} aria-label="Close template panel">
-                          <X size={13} />
-                        </button>
-                      </div>
-
-                      <select value={tplId} style={{ ...selectStyle, width: '100%', marginBottom: 8 }}
-                        onChange={(e) => { setTplId(e.target.value); setTplVals({}); }}>
-                        <option value="">
-                          {tplList.length ? 'Choose a template…' : 'Loading templates…'}
-                        </option>
-                        {tplList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-
-                      {/* Only constant-sourced fields are asked for — the customer's first name
-                          is resolved from their profile and never blocks the send. */}
-                      {tplSel?.fields?.map((f) => (
-                        <input key={f.token} style={{ ...inputStyle, width: '100%', marginBottom: 6 }}
-                          placeholder={f.label}
-                          value={tplVals[f.token] || ''}
-                          onChange={(e) => setTplVals((v) => ({ ...v, [f.token]: e.target.value }))} />
-                      ))}
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                        <button onClick={sendTemplate}
-                          disabled={!tplId || tplSending || (tplSel?.fields || []).some((f) => !String(tplVals[f.token] || '').trim())}
-                          style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px', opacity: (!tplId || tplSending) ? 0.5 : 1 }}>
-                          {tplSending ? 'Sending…' : 'Send template'}
-                        </button>
-                        {tplSel && (
-                          <span style={{ fontSize: 10, color: 'var(--t3)' }}>{tplSel.meta_name}</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                   {/* Email headers — To / Cc / Bcc / Subject (S181). Reply mode only. */}
                   {isEmail && !noteMode && (
@@ -1253,6 +1221,63 @@ export default function InboxPage() {
                     <ToolBtn title={noteMode ? 'Switch to reply mode' : 'Private note (internal only)'} active={noteMode}
                       onClick={() => { setMode(noteMode ? 'reply' : 'note'); if (!noteMode) setPendingFiles([]); }}
                       disabled={!canManage}><StickyNote size={15} /></ToolBtn>
+                    {/* WhatsApp Template (S245) — sits beside Private Note per Pruthvi's spec.
+                        Always available, not only when the window is shut: an agent may want a
+                        structured message either way, and after a number migration EVERY window
+                        is shut, so this is the only route back into a conversation. */}
+                    {isWa && !noteMode && (
+                      <ToolBtn title="WhatsApp template (reopen a conversation)" active={tplOpen}
+                        onClick={() => { if (tplOpen) { setTplOpen(false); } else { setShowEmoji(false); setShowCanned(false); openTemplates(); } }}
+                        disabled={!canManage}><MessageCircle size={15} /></ToolBtn>
+                    )}
+                    {isWa && tplOpen && !noteMode && (
+                      <Popover onClose={() => { setTplOpen(false); setTplId(''); setTplVals({}); }} width={380}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)', marginBottom: 8 }}>
+                          WhatsApp templates
+                        </div>
+
+                        <select value={tplId} style={{ ...selectStyle, width: '100%', marginBottom: 10 }}
+                          onChange={(e) => { setTplId(e.target.value); setTplVals({}); }}>
+                          <option value="">{tplList.length ? 'Choose a template…' : 'Loading templates…'}</option>
+                          {tplList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+
+                        {tplSel && (
+                          <>
+                            <div style={{ fontSize: 9.5, letterSpacing: '0.05em', color: 'var(--t3)', marginBottom: 4 }}>BODY</div>
+                            {/* Live preview of the approved copy — the agent sees the actual
+                                message, not just a template name, before it goes out. */}
+                            <div style={{ fontSize: 11.5, color: 'var(--t2)', whiteSpace: 'pre-wrap',
+                              background: 'var(--surface-2)', border: '1px solid var(--border)',
+                              borderRadius: 6, padding: 8, marginBottom: 10, maxHeight: 160, overflowY: 'auto' }}>
+                              {tplPreview(tplSel, tplVals)}
+                            </div>
+
+                            {tplSel.fields.filter((f) => !f.auto).map((f) => (
+                              <div key={f.token} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                                <span style={{ fontSize: 10, color: 'var(--t3)', background: 'var(--surface-2)',
+                                  border: '1px solid var(--border)', borderRadius: 4, padding: '3px 7px', minWidth: 22, textAlign: 'center' }}>
+                                  {f.pos}
+                                </span>
+                                <input style={{ ...inputStyle, flex: 1 }}
+                                  placeholder={f.example ? `${f.label} — e.g. ${f.example}` : f.label}
+                                  value={tplVals[f.token] || ''}
+                                  onChange={(e) => setTplVals((v) => ({ ...v, [f.token]: e.target.value }))} />
+                              </div>
+                            ))}
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                              <span style={{ fontSize: 9.5, color: 'var(--t3)' }}>{tplSel.meta_name}</span>
+                              <button onClick={sendTemplate}
+                                disabled={tplSending || tplSel.fields.some((f) => !f.auto && !String(tplVals[f.token] || '').trim())}
+                                style={{ ...btnPrimary, fontSize: 11, padding: '6px 12px' }}>
+                                {tplSending ? 'Sending…' : 'Send template'}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </Popover>
+                    )}
                     {showEmoji && (
                       <Popover onClose={() => setShowEmoji(false)} width="auto" pad={0} hideClose scroll={false}>
                         <EmojiPicker onSelect={(native) => insertAtCaret(native)} />

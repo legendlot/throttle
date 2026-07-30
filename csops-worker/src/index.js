@@ -3514,16 +3514,31 @@ async function getWaSendTemplates(_params, auth, env) {
   // Agent-facing set only. Journey templates (order placed, RTO, C2P…) are machine-triggered and
   // would be wrong — and often harmful — for a human to fire by hand from a support thread.
   const rows = (r.data || []).filter((t) => String(t.content?.meta_name || '').startsWith('lot_support'));
-  return ok(rows.map((t) => ({
-    id: t.id,
-    name: t.name,
-    meta_name: t.content?.meta_name || null,
-    // Only ask the agent for constant-sourced values. `first_name` comes off the customer
-    // profile and carries a "there" fallback, so it can never block a send.
-    fields: (Array.isArray(t.variables) ? t.variables : [])
-      .filter((v) => v && v.source === 'constant')
-      .map((v) => ({ token: v.token, label: String(v.token).replace(/_/g, ' ') })),
-  })));
+  return ok(rows.map((t) => {
+    const bySource = new Map((Array.isArray(t.variables) ? t.variables : []).map((v) => [v.token, v]));
+    // Ordered by `pos` because that is the {{n}} the body actually references — Meta binds
+    // template parameters by position, so the agent's 1st input must line up with {{1}}.
+    const mapping = (Array.isArray(t.content?.mapping) ? t.content.mapping : [])
+      .slice().sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+    return {
+      id: t.id,
+      name: t.name,
+      meta_name: t.content?.meta_name || null,
+      // The approved body, placeholders intact, so the agent can see what they are sending
+      // before they send it rather than trusting a template name.
+      body: t.content?.body || null,
+      fields: mapping.map((m) => ({
+        pos: m.pos ?? 0,
+        token: m.token,
+        label: String(m.token || '').replace(/_/g, ' '),
+        example: m.example || null,
+        // `auto` = resolved server-side (first_name off the customer profile, with a "there"
+        // fallback). Shown in the preview but never asked for, so a missing profile cannot
+        // block a send and the agent isn't asked to retype something we already know.
+        auto: (bySource.get(m.token)?.source || 'constant') !== 'constant',
+      })),
+    };
+  }));
 }
 
 async function sendWaTemplateReply(body, auth, env) {
