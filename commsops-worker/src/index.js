@@ -226,6 +226,36 @@ async function handleGet(url, auth, env) {
       return ok((r.data || []).map((t) => ({ ...t, usage: u[String(t.id)] || null })));
     }
 
+    case 'getSuppressions': {          // S253 — the hardest gate finally has a read path
+      // `comms.suppressions` is step ① of the send gate and blocks EVERY purpose, including
+      // transactional — a suppressed customer stops receiving order and shipping messages,
+      // not just marketing. Until now it was written by webhooks (Shopify customer-redact,
+      // Resend hard-bounce/complaint) and readable by nothing, so "why did this customer
+      // never get their order confirmation?" had no answer short of SQL.
+      //
+      // Two query shapes, because there are two real questions:
+      //   ?values=a,b   — "is THIS contact blocked?" (contact detail)
+      //   ?q=foo        — "who is blocked?"          (admin list)
+      // Matching is on VALUE, never profile_id: the Shopify redact path writes rows with no
+      // profile_id at all, so a profile_id-keyed lookup would silently miss exactly the
+      // suppressions that matter most.
+      const values = (url.searchParams.get('values') || '').split(',').map((v) => v.trim()).filter(Boolean);
+      const q = (url.searchParams.get('q') || '').trim();
+      let path = '/rest/v1/suppressions?select=*&order=created_at.desc&limit=500';
+      if (values.length) {
+        path += `&value=in.(${values.map((v) => `"${v.replace(/"/g, '')}"`).join(',')})`;
+      } else if (q) {
+        path += `&value=ilike.*${A.enc(q)}*`;
+      }
+      const r = await A.sbComms(path, env);
+      if (!r.ok) return err('db_error', 500);
+      // Recent lifts ride along so the contact detail can show "this WAS blocked and was
+      // lifted", which is otherwise invisible once the suppression row is gone.
+      const lr = await A.sbComms(
+        '/rest/v1/suppression_lifts?select=*&order=lifted_at.desc&limit=100', env);
+      return ok({ suppressions: r.data || [], lifts: (lr.ok && lr.data) || [] });
+    }
+
     case 'getMediaLibrary': {          // S251 — the shared image library
       // Reads the relay-email-assets bucket directly rather than keeping a side table of
       // uploads. Two reasons: the 28 images already uploaded since 2026-07-16 appear
@@ -674,6 +704,60 @@ async function handlePost(body, auth, env) {
       let sd; try { sd = st ? JSON.parse(st) : null; } catch { sd = null; }
       if (!sr.ok || !sd?.url) return err(`sign_failed:${st}`, 502);
       return ok(EA.signToUrls(env, bucket, path, sd));
+    }
+
+    case 'addSuppression': {           // S253 — block an address by hand
+      // The customer who phones and says "stop everything" currently has no path other than
+      // SQL. This is that path. Deliberately gated on data_consent_admin, not template
+      // perms: a suppression stops transactional mail too, so it is a privacy action.
+      if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
+      const channel = String(body.channel || '').trim();
+      const value = String(body.value || '').trim();
+      if (!['email', 'sms', 'whatsapp'].includes(channel)) return err('bad_channel', 400);
+      if (!value) return err('value_required', 400);
+      // Normalise exactly as the writers do, or the gate will never match what we store:
+      // gate.js compares `value=eq.<to>` against the address the send is going to.
+      const norm = channel === 'email' ? value.toLowerCase() : value.replace(/[^\d+]/g, '');
+      const r = await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify({
+          channel, value: norm, profile_id: body.profile_id || null,
+          reason: String(body.reason || 'manual').slice(0, 60),
+        }),
+      });
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      return ok(r.data?.[0] || { channel, value: norm });
+    }
+
+    case 'removeSuppression': {        // S253 — lift a block, with the compliance line held
+      if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
+      const id = body.id;
+      if (!id) return err('id_required', 400);
+      const cur = await A.sbComms(`/rest/v1/suppressions?id=eq.${A.enc(id)}&select=*&limit=1`, env);
+      const row = (cur.ok && cur.data?.[0]) || null;
+      if (!row) return err('not_found', 404);
+      // ⛔ A gdpr_redact suppression is a LEGAL ERASURE REQUEST (Shopify customers/redact).
+      // Lifting it re-enables messaging to someone who asked to be forgotten — a DPDP/GDPR
+      // violation, not a UX inconvenience. Refused outright, with no override in the UI or
+      // the API. If one was created in error it has to be undone deliberately in SQL by
+      // someone who has read this comment.
+      if (row.reason === 'gdpr_redact') return err('gdpr_redact_cannot_be_lifted', 403);
+      // Audit BEFORE the delete: the suppressions table is hard-delete, so once the row is
+      // gone the reason is gone with it. Written first so a failed delete leaves a harmless
+      // extra audit row rather than an unexplained missing block.
+      await A.sbComms('/rest/v1/suppression_lifts', env, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: row.channel, value: row.value, profile_id: row.profile_id,
+          original_reason: row.reason, original_created_at: row.created_at,
+          note: String(body.note || '').slice(0, 500) || null,
+          lifted_by: auth.email || auth.userId || null,
+        }),
+      });
+      const dr = await A.sbComms(`/rest/v1/suppressions?id=eq.${A.enc(id)}`, env, { method: 'DELETE' });
+      if (!dr.ok) return err('db_error', 500);
+      return ok({ lifted: id, channel: row.channel, value: row.value, was: row.reason });
     }
 
     case 'setTemplateArchived': {      // S252 — archive/unarchive, the SAFE way to retire one

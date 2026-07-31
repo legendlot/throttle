@@ -155,19 +155,70 @@ export default function ContactsPage() {
     return () => { alive = false; };
   }, [session]);
 
+  // Delivery blocks for the open contact (S253). Loaded alongside the detail.
+  //
+  // ⚠️ Matched on the ADDRESS, never profile_id. `comms.suppressions` is keyed
+  // (channel, value), and the Shopify customers/redact writer stores rows with NO
+  // profile_id at all — so a profile_id lookup would silently miss exactly the
+  // suppressions that matter most (legal erasures).
+  const [blocks, setBlocks] = useState(null);
+  const loadBlocks = useCallback(async (d) => {
+    const vals = [
+      ...(d?.identifiers || []).filter((i) => ['email', 'phone'].includes(i.type)).map((i) => i.value),
+      d?.profile?.email, d?.profile?.phone,
+    ].filter(Boolean);
+    if (!vals.length) { setBlocks({ suppressions: [], lifts: [] }); return; }
+    try {
+      const r = await garageFetch('getSuppressions', { values: [...new Set(vals)].join(',') }, session);
+      const mine = new Set(vals.map((v) => String(v).toLowerCase()));
+      setBlocks({
+        suppressions: (r?.suppressions || []),
+        // Lifts come back as the recent-100 feed, so narrow to this contact's addresses.
+        lifts: (r?.lifts || []).filter((l) => mine.has(String(l.value || '').toLowerCase())),
+      });
+    } catch { setBlocks({ suppressions: [], lifts: [], error: true }); }
+  }, [session]);
+
+  async function liftBlock(b) {
+    if (b.reason === 'gdpr_redact') {
+      showToast('A GDPR/DPDP erasure block cannot be lifted here', 'error');
+      return;
+    }
+    const extra = b.reason === 'complaint'
+      ? '\n\nThis address reported a previous message as SPAM. Re-enabling sending to it '
+        + 'puts sender reputation at risk for every other customer.'
+      : '';
+    if (!window.confirm(
+      `Lift the ${b.reason} block on ${b.value}?\n\n`
+      + `They will start receiving ${b.channel} again — including marketing, if they are opted in.`
+      + `${extra}\n\nThis is recorded against your name.`)) return;
+    try {
+      await workerFetch('removeSuppression', { id: b.id }, session);
+      showToast('Block lifted', 'success');
+      if (detail?.profile?.id) loadBlocks(detail);
+    } catch (e) {
+      const m = String(e.message || '');
+      showToast(m === 'gdpr_redact_cannot_be_lifted'
+        ? 'Erasure requests cannot be lifted — this is a legal block'
+        : (m || 'Could not lift the block'), 'error');
+    }
+  }
+
   const loadDetail = useCallback(async (id) => {
     setDetailLoading(true);
     setDetailError(false);
     try {
       const d = await garageFetch('getProfile', { id }, session);
       setDetail(d || null);
+      loadBlocks(d);                      // delivery blocks ride with the detail (S253)
     } catch (e) { setDetailError(true); showToast(e.message || 'Failed to load contact', 'error'); }
     finally { setDetailLoading(false); }
-  }, [session, showToast]);
+  }, [session, showToast, loadBlocks]);
 
   function open(r) {
     setDetail({ profile: r, identifiers: [], consent: [], events: [] });
     setDetailError(false);
+    setBlocks(null);
     setOptOutResult(null);
     setView('detail');
     loadDetail(r.id);
@@ -270,6 +321,64 @@ export default function ContactsPage() {
               )}
           </Panel>
         </div>
+
+        {/* DELIVERY BLOCKS (S253) — the first surface for comms.suppressions.
+            This is gate step ① and it outranks consent: a block here stops ORDER and
+            SHIPPING messages too, not just marketing. Rendered above the consent ledger
+            for exactly that reason — if something is blocked, no amount of consent below
+            explains why nothing is arriving. */}
+        <Panel title="Delivery blocks" count={blocks?.suppressions?.length || 0}>
+          {blocks === null ? (
+            <div style={{ padding: 18, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          ) : blocks.error ? (
+            <div style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--red, #DE2A2A)', fontSize: 12.5 }}>Could not check delivery blocks.</span>
+              <Btn onClick={() => loadBlocks(detail)}><RefreshCw size={14} /> Retry</Btn>
+            </div>
+          ) : blocks.suppressions.length === 0 ? (
+            <div style={{ padding: 16, color: 'var(--text-4)', fontSize: 12.5 }}>
+              No delivery blocks — nothing is stopping messages to this contact at the gate.
+              {blocks.lifts?.length > 0 && (
+                <span> Previously blocked and lifted:{' '}
+                  {blocks.lifts.map((l) => `${l.original_reason} on ${l.channel} (${fmtDateTime(l.lifted_at)}${l.lifted_by ? ' by ' + l.lifted_by : ''})`).join(' · ')}
+                </span>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="tw-note" style={{ margin: '10px 12px', borderLeft: '3px solid var(--red, #f87171)' }}>
+                <b>Blocked at the send gate.</b> This outranks consent and stops
+                <b> every</b> message including order and shipping updates.
+              </div>
+              <table className="dt">
+                <thead><tr><th>Channel</th><th>Address</th><th>Reason</th><th>Blocked</th><th></th></tr></thead>
+                <tbody>
+                  {blocks.suppressions.map((b) => (
+                    <tr key={b.id}>
+                      <td>{b.channel}</td>
+                      <td className="mono" style={{ fontSize: 11.5 }}>{b.value}</td>
+                      <td>
+                        <Badge label={b.reason}
+                          tone={b.reason === 'gdpr_redact' ? 'red' : b.reason === 'complaint' ? 'red' : 'yellow'} />
+                      </td>
+                      <td className="mono dim">{fmtDateTime(b.created_at)}</td>
+                      <td>
+                        {b.reason === 'gdpr_redact'
+                          ? <span className="dim" style={{ fontSize: 11.5 }}
+                              title="Shopify customers/redact — a legal erasure request. Lifting it would re-enable messaging to someone who asked to be forgotten.">
+                              legal erasure — cannot be lifted
+                            </span>
+                          : canConsent
+                            ? <Btn onClick={() => liftBlock(b)}>Lift block</Btn>
+                            : <span className="dim" style={{ fontSize: 11.5 }}>needs consent admin</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </Panel>
 
         <Panel title="Consent" count={detail.consent?.length || 0}>
           {detailLoading ? <div style={{ padding: 18, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
