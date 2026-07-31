@@ -1295,7 +1295,11 @@ export default function ReceivingPage() {
                     </div>
                   )}
                   <div style={{ marginTop: 8, fontSize: 10, color: 'var(--t3)' }}>
-                    Send posts to <span style={{ fontFamily: 'var(--mono)' }}>#inwarding-reports</span> and marks these boxes as reported. If Slack cannot be reached it copies to your clipboard instead and leaves the boxes unreported, so nothing is lost.
+                    {/* Deliberately unnamed: the channel lives in the webhook URL / token config,
+                        so hardcoding a name here goes stale the moment it is re-pointed — which is
+                        exactly what happened (this said #inwarding-reports long after the report
+                        had moved to #procurement-core). */}
+                    Send posts the report to Slack and marks these boxes as reported. If Slack cannot be reached it copies to your clipboard instead and leaves the boxes unreported, so nothing is lost.
                   </div>
                 </>
               )}
