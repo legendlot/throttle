@@ -172,34 +172,43 @@ const TAG_CHIPS_IN_HEADER = 2;
    *does it fit?* The bar cannot carry `overflow: hidden` as a backstop, because every
    popover in it is an absolutely-positioned child and would be clipped.
 
-   Non-oscillating by construction: a level is only given back when the slack exceeds what
-   restoring it actually costs, so it can never fit at level N, un-compact to N-1, overflow,
-   and compact again. `RESTORE_COST` is the width each step gives back (measured generously);
+   Free space is read from a dedicated flexible SPACER, not from `scrollWidth`.
+   ⚠️ `scrollWidth` can only report overflow, never headroom — it is never smaller than
+   `clientWidth` — so a ladder that de-escalates on `clientWidth - scrollWidth` can shed a
+   level and then never give it back. That matters here because the sidebar ANIMATES its
+   width over 180ms: expanding it passes through narrow intermediate widths, so the bar
+   would compact in passing and stay compact until a reload. The spacer sits between the
+   left-hand groups and the search box (where `margin-left: auto` used to put the slack), so
+   its measured width IS the room available — 0 exactly when there is none.
+
+   Non-oscillating by construction: a level is only given back when the spacer is wider than
+   restoring that level actually costs, so it can never fit at level N, un-compact to N-1,
+   overflow, and compact again. `RESTORE_COST` is what each step gives back (generously);
    the +24 is margin.
 
    Level 0 until measured — this app is `output: 'export'`, so there is no DOM at build time
    and the first paint is never the degraded one. */
 const FIT_LEVELS = 4;
 const RESTORE_COST = { 1: 80, 2: 60, 3: 70, 4: 300 };
-function useFitLadder(ref) {
+function useFitLadder(barRef, spacerRef) {
   const [level, setLevel] = useState(0);
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return undefined;
+    const bar = barRef.current;
+    const spacer = spacerRef.current;
+    if (!bar || !spacer) return undefined;
     const measure = () => {
-      const slack = el.clientWidth - el.scrollWidth;
-      if (slack < -1) {
-        setLevel(l => Math.min(FIT_LEVELS, l + 1));           // overflowing → shed the next thing
-      } else if (level > 0 && slack > RESTORE_COST[level] + 24) {
-        setLevel(l => Math.max(0, l - 1));                    // room to spare → give one back
+      if (bar.scrollWidth > bar.clientWidth + 1) {
+        setLevel(l => Math.min(FIT_LEVELS, l + 1));                 // overflowing → shed one
+      } else if (level > 0 && spacer.offsetWidth > RESTORE_COST[level] + 24) {
+        setLevel(l => Math.max(0, l - 1));                          // headroom → give one back
       }
     };
-    measure();                                                // re-runs per level change → converges
+    measure();                                                      // re-runs per level → converges
     if (typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    ro.observe(bar);
     return () => ro.disconnect();
-  }, [ref, level]);
+  }, [barRef, spacerRef, level]);
   return level;
 }
 
@@ -2013,7 +2022,8 @@ function InboxCommandBar(props) {
   // Self-measuring: the bar sheds weight only when it genuinely does not fit, so collapsing
   // the sidebar, resizing the window and a long agent name all feed the same one signal.
   const barRef = useRef(null);
-  const fit = useFitLadder(barRef);
+  const spacerRef = useRef(null);
+  const fit = useFitLadder(barRef, spacerRef);
   const compact = {
     hideActiveLabel: fit >= 1,   // active segment → glyph + count only
     searchWidth:     fit >= 2 ? 150 : 200,
@@ -2130,9 +2140,13 @@ function InboxCommandBar(props) {
         </button>
       </div>
 
-      {/* ── Right cluster starts here ───────────────────────────────────────────────────── */}
+      {/* ── Right cluster starts here ─────────────────────────────────────────────────────
+             The spacer does what `margin-left: auto` used to: absorb the free space. Reading
+             its width is the only way to know the bar has HEADROOM, which `scrollWidth`
+             cannot report — see useFitLadder. */}
+      <div ref={spacerRef} style={{ flex: '1 1 0', minWidth: 0 }} />
       {/* `data-search-primary` is what the layout's global `/` shortcut focuses. */}
-      <div style={{ position: 'relative', width: compact.searchWidth, marginLeft: 'auto', flexShrink: 0 }}>
+      <div style={{ position: 'relative', width: compact.searchWidth, flexShrink: 0 }}>
         <Search size={12} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)',
           color: 'var(--t4)', pointerEvents: 'none' }} />
         <input data-search-primary value={searchInput} onChange={e => setSearchInput(e.target.value)}
