@@ -47,6 +47,35 @@ function StatusBadge({ status }) {
 function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ts; } }
 const variantName = (r) => [r.product, r.model, r.color].filter(Boolean).join(' · ') || '—';
 
+// Assignee list = holders of cycle_count_record, i.e. people who could actually run the
+// count. Loaded once per mount and shared by the create modal + the detail reassign
+// control. A failure leaves the list empty, which degrades to "Unassigned" rather than
+// blocking the audit — assignment is accountability, never a precondition for counting.
+function useAssignees(session) {
+  const [assignees, setAssignees] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    (async () => {
+      try {
+        const d = await garageFetch('getAuditAssignees', {}, session);
+        if (alive) setAssignees(d?.assignees || []);
+      } catch { if (alive) setAssignees([]); }
+    })();
+    return () => { alive = false; };
+  }, [session]);
+  return assignees;
+}
+
+// An assignee whose profile no longer resolves comes back with a null name (the worker
+// deliberately does not echo the raw uuid). Show that as a flag, not as unassigned —
+// silently reading "—" would hide that a real audit has an owner who no longer exists.
+function AssigneeCell({ audit }) {
+  if (!audit?.assigned_to) return <span style={{ color: 'var(--t3)' }}>Unassigned</span>;
+  if (!audit.assigned_to_name) return <span style={{ color: '#fbbf24' }} title="Assigned to a user profile that no longer resolves">unknown user</span>;
+  return <span>{audit.assigned_to_name}</span>;
+}
+
 function KpiTile({ label, value, tone = 'gray' }) {
   const s = TONE[tone];
   return (
@@ -68,6 +97,7 @@ export default function StockAuditPage() {
   const [loading, setLoading] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [active, setActive]   = useState(null); // audit_no
+  const assignees = useAssignees(session);
 
   async function loadList() {
     if (!session) return;
@@ -118,7 +148,7 @@ export default function StockAuditPage() {
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
-                  <th style={th}>Audit</th><th style={th}>Status</th><th style={th}>Opened</th>
+                  <th style={th}>Audit</th><th style={th}>Status</th><th style={th}>Assigned to</th><th style={th}>Opened</th>
                   <th style={{ ...th, textAlign: 'right' }}>Present</th>
                   <th style={{ ...th, textAlign: 'right' }}>Missing</th>
                   <th style={{ ...th, textAlign: 'right' }}>Extra</th>
@@ -129,6 +159,7 @@ export default function StockAuditPage() {
                     <tr key={a.id} onClick={() => setActive(a.audit_no)} style={{ cursor: 'pointer' }}>
                       <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow, #f2cd1a)' }}>{a.audit_no}{a.area ? <span style={{ color: 'var(--t3)', fontSize: 10 }}> · {a.area}</span> : null}</td>
                       <td style={td}><StatusBadge status={a.status} /></td>
+                      <td style={{ ...td, fontSize: 11 }}><AssigneeCell audit={a} /></td>
                       <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{fmtTs(a.opened_at)}</td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)' }}>{a.present_count ?? '—'}</td>
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: a.missing_count ? '#ff7070' : 'var(--t2)' }}>{a.missing_count ?? '—'}</td>
@@ -144,7 +175,7 @@ export default function StockAuditPage() {
       </div>
 
       {newOpen && (
-        <NewAuditModal session={session} toast={toast}
+        <NewAuditModal session={session} toast={toast} assignees={assignees}
           onClose={() => setNewOpen(false)}
           onCreated={(no) => { setNewOpen(false); setActive(no); }} />
       )}
@@ -152,13 +183,17 @@ export default function StockAuditPage() {
   );
 }
 
-function NewAuditModal({ session, toast, onClose, onCreated }) {
-  const [form, setForm] = useState({ area: '', notes: '' });
+function NewAuditModal({ session, toast, assignees, onClose, onCreated }) {
+  const [form, setForm] = useState({ area: '', notes: '', assigned_to: '' });
   const [submitting, setSubmitting] = useState(false);
   async function submit() {
     setSubmitting(true);
     try {
-      const r = await workerFetch('createDispatchAudit', { data: { area: form.area.trim() || null, notes: form.notes.trim() || null } }, session);
+      const r = await workerFetch('createDispatchAudit', { data: {
+        area: form.area.trim() || null,
+        notes: form.notes.trim() || null,
+        assigned_to: form.assigned_to || null,
+      } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Failed — is another audit already open?', 'error'); return; }
       toast(`Opened ${r.data.audit.audit_no}`, 'success');
       onCreated(r.data.audit.audit_no);
@@ -168,6 +203,17 @@ function NewAuditModal({ session, toast, onClose, onCreated }) {
     <Modal open onClose={onClose} size="sm" title="Open a stock audit"
            confirmLabel={submitting ? 'OPENING…' : 'OPEN AUDIT'} onConfirm={submit} loading={submitting}>
       <div style={{ marginBottom: 10, fontSize: 11, color: 'var(--t2)' }}>Only one audit can be open at a time. Submit or cancel any open audit first.</div>
+      <div style={{ marginBottom: 10 }}>
+        <label style={lbl}>Assign to (optional)</label>
+        <select value={form.assigned_to} onChange={e => setForm({ ...form, assigned_to: e.target.value })} style={{ ...input, width: '100%' }}>
+          <option value="">Unassigned</option>
+          {assignees.map(u => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
+        </select>
+        <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, lineHeight: 1.45 }}>
+          Who is expected to walk the count. Advisory only — it does not restrict who may scan,
+          submit or approve, and can be changed while the audit is live.
+        </div>
+      </div>
       <div style={{ marginBottom: 10 }}>
         <label style={lbl}>Area / note (optional)</label>
         <input value={form.area} onChange={e => setForm({ ...form, area: e.target.value })} placeholder="e.g. D1 racks" style={{ ...input, width: '100%' }} />
@@ -213,6 +259,7 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
   const [paste, setPaste]     = useState('');
   const [busy, setBusy]       = useState(false);
   const [skip, setSkip]       = useState(() => new Set());
+  const assignees = useAssignees(session);
 
   async function load() {
     setLoading(true);
@@ -239,6 +286,16 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
       if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
       toast(`Added ${r.data.added} · ${r.data.total_scanned} scanned`, 'success');
       setPaste(''); load();
+    } finally { setBusy(false); }
+  }
+  async function reassign(userId) {
+    setBusy(true);
+    try {
+      const r = await workerFetch('assignDispatchAudit', { data: { audit_no: auditNo, assigned_to: userId || null } }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Assign failed', 'error'); return; }
+      const name = r.data?.audit?.assigned_to_name;
+      toast(userId ? `Assigned to ${name || 'that person'}` : 'Assignment cleared', 'success');
+      load();
     } finally { setBusy(false); }
   }
   async function submit() {
@@ -293,6 +350,30 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
           </div>
         </div>
         <div style={pbody}>
+          {/* Assignment is editable only while the audit is live — a completed or cancelled
+              audit is a historical record of who was accountable, and the worker rejects it
+              with a 409 too, so this is not the only guard. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap', fontSize: 11 }}>
+            <span style={{ ...lbl, marginBottom: 0 }}>Assigned to</span>
+            {(isOpen || isReview) && canRecord ? (
+              <>
+                <select value={audit.assigned_to || ''} disabled={busy}
+                  onChange={e => reassign(e.target.value)}
+                  style={{ ...input, minWidth: 190 }}>
+                  <option value="">Unassigned</option>
+                  {assignees.map(u => <option key={u.id} value={u.id}>{u.full_name || u.id}</option>)}
+                  {/* Keep an unresolvable current assignee selectable so switching away from
+                      it does not silently look like it was never set. */}
+                  {audit.assigned_to && !assignees.some(u => u.id === audit.assigned_to) && (
+                    <option value={audit.assigned_to}>{audit.assigned_to_name || 'unknown user'}</option>
+                  )}
+                </select>
+                {audit.assigned_at && <span style={{ color: 'var(--t3)' }}>since {fmtTs(audit.assigned_at)}</span>}
+              </>
+            ) : (
+              <><AssigneeCell audit={audit} />{audit.assigned_at && <span style={{ color: 'var(--t3)' }}>since {fmtTs(audit.assigned_at)}</span>}</>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <KpiTile label="Scanned" value={data.scans_count ?? 0} tone="blue" />
             <KpiTile label="Present" value={counts.present} tone="green" />
