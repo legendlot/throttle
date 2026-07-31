@@ -4,15 +4,16 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, Copy, Images } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
-import { fmtDate } from '@/components/format.js';
+import { fmtDateTime } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
 import WaPreview from '@/components/wa-editor/WaPreview.js';
-import { validateWaTemplate, WA_WABAS } from '@/components/wa-editor/waTemplate.js';
+import { validateWaTemplate, WA_WABAS, normalizeMetaName } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
+import ImageLibrary from '@/components/ImageLibrary.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -30,6 +31,25 @@ const STATUSES = ['draft', 'active', 'archived'];
 const VAR_SOURCES = ['profile', 'event', 'constant', 'recipient', 'system'];
 
 const STATUS_TONE = { active: 'green', draft: 'gray', archived: 'red' };
+
+// ── Duplicate helpers ────────────────────────────────────────────────────────
+// A copy must not collide with the original on either name, so both get a suffix that
+// is bumped until it is genuinely free in the CURRENT library. Meta template names are
+// the load-bearing one: they are unique per WhatsApp Business Account, and a submit that
+// reuses one fails at Meta with a name-taken error long after the author has moved on.
+function uniqueName(base, taken) {
+  const stripped = String(base || 'Untitled').replace(/\s*\(copy(?: \d+)?\)\s*$/i, '');
+  let candidate = `${stripped} (copy)`;
+  for (let n = 2; taken.has(candidate.toLowerCase()); n += 1) candidate = `${stripped} (copy ${n})`;
+  return candidate;
+}
+function uniqueMetaName(base, taken) {
+  const stripped = normalizeMetaName(String(base || '').replace(/_copy(?:_\d+)?$/i, ''));
+  if (!stripped) return '';           // nothing to derive from — let the author name it
+  let candidate = `${stripped}_copy`;
+  for (let n = 2; taken.has(candidate); n += 1) candidate = `${stripped}_copy_${n}`;
+  return candidate;
+}
 const APPROVAL_TONE = { APPROVED: 'green', PENDING: 'yellow', REJECTED: 'red', PAUSED: 'yellow', DISABLED: 'red' };
 
 // Canonical snapshot of the editable state, for "has anything actually changed?".
@@ -130,6 +150,8 @@ export default function TemplatesPage() {
   const [waDirty, setWaDirty] = useState(false);
   // Baseline of the last loaded/saved state, for the unchanged-template guards below.
   const [baseline, setBaseline] = useState(null);
+  // Email-side image library (the WhatsApp side owns its own, inside WaEditor).
+  const [libOpen, setLibOpen] = useState(false);
 
   const canEdit = !perms || perms.template_manage;
   const canTest = !perms || perms.campaign_build;
@@ -211,6 +233,69 @@ export default function TemplatesPage() {
     // a viewer looking at a broken live template should see WHY it is broken.
     if ((r.channel || 'email') === 'whatsapp' && r.provider_template_id) runShapeCheck(r.id);
   }
+
+  // DUPLICATE — open an UNSAVED copy of an existing template, so a new one starts from a
+  // working base instead of a blank form. Nothing is written until the author presses Save;
+  // the original is never touched.
+  //
+  // What is deliberately NOT carried over, and why each one would be a real defect:
+  //  · `id`                   — else Save would PATCH the original out from under itself.
+  //  · `provider_template_id` — this is Meta's id for the ORIGINAL. Carrying it would make
+  //                             the copy look already-submitted: the shape check would run
+  //                             against the original's approved copy, the test-send panel
+  //                             would offer to send it, and Submit would edit the original.
+  //  · `approval_status`      — a brand-new template has never been reviewed; showing
+  //                             "APPROVED" on unsubmitted content is the most dangerous
+  //                             possible lie on this screen.
+  //  · `wa.header_handle`     — Meta's handle for the original's uploaded asset. The image
+  //                             URL is reusable, that handle is not; it is re-minted at
+  //                             submit (same reasoning as WaEditor's replace-image path).
+  //  · `status`               — forced to draft. A copy is by definition not live yet.
+  // The WABA pin IS carried: a copy almost always belongs on the same account, and it stays
+  // editable here because the copy has no provider_template_id to lock it.
+  function startDuplicate(r) {
+    const c = r.content || {};
+    const isWa = (r.channel || 'email') === 'whatsapp';
+    const takenNames = new Set(rows.map((x) => String(x.name || '').toLowerCase()));
+    const takenMeta = new Set(rows.map((x) => x.content?.meta_name).filter(Boolean));
+    const copy = {
+      id: null,
+      channel: r.channel || 'email',
+      name: uniqueName(r.name, takenNames),
+      purpose: r.purpose || 'marketing',
+      language: r.language || 'en',
+      status: 'draft',
+      subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
+      design_json: c.design_json || null,
+      variables: Array.isArray(r.variables) ? JSON.parse(JSON.stringify(r.variables)) : [],
+      wa: {
+        meta_name: isWa ? uniqueMetaName(c.meta_name, takenMeta) : '',
+        category: c.category || 'MARKETING',
+        waba_id: c.waba_id || '',
+        header: c.header || '', header_format: c.header_format || '',
+        header_media_url: c.header_media_url || '',
+        body: c.body || '', footer: c.footer || '',
+        buttons: Array.isArray(c.buttons) ? JSON.parse(JSON.stringify(c.buttons)) : [],
+        mapping: Array.isArray(c.mapping) ? JSON.parse(JSON.stringify(c.mapping)) : [],
+      },
+      approval_status: null,
+      provider_template_id: null,
+      utm: (r.utm && typeof r.utm === 'object') ? JSON.parse(JSON.stringify(r.utm)) : null,
+    };
+    setT(copy);
+    setHtmlOnly(!isWa && !!(c.html_body || c.html) && !c.design_json);
+    setWaDirty(false);
+    // baseline null → the Save button starts ENABLED. A duplicate is unsaved by definition,
+    // and waSnapshot(copy) would have matched it exactly and greyed Save out on arrival.
+    setBaseline(null);
+    resetTest();
+    resetVersions();
+    resetShape();
+    setEditorKey('dup-' + r.id + '-' + Date.now());
+    setView('form');
+    showToast(`Copy of “${r.name}” — nothing is saved until you press Save`, 'success');
+  }
+
   function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); setNeedsAllow(false); }
   function resetVersions() { setVersions(null); setVersionsOpen(false); setVersionsLoading(false); }
   function resetShape() { setShape(null); setShapeLoading(false); }
@@ -467,6 +552,22 @@ export default function TemplatesPage() {
               && <Badge label={`Meta: ${t.approval_status}`} tone={APPROVAL_TONE[t.approval_status] || 'gray'} />}
           </div>
           <div className="po-head-r">
+            {/* Fork the template you are looking at. Gated on t.id — a duplicate of an
+                unsaved draft would just be the same unsaved form again. Warns first when
+                there are unsaved edits, because the copy is built from the SAVED row
+                (`rows`), so anything on screen but not saved would silently not come with it. */}
+            {canEdit && t.id && (
+              <Btn onClick={() => {
+                const src = rows.find((r) => r.id === t.id);
+                if (!src) { showToast('Reload the list first', 'error'); return; }
+                if ((dirty || waDirty) && !window.confirm(
+                  'You have unsaved changes. The copy is made from the last SAVED version, '
+                  + 'so those changes will not be carried over. Duplicate anyway?')) return;
+                startDuplicate(src);
+              }} title="Open an unsaved copy of this template">
+                <Copy size={14} /> Duplicate
+              </Btn>
+            )}
             {t.channel === 'whatsapp' && canEdit && t.id && (
               <>
                 <Btn onClick={syncStatus} disabled={submitting}><RefreshCw size={14} /> Sync status</Btn>
@@ -573,6 +674,12 @@ export default function TemplatesPage() {
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
             <span style={{ display: 'flex', gap: 6 }}>
+              {/* Bulk-upload ahead of authoring. GrapesJS's own asset panel can only be
+                  reached by double-clicking an image already on the canvas, which means
+                  you cannot load a batch of images BEFORE you start laying the email out —
+                  the "one by one during template creation" complaint. Anything picked here
+                  is pushed into the same asset manager, so both routes stay in sync. */}
+              <Btn onClick={() => setLibOpen(true)}><Images size={14} /> Image library</Btn>
               <Btn onClick={() => edRef.current && edRef.current.setDevice('Desktop')}>Desktop</Btn>
               <Btn onClick={() => edRef.current && edRef.current.setDevice('Mobile portrait')}>Mobile</Btn>
             </span>
@@ -616,6 +723,19 @@ export default function TemplatesPage() {
           <div className="tw-note" style={{ marginTop: 10 }}>
             Insert <code>{'{token}'}</code> merge tags from the chips above (or type them). Marketing sends auto-expose <code>{'{unsubscribe_url}'}</code>.
           </div>
+          {libOpen && (
+            <ImageLibrary session={session} multi onClose={() => setLibOpen(false)}
+              onPick={() => {}}
+              onPickMany={(urls) => {
+                // Push into GrapesJS's asset manager rather than dropping images onto the
+                // canvas: where an image belongs is a layout decision, and silently
+                // appending blocks to someone's email would be the wrong kind of helpful.
+                const ed = edRef.current && edRef.current.getEditor();
+                if (!ed) { showToast('Editor still loading — try again in a moment', 'error'); return; }
+                ed.AssetManager.add(urls.map((u) => ({ type: 'image', src: u })));
+                showToast(`${urls.length} image${urls.length === 1 ? '' : 's'} ready — double-click an image block to place them`, 'success');
+              }} />
+          )}
         </Panel>
         )}
 
@@ -671,7 +791,7 @@ export default function TemplatesPage() {
                         : <span className="dim">—</span>}</td>
                       <td className="mono dim" style={{ fontSize: 11.5 }}>
                         {v.content?.waba_id ? wabaLabel(v.content.waba_id) : '—'}</td>
-                      <td className="mono dim">{fmtDate(v.created_at)}</td>
+                      <td className="mono dim">{fmtDateTime(v.created_at)}</td>
                       <td className="dim" style={{ fontSize: 12 }}>{v.created_by || '—'}</td>
                     </tr>
                   ))}
@@ -884,8 +1004,18 @@ export default function TemplatesPage() {
                           : <span className="dim" style={{ fontSize: 12 }}>not submitted</span>)
                         : <span className="dim">—</span>}</td>
                       <td className="mono dim">v{r.version}</td>
-                      <td className="mono dim">{fmtDate(r.updated_at)}</td>
-                      <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
+                      <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
+                      <td>
+                        <span style={{ display: 'inline-flex', gap: 6 }}>
+                          <Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn>
+                          {canEdit && (
+                            <Btn onClick={(e) => { e.stopPropagation(); startDuplicate(r); }}
+                              title="Open an unsaved copy of this template as the starting point for a new one">
+                              <Copy size={14} /> Duplicate
+                            </Btn>
+                          )}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

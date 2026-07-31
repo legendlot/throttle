@@ -3,20 +3,61 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { ArrowLeft, Plus, RefreshCw, LogOut } from 'lucide-react';
+import { ArrowLeft, Plus, RefreshCw, LogOut, Mail, MessageCircle, MessageSquare } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fmtDate } from '@/components/format.js';
+import { fmtDateTime } from '@/components/format.js';
 
 const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 const STATE_TONE = { opted_in: 'green', opted_out: 'red', unknown: 'gray' };
 
-function fmtDateTime(raw) {
-  if (!raw) return '—';
-  const d = new Date(raw);
-  if (isNaN(d)) return String(raw).slice(0, 16);
-  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+// Per-channel opt-in strip (BiteSpeed's Channels column, which is the reference Afshaan
+// gave). One icon per channel, and the colour answers two different questions at once:
+//   green  — opted in
+//   red    — opted out (an explicit refusal; must never look the same as "we don't know")
+//   amber  — reachable, but no marketing consent on record → `unknown` in the ledger
+//   grey   — no address on file at all, so the channel is not a choice we ever had
+// The grey/amber split matters: RULE-CONSENT-001 keeps `unknown` from overriding a known
+// state, and collapsing "never asked" into "no address" would hide exactly the population
+// worth asking.
+const CHANNEL_ICONS = [
+  { key: 'email', Icon: Mail, label: 'Email' },
+  { key: 'whatsapp', Icon: MessageCircle, label: 'WhatsApp' },
+  { key: 'sms', Icon: MessageSquare, label: 'SMS' },
+];
+const CONSENT_COLOR = {
+  opted_in: { fg: '#34d399', bg: 'rgba(52,211,153,.13)', bd: 'rgba(52,211,153,.34)' },
+  opted_out: { fg: '#f87171', bg: 'rgba(248,113,113,.13)', bd: 'rgba(248,113,113,.34)' },
+  unknown: { fg: '#f59e0b', bg: 'rgba(245,158,11,.12)', bd: 'rgba(245,158,11,.30)' },
+  none: { fg: '#6b7178', bg: 'rgba(255,255,255,.03)', bd: 'rgba(255,255,255,.08)' },
+};
+
+function ChannelStrip({ consent, hasEmail, hasPhone }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 4 }}>
+      {CHANNEL_ICONS.map(({ key, Icon, label }) => {
+        // WhatsApp and SMS both ride the phone number; email rides the email address.
+        const reachable = key === 'email' ? hasEmail : hasPhone;
+        const state = consent?.[key];
+        const tone = !reachable ? 'none' : (state === 'opted_in' ? 'opted_in'
+          : state === 'opted_out' ? 'opted_out' : 'unknown');
+        const c = CONSENT_COLOR[tone];
+        const why = !reachable ? `${label}: no address on file`
+          : state === 'opted_in' ? `${label}: opted in to marketing`
+          : state === 'opted_out' ? `${label}: opted OUT of marketing`
+          : `${label}: reachable, no marketing consent recorded`;
+        return (
+          <span key={key} title={why} aria-label={why}
+            style={{ width: 24, height: 24, borderRadius: 6, display: 'inline-flex',
+              alignItems: 'center', justifyContent: 'center',
+              color: c.fg, background: c.bg, border: `1px solid ${c.bd}` }}>
+            <Icon size={13} />
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 export default function ContactsPage() {
@@ -41,16 +82,55 @@ export default function ContactsPage() {
 
   const canConsent = !perms || perms.data_consent_admin;
 
+  // Anonymous = a profile with no email and no phone: a browser session the pixel created.
+  // 25,154 of 154,937 profiles, and because they are the NEWEST rows they sorted to the
+  // top — 102 of the 200 rows this page used to render were unreachable noise. Hidden by
+  // default; the toggle brings them back. They are never deleted from here.
+  const [includeAnon, setIncludeAnon] = useState(false);
+  const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
+  const [counts, setCounts] = useState(null);
+
+  // The search term is debounced rather than fired per keystroke — the RPC is ~7ms but
+  // the round-trip is not, and an un-debounced search races its own responses.
+  useEffect(() => {
+    const h = setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => clearTimeout(h);
+  }, [q]);
+
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
     try {
-      const r = await garageFetch('getProfiles', { limit: 200 }, session);
-      setRows(Array.isArray(r) ? r : []);
+      const r = await garageFetch('getProfiles', {
+        limit: 200,
+        include_anonymous: includeAnon ? 'true' : 'false',
+        ...(debouncedQ ? { q: debouncedQ } : {}),
+      }, session);
+      // The RPC returns {rows, include_anonymous}; tolerate the old bare-array shape so a
+      // cached worker mid-deploy degrades to "no contacts" rather than a crash.
+      const list = Array.isArray(r) ? r : (Array.isArray(r?.rows) ? r.rows : []);
+      setRows(list);
     } catch (e) { showToast(e.message || 'Failed to load contacts', 'error'); }
     finally { setLoading(false); }
-  }, [session, showToast]);
+  }, [session, showToast, includeAnon, debouncedQ]);
   useEffect(() => { load(); }, [load]);
+
+  // Counts are their OWN request and deliberately never block the table: counting
+  // anonymous profiles is a whole-table anti-join (~2.5s) while the list itself is ~18ms.
+  // Fetched once per mount — the number moves slowly and is a data-health note, not state
+  // anything on screen depends on. A failure is silent: a missing footnote is not an error.
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    (async () => {
+      try {
+        const c = await garageFetch('getProfileCounts', {}, session);
+        if (alive && c && typeof c === 'object') setCounts(c);
+      } catch { /* decoration only */ }
+    })();
+    return () => { alive = false; };
+  }, [session]);
 
   const loadDetail = useCallback(async (id) => {
     setDetailLoading(true);
@@ -130,7 +210,7 @@ export default function ContactsPage() {
           <Panel title="Profile" pad>
             <div className="kv-grid">
               <div><div className="kv-k">Name</div><div className="kv-v">{p.display_name || '—'}</div></div>
-              <div><div className="kv-k">Created</div><div className="kv-v mono">{fmtDate(p.created_at)}</div></div>
+              <div><div className="kv-k">Created</div><div className="kv-v mono">{fmtDateTime(p.created_at)}</div></div>
               {attrEntries.length === 0
                 ? <div style={{ gridColumn: '1 / -1', color: 'var(--text-4)', fontSize: 12.5 }}>No derived attributes yet.</div>
                 : attrEntries.map(([k, v]) => (
@@ -272,30 +352,47 @@ export default function ContactsPage() {
     <div className="pg">
       <PageHead title="Contacts" sub="The unified profile substrate — identities, identifiers, consent, events."
         actions={<Btn onClick={load}><RefreshCw size={14} /> Refresh</Btn>} />
-      {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-        : rows.length === 0
-          ? <Panel><EmptyState icon="inbox" title="No contacts yet" hint="Profiles arrive via ingestion (Shopify / internal events). Once seeded they appear here." /></Panel>
-          : (
-            <Panel title="Contacts" count={rows.length}>
-              {/* §7.5 — initials avatar + the prototype column set incl. the Consent pill
-                  (backed by the S231 §9 read extension: getProfiles now returns each
-                  profile's effective MARKETING consent per channel as {channel: state}).
-                  Pill = any channel opted_in → opted_in; else any opted_out → opted_out;
-                  else unknown. The per-channel detail rides in the tooltip; the full
-                  ledger stays on the contact detail. */}
+      <Panel title="Contacts" count={rows.length}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+          padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>
+          <input className="f-inp" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search name, email or phone…"
+            style={{ flex: '1 1 240px', minWidth: 200, maxWidth: 360 }} />
+          <Btn kind={includeAnon ? 'primary' : 'ghost'} onClick={() => setIncludeAnon((v) => !v)}
+            title={includeAnon
+              ? 'Currently showing anonymous browser sessions — profiles with no email and no phone'
+              : 'Anonymous browser sessions (no email, no phone) are hidden'}>
+            {includeAnon ? 'Showing anonymous' : 'Anonymous hidden'}
+          </Btn>
+          {/* The count arrives after the table paints — see the separate counts effect. */}
+          {counts?.anonymous != null && !includeAnon && (
+            <span className="dim" style={{ fontSize: 12 }}>
+              {Number(counts.anonymous).toLocaleString('en-IN')} anonymous of{' '}
+              {Number(counts.total).toLocaleString('en-IN')} hidden
+            </span>
+          )}
+          <span className="dim" style={{ fontSize: 12, marginLeft: 'auto' }}>
+            newest {rows.length}
+          </span>
+        </div>
+        {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          : rows.length === 0
+            ? <EmptyState icon="inbox"
+                title={debouncedQ ? 'No contacts match' : 'No contacts yet'}
+                hint={debouncedQ
+                  ? 'Search covers name, email and phone. Anonymous sessions are excluded unless you show them.'
+                  : 'Profiles arrive via ingestion (Shopify / internal events). Once seeded they appear here.'} />
+            : (
               <table className="dt">
-                <thead><tr><th>Name</th><th>City</th><th>Consent</th><th className="num">Orders</th><th className="num">Lifetime ₹</th><th>Added</th></tr></thead>
+                <thead><tr>
+                  <th>Name</th><th>Email</th><th>Phone</th><th>Channels</th>
+                  <th className="num">Orders</th><th className="num">Lifetime ₹</th><th>Added</th>
+                </tr></thead>
                 <tbody>
                   {rows.map((r) => {
                     const a = r.attributes || {};
                     const initials = String(r.display_name || '')
                       .split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-                    const consent = r.consent || {};
-                    const states = Object.values(consent);
-                    const eff = states.includes('opted_in') ? 'opted_in'
-                      : states.includes('opted_out') ? 'opted_out' : 'unknown';
-                    const detail = Object.entries(consent).map(([ch, st]) => `${ch}: ${st}`).join(' · ')
-                      || 'no marketing consent recorded';
                     return (
                       <tr key={r.id} className="row-click" onClick={() => open(r)}>
                         <td>
@@ -307,24 +404,26 @@ export default function ContactsPage() {
                               {initials || '—'}
                             </span>
                             <span style={{ fontWeight: 600, color: 'var(--t1)' }}>
-                              {r.display_name || <span className="dim" style={{ fontWeight: 400 }}>— unnamed —</span>}
+                              {r.display_name
+                                || <span className="dim" style={{ fontWeight: 400 }}>
+                                     {(r.email || r.phone) ? '— unnamed —' : '— anonymous session —'}
+                                   </span>}
                             </span>
                           </span>
                         </td>
-                        <td className="dim" style={{ fontSize: 12.5 }}>{r.city || '—'}</td>
-                        <td title={`Marketing consent — ${detail}`}>
-                          <Badge label={eff} tone={STATE_TONE[eff] || 'gray'} dot />
-                        </td>
+                        <td className="mono dim" style={{ fontSize: 11.5 }}>{r.email || '—'}</td>
+                        <td className="mono dim" style={{ fontSize: 11.5 }}>{r.phone || '—'}</td>
+                        <td><ChannelStrip consent={r.consent} hasEmail={!!r.email} hasPhone={!!r.phone} /></td>
                         <td className="num mono dim">{a.lifetime_orders ?? '—'}</td>
                         <td className="num mono">{a.lifetime_value != null ? Number(a.lifetime_value).toLocaleString('en-IN') : <span className="dim">—</span>}</td>
-                        <td className="mono dim">{fmtDate(r.created_at)}</td>
+                        <td className="mono dim">{fmtDateTime(r.created_at)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-            </Panel>
-          )}
+            )}
+      </Panel>
     </div>
   );
 }

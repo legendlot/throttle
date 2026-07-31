@@ -5,7 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Check } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
-import { fmtDate } from '@/components/format.js';
+import { fmtDateTime } from '@/components/format.js';
 
 export default function UsersPage() {
   const { session, perms } = useAuth();
@@ -124,7 +124,7 @@ export default function UsersPage() {
                       <td className="mono dim">{a.email || '—'}</td>
                       <td><Badge label={a.role_label || a.role_key} tone="blue" /></td>
                       <td>{a.active ? <Badge label="active" tone="green" /> : <Badge label="inactive" tone="gray" />}</td>
-                      <td className="mono dim">{fmtDate(a.assigned_at)}</td>
+                      <td className="mono dim">{fmtDateTime(a.assigned_at)}</td>
                       <td><Btn onClick={() => toggleActive(a)} disabled={saving}><Check size={14} /> {a.active ? 'Deactivate' : 'Activate'}</Btn></td>
                     </tr>
                   ))}

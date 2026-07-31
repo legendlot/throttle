@@ -5,7 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fmtDate } from '@/components/format.js';
+import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
 
@@ -354,7 +354,7 @@ export default function SegmentsPage() {
                           title={r.kind === 'dynamic' ? 'As of the last refresh — open the segment and Refresh members to recount' : undefined}>
                           {r.member_count != null ? Number(r.member_count).toLocaleString('en-IN') : '—'}
                         </td>
-                        <td className="mono dim">{fmtDate(r.updated_at)}</td>
+                        <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
                         <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
                       </tr>
                     );

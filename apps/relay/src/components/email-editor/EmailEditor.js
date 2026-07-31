@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import grapesjs from 'grapesjs';
 import grapesjsMjml from 'grapesjs-mjml';
 import 'grapesjs/dist/css/grapes.min.css';
-import { supabase, workerFetch } from '@throttle/db';
+import { supabase, garageFetch, workerFetch } from '@throttle/db';
 import { useToast } from '@throttle/ui';
 import { exportEmail } from './exportEmail.js';
 import { BLANK_MJML } from './blankScaffold.js';
@@ -50,6 +50,31 @@ export default function EmailEditor({ initialDesign, session, onReady }) {
     });
     if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(initialDesign);
     else editor.setComponents(BLANK_MJML);
+
+    // Seed the asset manager from the shared library (S251).
+    //
+    // GrapesJS has always HAD a picker — it was just empty on every mount, because nothing
+    // ever told it what was already in the bucket. So an author who had uploaded an image
+    // last week saw a blank panel and re-uploaded it, and the bucket accumulated duplicates
+    // of the same picture. The images were never missing; they were merely invisible.
+    //
+    // Async and non-blocking: the editor is fully usable before this resolves, and a
+    // failure just leaves the panel as empty as it used to be — never a broken canvas.
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await garageFetch('getMediaLibrary', { limit: 200 }, session);
+        if (cancelled) return;
+        const assets = Array.isArray(r?.assets) ? r.assets : [];
+        if (assets.length) {
+          editor.AssetManager.add(assets.map((a) => ({
+            type: 'image', src: a.url, name: a.name.replace(/^\d+_/, ''),
+          })));
+        }
+      } catch (err) {
+        console.error('[email-editor] library', err && err.message || err);
+      }
+    })();
     const api = {
       export: () => exportEmail(editor),
       setDevice: (name) => editor.setDevice(name),
@@ -57,6 +82,10 @@ export default function EmailEditor({ initialDesign, session, onReady }) {
     };
     if (onReady) onReady(api);
     return () => {
+      // Stop the in-flight library fetch from calling AssetManager.add on a destroyed
+      // editor — templates/page.js remounts this via `editorKey` on every open, and
+      // Duplicate remounts it again immediately.
+      cancelled = true;
       if (onReady) onReady(null);
       try { editor.destroy(); } catch (_) {}
     };

@@ -169,14 +169,32 @@ async function handleGet(url, auth, env) {
       return ok({ rows: rows.data || [], stats: stats.ok ? stats.data : null });
     }
 
-    case 'getProfiles': {              // contacts list (M3; +consent S231)
-      // Set-based RPC — same rows as the old table read PLUS each profile's
-      // effective marketing-consent per channel ({channel: state}), for the
-      // COMMAND contacts-list consent pill (§9 read extension). Additive:
-      // every previous field is unchanged.
+    case 'getProfiles': {              // contacts list (M3; +consent S231; +channels/search S251)
+      // Set-based RPC. Returns each profile's contactable identifiers (email/phone) and
+      // its effective marketing consent per channel ({channel: state}), which together
+      // drive the per-channel opt-in icons.
+      //
+      // `include_anonymous` defaults FALSE. 25,154 of 154,937 profiles are pixel-created
+      // browser sessions with no email and no phone, and because they are the NEWEST rows
+      // they sorted straight to the top: 102 of the 200 rows this page rendered were
+      // unreachable noise (measured 2026-07-31). They are hidden, never deleted — 1,399
+      // of them have already been promoted into real contacts by identity resolution, so
+      // deleting them would break the very pipeline that makes them worth keeping.
       const limit = Number(url.searchParams.get('limit')) || 100;
+      const includeAnon = url.searchParams.get('include_anonymous') === 'true';
+      const q = url.searchParams.get('q') || null;
       const r = await A.sbComms('/rest/v1/rpc/profiles_list', env,
-        { method: 'POST', body: JSON.stringify({ p_limit: limit }) });
+        { method: 'POST', body: JSON.stringify({
+          p_limit: limit, p_include_anonymous: includeAnon, p_q: q }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getProfileCounts': {         // contacts data-health line (S251)
+      // Its OWN call, deliberately. Counting anonymous profiles is a whole-table anti-join
+      // (~2.5s at 155k rows, and a partial-index rewrite measured no better), while the
+      // list itself renders in ~18ms. Bundling them would have made every page load wait
+      // 2.5s for a number that is decoration. The UI fetches this after the table paints.
+      const r = await A.sbComms('/rest/v1/rpc/profiles_counts', env,
+        { method: 'POST', body: '{}' });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
     case 'getProfile': {               // contact detail: identifiers + consent + recent events (M3)
@@ -195,6 +213,47 @@ async function handleGet(url, auth, env) {
     case 'getTemplates': {             // M5
       const r = await A.sbComms('/rest/v1/templates?select=*&order=updated_at.desc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
+    case 'getMediaLibrary': {          // S251 — the shared image library
+      // Reads the relay-email-assets bucket directly rather than keeping a side table of
+      // uploads. Two reasons: the 28 images already uploaded since 2026-07-16 appear
+      // immediately (a new table would have started EMPTY and quietly implied there were
+      // no images to pick), and a bucket cannot drift out of sync with itself.
+      //
+      // Same bucket the email editor and the WhatsApp header have always uploaded into —
+      // this is a way to SEE what was already there, not a new store.
+      const bucket = 'relay-email-assets';
+      const lr = await fetch(`${env.SUPABASE_URL}/storage/v1/object/list/${bucket}`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prefix: 'email/',
+          limit: Math.min(Number(url.searchParams.get('limit')) || 200, 500),
+          offset: 0,
+          sortBy: { column: 'created_at', order: 'desc' },
+        }),
+      });
+      const lt = await lr.text();
+      let ld; try { ld = lt ? JSON.parse(lt) : null; } catch { ld = null; }
+      if (!lr.ok || !Array.isArray(ld)) return err(`list_failed:${lt}`.slice(0, 300), 502);
+      const assets = ld
+        // The list API emits a zero-byte placeholder row for the folder itself. It carries
+        // no metadata and is not an image; rendering it would put a broken tile in the picker.
+        .filter((o) => o && o.name && o.metadata)
+        .map((o) => ({
+          name: o.name,
+          path: `email/${o.name}`,
+          url: `${env.SUPABASE_URL}/storage/v1/object/public/${bucket}/email/${encodeURIComponent(o.name)}`,
+          size: o.metadata?.size ?? null,
+          mime: o.metadata?.mimetype || null,
+          created_at: o.created_at || o.updated_at || null,
+        }));
+      return ok({ assets });
     }
 
     case 'checkTemplateShape': {        // S241 — pre-send local-vs-Meta divergence check
@@ -597,6 +656,7 @@ async function handlePost(body, auth, env) {
       if (!sr.ok || !sd?.url) return err(`sign_failed:${st}`, 502);
       return ok(EA.signToUrls(env, bucket, path, sd));
     }
+
 
     case 'sendTest': {                 // M5 — test-send: always allowed, no approval; isTest bypasses the marketing gates
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);

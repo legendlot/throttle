@@ -5,7 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip } from '@/components/ui.js';
-import { fmtDate, inr } from '@/components/format.js';
+import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
@@ -678,7 +678,7 @@ export default function CampaignsPage() {
                       </td>
                       <td><Badge label={st.label} tone={st.tone} dot /></td>
                       <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
-                        {st.sub ? st.sub : (o?.at ? `${st.label === 'Sent' ? 'Sent ' : ''}${fmtDate(o.at)}` : '—')}
+                        {st.sub ? st.sub : (o?.at ? `${st.label === 'Sent' ? 'Sent ' : ''}${fmtDateTime(o.at)}` : '—')}
                       </td>
                       <td className="num mono">
                         {o?.delivered != null && o?.sent > 0

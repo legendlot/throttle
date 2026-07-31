@@ -7,7 +7,7 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch, InfoDot } from '@/components/ui.js';
 import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
-import { fmtDate, inr } from '@/components/format.js';
+import { fmtDateTime, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
@@ -813,7 +813,7 @@ export default function JourneysPage() {
                         )}
                       </td>
                       <td className="num mono dim">{rate(o?.read_rate)}</td>
-                      <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{o?.at ? fmtDate(o.at) : fmtDate(r.updated_at)}</td>
+                      <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{o?.at ? fmtDateTime(o.at) : fmtDateTime(r.updated_at)}</td>
                     </tr>
                     );
                   })}

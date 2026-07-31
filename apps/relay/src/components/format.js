@@ -14,6 +14,32 @@ export function fmtDateShort(raw) {
   if (isNaN(d)) return String(raw).slice(0, 10);
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
+// Date + time, always. A date alone cannot order two things that happened on the same
+// day, which is exactly the case that matters here: several saves of one template, or
+// several copies of it, all stamped "31 Jul 2026" with no way to tell which is current.
+// Timezone is PINNED to IST rather than left to the browser — these timestamps are read
+// against the floor's clock and quoted to the team, and a laptop on a different tz would
+// silently shift every row (the same reason activity/page.js already pins it).
+export function fmtDateTime(raw) {
+  if (!raw) return '—';
+  const d = new Date(raw);
+  if (isNaN(d)) return String(raw).slice(0, 16);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+}
+// Same instant, no year — for dense tables where the year is noise but the clock is not.
+export function fmtDateTimeShort(raw) {
+  if (!raw) return '—';
+  const d = new Date(raw);
+  if (isNaN(d)) return String(raw).slice(0, 16);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+}
 export function inr(n) {
   const v = Number(n) || 0;
   return '₹' + v.toLocaleString('en-IN');

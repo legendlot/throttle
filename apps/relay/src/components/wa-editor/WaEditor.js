@@ -1,9 +1,10 @@
 'use client';
 import { useRef, useState } from 'react';
-import { Plus, Trash2, Upload, X } from 'lucide-react';
+import { Plus, Trash2, Upload, X, Images } from 'lucide-react';
 import { supabase, workerFetch } from '@throttle/db';
 import { useToast } from '@throttle/ui';
 import { Panel, Badge, Btn } from '@/components/ui.js';
+import ImageLibrary from '@/components/ImageLibrary.js';
 import {
   WA_CATEGORIES, WA_COMPONENTS, WA_LIMITS, WA_WABAS,
   normalizeMetaName, placeholdersIn, previewText, validateWaTemplate,
@@ -47,7 +48,16 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
   const errs = validateWaTemplate(c, tokens);
   const { showToast } = useToast();
   const [uploading, setUploading] = useState(false);
+  const [libOpen, setLibOpen] = useState(false);
   const fileRef = useRef(null);
+
+  // Picking from the library is the same state transition as finishing an upload — the
+  // asset already exists, so only the URL differs. `header_handle` is blanked for exactly
+  // the reason the upload path blanks it: the old handle is Meta's copy of a DIFFERENT
+  // image, and reusing it would submit the previous picture under the new one's name.
+  function applyHeaderImage(url) {
+    setWa({ ...c, header_format: 'IMAGE', header: '', header_media_url: url, header_handle: '' });
+  }
 
   const set = (k, v) => setWa({ ...c, [k]: v });
 
@@ -159,6 +169,9 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
                   <div className="mono dim" style={{ flex: 1, minWidth: 0, fontSize: 11, wordBreak: 'break-all' }}>{c.header_media_url}</div>
                   {!disabled && (
                     <>
+                      <Btn onClick={() => setLibOpen(true)} disabled={uploading}>
+                        <Images size={14} /> Library
+                      </Btn>
                       <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={uploading}>
                         <Upload size={14} /> {uploading ? 'Uploading…' : 'Replace'}
                       </Btn>
@@ -168,15 +181,29 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
                 </div>
               ) : (
                 !disabled && (
-                  <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={uploading}>
-                    <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload image'}
-                  </Btn>
+                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                    <Btn kind="primary" onClick={() => setLibOpen(true)} disabled={uploading}>
+                      <Images size={14} /> Choose from library
+                    </Btn>
+                    <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={uploading}>
+                      <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload new'}
+                    </Btn>
+                  </span>
                 )
               )}
               <input ref={fileRef} type="file" accept={ACCEPT_MIME} style={{ display: 'none' }} onChange={onPickImage} />
               <div className="tw-note" style={{ marginTop: 6 }}>
-                PNG/JPEG/GIF/WebP, max 5MB. Meta reviews this exact image as the template&apos;s sample header.
+                PNG/JPEG/GIF/WebP, max 5MB.
+                {' '}{/* Scoped to the moment it is true. Worded as a flat rule, this read as
+                         a blocker during a header REPLACE and nearly caused a duplicate
+                         template to be created rather than an image swapped (S249). */}
+                <b>When you submit to Meta</b>, whichever image is set here is the sample
+                header Meta reviews — swapping it before submitting is fine.
               </div>
+              {libOpen && (
+                <ImageLibrary session={session} onClose={() => setLibOpen(false)}
+                  onPick={(url) => { applyHeaderImage(url); showToast('Header image set', 'success'); }} />
+              )}
             </div>
           )}
         </div>

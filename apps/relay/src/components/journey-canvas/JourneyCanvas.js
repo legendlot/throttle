@@ -191,7 +191,7 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
               <Plus size={12} /> {STEP_META[t].label}
             </button>
           ))}
-          <span className="dim" style={{ fontSize: 12 }}>Click a node to configure · drag from a right-side dot to connect · ⌫ deletes</span>
+          <span className="dim" style={{ fontSize: 12 }}>Click a node to configure · drag from a right-side dot to connect · ⌫ Backspace or Delete removes the selected node or connection</span>
         </div>
       )}
       {lint.length > 0 && (
@@ -209,7 +209,10 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
           onNodeClick={(_, n) => onSelect && onSelect(n.id)}
           onPaneClick={() => onSelect && onSelect(null)}
           nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable
-          deleteKeyCode={readOnly ? null : 'Backspace'}
+          // Both keys, deliberately. Backspace-only meant a full-size keyboard's Delete key
+          // did nothing on a selected node or edge, with no feedback explaining why — and
+          // Delete is the key most people reach for first. React Flow accepts an array.
+          deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
           fitView
           // `fitView` alone zooms until the graph FILLS the box, so a 2-node journey
           // rendered enormous and a fresh one nearly full-screen. maxZoom 1 means fit
