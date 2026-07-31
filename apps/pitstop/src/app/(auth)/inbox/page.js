@@ -150,37 +150,53 @@ const ICON_BTN = {
 // Same shape, 26px tall — the command bar is 40px and cannot afford 28.
 const BAR_BTN = { ...ICON_BTN, height: 26 };
 
-/* Measured width of one element, for the command bar's degradation ladder (§5.13). The bar
-   must never wrap — losing the 40px is the whole point — so controls shed weight in a fixed
-   order instead.
+/* ── Command-bar fit ladder (§5.13) ──────────────────────────────────────────────────────
+   The bar must never wrap — losing the 40px is the whole point — so controls shed weight in
+   a fixed order: 1 the active segment's text label · 2 search 200→150 · 3 Compose → icon
+   only · 4 the assignment axis moves into the filters popover.
 
-   ⚠️ Measures THE BAR, not the viewport. The design's thresholds are written as viewport
-   widths because every mock is drawn with the sidebar collapsed, but PitstopSidebar is
-   **236px expanded vs 64px collapsed** — a 172px swing. Keyed off `window.innerWidth`, a
-   1440px window with the sidebar OPEN leaves the bar 1204px and degrades nothing, so the
-   right-hand controls (including the collapse chevron, which must never be clipped) get
-   pushed off the edge. A ResizeObserver on the bar itself is immune to that, and follows
-   the sidebar's own 180ms collapse animation for free.
+   ⚠️ Driven by the bar's OWN overflow, not by a viewport breakpoint.
+   Two reasons the spec's viewport figures (1280/1200/1150/1100) cannot be used literally:
+   (a) every mock is drawn with the sidebar collapsed, but PitstopSidebar is **236px expanded
+       vs 64px collapsed** — a 172px swing — so a 1440px window with the sidebar OPEN leaves
+       the bar ~1204px, degrades nothing, and pushes the collapse chevron off the edge; and
+   (b) translating them into bar widths means budgeting the real pixel cost of ~20 controls
+       whose width depends on the agent's own data (agent names, channel counts, which
+       permissions they hold) — a guess that is wrong on someone's screen.
+   Measuring `scrollWidth > clientWidth` asks the browser the only question that matters:
+   *does it fit?* The bar cannot carry `overflow: hidden` as a backstop, because every
+   popover in it is an absolutely-positioned child and would be clipped.
 
-   `null` until measured: this app is `output: 'export'`, so there is no DOM at build time
-   and reading one during render would break the prerender. null reads as "widest", so the
-   first paint is never the degraded one. */
-function useElementWidth(ref) {
-  const [w, setW] = useState(null);
+   Non-oscillating by construction: a level is only given back when the slack exceeds what
+   restoring it actually costs, so it can never fit at level N, un-compact to N-1, overflow,
+   and compact again. `RESTORE_COST` is the width each step gives back (measured generously);
+   the +24 is margin.
+
+   Level 0 until measured — this app is `output: 'export'`, so there is no DOM at build time
+   and the first paint is never the degraded one. */
+const FIT_LEVELS = 4;
+const RESTORE_COST = { 1: 80, 2: 60, 3: 70, 4: 300 };
+function useFitLadder(ref) {
+  const [level, setLevel] = useState(0);
   useEffect(() => {
     const el = ref.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    if (!el) return undefined;
+    const measure = () => {
+      const slack = el.clientWidth - el.scrollWidth;
+      if (slack < -1) {
+        setLevel(l => Math.min(FIT_LEVELS, l + 1));           // overflowing → shed the next thing
+      } else if (level > 0 && slack > RESTORE_COST[level] + 24) {
+        setLevel(l => Math.max(0, l - 1));                    // room to spare → give one back
+      }
+    };
+    measure();                                                // re-runs per level change → converges
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setW(el.getBoundingClientRect().width);
     return () => ro.disconnect();
-  }, [ref]);
-  return w;
+  }, [ref, level]);
+  return level;
 }
-/* §5.13 thresholds, restated as BAR width = the design's viewport figure minus the 64px
-   collapsed sidebar — so a sidebar-collapsed 1440×900 behaves exactly as the mock specifies,
-   and an expanded sidebar degrades at the same *usable* width instead of not at all. */
-const BAR_STEPS = { hideActiveLabel: 1216, searchNarrow: 1136, composeIconOnly: 1086, assignInPopover: 1036 };
 
 const BITESPEED_BASE = 'https://chat.bitespeed.co';
 const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
@@ -1977,16 +1993,15 @@ function InboxCommandBar(props) {
     listCollapsed, toggleListCollapse,
   } = props;
 
-  // Self-measuring: the ladder reacts to the bar's real width, so collapsing the sidebar or
-  // the browser window both feed the same signal.
+  // Self-measuring: the bar sheds weight only when it genuinely does not fit, so collapsing
+  // the sidebar, resizing the window and a long agent name all feed the same one signal.
   const barRef = useRef(null);
-  const bw = useElementWidth(barRef);
-  const tight = (px) => bw != null && bw <= px;
+  const fit = useFitLadder(barRef);
   const compact = {
-    hideActiveLabel: tight(BAR_STEPS.hideActiveLabel),   // active segment → glyph + count only
-    searchWidth:     tight(BAR_STEPS.searchNarrow) ? 150 : 200,
-    composeIconOnly: tight(BAR_STEPS.composeIconOnly),
-    assignInPopover: tight(BAR_STEPS.assignInPopover),   // axis moves into the filters popover
+    hideActiveLabel: fit >= 1,   // active segment → glyph + count only
+    searchWidth:     fit >= 2 ? 150 : 200,
+    composeIconOnly: fit >= 3,
+    assignInPopover: fit >= 4,   // axis moves into the filters popover
   };
 
   // Shared segment shell. `on` drives the accent treatment; every variant keeps the same
