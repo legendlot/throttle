@@ -307,6 +307,8 @@ export default {
       case 'getSocialMonitoring':   return handleGetSocialMonitoring(body, ctx, env);
       case 'syncSocialInsights':    return handleSyncSocialInsights(body, ctx, env);
       case 'getSocialAnalytics':    return handleGetSocialAnalytics(body, ctx, env);
+      case 'getIgComments':         return handleGetIgComments(body, ctx, env);
+      case 'replyIgComment':        return handleReplyIgComment(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -3182,6 +3184,53 @@ async function igGet(pathAndQuery, env) {
   }
 }
 
+// ── Tier 2: comments (read + reply) ─────────────────────────────────────────
+// Same IGAA token as Tier 1. The Pitstop-messaging app carries
+// `instagram_business_manage_comments` (verified in the Meta App Dashboard
+// 2026-07-31, use case "Manage messaging & content on Instagram", step 1 green).
+//
+// ⚠️ App-level permission ≠ token scope. Meta bakes scopes into a token AT MINT
+// TIME, and META_IG_TOKEN was minted in S161 for DMs. If the comments permission
+// was added to the app afterwards, this token does not carry it and every call
+// here 400s until the token is RE-MINTED (self-serve, App Dashboard → API setup
+// with Instagram login → Generate access tokens — no App Review). That is why
+// igScopeError() below exists: a missing scope must read as "re-mint the token",
+// never as "this post has no comments", which is what an unclassified empty
+// result would look like.
+async function igPost(pathAndQuery, form, env) {
+  if (!env.META_IG_TOKEN) return { ok: false, status: 503, data: { error: 'no_ig_token' } };
+  const sep = pathAndQuery.includes('?') ? '&' : '?';
+  const bodyParams = new URLSearchParams(form || {});
+  try {
+    const res = await fetch(`${IG_GRAPH}/${pathAndQuery}${sep}access_token=${env.META_IG_TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: bodyParams.toString(),
+    });
+    const data = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: String(e) } };
+  }
+}
+
+// Turn a Meta OAuth/permission failure into an actionable message. Meta reports a
+// missing scope as an OAuthException (code 190/200/10, or a message naming the
+// permission) — indistinguishable from other auth failures unless inspected.
+function igScopeError(r) {
+  const e = r?.data?.error;
+  if (!e) return null;
+  const msg = String(e.message || e || '');
+  const looksScope = /permission|scope|instagram_business_manage_comments|OAuthException/i.test(msg)
+    || [190, 200, 10, 3].includes(Number(e.code));
+  if (!looksScope) return null;
+  return `Instagram refused the comment call — this is almost certainly a TOKEN SCOPE problem, not an empty result. `
+    + `The app has instagram_business_manage_comments, but META_IG_TOKEN was minted for DMs (S161) and a Meta token `
+    + `only carries the scopes it was granted at mint time. Re-mint it: App Dashboard → Pitstop messaging → `
+    + `Instagram API → API setup with Instagram login → Generate access tokens, then wrangler secret put `
+    + `META_IG_TOKEN on throttleops. No App Review needed. Meta said: ${msg}`;
+}
+
 // Map an insights `data` array → { metricName: latestValue }.
 function igMetricMap(data) {
   const out = {};
@@ -3366,6 +3415,61 @@ async function handleSyncSocialInsights(body, ctx, env) {
     console.error('[syncSocialInsights]', e?.stack || e);
     return err(`Sync failed: ${e?.message || e}`, 500);   // always a CORS response
   }
+}
+
+// Tier 2 — read the comment thread on one published IG post.
+// Read-only, and deliberately does NOT cache into Postgres: comments live on Meta
+// permanently and are re-fetchable, so a local copy would only add a staleness
+// problem and a moderation-lag bug (a comment deleted on IG would linger here).
+async function handleGetIgComments(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const mediaId = String(body?.ig_media_id || '').trim();
+  if (!mediaId) return err('ig_media_id required', 400);
+  if (!/^\d+$/.test(mediaId)) return err('ig_media_id must be numeric', 400);
+  if (!env.META_IG_TOKEN) return err('META_IG_TOKEN is not set on throttleops', 503);
+
+  // replies{} is a nested edge — one call returns the whole thread.
+  const fields = 'id,text,username,timestamp,like_count,hidden,replies{id,text,username,timestamp,like_count}';
+  const r = await igGet(`${encodeURIComponent(mediaId)}/comments?fields=${encodeURIComponent(fields)}&limit=100`, env);
+  if (!r.ok) {
+    const scope = igScopeError(r);
+    if (scope) return err(scope, 403);
+    return err(`Instagram comment read failed (${r.status}): ${JSON.stringify(r.data?.error || r.data)}`, 502);
+  }
+  const comments = (r.data?.data || []).map(c => ({
+    id: c.id, text: c.text || '', username: c.username || null,
+    timestamp: c.timestamp || null, like_count: Number(c.like_count || 0),
+    hidden: !!c.hidden,
+    replies: (c.replies?.data || []).map(x => ({
+      id: x.id, text: x.text || '', username: x.username || null,
+      timestamp: x.timestamp || null, like_count: Number(x.like_count || 0),
+    })),
+  }));
+  return json({ ig_media_id: mediaId, count: comments.length, comments });
+}
+
+// Tier 2 — reply to a comment. POST /{ig-comment-id}/replies, NOT the messages
+// endpoint: a comment reply is a different object from a DM, and sending via
+// messages would open a private thread instead of replying publicly.
+async function handleReplyIgComment(body, ctx, env) {
+  // Replying is public brand speech, so it is lead/admin — not `member`, which can
+  // read the thread above. Deliberately narrower than the read gate.
+  const g = requireRole(ctx, 'lead', 'admin'); if (g) return g;
+  const commentId = String(body?.comment_id || '').trim();
+  const message = String(body?.message || '').trim();
+  if (!commentId) return err('comment_id required', 400);
+  if (!/^\d+$/.test(commentId)) return err('comment_id must be numeric', 400);
+  if (!message) return err('message required', 400);
+  if (message.length > 2200) return err('message too long (IG caps a comment at 2,200 characters)', 400);
+  if (!env.META_IG_TOKEN) return err('META_IG_TOKEN is not set on throttleops', 503);
+
+  const r = await igPost(`${encodeURIComponent(commentId)}/replies`, { message }, env);
+  if (!r.ok) {
+    const scope = igScopeError(r);
+    if (scope) return err(scope, 403);
+    return err(`Instagram reply failed (${r.status}): ${JSON.stringify(r.data?.error || r.data)}`, 502);
+  }
+  return json({ comment_id: commentId, reply_id: r.data?.id || null, message });
 }
 
 async function handleGetSocialAnalytics(body, ctx, env) {
