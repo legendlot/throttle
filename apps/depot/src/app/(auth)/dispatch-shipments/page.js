@@ -144,6 +144,7 @@ export default function DispatchShipmentsPage() {
   const [detailShipment, setDetailShipment] = useState(null);
   const [detailBoxes,    setDetailBoxes]    = useState([]);
   const [detailLines,    setDetailLines]    = useState([]);
+  const [detailRemovals, setDetailRemovals] = useState([]);
   const [detailLoading,  setDetailLoading]  = useState(false);
   const [expandedBoxes,  setExpandedBoxes]  = useState(new Set());
   const [boxUnitsCache,  setBoxUnitsCache]  = useState({});
@@ -250,14 +251,16 @@ export default function DispatchShipmentsPage() {
     setBoxUnitsCache({});
     setDetailLoading(true);
     try {
-      const [boxes, lines] = await Promise.all([
+      const [boxes, lines, rem] = await Promise.all([
         garageFetch('getShipmentBoxes', { shipment_id: shipment.id }, session),
         garageFetch('getShipmentLines', { shipment_id: shipment.id }, session),
+        garageFetch('getShipmentRemovals', { shipment_id: shipment.id }, session),
       ]);
       setDetailBoxes(Array.isArray(boxes) ? boxes : []);
       setDetailLines(Array.isArray(lines) ? lines : []);
+      setDetailRemovals(Array.isArray(rem?.removals) ? rem.removals : []);
     } catch (_) {
-      setDetailBoxes([]); setDetailLines([]);
+      setDetailBoxes([]); setDetailLines([]); setDetailRemovals([]);
     } finally {
       setDetailLoading(false);
     }
@@ -267,15 +270,17 @@ export default function DispatchShipmentsPage() {
     if (!detailShipment) return;
     setDetailLoading(true);
     try {
-      const [shpData, boxes, lines] = await Promise.all([
+      const [shpData, boxes, lines, rem] = await Promise.all([
         garageFetch('getDispatchShipments', {}, session),
         garageFetch('getShipmentBoxes', { shipment_id: detailShipment.id }, session),
         garageFetch('getShipmentLines', { shipment_id: detailShipment.id }, session),
+        garageFetch('getShipmentRemovals', { shipment_id: detailShipment.id }, session),
       ]);
       const updated = Array.isArray(shpData) ? shpData.find(s => s.id === detailShipment.id) : null;
       if (updated) setDetailShipment(updated);
       setDetailBoxes(Array.isArray(boxes) ? boxes : []);
       setDetailLines(Array.isArray(lines) ? lines : []);
+      setDetailRemovals(Array.isArray(rem?.removals) ? rem.removals : []);
     } catch (_) {} finally {
       setDetailLoading(false);
     }
@@ -968,6 +973,19 @@ export default function DispatchShipmentsPage() {
                             </span>
                           )}
                           {ready && <ToneBadge tone="ok">Ready</ToneBadge>}
+                          {/* Stale-draft nudge, 7 days (Afshaan 2026-07-31). A draft only
+                              closes when its LAST box is dispatched out, so an unfinished
+                              consignment sits here forever with its cartons still live —
+                              DSO-0152 went 41 days unnoticed. Age counts from the newest
+                              box activity, not created_at, so an actively-worked shipment
+                              never trips it. */}
+                          {s.stale_draft && (
+                            <span title={`Draft, untouched for ${s.idle_days} days · ${fmt(s.draft_units_packed)} unit(s) sitting in ${s.draft_boxes} box(es). Dispatch it out or cancel it.`}
+                              style={{ fontSize: 9, fontWeight: 700, color: 'var(--warn-fg)', border: '1px solid var(--warn-bd)',
+                                background: 'var(--warn-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                              STALE {s.idle_days}d
+                            </span>
+                          )}
                           {s.tracking_number && (
                             <span title={`Tracked${s.courier_partner ? ` · ${s.courier_partner}` : ''}: ${s.tracking_number}`}
                               style={{ display: 'inline-flex', color: 'var(--blue-bright)', flexShrink: 0 }}>
@@ -1199,6 +1217,49 @@ export default function DispatchShipmentsPage() {
                     })}
                   </div>
                 )}
+
+                {/* Removed after packing — sits directly under the manifest because it
+                    answers the question the manifest raises ("why is this line short?").
+                    Removing a packed unit is routine (~1,100/month) and correctly drops
+                    packed_qty, so this is an explanation, not an exception report. Units
+                    that were later re-packed into THIS shipment are shown greyed as
+                    "back in" so they are not mistaken for losses. */}
+                {detailRemovals.length > 0 && (() => {
+                  const gone = detailRemovals.filter(r => !r.returned_to_this_shipment);
+                  return (
+                    <>
+                      <div className="label" style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 10 }}>
+                        Removed after packing · {gone.length}
+                        {detailRemovals.length !== gone.length && (
+                          <span style={{ color: 'var(--t4)' }}> ({detailRemovals.length - gone.length} came back)</span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+                        {detailRemovals.map((r, i) => {
+                          const back = r.returned_to_this_shipment;
+                          const dest = back
+                            ? 'back in this shipment'
+                            : r.now_in_shipment ? `now on ${r.now_in_shipment}`
+                            : r.now_in_box     ? `now in ${r.now_in_box}${r.current_status === 'shipped' ? ' · shipped separately' : ''}`
+                            : (r.current_status || 'not in a box');
+                          return (
+                            <div key={`${r.car_upc}-${r.removed_at}-${i}`}
+                              style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: 'var(--font-ui)',
+                                fontSize: 12, color: back ? 'var(--t4)' : 'var(--t2)' }}>
+                              <span className="num" style={{ color: back ? 'var(--t4)' : 'var(--t1)', width: 132, flexShrink: 0 }}>{r.car_upc}</span>
+                              <span style={{ width: 150, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {[r.product, r.model, r.color].filter(Boolean).join(' ')}
+                              </span>
+                              <span style={{ width: 96, flexShrink: 0, color: 'var(--t4)' }}>{r.removed_from_box || '—'}</span>
+                              <span style={{ width: 118, flexShrink: 0, color: 'var(--t4)' }}>{formatDateTime(r.removed_at)}</span>
+                              <span style={{ flex: 1, color: back ? 'var(--t4)' : 'var(--yellow)' }}>{dest}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* Boxes */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
