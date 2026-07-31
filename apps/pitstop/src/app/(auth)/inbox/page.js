@@ -150,6 +150,11 @@ const ICON_BTN = {
 // Same shape, 26px tall — the command bar is 40px and cannot afford 28.
 const BAR_BTN = { ...ICON_BTN, height: 26 };
 
+// Tag chips shown inline in the conversation header; the remainder collapse into a `+N` that
+// opens the picker. 2 rather than 3 because the header's right cluster is genuinely wide once
+// an assigned agent's full name is in it (measured: 637px), and the customer's name has to win.
+const TAG_CHIPS_IN_HEADER = 2;
+
 /* ── Command-bar fit ladder (§5.13) ──────────────────────────────────────────────────────
    The bar must never wrap — losing the 40px is the whole point — so controls shed weight in
    a fixed order: 1 the active segment's text label · 2 search 200→150 · 3 Compose → icon
@@ -1150,23 +1155,35 @@ export default function InboxPage() {
                   )}
                 </div>
 
-                {/* Tags — was a 32px band of its own. Up to 3 chips inline with one-click remove;
-                    the overflow count and add/create sit behind the picker so the row cannot wrap.
+                {/* Tags — was a 32px band of its own. A couple of chips inline with one-click
+                    remove; the rest, plus add/create, behind the picker so the row cannot wrap.
                     ⚠️ Both the chips' remove AND the picker operate on the FULL `threadTags` list —
                     handing TagPicker a truncated `value` would make its next save DELETE the
-                    tags it could not see. */}
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                  {threadTags.slice(0, 3).map(tag => (
-                    <TagChip key={tag.id} tag={tag} small
-                      onRemove={canManage ? (t) => setThreadTagsAction(threadTags.filter(x => x.id !== t.id).map(x => x.id)) : null} />
-                  ))}
-                  {threadTags.length > 3 && (
+                    tags it could not see.
+                    ⚠️ The chip strip is BOUNDED and shrinkable, and the `+N`/`+` buttons sit
+                    OUTSIDE it. Tags are secondary here (they also show on every list row) but as
+                    an unbounded flex-shrink:0 sibling they beat the customer's NAME, which is the
+                    one thing that must stay readable: measured live at 1128px of header, tags took
+                    333px and the name collapsed to 61px ("ft.za…"). Bounding the strip — rather
+                    than flooring the name with a min-width — avoids leaving dead space beside a
+                    short name. */}
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
+                    maxWidth: 220, overflow: 'hidden' }}>
+                    {threadTags.slice(0, TAG_CHIPS_IN_HEADER).map(tag => (
+                      <span key={tag.id} style={{ flexShrink: 0, display: 'inline-flex' }}>
+                        <TagChip tag={tag} small
+                          onRemove={canManage ? (t) => setThreadTagsAction(threadTags.filter(x => x.id !== t.id).map(x => x.id)) : null} />
+                      </span>
+                    ))}
+                  </div>
+                  {threadTags.length > TAG_CHIPS_IN_HEADER && (
                     <button onClick={() => setTagsOpen(v => !v)}
-                      title={`Also tagged: ${threadTags.slice(3).map(t => t.name).join(', ')}`}
+                      title={`Also tagged: ${threadTags.slice(TAG_CHIPS_IN_HEADER).map(t => t.name).join(', ')}`}
                       style={{ fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 999,
                         border: '1px solid var(--border-2)', background: 'transparent', color: 'var(--t3)',
                         cursor: 'pointer', flexShrink: 0 }}>
-                      +{threadTags.length - 3}
+                      +{threadTags.length - TAG_CHIPS_IN_HEADER}
                     </button>
                   )}
                   {canManage && (
