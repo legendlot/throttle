@@ -7,6 +7,7 @@ import {
   Search, X, Plus, Check, Ban, ListFilter, Layers, List, Rows3, Inbox,
   ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
   Lock, Settings2, LayoutDashboard, ListChecks, Archive, CheckSquare, Users, Flag, Tag, Columns3,
+  UserPlus, FolderInput,
 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
@@ -259,7 +260,11 @@ export default function TasksPage() {
   // "Collaborating" = everything else (collaborator-only). Search applies; no Grid/nesting.
   const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesQuery) : []), [mineMode, tasks, matchesQuery]);
   const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner').sort(sortFn), [mineMatched, sortFn]);
-  const mineCollab = useMemo(() => mineMatched.filter(t => t._relation !== 'owner').sort(sortFn), [mineMatched, sortFn]);
+  // Match 'collaborator' EXACTLY, not !== 'owner'. The worker gained a third relation
+  // ('creator' — raised by me, owned by someone else), and the old catch-all would have
+  // filed those under "Collaborating", which is a different and misleading claim.
+  const mineCollab = useMemo(() => mineMatched.filter(t => t._relation === 'collaborator').sort(sortFn), [mineMatched, sortFn]);
+  const mineCreated = useMemo(() => mineMatched.filter(t => t._relation === 'creator').sort(sortFn), [mineMatched, sortFn]);
 
   // Board (Kanban) view: top-level, non-abandoned tasks (incl. ones still "needs setup" —
   // there is no separate Grid tray on the board). Columns follow the group-by axis,
@@ -270,9 +275,9 @@ export default function TasksPage() {
 
   // ---- bulk selection (works in Grid + board + my-tasks; only editable tasks are selectable) ----
   const selectableIds = useMemo(() => {
-    const pool = mineMode ? [...mineOwner, ...mineCollab] : [...gridRows, ...boardRows];
+    const pool = mineMode ? [...mineOwner, ...mineCollab, ...mineCreated] : [...gridRows, ...boardRows];
     return pool.filter(t => t._can_edit && t.status !== 'abandoned').map(t => t.id);
-  }, [mineMode, mineOwner, mineCollab, gridRows, boardRows]);
+  }, [mineMode, mineOwner, mineCollab, mineCreated, gridRows, boardRows]);
   const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
   const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
   function clearSelection() { setSelected(new Set()); }
@@ -295,9 +300,32 @@ export default function TasksPage() {
       await load();
     } catch (e) { showToast(e.message || 'Bulk update failed', 'error'); }
   }
+  // The three S153 actions that are NOT plain field writes, so they each have their own
+  // worker handler rather than riding bulkUpdateTasks. One shared reporter: every handler
+  // returns {updated, skipped} and skips rather than failing the batch, so "skipped N" is
+  // normal output (usually rows the caller can't edit), not an error.
+  async function runBulk(action, payload, verb) {
+    const ids = [...selected];
+    if (!ids.length) return;
+    try {
+      const res = await docketopsPost(action, { ids, ...payload }, session);
+      const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
+      showToast(`${verb} ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
+      clearSelection();
+      await load();
+    } catch (e) { showToast(e.message || `${verb} failed`, 'error'); }
+  }
+  const applyBulkCollaborator = (employee_id, mode) =>
+    runBulk('bulkSetCollaborator', { employee_id, mode }, mode === 'remove' ? 'Removed from' : 'Added to');
+  const applyBulkMove = (space_id) => runBulk('bulkMoveTasks', { space_id }, 'Moved');
+  async function applyBulkAbandon(reason) {
+    // Terminal and mass — confirm with the count, and the worker requires the reason too.
+    if (!window.confirm(`Abandon ${selected.size} task${selected.size === 1 ? '' : 's'}? This is terminal.`)) return;
+    await runBulk('bulkAbandonTasks', { reason }, 'Abandoned');
+  }
 
   // Publish the visible count to the topbar; clear it when leaving the board.
-  const headerCount = mineMode ? (mineOwner.length + mineCollab.length) : activeTop.length;
+  const headerCount = mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) : activeTop.length;
   useEffect(() => { setCount?.(headerCount); return () => setCount?.(null); }, [headerCount, setCount]);
 
   // Program mode: smart default space for new tasks = the space this program already lives
@@ -445,11 +473,11 @@ export default function TasksPage() {
       </div>
 
       {loading && tasks.length === 0 ? <Spinner /> : (
-        (mineMode ? (mineOwner.length + mineCollab.length) === 0 : topLevel.length === 0) ? (
+        (mineMode ? (mineOwner.length + mineCollab.length + mineCreated.length) === 0 : topLevel.length === 0) ? (
           <div className="empty-state">
             <div className="ei"><ListChecks size={24} /></div>
             <h3>{(q || activeFilterCount) ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
-            <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own or collaborate on — across every space — show up here.' : 'Capture a task above to get started.')}</p>
+            <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own, collaborate on, or raised for someone else — across every space — show up here.' : 'Capture a task above to get started.')}</p>
             {activeFilterCount > 0 && <button className="fp-clear" style={{ width: 'auto', margin: '14px auto 0' }} onClick={clearFilters}>Clear filters</button>}
           </div>
         ) : mineMode ? (
@@ -457,6 +485,11 @@ export default function TasksPage() {
             <MineSection title="Assigned to me" rows={mineOwner} ctx={rowCtx} gridCols={gridCols}
               sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
             <MineSection title="Collaborating" rows={mineCollab} ctx={rowCtx} gridCols={gridCols}
+              sortKey={sortKey} sortDir={sortDir} onSort={onSort} collapsible />
+            {/* Raised by me, owned by someone else — delegated work that used to be absent
+                from this view entirely. Only OPEN ones appear (the RPC excludes done/
+                abandoned for this relation), so a finished delegation leaves the list. */}
+            <MineSection title="Raised by me" rows={mineCreated} ctx={rowCtx} gridCols={gridCols}
               sortKey={sortKey} sortDir={sortDir} onSort={onSort} collapsible />
           </div>
         ) : (
@@ -512,7 +545,10 @@ export default function TasksPage() {
 
       {!boardMode && selectMode && selected.size > 0 && (
         <BulkBar count={selected.size} onClear={clearSelection} onApply={applyBulk}
-          ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts} />
+          ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts}
+          empOpts={empOpts}
+          spaceOpts={spaces.filter(s => !s.archived_at).map(s => ({ value: s.id, label: s.name }))}
+          onCollaborator={applyBulkCollaborator} onMove={applyBulkMove} onAbandon={applyBulkAbandon} />
       )}
 
       {drawerId && (
@@ -929,8 +965,9 @@ function MineSection({ title, rows, ctx, gridCols, sortKey, sortDir, onSort, col
 }
 
 /* ---------------- Bulk action bar (floating) ---------------- */
-function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts }) {
-  const [menu, setMenu] = useState(null); // owner | status | priority | program | deadline
+function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts,
+                  empOpts = [], spaceOpts = [], onCollaborator, onMove, onAbandon }) {
+  const [menu, setMenu] = useState(null); // owner | status | priority | program | deadline | collab | space | abandon
   const [draft, setDraft] = useState(null);
   const [reason, setReason] = useState('');
   const ref = useRef(null);
@@ -995,6 +1032,49 @@ function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts }) 
         <div className="bb-item">
           <button className={'bb-btn' + (menu === 'program' ? ' on' : '')} onClick={() => toggle('program')}><Tag size={14} /> Program</button>
           {menu === 'program' && <div className="pop bb-pop"><OptionList options={programOpts} searchable onPick={(v) => go('program_id', v)} /></div>}
+        </div>
+        {/* Collaborators (S153) — child table, so it does not go through onApply. Add vs
+            remove is chosen explicitly: a single tap list would make "remove" unreachable. */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'collab' ? ' on' : '')} onClick={() => toggle('collab')}><UserPlus size={14} /> Collaborators</button>
+          {menu === 'collab' && (
+            <div className="pop bb-pop" style={{ width: 250, padding: 8 }}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                <button className={'btn ' + (draft === 'remove' ? 'btn-ghost' : 'btn-primary')} style={{ flex: 1 }} onClick={() => setDraft('add')}>Add</button>
+                <button className={'btn ' + (draft === 'remove' ? 'btn-primary' : 'btn-ghost')} style={{ flex: 1 }} onClick={() => setDraft('remove')}>Remove</button>
+              </div>
+              <OptionList options={empOpts} searchable
+                onPick={(v) => { onCollaborator(v, draft === 'remove' ? 'remove' : 'add'); close(); }} />
+            </div>
+          )}
+        </div>
+        {/* Move to space (S153) — sub-tasks follow their parent, handled worker-side. */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'space' ? ' on' : '')} onClick={() => toggle('space')}><FolderInput size={14} /> Move</button>
+          {menu === 'space' && (
+            <div className="pop bb-pop">
+              <OptionList options={spaceOpts} searchable onPick={(v) => { onMove(v); close(); }} />
+            </div>
+          )}
+        </div>
+        {/* Abandon (S153) — terminal, so a reason is mandatory here exactly as it is on a
+            single task. bulkUpdateTasks deliberately refuses status='abandoned'. */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'abandon' ? ' on' : '')} onClick={() => toggle('abandon')}><Ban size={14} /> Abandon</button>
+          {menu === 'abandon' && (
+            <div className="pop bb-pop" style={{ width: 260, padding: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8, lineHeight: 1.45 }}>
+                Terminal. The same reason is recorded on every selected task.
+              </div>
+              <input className="reason-input" placeholder="Reason (required)" value={reason} autoFocus
+                onChange={e => setReason(e.target.value)} />
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
+                <button className="btn btn-ghost" onClick={close}>Cancel</button>
+                <button className="btn btn-primary" disabled={!reason.trim()}
+                  onClick={() => { const r = reason.trim(); close(); onAbandon(r); }}>Abandon</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <button className="bb-clear" onClick={onClear}><X size={14} /> Clear</button>
