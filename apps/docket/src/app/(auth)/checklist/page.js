@@ -19,10 +19,27 @@ import { PRIORITIES } from '../../../lib/tasks.js';
 const timeKey = (i) => (i.recurrence?.time) || '99:99';
 const byTime = (a, b) => timeKey(a).localeCompare(timeKey(b)) || (a.title || '').localeCompare(b.title || '');
 
+// IST today as YYYY-MM-DD. en-CA formats that way natively, and going through Intl keeps this
+// consistent with the nowHM clock below instead of reintroducing the toISOString() off-by-one
+// (that helper returns YESTERDAY between 00:00 and 05:30 IST).
+const istTodayStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+// Pure UTC arithmetic on a date-only string — no local-timezone drift either way.
+const shiftISO = (iso, days) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+};
+
 export default function ChecklistPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
   const [tab, setTab] = useState('day');           // 'day' | 'manage' | 'oversight'
+  // '' = today. Any past date is viewable AND completable — the whole worker path is already
+  // date-relative (getChecklist / toggleChecklistItem / toggleChecklistOccurrence all take a
+  // date, and due_today/completed_today are computed from it), so this is purely the UI
+  // catching up. Forgetting to tick yesterday previously had no recourse at all.
+  const [viewDate, setViewDate] = useState('');
   const [me, setMe] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -60,14 +77,16 @@ export default function ChecklistPage() {
     return (employees || []).filter(e => e.id === me.employee_id || viewAll || (me.department_id && e.department_id === me.department_id));
   }, [me, employees, viewAll]);
 
-  const load = useCallback(async (pid) => {
+  const load = useCallback(async (pid, dateArg) => {
     if (!session || !pid) return;
     setLoading(true);
-    try { setData(await docketopsGet('getChecklist', { employee_id: pid }, session)); }
+    const params = { employee_id: pid };
+    if (dateArg) params.date = dateArg;   // omitted ⇒ the worker uses IST today
+    try { setData(await docketopsGet('getChecklist', params, session)); }
     catch (e) { showToast(e.message || 'Failed to load checklist', 'error'); setData(null); }
     finally { setLoading(false); }
   }, [session, showToast]);
-  useEffect(() => { if (personId && tab === 'day') load(personId); }, [personId, tab, load]);
+  useEffect(() => { if (personId && tab === 'day') load(personId, viewDate); }, [personId, tab, viewDate, load]);
 
   const loadTemplates = useCallback(async () => {
     if (!session) return;
@@ -83,6 +102,13 @@ export default function ChecklistPage() {
   const doneCount = dueToday.filter(i => i.completed_today).length;
   const allSorted = useMemo(() => recItems.slice().sort(byTime), [recItems]);
   const nowHM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  // `today` above is the date the worker ANSWERED for, which is the viewed date. Compare it to
+  // real IST today to decide whether this is a back-fill view.
+  const istToday = istTodayStr();
+  const isToday = !today || today === istToday;
+  // Future dates are deliberately NOT reachable. A checklist records that something WAS done;
+  // ticking tomorrow's box is meaningless and would make adherence unauditable. Past-only.
+  const canGoNext = !!today && today < istToday;
   const isOwn = personId === me?.employee_id;
 
   // ── personal recurring toggle (flat) ──
@@ -90,14 +116,14 @@ export default function ChecklistPage() {
     if (!item._can_complete) return;
     const next = !item.completed_today;
     setData(d => ({ ...d, recurring_items: d.recurring_items.map(i => i.id === item.id ? { ...i, completed_today: next } : i) }));
-    try { await docketopsPost('toggleChecklistOccurrence', { id: item.id, completed: next }, session); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); load(personId); }
+    try { await docketopsPost('toggleChecklistOccurrence', { id: item.id, completed: next, date: today || undefined }, session); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); load(personId, viewDate); }
   }
   // ── template run handlers ──
   async function toggleItem(itemId, completed) {
     setData(d => ({ ...d, template_runs: d.template_runs.map(run => ({ ...run, sections: run.sections.map(s => ({ ...s, items: s.items.map(it => it.id === itemId ? { ...it, completed, completed_at: completed ? new Date().toISOString() : null, completed_by: completed ? (me?.full_name || null) : null } : it) })) })) }));
-    try { await docketopsPost('toggleChecklistItem', { template_item_id: itemId, completed }, session); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); load(personId); }
+    try { await docketopsPost('toggleChecklistItem', { template_item_id: itemId, completed, date: today || undefined }, session); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); load(personId, viewDate); }
   }
   async function saveComment(sectionId, body) {
     try { await docketopsPost('saveSectionComment', { section_id: sectionId, body }, session); }
@@ -112,21 +138,21 @@ export default function ChecklistPage() {
     setBusy(true);
     try {
       await docketopsPost('createRecurringTask', { title: draft.title.trim(), recurrence: draft.recurrence, owner_employee_id: draft.owner_employee_id || null, priority: draft.priority, department_id: draft.department_id || null, description: draft.description || null }, session);
-      setShowCreate(false); setDraft(null); showToast('Recurring task added', 'success'); load(personId);
+      setShowCreate(false); setDraft(null); showToast('Recurring task added', 'success'); load(personId, viewDate);
     } catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
   function openEditSched(item) { setEditSchedId(item.id); setSchedDraft(item.recurrence || { freq: 'daily', time: '09:00' }); }
   async function saveSched() {
     if (!isValidRecurrence(schedDraft)) { showToast('Pick a valid schedule', 'error'); return; }
     setBusy(true);
-    try { await docketopsPost('updateRecurrence', { id: editSchedId, recurrence: schedDraft }, session); setEditSchedId(null); setSchedDraft(null); load(personId); }
+    try { await docketopsPost('updateRecurrence', { id: editSchedId, recurrence: schedDraft }, session); setEditSchedId(null); setSchedDraft(null); load(personId, viewDate); }
     catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
   async function stopTask(item) {
     const reason = window.prompt('Stop this recurring task? It leaves the checklist (logged, not deleted). Reason:');
     if (reason == null) return;
     if (!reason.trim()) { showToast('Reason required', 'error'); return; }
-    try { await docketopsPost('abandonTask', { id: item.id, reason: reason.trim() }, session); showToast('Stopped', 'success'); load(personId); }
+    try { await docketopsPost('abandonTask', { id: item.id, reason: reason.trim() }, session); showToast('Stopped', 'success'); load(personId, viewDate); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function archiveTemplate(t) {
@@ -149,6 +175,18 @@ export default function ChecklistPage() {
       {tab === 'day' && (<>
         <div className="screen-head cl-head">
           <p>Recurring tasks{isOwn ? ' on your checklist' : ` on ${data?.owner?.full_name || 'this'}’s checklist`}. Check them off as you go.</p>
+          <div className="cl-datenav" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="cl-tab" title="Previous day"
+              onClick={() => setViewDate(shiftISO(today || istToday, -1))}>‹</button>
+            <span style={{ fontSize: 12, minWidth: 116, textAlign: 'center', color: isToday ? 'var(--t2)' : 'var(--warn-fg, #fbbf24)' }}>
+              {isToday ? 'Today' : fmtISTDate(today)}
+            </span>
+            {/* Forward is capped at today on purpose — see canGoNext. */}
+            <button className="cl-tab" title={canGoNext ? 'Next day' : 'Cannot tick a future checklist'}
+              disabled={!canGoNext} style={{ opacity: canGoNext ? 1 : 0.4, cursor: canGoNext ? 'pointer' : 'not-allowed' }}
+              onClick={() => canGoNext && setViewDate(shiftISO(today, 1))}>›</button>
+            {!isToday && <button className="cl-tab" onClick={() => setViewDate('')}>Today</button>}
+          </div>
           {viewablePeople.length > 1 && (
             <div className="cl-person">
               <Combobox value={personId} allowClear={false} style={{ width: 260 }}
@@ -160,13 +198,15 @@ export default function ChecklistPage() {
         {loading ? <Spinner /> : (<>
           <section className="cl-card">
             <div className="cl-card-head">
-              <div><h3>Today</h3><span className="cl-sub">{fmtISTDate(today)}</span></div>
+              <div><h3>{isToday ? 'Today' : 'Back-fill'}</h3><span className="cl-sub">{fmtISTDate(today)}</span></div>
               {dueToday.length > 0 && (<div className="cl-progress"><span>{doneCount}/{dueToday.length} done</span><div className="cl-bar"><i style={{ width: `${dueToday.length ? (doneCount / dueToday.length * 100) : 0}%` }} /></div></div>)}
             </div>
-            {dueToday.length === 0 ? <div className="cl-empty">Nothing personal scheduled for today.</div> : (
+            {dueToday.length === 0 ? <div className="cl-empty">Nothing personal scheduled for {isToday ? 'today' : fmtISTDate(today)}.</div> : (
               <ul className="cl-today">
                 {dueToday.map(i => {
-                  const overdue = !i.completed_today && i.recurrence?.time && i.recurrence.time < nowHM;
+                  // Only meaningful for today — on a past date every timed item is trivially
+                  // "past its time", so flagging them all red says nothing.
+                  const overdue = isToday && !i.completed_today && i.recurrence?.time && i.recurrence.time < nowHM;
                   return (
                     <li key={i.id} className={'cl-item' + (i.completed_today ? ' done' : '')}>
                       <button className={'cl-check' + (i.completed_today ? ' on' : '')} disabled={!i._can_complete} title={i._can_complete ? '' : 'You can only complete your own checklist'} onClick={() => toggleRecurring(i)}>{i.completed_today && <Check size={14} />}</button>
@@ -264,7 +304,7 @@ export default function ChecklistPage() {
 
       {tab === 'oversight' && <OversightPanel session={session} employees={employees} departments={departments} />}
 
-      {drawerId && (<TaskDrawer id={drawerId} session={session} departments={departments} employees={employees} onClose={() => setDrawerId(null)} onMutated={() => load(personId)} />)}
+      {drawerId && (<TaskDrawer id={drawerId} session={session} departments={departments} employees={employees} onClose={() => setDrawerId(null)} onMutated={() => load(personId, viewDate)} />)}
     </div>
   );
 }
