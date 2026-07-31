@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Upload, RefreshCw, Trash2, Link2, ImageOff, Search } from 'lucide-react';
+import { Upload, RefreshCw, Trash2, Link2, ImageOff, Search, Download, Pencil, Check, X } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { uploadMany, ACCEPT_MIME } from '@/components/ImageLibrary.js';
@@ -34,6 +34,8 @@ export default function LibraryPage() {
   const [dragging, setDragging] = useState(false);
   const [q, setQ] = useState('');
   const [onlyUnused, setOnlyUnused] = useState(false);
+  const [renaming, setRenaming] = useState(null);   // path of the tile being renamed
+  const [renameVal, setRenameVal] = useState('');
   const fileRef = useRef(null);
 
   const canEdit = !perms || perms.template_manage;
@@ -89,6 +91,69 @@ export default function LibraryPage() {
   async function copyUrl(a) {
     try { await navigator.clipboard.writeText(a.url); showToast('URL copied', 'success'); }
     catch { showToast('Could not copy — select the URL manually', 'error'); }
+  }
+
+  // Download via a blob, not <a download>. The bucket is on a different origin and the
+  // `download` attribute is IGNORED cross-origin — the browser would navigate to the image
+  // instead of saving it, which looks like the button doing nothing. Falls back to opening
+  // in a tab if the fetch is blocked, so there is always some way to get the file.
+  async function download(a) {
+    try {
+      const res = await fetch(a.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const el = document.createElement('a');
+      el.href = href;
+      el.download = cleanName(a.name);   // save under the readable name, not the epoch one
+      document.body.appendChild(el);
+      el.click();
+      el.remove();
+      // Revoke on the next tick — revoking synchronously can cancel the download in Safari.
+      setTimeout(() => URL.revokeObjectURL(href), 10_000);
+    } catch (e) {
+      window.open(a.url, '_blank', 'noopener');
+      showToast('Opened in a new tab — use right-click → Save image', 'error');
+    }
+  }
+
+  function startRename(a) {
+    setRenaming(a.path);
+    // Seed with the readable name minus its extension; the extension and the epoch-ms
+    // prefix are preserved server-side and are not the author's to change.
+    setRenameVal(cleanName(a.name).replace(/\.[a-z0-9]+$/i, ''));
+  }
+
+  async function commitRename(a) {
+    const next = renameVal.trim();
+    if (!next) { showToast('Name required', 'error'); return; }
+    if (next === cleanName(a.name).replace(/\.[a-z0-9]+$/i, '')) { setRenaming(null); return; }
+    // Renaming is a MOVE — the old URL dies. Live templates are repointed automatically,
+    // but anything already delivered to a customer keeps the dead link, so say so once
+    // rather than letting it be discovered in an inbox.
+    const used = a.used_by?.length || 0;
+    if (!window.confirm(
+      `Rename to "${next}"?\n\n`
+      + `The file is MOVED, so its current link stops working.\n`
+      + (used
+        ? `· ${used} template${used === 1 ? '' : 's'} using it will be repointed automatically.\n`
+        : `· No template uses it, so nothing needs repointing.\n`)
+      + `· Emails ALREADY DELIVERED keep the old link and will show a broken image.\n`
+      + `· WhatsApp messages already sent are unaffected.`)) return;
+    setBusy(true);
+    try {
+      const r = await workerFetch('renameMediaAsset', { path: a.path, new_name: next }, session);
+      const ref = r?.data?.references || {};
+      const moved = (ref.templates || 0) + (ref.versions || 0);
+      showToast(moved ? `Renamed — ${moved} reference${moved === 1 ? '' : 's'} repointed` : 'Renamed', 'success');
+      setRenaming(null);
+      await load();
+    } catch (e) {
+      const m = String(e.message || '');
+      showToast(m.startsWith('name_taken:') ? `That name is already used by ${m.slice(11)}`
+        : m.includes('INCONSISTENT') ? `Rename half-applied — tell Claude: ${m}`
+        : (m || 'Rename failed'), 'error');
+    } finally { setBusy(false); }
   }
 
   if (perms && !perms.relay_view) {
@@ -185,9 +250,24 @@ export default function LibraryPage() {
                       style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
                   </span>
                   <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-                    <span className="mono" style={{ fontSize: 11, color: 'var(--t2, #c8ccd2)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={cleanName(a.name)}>{cleanName(a.name)}</span>
+                    {renaming === a.path ? (
+                      <span style={{ display: 'flex', gap: 4 }}>
+                        <input className="f-inp mono" autoFocus value={renameVal}
+                          onChange={(e) => setRenameVal(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename(a);
+                            if (e.key === 'Escape') setRenaming(null);
+                          }}
+                          placeholder="cart-reminder"
+                          style={{ flex: 1, minWidth: 0, fontSize: 11, padding: '4px 6px' }} />
+                        <Btn onClick={() => commitRename(a)} disabled={busy} title="Save (Enter)"><Check size={12} /></Btn>
+                        <Btn onClick={() => setRenaming(null)} disabled={busy} title="Cancel (Esc)"><X size={12} /></Btn>
+                      </span>
+                    ) : (
+                      <span className="mono" style={{ fontSize: 11, color: 'var(--t2, #c8ccd2)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={cleanName(a.name)}>{cleanName(a.name)}</span>
+                    )}
                     <span className="dim" style={{ fontSize: 10.5 }}>
                       {prettySize(a.size)} · {fmtDateTime(a.created_at)}
                     </span>
@@ -199,8 +279,15 @@ export default function LibraryPage() {
                         ? <Badge label={`used in ${used.length}`} tone="green" dot />
                         : <Badge label="unused" tone="gray" dot />}
                     </span>
-                    <span style={{ display: 'flex', gap: 6, marginTop: 'auto' }}>
+                    <span style={{ display: 'flex', gap: 6, marginTop: 'auto', flexWrap: 'wrap' }}>
+                      <Btn onClick={() => download(a)} title="Download this image"><Download size={13} /></Btn>
                       <Btn onClick={() => copyUrl(a)} title="Copy the public URL"><Link2 size={13} /></Btn>
+                      {canEdit && (
+                        <Btn onClick={() => startRename(a)} disabled={busy || renaming === a.path}
+                          title="Rename — moves the file and repoints every template that uses it">
+                          <Pencil size={13} />
+                        </Btn>
+                      )}
                       {canEdit && (
                         <Btn onClick={() => remove(a)} disabled={used.length > 0}
                           title={used.length

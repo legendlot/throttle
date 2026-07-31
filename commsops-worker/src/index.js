@@ -665,6 +665,101 @@ async function handlePost(body, auth, env) {
       return ok(EA.signToUrls(env, bucket, path, sd));
     }
 
+    case 'renameMediaAsset': {         // S251c — make the library searchable by name
+      // Storage has no rename: it is a MOVE, and the old public URL dies the instant it
+      // completes. Afshaan's requirement — "renamed there too, so there is only one copy" —
+      // is exactly that: move the single object, then repoint every stored reference.
+      // Never copy-and-leave, which would double the bucket and reintroduce the duplicate
+      // problem the library was built to expose.
+      //
+      // ⚠️ Known, accepted cost: an already-DELIVERED email hot-links the old URL, so its
+      // image breaks in the recipient's inbox. Measured before building this: 56 email
+      // sends, all on 2026-06-30, from one template (Relay email is still test-gated).
+      // WhatsApp is unaffected — approved templates send by Meta media-id and Meta holds
+      // its own copy of the asset. Small and bounded, but it is why the UI says so.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const path = String(body.path || '');
+      if (!path.startsWith('email/') || path.includes('..')) return err('bad_path', 400);
+
+      const file = path.slice('email/'.length);
+      // Keep the epoch-ms prefix: it is what guarantees uniqueness and preserves upload
+      // order, and the UI strips it for display anyway. Only the human part is renamed.
+      const m = file.match(/^(\d+_)?(.*?)(\.[a-z0-9]+)?$/i);
+      const stamp = m?.[1] || `${Date.now()}_`;
+      const ext = (m?.[3] || '').toLowerCase();
+      // Same sanitiser as email-assets.js safeSeg, so a renamed file cannot acquire
+      // characters the upload path would never have produced (and which encodeURIComponent
+      // would then escape, making the stored URL and the displayed URL disagree).
+      const desired = String(body.new_name || '')
+        .replace(/\.[a-z0-9]+$/i, '')
+        .toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      if (!desired) return err('name_required', 400);
+      const newFile = `${stamp}${desired}${ext}`;
+      const newPath = `email/${newFile}`;
+      if (newPath === path) return ok({ renamed: false, path, unchanged: true });
+
+      // Reject a clash on the DISPLAY name (what the epoch prefix hides), so search stays
+      // unambiguous — two tiles both reading "hero.png" is the confusion this feature exists
+      // to remove.
+      const lr2 = await fetch(`${env.SUPABASE_URL}/storage/v1/object/list/relay-email-assets`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prefix: 'email/', limit: 500, offset: 0 }),
+      });
+      const lj = await lr2.json().catch(() => null);
+      if (!lr2.ok || !Array.isArray(lj)) return err('list_failed', 502);
+      const clash = lj.some((o) => o?.name && o.name !== file
+        && o.name.replace(/^\d+_/, '') === `${desired}${ext}`);
+      if (clash) return err(`name_taken:${desired}${ext}`, 409);
+
+      // 1) MOVE first. If the reference rewrite then fails we can move back and end up
+      //    exactly where we started; the reverse order would leave live templates
+      //    pointing at a path that does not exist yet.
+      const mv = await fetch(`${env.SUPABASE_URL}/storage/v1/object/move`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          bucketId: 'relay-email-assets', sourceKey: path, destinationKey: newPath,
+        }),
+      });
+      if (!mv.ok) return err(`move_failed:${(await mv.text()).slice(0, 200)}`, 502);
+
+      // 2) Repoint every reference, in ONE transaction (templates + version archive +
+      //    the Meta media cache).
+      const rw = await A.sbComms('/rest/v1/rpc/rename_media_references', env, {
+        method: 'POST',
+        body: JSON.stringify({ p_old_path: path, p_new_path: newPath }),
+      });
+      if (!rw.ok) {
+        // Compensate: put the object back so the rename is all-or-nothing from the
+        // caller's point of view. If even THAT fails, say so loudly with both paths —
+        // a silent half-rename is the one outcome nobody could diagnose later.
+        const back = await fetch(`${env.SUPABASE_URL}/storage/v1/object/move`, {
+          method: 'POST',
+          headers: {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            bucketId: 'relay-email-assets', sourceKey: newPath, destinationKey: path,
+          }),
+        });
+        return err(back.ok
+          ? 'rename_rolled_back_references_unchanged'
+          : `rename_INCONSISTENT_file_is_at:${newPath}_references_still_point_to:${path}`, 502);
+      }
+      return ok({ renamed: true, path: newPath, name: newFile, references: rw.data || {} });
+    }
+
     case 'deleteMediaAsset': {         // S251 — library housekeeping, usage-guarded
       // Deleting a public asset is irreversible and immediately visible to customers: an
       // email template embeds the URL live, so removing the object breaks every future
