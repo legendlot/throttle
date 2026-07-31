@@ -5319,6 +5319,7 @@ async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
     method: 'POST', prefer: 'return=minimal',
     body: JSON.stringify({
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text',
+      waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       body: text, template_name: WRONG_NUMBER_TAG,
       provider_message_id: msg.provider_message_id || null, status: msg.status || 'sent',
       is_internal: false, sent_by_user_id: null, sent_by_name: 'Relay (auto)',
