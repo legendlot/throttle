@@ -143,16 +143,19 @@ export default function ChannelFamilyPage({ familyKey }) {
         </span>}
         sub={`${famChannels.length} sub-channel${famChannels.length === 1 ? '' : 's'} · vs prior period`}
       />
-      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
-
       {/* family scope tabs — the strip that emptied the rail. Each tab is still its own
-          existing route (/channels/<family>), so links and bookmarks keep working. */}
+          existing route (/channels/<family>), so links and bookmarks keep working.
+          ORDER MATTERS: this sits ABOVE the RangePicker, matching PnlView + both Products
+          pages. Below it, the strip reads as part of the sticky date control (a filter) and
+          scrolls away under it — which is exactly how the family pages got reported lost. */}
       <div className="so-scopebar">
         {FAMILY_ORDER.map(k => (
           <ScopeTab key={k} on={k === familyKey} color={FAMILIES[k].color} label={FAMILIES[k].label}
             title={FAMILIES[k].label} onClick={() => { if (k !== familyKey) router.push('/channels/' + k); }} />
         ))}
       </div>
+
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : !hasAnyData ? (

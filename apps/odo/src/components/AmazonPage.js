@@ -207,17 +207,18 @@ export default function AmazonPage() {
         <Swatch color={AMZ} size={11} glow />
         <span className="so-h2" style={{ fontSize: 18 }}>Amazon</span>
       </div>
-      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
-
-      {/* family scope tabs — identical strip to ChannelFamilyPage. Amazon has its own bespoke page
-          rather than the generic family page, so without this the route is a dead end: the rail's
-          Channels item hard-routes to /channels/website and there is no other way back out. */}
+      {/* family scope tabs — identical strip to ChannelFamilyPage, and kept in the same position
+          (ABOVE the RangePicker) so the two Channels surfaces agree. Amazon has its own bespoke
+          page rather than the generic family page, so without this the route is a dead end: the
+          rail's Channels item hard-routes to /channels/website and there is no other way back out. */}
       <div className="so-scopebar">
         {FAMILY_ORDER.map(k => (
           <ScopeTab key={k} on={k === 'amazon'} color={FAMILIES[k].color} label={FAMILIES[k].label}
             title={FAMILIES[k].label} onClick={() => { if (k !== 'amazon') router.push('/channels/' + k); }} />
         ))}
       </div>
+
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <Spinner /> : (
