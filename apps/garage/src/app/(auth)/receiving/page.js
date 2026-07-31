@@ -410,11 +410,13 @@ export default function ReceivingPage() {
         .filter(m => markCodes.includes(m.mark_code) || markCodes.includes(m.mark_id))
         .map(m => m.mark_id);
 
-      // Posts to #inwarding-reports. The worker stamps the boxes ONLY on a confirmed
-      // 200, so a Slack outage leaves the inward still reportable rather than silently
-      // swallowing it — which is why this reads the reply instead of assuming success.
+      // The worker stamps the boxes ONLY on a confirmed delivery, so a Slack outage
+      // leaves the inward still reportable rather than silently swallowing it — which
+      // is why this reads the reply instead of assuming success. `csv` is used only
+      // when the reports bot token is set; otherwise the worker posts `text` via the
+      // webhook and ignores it. (Channel is whatever the webhook/token is pointed at.)
       const r = await workerFetch('sendInwardVarianceReport',
-        { data: { shipment_id: currentShipmentId, mark_ids: ids, text } }, session);
+        { data: { shipment_id: currentShipmentId, mark_ids: ids, text, csv: varianceReportCsv(varReport) } }, session);
 
       if (r?.ok && r.data?.posted) {
         showToast(`Sent to Slack — ${r.data.marked} box${r.data.marked === 1 ? '' : 'es'} marked as reported`, 'success');
@@ -449,6 +451,36 @@ export default function ReceivingPage() {
       }
     }
     return L.join('\n');
+  }
+
+  // Spreadsheet form of the same report, attached alongside the text when the
+  // reports bot token is configured (a webhook can only post text). One row per
+  // part, PO position folded in as columns so the whole picture is on one sheet.
+  function varianceReportCsv(r) {
+    const q = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const poBy = {};
+    for (const p of (r.po || [])) poBy[p.part_code] = p;
+    const rows = [[
+      'Shipment', 'PO', 'Supplier', 'Part code', 'Part name',
+      'Expected', 'Received', 'Damaged', 'Variance', 'Status',
+      'PO ordered', 'PO received to date', 'PO outstanding',
+    ]];
+    for (const p of (r.inward || [])) {
+      const v = p.variance;
+      const po = poBy[p.part_code] || {};
+      rows.push([
+        r.shipment_id, r.po_reference || '', r.supplier || '',
+        p.part_code, p.part_name,
+        p.expected, p.received, p.damaged || 0,
+        v == null ? '' : v,
+        v == null ? 'no expected qty set' : v === 0 ? 'matches' : v > 0 ? 'over' : 'short',
+        po.ordered ?? '', po.received_to_date ?? '', po.outstanding ?? '',
+      ]);
+    }
+    return rows.map(r2 => r2.map(q).join(',')).join('\n');
   }
 
   // ── Box intake ────────────────────────────────────────────────────────────────
