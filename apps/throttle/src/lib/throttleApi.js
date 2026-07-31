@@ -412,3 +412,15 @@ export async function syncSocialInsights(session) {
   const r = await workerFetch('syncSocialInsights', {}, session.access_token);
   return r?.data ?? r ?? null;
 }
+// Tier 2 — IG comments. Deliberately NOT swallowing errors the way
+// fetchSocialAnalytics does: the informative case here is the failure. A missing
+// token scope comes back as a 403 whose message says how to re-mint, and
+// returning null would render that as "no comments" on a post that has 70.
+export async function fetchIgComments(session, igMediaId) {
+  const r = await workerFetch('getIgComments', { ig_media_id: igMediaId }, session.access_token);
+  return r?.data ?? r ?? null;
+}
+export async function replyIgComment(session, commentId, message) {
+  const r = await workerFetch('replyIgComment', { comment_id: commentId, message }, session.access_token);
+  return r?.data ?? r ?? null;
+}

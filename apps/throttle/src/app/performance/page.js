@@ -12,6 +12,7 @@ import { AppShell } from '@/components/throttle/AppShell';
 import { Card, PrimaryBtn } from '@/components/throttle/ui';
 import { toast } from '@/components/throttle/ToastHost';
 import ReachChart from '@/components/throttle/ReachChart';
+import IgComments from '@/components/throttle/IgComments';
 import { fetchSocialAnalytics, syncSocialInsights } from '@/lib/throttleApi';
 
 function fmtNum(n) {
@@ -115,7 +116,12 @@ const dateInputStyle = {
 };
 
 function PerformanceScreen() {
-  const { session } = useAuth();
+  const { session, role } = useAuth();
+  // Mirrors throttleops' gate on replyIgComment (lead/admin) so the Reply control never
+  // appears where it would 403. The worker stays the authority — this only avoids offering
+  // an action that cannot succeed. Reading the thread is member+, hence a separate flag.
+  const canReplyIg = ['lead', 'admin'].includes(role);
+  const [openComments, setOpenComments] = useState(null);   // ig_media_id | null
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -214,17 +220,39 @@ function PerformanceScreen() {
                 <div style={{ fontSize: 12, color: 'var(--t4)' }}>No posts synced yet — hit Refresh from Instagram.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {top.map(p => (
-                    <a key={p.ig_media_id} href={p.permalink} target="_blank" rel="noreferrer"
-                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 8px', borderRadius: 'var(--r-sm)', textDecoration: 'none', borderBottom: '1px solid var(--border)' }}>
-                      <span className="t-chip" data-on style={{ flexShrink: 0 }}>{(p.media_type || '').replace('_ALBUM', '').slice(0, 8) || 'POST'}</span>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.caption || '(no caption)'}</span>
-                      {!p.matched_post_id && <span style={{ fontSize: 9.5, color: 'var(--t4)', textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>unplanned</span>}
-                      <span className="num" style={{ flexShrink: 0, fontSize: 12, color: 'var(--t3)' }}>♥ {fmtNum(p.like_count)}</span>
-                      <span className="num" style={{ flexShrink: 0, fontSize: 12, color: 'var(--t3)' }}>💬 {fmtNum(p.comments_count)}</span>
-                      <span className="num" style={{ flexShrink: 0, fontSize: 13, fontWeight: 700, color: 'var(--yellow)', minWidth: 54, textAlign: 'right' }}>{fmtNum(p.reach)}</span>
-                    </a>
-                  ))}
+                  {top.map(p => {
+                    const open = openComments === p.ig_media_id;
+                    return (
+                    <div key={p.ig_media_id} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 8px' }}>
+                        <span className="t-chip" data-on style={{ flexShrink: 0 }}>{(p.media_type || '').replace('_ALBUM', '').slice(0, 8) || 'POST'}</span>
+                        <a href={p.permalink} target="_blank" rel="noreferrer"
+                          style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: 'none' }}>{p.caption || '(no caption)'}</a>
+                        {!p.matched_post_id && <span style={{ fontSize: 9.5, color: 'var(--t4)', textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>unplanned</span>}
+                        <span className="num" style={{ flexShrink: 0, fontSize: 12, color: 'var(--t3)' }}>♥ {fmtNum(p.like_count)}</span>
+                        {/* The comment count is the affordance — a separate button would be a
+                            second click target for the same intent. Zero-comment posts stay
+                            inert rather than opening an empty panel. */}
+                        <button className="num" disabled={!Number(p.comments_count)}
+                          title={Number(p.comments_count) ? (open ? 'Hide comments' : 'Read + reply to comments') : 'No comments on this post'}
+                          onClick={() => setOpenComments(open ? null : p.ig_media_id)}
+                          style={{ flexShrink: 0, fontSize: 12, background: 'none', border: 'none', padding: 0,
+                                   color: open ? 'var(--yellow)' : 'var(--t3)',
+                                   cursor: Number(p.comments_count) ? 'pointer' : 'default',
+                                   opacity: Number(p.comments_count) ? 1 : 0.45 }}>
+                          💬 {fmtNum(p.comments_count)}
+                        </button>
+                        <span className="num" style={{ flexShrink: 0, fontSize: 13, fontWeight: 700, color: 'var(--yellow)', minWidth: 54, textAlign: 'right' }}>{fmtNum(p.reach)}</span>
+                      </div>
+                      {open && (
+                        <div style={{ padding: '2px 8px 12px 8px' }}>
+                          <IgComments session={session} igMediaId={p.ig_media_id}
+                            canReply={canReplyIg} expectedCount={Number(p.comments_count) || 0} />
+                        </div>
+                      )}
+                    </div>
+                    );
+                  })}
                 </div>
               )}
             </Card>
