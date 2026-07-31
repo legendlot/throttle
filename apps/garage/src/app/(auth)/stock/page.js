@@ -112,6 +112,99 @@ function SupplyTag({ row, sup }) {
   return <span title={v.title} style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: t.fg, background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>{v.label}</span>;
 }
 
+// ── Stock Integrity ────────────────────────────────────────────────────────────
+// Why this tab exists: every product except Rift currently computes producible = 0 or
+// negative, because the part that binds it reads 0 or below. That makes the Garage
+// producibility bottleneck AND the 90-day runway report structurally unusable — they
+// are not wrong, they are correctly reporting a broken ledger. This is the worklist
+// that lets the STORE clear it, rather than someone patching numbers in the database.
+//
+// Two rules bound everything here, and neither may be worked around:
+//  · RULE-005 — `closing_stock` is a GENERATED column. Only `opening_stock` is ever
+//    corrected, and only after a physical count. So this tab WRITES NOTHING; it says
+//    what to go count and what the correction would be.
+//  · RULE-006 — a negative *opening* stock can be deliberate (BM-ME-13 is opening
+//    = -5,625 today, and that is sanctioned). That is a DIFFERENT COLUMN from the
+//    closing_stock this classifies, so the two do not collide — but this must never
+//    become an auto-correct, or a deliberate count gets "fixed" into a bug.
+const INTEGRITY_BUCKETS = {
+  dead_ancestor:  { rank: 0, label: 'Stock on dead code', tone: 'warn' },
+  never_received: { rank: 1, label: 'Never received',     tone: 'bad'  },
+  over_issued:    { rank: 2, label: 'Over-issued',        tone: 'bad'  },
+  exhausted:      { rank: 3, label: 'Exhausted',          tone: 'ordered' },
+};
+
+function classifyIntegrity(row, deadHolders, sup) {
+  const closing = Number(row.closing_stock)  || 0;
+  const opening = Number(row.opening_stock)  || 0;
+  const recv    = Number(row.total_received) || 0;
+  const issued  = Number(row.total_issued)   || 0;
+
+  // A negative balance is physically impossible, so it is always a defect — it stays on
+  // the list even if more is on order, because the incoming qty will land on top of a
+  // wrong baseline and carry the error forward rather than absorb it.
+  if (closing < 0) {
+    const holders = deadHolders[row.part_code] || [];
+    if (holders.length) {
+      const total = holders.reduce((a, h) => a + h.stock, 0);
+      return {
+        bucket: 'dead_ancestor', shortfall: closing,
+        detail: holders.map(h => `${h.code} (${fmtN(h.stock)})`).join(', '),
+        action: `${fmtN(total)} sits on the deprecated code ${holders.map(h => h.code).join(', ')} while this live code reads ${fmtN(closing)}. Receipts went to the old code and issues to the new one. Count both, move the balance onto ${row.part_code} via opening_stock, and leave the old row soft-deprecated (RULE-004) — never delete it.`,
+      };
+    }
+    if (opening === 0 && recv === 0) {
+      return {
+        bucket: 'never_received', shortfall: closing,
+        detail: `${fmtN(issued)} issued, 0 ever received`,
+        action: `${fmtN(issued)} was issued against this code but nothing was ever received on it. Either the GRN was booked to a different part code, or the receipt was never raised. Find the GRN first — correcting opening_stock without finding it just hides the mis-booking.`,
+      };
+    }
+    return {
+      bucket: 'over_issued', shortfall: closing,
+      detail: `${fmtN(issued)} issued vs ${fmtN(opening + recv)} available`,
+      action: `Issued ${fmtN(issued)} against ${fmtN(opening + recv)} ever available. Physically count the shelf, then correct opening_stock by the difference (RULE-005).`,
+    };
+  }
+
+  // Exactly zero is only worth listing when the floor still PICKS the part. Note that
+  // "issued === opening + received" is not a signal — it is what closing = 0 means
+  // arithmetically for every zero row, so it says nothing about how it got there.
+  if (closing === 0 && row.on_active_bom) {
+    const inbound = (Number(sup?.on_order) || 0) + (Number(sup?.landed) || 0);
+    if (inbound > 0) return null;  // already being replenished — not a worklist item
+    return {
+      bucket: 'exhausted', shortfall: 0,
+      detail: 'nothing on order',
+      action: 'Fully consumed, still on an active BOM, and nothing inbound — so any run needing it computes producible = 0. Raise a PO, or deprecate the part if it is genuinely retired (RULE-004).',
+    };
+  }
+  return null;
+}
+
+function IntegrityTag({ bucket }) {
+  const b = INTEGRITY_BUCKETS[bucket];
+  const t = SUPPLY_TONE[b.tone];
+  return <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: t.fg, background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>{b.label}</span>;
+}
+
+function downloadIntegrityCsv(rows, filename) {
+  const headers = ['Part Code', 'Product', 'Part Name', 'Category', 'Picked (active BOM)',
+    'Finding', 'Opening', 'Received', 'Issued', 'Returned', 'Closing', 'Detail', 'Suggested action'];
+  const lines = [headers, ...rows.map(r => [
+    r.part_code, r.product, r.part_name, r.category, r.on_active_bom ? 'YES' : 'no',
+    INTEGRITY_BUCKETS[r._i.bucket].label,
+    r.opening_stock ?? 0, r.total_received ?? 0, r.total_issued ?? 0, r.returned ?? 0,
+    Number(r.closing_stock) || 0, r._i.detail, r._i.action,
+  ])];
+  const csv = lines.map(l => l.map(v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function StockPage() {
   const { session, perms } = useAuth();
   const { PRODUCTS: CATALOGUE_PRODUCTS } = useProducts();
@@ -133,6 +226,10 @@ export default function StockPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [fbuSearch, setFbuSearch] = useState('');
   const [sort, setSort] = useState({ key: 'part', dir: 'asc' });
+  const [integritySearch, setIntegritySearch] = useState('');
+  // Default to picked-only: an unpicked part's bad balance is real but nothing consumes
+  // it, so leading with it would bury the 28 rows that actually block production.
+  const [integrityPickedOnly, setIntegrityPickedOnly] = useState(true);
 
   const showCost = hasPermission(perms, 'reports_finance');
 
@@ -256,6 +353,55 @@ export default function StockPage() {
     return ro > 0 && c <= ro;
   }).length, [stockData]);
 
+  // live code → deprecated codes still holding positive stock. Built from the full ledger
+  // (not getSupplyStatus, which only knows codes carrying an open PO) so a dead code with
+  // stock and nothing on order is still caught.
+  const deadHolders = useMemo(() => {
+    const m = {};
+    stockData.forEach(r => {
+      const live = r.superseded_by;
+      const stock = Number(r.closing_stock) || 0;
+      if (live && stock > 0) (m[live] = m[live] || []).push({ code: r.part_code, stock });
+    });
+    return m;
+  }, [stockData]);
+
+  const integrityAll = useMemo(() => {
+    const out = [];
+    stockData.forEach(r => {
+      const _i = classifyIntegrity(r, deadHolders, supplyMap[r.part_code]);
+      if (_i) out.push({ ...r, _i });
+    });
+    out.sort((a, b) => {
+      const ra = INTEGRITY_BUCKETS[a._i.bucket].rank, rb = INTEGRITY_BUCKETS[b._i.bucket].rank;
+      if (ra !== rb) return ra - rb;                                       // worst finding first
+      if (a.on_active_bom !== b.on_active_bom) return a.on_active_bom ? -1 : 1;
+      if (a._i.shortfall !== b._i.shortfall) return a._i.shortfall - b._i.shortfall;
+      return (a.part_code || '').localeCompare(b.part_code || '');
+    });
+    return out;
+  }, [stockData, deadHolders, supplyMap]);
+
+  const integrityRows = useMemo(() => {
+    const tokens = (integritySearch || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return integrityAll.filter(r => {
+      if (integrityPickedOnly && !r.on_active_bom) return false;
+      if (!tokens.length) return true;
+      const hay = `${r.part_code || ''} ${r.product || ''} ${r.part_name || ''} ${r.category || ''}`.toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+  }, [integrityAll, integritySearch, integrityPickedOnly]);
+
+  const integrityCounts = useMemo(() => {
+    const c = { blocking: 0, negative: 0, byBucket: {} };
+    integrityAll.forEach(r => {
+      if (r.on_active_bom) c.blocking++;
+      if ((Number(r.closing_stock) || 0) < 0) c.negative++;
+      c.byBucket[r._i.bucket] = (c.byBucket[r._i.bucket] || 0) + 1;
+    });
+    return c;
+  }, [integrityAll]);
+
   function SortableTh({ colKey, align, children }) {
     const active = sort.key === colKey;
     return (
@@ -282,12 +428,14 @@ export default function StockPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{stockData.length} parts · {lowCount} at reorder</span>
           {tab === 'components' && <button style={btnSec} onClick={handleDownloadCsv} disabled={filteredStock.length === 0}><Download size={14} strokeWidth={1.75} />Export</button>}
+          {tab === 'integrity' && <button style={btnSec} onClick={() => downloadIntegrityCsv(integrityRows, `stock-integrity-${todayStr()}.csv`)} disabled={integrityRows.length === 0}><Download size={14} strokeWidth={1.75} />Export</button>}
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
         <Chip active={tab === 'components'} onClick={() => setTab('components')}>Components</Chip>
         <Chip active={tab === 'fbu'} onClick={() => setTab('fbu')}>FBU Units</Chip>
+        <Chip active={tab === 'integrity'} onClick={() => setTab('integrity')} count={integrityCounts.blocking || undefined}>Integrity</Chip>
       </div>
 
       {tab === 'components' ? (
@@ -391,7 +539,7 @@ export default function StockPage() {
             </Panel>
           )}
         </>
-      ) : (
+      ) : tab === 'fbu' ? (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 11px', minWidth: 240, maxWidth: 320, marginBottom: 14 }}>
             <Search size={15} strokeWidth={1.75} style={{ color: 'var(--t4)' }} />
@@ -423,6 +571,81 @@ export default function StockPage() {
                           <td style={td}>{r.variant || '—'}</td>
                           <td style={td}>{r.color || '—'}</td>
                           <td style={{ ...tdNum, fontWeight: 600, color: qty > 0 ? 'var(--ok-fg)' : 'var(--t4)' }}>{qty}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ marginBottom: 14, padding: '11px 13px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 12.5, color: 'var(--t2)', lineHeight: 1.55 }}>
+            Parts whose balance blocks production. <strong>Nothing here writes to stock</strong> — closing
+            stock is a generated column, so a correction is always made on <em>opening stock</em>, and only
+            after a physical count. Take the export to the shelf, count, then correct.
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 11px', minWidth: 260 }}>
+              <Search size={15} strokeWidth={1.75} style={{ color: 'var(--t4)' }} />
+              <input style={searchInput} value={integritySearch} onChange={e => setIntegritySearch(e.target.value)} placeholder="Filter by part, product or category…" />
+            </div>
+            <Chip pill active={integrityPickedOnly} onClick={() => setIntegrityPickedOnly(true)} count={integrityCounts.blocking}>Picked parts</Chip>
+            <Chip pill active={!integrityPickedOnly} onClick={() => setIntegrityPickedOnly(false)} count={integrityAll.length}>Everything</Chip>
+            <span className="num" style={{ fontSize: 12, color: 'var(--t3)', marginLeft: 4 }}>
+              {integrityCounts.negative} negative
+              {Object.entries(INTEGRITY_BUCKETS)
+                .filter(([k]) => integrityCounts.byBucket[k])
+                .map(([k, b]) => ` · ${integrityCounts.byBucket[k]} ${b.label.toLowerCase()}`)
+                .join('')}
+            </span>
+          </div>
+
+          {stockLoading ? (
+            <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>
+          ) : stockError ? (
+            <EmptyState message={stockError} />
+          ) : integrityRows.length === 0 ? (
+            <EmptyState message={integrityPickedOnly ? 'No picked part has a blocking balance — the ledger is clean' : 'No integrity findings'} />
+          ) : (
+            <Panel padding={0}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Part</th>
+                      <th style={th}>Product</th>
+                      <th style={th}>Finding</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Open</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Recv</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Iss</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Close</th>
+                      <th style={th}>What to do</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {integrityRows.map((r, i) => {
+                      const closing = Number(r.closing_stock) || 0;
+                      return (
+                        <tr key={r.part_code || i} className="g-row">
+                          <td style={td}>
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--t1)' }}>{r.part_code}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.part_name || '—'}</div>
+                            {!r.on_active_bom && <div style={{ fontSize: 10.5, color: 'var(--t4)' }}>not on any active BOM</div>}
+                          </td>
+                          <td style={td}>{r.product ? <ProductTag name={r.product} /> : <span style={{ fontSize: 11.5, color: 'var(--t4)' }}>Common</span>}</td>
+                          <td style={td}>
+                            <IntegrityTag bucket={r._i.bucket} />
+                            <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 3 }}>{r._i.detail}</div>
+                          </td>
+                          <td style={tdNum}>{fmtN(Number(r.opening_stock) || 0)}</td>
+                          <td style={tdNum}>{fmtN(Number(r.total_received) || 0)}</td>
+                          <td style={tdNum}>{fmtN(Number(r.total_issued) || 0)}</td>
+                          <td style={{ ...tdNum, fontWeight: 600, color: closing < 0 ? 'var(--bad-fg)' : 'var(--t3)' }}>{fmtN(closing)}</td>
+                          <td style={{ ...td, whiteSpace: 'normal', minWidth: 340, maxWidth: 460, fontSize: 12.5, color: 'var(--t3)', lineHeight: 1.5 }}>{r._i.action}</td>
                         </tr>
                       );
                     })}
