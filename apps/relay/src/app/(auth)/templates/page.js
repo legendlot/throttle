@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, Copy, Images } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, Copy, Images, Archive, ArchiveRestore } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { fmtDateTime } from '@/components/format.js';
@@ -103,6 +103,7 @@ export default function TemplatesPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [approvalFilter, setApprovalFilter] = useState('all');
   const [wabaFilter, setWabaFilter] = useState('all');
+  const [showArchived, setShowArchived] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
   const [t, setT] = useState(emptyTemplate());
@@ -160,7 +161,7 @@ export default function TemplatesPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const r = await garageFetch('getTemplates', {}, session);
+      const r = await garageFetch('getTemplates', { with_usage: 'true' }, session);
       setRows(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load templates', 'error'); }
     finally { setLoading(false); }
@@ -513,6 +514,60 @@ export default function TemplatesPage() {
       runShapeCheck(t.id);   // refresh the banner — it now reports the mid-review send block
     } catch (e) { showToast(e.message || 'Submit failed', 'error'); }
     finally { setSubmitting(false); }
+  }
+
+  // ── Retire a template ──────────────────────────────────────────────────────
+  // Archive is the primary action and is LOCAL ONLY — Meta keeps its approved copy, so an
+  // archived template can be brought back with no re-approval. Hard delete is reserved for
+  // templates that never reached Meta at all; see the worker for why we never issue a Meta
+  // DELETE (it removes every language version, name-reuse is undocumented, and it produces
+  // the #132001 "template name does not exist" failure already present in this account).
+  async function toggleArchive(r) {
+    const u = r.usage || {};
+    const archiving = r.status !== 'archived';
+    if (archiving && u.journeys_live > 0) {
+      const names = Array.isArray(u.live_names) ? u.live_names.join(', ') : '';
+      if (!window.confirm(
+        `"${r.name}" is used by ${u.journeys_live} LIVE journey${u.journeys_live === 1 ? '' : 's'}`
+        + (names ? ` (${names})` : '') + `.\n\n`
+        + `Archiving hides it from this library and from the journey and campaign pickers, `
+        + `so nobody can newly select it. It does NOT stop those live journeys sending it, `
+        + `and it does NOT touch Meta — blocking the send would break a customer-facing flow `
+        + `silently, which is worse.\n\nArchive anyway?`)) return;
+    }
+    try {
+      await workerFetch('setTemplateArchived', { id: r.id, archived: archiving }, session);
+      showToast(archiving ? 'Archived' : 'Restored to draft', 'success');
+      load();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
+
+  async function destroy(r) {
+    const u = r.usage || {};
+    if (r.provider_template_id) {
+      showToast('This template exists on Meta — archive it instead of deleting', 'error');
+      return;
+    }
+    const blockers = [
+      u.journeys_other ? `${u.journeys_other} journey(s)` : null,
+      u.campaigns ? `${u.campaigns} campaign(s)` : null,
+      u.sent ? `${u.sent} sent message(s)` : null,
+    ].filter(Boolean);
+    if (blockers.length) { showToast(`Still referenced by ${blockers.join(', ')} — archive instead`, 'error'); return; }
+    if (!window.confirm(
+      `Permanently delete "${r.name}"?\n\n`
+      + `It was never submitted to Meta and nothing references it, so this removes it and its `
+      + `version history from Relay only. There is no Meta copy to remove.\n\nThis cannot be undone.`)) return;
+    try {
+      await workerFetch('deleteTemplate', { id: r.id }, session);
+      showToast('Template deleted', 'success');
+      load();
+    } catch (e) {
+      const m = String(e.message || '');
+      showToast(m === 'on_meta_archive_instead' ? 'Exists on Meta — archive it instead'
+        : m.startsWith('in_use:') ? `Still referenced by ${m.slice(7)}`
+        : (m || 'Delete failed'), 'error');
+    }
   }
 
   async function syncStatus() {
@@ -895,7 +950,12 @@ export default function TemplatesPage() {
   }
 
   const needle = q.trim().toLowerCase();
+  const archivedCount = rows.filter((r) => r.status === 'archived').length;
   const filteredRows = rows.filter((r) => {
+    // Archived templates are retired: hidden unless you ask for them, or explicitly filter
+    // to Archived via the status dropdown. Before S252 `archived` was in the enum but no
+    // reader honoured it, so archiving did nothing at all.
+    if (r.status === 'archived' && !showArchived && statusFilter !== 'archived') return false;
     if (chanFilter !== 'all' && (r.channel || 'email') !== chanFilter) return false;
     if (purposeFilter !== 'all' && (r.purpose || '') !== purposeFilter) return false;
     if (statusFilter !== 'all' && (r.status || '') !== statusFilter) return false;
@@ -911,10 +971,11 @@ export default function TemplatesPage() {
     return true;
   });
   const filtersOn = chanFilter !== 'all' || purposeFilter !== 'all' || statusFilter !== 'all'
-    || approvalFilter !== 'all' || wabaFilter !== 'all' || !!needle;
+    || approvalFilter !== 'all' || wabaFilter !== 'all' || !!needle || showArchived;
   const clearFilters = () => {
     setQ(''); setChanFilter('all'); setPurposeFilter('all');
     setStatusFilter('all'); setApprovalFilter('all'); setWabaFilter('all');
+    setShowArchived(false);
   };
 
   return (
@@ -961,6 +1022,12 @@ export default function TemplatesPage() {
                     <option value="all">Any account</option>
                     {wabaOptions.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
                   </select>
+                )}
+                {archivedCount > 0 && (
+                  <Btn kind={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived((v) => !v)}
+                    title="Archived templates are hidden from this list and from the journey and campaign pickers">
+                    {showArchived ? 'Showing archived' : `Archived · ${archivedCount}`}
+                  </Btn>
                 )}
                 {filtersOn && (
                   <Btn kind="ghost" onClick={clearFilters}>
@@ -1012,6 +1079,26 @@ export default function TemplatesPage() {
                             <Btn onClick={(e) => { e.stopPropagation(); startDuplicate(r); }}
                               title="Open an unsaved copy of this template as the starting point for a new one">
                               <Copy size={14} /> Duplicate
+                            </Btn>
+                          )}
+                          {canEdit && (
+                            <Btn onClick={(e) => { e.stopPropagation(); toggleArchive(r); }}
+                              title={r.status === 'archived'
+                                ? 'Restore to draft — it returns to the library and the pickers'
+                                : 'Archive — hides it here and in the journey/campaign pickers. Meta keeps its approved copy, so this is reversible.'}>
+                              {r.status === 'archived' ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                            </Btn>
+                          )}
+                          {/* Hard delete exists only for templates that never reached Meta.
+                              Anything with a provider_template_id is archive-only — see the
+                              worker for why Relay never issues a Meta DELETE. */}
+                          {canEdit && !r.provider_template_id && (
+                            <Btn onClick={(e) => { e.stopPropagation(); destroy(r); }}
+                              disabled={!!(r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent))}
+                              title={r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent)
+                                ? 'Referenced by a journey, campaign or sent message — archive it instead'
+                                : 'Delete permanently (never submitted to Meta, nothing references it)'}>
+                              <Trash2 size={14} />
                             </Btn>
                           )}
                         </span>

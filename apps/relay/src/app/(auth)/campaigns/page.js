@@ -164,7 +164,12 @@ export default function CampaignsPage() {
       const [cs, sg, tp, ov, st] = await Promise.all([
         garageFetch('getCampaigns', {}, session),
         garageFetch('getSegments', {}, session),
-        garageFetch('getTemplates', {}, session),
+        // Archived templates are excluded from the picker (S252): archiving means
+        // "retired, do not wire this up again". Templates already bound to an
+        // existing campaign keep working — the send path deliberately does not check
+        // status, since silently breaking a live flow is worse than letting it send.
+        garageFetch('getTemplates', {}, session).then((r) =>
+          (Array.isArray(r) ? r : []).filter((x) => x.status !== 'archived')),
         // ONE set-based call for every campaign's metrics — never per-row getCampaignStats.
         // Non-fatal: the list still renders (with — in the metric columns) if analytics fail.
         garageFetch('getCampaignsOverview', {}, session).catch(() => null),

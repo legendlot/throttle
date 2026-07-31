@@ -188,12 +188,16 @@ async function handleGet(url, auth, env) {
           p_limit: limit, p_include_anonymous: includeAnon, p_q: q }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
-    case 'getProfileCounts': {         // contacts data-health line (S251)
-      // Its OWN call, deliberately. Counting anonymous profiles is a whole-table anti-join
-      // (~2.5s at 155k rows, and a partial-index rewrite measured no better), while the
-      // list itself renders in ~18ms. Bundling them would have made every page load wait
-      // 2.5s for a number that is decoration. The UI fetches this after the table paints.
-      const r = await A.sbComms('/rest/v1/rpc/profiles_counts', env,
+    case 'getProfileCounts': {         // contacts header tiles (S251, widened S252)
+      // Its OWN call, deliberately. These are whole-table aggregates over 155k profiles and
+      // 270k consent rows (~1.0s), while the list itself renders in ~18ms. Bundling them
+      // would make every page load wait a second for numbers that are a header, not the
+      // content. The UI fetches this after the table paints and never blocks on it.
+      //
+      // Now backed by comms.contact_stats() rather than the old profiles_counts(): it
+      // returns strictly more AND is faster (~1.0s vs ~2.5s), because `anonymous` falls out
+      // as total − contactable instead of needing its own whole-table anti-join.
+      const r = await A.sbComms('/rest/v1/rpc/contact_stats', env,
         { method: 'POST', body: '{}' });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
@@ -210,9 +214,16 @@ async function handleGet(url, auth, env) {
                   consent: cons.data || [], events: evs.data || [] });
     }
 
-    case 'getTemplates': {             // M5
+    case 'getTemplates': {             // M5 (+usage S252)
       const r = await A.sbComms('/rest/v1/templates?select=*&order=updated_at.desc', env);
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      if (!r.ok) return err('db_error', 500);
+      // Usage rides along only when asked for: it scans every journey version's definition
+      // as text. The library list wants it (to gate Archive/Delete); the journey picker,
+      // which calls this on every open, does not.
+      if (url.searchParams.get('with_usage') !== 'true') return ok(r.data);
+      const ur = await A.sbComms('/rest/v1/rpc/template_usage', env, { method: 'POST', body: '{}' });
+      const u = (ur.ok && ur.data) || {};
+      return ok((r.data || []).map((t) => ({ ...t, usage: u[String(t.id)] || null })));
     }
 
     case 'getMediaLibrary': {          // S251 — the shared image library
@@ -663,6 +674,71 @@ async function handlePost(body, auth, env) {
       let sd; try { sd = st ? JSON.parse(st) : null; } catch { sd = null; }
       if (!sr.ok || !sd?.url) return err(`sign_failed:${st}`, 502);
       return ok(EA.signToUrls(env, bucket, path, sd));
+    }
+
+    case 'setTemplateArchived': {      // S252 — archive/unarchive, the SAFE way to retire one
+      // ⚠️ Archiving is LOCAL ONLY and never touches Meta. Deliberate — see deleteTemplate
+      // below for the full reasoning. Meta keeps its approved copy, so an archived template
+      // can be un-archived and used again with no re-approval.
+      //
+      // `status='archived'` existed in the enum since M5 but NOTHING read it, so archiving
+      // was cosmetic. It is now honoured: archived templates drop out of the library list
+      // (behind a filter) and out of the journey/campaign pickers, so nobody can newly
+      // wire one up.
+      //
+      // Sends are deliberately NOT blocked on archived. If a live journey still references
+      // one, refusing the send would break a customer-facing flow silently — strictly worse
+      // than letting it send. The guard is at the point of archiving instead: the caller is
+      // told which live journeys use it and must confirm.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const id = body.id;
+      if (!id) return err('id_required', 400);
+      const archived = body.archived !== false;
+      const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: archived ? 'archived' : 'draft', updated_at: nowIso() }),
+      });
+      if (!r.ok) return err('db_error', 500);
+      return ok({ ...(r.data?.[0] || {}), archived });
+    }
+
+    case 'deleteTemplate': {           // S252 — hard delete, heavily fenced
+      // ⛔ THIS NEVER DELETES FROM META, AND THAT IS THE WHOLE DESIGN. Checked against
+      // Meta's current docs rather than assumed:
+      //  · DELETE by `name` removes EVERY language version of the template at once.
+      //  · The docs do NOT state whether a deleted name can be reused, or after how long.
+      //    An undocumented constraint on recreating a name is itself a reason not to.
+      //  · Meta already auto-archives templates inactive for 12 months and deletes them
+      //    28 days later, so dead templates age out on Meta's side without our help.
+      //  · Deleting on Meta while anything still references the name produces
+      //    `(#132001) Template name does not exist in the translation` — not hypothetical,
+      //    that exact failure is already recorded in comms.messages here.
+      // So: a template that has EVER been submitted to Meta cannot be deleted from Relay at
+      // all — archive it instead. Only a purely-local template (never submitted, so there is
+      // no Meta copy to diverge from) can be removed, and only when nothing points at it.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const id = body.id;
+      if (!id) return err('id_required', 400);
+      const cur = await A.sbComms(
+        `/rest/v1/templates?id=eq.${A.enc(id)}&select=id,name,provider_template_id&limit=1`, env);
+      const row = (cur.ok && cur.data?.[0]) || null;
+      if (!row) return err('template_not_found', 404);
+      if (row.provider_template_id) {
+        return err('on_meta_archive_instead', 409);
+      }
+      const ur = await A.sbComms('/rest/v1/rpc/template_usage', env, { method: 'POST', body: '{}' });
+      if (!ur.ok) return err('usage_check_failed', 502);   // fail CLOSED, never delete blind
+      const u = (ur.data && ur.data[String(id)]) || {};
+      const blockers = [];
+      if (u.journeys_other) blockers.push(`${u.journeys_other} journey(s)`);
+      if (u.campaigns) blockers.push(`${u.campaigns} campaign(s)`);
+      if (u.sent) blockers.push(`${u.sent} sent message(s)`);
+      if (blockers.length) return err(`in_use:${blockers.join(', ')}`, 409);
+      // Version archive first — it FKs nothing but is meaningless once the parent is gone.
+      await A.sbComms(`/rest/v1/template_versions?template_id=eq.${A.enc(id)}`, env, { method: 'DELETE' });
+      const dr = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, { method: 'DELETE' });
+      if (!dr.ok) return err('db_error', 500);
+      return ok({ deleted: id, name: row.name });
     }
 
     case 'renameMediaAsset': {         // S251c — make the library searchable by name

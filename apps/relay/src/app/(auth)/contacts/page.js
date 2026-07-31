@@ -33,6 +33,29 @@ const CONSENT_COLOR = {
   none: { fg: '#6b7178', bg: 'rgba(255,255,255,.03)', bd: 'rgba(255,255,255,.08)' },
 };
 
+// Header tiles (S252). Two different questions, shown side by side rather than collapsed:
+//   ON FILE  — do we hold the identifier at all?
+//   OPTED IN — do we hold it AND a marketing opt-in?
+// Campaign sizing needs the second; only the first tells you the data is healthy. Showing
+// one alone invites planning a broadcast against a number that is not sendable.
+function Tile({ label, value, sub, tone, warn }) {
+  return (
+    <div style={{ flex: '1 1 150px', minWidth: 140, padding: '12px 14px',
+      border: '1px solid var(--bd, #2a2e35)', borderRadius: 10, background: 'var(--surface-2, rgba(255,255,255,.02))' }}>
+      <div className="dim" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-disp)', fontSize: 22, fontWeight: 600, marginTop: 4,
+        color: tone || 'var(--t1)' }}>
+        {value == null ? '—' : Number(value).toLocaleString('en-IN')}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 10.5, marginTop: 2, color: warn ? 'var(--warn, #f59e0b)' : 'var(--t3, #9aa0aa)' }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChannelStrip({ consent, hasEmail, hasPhone }) {
   return (
     <span style={{ display: 'inline-flex', gap: 4 }}>
@@ -352,6 +375,29 @@ export default function ContactsPage() {
     <div className="pg">
       <PageHead title="Contacts" sub="The unified profile substrate — identities, identifiers, consent, events."
         actions={<Btn onClick={load}><RefreshCw size={14} /> Refresh</Btn>} />
+      {/* Tiles arrive on their own request (~1s over 155k profiles) and never block the
+          table. Rendered as skeletons meanwhile rather than hidden, so the header does not
+          jump once they land. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+        <Tile label="Contacts" value={counts?.total}
+          sub={counts ? `${Number(counts.contactable).toLocaleString('en-IN')} reachable · ${Number(counts.anonymous).toLocaleString('en-IN')} anonymous` : 'loading…'} />
+        <Tile label="Email" value={counts?.email_opted_in} tone="#a78bfa"
+          sub={counts ? `opted in · ${Number(counts.email_on_file).toLocaleString('en-IN')} on file` : null} />
+        <Tile label="WhatsApp" value={counts?.whatsapp_opted_in} tone="#25D366"
+          // The gap is named, not buried: 16,324 profiles hold a WhatsApp marketing opt-in
+          // with no phone number, so "opted in" alone overstates reachable audience by ~18%.
+          sub={counts
+            ? (counts.whatsapp_optin_unreachable
+              ? `opted in · ${Number(counts.whatsapp_optin_unreachable).toLocaleString('en-IN')} more opted in with no number`
+              : `opted in · ${Number(counts.phone_on_file).toLocaleString('en-IN')} on file`)
+            : null}
+          warn={!!counts?.whatsapp_optin_unreachable} />
+        <Tile label="SMS" value={counts?.sms_opted_in} tone="#7c9bff"
+          sub={counts ? `opted in · ${Number(counts.phone_on_file).toLocaleString('en-IN')} numbers on file` : null} />
+        <Tile label="Opted out" value={counts?.opted_out_any} tone="#f87171"
+          sub="on at least one channel" />
+      </div>
+
       <Panel title="Contacts" count={rows.length}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>

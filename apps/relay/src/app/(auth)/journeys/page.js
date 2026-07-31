@@ -133,7 +133,12 @@ export default function JourneysPage() {
     try {
       const [js, tp, sg, ev, st, ov, sd] = await Promise.all([
         garageFetch('getJourneys', {}, session),
-        garageFetch('getTemplates', {}, session),
+        // Archived templates are excluded from the picker (S252): archiving means
+        // "retired, do not wire this up again". Templates already bound to an
+        // existing journey keep working — the send path deliberately does not check
+        // status, since silently breaking a live flow is worse than letting it send.
+        garageFetch('getTemplates', {}, session).then((r) =>
+          (Array.isArray(r) ? r : []).filter((x) => x.status !== 'archived')),
         garageFetch('getSegments', {}, session),
         // Registry-backed trigger picker. loadEventDefs never rejects — it falls back to
         // FALLBACK_EVENT_DEFS internally — so a suggestion list cannot fail a page load.
