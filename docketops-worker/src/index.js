@@ -601,7 +601,16 @@ async function getMyTasks(url, auth, env) {
     const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
     rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
   }
-  rows = rows.map(t => ({ ...t, _relation: (auth.employeeId && t.owner_employee_id === auth.employeeId) ? 'owner' : 'collaborator' }));
+  // Three-way relation, checked most-specific first. 'creator' is the S153 addition: a task
+  // you raised and handed to someone else, which list_my_tasks used to omit entirely (246
+  // such tasks live, 138 open, 25 creators). Ownership wins over collaboration, and both win
+  // over authorship, so a task never shows up in two sections.
+  rows = rows.map(t => {
+    let _relation = 'creator';
+    if (auth.employeeId && t.owner_employee_id === auth.employeeId) _relation = 'owner';
+    else if (auth.employeeId && (t.collaborators || []).some(c => c.id === auth.employeeId)) _relation = 'collaborator';
+    return { ...t, _relation };
+  });
   return ok(rows);
 }
 
@@ -1454,6 +1463,138 @@ async function bulkUpdateTasks(body, auth, env) {
   return ok({ updated: targets.length, skipped, field });
 }
 
+// ── S153 bulk follow-ups ──────────────────────────────────────────────────────
+// All three below share bulkUpdateTasks' contract: load once, act set-based, skip what the
+// caller cannot edit and COUNT the skips (never fail the whole batch for one bad row), and
+// write history via logHistoryBatch. No per-row await loop.
+//
+// They are separate handlers rather than new BULK_FIELDS entries because none of them is a
+// plain column write:
+//   · collaborators live in a child table;
+//   · a space move has to check space access AND carry sub-tasks;
+//   · abandoning requires a reason, which bulkUpdateTasks explicitly refuses to fake.
+
+// Add or remove ONE collaborator across N tasks.
+async function bulkSetCollaborator(body, auth, env) {
+  const d = body.data || body;
+  const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
+  const employeeId = d.employee_id;
+  const mode = d.mode === 'remove' ? 'remove' : 'add';
+  if (!ids.length) return err('ids required', 400);
+  if (!employeeId) return err('employee_id required', 400);
+
+  const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
+  if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
+  const all = tr.data || [];
+  const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
+  const skipped = ids.length - editable.length;
+  if (!editable.length) return ok({ updated: 0, skipped, mode });
+  const targetIds = editable.map(t => t.id);
+
+  // Read who is already on these tasks FIRST, so history records only real changes. One
+  // extra subrequest, and worth it: writing 'collaborator_removed' for a task the person was
+  // never on puts a false event in the audit trail, and `updated` would overstate the work.
+  const exR = await sbDocket(
+    `/rest/v1/task_collaborators?task_id=in.${inList(targetIds)}&employee_id=eq.${enc(employeeId)}&select=task_id`, env);
+  const already = new Set((exR.ok ? exR.data : []).map(c => c.task_id));
+  const changing = mode === 'add' ? targetIds.filter(id => !already.has(id))
+                                  : targetIds.filter(id =>  already.has(id));
+  if (!changing.length) return ok({ updated: 0, skipped, mode, employee_id: employeeId, no_change: targetIds.length });
+
+  if (mode === 'add') {
+    // ignore-duplicates anyway: `already` can be stale under a concurrent add, and a 409
+    // here would sink the whole batch (same idempotency as single-task addCollaborator).
+    const rows = changing.map(id => ({ task_id: id, employee_id: employeeId, added_by: auth.userId }));
+    const r = await sbDocket(`/rest/v1/task_collaborators?on_conflict=task_id,employee_id`, env, {
+      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates', body: JSON.stringify(rows),
+    });
+    if (!r.ok) return err('add_failed: ' + JSON.stringify(r.data), 400);
+  } else {
+    const r = await sbDocket(
+      `/rest/v1/task_collaborators?task_id=in.${inList(changing)}&employee_id=eq.${enc(employeeId)}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+    if (!r.ok) return err('remove_failed: ' + JSON.stringify(r.data), 400);
+  }
+  await logHistoryBatch(env, auth.userId, changing.map(id => ({
+    task_id: id,
+    event_type: mode === 'add' ? 'collaborator_added' : 'collaborator_removed',
+    field: 'collaborator', [mode === 'add' ? 'new' : 'old']: employeeId,
+  })));
+  return ok({ updated: changing.length, skipped, mode, employee_id: employeeId,
+              no_change: targetIds.length - changing.length });
+}
+
+// Move N tasks into one space. Mirrors moveTask's two non-obvious behaviours rather than
+// PATCHing space_id directly: the destination is access-checked ONCE, and sub-tasks travel
+// with their parents — a bulk write that skipped either would strand children in the old
+// space and could push a task into a space the mover cannot see.
+async function bulkMoveTasks(body, auth, env) {
+  const d = body.data || body;
+  const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
+  if (!ids.length) return err('ids required', 400);
+  if (!d.space_id) return err('space_id required', 400);
+  const target = await loadSpace(d.space_id, env);
+  if (!target) return err('space_not_found', 404);
+  if (!(await canAccessSpace(auth, target, env))) return err('forbidden_space', 403);
+
+  const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
+  if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
+  const all = tr.data || [];
+  const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
+  const skipped = ids.length - editable.length;
+  const targets = editable.filter(t => t.space_id !== d.space_id);
+  if (!targets.length) return ok({ updated: 0, skipped, space_id: d.space_id });
+  const targetIds = targets.map(t => t.id);
+
+  const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targetIds)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ space_id: d.space_id, updated_by: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  // Sub-tasks follow their parent (one level), same as moveTask. One extra subrequest for
+  // the whole batch, not one per task.
+  await sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(targetIds)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ space_id: d.space_id }) });
+  await logHistoryBatch(env, auth.userId, targets.map(t => ({
+    task_id: t.id, event_type: 'space_changed', field: 'space_id', old: t.space_id, new: d.space_id })));
+  return ok({ updated: targets.length, skipped, space_id: d.space_id });
+}
+
+// Abandon N tasks with ONE reason.
+//
+// The backlog phrased this "reason-per-task". Read literally — a different reason typed for
+// each task — it defeats the point of a bulk action, so this takes one reason and RECORDS it
+// on every task (abandon_reason + a history row each), which is the useful reading and what
+// abandonTask already does per task. If genuinely distinct reasons are ever wanted, that is
+// N single abandonTask calls, not this.
+async function bulkAbandonTasks(body, auth, env) {
+  const d = body.data || body;
+  const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
+  const reason = String(d.reason || '').trim();
+  if (!ids.length) return err('ids required', 400);
+  // Same hard requirement as abandonTask — abandoning is terminal, so it never happens
+  // unexplained, and bulk is exactly where an unexplained mass-abandon would hurt most.
+  if (!reason) return err('reason required', 400);
+
+  const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
+  if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
+  const all = tr.data || [];
+  const targets = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
+  const skipped = ids.length - targets.length;
+  if (!targets.length) return ok({ updated: 0, skipped });
+  const targetIds = targets.map(t => t.id);
+
+  const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targetIds)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({
+      status: 'abandoned', abandoned_at: nowIso(), abandoned_by: auth.userId,
+      abandon_reason: reason, updated_by: auth.userId, updated_at: nowIso(),
+    }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  await logHistoryBatch(env, auth.userId, targets.map(t => ({
+    task_id: t.id, event_type: 'abandoned', field: 'status', old: t.status, new: 'abandoned', note: reason })));
+  return ok({ updated: targets.length, skipped });
+}
+
 async function abandonTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);
@@ -1833,6 +1974,7 @@ const GET_ACTIONS = {
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
+  bulkSetCollaborator, bulkMoveTasks, bulkAbandonTasks,
   createRecurringTask, updateRecurrence, toggleChecklistOccurrence,
   saveChecklistTemplate, archiveChecklistTemplate,
   assignChecklistTemplate, unassignChecklistTemplate,
