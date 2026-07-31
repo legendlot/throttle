@@ -140,9 +140,20 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
   // Re-fit whenever the SET of nodes changes identity, so opening a different journey
   // re-frames too, but dragging a node does not yank the viewport away from you.
   const instRef = useRef(null);
+  const fittedForRef = useRef('');
   const nodeKey = nodes.map((n) => n.id).sort().join('|');
   useEffect(() => {
     if (!instRef.current || !nodes.length) return undefined;
+    // Fit on FIRST LOAD and on JOURNEY SWITCH only — never on an incremental edit.
+    // Keying the effect on the node set alone would re-frame every time someone adds
+    // a step, yanking the viewport mid-build. A different journey shares no node ids
+    // with the previous one, so "no overlap with what we last fitted" is exactly the
+    // switch signal, and adding one node to an existing graph never trips it.
+    const prev = fittedForRef.current;
+    const prevIds = prev ? prev.split('|') : [];
+    const shares = prevIds.some((id) => id && nodeKey.split('|').includes(id));
+    if (prev && shares) return undefined;
+    fittedForRef.current = nodeKey;
     // rAF: fit after React Flow has measured the nodes, otherwise it fits to zero-size
     // boxes and lands on the same wrong zoom it would have anyway.
     const h = requestAnimationFrame(() => {
