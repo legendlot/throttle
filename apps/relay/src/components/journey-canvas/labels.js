@@ -46,10 +46,14 @@ const OUTCOME_LABEL = {
 };
 
 // Fragments that read badly when naively title-cased, so they are expanded first.
+// Verified against the live C2P step ids, which is where the unreadable rows came
+// from — `pay_notdone_msg` and `exit_noreply` are real, and both title-case into
+// nonsense ("Notdone", "Noreply") without an entry here.
 const WORD = {
   msg: 'message', pay: 'payment', convert: 'conversion', tag: 'tag',
   ask: 'ask', cancel: 'cancel', confirm: 'confirm', noresp: 'no-response',
   stuck: 'stuck', link: 'link', wait: 'wait', done: 'done', unpaid: 'unpaid',
+  notdone: 'not completed', noreply: 'no reply', resp: 'response', req: 'request',
 };
 
 function sentenceCase(s) {

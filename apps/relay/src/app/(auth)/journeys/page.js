@@ -27,10 +27,8 @@ function branchTone(key) {
   if (key.startsWith('exit:') || key === 'exited' || key === 'expired' || key === 'failed') return 'red';
   return 'gray';
 }
-function branchLabel(key) {
-  if (key.startsWith('exit:')) return `exit → ${key.slice(5)}`;
-  return key.replace(/^branch_/, '');
-}
+// (branchLabel removed S249 — humanOutcome in journey-canvas/labels.js is now the single
+// labeller, shared with the canvas so the funnel and the nodes cannot disagree.)
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
 
 // A null rate is "never ran", which is NOT the same as 0% — render an em dash so a
