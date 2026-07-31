@@ -227,6 +227,10 @@ button { font-family: inherit; }
 }
 .infodot-pop {
   position: absolute; z-index: 60; top: calc(100% + 7px);
+  /* The dot usually sits inside a .kv-k / section label, which is uppercased and
+     letter-spaced. Without resetting, every popover renders as SHOUTED prose —
+     caught in the live smoke, not the build. A popover is body copy, always. */
+  text-transform: none; letter-spacing: normal; font-family: var(--font-ui, system-ui);
   background: var(--surface-3, #30343a); color: var(--t2, #a7acb2);
   border: 1px solid var(--border-2, #3a3e44); border-radius: var(--radius, 7px);
   padding: 10px 12px; font-size: 12px; line-height: 1.5; font-weight: 400;

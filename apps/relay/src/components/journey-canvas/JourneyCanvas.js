@@ -2,7 +2,7 @@
 // The React Flow canvas. Controlled: the PAGE owns nodes/edges state; this renders
 // them + palette + lint strip and reports changes up. Client-only (page imports it
 // via next/dynamic ssr:false — React Flow touches window).
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   ReactFlow, Background, Controls, Handle, Position,
   applyNodeChanges, applyEdgeChanges, addEdge,
@@ -133,6 +133,24 @@ let seq = 0;
 const newId = (t) => `${t}_${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSelect, readOnly }) {
+  // FIT WHEN THE GRAPH ARRIVES, not when the component mounts. React Flow's `fitView`
+  // prop runs once at init, and the page loads a journey asynchronously — so at mount
+  // there are zero nodes, the fit is a no-op, and the graph then renders at default
+  // zoom with half of it off-canvas (which is what "always zoomed in too much" was).
+  // Re-fit whenever the SET of nodes changes identity, so opening a different journey
+  // re-frames too, but dragging a node does not yank the viewport away from you.
+  const instRef = useRef(null);
+  const nodeKey = nodes.map((n) => n.id).sort().join('|');
+  useEffect(() => {
+    if (!instRef.current || !nodes.length) return undefined;
+    // rAF: fit after React Flow has measured the nodes, otherwise it fits to zero-size
+    // boxes and lands on the same wrong zoom it would have anyway.
+    const h = requestAnimationFrame(() => {
+      instRef.current?.fitView({ padding: 0.22, maxZoom: 1, minZoom: 0.25, duration: 200 });
+    });
+    return () => cancelAnimationFrame(h);
+  }, [nodeKey, nodes.length]);
+
   const onNodesChange = useCallback((ch) => setNodes((ns) => applyNodeChanges(ch, ns)), [setNodes]);
   const onEdgesChange = useCallback((ch) => setEdges((es) => applyEdgeChanges(ch, es)), [setEdges]);
   // one edge per source handle: connecting an already-wired handle rewires it
@@ -188,9 +206,10 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
           // lets a long flow shrink far enough to be seen whole.
           fitViewOptions={{ padding: 0.22, maxZoom: 1, minZoom: 0.25 }}
           minZoom={0.25} maxZoom={1.75}
+          onInit={(inst) => { instRef.current = inst; }}
           proOptions={{ hideAttribution: true }}>
           <Background gap={16} />
-          <Controls showInteractive={false} position="bottom-right" />
+          <Controls showInteractive={false} position="bottom-left" />
         </ReactFlow>
       </div>
     </div>
