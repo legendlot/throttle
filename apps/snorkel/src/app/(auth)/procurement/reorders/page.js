@@ -169,8 +169,17 @@ export default function ReordersPage() {
     if (p.unit) setUnit(p.unit);
     try {
       const stock = await garageFetch('getStock', { part_code: p.part_code }, session);
-      const row = Array.isArray(stock) ? stock[0] : null;
-      setCurrentStock(row?.closing_stock ?? 0);
+      // MATCH the part — never trust position. This read used to take stock[0], which was
+      // the alphabetically-first row of the WHOLE ledger (a junk blank-part_code row with
+      // closing_stock 290), so every part reported "Current Stock: 290". The worker now
+      // honours the part_code filter, but this stays a find() rather than [0] so the page
+      // is correct on its own: a positional read is wrong the moment the response carries
+      // more than the one row you asked for, and that is invisible until someone checks.
+      const rows = Array.isArray(stock) ? stock : [];
+      const row = rows.find(r => r.part_code === p.part_code) || null;
+      // Distinguish "no ledger row for this part" from "zero on hand" — an unstocked new
+      // code showing a confident 0 is what the old code did, and it reads as fact.
+      setCurrentStock(row ? (Number(row.closing_stock) || 0) : null);
     } catch {
       setCurrentStock(null);
     }
