@@ -246,6 +246,10 @@ function OrderDetailInner() {
           {isConfirmed && canManage && !o.invoice_generated && <button style={btnSecondary} onClick={startMetaEdit} disabled={busy}>Edit details</button>}
           {isDraft && canConfirm && <button style={btnPrimary} onClick={confirm} disabled={busy}>Confirm → Dispatch</button>}
           {isConfirmed && canManage && !o.invoice_generated && <button style={btnPrimary} onClick={genInvoice} disabled={busy}>Generate Invoice</button>}
+          {/* Available from confirm onwards — the window where the order is with
+              Depot but the tax invoice may not exist yet (RULE-SNORKEL-004). Gated
+              on sales_view, not sales_order_manage: it is a read-only document. */}
+          {isConfirmed && <button style={btnSecondary} onClick={() => router.push(`/sales/orders/confirmation?id=${encodeURIComponent(id)}`)}>🖶 Order Confirmation</button>}
           {o.invoice_generated && <button style={btnSecondary} onClick={() => router.push(`/sales/orders/invoice?id=${encodeURIComponent(id)}`)}>🖶 Invoice</button>}
           {(isDraft || isConfirmed) && canManage && <button style={btnDanger} onClick={cancel} disabled={busy}>Cancel</button>}
         </div>

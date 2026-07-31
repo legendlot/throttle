@@ -1372,6 +1372,13 @@ export default {
             const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`);
             const sellerR = await query('company_addresses', '?is_registered_office=eq.true&active=eq.true&select=*&limit=1');
             const seller = sellerR.ok ? sellerR.data?.[0] || null : null;
+            // Bank block for the printed documents (order confirmation + invoice).
+            // Data-driven like the seller address — never hardcode banking detail
+            // into the app (RULE-GP-001 #7). Null when unseeded, and every consumer
+            // renders the block only when this is non-null, so an unseeded table
+            // simply omits the section rather than printing empty labels.
+            const bankR = await query('company_bank_accounts', '?is_default=eq.true&active=eq.true&select=*&limit=1');
+            const bank = bankR.ok ? bankR.data?.[0] || null : null;
             const placeOfSupply = o.place_of_supply || o.sales_partners?.state || null;
             const intra = !!(seller?.state && placeOfSupply &&
                            seller.state.trim().toLowerCase() === placeOfSupply.trim().toLowerCase());
@@ -1384,7 +1391,7 @@ export default {
                 igst_amount: intra ? 0 : +gstAmt.toFixed(2) };
             });
             return ok({ order: { ...o, sales_partners: undefined }, partner: o.sales_partners || null,
-              seller, place_of_supply: placeOfSupply, intra, lines });
+              seller, bank, place_of_supply: placeOfSupply, intra, lines });
           }
 
           case 'getCreditNotes': {
