@@ -209,12 +209,20 @@ export function KpiStrip({ cells = [] }) {
 }
 
 /* ---- Panel ----------------------------------------------------------- */
-export function Panel({ title, count, action, children, pad = false }) {
+// `info` puts the panel's explanatory prose behind an ⓘ in its header instead of
+// as a paragraph above the controls (S249). Same content, same place every time —
+// a reader who wants the rules knows where they are, and one who doesn't gets a
+// panel that fits on screen.
+export function Panel({ title, count, action, children, pad = false, info, infoWidth }) {
   return (
     <section className="panel">
       {(title != null || action) && (
         <div className="panel-head">
-          <span className="panel-title">{title}{count != null && <span className="panel-count">{count}</span>}</span>
+          <span className="panel-title">
+            {title}
+            {count != null && <span className="panel-count">{count}</span>}
+            {info && <InfoDot label={`About ${typeof title === 'string' ? title : 'this panel'}`} width={infoWidth}>{info}</InfoDot>}
+          </span>
           {action}
         </div>
       )}
@@ -240,6 +248,65 @@ export function PageHead({ title, sub, actions }) {
     <div className="page-head">
       <div><h2 className="page-title">{title}</h2>{sub && <p className="page-sub">{sub}</p>}</div>
       {actions && <div className="page-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/* ---- InfoDot --------------------------------------------------------- */
+// A small ⓘ that parks explanatory prose behind a hover/click popover.
+//
+// The journeys editor had grown ~8 paragraphs of permanently-visible guidance —
+// each one earned (every note records a real incident), but together they buried
+// the controls they were explaining. Prose that is right 100% of the time and
+// needed 1% of the time belongs behind an affordance, not above the field.
+//
+// Hover OR click, deliberately: hover is the fast path for a mouse, but it is
+// unreachable on touch and by keyboard, so click/focus toggles the same panel.
+// Escape closes and returns focus, and `pin` (set by click) survives mouse-out
+// so the text can be read without keeping the pointer perfectly still.
+export function InfoDot({ children, label = 'More information', side = 'right', width = 320 }) {
+  const [hover, setHover] = useState(false);
+  const [pin, setPin] = useState(false);
+  const wrapRef = useRef(null);
+  const open = hover || pin;
+
+  useEffect(() => {
+    if (!pin) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setPin(false); };
+    // Click-away only applies to the PINNED state — a hover popover closes itself.
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setPin(false); };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
+  }, [pin]);
+
+  return (
+    <span ref={wrapRef} className="infodot-wrap"
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button type="button" className={`infodot${open ? ' is-open' : ''}`}
+        aria-label={label} aria-expanded={open}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setPin((p) => !p); }}
+        onFocus={() => setHover(true)} onBlur={() => setHover(false)}>i</button>
+      {open && (
+        <span role="tooltip" className={`infodot-pop infodot-${side}`} style={{ width }}
+          // Clicks inside the panel must not bubble to a row/card click handler.
+          onClick={(e) => e.stopPropagation()}>
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/* ---- FieldLabel ------------------------------------------------------ */
+// A form label with its guidance folded into an InfoDot, so every field in a
+// panel gets the same treatment instead of some carrying notes and some not.
+export function FieldLabel({ children, hint, info, infoWidth }) {
+  return (
+    <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <span>{children}</span>
+      {hint && <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>{hint}</span>}
+      {info && <InfoDot label={`About: ${typeof children === 'string' ? children : 'this field'}`} width={infoWidth}>{info}</InfoDot>}
     </div>
   );
 }

@@ -208,3 +208,55 @@ button { font-family: inherit; }
 .email-gjs .gjs-cv-canvas { background: #f4f4f4; }
 .chip { font-family: var(--font-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; color: var(--t2); }
 .chip:hover { border-color: var(--border-strong); color: var(--t1); }
+
+/* ---- InfoDot (S249) --------------------------------------------------
+   Guidance prose moved off the journeys editor and behind a hover/click ⓘ.
+   Positioned relative to its own wrapper so it can sit beside a label without
+   the label needing layout changes. */
+.infodot-wrap { position: relative; display: inline-flex; align-items: center; }
+.infodot {
+  width: 15px; height: 15px; line-height: 1; flex: 0 0 15px;
+  border-radius: 50%; border: 1px solid var(--border-2, #3a3e44);
+  background: var(--surface-2, #26282c); color: var(--t3, #71767c);
+  font-family: var(--font-ui, system-ui); font-size: 10px; font-weight: 700; font-style: italic;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: help; padding: 0; transition: color var(--duration-fast, 120ms), border-color var(--duration-fast, 120ms);
+}
+.infodot:hover, .infodot:focus-visible, .infodot.is-open {
+  color: var(--accent, #f2cd1a); border-color: var(--accent-bd, rgba(242,205,26,.32)); outline: none;
+}
+.infodot-pop {
+  position: absolute; z-index: 60; top: calc(100% + 7px);
+  background: var(--surface-3, #30343a); color: var(--t2, #a7acb2);
+  border: 1px solid var(--border-2, #3a3e44); border-radius: var(--radius, 7px);
+  padding: 10px 12px; font-size: 12px; line-height: 1.5; font-weight: 400;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); white-space: normal; text-align: left;
+  /* A popover is reference material, not a layout element — never let it stretch a row. */
+  max-width: min(360px, calc(100vw - 32px));
+}
+.infodot-right { left: -6px; }
+.infodot-left  { right: -6px; }
+.infodot-pop b     { color: var(--t1, #f3f4f5); font-weight: 600; }
+.infodot-pop code,
+.infodot-pop .mono { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--t1, #f3f4f5); }
+.infodot-pop p     { margin: 0 0 7px; }
+.infodot-pop p:last-child { margin-bottom: 0; }
+
+/* ---- React Flow controls (S249) --------------------------------------
+   The default control buttons are near-white on white — invisible on this dark
+   surface, which is why the zoom affordances read as washed out. Restyled to the
+   app's own surface tokens rather than overriding React Flow's theme wholesale. */
+.react-flow__controls { box-shadow: 0 4px 14px rgba(0,0,0,.4); border-radius: var(--radius, 7px); overflow: hidden; }
+.react-flow__controls-button {
+  background: var(--surface-2, #26282c) !important;
+  border-bottom: 1px solid var(--border, #2c2f33) !important;
+  width: 26px; height: 26px;
+}
+.react-flow__controls-button svg { fill: var(--t2, #a7acb2); }
+.react-flow__controls-button:hover { background: var(--surface-3, #30343a) !important; }
+.react-flow__controls-button:hover svg { fill: var(--accent, #f2cd1a); }
+.react-flow__controls-button:disabled svg { fill: var(--t5, #838992); }
+
+/* Panel titles carry an optional ⓘ — keep the row a flex line so the dot sits on
+   the baseline instead of stretching the header. */
+.panel-title { display: inline-flex; align-items: center; gap: 8px; }

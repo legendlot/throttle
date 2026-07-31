@@ -10,6 +10,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag } from 'lucide-react';
 import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
+import { humanOutcome } from './labels.js';
 
 const STEP_META = {
   send:          { label: 'Send',              icon: null,      color: 'var(--accent, #F2CD1A)' },
@@ -84,14 +85,30 @@ function StepNode({ data, selected }) {
         {Icon && <Icon size={13} style={{ color: meta.color }} />} {meta.label}
       </div>
       <div className="mono" style={{ marginTop: 4, color: 'var(--text-2, #555)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
-      {handles.map((h, i) => (
-        <div key={h}>
-          <Handle type="source" position={Position.Right} id={h} style={{ top: 24 + i * 20 }} />
-          {handles.length > 1 && (
-            <span style={{ position: 'absolute', right: 10, top: 16 + i * 20, fontSize: 10, color: 'var(--text-3, #888)' }}>{h}</span>
-          )}
+      {/* OUTCOMES render as their own rows under the body, not as absolutely-positioned
+          labels floated over it. The old version pinned each label at `top: 16 + i*20`
+          INSIDE the node box, so a 3-outcome node (C2P's WA-buttons step) stacked
+          "Make Payment / Confirm COD Order / Cancel Order" straight through its own
+          title and subtitle — unreadable exactly where the flow is most complex.
+          Rows also let the node grow to fit, so N outcomes never overflow, and the
+          handle sits on its row rather than at a guessed offset: React Flow reads
+          handle geometry from the DOM, so nesting keeps label and dot aligned for free. */}
+      {handles.length > 1 ? (
+        <div style={{ marginTop: 7, borderTop: '1px solid var(--bd, #e2e2e2)', paddingTop: 5 }}>
+          {handles.map((h) => (
+            <div key={h} style={{ position: 'relative', display: 'flex', justifyContent: 'flex-end',
+              alignItems: 'center', height: 18, paddingRight: 4 }}>
+              <span style={{ fontSize: 10.5, color: 'var(--text-3, #888)', whiteSpace: 'nowrap' }}>
+                {humanOutcome(h)}
+              </span>
+              <Handle type="source" position={Position.Right} id={h}
+                style={{ position: 'absolute', right: -12, top: '50%', transform: 'translateY(-50%)' }} />
+            </div>
+          ))}
         </div>
-      ))}
+      ) : (
+        handles.map((h) => <Handle key={h} type="source" position={Position.Right} id={h} />)
+      )}
     </div>
   );
 }
@@ -153,16 +170,27 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
           <span>{lint.join(' · ')}</span>
         </div>
       )}
-      <div style={{ height: 480, border: '1px solid var(--bd, #ddd)', borderRadius: 10 }}>
+      {/* Sized against the VIEWPORT, not a fixed 480px. A journey is a wide graph and the
+          old box showed roughly two nodes at a time, so reading one meant panning. Clamped
+          so it still behaves on a laptop (min) and does not swallow a large screen (max). */}
+      <div style={{ height: 'clamp(520px, 68vh, 860px)', border: '1px solid var(--bd, #ddd)', borderRadius: 10 }}>
         <ReactFlow
           nodes={nodes} edges={edges} nodeTypes={nodeTypes}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
           onNodeClick={(_, n) => onSelect && onSelect(n.id)}
           onPaneClick={() => onSelect && onSelect(null)}
           nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable
-          deleteKeyCode={readOnly ? null : 'Backspace'} fitView proOptions={{ hideAttribution: true }}>
+          deleteKeyCode={readOnly ? null : 'Backspace'}
+          fitView
+          // `fitView` alone zooms until the graph FILLS the box, so a 2-node journey
+          // rendered enormous and a fresh one nearly full-screen. maxZoom 1 means fit
+          // never magnifies past actual size — it may only zoom OUT to fit. minZoom
+          // lets a long flow shrink far enough to be seen whole.
+          fitViewOptions={{ padding: 0.22, maxZoom: 1, minZoom: 0.25 }}
+          minZoom={0.25} maxZoom={1.75}
+          proOptions={{ hideAttribution: true }}>
           <Background gap={16} />
-          <Controls showInteractive={false} />
+          <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
       </div>
     </div>

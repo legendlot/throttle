@@ -5,7 +5,8 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch, InfoDot } from '@/components/ui.js';
+import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
 import { fmtDate, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
@@ -392,7 +393,13 @@ export default function JourneysPage() {
           </div>
         )}
 
-        <Panel title="Trigger & enrolment" pad>
+        <Panel title="Trigger & enrolment" pad infoWidth={340} info={<>
+          <p>Who enters this journey, and when. The trigger fires per <b>event</b>, or when a
+          profile <b>enters a segment</b>.</p>
+          <p>Filters below narrow that further — they are the only place an enrolment can be
+          stopped <i>before</i> it happens. Everything after this point is the flow.</p>
+          <p><b>Triggers only fire while the journey is ON.</b></p>
+        </>}>
           <div className="form-grid">
             <div className="ff"><div className="kv-k">Name</div>
               <input className="f-inp" value={j.name} onChange={(e) => set('name', e.target.value)} placeholder="Abandoned cart" disabled={busy || !editable} />
@@ -428,11 +435,19 @@ export default function JourneysPage() {
                     with a real order, then remove the row. Equality only, ANDed, string-compared
                     — matching ingest.js exactly. */}
                 <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-                  <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     Only enrol when…
                     <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>
                       optional — blank means every {j.triggerEvent || 'event'} enrols
                     </span>
+                    <InfoDot label="About enrolment filters">
+                      <p>Enrols only when <b>every</b> filter matches the event. Values are compared
+                      as text, ignoring case — <code>true</code> and <code>True</code> both work.</p>
+                      <p>Anything that does not match is skipped <b>silently</b>: it never enters the
+                      journey, so it will not show up as a skip anywhere.</p>
+                      <p>Built for staged rollouts — point a money-moving journey at one test product
+                      first, prove it with a real order, then remove the row.</p>
+                    </InfoDot>
                   </div>
                   {(j.triggerFilter || []).map((row, i) => (
                     <div key={i}>
@@ -471,14 +486,6 @@ export default function JourneysPage() {
                         enrolment filters on the trigger; a Condition node is a branch mid-journey. */}
                     <Plus size={14} /> Add filter
                   </Btn>
-                  {(j.triggerFilter || []).some((r) => String(r.prop || '').trim()) && (
-                    <div className="tw-note" style={{ marginTop: 8 }}>
-                      Enrols only when <b>every</b> filter matches the event, compared as text and
-                      ignoring case (<code>true</code> and <code>True</code> both work). Everything
-                      else is skipped silently — it never enters the journey, so it will not appear
-                      as a skip.
-                    </div>
-                  )}
 
                   {/* Reachability gate (S242 engine, exposed here S243). Was data-only, which is
                       how TWO journeys shipped enrolling anonymous browsers: nothing in the UI
@@ -487,11 +494,26 @@ export default function JourneysPage() {
                       journey that works and one that burns a Workflow instance + a 30-minute
                       sleep per anonymous browser to reach nobody. */}
                   <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-                    <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                       Only enrol if we can actually message them
                       <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>
-                        strongly recommended for pixel-fired events
+                        recommended for pixel events
                       </span>
+                      <InfoDot label="About the reachability check">
+                        {j.triggerRequiresIdentifier ? (<>
+                          <p>Profiles with no <b>{(j.triggerRequiresIdentifier || '').replace(',', ' or ')}</b> never
+                          enrol. Checked at enrolment, so it costs nothing — the send gate would have
+                          skipped them anyway, just 30 minutes and a Workflow instance later.</p>
+                        </>) : (<>
+                          <p><b>Leave this off only for events that always carry identity</b> — Shopify
+                          and Shopflo order events.</p>
+                          <p>For a <b>pixel</b> event like <span className="mono">product_viewed</span> or{' '}
+                          <span className="mono">add_to_cart</span>, roughly <b>4 in 5 enrolments will
+                          reach nobody</b>: pixel events identify about 1.3% of visitors.</p>
+                          <p>Two journeys shipped enrolling anonymous browsers because nothing in the UI
+                          hinted this field existed.</p>
+                        </>)}
+                      </InfoDot>
                     </div>
                     <select className="f-inp" style={{ marginTop: 6 }}
                       value={j.triggerRequiresIdentifier || ''}
@@ -502,23 +524,25 @@ export default function JourneysPage() {
                       <option value="email">Needs an email address (email journeys)</option>
                       <option value="phone,email">Needs either a phone or an email</option>
                     </select>
-                    <div className="tw-note" style={{ marginTop: 8 }}>
-                      {j.triggerRequiresIdentifier ? (<>
-                        Profiles with no <b>{(j.triggerRequiresIdentifier || '').replace(',', ' or ')}</b> never
-                        enrol. Checked at enrolment, so it costs nothing — the send gate would have
-                        skipped them anyway, just 30 minutes and a Workflow instance later.
-                      </>) : (<>
-                        <b>Leave this off only for events that always carry identity</b> (Shopify /
-                        Shopflo order events). For a <b>pixel</b> event like{' '}
-                        <span className="mono">product_viewed</span> or <span className="mono">add_to_cart</span>,
-                        roughly <b>4 in 5 enrolments will reach nobody</b>.
-                      </>)}
-                    </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="ff"><div className="kv-k">Segment to watch</div>
+              <div className="ff">
+                <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span>Segment to watch</span>
+                  <InfoDot label="About segment-entry triggers">
+                    <p><b>People already in the segment will not be enrolled.</b> When this journey
+                    goes active, the segment&apos;s current members are recorded as a baseline (you
+                    get a Slack note saying how many).</p>
+                    <p>Only profiles who enter <i>after</i> that point start the journey. Entry is
+                    checked every 5 minutes.</p>
+                    {(() => {
+                      const s = segments.find((x) => x.id === j.triggerSegmentId);
+                      return s ? <p>Currently watching <b>{s.name}</b>.</p> : null;
+                    })()}
+                  </InfoDot>
+                </div>
                 <select className="f-inp" value={j.triggerSegmentId} onChange={(e) => set('triggerSegmentId', e.target.value)} disabled={busy || !editable}>
                   <option value="">— pick a segment —</option>
                   {segments.filter((s) => s.kind === 'dynamic').map((s) => (
@@ -553,21 +577,17 @@ export default function JourneysPage() {
             <UtmMarketingNote />
           </div>
 
-          {j.triggerType === 'segment_entry' && (
-            <div className="tw-note" style={{ marginTop: 14 }}>
-              <b>People already in the segment will not be enrolled.</b> When this journey goes
-              active, the segment&apos;s current members are recorded as a baseline (you&apos;ll get a
-              Slack note saying how many) — only profiles who enter <i>after</i> that point start the
-              journey. Entry is checked every 5 minutes.
-              {(() => {
-                const s = segments.find((x) => x.id === j.triggerSegmentId);
-                return s ? <> Watching <b>{s.name}</b>.</> : null;
-              })()}
-            </div>
-          )}
-
           <div style={{ marginTop: 14 }}>
-            <div className="kv-k" style={{ marginBottom: 6 }}>Exit rules — event fires → journey exits early with this outcome</div>
+            <div className="kv-k" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span>Exit rules</span>
+              <InfoDot label="About exit rules">
+                <p>When the named event fires for a profile mid-journey, that enrolment <b>exits
+                early</b> and is recorded with the outcome you give here.</p>
+                <p>Typical use: leave a cart-recovery journey the moment{' '}
+                <span className="mono">order_placed</span> arrives, so nobody is chased for a cart
+                they already bought.</p>
+              </InfoDot>
+            </div>
             {(j.exit_rules || []).map((rule, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                 <div style={{ flex: 1 }}>
@@ -590,7 +610,15 @@ export default function JourneysPage() {
           </div>
         </Panel>
 
-        <Panel title="Flow" pad>
+        <Panel title="Flow" pad infoWidth={340} info={<>
+          <p>Click a node to configure it, drag from a right-side dot to connect, and press
+          <span className="mono"> ⌫ </span> to delete the selected node.</p>
+          <p>A node&apos;s right-side dots are its <b>outcomes</b> — a send has sent/failed, a
+          wait-for-reply has replied/no-reply, and so on. Every outcome you leave unconnected
+          simply ends the journey there.</p>
+          <p>Editing republishes a new version. <b>In-flight enrolments finish on the version
+          they started on</b>, so a change never rewrites a conversation already under way.</p>
+        </>}>
           <JourneyCanvas nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
             onSelect={setSelected} readOnly={busy || !editable} />
           <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates} senders={senders}
@@ -598,7 +626,14 @@ export default function JourneysPage() {
             onChange={updateSelectedConfig} onDelete={deleteSelected} disabled={busy || !editable} />
         </Panel>
 
-        <Panel title="Lifecycle" pad>
+        <Panel title="Lifecycle" pad infoWidth={340} info={<>
+          <p>Triggers only fire while a journey is <b>active</b>. Turning it off stops new
+          enrolments; it does not stop enrolments already running.</p>
+          <p>Editing republishes a new version — in-flight enrolments finish on their pinned
+          version.</p>
+          <p><b>Archive</b> is a retirement, not the everyday switch: it stops sending and leaves
+          the active list.</p>
+        </>}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {/* On/off now lives on the ON/OFF switch in the header — one control, not two that can
                 disagree. Archive stays a button: it is a retirement, not the everyday toggle. */}
@@ -618,13 +653,16 @@ export default function JourneysPage() {
                 disabled={busy} style={{ marginLeft: 'auto' }}>Archive</Btn>
             )}
           </div>
-          <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-            Triggers only fire while a journey is <strong>active</strong>. Editing republishes a new version; in-flight enrolments finish on their pinned version.
-          </div>
         </Panel>
 
         {j.id && (
-          <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad>
+          <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad infoWidth={340} info={<>
+          <p>Where enrolments actually went, across <b>all versions</b> of this journey.</p>
+          <p>Each row is one step: how many reached it, how many are <b>waiting there right
+          now</b>, and how they split across that step&apos;s outcomes.</p>
+          <p>Step names are shown in plain English — hover one to see the engine&apos;s own id if
+          you are editing the graph.</p>
+        </>}>
             {funnelError ? (
               <>
                 <EmptyState icon="info" title="Funnel unavailable — retry" hint="Could not load enrolment funnel data." />
@@ -636,26 +674,30 @@ export default function JourneysPage() {
               <EmptyState icon="git-branch" title="No enrolments yet" hint="Once profiles enrol, each step shows how many entered and how they branched — e.g. a wait-for-response gate's responded vs timeout vs exit counts (across all versions)." />
             ) : (
               <>
+                {/* Every identifier here is rendered through labels.js. The engine's own
+                    strings (`pay_wait`, `wait_response`, `no_reply`) are correct in the graph
+                    and unreadable in a report — this panel was a list of truncated function
+                    names. The raw id stays available on hover for anyone editing the graph. */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
                   {Object.entries(funnel.enrolments || {}).map(([st, n]) => (
-                    <Badge key={st} label={`${st}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
+                    <Badge key={st} label={`${humanEnrolmentStatus(st)}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
                   ))}
                 </div>
-                <Pipeline stages={(funnel.steps || []).map((s) => ({ stage: `${s.step_id} · ${s.step_type}`, count: s.entered, tone: STEP_TONE[s.step_type] || 'gray' }))} />
+                <Pipeline stages={(funnel.steps || []).map((s) => ({ stage: humanStepId(s.step_id), count: s.entered, tone: STEP_TONE[s.step_type] || 'gray' }))} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
                   {(funnel.steps || []).map((s) => {
                     const parked = Number((funnel.parked || {})[s.step_id] || 0);
                     const branches = Object.entries(s.results || {}).filter(([k]) => k !== 'entered');
                     return (
                       <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <strong className="mono" style={{ fontSize: 13 }}>{s.step_id}</strong>
-                        <Badge label={s.step_type} tone={STEP_TONE[s.step_type] || 'gray'} />
-                        <span className="dim" style={{ fontSize: 12 }}>{s.entered} resolved</span>
-                        {parked > 0 && <Badge label={`⏳ ${parked} waiting`} tone="yellow" dot />}
+                        <strong style={{ fontSize: 13 }} title={`step id: ${s.step_id}`}>{humanStepId(s.step_id)}</strong>
+                        <Badge label={humanStepType(s.step_type)} tone={STEP_TONE[s.step_type] || 'gray'} />
+                        <span className="dim" style={{ fontSize: 12 }}>{s.entered} reached this step</span>
+                        {parked > 0 && <Badge label={`${parked} waiting here now`} tone="yellow" dot />}
                         <span style={{ flex: 1 }} />
                         {branches.length === 0
                           ? <span className="dim" style={{ fontSize: 12 }}>—</span>
-                          : branches.map(([k, v]) => <Badge key={k} label={`${branchLabel(k)}: ${v}`} tone={branchTone(k)} />)}
+                          : branches.map(([k, v]) => <Badge key={k} label={`${humanOutcome(k)}: ${v}`} tone={branchTone(k)} />)}
                       </div>
                     );
                   })}
@@ -697,8 +739,8 @@ export default function JourneysPage() {
                     Draft/archived (vs merely OFF) shows as a small pill beside the name. */}
                 <thead><tr>
                   <th style={{ width: 96 }}>On / Off</th><th>Journey</th>
-                  <th className="num">Enrolled</th><th className="num">Conv</th>
-                  <th className="num">Revenue</th><th className="num">Read</th>
+                  <th className="num">Enrolled</th><th className="num">Sent</th>
+                  <th className="num">Delivered</th><th className="num">Read</th>
                   <th>Last activity</th>
                 </tr></thead>
                 <tbody>
@@ -735,7 +777,10 @@ export default function JourneysPage() {
                             {(r.status === 'draft' || r.status === 'archived') && (
                               <span style={{ marginLeft: 8 }}><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></span>
                             )}
-                            <div className="mono dim" style={{ fontSize: 10.5, marginTop: 2 }}>
+                            <div className="mono dim" style={{ fontSize: 10.5, marginTop: 2 }}
+                              title={o?.attributed_revenue
+                                ? `Attributed revenue ${inr(o.attributed_revenue)} across ${o.attributed_orders || 0} order(s) — meaningful on recovery journeys, incidental on notifications`
+                                : undefined}>
                               {triggerSummary(r.trigger, segments)} · v{r.active_version ?? '—'}
                             </div>
                           </div>
@@ -745,14 +790,27 @@ export default function JourneysPage() {
                         {o ? o.enrolled_30d : '—'}
                         {o?.in_flight > 0 && <div className="dim" style={{ fontSize: 10 }}>{o.in_flight} in flight</div>}
                       </td>
-                      {/* Conv = purchase-exits ÷ enrolled — the journey's own goal signal (a
-                          purchase-exit can fire WITHOUT a message ever sending). */}
-                      <td className="num mono dim" title={o ? `${o.purchased_exits} purchase-exit(s) of ${o.enrolled} enrolled` : undefined}>{rate(o?.conversion_rate)}</td>
-                      <td className="num mono">
-                        {o?.attributed_revenue ? inr(o.attributed_revenue) : <span style={{ color: 'var(--t5)' }}>—</span>}
-                        {o?.unpriced > 0 && (
-                          <div className="dim" style={{ fontSize: 10 }} title={`${o.unpriced} sent message(s) have no rate card entry — spend is understated`}>
-                            +{o.unpriced} unpriced
+                      {/* SENT + DELIVERED replace Conv + Revenue here (S249, Afshaan).
+                          Attributed revenue on a NOTIFICATION journey is noise: Order Cancelled
+                          showed ₹12,580 because orders happen to follow a cancellation notice,
+                          not because the notice earned them — and Conv read 0.0% on every row,
+                          since purchase-exits are only wired on recovery journeys. Both remain
+                          on /analytics and in the editor's Funnel; revenue is kept here as a
+                          hover on the journey name so a cart-recovery journey does not lose it.
+                          Did it send, and did it land, is the question this list should answer. */}
+                      <td className="num mono" title={o ? `${o.sent} sent · ${o.failed} failed · ${o.skipped} skipped by the send gate` : undefined}>
+                        {o?.sent ?? '—'}
+                        {o?.failed > 0 && (
+                          <div style={{ fontSize: 10, color: 'var(--red-fg, #ff7a7a)' }}>{o.failed} failed</div>
+                        )}
+                      </td>
+                      <td className="num mono" title={o ? `${o.delivered} delivered of ${o.sent} sent` : undefined}>
+                        {o?.delivered ?? '—'}
+                        {/* The rate is the point — a raw delivered count means nothing without
+                            the denominator, and this is where a number quietly going wrong shows. */}
+                        {o?.sent > 0 && (
+                          <div className="dim" style={{ fontSize: 10 }}>
+                            {((Number(o.delivered) / Number(o.sent)) * 100).toFixed(0)}%
                           </div>
                         )}
                       </td>

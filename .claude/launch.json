@@ -4,9 +4,26 @@
     {
       "name": "odo",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["next", "dev", "-p", "3007"],
+      "runtimeArgs": [
+        "next",
+        "dev",
+        "-p",
+        "3007"
+      ],
       "cwd": "apps/odo",
       "port": 3007
+    },
+    {
+      "name": "relay",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "dev",
+        "-p",
+        "3011"
+      ],
+      "cwd": "apps/relay",
+      "port": 3011
     }
   ]
 }
