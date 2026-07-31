@@ -241,6 +241,13 @@ async function handleGet(url, auth, env) {
       const lt = await lr.text();
       let ld; try { ld = lt ? JSON.parse(lt) : null; } catch { ld = null; }
       if (!lr.ok || !Array.isArray(ld)) return err(`list_failed:${lt}`.slice(0, 300), 502);
+      // Which templates point at each image. Requested only when asked for (the picker
+      // modal does not need it) — it scans every template's content as text.
+      let usage = {};
+      if (url.searchParams.get('with_usage') === 'true') {
+        const ur = await A.sbComms('/rest/v1/rpc/media_usage', env, { method: 'POST', body: '{}' });
+        if (ur.ok && ur.data && typeof ur.data === 'object') usage = ur.data;
+      }
       const assets = ld
         // The list API emits a zero-byte placeholder row for the folder itself. It carries
         // no metadata and is not an image; rendering it would put a broken tile in the picker.
@@ -252,6 +259,7 @@ async function handleGet(url, auth, env) {
           size: o.metadata?.size ?? null,
           mime: o.metadata?.mimetype || null,
           created_at: o.created_at || o.updated_at || null,
+          used_by: usage[`email/${o.name}`] || [],
         }));
       return ok({ assets });
     }
@@ -655,6 +663,39 @@ async function handlePost(body, auth, env) {
       let sd; try { sd = st ? JSON.parse(st) : null; } catch { sd = null; }
       if (!sr.ok || !sd?.url) return err(`sign_failed:${st}`, 502);
       return ok(EA.signToUrls(env, bucket, path, sd));
+    }
+
+    case 'deleteMediaAsset': {         // S251 — library housekeeping, usage-guarded
+      // Deleting a public asset is irreversible and immediately visible to customers: an
+      // email template embeds the URL live, so removing the object breaks every future
+      // send of that email. So this REFUSES any asset a template still references, and
+      // says which ones — the caller cannot override it. (A WhatsApp header is safer,
+      // since Meta keeps its own copy of an approved template's sample image, but the
+      // saved row would still point at a dead URL and the next submit would fail.)
+      //
+      // The point of allowing deletion at all: the bucket already holds duplicates of the
+      // same picture, created because the editor's asset panel was never seeded and
+      // authors re-uploaded what was already there. 8 of 28 objects are unreferenced.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const path = String(body.path || '');
+      // Confine to the library's own prefix and refuse traversal — this is a delete taking
+      // a caller-supplied path, so the shape of the path is a security boundary, not a nicety.
+      if (!path.startsWith('email/') || path.includes('..')) return err('bad_path', 400);
+      const ur = await A.sbComms('/rest/v1/rpc/media_usage', env, { method: 'POST', body: '{}' });
+      if (!ur.ok) return err('usage_check_failed', 502);   // fail CLOSED — never delete blind
+      const used = (ur.data && ur.data[path]) || [];
+      if (used.length) {
+        return err(`in_use:${used.map((t) => t.name).join(', ')}`.slice(0, 300), 409);
+      }
+      const dr = await fetch(`${env.SUPABASE_URL}/storage/v1/object/relay-email-assets/${path.split('/').map(encodeURIComponent).join('/')}`, {
+        method: 'DELETE',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      });
+      if (!dr.ok) return err(`delete_failed:${(await dr.text()).slice(0, 200)}`, 502);
+      return ok({ deleted: path });
     }
 
 

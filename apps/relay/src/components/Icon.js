@@ -7,7 +7,7 @@ import {
   RefreshCw, FileText, FilePlus, Package, PackageCheck, PackageSearch, Wallet,
   Store, ClipboardList, HandCoins, Boxes, Settings, BookOpen, Shield, Users,
   Building2, Truck, Inbox, BarChart3, ChevronRight, Printer, Pencil, Check,
-  CheckCheck, Send, Info, Download, FileSearch, PartyPopper, SearchX, Trash2,
+  CheckCheck, Send, Info, Download, FileSearch, PartyPopper, SearchX, Trash2, Images,
 } from 'lucide-react';
 
 const MAP = {
@@ -20,6 +20,7 @@ const MAP = {
   'bar-chart-3': BarChart3, 'chevron-right': ChevronRight, 'printer': Printer, 'pencil': Pencil,
   'check': Check, 'check-check': CheckCheck, 'send': Send, 'info': Info, 'download': Download,
   'file-search': FileSearch, 'party-popper': PartyPopper, 'search-x': SearchX, 'trash-2': Trash2,
+  'images': Images,
 };
 
 export function Icon({ name, size = 16, strokeWidth = 1.9, className, style }) {

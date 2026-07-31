@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
-  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity,
+  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -30,6 +30,11 @@ export const NAV_GROUPS = [
     id: 'build', label: 'Build & measure',
     items: [
       { id: 'templates', label: 'Templates', route: '/templates', icon: Mail,      requires: 'relay_view' },
+      // Library sits beside Templates because it is the thing templates draw FROM.
+      // It began life as a modal inside the template editor, which meant the only way
+      // to load images was to first open some template you might not want to edit —
+      // so bulk upload, the actual job, had nowhere to happen.
+      { id: 'library',   label: 'Library',   route: '/library',   icon: Images,    requires: 'relay_view' },
       { id: 'analytics', label: 'Analytics', route: '/analytics', icon: BarChart3, requires: 'relay_view' },
     ],
   },
