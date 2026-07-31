@@ -4896,7 +4896,33 @@ async function relayWaFindOrCreateThread(phone, phoneNumberId, env, name) {
     t = exact.data?.[0] || null;
     if (!t) {
       const unclaimed = await sb(`${base}&waba_phone_number_id=is.null${tail}`, env);
-      t = unclaimed.data?.[0] || null;
+      const cand = unclaimed.data?.[0] || null;
+      // ADOPT a numberless thread only if it is not LIVE ON THE OTHER TRANSPORT. Claiming one is
+      // how a customer's conversations on two different LOT numbers got welded into one: while a
+      // number is still on BiteSpeed its threads arrive through the Chatwoot mirror carrying a
+      // provider_thread_ref and NO number, so a Relay inbound on the support line would find one
+      // seconds old and stamp it support. Anki (+919474213834) hit exactly that on 2026-07-31 —
+      // the mirror created her transactional thread at 11:17:30, her support message landed at
+      // 11:17:57, and the two streams merged; the agent then saw BiteSpeed's (correct, and correct
+      // FOR THAT NUMBER) "this number is only for transactional updates" reply sitting inside what
+      // the header called a support chat.
+      //
+      // Recency is the discriminator, NOT provider_thread_ref alone: every pre-cutover support
+      // thread is ALSO Chatwoot-mirrored, and those must stay adoptable or ~6,800 conversations
+      // lose their history the next time the customer writes. A thread Chatwoot touched moments
+      // ago belongs to a number still on BiteSpeed; a dormant one is genuine pre-migration history.
+      // Self-generalising, with no cutover date to maintain: as each remaining number migrates its
+      // Chatwoot traffic stops, and its threads age past the window and become adoptable on their own.
+      // 5 minutes, CENTRED ON MEASURED DATA rather than picked: across all 18 mirrored threads
+      // ever stamped with the support number, the two genuine merge victims sat at 0.4 min while
+      // the nearest legitimate adoption sat at 20.4 min (the rest ran 3.4h → 13 days). So the two
+      // populations are ~50× apart and anything in 1–20 min separates them; 5 min takes ~10×
+      // margin on both sides. Re-measure with that query before changing it.
+      const HOT_MS = 5 * 60 * 1000;
+      const hotOnChatwoot = !!cand?.provider_thread_ref
+        && !!cand?.last_message_at
+        && (Date.now() - new Date(cand.last_message_at).getTime()) < HOT_MS;
+      t = hotOnChatwoot ? null : cand;
     }
   } else {
     // No number forwarded (older commsops payloads). Fall back to the pre-2026-07-30 behaviour
