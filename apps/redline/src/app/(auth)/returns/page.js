@@ -140,26 +140,42 @@ export default function ReturnsPage() {
   }
 
   // ── UDR issue request (notional; production-owned, RULE-RET-002) ──
+  // A variant is only requestable for what is left AFTER outstanding requests. `available`
+  // and `requested` come from getReturnPilesV2; falling back to `count` keeps the modal
+  // working against an older worker response rather than disabling every row.
+  const udrAvail = (b) => (b.available != null ? b.available : (b.count || 0));
   function toggleUdr(b) {
+    if (udrAvail(b) <= 0) return;   // nothing left to request — the worker would 422 anyway
     const key = `${b.product}|${b.model}|${b.color}`;
     setUdrSel((prev) => {
       const n = { ...prev };
-      if (n[key]) delete n[key]; else n[key] = { product: b.product, model: b.model, color: b.color, qty: b.count || 0 };
+      if (n[key]) delete n[key]; else n[key] = { product: b.product, model: b.model, color: b.color, qty: udrAvail(b) };
       return n;
     });
   }
   function toggleAllUdr() {
+    const selectable = piles.UDR.filter((b) => udrAvail(b) > 0);
     setUdrSel((prev) => {
-      const allSel = piles.UDR.length > 0 && piles.UDR.every((b) => prev[`${b.product}|${b.model}|${b.color}`]);
+      const allSel = selectable.length > 0 && selectable.every((b) => prev[`${b.product}|${b.model}|${b.color}`]);
       if (allSel) return {};
       const n = {};
-      for (const b of piles.UDR) n[`${b.product}|${b.model}|${b.color}`] = { product: b.product, model: b.model, color: b.color, qty: b.count || 0 };
+      for (const b of selectable) n[`${b.product}|${b.model}|${b.color}`] = { product: b.product, model: b.model, color: b.color, qty: udrAvail(b) };
       return n;
     });
   }
-  const allUdrSelected = piles.UDR.length > 0 && piles.UDR.every((b) => udrSel[`${b.product}|${b.model}|${b.color}`]);
+  // Only over SELECTABLE rows — otherwise the header box can never read checked whenever a
+  // single variant is fully consumed, which is currently 10 of 14.
+  const udrSelectable = piles.UDR.filter((b) => udrAvail(b) > 0);
+  const allUdrSelected = udrSelectable.length > 0 && udrSelectable.every((b) => udrSel[`${b.product}|${b.model}|${b.color}`]);
   function setUdrQty(key, qty) {
-    setUdrSel((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], qty: Math.max(0, parseInt(qty, 10) || 0) } } : prev));
+    // Clamp to what is actually free. Without this the point of the change is lost: someone
+    // can still type past availability and hit the exact 422 this is meant to pre-empt. The
+    // worker still validates — this only stops a submit that is guaranteed to fail.
+    const b = piles.UDR.find((x) => `${x.product}|${x.model}|${x.color}` === key);
+    const cap = b ? udrAvail(b) : Infinity;
+    setUdrSel((prev) => (prev[key]
+      ? { ...prev, [key]: { ...prev[key], qty: Math.min(cap, Math.max(0, parseInt(qty, 10) || 0)) } }
+      : prev));
   }
   async function submitUdr() {
     const lines = Object.values(udrSel).filter((l) => l.qty > 0);
@@ -299,7 +315,7 @@ export default function ReturnsPage() {
               <button style={{ ...btnGhost, padding: '5px 8px' }} onClick={() => setUdrOpen(false)} disabled={udrSubmitting}><Icon name="x" size={14} /></button>
             </div>
             <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', marginBottom: 12, lineHeight: 1.5 }}>
-              Raises a notional UDR issue request (one work order per line). It appears in the <strong style={{ color: 'var(--t2)' }}>Store Issue Queue</strong>; the Store then scans each unit out at the <strong style={{ color: 'var(--t2)' }}>Issue UDR</strong> station — no desk issuing.
+              Raises a notional UDR issue request (one work order per line). It appears in the <strong style={{ color: 'var(--t2)' }}>Store Issue Queue</strong>; the Store then scans each unit out at the <strong style={{ color: 'var(--t2)' }}>Issue UDR</strong> station — no desk issuing. <strong style={{ color: 'var(--t2)' }}>Requested</strong> is what open requests have already claimed, so only the free remainder can be asked for.
             </div>
             <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 0 0' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -308,23 +324,39 @@ export default function ReturnsPage() {
                   <th style={thStyle}><span className="eyebrow">Product</span></th>
                   <th style={thStyle}><span className="eyebrow">Colour</span></th>
                   <th style={{ ...thStyle, textAlign: 'right' }}><span className="eyebrow">In pool</span></th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}><span className="eyebrow">Requested</span></th>
                   <th style={{ ...thStyle, textAlign: 'right' }}><span className="eyebrow">Request qty</span></th>
                 </tr></thead>
                 <tbody>
                   {piles.UDR.map((b, i) => {
                     const key = `${b.product}|${b.model}|${b.color}`;
                     const sel = udrSel[key];
+                    const requested = b.requested || 0;
+                    const avail = udrAvail(b);
+                    // Fully consumed: the pile shows units, but every one is already promised
+                    // to an open request, so requesting again 422s. Dim + block rather than
+                    // hide — production still needs to see the units exist and why they are
+                    // not requestable. The worker remains the authority.
+                    const spent = avail <= 0;
+                    const click = spent ? undefined : () => toggleUdr(b);
+                    const nameStyle = { ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: spent ? 'var(--t3)' : 'var(--t1)', cursor: spent ? 'not-allowed' : 'pointer' };
                     return (
-                      <tr key={`${key}-${i}`} style={{ background: sel ? 'var(--ok-bg)' : 'transparent' }}>
-                        <td style={tdBase}><input type="checkbox" readOnly checked={!!sel} onClick={() => toggleUdr(b)} /></td>
-                        <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--t1)', cursor: 'pointer' }} onClick={() => toggleUdr(b)}>{[b.product, b.model].filter(Boolean).join(' ')}</td>
-                        <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }} onClick={() => toggleUdr(b)}>{b.color || '—'}</td>
+                      <tr key={`${key}-${i}`} title={spent ? `All ${fmt(b.count)} in the pile are already promised to open requests — nothing left to request` : undefined}
+                          style={{ background: sel ? 'var(--ok-bg)' : 'transparent', opacity: spent ? 0.55 : 1 }}>
+                        <td style={tdBase}><input type="checkbox" readOnly disabled={spent} checked={!!sel} onClick={click} style={{ cursor: spent ? 'not-allowed' : 'pointer' }} /></td>
+                        <td style={nameStyle} onClick={click}>{[b.product, b.model].filter(Boolean).join(' ')}</td>
+                        <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: spent ? 'not-allowed' : 'pointer' }} onClick={click}>{b.color || '—'}</td>
                         <td style={{ ...tdBase, textAlign: 'right' }}><span className="num" style={{ fontSize: 12.5, color: 'var(--t3)' }}>{fmt(b.count)}</span></td>
                         <td style={{ ...tdBase, textAlign: 'right' }}>
-                          {sel
-                            ? <input type="number" min="0" value={sel.qty} onChange={(e) => setUdrQty(key, e.target.value)}
-                                className="num" style={{ ...inputStyle, width: 70, padding: '5px 8px', fontSize: 12.5, textAlign: 'right' }} />
-                            : <span style={{ color: 'var(--t3)' }}>—</span>}
+                          <span className="num" style={{ fontSize: 12.5, color: requested > 0 ? 'var(--warn-fg, #fbbf24)' : 'var(--t4)' }}>{requested > 0 ? fmt(requested) : '—'}</span>
+                        </td>
+                        <td style={{ ...tdBase, textAlign: 'right' }}>
+                          {spent
+                            ? <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>all requested</span>
+                            : sel
+                              ? <input type="number" min="0" max={avail} value={sel.qty} onChange={(e) => setUdrQty(key, e.target.value)}
+                                  className="num" style={{ ...inputStyle, width: 70, padding: '5px 8px', fontSize: 12.5, textAlign: 'right' }} />
+                              : <span style={{ color: 'var(--t3)' }}>{fmt(avail)} free</span>}
                         </td>
                       </tr>
                     );
