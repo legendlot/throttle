@@ -1243,16 +1243,26 @@ export default function DispatchShipmentsPage() {
                             : r.now_in_box     ? `now in ${r.now_in_box}${r.current_status === 'shipped' ? ' · shipped separately' : ''}`
                             : (r.current_status || 'not in a box');
                           return (
+                            /* Two lines, not five columns — the drawer is ~490px and a
+                               single fixed-width row squeezed the destination to zero
+                               width, which is the whole point of the panel. */
                             <div key={`${r.car_upc}-${r.removed_at}-${i}`}
-                              style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: 'var(--font-ui)',
-                                fontSize: 12, color: back ? 'var(--t4)' : 'var(--t2)' }}>
-                              <span className="num" style={{ color: back ? 'var(--t4)' : 'var(--t1)', width: 132, flexShrink: 0 }}>{r.car_upc}</span>
-                              <span style={{ width: 150, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {[r.product, r.model, r.color].filter(Boolean).join(' ')}
-                              </span>
-                              <span style={{ width: 96, flexShrink: 0, color: 'var(--t4)' }}>{r.removed_from_box || '—'}</span>
-                              <span style={{ width: 118, flexShrink: 0, color: 'var(--t4)' }}>{formatDateTime(r.removed_at)}</span>
-                              <span style={{ flex: 1, color: back ? 'var(--t4)' : 'var(--yellow)' }}>{dest}</span>
+                              style={{ display: 'flex', flexDirection: 'column', gap: 1, fontFamily: 'var(--font-ui)',
+                                fontSize: 12, color: back ? 'var(--t4)' : 'var(--t2)', paddingBottom: 5,
+                                borderBottom: '1px solid var(--border)' }}>
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+                                <span className="num" style={{ color: back ? 'var(--t4)' : 'var(--t1)', flexShrink: 0 }}>{r.car_upc}</span>
+                                <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {[r.product, r.model, r.color].filter(Boolean).join(' ')}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 11, color: 'var(--t4)', flexWrap: 'wrap' }}>
+                                <span>{r.removed_from_box || '—'}</span>
+                                <span>·</span>
+                                <span>{formatDateTime(r.removed_at)}</span>
+                                <span>·</span>
+                                <span style={{ color: back ? 'var(--t4)' : 'var(--yellow)' }}>{dest}</span>
+                              </div>
                             </div>
                           );
                         })}
