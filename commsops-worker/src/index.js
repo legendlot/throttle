@@ -720,10 +720,16 @@ async function handlePost(body, auth, env) {
       const id = body.id;
       if (!id) return err('id_required', 400);
       const cur = await A.sbComms(
-        `/rest/v1/templates?id=eq.${A.enc(id)}&select=id,name,provider_template_id&limit=1`, env);
+        `/rest/v1/templates?id=eq.${A.enc(id)}&select=id,name,provider_template_id,approval_status&limit=1`, env);
       const row = (cur.ok && cur.data?.[0]) || null;
       if (!row) return err('template_not_found', 404);
-      if (row.provider_template_id) {
+      // Guard on EITHER signal of Meta contact, not just provider_template_id.
+      // Found live 2026-07-31: `Shipment Update-Out for Delivery_WA` carries
+      // approval_status='APPROVED' with provider_template_id NULL — Meta has seen it but we
+      // no longer hold its id. Checking only the id would have let that be deleted here,
+      // orphaning a template on Meta under a name we could then never cleanly recreate
+      // (name-reuse rules are undocumented). Any evidence of Meta contact ⇒ archive only.
+      if (row.provider_template_id || row.approval_status) {
         return err('on_meta_archive_instead', 409);
       }
       const ur = await A.sbComms('/rest/v1/rpc/template_usage', env, { method: 'POST', body: '{}' });

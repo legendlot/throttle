@@ -544,8 +544,8 @@ export default function TemplatesPage() {
 
   async function destroy(r) {
     const u = r.usage || {};
-    if (r.provider_template_id) {
-      showToast('This template exists on Meta — archive it instead of deleting', 'error');
+    if (r.provider_template_id || r.approval_status) {
+      showToast('Meta has seen this template — archive it instead of deleting', 'error');
       return;
     }
     const blockers = [
@@ -1092,7 +1092,11 @@ export default function TemplatesPage() {
                           {/* Hard delete exists only for templates that never reached Meta.
                               Anything with a provider_template_id is archive-only — see the
                               worker for why Relay never issues a Meta DELETE. */}
-                          {canEdit && !r.provider_template_id && (
+                          {/* Either signal of Meta contact means archive-only, not just
+                              provider_template_id: one live template carries
+                              approval_status=APPROVED with a NULL id (Meta has seen it, we
+                              lost the id), and deleting that would orphan it on Meta. */}
+                          {canEdit && !r.provider_template_id && !r.approval_status && (
                             <Btn onClick={(e) => { e.stopPropagation(); destroy(r); }}
                               disabled={!!(r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent))}
                               title={r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent)
