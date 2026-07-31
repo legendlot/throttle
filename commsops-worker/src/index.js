@@ -226,6 +226,20 @@ async function handleGet(url, auth, env) {
       return ok((r.data || []).map((t) => ({ ...t, usage: u[String(t.id)] || null })));
     }
 
+    case 'getCourierEmitImpact': {     // S254 — "how many messages does moving this release?"
+      // Answers the question that makes the courier watermark safe to edit. Moving it
+      // FORWARD is harmless (fewer rows qualify); moving it BACKWARD makes previously-skipped
+      // shipments newly eligible — measured 2026-07-31, dropping it 7 days would release
+      // 185 real customer messages (114 rto / 52 in_transit / 19 delivered). Nobody should
+      // make that change without seeing the number first.
+      const from = url.searchParams.get('from');
+      if (!from || Number.isNaN(Date.parse(from))) return err('from_required', 400);
+      const r = await A.sbComms('/rest/v1/rpc/courier_emit_impact', env, {
+        method: 'POST', body: JSON.stringify({ p_from: new Date(Date.parse(from)).toISOString() }),
+      });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
     case 'getSuppressions': {          // S253 — the hardest gate finally has a read path
       // `comms.suppressions` is step ① of the send gate and blocks EVERY purpose, including
       // transactional — a suppressed customer stops receiving order and shipping messages,
@@ -514,7 +528,13 @@ async function handlePost(body, auth, env) {
         // "Wrong number" redirect (S245) — read by csops on every relay-transported inbound.
         'wrong_number_redirect_enabled', 'wrong_number_redirect_phone_ids', 'wrong_number_redirect_text',
         // Account-wide utm_* floor, overridden per journey/campaign and per template.
-        'utm_defaults'];
+        'utm_defaults',
+        // S254 — the last three SQL-only operational switches. The backlog literally
+        // instructs changing `courier_emit_from` to move a go-live date, yet it had no
+        // control, so the act was a hand-written UPDATE on a live table whose blast radius
+        // is customer WhatsApp messages. See the validation below: these are gated harder
+        // than the rest precisely because moving a watermark BACKWARD releases a burst.
+        'courier_emit_from', 'rto_stage_emit_from', 'segment_entry_max_per_tick'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
       // Disabling test mode = unlocking real-customer sends. Make it a deliberate,
@@ -538,6 +558,34 @@ async function handlePost(body, auth, env) {
         const pct = Number(patch.c2p_prepaid_discount_pct);
         if (!Number.isFinite(pct) || pct < 0 || pct >= 100) return err('c2p_prepaid_discount_pct must be a number >= 0 and < 100', 422);
         patch.c2p_prepaid_discount_pct = pct;
+      }
+      // EMIT WATERMARKS (S254). Both are fail-closed gates on real customer messaging:
+      // shipment-events.js and rto-stages.js emit NOTHING when unset, and that property must
+      // survive contact with a form. An empty string from a cleared date input would blank the
+      // column and silently switch the feed off, so a blank is REFUSED rather than written —
+      // turning a feed off is a decision, not a side effect of clearing a field.
+      for (const k of ['courier_emit_from', 'rto_stage_emit_from']) {
+        if (!(k in patch)) continue;
+        const raw = patch[k];
+        if (raw === null || raw === '' || raw === undefined)
+          return err(`${k} cannot be blank — an unset watermark silently stops that feed`, 422);
+        const t = Date.parse(raw);
+        if (Number.isNaN(t)) return err(`${k} must be a valid date/time`, 422);
+        // A watermark in the future is legitimate (that is how a go-live is scheduled), but a
+        // far-future one is almost certainly a typo'd year, and it would mute the feed for
+        // months without any error anywhere.
+        if (t > Date.now() + 365 * 86400000)
+          return err(`${k} is more than a year in the future — check the year`, 422);
+        patch[k] = new Date(t).toISOString();
+      }
+      // Segment-entry cap. `> 0` matters: segment-entry.js only honours a positive number and
+      // otherwise silently falls back to DEFAULT_CAP=500, so 0 or a negative would read as
+      // "no enrolments" while actually meaning "500".
+      if ('segment_entry_max_per_tick' in patch) {
+        const n = Number(patch.segment_entry_max_per_tick);
+        if (!Number.isInteger(n) || n < 1 || n > 20000)
+          return err('segment_entry_max_per_tick must be a whole number between 1 and 20000', 422);
+        patch.segment_entry_max_per_tick = n;
       }
       const r = await A.sbComms('/rest/v1/settings?id=eq.1', env, {
         method: 'PATCH', body: JSON.stringify(patch),

@@ -7,6 +7,24 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Check, Lock, Unlock, ShieldAlert } from 'lucide-react';
 import { PageHead, Panel, Btn } from '@/components/ui.js';
 
+
+// <input type="datetime-local"> speaks LOCAL wall-clock with no zone; the column is
+// timestamptz. Convert explicitly in both directions — reading the raw input value as if it
+// were UTC would shift every watermark by the IST offset (5h30m), which on a fail-closed
+// emit gate means silently messaging about a different 5.5-hour slice of shipments.
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(v) {
+  if (!v) return '';
+  const d = new Date(v);              // parsed as local time, which is what the user typed
+  return isNaN(d) ? '' : d.toISOString();
+}
+
 const FIELDS = [
   { key: 'approval_required_marketing', label: 'Require approval for marketing sends', type: 'toggle',
     hint: 'When on, marketing campaigns above the audience threshold need an approver.' },
@@ -58,6 +76,7 @@ export default function SettingsPage() {
     setLoading(true);
     try {
       const s = await garageFetch('getRelaySettings', {}, session);
+      setSavedCourierFrom(s?.courier_emit_from || null);
       setForm(s || {});
       setAllowText(Array.isArray(s?.test_mode_allow) ? s.test_mode_allow.join('\n') : '');
     } catch (e) { showToast(e.message || 'Failed to load settings', 'error'); }
@@ -96,6 +115,43 @@ export default function SettingsPage() {
     set(key, next);
   }
 
+  // Impact preview for the courier watermark (S254). Only meaningful when the date moves
+  // EARLIER than what is stored — moving it forward can only reduce what qualifies.
+  const [impact, setImpact] = useState(null);
+  const [savedCourierFrom, setSavedCourierFrom] = useState(null);
+
+  useEffect(() => {
+    const next = form.courier_emit_from;
+    if (!session || !next || !savedCourierFrom) { setImpact(null); return; }
+    if (Date.parse(next) >= Date.parse(savedCourierFrom)) { setImpact(null); return; }
+    let alive = true;
+    setImpact({ loading: true });
+    const h = setTimeout(async () => {
+      try {
+        const r = await garageFetch('getCourierEmitImpact', { from: next }, session);
+        if (alive) setImpact({ total: Number(r?.total || 0), by: r?.by_lifecycle || {} });
+      } catch { if (alive) setImpact(null); }
+    }, 400);
+    return () => { alive = false; clearTimeout(h); };
+  }, [form.courier_emit_from, savedCourierFrom, session]);
+
+  // Separate save for this panel so a watermark change is always a deliberate act with its
+  // own confirmation, never something that rides along with an unrelated settings edit.
+  async function saveEmission() {
+    const next = form.courier_emit_from;
+    const movedBack = next && savedCourierFrom && Date.parse(next) < Date.parse(savedCourierFrom);
+    if (movedBack) {
+      const n = impact && !impact.loading ? impact.total : null;
+      if (!window.confirm(
+        `Move the courier watermark BACK?\n\n`
+        + (n != null
+          ? `${n.toLocaleString('en-IN')} customer message${n === 1 ? '' : 's'} become eligible and will send at ~15 per 5-minute tick.\n\n`
+          : `This makes previously-skipped shipments eligible again.\n\n`)
+        + `These are real WhatsApp messages about orders, deliveries and returns.`)) return;
+    }
+    await save();
+  }
+
   async function save() {
     setSaving(true);
     try {
@@ -110,6 +166,14 @@ export default function SettingsPage() {
       payload.test_mode_allow = allowText.split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
       // jsonb, not one of the flat FIELDS — null means "no account floor, auto-derive".
       payload.utm_defaults = form.utm_defaults || null;
+      // Emit watermarks + the segment-entry cap (S254). Sent only when present so a partial
+      // form can never blank a fail-closed watermark — the worker refuses a blank anyway,
+      // but not sending it at all is the stronger guarantee.
+      if (form.courier_emit_from) payload.courier_emit_from = form.courier_emit_from;
+      if (form.rto_stage_emit_from) payload.rto_stage_emit_from = form.rto_stage_emit_from;
+      if (form.segment_entry_max_per_tick !== '' && form.segment_entry_max_per_tick != null) {
+        payload.segment_entry_max_per_tick = Number(form.segment_entry_max_per_tick);
+      }
       await workerFetch('saveRelaySettings', payload, session);
       showToast('Settings saved', 'success');
       load();
@@ -207,6 +271,84 @@ export default function SettingsPage() {
             <UtmMarketingNote />
             <div className="form-foot">
               <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save settings'}</Btn>
+            </div>
+          </Panel>
+
+          {/* EVENT EMISSION (S254) — the last three SQL-only switches.
+              These are not ordinary settings: two of them are FAIL-CLOSED watermarks that
+              gate real customer messaging. shipment-events.js and rto-stages.js emit
+              NOTHING when unset, so a blank here silently switches a feed off — which is
+              why the worker refuses a blank rather than writing one. */}
+          <Panel title="Event emission — go-live watermarks" pad>
+            <div className="tw-note" style={{ marginTop: 0 }}>
+              Courier and RTO journey events are <b>forward-only</b>: each feed emits nothing
+              that happened before its watermark. Moving one <b>forward</b> is safe — fewer
+              shipments qualify. Moving one <b>back</b> makes previously-skipped shipments
+              eligible again and will send real messages.
+            </div>
+
+            <div className="form-grid" style={{ marginTop: 14 }}>
+              <div className="ff">
+                <div className="kv-k">Courier events emit from</div>
+                <input className="f-inp mono" type="datetime-local" disabled={saving}
+                  value={toLocalInput(form.courier_emit_from)}
+                  onChange={(e) => { set('courier_emit_from', fromLocalInput(e.target.value)); }} />
+                <div className="tw-note" style={{ marginTop: 6 }}>
+                  Gates <code>order_shipped</code>, <code>order_out_for_delivery</code>,{' '}
+                  <code>order_delivered</code>, <code>order_rto</code>. Drains at ~15 per
+                  5-minute tick, so a large backlog releases over hours, not at once.
+                </div>
+              </div>
+
+              <div className="ff">
+                <div className="kv-k">RTO stage events emit from</div>
+                <input className="f-inp mono" type="datetime-local" disabled={saving}
+                  value={toLocalInput(form.rto_stage_emit_from)}
+                  onChange={(e) => set('rto_stage_emit_from', fromLocalInput(e.target.value))} />
+                <div className="tw-note" style={{ marginTop: 6 }}>
+                  Its own watermark, deliberately separate from the courier one — reusing that
+                  would have back-fired every historical scan. Safer to move: each tick only
+                  scans the last <b>6 hours</b> regardless, so dropping this date cannot
+                  release a long backlog.
+                </div>
+              </div>
+
+              <div className="ff">
+                <div className="kv-k">Segment-entry enrolments per tick</div>
+                <input className="f-inp mono" type="number" min={1} max={20000} disabled={saving}
+                  value={form.segment_entry_max_per_tick ?? ''}
+                  onChange={(e) => set('segment_entry_max_per_tick', e.target.value)} />
+                <div className="tw-note" style={{ marginTop: 6 }}>
+                  Cap on how many people a widened segment can enrol into an entry journey in
+                  one run. The remainder is not dropped — the next tick re-detects it.
+                  Default 500. Must be at least 1: zero would read as &quot;none&quot; but
+                  actually falls back to 500.
+                </div>
+              </div>
+            </div>
+
+            {/* Impact preview — the reason this is safe to expose at all. */}
+            {impact && (
+              <div className="tw-note" style={{ marginTop: 12,
+                borderLeft: `3px solid ${impact.total > 0 ? 'var(--warn, #f59e0b)' : 'var(--ok, #16a34a)'}` }}>
+                {impact.loading ? 'Checking what this would release…' : (
+                  impact.total > 0 ? (
+                    <>
+                      <b>{Number(impact.total).toLocaleString('en-IN')} customer message
+                      {impact.total === 1 ? '' : 's'} would become eligible</b> at that date
+                      {impact.by && Object.keys(impact.by).length > 0 && (
+                        <> — {Object.entries(impact.by).map(([k, v]) => `${v} ${k}`).join(' · ')}</>
+                      )}. They send at ~15 per 5-minute tick.
+                    </>
+                  ) : <><b>Nothing new becomes eligible</b> at that date.</>
+                )}
+              </div>
+            )}
+
+            <div className="form-foot">
+              <Btn kind="primary" onClick={saveEmission} disabled={saving}>
+                <Check size={14} /> {saving ? 'Saving…' : 'Save emission settings'}
+              </Btn>
             </div>
           </Panel>
           </>
