@@ -33,6 +33,43 @@ const CONSENT_COLOR = {
   none: { fg: '#6b7178', bg: 'rgba(255,255,255,.03)', bd: 'rgba(255,255,255,.08)' },
 };
 
+// Which consent row is ACTUALLY in effect per (channel, purpose) — i.e. what the send gate
+// will use. Mirrors consent.js `_latestConsentRaw` exactly: latest by captured_at, EXCLUDING
+// `unknown` (RULE-CONSENT-001).
+//
+// This exists because the raw ledger is genuinely misleading to read (found 2026-07-31 from
+// a real contact). Shopflo BACK-DATES `captured_at` by ~3 minutes and arrives ~1 minute
+// LATER than the Shopify webhook, so sorting the ledger by captured_at puts the row that
+// arrived LAST *below* rows that arrived first. The screen therefore reads as
+// "unknown overwrote opted_in" when the true order was the opposite — the unknowns were
+// written first, when no known state existed, and the opt-in landed afterwards. Nothing
+// marked which row won, so a CORRECT system looked broken (and a broken one would look fine).
+function effectiveConsentIds(rows) {
+  const best = new Map();
+  for (const c of rows || []) {
+    if (c.state === 'unknown') continue;          // carries no information — gate ignores it
+    const k = `${c.channel}|${c.purpose}`;
+    const prev = best.get(k);
+    const key = (x) => `${x.captured_at || ''}|${x.created_at || ''}`;
+    if (!prev || key(c) > key(prev)) best.set(k, c);
+  }
+  return new Set([...best.values()].map((c) => c.id));
+}
+// Back-dating is invisible unless shown: a row whose captured_at is materially older than
+// when we actually recorded it is exactly the case that makes the ledger read out of order.
+const BACKDATE_MS = 60 * 1000;
+function backdatedBy(c) {
+  if (!c?.captured_at || !c?.created_at) return 0;
+  const d = new Date(c.created_at) - new Date(c.captured_at);
+  return d > BACKDATE_MS ? d : 0;
+}
+function humanGap(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 // Header tiles (S252). Two different questions, shown side by side rather than collapsed:
 //   ON FILE  — do we hold the identifier at all?
 //   OPTED IN — do we hold it AND a marketing opt-in?
@@ -391,22 +428,64 @@ export default function ContactsPage() {
               )
               : (!detail.consent || detail.consent.length === 0)
               ? <div style={{ padding: 16, color: 'var(--text-4)', fontSize: 12.5 }}>No consent records.</div>
-              : (
-                <table className="dt">
-                  <thead><tr><th>Channel</th><th>Purpose</th><th>State</th><th>Source</th><th>Captured</th></tr></thead>
-                  <tbody>
-                    {detail.consent.map((c) => (
-                      <tr key={c.id}>
-                        <td>{c.channel}</td>
-                        <td className="dim">{c.purpose}</td>
-                        <td><Badge label={c.state} tone={STATE_TONE[c.state] || 'gray'} /></td>
-                        <td className="dim">{c.source || '—'}</td>
-                        <td className="mono dim">{fmtDateTime(c.captured_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+              : (() => {
+                const eff = effectiveConsentIds(detail.consent);
+                // Ordered by ARRIVAL (created_at), not captured_at. The ledger's own
+                // timestamp is author-supplied and Shopflo back-dates it, so a captured_at
+                // sort shows events out of the order they actually happened — which is
+                // precisely what made this panel read as "unknown overwrote opted_in".
+                const rows = [...detail.consent].sort((a, b) =>
+                  String(b.created_at || b.captured_at || '').localeCompare(String(a.created_at || a.captured_at || '')));
+                const anyBackdated = rows.some((c) => backdatedBy(c) > 0);
+                return (
+                  <>
+                    <div className="tw-note" style={{ margin: '10px 12px' }}>
+                      Append-only — newest first <b>by when we recorded it</b>.{' '}
+                      <b>In effect</b> marks the row the send gate actually uses per channel and
+                      purpose: the latest <i>known</i> state.{' '}
+                      <code>unknown</code> rows carry no information and are skipped entirely
+                      (RULE-CONSENT-001), so an older <code>opted_in</code> still wins over a
+                      newer <code>unknown</code>.
+                      {anyBackdated && <> ⚠️ Some rows were <b>back-dated</b> by their source —
+                        the Captured column is when the customer acted, Recorded is when it
+                        reached us, and they can disagree by minutes.</>}
+                    </div>
+                    <table className="dt">
+                      <thead><tr>
+                        <th>Channel</th><th>Purpose</th><th>State</th><th>Source</th>
+                        <th>Captured</th><th>Recorded</th><th></th>
+                      </tr></thead>
+                      <tbody>
+                        {rows.map((c) => {
+                          const isEff = eff.has(c.id);
+                          const bd = backdatedBy(c);
+                          const ignored = c.state === 'unknown';
+                          return (
+                            <tr key={c.id} style={ignored ? { opacity: .55 } : undefined}>
+                              <td>{c.channel}</td>
+                              <td className="dim">{c.purpose}</td>
+                              <td><Badge label={c.state} tone={STATE_TONE[c.state] || 'gray'} /></td>
+                              <td className="dim">{c.source || '—'}</td>
+                              <td className="mono dim">{fmtDateTime(c.captured_at)}</td>
+                              <td className="mono dim" title={bd ? `Recorded ${humanGap(bd)} after the customer acted — this source back-dates captured_at` : undefined}>
+                                {bd ? <span style={{ color: 'var(--warn, #f59e0b)' }}>+{humanGap(bd)} later</span> : '—'}
+                              </td>
+                              <td>
+                                {isEff ? <Badge label="in effect" tone="green" dot />
+                                  : ignored ? <span className="dim" style={{ fontSize: 11 }}
+                                      title="Carries no information, so the send gate skips it entirely — it can never override a known state.">
+                                      no information
+                                    </span>
+                                  : <span className="dim" style={{ fontSize: 11 }}>superseded</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                );
+              })()}
         </Panel>
 
         {canConsent && (
