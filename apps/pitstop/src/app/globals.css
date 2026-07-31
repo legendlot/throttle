@@ -187,6 +187,21 @@ button { font-family: inherit; }
 .font-display { font-family: var(--f-display); }
 .font-ui      { font-family: var(--f-ui); }
 
+/* ── Hover atoms for inline-styled controls ────────────────
+   The inbox command bar and conversation header are inline-styled by design, and an inline
+   style cannot express :hover. These carry ONLY a hover fill, so the element keeps its own
+   inline border/colour treatment; the :focus-visible ring above still applies and is
+   deliberately not suppressed.
+   `.ps-ibtn` — icon buttons  ·  `.ps-seg` — command-bar segments/pills.
+   ⚠️ APPLY ONLY WHEN THE CONTROL IS NOT IN ITS ACTIVE/ACCENT STATE. Beating an inline style
+   needs !important, which would otherwise repaint a selected segment grey on hover — so the
+   call sites pass the class conditionally rather than unconditionally.
+   ────────────────────────────────────────────────────────── */
+.ps-ibtn { transition: background var(--fast) var(--ease); }
+.ps-ibtn:hover:not(:disabled) { background: var(--surface-2) !important; }
+.ps-seg  { transition: background var(--fast) var(--ease); }
+.ps-seg:hover:not(:disabled)  { background: var(--surface) !important; }
+
 /* ══════════════════════════════════════════════════════════
    MOTION (prototype keyframes)
    ══════════════════════════════════════════════════════════ */

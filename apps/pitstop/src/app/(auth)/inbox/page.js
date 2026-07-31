@@ -15,13 +15,14 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
-  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
-  Bell, BellOff, ShoppingBag, ChevronDown,
+  CheckCircle2, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
+  Bell, BellOff, ShoppingBag, SlidersHorizontal, Users,
 } from 'lucide-react';
-import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
+import { ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import TagPicker, { TagChip } from '../../../components/TagPicker.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
+import { useRefreshState } from '../layout.js';
 
 // Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
 const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
@@ -132,6 +133,55 @@ const relTime = (iso) => {
   return `${Math.floor(h / 24)}d`;
 };
 const PAGE = 60;   // conversation-list page size — "Load more" adds one PAGE at a time (S202)
+
+// Command-bar channel order. 'all' is the unscoped segment; the rest key into CHANNELS.
+const CHANNEL_KEYS = ['instagram', 'messenger', 'whatsapp', 'email', 'web'];
+const SEGMENT_KEYS = ['all', ...CHANNEL_KEYS];
+
+/* Icon-only control in the command bar / conversation header. Every caller MUST pass a
+   `title` — for three of these buttons it is the only thing naming a control that used to
+   be visible text. `ps-ibtn` carries hover + nothing else (see globals.css); the
+   :focus-visible ring is global and deliberately not suppressed. */
+const ICON_BTN = {
+  display: 'grid', placeItems: 'center', width: 28, height: 28, flexShrink: 0,
+  border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)',
+  background: 'transparent', color: 'var(--t2)', cursor: 'pointer',
+};
+// Same shape, 26px tall — the command bar is 40px and cannot afford 28.
+const BAR_BTN = { ...ICON_BTN, height: 26 };
+
+/* Measured width of one element, for the command bar's degradation ladder (§5.13). The bar
+   must never wrap — losing the 40px is the whole point — so controls shed weight in a fixed
+   order instead.
+
+   ⚠️ Measures THE BAR, not the viewport. The design's thresholds are written as viewport
+   widths because every mock is drawn with the sidebar collapsed, but PitstopSidebar is
+   **236px expanded vs 64px collapsed** — a 172px swing. Keyed off `window.innerWidth`, a
+   1440px window with the sidebar OPEN leaves the bar 1204px and degrades nothing, so the
+   right-hand controls (including the collapse chevron, which must never be clipped) get
+   pushed off the edge. A ResizeObserver on the bar itself is immune to that, and follows
+   the sidebar's own 180ms collapse animation for free.
+
+   `null` until measured: this app is `output: 'export'`, so there is no DOM at build time
+   and reading one during render would break the prerender. null reads as "widest", so the
+   first paint is never the degraded one. */
+function useElementWidth(ref) {
+  const [w, setW] = useState(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(el);
+    setW(el.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
+}
+/* §5.13 thresholds, restated as BAR width = the design's viewport figure minus the 64px
+   collapsed sidebar — so a sidebar-collapsed 1440×900 behaves exactly as the mock specifies,
+   and an expanded sidebar degrades at the same *usable* width instead of not at all. */
+const BAR_STEPS = { hideActiveLabel: 1216, searchNarrow: 1136, composeIconOnly: 1086, assignInPopover: 1036 };
+
 const BITESPEED_BASE = 'https://chat.bitespeed.co';
 const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
   ? `${BITESPEED_BASE}/app/accounts/${t.provider_account_id}/conversations/${t.provider_thread_ref}`
@@ -139,6 +189,7 @@ const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
 
 export default function InboxPage() {
   const { session, user, perms } = useAuth();
+  const { setTopbarBadge } = useRefreshState();
   const canManage = !!perms?.cs_ticket_manage;
   const canReassign = !!(perms?.cs_ticket_reassign || perms?.cs_ticket_admin);
   const myId = user?.id || null;
@@ -159,6 +210,12 @@ export default function InboxPage() {
   const [allTags, setAllTags] = useState([]);
   const [waNumbers, setWaNumbers] = useState([]);
   const [ordersOpen, setOrdersOpen] = useState(false);
+  // Command-bar filters popover — holds the four selects (sort/priority/tag/agent) that used
+  // to cost two wrapped rows inside a 320px column.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Conversation-header overflow menus: Create/Link ticket, and the tag picker.
+  const [ticketMenuOpen, setTicketMenuOpen] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
   const [threads, setThreads] = useState([]);
   const [listLimit, setListLimit] = useState(PAGE);   // conversation-list window; "Load more" grows it (S202)
   const [stats, setStats] = useState({
@@ -378,6 +435,9 @@ export default function InboxPage() {
     setThreads(prev => prev.map(t => t.id === selectedId ? { ...t, unread: false } : t));
     if (session) csopsPost('markThreadRead', { thread_id: selectedId }, session).then(() => loadStats()).catch(() => {});
     setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFiles([]);
+    // Header overflow menus are thread-scoped — a menu left hanging open across a thread switch
+    // would be floating over a conversation the agent never opened it on.
+    setTicketMenuOpen(false); setTagsOpen(false);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
@@ -446,6 +506,14 @@ export default function InboxPage() {
     prevAwaitingRef.current = totalAwaiting;
     if (soundOn && prev !== null && totalAwaiting > prev) chime();
   }, [totalAwaiting, soundOn, statsReady]);
+
+  // The one number agents act on moves to the topbar (the old AwaitingTile's job) — it is the
+  // single figure worth 40px of chrome, and the topbar has that width spare. Published as plain
+  // data, and CLEARED ON UNMOUNT so it can never linger on /queue or /calls.
+  useEffect(() => {
+    setTopbarBadge(totalAwaiting > 0 ? { kind: 'awaiting', n: totalAwaiting } : null);
+    return () => setTopbarBadge(null);
+  }, [totalAwaiting, setTopbarBadge]);
   const allTotal = useMemo(
     () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0) + (stats.web?.total || 0),
     [stats],
@@ -458,19 +526,12 @@ export default function InboxPage() {
     return { all: sum('total'), mine: sum('mine'), unassigned: sum('unassigned') };
   }, [stats, channel]);
 
-  const tabs = [
-    { id: 'all', label: 'All', count: allTotal },
-    { id: 'instagram', label: 'Instagram', count: stats.instagram.total },
-    { id: 'messenger', label: 'Messenger', count: stats.messenger.total },
-    { id: 'whatsapp', label: 'WhatsApp', count: stats.whatsapp.total },
-    { id: 'email', label: 'Email', count: stats.email?.total || 0 },
-    { id: 'web', label: 'Web', count: stats.web?.total || 0 },
-  ];
-
+  // Assignment axis. `all` reads "Everyone" because the channel group directly to its left
+  // already owns the word "All" — the id is untouched (it is a worker `tab` param).
   const assignTabs = [
-    { id: 'all', label: 'All', count: scoped.all },
     { id: 'mine', label: 'Mine', count: scoped.mine },
     { id: 'unassigned', label: 'Unassigned', count: scoped.unassigned },
+    { id: 'all', label: 'Everyone', count: scoped.all },
   ];
 
   // ── composer helpers ────────────────────────────────────────
@@ -843,6 +904,12 @@ export default function InboxPage() {
 
   const thread = convo?.thread;
   const ch = thread ? chanOf(thread.channel) : null;
+  const threadTags = convo?.tags || [];
+  // Past-orders lookup key. NB there is no `customer_email` on a thread — an email thread
+  // carries the address in `external_user_id`, so the key is channel-dependent.
+  const ordersPhone = thread?.customer_phone || '';
+  const ordersEmail = thread?.channel === 'email' ? (thread?.external_user_id || '') : '';
+  const hasOrdersKey = !!(ordersPhone || ordersEmail);
   // Which of OUR numbers this thread is on. Null on non-WhatsApp threads, on legacy threads that
   // predate per-number attribution, and until getWaNumbers resolves — the chip simply does not
   // render, rather than guessing a number and being confidently wrong about who we are speaking as.
@@ -879,197 +946,103 @@ export default function InboxPage() {
     borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
     background: 'var(--surface)', color: 'var(--t1)', cursor: 'pointer' };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 420 }}>
-      {/* Header tiles — per-channel volume + awaiting-reply. Click to filter. */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {['instagram', 'messenger', 'whatsapp', 'email', 'web'].map(k => (
-          <ChannelTile key={k} chKey={k} stat={stats[k]} active={channel === k}
-            onClick={() => setChannel(c => (c === k ? 'all' : k))} />
-        ))}
-        <AwaitingTile total={totalAwaiting} />
-      </div>
+  // Filters popover carries an "off default" dot so a hidden filter is never silently applied.
+  const filtersDirty = sort !== 'recent' || !!priorityFilter || !!tagFilter || !!agentFilter;
+  function clearFilters() { setSort('recent'); setPriorityFilter(''); setTagFilter(''); setAgentFilter(''); }
 
-      <Tabs tabs={tabs} value={channel} onChange={setChannel} />
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <InboxCommandBar
+        channel={channel} setChannel={setChannel} stats={stats} allTotal={allTotal}
+        assignTabs={assignTabs} assignTab={assignTab} setAssignTab={setAssignTab}
+        stateFilter={stateFilter} setStateFilter={setStateFilter}
+        ignitionScope={ignitionScope}
+        onToggleIgnition={() => { setIgnitionScope(v => !v); setSelectedId(null); }}
+        soundOn={soundOn}
+        onToggleSound={() => { const v = !soundOn; setSoundOn(v); try { localStorage.setItem('pitstop_inbox_sound', v ? '1' : '0'); } catch {} if (v) chime(); }}
+        searchInput={searchInput} setSearchInput={setSearchInput}
+        sort={sort} setSort={setSort}
+        priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter}
+        tagFilter={tagFilter} setTagFilter={setTagFilter}
+        agentFilter={agentFilter} setAgentFilter={setAgentFilter}
+        allTags={allTags} agents={agents}
+        filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
+        filtersDirty={filtersDirty} clearFilters={clearFilters} miniSelect={miniSelect}
+        canManage={canManage} canReassign={canReassign}
+        selectMode={selectMode}
+        onToggleSelect={() => { if (selectMode) exitSelectMode(); else setSelectMode(true); }}
+        onCompose={() => { setNewOpen(true); setNewNote(null); openTemplates(); }}
+        listCollapsed={listCollapsed} toggleListCollapse={toggleListCollapse}
+      />
+
+      {/* Bulk multi-select + assign (S164, Pruthvi) — a full-width band directly under the bar
+          rather than a row inside the 320px column. Entering select mode is the bar's job now;
+          this band is what you do once you are in it. */}
+      {selectMode && threads.length > 0 && (() => {
+        const visible = threads.map(t => t.id);
+        const allSel = visible.every(id => selectedIds.has(id));
+        const someSel = visible.some(id => selectedIds.has(id));
+        return (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, minHeight: 32,
+            padding: '0 16px', background: 'var(--accent-bg)', borderBottom: '1px solid var(--border)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={allSel}
+                ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
+                onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+              {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select all'}
+            </label>
+            {selectedIds.size === 0 ? (
+              <button onClick={exitSelectMode}
+                style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            ) : (
+              <>
+                <select value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} title="Assign selected to…"
+                  style={{ ...miniSelect, flex: '0 0 auto', minWidth: 150 }}>
+                  <option value="">Assign to…</option>
+                  {myId && <option value={myId}>Me</option>}
+                  {canReassign && agents.filter(a => a.id !== myId).map(a => (
+                    <option key={a.id} value={a.id}>{a.full_name || a.email}</option>
+                  ))}
+                  {canReassign && <option value="__release__">Release (unassign)</option>}
+                </select>
+                <button onClick={bulkAssign} disabled={!bulkAgent || bulkBusy}
+                  style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--accent)', background: 'var(--accent)', color: '#000',
+                    cursor: (!bulkAgent || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkAgent || bulkBusy) ? 0.5 : 1 }}>
+                  {bulkBusy ? '…' : 'Apply'}
+                </button>
+                <button onClick={exitSelectMode}
+                  style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
+                  Clear
+                </button>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {err && (
-        <div style={{ fontSize: 12, color: 'var(--bad-fg)', background: 'var(--bad-bg)',
-          border: '1px solid var(--bad-bd)', borderRadius: 'var(--radius-sm)', padding: '8px 12px' }}>{err}</div>
+        <div style={{ flexShrink: 0, fontSize: 12, color: 'var(--bad-fg)', background: 'var(--bad-bg)',
+          borderBottom: '1px solid var(--bad-bd)', padding: '8px 16px' }}>{err}</div>
       )}
 
       {/* Two-pane via grid: list shrinks 320→200, conversation holds a 340px floor so
           it never collapses to a sliver in narrow/zoomed desktop windows (was a fixed
-          340 list + flex chat that could squeeze the chat to ~0). */}
+          340 list + flex chat that could squeeze the chat to ~0). Edge to edge — no gap,
+          no radius, no outer border; a single 1px divider carries the split. */}
       <div style={{ display: 'grid', gridTemplateColumns: listCollapsed ? '28px minmax(340px, 1fr)' : 'minmax(200px, 320px) minmax(340px, 1fr)',
-        gap: 14, flex: 1, minHeight: 0 }}>
-        {/* ── Thread list ───────────────────────────────────── */}
-        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column',
-          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <div style={{ padding: listCollapsed ? '10px 4px' : '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
-            alignItems: 'center', gap: 6 }}>
-            {!listCollapsed && <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>}
-            {/* Filter buttons in their own flex-1 container so they never push the collapse chevron off-screen */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, justifyContent: 'flex-end', minWidth: 0, overflow: 'hidden' }}>
-              {!listCollapsed && !ignitionScope && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
-                <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
-                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
-                    border: '1px solid', borderColor: stateFilter === id ? 'var(--accent)' : 'var(--border)',
-                    background: stateFilter === id ? 'var(--accent-bg)' : 'transparent',
-                    color: stateFilter === id ? 'var(--accent)' : 'var(--t3)', flexShrink: 0 }}>{lbl}</button>
-              ))}
-              {/* Read-only oversight: threads transferred to the Influencer team (leads/admin, S177) */}
-              {!listCollapsed && canReassign && (
-                <button onClick={() => { setIgnitionScope(v => !v); setSelectedId(null); }}
-                  title="View conversations transferred to the Influencer team (read-only)"
-                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
-                    display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
-                    border: '1px solid', borderColor: ignitionScope ? 'var(--accent)' : 'var(--border)',
-                    background: ignitionScope ? 'var(--accent-bg)' : 'transparent',
-                    color: ignitionScope ? 'var(--accent)' : 'var(--t3)' }}>
-                  <ExternalLink size={10} /> Ignition
-                </button>
-              )}
-              {/* Chime toggle (S245). Opt-in and per-browser: a shared desk with several agents
-                  does not want a chorus. The tab badge is always on and needs no permission. */}
-              {!listCollapsed && (
-                <button onClick={() => { const v = !soundOn; setSoundOn(v); try { localStorage.setItem('pitstop_inbox_sound', v ? '1' : '0'); } catch {} if (v) chime(); }}
-                  title={soundOn ? 'Chime on new customer message — click to mute' : 'Muted — click to chime on new customer messages'}
-                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
-                    display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
-                    border: '1px solid', borderColor: soundOn ? 'var(--accent)' : 'var(--border)',
-                    background: soundOn ? 'var(--accent-bg)' : 'transparent',
-                    color: soundOn ? 'var(--accent)' : 'var(--t3)' }}>
-                  {soundOn ? <Bell size={10} /> : <BellOff size={10} />}
-                </button>
-              )}
-            </div>
-            {/* Compose — the ONLY way to reach a customer who has not written to us. Without it a
-                thread could only be born from an inbound message (a regression vs BiteSpeed). */}
-            {canManage && (
-              <button onClick={() => { setNewOpen(true); setNewNote(null); openTemplates(); }}
-                title="New WhatsApp conversation"
-                style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
-                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
-                  color: 'var(--t3)', flexShrink: 0, marginRight: 4 }}>
-                <Plus size={13} />
-              </button>
-            )}
-            {/* Collapse chevron is a direct flex sibling — always pinned to the right, never clipped */}
-            <button onClick={toggleListCollapse} title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
-              style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
-                border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
-                color: 'var(--t3)', flexShrink: 0 }}>
-              {listCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-            </button>
-          </div>
-          <div style={{ display: listCollapsed ? 'none' : 'contents' }}>
-          {/* Assignment axis — Mine / Unassigned / All (S162-A) */}
-          <div style={{ display: 'flex', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-            {assignTabs.map(t => (
-              <button key={t.id} onClick={() => setAssignTab(t.id)} style={{
-                flex: 1, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '5px 6px',
-                borderRadius: 'var(--radius-sm)', border: '1px solid',
-                borderColor: assignTab === t.id ? 'var(--accent)' : 'var(--border)',
-                background: assignTab === t.id ? 'var(--accent-bg)' : 'transparent',
-                color: assignTab === t.id ? 'var(--accent)' : 'var(--t2)' }}>
-                {t.label} <span className="num" style={{ opacity: 0.7 }}>{t.count}</span>
-              </button>
-            ))}
-          </div>
-          {/* Filter + Sort (S164, Pruthvi) — tag filter folded in here (S177) to save a row */}
-          <div style={{ display: 'flex', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-            <select value={sort} onChange={e => setSort(e.target.value)} title="Sort conversations" style={miniSelect}>
-              <option value="recent">↓ Recent activity</option>
-              <option value="oldest">↑ Oldest first</option>
-              <option value="priority">★ Priority</option>
-            </select>
-            <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} title="Filter by priority" style={miniSelect}>
-              <option value="">All priorities</option>
-              {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
-            </select>
-            {allTags.length > 0 && (
-              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag" style={miniSelect}>
-                <option value="">All tags</option>
-                {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            )}
-            {canReassign && agents.length > 0 && (
-              <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} title="Filter by assigned agent" style={miniSelect}>
-                <option value="">All agents</option>
-                {agents.map(a => <option key={a.id} value={a.id}>{a.full_name || a.email}</option>)}
-              </select>
-            )}
-          </div>
-          {/* Search box (S178, Pruthvi) — server-side phone/name search across all threads */}
-          <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
-            <Search size={13} style={{ position: 'absolute', left: 19, top: '50%', transform: 'translateY(-50%)', color: 'var(--t4)', pointerEvents: 'none' }} />
-            <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
-              placeholder="Search by phone or name…"
-              style={{ ...inputStyle, width: '100%', paddingLeft: 29, paddingRight: 26, fontSize: 12 }} />
-            {searchInput && (
-              <button onClick={() => setSearchInput('')} title="Clear search"
-                style={{ position: 'absolute', right: 17, top: '50%', transform: 'translateY(-50%)', background: 'transparent',
-                  border: 'none', cursor: 'pointer', color: 'var(--t3)', display: 'grid', placeItems: 'center', padding: 0 }}>
-                <X size={13} />
-              </button>
-            )}
-          </div>
-          {/* Bulk multi-select + assign (S164, Pruthvi) — checkboxes gated behind Select mode (S236) */}
-          {threads.length > 0 && (() => {
-            const visible = threads.map(t => t.id);
-            const allSel = visible.every(id => selectedIds.has(id));
-            const someSel = visible.some(id => selectedIds.has(id));
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
-                borderBottom: '1px solid var(--border)', flexWrap: 'wrap',
-                background: selectedIds.size > 0 ? 'var(--accent-bg)' : 'transparent' }}>
-                {!selectMode ? (
-                  <button onClick={() => setSelectMode(true)} title="Select conversations for bulk assign"
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)',
-                      padding: '2px 8px 2px 2px', background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                    <CheckSquare size={13} strokeWidth={1.75} /> Select
-                  </button>
-                ) : (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={allSel}
-                      ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
-                      onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
-                    {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select all'}
-                  </label>
-                )}
-                {selectMode && selectedIds.size === 0 && (
-                  <button onClick={exitSelectMode}
-                    style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
-                    Cancel
-                  </button>
-                )}
-                {selectedIds.size > 0 && (
-                  <>
-                    <select value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} title="Assign selected to…" style={miniSelect}>
-                      <option value="">Assign to…</option>
-                      {myId && <option value={myId}>Me</option>}
-                      {canReassign && agents.filter(a => a.id !== myId).map(a => (
-                        <option key={a.id} value={a.id}>{a.full_name || a.email}</option>
-                      ))}
-                      {canReassign && <option value="__release__">Release (unassign)</option>}
-                    </select>
-                    <button onClick={bulkAssign} disabled={!bulkAgent || bulkBusy}
-                      style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--accent)', background: 'var(--accent)', color: '#000',
-                        cursor: (!bulkAgent || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkAgent || bulkBusy) ? 0.5 : 1 }}>
-                      {bulkBusy ? '…' : 'Apply'}
-                    </button>
-                    <button onClick={exitSelectMode}
-                      style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
-                      Clear
-                    </button>
-                  </>
-                )}
-              </div>
-            );
-          })()}
+        gap: 0, flex: 1, minHeight: 0 }}>
+        {/* ── Thread list ───────────────────────────────────────────────────────────────
+            Every band that used to sit above the first row (panel header · assignment axis ·
+            filter selects · search · select) now lives in the command bar. What is left IS
+            the list — which is the entire point of the change. */}
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          background: 'var(--surface)', borderRight: '1px solid var(--border)' }}>
+          {!listCollapsed && (
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
@@ -1103,67 +1076,106 @@ export default function InboxPage() {
               </button>
             )}
           </div>
-          </div>{/* end contents wrapper */}
+          )}
         </div>
 
         {/* ── Conversation ──────────────────────────────────── */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
-          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+          background: 'var(--surface)', overflow: 'hidden' }}>
           {!thread ? (
             <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--t3)', fontSize: 13 }}>
               Select a conversation to view it.
             </div>
           ) : (
             <>
-              {/* Header — wraps so the action cluster drops below the title on a
-                  narrow/zoomed pane instead of overflowing + clipping (Pruthvi, S177). */}
-              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
-                alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', rowGap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
-                  <Avatar t={thread} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap',
-                      overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(thread)}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1, flexWrap: 'wrap' }}>
-                      <ch.Glyph size={11} style={{ color: ch.color }} />
-                      <span style={{ fontSize: 11, color: 'var(--t3)' }}>{ch.label}</span>
-                      {/* The customer's number, ALONGSIDE the name rather than instead of it.
-                          displayName() falls back to the phone, so the moment WhatsApp names
-                          started resolving the number vanished from the header — and an agent
-                          who needs to CALL the customer had nowhere to read it (Pruthvi). */}
-                      {thread.customer_phone && thread.customer_handle
-                        && thread.customer_handle !== thread.customer_phone && (
-                        <span style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}
-                          title="Customer's number">· {thread.customer_phone}</span>
-                      )}
-                      {/* WHICH OF OUR NUMBERS this conversation is on. Support, marketing and
-                          transactional read completely differently to a customer, so an agent
-                          replying needs to know which one they are speaking as. */}
-                      {waLabel && (
-                        <span style={{ fontSize: 10.5, color: 'var(--t3)', background: 'var(--surface-2, rgba(127,127,127,.12))',
-                          border: '1px solid var(--border)', borderRadius: 4, padding: '0 5px', whiteSpace: 'nowrap' }}
-                          title={`This conversation is on our ${waLabel} number`}>to {waLabel}</span>
-                      )}
-                      {thread.channel === 'email' && thread.external_user_id && (
-                        <span style={{ fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          · {thread.external_user_id}</span>
-                      )}
-                    </div>
-                    {thread.channel === 'email' && thread.subject && (
-                      <div style={{ fontSize: 11.5, color: 'var(--t2)', fontWeight: 500, marginTop: 2, whiteSpace: 'nowrap',
-                        overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 360 }} title={thread.subject}>
-                        {thread.subject}</div>
-                    )}
-                  </div>
+              {/* Header — ONE row, no wrap. The pane's three persistent bands (header + tags +
+                  Past orders) are folded into this single 48px row; nothing was dropped, three
+                  controls moved behind titled icon buttons. */}
+              <div style={{ padding: '8px 16px', minHeight: 48, flexShrink: 0,
+                borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Avatar t={thread} size={30} />
+                {/* Identity — channel glyph · name · number · which-of-our-numbers · email
+                    address + subject, all on the one line. The command bar's active segment
+                    already names the channel, so the glyph carries it here (label in `title`). */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span title={ch.label} style={{ display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                    <ch.Glyph size={13} style={{ color: ch.color }} />
+                  </span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--t1)', whiteSpace: 'nowrap',
+                    overflow: 'hidden', textOverflow: 'ellipsis' }} title={displayName(thread)}>{displayName(thread)}</span>
+                  {/* The customer's number, ALONGSIDE the name rather than instead of it.
+                      displayName() falls back to the phone, so the moment WhatsApp names
+                      started resolving the number vanished from the header — and an agent
+                      who needs to CALL the customer had nowhere to read it (Pruthvi). */}
+                  {thread.customer_phone && thread.customer_handle
+                    && thread.customer_handle !== thread.customer_phone && (
+                    <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--t3)',
+                      whiteSpace: 'nowrap', flexShrink: 0 }} title="Customer's number">{thread.customer_phone}</span>
+                  )}
+                  {/* WHICH OF OUR NUMBERS this conversation is on. Support, marketing and
+                      transactional read completely differently to a customer, so an agent
+                      replying needs to know which one they are speaking as. */}
+                  {waLabel && (
+                    <span style={{ fontSize: 10.5, color: 'var(--t3)', background: 'var(--surface-2)',
+                      border: '1px solid var(--border)', borderRadius: 4, padding: '0 5px',
+                      whiteSpace: 'nowrap', flexShrink: 0 }}
+                      title={`This conversation is on our ${waLabel} number`}>to {waLabel}</span>
+                  )}
+                  {thread.channel === 'email' && thread.external_user_id && (
+                    <span style={{ fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis' }} title={thread.external_user_id}>
+                      {thread.external_user_id}</span>
+                  )}
+                  {/* Subject stays readable here AND stays editable in the composer's Subject field. */}
+                  {thread.channel === 'email' && thread.subject && (
+                    <span style={{ fontSize: 11.5, color: 'var(--t2)', fontWeight: 500, whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 360 }} title={thread.subject}>
+                      {thread.subject}</span>
+                  )}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                  justifyContent: 'flex-end', minWidth: 0 }}>
-                  {/* Assign / claim (S162-A) */}
+
+                {/* Tags — was a 32px band of its own. Up to 3 chips inline with one-click remove;
+                    the overflow count and add/create sit behind the picker so the row cannot wrap.
+                    ⚠️ Both the chips' remove AND the picker operate on the FULL `threadTags` list —
+                    handing TagPicker a truncated `value` would make its next save DELETE the
+                    tags it could not see. */}
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                  {threadTags.slice(0, 3).map(tag => (
+                    <TagChip key={tag.id} tag={tag} small
+                      onRemove={canManage ? (t) => setThreadTagsAction(threadTags.filter(x => x.id !== t.id).map(x => x.id)) : null} />
+                  ))}
+                  {threadTags.length > 3 && (
+                    <button onClick={() => setTagsOpen(v => !v)}
+                      title={`Also tagged: ${threadTags.slice(3).map(t => t.name).join(', ')}`}
+                      style={{ fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 999,
+                        border: '1px solid var(--border-2)', background: 'transparent', color: 'var(--t3)',
+                        cursor: 'pointer', flexShrink: 0 }}>
+                      +{threadTags.length - 3}
+                    </button>
+                  )}
+                  {canManage && (
+                    <button className="ps-ibtn" onClick={() => setTagsOpen(v => !v)} title="Add or remove tags"
+                      style={{ display: 'grid', placeItems: 'center', width: 18, height: 18, borderRadius: 999,
+                        border: '1px dashed var(--border-2)', background: 'transparent', color: 'var(--t3)',
+                        cursor: 'pointer', flexShrink: 0 }}>
+                      <Plus size={10} />
+                    </button>
+                  )}
+                  {tagsOpen && (
+                    <Popover onClose={() => setTagsOpen(false)} width={250} placement="down" scroll={false}>
+                      <div className="label" style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)',
+                        textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, paddingRight: 16 }}>Tags</div>
+                      <TagPicker session={session} value={threadTags} onSave={setThreadTagsAction}
+                        canManage={canManage} canCreate={canManage} small />
+                    </Popover>
+                  )}
+                </div>
+
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
+                  {/* Claim stays ONE click — it is the most-used control on this row. */}
                   {canManage && !isIgnitionThread && (
-                    <AssignControl
-                      thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
-                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} onTransfer={transfer}
-                      onTransferToIgnition={transferToIgnition} myId={myId} />
+                    <AssignBadge thread={thread} mineThread={mineThread} myId={myId} onAssign={assign} />
                   )}
                   {isIgnitionThread && (
                     <ToneBadge tone="info"><ExternalLink size={10} style={{ marginRight: 3 }} /> Influencer team</ToneBadge>
@@ -1172,11 +1184,62 @@ export default function InboxPage() {
                   {canManage && (
                     <select value={thread.priority || 'normal'} onChange={e => setPriorityAction(e.target.value)}
                       title="Conversation priority"
-                      style={{ fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer',
+                      style={{ fontSize: 11, fontWeight: 600, padding: '5px 8px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', flexShrink: 0,
                         color: thread.priority === 'urgent' ? 'var(--bad-fg)' : thread.priority === 'high' ? 'var(--warn-fg)' : 'var(--t2)' }}>
                       {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
                     </select>
+                  )}
+                  {/* Past orders (Pruthvi) — LOADED ON CLICK, never on open. ShopifyPanel without
+                      `autoLoad` renders its own Search button, so mounting it costs nothing until an
+                      agent asks. Deliberate: this hits Shopify live, and the inbox is already the
+                      surface agents call slow. */}
+                  {hasOrdersKey && (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button className="ps-ibtn" onClick={() => setOrdersOpen(v => !v)} style={ICON_BTN}
+                        title="This customer's previous orders">
+                        <ShoppingBag size={13} />
+                      </button>
+                      {ordersOpen && (
+                        <Popover onClose={() => setOrdersOpen(false)} width={420} placement="down" align="right" maxH={460}>
+                          {/* key=thread.id forces a REMOUNT per conversation. ShopifyPanel holds its
+                              result in internal state and (deliberately) does not auto-refetch when
+                              props change, so without this an agent switching threads would be shown
+                              the PREVIOUS customer's orders under the new customer's name. */}
+                          <ShopifyPanel key={thread.id} session={session} phone={ordersPhone} email={ordersEmail} />
+                        </Popover>
+                      )}
+                    </div>
+                  )}
+                  {/* Ticket — the live link stays visible text; Create/Link go behind one icon. */}
+                  {convo?.linked_ticket ? (
+                    <a href={`/queue/detail?ticket_no=${convo.linked_ticket.ticket_no}`}
+                      style={{ ...btnGhost, textDecoration: 'none', padding: '5px 9px', fontSize: 12, flexShrink: 0 }}
+                      title="Open the linked ticket">
+                      <Link2 size={12} /> {convo.linked_ticket.ticket_no}
+                    </a>
+                  ) : canManage && (
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button className="ps-ibtn" onClick={() => setTicketMenuOpen(v => !v)} style={ICON_BTN}
+                        title="Create or link a ticket">
+                        <Link2 size={13} />
+                      </button>
+                      {ticketMenuOpen && (
+                        <Popover onClose={() => setTicketMenuOpen(false)} width={220} placement="down" align="right" scroll={false}>
+                          <button onClick={() => { setTicketMenuOpen(false); createTicketFromConvo(); }}
+                            style={{ ...btnGhost, width: '100%', justifyContent: 'flex-start', padding: '7px 9px',
+                              fontSize: 12, marginBottom: 6, marginTop: 14 }}
+                            title="Create a new ticket from this conversation and link it">
+                            <Plus size={12} /> Create ticket
+                          </button>
+                          <button onClick={() => { setTicketMenuOpen(false); setLinkOpen(true); }}
+                            style={{ ...btnGhost, width: '100%', justifyContent: 'flex-start', padding: '7px 9px', fontSize: 12 }}
+                            title="Link an existing ticket by number">
+                            <Link2 size={12} /> Link ticket
+                          </button>
+                        </Popover>
+                      )}
+                    </div>
                   )}
                   {canManage && (
                     thread.thread_state === 'closed' ? (
@@ -1184,26 +1247,29 @@ export default function InboxPage() {
                         {thread.closed_reason && (
                           <span title={thread.closed_note || ''}
                             style={{ fontSize: 10.5, fontWeight: 700, padding: '5px 8px', borderRadius: 'var(--radius-sm)',
-                              border: '1px solid', whiteSpace: 'nowrap',
+                              border: '1px solid', whiteSpace: 'nowrap', flexShrink: 0,
                               borderColor: thread.closed_reason === 'resolved' ? 'var(--ok-bd)' : 'var(--border)',
                               background:  thread.closed_reason === 'resolved' ? 'var(--ok-bg)' : 'var(--surface-2)',
                               color:       thread.closed_reason === 'resolved' ? 'var(--ok-fg)' : 'var(--t3)' }}>
                             {CLOSE_REASON_LABEL[thread.closed_reason] || thread.closed_reason}
                           </span>
                         )}
-                        <button onClick={() => setThreadStateAction('open')} style={{ ...btnGhost, padding: '6px 10px' }} title="Reopen this conversation">
+                        <button onClick={() => setThreadStateAction('open')} title="Reopen this conversation"
+                          style={{ ...btnGhost, padding: '5px 9px', fontSize: 12, flexShrink: 0 }}>
                           <RotateCcw size={12} /> Reopen
                         </button>
                       </>
                     ) : (
                       <>
                         <button onClick={() => setThreadStateAction('closed', 'resolved')}
-                          style={{ ...btnGhost, padding: '6px 10px', color: 'var(--ok-fg)', borderColor: 'var(--ok-bd)' }}
+                          style={{ ...btnGhost, padding: '5px 9px', fontSize: 12, flexShrink: 0,
+                            color: 'var(--ok-fg)', borderColor: 'var(--ok-bd)' }}
                           title="The customer's issue was sorted">
                           <CheckCircle2 size={12} /> Resolve
                         </button>
-                        <div style={{ position: 'relative' }}>
-                          <button onClick={() => setCloseOpen(v => !v)} style={{ ...btnGhost, padding: '6px 10px' }}
+                        <div style={{ position: 'relative', flexShrink: 0 }}>
+                          <button onClick={() => setCloseOpen(v => !v)}
+                            style={{ ...btnGhost, padding: '5px 9px', fontSize: 12 }}
                             title="Close without resolving — pick a reason">
                             <XCircle size={12} /> Close
                           </button>
@@ -1241,22 +1307,13 @@ export default function InboxPage() {
                       </>
                     )
                   )}
-                  {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
-                  {convo?.linked_ticket ? (
-                    <a href={`/queue/detail?ticket_no=${convo.linked_ticket.ticket_no}`}
-                      style={{ ...btnGhost, textDecoration: 'none', padding: '6px 10px' }}>
-                      <Link2 size={12} /> {convo.linked_ticket.ticket_no}
-                    </a>
-                  ) : canManage && (
-                    <>
-                      <button onClick={createTicketFromConvo} style={{ ...btnGhost, padding: '6px 10px' }}
-                        title="Create a new ticket from this conversation and link it">
-                        <Plus size={12} /> Create ticket
-                      </button>
-                      <button onClick={() => setLinkOpen(v => !v)} style={{ ...btnGhost, padding: '6px 10px' }}>
-                        <Link2 size={12} /> Link ticket
-                      </button>
-                    </>
+                  {/* Release · Transfer… · Transfer to Influencer team — one icon, the existing
+                      AssignControl popover unchanged behind it. */}
+                  {canManage && !isIgnitionThread && (
+                    <AssignControl
+                      thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
+                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} onTransfer={transfer}
+                      onTransferToIgnition={transferToIgnition} myId={myId} />
                   )}
                 </div>
               </div>
@@ -1287,56 +1344,23 @@ export default function InboxPage() {
                 </div>
               )}
 
-              {/* Tags */}
-              <div style={{ padding: '7px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
-                alignItems: 'center', gap: 8, background: 'var(--surface)' }}>
-                <Tag size={12} style={{ color: 'var(--t4)', flexShrink: 0 }} />
-                <TagPicker session={session} value={convo?.tags || []} onSave={setThreadTagsAction}
-                  canManage={canManage} canCreate={canManage} small />
-              </div>
-
-              {/* Past orders (Pruthvi) — collapsed by default and loaded ON CLICK, never on open.
-                  ShopifyPanel without `autoLoad` renders its own Search button, so mounting it here
-                  costs nothing until an agent asks. Deliberate: this hits Shopify live, and the
-                  inbox is already the surface agents call slow — auto-loading it on every
-                  conversation would make the thing they complained about worse. */}
-              {/* NB there is no `customer_email` on a thread — an email thread carries the address
-                  in `external_user_id`, so the lookup key is channel-dependent. */}
-              {(() => {
-                const oPhone = thread.customer_phone || '';
-                const oEmail = thread.channel === 'email' ? (thread.external_user_id || '') : '';
-                if (!oPhone && !oEmail) return null;
-                return (
-                  <div style={{ borderBottom: '1px solid var(--border)' }}>
-                    <button onClick={() => setOrdersOpen(v => !v)}
-                      style={{ ...btnGhost, width: '100%', justifyContent: 'flex-start', gap: 6, border: 'none',
-                        borderRadius: 0, padding: '8px 16px', fontSize: 11.5, color: 'var(--t3)' }}
-                      title="This customer's previous orders">
-                      <ShoppingBag size={12} />
-                      Past orders
-                      <ChevronDown size={12} style={{ marginLeft: 'auto',
-                        transform: ordersOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
-                    </button>
-                    {ordersOpen && (
-                      <div style={{ padding: '0 16px 12px' }}>
-                        {/* key=thread.id forces a REMOUNT per conversation. ShopifyPanel holds its
-                            result in internal state and (deliberately) does not auto-refetch when
-                            props change, so without this an agent switching threads would be shown
-                            the PREVIOUS customer's orders under the new customer's name. */}
-                        <ShopifyPanel key={thread.id} session={session} phone={oPhone} email={oEmail} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Link-ticket inline row */}
+              {/* Link-ticket inline row. Needs its own dismiss: the trigger used to be a visible
+                  TOGGLE button, and it is now a one-way menu item, so without this the row can
+                  only be closed by actually linking a ticket. */}
               {linkOpen && !convo?.linked_ticket && (
-                <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8,
-                  background: 'var(--surface-2)' }}>
-                  <input value={linkVal} onChange={e => setLinkVal(e.target.value)} placeholder="CS-2026-NNNNN"
-                    onKeyDown={e => e.key === 'Enter' && linkTicket()} style={{ ...inputStyle, flex: 1 }} />
+                <div style={{ flexShrink: 0, padding: '10px 16px', borderBottom: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-2)' }}>
+                  <input autoFocus value={linkVal} onChange={e => setLinkVal(e.target.value)} placeholder="CS-2026-NNNNN"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') linkTicket();
+                      else if (e.key === 'Escape') { setLinkOpen(false); setLinkVal(''); }
+                    }}
+                    style={{ ...inputStyle, flex: 1 }} />
                   <button onClick={linkTicket} style={btnPrimary} disabled={!linkVal.trim()}>Link</button>
+                  <button className="ps-ibtn" onClick={() => { setLinkOpen(false); setLinkVal(''); }}
+                    title="Cancel linking" style={ICON_BTN}>
+                    <X size={13} />
+                  </button>
                 </div>
               )}
 
@@ -1592,7 +1616,7 @@ export default function InboxPage() {
               border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)' }}>New conversation</div>
-                <button onClick={() => setNewOpen(false)} style={{ background: 'transparent', border: 'none',
+                <button onClick={() => setNewOpen(false)} title="Close" style={{ background: 'transparent', border: 'none',
                   color: 'var(--t3)', cursor: 'pointer' }}><X size={15} /></button>
               </div>
 
@@ -1703,18 +1727,6 @@ function displayName(t) {
 function Empty({ children }) {
   return <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>{children}</div>;
 }
-function ModeBtn({ active, onClick, icon: I, label, tone }) {
-  const accent = tone === 'warn' ? 'var(--warn-fg)' : 'var(--accent)';
-  return (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-      fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 'var(--radius-sm)',
-      border: `1px solid ${active ? accent : 'var(--border)'}`,
-      background: active ? (tone === 'warn' ? 'var(--warn-bg)' : 'var(--accent-bg)') : 'transparent',
-      color: active ? accent : 'var(--t2)' }}>
-      <I size={13} /> {label}
-    </button>
-  );
-}
 function ToolBtn({ children, title, onClick, disabled, active }) {
   return (
     <button title={title} onClick={onClick} disabled={disabled}
@@ -1736,18 +1748,32 @@ function EmailField({ label, value, onChange, disabled, placeholder }) {
     </div>
   );
 }
-// Anchored popover. The transparent fixed backdrop catches any outside click and
-// closes it (click-outside-to-dismiss for every composer popup — S162).
-function Popover({ children, onClose, width = 280, pad = 10, hideClose = false, scroll = true }) {
+/* Anchored popover. The transparent fixed backdrop catches any outside click and closes it
+   (click-outside-to-dismiss for every composer popup — S162); Esc closes it too.
+   `placement` / `align` were added for the command-bar era: this component was built for the
+   composer, which opens UPWARD from the bottom of the pane, while every popover in the command
+   bar and the conversation header opens DOWNWARD — and the ones anchored to a right-hand
+   control must align right or they hang off the edge of the window.
+   ⚠️ The defaults ('up' / 'left') are the pre-existing behaviour, so the three composer callers
+   (template · emoji · canned) are byte-identical. Do not change the defaults. */
+function Popover({ children, onClose, width = 280, pad = 10, hideClose = false, scroll = true,
+  placement = 'up', align = 'left', maxH = 320 }) {
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
-      <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 40, width,
+      <div style={{ position: 'absolute', zIndex: 40, width,
+        ...(placement === 'down' ? { top: 'calc(100% + 6px)' } : { bottom: 'calc(100% + 6px)' }),
+        ...(align === 'right' ? { right: 0 } : { left: 0 }),
         background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
         boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: pad,
-        ...(scroll ? { maxHeight: 320, overflowY: 'auto' } : {}) }}>
+        ...(scroll ? { maxHeight: maxH, overflowY: 'auto' } : {}) }}>
         {!hideClose && (
-          <button onClick={onClose} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, cursor: 'pointer',
+          <button onClick={onClose} title="Close" style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, cursor: 'pointer',
             border: 'none', background: 'transparent', color: 'var(--t3)' }}><X size={13} /></button>
         )}
         {children}
@@ -1805,6 +1831,24 @@ function CannedPanel({ slashActive, query, list, search, setSearch, canManage, d
     </div>
   );
 }
+/* Who owns this conversation, as a badge — and Claim, which is deliberately still ONE click
+   (§13.2: it is the most-used control on the header row, so it never goes behind an icon).
+   Split out of AssignControl so the badge can sit early in the right cluster while Release /
+   Transfer sit at its far end, per the approved layout. */
+function AssignBadge({ thread, mineThread, myId, onAssign }) {
+  if (mineThread) return <ToneBadge tone="ok"><UserPlus size={10} style={{ marginRight: 3 }} /> Mine</ToneBadge>;
+  if (thread.assigned_agent_id) return <ToneBadge tone="info">{thread.assigned_agent_name || 'Assigned'}</ToneBadge>;
+  return (
+    <button onClick={() => onAssign(myId)} title="Assign this conversation to yourself"
+      style={{ ...btnPrimary, padding: '5px 11px', fontSize: 11.5, flexShrink: 0 }}>
+      <UserPlus size={12} /> Claim
+    </button>
+  );
+}
+/* Release · Transfer… · Transfer to the Influencer team, behind one titled icon button.
+   The panel itself is unchanged from when Transfer… was visible text; Release moved INTO it
+   (it was a sibling button) and is the first thing in it, since that is the common case for a
+   thread you own. */
 function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, onTransfer, onTransferToIgnition, myId }) {
   const assigned = thread.assigned_agent_id;
   const [sel, setSel] = useState('');
@@ -1818,30 +1862,15 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
   const targets = (agents || []).filter(a => a.id !== assigned);   // can't transfer to the current owner
   const submit = () => { if (sel) onTransfer(sel, note.trim() || null); };
   const submitIgnition = () => onTransferToIgnition?.(note.trim() || null);
-  const xferBtn = <button onClick={openPanel} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Transfer…</button>;
-  // Owned by me → green pill + release + transfer. Owned by other → name (+ transfer for TL+).
-  // Unassigned → Claim (+ transfer).
+  // Nothing behind the button when the agent may neither release nor transfer (someone else's
+  // thread, no reassign perm) — so it does not render at all rather than opening an empty panel.
+  if (!canTransfer) return null;
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
-      {mineThread ? (
-        <>
-          <ToneBadge tone="ok"><UserPlus size={10} style={{ marginRight: 3 }} /> Mine</ToneBadge>
-          <button onClick={() => onAssign(null)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Release</button>
-          {canTransfer && xferBtn}
-        </>
-      ) : assigned ? (
-        <>
-          <ToneBadge tone="info">{thread.assigned_agent_name || 'Assigned'}</ToneBadge>
-          {canTransfer && xferBtn}
-        </>
-      ) : (
-        <>
-          <button onClick={() => onAssign(myId)} style={{ ...btnPrimary, padding: '5px 11px', fontSize: 11.5 }}>
-            <UserPlus size={12} /> Claim
-          </button>
-          {canTransfer && xferBtn}
-        </>
-      )}
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+      <button className="ps-ibtn" onClick={openPanel} style={ICON_BTN}
+        title={mineThread ? 'Release or transfer this conversation' : 'Transfer this conversation'}>
+        <Users size={13} />
+      </button>
       {open && (
         <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
       )}
@@ -1849,6 +1878,14 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
         <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: 260,
           background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
           boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 10 }}>
+          {mineThread && (
+            <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
+              <button onClick={() => onAssign(null)} title="Give this conversation back to the unassigned pool"
+                style={{ ...btnGhost, width: '100%', justifyContent: 'center', padding: '7px 0', fontSize: 12 }}>
+                Release
+              </button>
+            </div>
+          )}
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Transfer to</div>
           <div style={{ maxHeight: 180, overflowY: 'auto', marginBottom: 8 }}>
             {targets.length === 0 ? (
@@ -1912,55 +1949,271 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
     </div>
   );
 }
-/* Compact single-row stat chip (S177) — was a ~100px card; now ~40px so the
-   conversation list gets the vertical space back (Pruthvi: only one row showed). */
-function ChannelTile({ chKey, stat, active, onClick }) {
-  const ch = chanOf(chKey);
-  const tracksAwaiting = stat?.awaiting != null; // WhatsApp/Email (null) don't track awaiting here
-  const awaiting = stat?.awaiting || 0;
-  const unread = stat?.unread || 0;   // new customer messages not yet opened (S222)
-  const subText = tracksAwaiting ? (awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied')
-    : chKey === 'whatsapp' ? 'in BiteSpeed'
-    : `${stat?.unassigned || 0} unassigned`;
-  const subTone = tracksAwaiting && awaiting > 0 ? 'var(--warn-fg)' : 'var(--t3)';
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   InboxCommandBar — one 40px row that owns ALL scoping and filtering.
+
+   It replaces six stacked bands: the channel tile row AND the <Tabs> strip (both of which
+   set the same `channel` state — the same control twice), plus the conversation list's own
+   header, assignment axis, filter selects, search and select rows, which were a row of small
+   controls stacked vertically inside a 320px column: the most expensive place to put them.
+
+   Everything is re-homed, nothing is dropped. The two figures that left the screen are
+   per-channel `awaiting` (now one aggregate topbar pill + each segment's tooltip) and
+   per-channel `closed` (reachable via the Closed state filter) — signed off in §13.
+   Lives here rather than in components/: it reads a dozen values off the page's state and
+   has no reuse anywhere, so extracting it would only add a prop-drilling surface.
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+function InboxCommandBar(props) {
+  const {
+    channel, setChannel, stats, allTotal,
+    assignTabs, assignTab, setAssignTab,
+    stateFilter, setStateFilter,
+    ignitionScope, onToggleIgnition, soundOn, onToggleSound,
+    searchInput, setSearchInput,
+    sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
+    agentFilter, setAgentFilter, allTags, agents,
+    filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect,
+    canManage, canReassign, selectMode, onToggleSelect, onCompose,
+    listCollapsed, toggleListCollapse,
+  } = props;
+
+  // Self-measuring: the ladder reacts to the bar's real width, so collapsing the sidebar or
+  // the browser window both feed the same signal.
+  const barRef = useRef(null);
+  const bw = useElementWidth(barRef);
+  const tight = (px) => bw != null && bw <= px;
+  const compact = {
+    hideActiveLabel: tight(BAR_STEPS.hideActiveLabel),   // active segment → glyph + count only
+    searchWidth:     tight(BAR_STEPS.searchNarrow) ? 150 : 200,
+    composeIconOnly: tight(BAR_STEPS.composeIconOnly),
+    assignInPopover: tight(BAR_STEPS.assignInPopover),   // axis moves into the filters popover
+  };
+
+  // Shared segment shell. `on` drives the accent treatment; every variant keeps the same
+  // border box so the row never shifts by a pixel when the selection moves.
+  const seg = (on, extra = {}) => ({
+    display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+    borderRadius: 'var(--radius-sm)', border: '1px solid',
+    borderColor: on ? 'var(--accent-bd)' : 'var(--border)',
+    background: on ? 'var(--accent-bg)' : 'transparent',
+    fontFamily: 'var(--f-ui)', transition: `background var(--fast) var(--ease)`,
+    ...extra,
+  });
+
   return (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 150px', minWidth: 140,
-      textAlign: 'left', cursor: 'pointer', background: 'var(--surface)', border: `1px solid ${active ? ch.color : 'var(--border)'}`,
-      borderRadius: 'var(--radius)', padding: '7px 11px', position: 'relative', overflow: 'hidden',
-      boxShadow: active ? `0 0 0 1px ${ch.color}` : 'none' }}>
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: ch.color }} />
-      <ch.Glyph size={15} style={{ color: ch.color, flexShrink: 0 }} />
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
-        <span className="eyebrow" style={{ fontSize: 9, letterSpacing: '0.1em' }}>{ch.label}</span>
-        <span style={{ fontSize: 10.5, fontWeight: 500, color: subTone, whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis' }}>{subText}</span>
+    <div ref={barRef} style={{ height: 40, flexShrink: 0, background: 'var(--bg)', borderBottom: '1px solid var(--border)',
+      padding: '0 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+
+      {/* ── Channel scope. Tab behaviour, NOT the old tile behaviour: clicking the active
+             segment does not toggle back to 'all'. ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
+        ...(compact.hideActiveLabel ? { overflow: 'hidden' } : {}) }}>
+        {SEGMENT_KEYS.map(k => {
+          const isAll = k === 'all';
+          const c = isAll ? null : chanOf(k);
+          const on = channel === k;
+          const total = isAll ? allTotal : (stats[k]?.total || 0);
+          const unread = isAll ? 0 : (stats[k]?.unread || 0);   // same source as the tiles' "N new" pill (S222)
+          // The tiles' visible channel label lives here now, so hover still names every channel.
+          const title = isAll ? `All channels · ${allTotal}` : `${c.label}${unread ? ` · ${unread} new` : ''}`;
+          // Only the active segment spends width on its text label — and it gives that up first
+          // when the bar gets tight. 'All' always shows text: it has no glyph to fall back on.
+          const showLabel = isAll || (on && !compact.hideActiveLabel);
+          return (
+            <button key={k} onClick={() => setChannel(k)} title={title} className={on ? undefined : 'ps-seg'}
+              style={{ position: 'relative', padding: on ? '5px 9px' : '5px 8px',
+                borderColor: on ? 'var(--accent-bd)' : 'transparent',
+                background: on ? 'var(--accent-bg)' : 'transparent',
+                border: '1px solid', borderRadius: 'var(--radius-sm)',
+                display: 'flex', alignItems: 'center', gap: on ? 6 : 5,
+                cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                fontFamily: 'var(--f-ui)', fontSize: 12, fontWeight: on ? 700 : 500,
+                color: on ? 'var(--t1)' : 'var(--t2)',
+                transition: `background var(--fast) var(--ease)` }}>
+              {c && <c.Glyph size={14} style={{ color: c.color, flexShrink: 0 }} />}
+              {showLabel && (isAll ? 'All' : c.label)}
+              <span className="num" style={on
+                ? { fontFamily: 'var(--f-mono)', fontSize: 10, background: 'var(--accent-bg)',
+                    color: 'var(--accent)', borderRadius: 99, padding: '0 5px' }
+                : isAll
+                  ? { fontFamily: 'var(--f-mono)', fontSize: 10, background: 'var(--surface-2)',
+                      color: 'var(--t4)', borderRadius: 99, padding: '0 5px' }
+                  : { fontSize: 10.5 }}>{total}</span>
+              {/* Unread dot — a new customer message nobody has opened yet. */}
+              {unread > 0 && (
+                <span style={{ position: 'absolute', top: 2, right: 1, width: 6, height: 6,
+                  borderRadius: '50%', background: c.color }} />
+              )}
+            </button>
+          );
+        })}
       </div>
-      <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.1 }}>
-        {unread > 0 && (
-          <span className="num" title={`${unread} new customer message${unread === 1 ? '' : 's'}`}
-            style={{ fontSize: 9.5, fontWeight: 800, color: '#fff', background: ch.color, borderRadius: 999,
-              padding: '1px 6px', marginBottom: 3, lineHeight: 1.4 }}>{unread} new</span>
+
+      <BarDivider />
+
+      {/* ── Assignment axis. Folds into the filters popover on a narrow window rather than
+             being clipped (§5.13 step 4). ───────────────────────────────────────────────── */}
+      {!compact.assignInPopover && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+            {assignTabs.map(t => (
+              <button key={t.id} onClick={() => setAssignTab(t.id)} className={assignTab === t.id ? undefined : 'ps-seg'}
+                title={`${t.label} — ${t.count} conversation${t.count === 1 ? '' : 's'}`}
+                style={seg(assignTab === t.id, { fontSize: 11, fontWeight: 600, padding: '4px 8px',
+                  color: assignTab === t.id ? 'var(--accent)' : 'var(--t2)' })}>
+                {t.label}
+                <span className="num" style={{ fontSize: 10, opacity: 0.7 }}>{t.count}</span>
+              </button>
+            ))}
+          </div>
+          <BarDivider />
+        </>
+      )}
+
+      {/* ── State · Ignition scope · sound ──────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+        {/* Hidden under the Ignition scope, which bypasses the state facet entirely (S177). */}
+        {!ignitionScope && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
+          <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
+            className={stateFilter === id ? undefined : 'ps-seg'}
+            style={seg(stateFilter === id, { fontSize: 10, fontWeight: 600, padding: '3px 7px',
+              color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' })}>{lbl}</button>
+        ))}
+        {/* Read-only oversight: threads transferred to the Influencer team (leads/admin, S177).
+            Icon-only now — the label moved into `title`. */}
+        {canReassign && (
+          <button onClick={onToggleIgnition} className={ignitionScope ? undefined : 'ps-seg'}
+            title="View conversations transferred to the Influencer team (read-only)"
+            style={seg(ignitionScope, { padding: '4px 6px',
+              color: ignitionScope ? 'var(--accent)' : 'var(--t3)' })}>
+            <ExternalLink size={11} />
+          </button>
         )}
-        <span className="num" style={{ fontWeight: 700, fontSize: 18, color: 'var(--t1)', lineHeight: 1 }}>{stat?.total || 0}</span>
-        <span className="num" style={{ fontSize: 9.5, fontWeight: 500, color: 'var(--t3)' }}>{stat?.closed || 0} closed</span>
+        {/* Chime toggle (S245). Opt-in and per-browser: a shared desk with several agents
+            does not want a chorus. The tab badge is always on and needs no permission. */}
+        <button onClick={onToggleSound} className={soundOn ? undefined : 'ps-seg'}
+          title={soundOn ? 'Chime on new customer message — click to mute' : 'Muted — click to chime on new customer messages'}
+          style={seg(soundOn, { padding: '4px 6px', color: soundOn ? 'var(--accent)' : 'var(--t3)' })}>
+          {soundOn ? <Bell size={11} /> : <BellOff size={11} />}
+        </button>
       </div>
-    </button>
-  );
-}
-function AwaitingTile({ total }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 150px', minWidth: 140,
-      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-      padding: '7px 11px', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: total > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)' }} />
-      <Clock size={15} style={{ color: total > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)', flexShrink: 0 }} />
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
-        <span className="eyebrow" style={{ fontSize: 9, letterSpacing: '0.1em' }}>Awaiting reply</span>
-        <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--t3)', whiteSpace: 'nowrap' }}>across all channels</span>
+
+      {/* ── Right cluster starts here ───────────────────────────────────────────────────── */}
+      {/* `data-search-primary` is what the layout's global `/` shortcut focuses. */}
+      <div style={{ position: 'relative', width: compact.searchWidth, marginLeft: 'auto', flexShrink: 0 }}>
+        <Search size={12} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)',
+          color: 'var(--t4)', pointerEvents: 'none' }} />
+        <input data-search-primary value={searchInput} onChange={e => setSearchInput(e.target.value)}
+          placeholder="Search phone or name…"
+          style={{ ...inputStyle, fontSize: 11.5, padding: `5px ${searchInput ? 24 : 10}px 5px 26px` }} />
+        {searchInput && (
+          <button onClick={() => setSearchInput('')} title="Clear search"
+            style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'transparent',
+              border: 'none', cursor: 'pointer', color: 'var(--t3)', display: 'grid', placeItems: 'center', padding: 0 }}>
+            <X size={12} />
+          </button>
+        )}
       </div>
-      <span className="num" style={{ fontWeight: 700, fontSize: 18, color: total > 0 ? 'var(--warn-fg)' : 'var(--t1)', lineHeight: 1, marginLeft: 'auto' }}>{total}</span>
+
+      {/* ── Filters popover — sort · priority · tag · agent (verbatim), so four selects stop
+             costing two wrapped rows in a 320px column. ─────────────────────────────────── */}
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <button className="ps-ibtn" onClick={() => setFiltersOpen(v => !v)} style={BAR_BTN}
+          title={compact.assignInPopover ? 'Assignment · sort · priority · tag · agent' : 'Sort · priority · tag · agent'}>
+          <SlidersHorizontal size={13} />
+          {/* An applied filter must never be invisible — that is how an agent concludes the
+              inbox is empty when it is merely filtered. */}
+          {filtersDirty && (
+            <span style={{ position: 'absolute', top: -2, right: -2, width: 6, height: 6,
+              borderRadius: '50%', background: 'var(--accent)' }} />
+          )}
+        </button>
+        {filtersOpen && (
+          <Popover onClose={() => setFiltersOpen(false)} width={260} placement="down" align="right">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+              {compact.assignInPopover && (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {assignTabs.map(t => (
+                    <button key={t.id} onClick={() => setAssignTab(t.id)}
+                      style={seg(assignTab === t.id, { flex: 1, justifyContent: 'center', fontSize: 11,
+                        fontWeight: 600, padding: '5px 4px',
+                        color: assignTab === t.id ? 'var(--accent)' : 'var(--t2)' })}>
+                      {t.label}<span className="num" style={{ fontSize: 10, opacity: 0.7 }}>{t.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <select value={sort} onChange={e => setSort(e.target.value)} title="Sort conversations"
+                style={{ ...miniSelect, flex: 'none', width: '100%' }}>
+                <option value="recent">↓ Recent activity</option>
+                <option value="oldest">↑ Oldest first</option>
+                <option value="priority">★ Priority</option>
+              </select>
+              <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} title="Filter by priority"
+                style={{ ...miniSelect, flex: 'none', width: '100%' }}>
+                <option value="">All priorities</option>
+                {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
+              </select>
+              {allTags.length > 0 && (
+                <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag"
+                  style={{ ...miniSelect, flex: 'none', width: '100%' }}>
+                  <option value="">All tags</option>
+                  {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
+              {canReassign && agents.length > 0 && (
+                <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} title="Filter by assigned agent"
+                  style={{ ...miniSelect, flex: 'none', width: '100%' }}>
+                  <option value="">All agents</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.full_name || a.email}</option>)}
+                </select>
+              )}
+              <button onClick={clearFilters} disabled={!filtersDirty}
+                style={{ ...btnGhost, width: '100%', justifyContent: 'center', padding: '6px 0', fontSize: 11.5,
+                  opacity: filtersDirty ? 1 : 0.45, cursor: filtersDirty ? 'pointer' : 'default' }}>
+                Clear filters
+              </button>
+            </div>
+          </Popover>
+        )}
+      </div>
+
+      {/* Select mode — gates the per-row checkboxes (S236). Toggling OFF goes through
+          exitSelectMode so a selection can never be stranded behind hidden checkboxes. */}
+      <button className={selectMode ? undefined : 'ps-ibtn'} onClick={onToggleSelect}
+        title={selectMode ? 'Leave select mode' : 'Select conversations for bulk assign'}
+        style={{ ...BAR_BTN,
+          borderColor: selectMode ? 'var(--accent-bd)' : 'var(--border-2)',
+          background: selectMode ? 'var(--accent-bg)' : 'transparent',
+          color: selectMode ? 'var(--accent)' : 'var(--t2)' }}>
+        <CheckSquare size={13} />
+      </button>
+
+      {/* Compose — the ONLY way to reach a customer who has not written to us. Without it a
+          thread could only be born from an inbound message (a regression vs BiteSpeed). */}
+      {canManage && (
+        <button className="ps-ibtn" onClick={onCompose} title="New WhatsApp or email conversation"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, cursor: 'pointer',
+            fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+            padding: compact.composeIconOnly ? 0 : '4px 9px',
+            ...(compact.composeIconOnly ? { display: 'grid', placeItems: 'center', width: 28, height: 26 } : {}),
+            border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)',
+            background: 'transparent', color: 'var(--t2)' }}>
+          <Plus size={12} />{!compact.composeIconOnly && 'Compose'}
+        </button>
+      )}
+
+      {/* Collapse the thread list. The bar itself never changes when collapsed. */}
+      <button className="ps-ibtn" onClick={toggleListCollapse}
+        title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
+        style={{ ...BAR_BTN, borderColor: 'var(--border)', color: 'var(--t3)' }}>
+        {listCollapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+      </button>
     </div>
   );
+}
+function BarDivider() {
+  return <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />;
 }
 function Avatar({ t, size = 34 }) {
   const ch = chanOf(t?.channel);

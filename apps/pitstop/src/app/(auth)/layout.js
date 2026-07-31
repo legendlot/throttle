@@ -1,22 +1,37 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher, useSearchShortcut } from '@throttle/ui';
 import { PitstopSidebar, PitstopTopbar, CommandPalette } from '../../components/kit/index.js';
 import { csopsGet } from '../../lib/csopsFetch.js';
+import { routeMatch } from '../../lib/nav.js';
 import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
 import PresenceToggle from '../../components/PresenceToggle.js';
+
+// Routes that own their own gutters and their own scrolling. The inbox runs two independent
+// scroll areas (thread list + message list) edge to edge, so `main` must neither pad it nor
+// add a third (page-level) scrollbar. Every other route keeps var(--pad) + overflow auto.
+const FLUSH_ROUTES = ['/inbox'];
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
   lastRefreshed: null,  setLastRefreshed: () => {},
+  topbarBadge: null,    setTopbarBadge:   () => {},
 });
 
 export function RefreshProvider({ children }) {
   const [refreshing,    setRefreshing]    = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
+  // A page may publish ONE status pill into the topbar (plain data, never JSX — the topbar
+  // owns its styling). Pages clear it on unmount, so it can never outlive its route.
+  const [topbarBadge,   setTopbarBadge]   = useState(null);
+  const value = useMemo(
+    () => ({ refreshing, setRefreshing, lastRefreshed, setLastRefreshed, topbarBadge, setTopbarBadge }),
+    [refreshing, lastRefreshed, topbarBadge],
+  );
   return (
-    <RefreshContext.Provider value={{ refreshing, setRefreshing, lastRefreshed, setLastRefreshed }}>
+    <RefreshContext.Provider value={value}>
       {children}
     </RefreshContext.Provider>
   );
@@ -38,7 +53,9 @@ export default function AuthLayout({ children }) {
 
 function AuthLayoutInner({ children }) {
   const { user, brandUser, role, perms, session, signOut, loading } = useAuth();
-  const { refreshing, lastRefreshed } = useRefreshState();
+  const { refreshing, lastRefreshed, topbarBadge } = useRefreshState();
+  const pathname = usePathname();
+  const flush = FLUSH_ROUTES.some(r => routeMatch(pathname, r));
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const [badges, setBadges] = useState({ open: 0, missed: 0 });
 
@@ -97,12 +114,17 @@ function AuthLayoutInner({ children }) {
         onLogout={signOut}
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <PitstopTopbar refreshing={refreshing} lastRefreshed={lastRefreshed}>
+        <PitstopTopbar refreshing={refreshing} lastRefreshed={lastRefreshed} badge={topbarBadge}>
           <PresenceToggle session={session} />
           <DeptSwitcher />
           <AppLauncher current="pitstop" />
         </PitstopTopbar>
-        <main style={{ flex: 1, overflowY: 'auto', padding: 'var(--pad)' }}>
+        {/* `minHeight: 0` is what lets a flush route's flex child actually shrink instead of
+            growing past the viewport; `overflow: hidden` keeps the page itself from scrolling
+            behind the route's own scroll areas. */}
+        <main style={{ flex: 1, minHeight: 0,
+          overflow: flush ? 'hidden' : 'auto',
+          padding: flush ? 0 : 'var(--pad)' }}>
           {children}
         </main>
       </div>

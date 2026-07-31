@@ -20,7 +20,7 @@ function fmtUpdated(d) {
   } catch { return typeof d === 'string' ? d : ''; }
 }
 
-export function PitstopTopbar({ refreshing = false, lastRefreshed = null, children }) {
+export function PitstopTopbar({ refreshing = false, lastRefreshed = null, badge = null, children }) {
   const pathname = usePathname();
   const router = useRouter();
   const { crumb, title } = resolveNav(pathname);
@@ -35,6 +35,21 @@ export function PitstopTopbar({ refreshing = false, lastRefreshed = null, childr
         <h1 style={{ fontFamily: 'var(--f-display)', fontWeight: 700, fontSize: 19, letterSpacing: '0.04em',
           color: 'var(--t1)', textTransform: 'uppercase', lineHeight: 1.1, margin: '1px 0 0' }}>{title}</h1>
       </div>
+
+      {/* Optional page-published status pill (set via useRefreshState().setTopbarBadge).
+          A STATUS, not a filter — no click handler, cursor:default — and hidden entirely at 0
+          so a healthy inbox shows nothing rather than a reassuring zero. */}
+      {badge?.kind === 'awaiting' && badge.n > 0 && (
+        <div title="Awaiting reply across all channels"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px',
+            borderRadius: 'var(--radius-sm)', background: 'var(--warn-bg)',
+            border: '1px solid var(--warn-bd)', color: 'var(--warn-fg)',
+            fontFamily: 'var(--f-display)', fontSize: 10.5, fontWeight: 700,
+            letterSpacing: '0.08em', textTransform: 'uppercase',
+            whiteSpace: 'nowrap', flexShrink: 0, cursor: 'default' }}>
+          <Icon name="clock" size={12} /> {badge.n} awaiting
+        </div>
+      )}
 
       <button onClick={() => router.push('/new')} style={btnPrimary}>
         <Icon name="plus" size={14} /> New ticket
