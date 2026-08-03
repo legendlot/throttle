@@ -53,6 +53,7 @@ Grounded, not assumed:
   never derive.
 - **Phone formats differ by endpoint.** `/v1/sms` takes **bare 10-digit**; RCS takes **E.164**.
   Store canonical E.164, render at the adapter boundary. Never transport a phone as a JSON number.
+  🔴 **F1 — see §6b. The naive rendering is a customer-harming bug, not a formatting detail.**
 - **Three incompatible error shapes** (`errors[]`, flat `message`, single `error`). All carry
   `success:false`. `109`/`114` return **HTTP 400, not 404** — never branch on HTTP status alone.
 - **No idempotency key anywhere.** Relay must dedupe *before* calling and retry only on
@@ -62,15 +63,50 @@ Grounded, not assumed:
 
 ## 4. Live provisioning state (verified 2026-08-03)
 
-**SMS — working**
+**SMS — working, and better provisioned than a first read suggested**
 
 | | |
 |---|---|
 | DLT header | `LGNDRC`, entity id `1701175957030337181`, Active (2026-07-28) |
-| Templates | 1 — `G38A46v1i` "Product Page kwikpass", DLT id `1707176249350090048`, Active, non-unicode |
-| Content | `Hey {#var#}! Looks like our star legend caught your eye. Don't let it race away; tap 'Add to Cart' now and make it yours : {#var#}` |
+| Templates | **20, all Active** — see the registry below |
 | Webhook | none configured |
 | Credits | ~₹9.85 — enough for live tests, not a campaign |
+
+⚠️ **An earlier revision of this spec said "1 template exists". That was wrong** — it read only the
+first table row. There are 20, and the coverage closely matches Relay's existing journeys, so SMS is
+substantially more ready than that revision implied. Corrected 2026-08-03.
+
+| Template id | Name | DLT type | DLT template id |
+|---|---|---|---|
+| `plsFsHlz6` | Order Shipped | **explicit** ⚠️ | 1707176156464942410 |
+| `0gH2lpi5C` / `EpxvxiaP8` | Order Delivered | implicit | …313308513 / …263977465 |
+| `efznzdt0l` | Order Cancellation | implicit | 1707176243410733011 |
+| `amrIObqWc` | Order Cancellation | **explicit** ⚠️ | 1707176130203997578 |
+| `vyNTAwgHa` | Prepaid Order Confirmation | implicit | 1707176130196189451 |
+| `nWF2BOmTZ` | Prepaid Order Confirmation | **explicit** ⚠️ | 1707176249263781789 |
+| `ZZEOOb542` / `UmtXBfUjb` | COD Amount Confirmation | implicit | …292738539 / …232974575 |
+| `C1kDRPdk4` / `cccum9TCT` | ABC 1 | explicit | …299669109 / …241447254 |
+| `fg0JrV2rN` / `9q1mj62AN` | ABC 2 | explicit | …306921545 / …255793178 |
+| `G38A46v1i` / `8uzRdXnHh` | Product Page kwikpass | explicit | …350090048 / …411229833 |
+| `Ia0ksdTNB` / `HGwYYNWru` | Collection KwikPass | explicit | …337166145 / …432006550 |
+| `26B23IQ01` / `Pmpenlzye` | Home Page KwikPass | explicit | …323707514 / …369724799 |
+| `WoiNXptjM` | Add to Cart KwikPass | explicit | 1707176130420370110 |
+
+🔴 **F2 — two traps in this registry, both load-bearing:**
+
+1. **Almost every name is duplicated, and two pairs DISAGREE on DLT consent type**
+   (Order Cancellation, Prepaid Order Confirmation each have one `implicit` and one `explicit`
+   twin). **Bind templates by `provider_template_id`, NEVER by name.** A name lookup is
+   non-deterministic and picks the wrong regulatory class half the time.
+2. **`Order Shipped` is registered `explicit`**, as is one Order Cancellation and one Prepaid
+   Order Confirmation. In DLT, `explicit` = promotional-consent — **those messages will not be
+   delivered to DND-registered numbers.** A shipping notification that silently skips DND
+   customers is a real customer-facing failure. **Confirm with TrustSignal / re-register as
+   `implicit` before routing transactional journeys to them.** Until then, prefer the `implicit`
+   twin wherever one exists.
+
+`template_type` (`explicit`|`implicit`) must be stored on the Relay template row and cross-checked
+against `route` at bind time — see §6a.
 
 **RCS — bot only**
 
@@ -151,6 +187,52 @@ points at a real `comms.templates` row with `channel='sms'`. One DLT template, o
 and the fallback leg inherits the same approval and versioning as any other SMS template. Do **not**
 inline DLT text into the RCS row.
 
+**F9 — `pr1..pr5` is a hard ceiling of five variables.** A template needing six would silently
+truncate and send a broken message. Validate `var_order.length <= 5` **at template-bind time, not
+at send time**, so it fails in the authoring UI rather than in front of a customer.
+
+**F10 — gate SMS sends on template status too.** The spec originally required this only for RCS.
+Both registries carry a status and both push a `Template` webhook event; never send on a template
+whose last known status is not Active/approved, on either channel.
+
+## 6a. `purpose` → `route`, and the DLT consent cross-check (F3)
+
+The spec previously left this undefined, which is how a compliance bug gets built by accident.
+
+| Relay `purpose` | TrustSignal `route` | Required DLT `template_type` |
+|---|---|---|
+| `marketing` | `promotional` | `explicit` |
+| `utility` | `transactional` | `implicit` |
+| `transactional` | `transactional` | `implicit` |
+| *(OTP, if ever)* | `otp` | `implicit` |
+
+⚠️ **Route and template_type must agree, and the mismatch must be a hard error at bind time.**
+Sending a `utility` journey on an `explicit` template is exactly the F2 trap — it looks fine, it
+returns `success: true`, and it silently fails to reach every DND-registered customer.
+`global` is deliberately unmapped: it is the no-template-required international route and must
+never be reachable from a normal Relay send (see §6b).
+
+## 6b. Phone rendering — the F1 rule, stated because the obvious version is dangerous
+
+Relay stores canonical E.164. Live data: **82,964 `+91` · 177 non-`+91` · 1 malformed `+91`**
+(measured 2026-08-03).
+
+**Never derive the SMS recipient by taking the last 10 digits.** `+14155550123` → `4155550123` is a
+valid Indian mobile belonging to an unrelated person, and nothing in the send path would error.
+
+The rule:
+
+1. `+91` **and** exactly 13 chars → strip `+91`, send the bare 10 digits to `/v1/sms`.
+2. `+91` but **not** 13 chars (the 1 malformed row) → **hard fail**, `reason='invalid_phone'`. Do
+   not attempt repair at send time.
+3. Non-`+91` → **hard fail** with `reason='unsupported_country'` in v1. The DLT header and template
+   registry are India-only, so an international SMS could not be compliant anyway. Routing these
+   via `/v1/sms/countrycode` + the `global` route is a deliberate later decision, not a default.
+4. RCS takes the stored E.164 unchanged.
+
+This is one function in `trustsignal-client.js` with a unit test per branch, including an explicit
+test that a `+1` number is **rejected rather than truncated**.
+
 ## 7. Send path
 
 Unchanged gate, unchanged order: **suppression → consent → frequency cap → quiet hours → channel
@@ -167,6 +249,28 @@ referenced SMS template.
 **Consent (D2/D3):** an RCS send checks `rcs` **and** `sms`. `rcs` resolves through the SMS opt-in
 per D3 — implemented as a **resolver rule in the gate, not a 10,602-row consent backfill**, so the
 inheritance stays visible, reversible, and cannot be mistaken for collected consent.
+
+⚠️ **F7 — D2 and D3 are tautological TODAY, and the code must say so.** Since `rcs` resolves to the
+SMS opt-in, "require both" currently evaluates the SMS opt-in twice. That is not a bug, but a reader
+can easily believe the gate is doing more than it is. D2 is the **durable** rule and matters the
+moment `rcs` gains a real independent consent axis; D3 is the **current resolver**. Write the check
+as two explicit calls with a comment stating they collapse today — do not "simplify" it to one call,
+because that silently removes the guard the day someone gives RCS its own consent.
+
+**F5 — DND failures must write a suppression.** SMS has **no inbound channel**, so there is no STOP
+path and a customer cannot opt out to us directly; DND is carrier-side and surfaces as a `dndcf`
+stat / a DND failure code on the delivery webhook. Without writing a `comms.suppressions` row we
+re-send and re-pay to the same dead numbers indefinitely, and the failure rate quietly becomes the
+channel's baseline. On a DND failure: suppress `(channel='sms', value=<phone>)` with
+`reason='dnd'`. ⚠️ Suppress **SMS only, never the profile globally** — a DND registration is a
+carrier-SMS state and says nothing about email or WhatsApp reachability.
+
+**F6 — `isdesturl` and DLT template matching.** The shortener rewrites URLs in the outgoing body.
+DLT matches delivered content against the registered template, so **a URL that appears literally in
+approved DLT content will no longer match once rewritten → carrier rejection.** A URL must always
+sit inside a `{#var#}` variable. Validate at bind time: if `isdesturl` is on and the template's
+static content contains an `http(s)://` literal, refuse the binding. (Our current templates put the
+URL in a trailing `{#var#}`, so they are safe — but nothing enforces that for the next one.)
 
 ## 8. Webhooks and status
 
@@ -190,12 +294,40 @@ Two routes on commsops: `/webhook/trustsignal/sms`, `/webhook/trustsignal/rcs`.
 | RCS `failed` | `failed` |
 | RCS **`nonrcs`** / `Fallback` event | **flip `channel` → `sms`, set `fallback_from='rcs'`**, cost from the SMS leg |
 
+**F4 — the channel flip must be ONE-WAY and IDEMPOTENT.** Both `Fallback` and
+`Delivery_status(status='nonrcs')` imply the same thing, they can both arrive, and they can arrive
+in either order — so a naive handler could flip twice, or flip back when a late RCS event lands.
+Rules:
+
+- The flip is `rcs → sms` **only**. Nothing ever sets `channel` back to `rcs`.
+- It is keyed on `fallback_from IS NULL` — applying it twice is a no-op, not a second write.
+- **Cost is overwritten only by the SMS leg's credit**, and only on the flip. A later RCS-side
+  event must never re-apply the RCS cost to a row that already fell back.
+- A `read` or `delivered` event carrying `route:'rcs'` that arrives *after* a flip is **discarded**,
+  not applied — it describes a leg that did not deliver.
+
+**F8 — terminal status when the fallback ALSO fails.** Defined explicitly, because the vendor does
+not: the row ends `channel='sms'`, `fallback_from='rcs'`, `status='failed'`, with the **SMS** leg's
+error in `reason`. One logical send, one terminal state. Never two failure rows, and never a row
+left `accepted` because each individual leg reported separately.
+
 Receiver hardening, all of it required because there is no signature:
 - Respond 200 immediately, process asynchronously.
 - Dedupe on `(transaction_id, status)`; these webhooks retry and reorder.
 - **Only ever move state forward** — `read` can arrive before `delivered`.
 - Log unknown status/error codes with the raw body rather than crashing; the published error
   catalogue is explicitly partial.
+
+**F12 — clicks emit the EXISTING `link_clicked` event, not a new one.** S189 deliberately renamed
+`email_clicked` → `link_clicked` to be channel-agnostic, specifically so SMS/WA would emit the same
+name. Both the SMS `clickwebhook_url` and the RCS `Click` event map onto it, with `channel` in the
+properties. Do not mint `sms_clicked`/`rcs_clicked` — that would fragment every click segment.
+
+**F11 — cost typing.** SMS returns `sms_cost` as a **number**, RCS returns `cost` as a **string**
+(`"0.1"`). `comms.messages.cost` is numeric, and PostgREST hands numerics back as strings anyway
+(CORE.md). Coerce with `Number()` on both read and write, and record the unit — the vendor's
+"credit" is not obviously ₹, so reconcile against `/v1/sms/stats` (`credits`, `dl_credits`) before
+trusting any cost figure in reporting.
 
 **Registration is eventually consistent** — the vendor states webhook config takes up to 10 minutes
 to reflect. Never make it part of a synchronous setup flow.
@@ -263,12 +395,20 @@ DB CHECK constraints: **none on channel/purpose** — verified, nothing to widen
 Ordered so the highest-confidence, lowest-dependency work lands first and an RCS slip cannot block
 SMS.
 
-1. **`trustsignal-client.js`** — hosts, auth+redaction, error normaliser, phone renderer, token
-   bucket. Unit tests, no network.
+1. **`trustsignal-client.js`** — hosts, auth+redaction, error normaliser, **phone renderer (§6b)**,
+   token bucket. Unit tests, no network, **including the `+1`-is-rejected-not-truncated test**.
 2. **`adapters/sms.js` + send-path wiring** — sender identity, template model incl. `var_order`,
-   `isdesturl`. Unit tests including the positional-mapping test (§6).
-3. **SMS webhook receiver** + status mapping + token header; register the URL on Sigmo.
-4. **First live SMS** to an internal number under TEST MODE, on the existing `LGNDRC` template.
+   `template_type`, the route cross-check (§6a), `isdesturl`. Unit tests including the
+   positional-mapping test (§6) and the route↔template_type mismatch hard-error.
+3. **SMS webhook receiver** + status mapping + token header + **DND→suppression (F5)**; register
+   the URL on Sigmo.
+   ⚠️ **F14 — webhook registration takes up to 10 minutes to propagate.** Verify it is live before
+   step 4, or the first send will produce no status and read as a broken receiver.
+4. **First live SMS** to an internal number under TEST MODE, on an `implicit` template.
+   ⚠️ **F13 — TEST MODE matches the `to` string and does NOT strip `+`** (`compactAddr` removes
+   spaces/parens/hyphens/dots only). An allowlist holding bare `9999999999` will not match a sent
+   `+919999999999`; it fails **closed**, so this is a blocked test rather than a leak — but add the
+   internal numbers in full E.164 or the first SMS test will silently refuse to send.
 5. **UI sweep** (§11) for `sms`.
 6. **`adapters/rcs.js`** — `with_fallback`, fallback-by-reference resolution, D7 route pinning.
 7. **RCS webhook receiver** — incl. the `nonrcs`/Fallback channel flip (D1) and `Click`.
@@ -281,8 +421,17 @@ SMS.
 ## 13. Open items and risks
 
 **External, not code:**
-- Only **one** DLT template exists. Every SMS content variant needs its own DLT registration, so
-  SMS journey scope is bounded by the template registry, not by this build.
+- **20 DLT templates are live**, covering Order Shipped/Delivered/Cancellation, COD + Prepaid
+  confirmation, ABC 1/2 and the KwikPass browse set — good coverage of Relay's existing journeys.
+  Any *new* SMS content variant still needs its own DLT registration.
+- 🔴 **Re-register the mis-classified templates.** `Order Shipped` (`plsFsHlz6`) and one twin each
+  of Order Cancellation / Prepaid Order Confirmation are `explicit`, so they will not reach
+  DND-registered numbers. Confirm with TrustSignal and re-register as `implicit`, or bind the
+  `implicit` twin. **This is the single highest-value external action** — it is the difference
+  between shipping notifications reaching everyone and silently skipping DND customers.
+- **Prune the duplicate templates** once the correct twin of each pair is chosen, so a future
+  name-based lookup cannot pick wrong. (Binding is by id per F2, but removing the ambiguity is
+  cheaper than relying on discipline forever.)
 - RCS has **zero** templates. Step 9 cannot be validated until at least one is approved.
 - Credits ~₹9.85 — top up before anything beyond internal tests.
 - Confirm with TrustSignal: the `vi` provider's actual cross-carrier reach, and what a
