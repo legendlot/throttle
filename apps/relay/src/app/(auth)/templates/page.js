@@ -84,8 +84,123 @@ function emptyTemplate() {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
     wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', header_format: '', header_media_url: '', body: '', footer: '', buttons: [], mapping: [] },
+    sms: { body: '', var_order: [], template_type: '', dlt_template_id: '', dlt_var_count: null, header: '' },
     approval_status: null, provider_template_id: null, utm: null,
   };
+}
+
+// ── SMS editor ───────────────────────────────────────────────────────────────
+// SMS is neither email nor WhatsApp. TrustSignal sends a DLT template id plus POSITIONAL
+// pr1..pr5 params, and the carrier matches the delivered text against the DLT registration —
+// so the two things that actually break an SMS are (a) editing the registered copy and (b)
+// getting var_order's ORDER wrong, which produces a grammatical message carrying the wrong
+// words with nothing erroring anywhere. This editor is built around making both visible.
+function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
+  const s = sms || {};
+  const up = (k, v) => setSms({ ...s, [k]: v });
+  const order = Array.isArray(s.var_order) ? s.var_order : [];
+  const body = s.body || '';
+
+  const declared = (variables || []).map((v) => (v.token || '').trim()).filter(Boolean);
+  const stillRaw = /\{#var#\}/.test(body);
+  const bodyTokens = [...new Set((body.match(/\{([a-zA-Z0-9_]+)\}/g) || []).map((x) => x.slice(1, -1)))];
+  const arityKnown = typeof s.dlt_var_count === 'number';
+  const arityBad = arityKnown && order.length !== s.dlt_var_count;
+  const tooMany = order.length > 5;
+  const undeclared = order.filter((tok) => !declared.includes(tok));
+  const notInBody = order.filter((tok) => !bodyTokens.includes(tok));
+
+  const problems = [];
+  if (stillRaw) problems.push('Body still contains {#var#} — replace each with a named {token}, left to right.');
+  if (tooMany) problems.push(`${order.length} variables — pr1..pr5 is a hard vendor ceiling.`);
+  if (arityBad) problems.push(`Variable order has ${order.length} entries but the DLT template registers ${s.dlt_var_count} placeholder${s.dlt_var_count === 1 ? '' : 's'}.`);
+  if (undeclared.length) problems.push(`Not declared in Variables below: ${undeclared.join(', ')}`);
+  if (notInBody.length) problems.push(`In the order but not used in the body: ${notInBody.join(', ')}`);
+
+  return (
+    <Panel title="Content · SMS" pad>
+      <div className="dim" style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+        The body must stay word-for-word what is registered on DLT — the carrier matches delivered
+        text against the registration, so rewording it gets the message rejected. Only the
+        placeholders change: replace each <code>{'{#var#}'}</code> with a named <code>{'{token}'}</code>.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 14 }}>
+        <div className="ff">
+          <div className="kv-k">DLT template id</div>
+          <input className="f-inp" value={s.dlt_template_id || ''} disabled={disabled}
+            onChange={(e) => up('dlt_template_id', e.target.value)} placeholder="1707176130196189451" />
+        </div>
+        <div className="ff">
+          <div className="kv-k">Consent type</div>
+          <select className="f-inp" value={s.template_type || ''} disabled={disabled}
+            onChange={(e) => up('template_type', e.target.value)}>
+            <option value="">— not set —</option>
+            <option value="implicit">implicit (service · utility/transactional)</option>
+            <option value="explicit">explicit (promotional · marketing)</option>
+          </select>
+        </div>
+        <div className="ff">
+          <div className="kv-k">Sender header</div>
+          <input className="f-inp" value={s.header || ''} disabled={disabled}
+            onChange={(e) => up('header', e.target.value)} placeholder="LGNDRC" />
+        </div>
+        <div className="ff">
+          <div className="kv-k">DLT placeholders</div>
+          <input className="f-inp" value={arityKnown ? String(s.dlt_var_count) : '—'} disabled readOnly />
+        </div>
+      </div>
+      <div className="dim" style={{ fontSize: 11, marginTop: -6, marginBottom: 14 }}>
+        Consent type mirrors the DLT registration — it is <strong>not</strong> verified against it.
+        The carrier enforces on DLT, so a wrong value here looks correct and still skips
+        DND-registered customers.
+        {providerTemplateId ? <> Vendor template <code>{providerTemplateId}</code>.</> : null}
+      </div>
+
+      <div className="ff" style={{ marginBottom: 14 }}>
+        <div className="kv-k">Message body</div>
+        <textarea className="f-inp" rows={4} value={body} disabled={disabled}
+          onChange={(e) => up('body', e.target.value)}
+          placeholder="Hi {first_name}! Your order {order_number} is confirmed." />
+        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>{body.length} characters</div>
+      </div>
+
+      <div className="ff" style={{ marginBottom: 10 }}>
+        <div className="kv-k">Variable order (positional)</div>
+        <input className="f-inp" value={order.join(', ')} disabled={disabled}
+          onChange={(e) => up('var_order', e.target.value.split(',').map((x) => x.trim()).filter(Boolean))}
+          placeholder="first_name, order_number" />
+        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+          Comma-separated, in the order the placeholders appear in the registered text. This is the
+          mapping onto pr1..prN and it is not alphabetical.
+        </div>
+      </div>
+
+      {order.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {order.map((tok, i) => (
+            <span key={`${tok}-${i}`} className="chip" style={{ opacity: declared.includes(tok) ? 1 : 0.55 }}>
+              pr{i + 1} → {`{${tok}}`}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {problems.length > 0 ? (
+        <div style={{ fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8,
+                      border: '1px solid rgba(220,140,40,.45)', background: 'rgba(220,140,40,.08)' }}>
+          <strong>Not ready to send</strong>
+          <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+            {problems.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      ) : (
+        <div className="dim" style={{ fontSize: 12 }}>
+          Binding looks consistent. This checks our own wiring only — it is not DLT compliance.
+        </div>
+      )}
+    </Panel>
+  );
 }
 
 export default function TemplatesPage() {
@@ -212,6 +327,20 @@ export default function TemplatesPage() {
         body: c.body || '', footer: c.footer || '',
         buttons: Array.isArray(c.buttons) ? c.buttons : [],
         mapping: Array.isArray(c.mapping) ? c.mapping : [],
+      },
+      // SMS. `body` holds the DLT-registered copy with each positional {#var#} replaced by a
+      // named {token}; `var_order` is what maps those names onto pr1..prN and its ORDER is
+      // load-bearing. `dlt_var_count` is the placeholder count recorded from the registration
+      // by the catalog pull, and is what makes an arity mistake checkable rather than a matter
+      // of care. Kept in its own sub-object so buildPayload can rebuild content without the
+      // email branch clobbering it.
+      sms: {
+        body: c.body || '',
+        var_order: Array.isArray(c.var_order) ? c.var_order : [],
+        template_type: c.template_type || '',
+        dlt_template_id: c.dlt_template_id || '',
+        dlt_var_count: typeof c.dlt_var_count === 'number' ? c.dlt_var_count : null,
+        header: c.header || '',
       },
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
@@ -364,6 +493,23 @@ export default function TemplatesPage() {
       // omitted key would be merge-preserved back to the stale handle), so forward it ONLY when
       // WaEditor actually touched it this session — never a fabricated non-empty value.
       if ('header_handle' in w) content.header_handle = w.header_handle || '';
+    } else if (t.channel === 'sms') {
+      // Shape consumed by render.js renderSms + adapters/sms.js. Explicit rather than relying
+      // on the worker's carry-over merge: that guard exists to survive an editor that does NOT
+      // know these keys, and this branch is the editor learning them. Sending them explicitly
+      // also means a real clear (emptying var_order) reaches the server instead of being
+      // merge-restored to the old value.
+      const s = t.sms || {};
+      content = {
+        body: s.body || '',
+        var_order: (s.var_order || []).map((x) => String(x).trim()).filter(Boolean),
+        template_type: s.template_type || '',
+        dlt_template_id: s.dlt_template_id || '',
+        header: s.header || '',
+      };
+      if (typeof s.dlt_var_count === 'number') content.dlt_var_count = s.dlt_var_count;
+      // Once a body has real {token}s and an order, it is no longer the raw catalogue mirror.
+      content.needs_variable_authoring = /\{#var#\}/.test(content.body) || content.var_order.length === 0;
     } else if (edRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
@@ -403,6 +549,23 @@ export default function TemplatesPage() {
       if (String(hc.header_format || '').toUpperCase() === 'IMAGE' && !hc.header_media_url) {
         showToast('Upload the header image before saving (or switch the header type away from Image).', 'error');
         return;
+      }
+    }
+    // SMS: same narrow, save-time-only shape as the WA header guard above — block the states
+    // that would reach a customer broken, and only once the author has marked the template
+    // ACTIVE. A draft stays freely savable mid-authoring, which is the whole point of drafts.
+    // renderSms enforces these again at send time; this exists so the failure surfaces here
+    // rather than in a send log.
+    if (t.channel === 'sms' && t.status === 'active') {
+      const c = payload.content;
+      const n = (c.var_order || []).length;
+      if (/\{#var#\}/.test(c.body || '')) {
+        showToast('Body still contains {#var#} — replace each with a named {token} before activating.', 'error'); return;
+      }
+      if (!c.template_type) { showToast('Set the consent type before activating.', 'error'); return; }
+      if (n > 5) { showToast(`${n} variables — pr1..pr5 is a hard vendor ceiling.`, 'error'); return; }
+      if (typeof c.dlt_var_count === 'number' && n !== c.dlt_var_count) {
+        showToast(`Variable order has ${n} entries but the DLT template registers ${c.dlt_var_count}.`, 'error'); return;
       }
     }
     if (t.channel === 'email') {
@@ -457,7 +620,12 @@ export default function TemplatesPage() {
         // it a marketing template can't route out the marketing number. Gates stay bypassed
         // via isTest server-side.
         purpose: t.purpose,
-        template: { content: payload.content, variables: payload.variables },
+        // provider_template_id rides along because send.js resolves `opts.template ||
+        // getTemplate(opts.templateId)` — the inline draft WINS, so a templateId here would be
+        // ignored. SMS needs it: adapters/sms.js sends it as TrustSignal's `template_id`, and
+        // without it the vendor gets `undefined` and the send is rejected. Harmless on the
+        // other channels, which never read it.
+        template: { content: payload.content, variables: payload.variables, provider_template_id: t.provider_template_id || null },
         constants: vals, recipient: vals,
       }, session);
       const res = r?.data || {};
@@ -725,6 +893,9 @@ export default function TemplatesPage() {
         {t.channel === 'whatsapp' ? (
           <WaEditor wa={t.wa} setWa={(w) => { set('wa', w); setWaDirty(true); }} variables={t.variables} disabled={saving || !canEdit}
           locked={!!t.provider_template_id} session={session} wabas={wabas} />
+        ) : t.channel === 'sms' ? (
+          <SmsEditor sms={t.sms} setSms={(s) => set('sms', s)} variables={t.variables}
+            disabled={saving || !canEdit} providerTemplateId={t.provider_template_id} />
         ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
