@@ -1346,11 +1346,24 @@ async function runScheduled(env) {
       const cutoff = new Date(Date.now() - ms).toISOString();
       const er = await A.sbComms(
         `/rest/v1/enrolments?journey_id=eq.${A.enc(j.id)}&status=eq.active&enrolled_at=lt.${A.enc(cutoff)}&select=id&limit=200`, env);
-      for (const e of ((er.ok && er.data) || [])) {
+      const rows = (er.ok && er.data) || [];
+      for (const e of rows) {
         try {
           const inst = await env.JOURNEY_WORKFLOW.get(String(e.id));
           await inst.sendEvent({ type: 'signal', payload: { kind: 'exit', outcome: 'expired', event: '__max_duration' } });
-        } catch (_) { /* not parked / already gone */ }
+        } catch (_) { /* not parked / already gone — the PATCH below is the backstop */ }
+      }
+      // BACKSTOP (2026-08-03). Signalling alone LEAKS: if the Workflow instance is gone —
+      // died, never started, or was torn down — `get`/`sendEvent` throws, the catch swallows
+      // it, and the row stays `active` FOREVER. This sweep then re-finds it every 5 minutes
+      // and re-fails on it, so the leak is permanent and silent. Found live: one enrolment
+      // active 7.8 days on a journey whose max_duration is 3 days, `current_step` null, on a
+      // journey since taken to draft — nothing would ever have cleared it.
+      // Safe to write unconditionally: 'expired' is exactly the outcome the signal itself
+      // resolves to, so a parked instance that ends a moment later writes the same value.
+      if (rows.length) {
+        await A.sbComms(`/rest/v1/enrolments?id=in.(${rows.map((r) => r.id).join(',')})`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'expired', ended_at: new Date().toISOString() }) });
       }
     }
   } catch (e) { console.log('j1_maxduration_sweep_error', e?.message || String(e)); }
