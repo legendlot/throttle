@@ -7,6 +7,7 @@ const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms } = require('./webhooks.js');
 const TSC = require('./trustsignal-client.js');
+const SMSTPL = require('./sms-templates.js');
 const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
 const WATPL = require('./wa-templates.js');
 const SEG = require('./segment-entry.js');
@@ -1622,6 +1623,19 @@ export default {
     if (url.pathname === '/webhook/cashfree' && request.method === 'POST') {
       const r = await CFWH.handleCashfreeWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Internal TrustSignal SMS template catalog pull (read-only GET) — same token gate and
+    // same read-only posture as the WA pull below. Exists so Relay template rows can carry the
+    // EXACT DLT-registered body text: the carrier matches delivered content against the
+    // registration, so body copy we invented would be rejected. No writes to TrustSignal.
+    if (url.pathname === '/internal/sms-templates' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const r = await SMSTPL.tsListTemplates(env, b);
+      return r.ok ? ok(r) : err(r.error, 400);
     }
     // Internal WA template catalog pull (read-only Graph GET) — token-gated by WA_SYNC_TOKEN
     // (set transiently for a sync, deleted after → route inert). No sends, no customer data.
