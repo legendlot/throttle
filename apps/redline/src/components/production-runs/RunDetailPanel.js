@@ -160,7 +160,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const issueNo = runData.issue_no || null;
   const receipt = receipts.find((r) => r.run_id === run.id) || null;
 
-  const showCancel = ['Draft', 'Submitted'].includes(run.status);
+  // Picking is included deliberately: the store starting a pick moves no stock, so a run
+  // that production no longer wants had no way to be cancelled once picking began. The
+  // worker still refuses if anything has actually been issued.
+  const showCancel = ['Draft', 'Submitted', 'Picking'].includes(run.status);
   const showConfirmReceipt = run.status === 'Issued' && !receipt;
   const showReappeal = receipt && receipt.status === 'Contested';
   // L57 — re-home the admin Force-Resolve escape hatch (was unsurfaced after the old Garage
@@ -230,8 +233,14 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   async function handleCancel() {
     setCancelling(true);
     try {
-      await workerFetch('cancelProductionRun', { data: { run_no: run.run_no } }, session);
-      showToast(`Run ${run.run_no} cancelled`, 'success');
+      const res = await workerFetch('cancelProductionRun', { data: { run_no: run.run_no } }, session);
+      const picked = res?.data?.abandoned_pick;
+      showToast(
+        picked?.qty_picked
+          ? `Run ${run.run_no} cancelled — ${picked.qty_picked.toLocaleString('en-IN')} parts across ${picked.lines_picked} lines were already picked, put them back on the shelf`
+          : `Run ${run.run_no} cancelled`,
+        'success',
+      );
       setCancelOpen(false);
       onRunChange(run.run_no);
     } catch (e) {
@@ -585,7 +594,11 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
         open={cancelOpen}
         onClose={() => !cancelling && setCancelOpen(false)}
         title={`Cancel ${run.run_no}`}
-        message={`Cancel run ${run.run_no}? This cannot be undone.`}
+        message={
+          run.status === 'Picking'
+            ? `Cancel run ${run.run_no}? This cannot be undone. The store has already started picking for this run — no stock has moved, but any parts already taken off the shelf must be put back.`
+            : `Cancel run ${run.run_no}? This cannot be undone.`
+        }
         confirmLabel={cancelling ? 'CANCELLING…' : 'Cancel Run'}
         confirmColor="red"
         onConfirm={handleCancel}
