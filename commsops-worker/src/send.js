@@ -2,13 +2,14 @@
 // Idempotent via dedup_key. On gate-fail writes a skipped/suppressed messages row
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
-const { renderEmail, renderWhatsapp } = require('./render.js');
+const { renderEmail, renderWhatsapp, renderSms } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
 const whatsappAdapter = require('./adapters/whatsapp.js');
+const smsAdapter = require('./adapters/sms.js');
 
-const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter };
+const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter, sms: smsAdapter };
 
 // Is the WA customer-service window open for this recipient ON THIS SENDING NUMBER?
 // (review H5 part 3) — Meta's 24h window is per (business number ↔ customer): a window opened
@@ -316,6 +317,20 @@ async function send(env, opts) {
         window_open: windowOpen,
       };
       waMeta = { mode: body.mode, window_open: windowOpen, hasTemplate: isTemplate };
+    } else if (channel === 'sms') {
+      // SMS is its own branch, NOT the email fallthrough. The vendor takes a DLT template id +
+      // positional pr1..pr5, so the adapter needs {sender, purpose, provider_template_id,
+      // template_type, var_order, vars, body} — none of which renderEmail produces.
+      //
+      // ⚠️ NO UTM TAGGING HERE, deliberately. `isdesturl` rewrites urls in the outgoing body, and
+      // DLT matches delivered content against the registered template — appending utm_* to a url
+      // inside a {#var#} changes the value the carrier sees. Attribution for SMS waits for the
+      // Phase-B `/r/<code>` redirect, exactly as WA url-buttons do (see the WA button note above).
+      const body = renderSms(template, {
+        profile, event: opts.eventContext, constants: opts.constants,
+        recipient: opts.recipient, system: {},
+      });
+      rendered = { ...body, to, sender: sender.address, purpose };
     } else {
       const sys = {};
       if (purpose === 'marketing') {
@@ -374,6 +389,20 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
     to_address: opts.to || null,
     sent_at: sent && res.status === 'sent' ? nowIso() : null,
   };
+  // SMS parks the vendor's charge in `pricing`, NOT in `cost`.
+  // `comms.messages.cost` is a billable-MESSAGE COUNT — ₹ is derived at read time via
+  // comms.message_cost_inr() × channel_rate_card. TrustSignal's `sms_cost` is a CREDIT figure
+  // (fractional values occur), so writing it to `cost` would feed a different unit into that
+  // multiplication and produce plausible-but-wrong ₹ on /analytics. Reconcile the credit against
+  // /v1/sms/stats before it is trusted in reporting (spec F11); until then it is recorded, not used.
+  //
+  // ⚠️ Scoped to SMS on purpose. For WhatsApp, `pricing` is Meta's authoritative per-message
+  // verdict written by wa-webhooks.js (with pricing_category + billable), so a generic send-time
+  // write here would clobber the one trustworthy billing signal the moment a WA adapter started
+  // returning a cost. Any new channel must make the same call deliberately.
+  if (channel === 'sms' && res.cost != null && Number.isFinite(Number(res.cost))) {
+    row.pricing = { provider_credit: Number(res.cost), provider: sender?.provider || null };
+  }
   let msg;
   if (opts._reservedId) {
     const r = await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(opts._reservedId)}`, env,

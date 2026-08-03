@@ -185,4 +185,39 @@ function renderWhatsapp(template, ctx) {
   return { mode: 'text', text: body };
 }
 
-module.exports = { renderEmail, renderWhatsapp, resolveVar, applyTokens, resolveDeclared };
+// renderSms(template, ctx) → the object adapters/sms.js consumes.
+// SMS is neither email nor WhatsApp: the vendor takes a DLT template id plus POSITIONAL
+// pr1..pr5 params, so this returns the resolved values as a NAMED map plus the template's
+// `var_order`, and lets the adapter own the positional binding (one place, unit-tested there).
+// `body` is still rendered in full because /v1/sms wants the message text alongside the id.
+const URL_RE = /https?:\/\//i;
+function renderSms(template, ctx) {
+  const content = template.content || {};
+  const order = Array.isArray(content.var_order) ? content.var_order : [];
+  // F9 — the pr1..pr5 ceiling is checked HERE as well as in the adapter. The spec asks for it at
+  // bind time so it fails in authoring rather than in front of a customer; render is the earliest
+  // point this code path sees the template.
+  if (order.length > 5) throw new Error(`too_many_variables:${order.length}`);
+
+  const staticBody = content.body || content.text_body || content.text || '';
+  if (!staticBody) throw new Error('empty_sms_body');
+  // F6 — `isdesturl` rewrites urls in the outgoing body, and DLT matches delivered content
+  // against the registered template, so a url baked into approved content stops matching once
+  // shortened and the carrier rejects it. A url must always sit inside a {#var#} variable.
+  // Checked against the STATIC body (pre-token), so a url arriving via a variable is fine.
+  if (URL_RE.test(staticBody)) throw new Error('static_url_in_template');
+
+  const values = resolveDeclared(template, ctx);
+  const body = applyTokens(staticBody, values);
+  return {
+    provider_template_id: template.provider_template_id || null,
+    template_type: content.template_type || '',
+    dlt_template_id: content.dlt_template_id || null,
+    var_order: order,
+    vars: values,
+    body,
+    has_link: URL_RE.test(body),
+  };
+}
+
+module.exports = { renderEmail, renderWhatsapp, renderSms, resolveVar, applyTokens, resolveDeclared };
