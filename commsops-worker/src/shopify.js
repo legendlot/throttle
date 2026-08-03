@@ -63,6 +63,23 @@ function normalizePhone(raw) {
 const MKT = { SUBSCRIBED: 'opted_in', UNSUBSCRIBED: 'opted_out' };
 const mktState = (s) => MKT[String(s || '').toUpperCase()] || 'unknown';
 
+// Did Shopify actually tell us anything? This is a THREE-way distinction the mapper used to
+// collapse into two, and the collapse is what hid a broken feed for months:
+//   · a recognised state (SUBSCRIBED / UNSUBSCRIBED)      → opted_in / opted_out
+//   · a real but unmapped state (NOT_SUBSCRIBED, PENDING,
+//     REDACTED, INVALID)                                  → `unknown`, which is INFORMATION:
+//     we asked and they are not subscribed
+//   · the field absent from the payload entirely          → NO consent row at all
+// The third case used to write `unknown` too, which fabricates a consent record out of no
+// data. Measured 2026-08-03: the `customers/*` webhook path had produced 39,467 marketing
+// consent rows and **100.0% were `unknown` — zero opted_in, zero opted_out, ever** — while the
+// GraphQL import path, which requests the field explicitly, runs at 4.8% (email) / 10.7% (wa)
+// unknown with real states on both sides. With ~94% of import-path customers opted_in, zero
+// knowns across 19,485 webhook draws is not a customer-behaviour result; the field is not
+// being delivered. Suspect Shopify **Protected Customer Data** approval on the app — that is
+// an admin-side grant, so the code cannot fix the cause, only stop inventing data from it.
+const hasMktField = (v) => v !== undefined && v !== null && v !== '';
+
 function mapCustomer(n) {
   const idents = [];
   if (n.email) idents.push({ type: 'email', value: String(n.email).toLowerCase().trim(), is_verified: true });
@@ -83,16 +100,25 @@ function mapCustomer(n) {
   if (full) attrs.full_name = full;
   if (Array.isArray(n.tags) && n.tags.length) attrs.tags = n.tags;
 
+  // NB the import path keeps writing `unknown` for an unmapped state — deliberately UNCHANGED.
+  // Here the field is genuinely delivered (the GraphQL query asks for it explicitly), so an
+  // `unknown` means "Shopify says NOT_SUBSCRIBED/PENDING/…", which is real information and
+  // belongs in the record. Only the webhook path suppresses the absent-field case. Evidence is
+  // added on both so the raw state stops being unrecoverable.
   const consent = [];
   if (n.email) {
-    consent.push({ channel: 'email', purpose: 'marketing', state: mktState(n.emailMarketingConsent?.marketingState),
-      source: 'shopify_import', captured_at: n.emailMarketingConsent?.consentUpdatedAt || null });
+    const es = n.emailMarketingConsent?.marketingState;
+    consent.push({ channel: 'email', purpose: 'marketing', state: mktState(es),
+      source: 'shopify_import', captured_at: n.emailMarketingConsent?.consentUpdatedAt || null,
+      ...(hasMktField(es) ? { evidence: { shopify_state: String(es) } } : {}) });
     consent.push({ channel: 'email', purpose: 'transactional', state: 'opted_in',
       source: 'shopify_import', captured_at: n.createdAt || null });
   }
   if (phone) {  // store SMS/WA marketing consent now for the future WhatsApp cutover
-    consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(n.smsMarketingConsent?.marketingState),
-      source: 'shopify_import', captured_at: n.smsMarketingConsent?.consentUpdatedAt || null });
+    const ss = n.smsMarketingConsent?.marketingState;
+    consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(ss),
+      source: 'shopify_import', captured_at: n.smsMarketingConsent?.consentUpdatedAt || null,
+      ...(hasMktField(ss) ? { evidence: { shopify_state: String(ss) } } : {}) });
   }
 
   return { identifiers: idents, display_name: first || full || null,
@@ -130,14 +156,25 @@ function mapCustomerRest(c) {
 
   const consent = [];
   if (c.email) {
-    consent.push({ channel: 'email', purpose: 'marketing', state: mktState(c.email_marketing_consent?.state),
-      source: 'shopify_webhook', captured_at: c.email_marketing_consent?.consent_updated_at || null });
+    // Only record a marketing state when Shopify actually sent one — see hasMktField.
+    const es = c.email_marketing_consent?.state;
+    if (hasMktField(es)) {
+      consent.push({ channel: 'email', purpose: 'marketing', state: mktState(es),
+        source: 'shopify_webhook', captured_at: c.email_marketing_consent?.consent_updated_at || null,
+        evidence: { shopify_state: String(es) } });
+    }
+    // Transactional is OUR standing basis for order mail, not a Shopify-reported state — it is
+    // deliberately unconditional and unaffected by the guard above.
     consent.push({ channel: 'email', purpose: 'transactional', state: 'opted_in',
       source: 'shopify_webhook', captured_at: c.created_at || null });
   }
   if (phone) {
-    consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(c.sms_marketing_consent?.state),
-      source: 'shopify_webhook', captured_at: c.sms_marketing_consent?.consent_updated_at || null });
+    const ss = c.sms_marketing_consent?.state;
+    if (hasMktField(ss)) {
+      consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(ss),
+        source: 'shopify_webhook', captured_at: c.sms_marketing_consent?.consent_updated_at || null,
+        evidence: { shopify_state: String(ss) } });
+    }
   }
   return { identifiers: idents, display_name: first || full || null,
     city: c.default_address?.city || null, locale: null, attributes: attrs, consent };
