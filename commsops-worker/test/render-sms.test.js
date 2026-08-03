@@ -86,5 +86,50 @@ t('an empty body is refused rather than sending a blank SMS', () => {
   assert.throws(() => renderSms(empty, {}), /empty_sms_body/);
 });
 
+// ── guards for catalogue-seeded, not-yet-authored templates ──
+// The catalog pull mirrors the 20 DLT templates into comms.templates with their REGISTERED
+// body, which still carries positional {#var#} markers. send.js fetches a template by id with
+// NO status gate, so "draft" does not stop a send — these two guards are what actually make an
+// unauthored template fail closed instead of shipping {#var#} to a customer.
+
+t('a body still holding {#var#} after rendering is REFUSED', () => {
+  const seeded = {
+    provider_template_id: 'plsFsHlz6',
+    content: { template_type: 'explicit', body: 'Hi {#var#}, your order {#var#} shipped.', var_order: [] },
+    variables: [],
+  };
+  assert.throws(() => renderSms(seeded, {}), /unfilled_dlt_placeholders/);
+});
+
+t('var_order arity must match the registered DLT placeholder count', () => {
+  // Positional binding means a count mismatch silently shifts every value by one — the exact
+  // "grammatical message with the wrong words in it" failure. dlt_var_count is recorded by the
+  // catalog pull, so the mismatch is checkable rather than a matter of care.
+  const tpl = {
+    provider_template_id: 'x',
+    content: { template_type: 'implicit', body: 'Hi {a}, order {b} ok', var_order: ['a'], dlt_var_count: 2 },
+    variables: [{ token: 'a', source: 'constant', value: 'A' }, { token: 'b', source: 'constant', value: 'B' }],
+  };
+  assert.throws(() => renderSms(tpl, {}), /var_order_arity_mismatch/);
+});
+
+t('matching arity passes', () => {
+  const tpl = {
+    provider_template_id: 'x',
+    content: { template_type: 'implicit', body: 'Hi {a}, order {b} ok', var_order: ['a', 'b'], dlt_var_count: 2 },
+    variables: [{ token: 'a', source: 'constant', value: 'A' }, { token: 'b', source: 'constant', value: 'B' }],
+  };
+  assert.strictEqual(renderSms(tpl, {}).body, 'Hi A, order B ok');
+});
+
+t('dlt_var_count absent → arity check is skipped, not assumed zero', () => {
+  const tpl = {
+    provider_template_id: 'x',
+    content: { template_type: 'implicit', body: 'Hi {a}', var_order: ['a'] },
+    variables: [{ token: 'a', source: 'constant', value: 'A' }],
+  };
+  assert.doesNotThrow(() => renderSms(tpl, {}));
+});
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

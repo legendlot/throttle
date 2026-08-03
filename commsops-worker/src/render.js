@@ -207,8 +207,22 @@ function renderSms(template, ctx) {
   // Checked against the STATIC body (pre-token), so a url arriving via a variable is fine.
   if (URL_RE.test(staticBody)) throw new Error('static_url_in_template');
 
+  // Positional binding means an arity mismatch shifts every value by one — a grammatical message
+  // carrying the wrong words, with nothing erroring. `dlt_var_count` is recorded by the catalog
+  // pull from the REGISTERED content, so this is checkable rather than a matter of care.
+  // Absent (hand-authored rows) → skipped, never assumed to be zero.
+  if (typeof content.dlt_var_count === 'number' && order.length !== content.dlt_var_count)
+    throw new Error(`var_order_arity_mismatch:want=${content.dlt_var_count},got=${order.length}`);
+
   const values = resolveDeclared(template, ctx);
   const body = applyTokens(staticBody, values);
+
+  // A catalogue-seeded row carries the DLT body verbatim, still holding positional {#var#}
+  // markers, and send.js fetches templates with NO status gate — so `draft` does not stop a
+  // send. This is what actually makes an un-authored template fail closed instead of shipping
+  // "{#var#}" to a customer.
+  if (/\{#var#\}/.test(body)) throw new Error('unfilled_dlt_placeholders');
+
   return {
     provider_template_id: template.provider_template_id || null,
     template_type: content.template_type || '',
