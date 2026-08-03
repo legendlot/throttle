@@ -49,4 +49,49 @@ function normalizeError(body) {
   return { code: null, codeMsg: null, message: msg };
 }
 
-module.exports = { renderPhoneForSms, redact, normalizeError };
+// ── Hosts ────────────────────────────────────────────────────────────────────
+// One host per service, and the path prefixes DISAGREE (sms `/v1`, rcs `/api/v1`).
+// Hard-code per call site; never derive a path from a base.
+const HOSTS = {
+  auth: 'https://auth.trustsignal.io',
+  sms:  'https://sms.trustsignal.io',
+  rcs:  'https://rcsapi.trustsignal.io',
+};
+
+// tsFetch(env, service, path, {method, body}) → {ok, status, data, error}
+// `error` is a normalized {code, codeMsg, message} on any non-2xx OR success:false body —
+// the vendor returns HTTP 400 for conditions that are logically 404 (codes 109/114), so
+// NEVER branch on HTTP status alone.
+async function tsFetch(env, service, path, opts = {}) {
+  const base = HOSTS[service];
+  if (!base) throw new Error(`unknown_trustsignal_service:${service}`);
+  const key = env.TRUSTSIGNAL_API_KEY;
+  if (!key) return { ok: false, status: 0, data: null, error: { code: null, codeMsg: 'API_KEY_MISSING', message: 'TRUSTSIGNAL_API_KEY not set' } };
+
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${base}${path}${sep}api_key=${encodeURIComponent(key)}`;
+
+  let res, data;
+  try {
+    res = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      ...(opts.body ? { body: JSON.stringify(opts.body) } : {}),
+    });
+    const text = await res.text();
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  } catch (e) {
+    // A network failure must be a RESULT, not a throw — a throw escapes the send path and
+    // leaves no messages row (the same failure mode adapters/email.js guards against).
+    return { ok: false, status: 0, data: null,
+             error: { code: null, codeMsg: 'NETWORK', message: redact(String(e?.message || e)).slice(0, 140) } };
+  }
+
+  const okBody = data && typeof data === 'object' ? data.success !== false : true;
+  if (!res.ok || !okBody) {
+    return { ok: false, status: res.status, data, error: normalizeError(data) };
+  }
+  return { ok: true, status: res.status, data, error: null };
+}
+
+module.exports = { renderPhoneForSms, redact, normalizeError, tsFetch, HOSTS };
