@@ -117,6 +117,41 @@ const RENDERED = {
     });
   });
 
+  const { parseStatusWebhook } = require('../src/adapters/sms.js');
+
+  t('a delivered DLR maps to delivered', () => {
+    const [e] = parseStatusWebhook({ transaction_id: 'TX1', status: 'delivered', dlrt: '2026-08-03T10:15:03Z' });
+    assert.strictEqual(e.provider_message_id, 'TX1');
+    assert.strictEqual(e.canonical_status, 'delivered');
+  });
+
+  t('a failed DLR maps to failed and carries the reason', () => {
+    const [e] = parseStatusWebhook({ transaction_id: 'TX2', status: 'failed', error: 'EXPIRED' });
+    assert.strictEqual(e.canonical_status, 'failed');
+    assert.ok(e.reason.includes('EXPIRED'));
+  });
+
+  t('a DND DLR is failed AND flags a suppression (F5)', () => {
+    const [e] = parseStatusWebhook({ transaction_id: 'TX3', status: 'dnd', to: '+919876543210' });
+    assert.strictEqual(e.canonical_status, 'failed');
+    assert.strictEqual(e.suppress, 'dnd');
+    assert.strictEqual(e.suppress_value, '+919876543210');
+  });
+
+  t('suppression is SMS-scoped — a DND says nothing about email or WhatsApp', () => {
+    const [e] = parseStatusWebhook({ transaction_id: 'TX3', status: 'dndcf', to: '+919876543210' });
+    assert.strictEqual(e.suppress_channel, 'sms');
+  });
+
+  t('an unknown status is returned as null rather than throwing', () => {
+    const [e] = parseStatusWebhook({ transaction_id: 'TX4', status: 'martian' });
+    assert.strictEqual(e.canonical_status, null);
+  });
+
+  t('a payload with no transaction_id yields no events', () => {
+    assert.strictEqual(parseStatusWebhook({ status: 'delivered' }).length, 0);
+  });
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);
 })();

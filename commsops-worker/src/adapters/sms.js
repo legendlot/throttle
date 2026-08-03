@@ -90,4 +90,47 @@ async function send(rendered, env) {
   };
 }
 
-module.exports = { buildSmsParams, routeForPurpose, assertBindable, send, PURPOSE_ROUTE, ROUTE_TYPE };
+// TrustSignal SMS DLR status → our canonical message status.
+// `success:true` on send means ACCEPTED; only the DLR moves a row to a terminal state.
+// ⚠️ The vendor collection publishes NO SMS delivery-callback payload (25+ exist for WhatsApp,
+// zero for SMS), so these field names are INFERRED from the stats vocabulary. That is why an
+// unrecognised status returns null instead of throwing, and why the DND suppression address is
+// taken from our own messages row rather than from `p.to` — see webhooks.js handleTrustsignalSms.
+const SMS_STATUS = {
+  delivered: 'delivered',
+  submitted: 'sent',
+  submit_queue: 'sent',
+  failed: 'failed',
+  expired: 'failed',
+  rejected: 'failed',
+  dnd: 'failed',
+  dndcf: 'failed',
+};
+// DND is the one failure that must also SUPPRESS. SMS has no inbound, so a customer cannot send
+// STOP to us — the carrier's DND registry is the only signal, and it arrives as a delivery
+// failure. Without suppressing we retry and re-pay indefinitely and the failure rate quietly
+// becomes the channel's baseline.
+// ⚠️ SMS-SCOPED ONLY. A DND registration is a carrier-SMS state and says nothing about the
+// customer's email or WhatsApp reachability — never suppress the profile globally.
+const DND_STATUSES = new Set(['dnd', 'dndcf']);
+
+function parseStatusWebhook(payload) {
+  const p = payload || {};
+  const id = p.transaction_id || null;
+  if (!id) return [];
+  const raw = String(p.status || '').toLowerCase();
+  const ev = {
+    provider_message_id: id,
+    canonical_status: SMS_STATUS[raw] || null,
+    at: p.dlrt || p.st || null,
+    reason: p.error || p.error_code ? `${p.error_code || ''}:${p.error || ''}`.replace(/^:|:$/g, '') : null,
+  };
+  if (DND_STATUSES.has(raw)) {
+    ev.suppress = 'dnd';
+    ev.suppress_channel = 'sms';
+    ev.suppress_value = p.to || null;
+  }
+  return [ev];
+}
+
+module.exports = { buildSmsParams, routeForPurpose, assertBindable, send, parseStatusWebhook, PURPOSE_ROUTE, ROUTE_TYPE };
