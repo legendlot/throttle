@@ -17,4 +17,36 @@ function renderPhoneForSms(e164) {
   return { ok: true, value: s.slice(3) };
 }
 
-module.exports = { renderPhoneForSms };
+// ── Credential redaction ─────────────────────────────────────────────────────
+// TrustSignal authenticates with ?api_key= in the URL, so the key reaches every log line,
+// span and exception that echoes a request. One console.error(url) leaks the account key
+// into Cloudflare logs. EVERY log/error path in this integration goes through redact().
+function redact(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/(api_key=)[^&\s'"]+/gi, '$1[redacted]');
+}
+
+// ── Error normalisation ──────────────────────────────────────────────────────
+// Three incompatible failure shapes ship in the vendor collection:
+//   A  { errors: [{ code, codeMsg, message }] }   most SMS/RCS/WhatsApp endpoints
+//   B  { message }                                 Otify verify, WA typing indicator
+//   C  { error }                                   WA Get Webhook
+// The published code catalogue is explicitly partial, so an unrecognised body must still
+// produce a usable message rather than throwing inside a send path.
+function normalizeError(body) {
+  const b = body || {};
+  const first = Array.isArray(b.errors) ? b.errors[0] : null;
+  if (first) {
+    return {
+      code: first.code != null ? String(first.code) : null,
+      codeMsg: first.codeMsg || null,
+      message: first.message || first.codeMsg || 'trustsignal_error',
+    };
+  }
+  const msg = (typeof b.message === 'string' && b.message)
+    || (typeof b.error === 'string' && b.error)
+    || 'trustsignal_error';
+  return { code: null, codeMsg: null, message: msg };
+}
+
+module.exports = { renderPhoneForSms, redact, normalizeError };
