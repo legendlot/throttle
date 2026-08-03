@@ -1196,7 +1196,10 @@ async function handlePost(body, auth, env) {
       // has promised all along (review H8). Drafting/pausing stays campaign_build.
       const gate = body.status === 'active' ? A.canActivate : A.canBuild;
       if (!gate(auth.permissions)) return err('forbidden', 403);
-      const r = await J.setJourneyStatus(env, body.id, body.status);
+      // stop_in_flight also ENDS enrolments already running (they otherwise keep sending —
+      // flipping status only closes the door). Same campaign_build gate: it can only ever
+      // stop customer messages, never cause one.
+      const r = await J.setJourneyStatus(env, body.id, body.status, { stopInFlight: body.stop_in_flight === true });
       return r.ok ? ok(r) : err(r.error, 400); }
 
     // ── M4: Shopify sync ── (PII bulk import — super-admin only)

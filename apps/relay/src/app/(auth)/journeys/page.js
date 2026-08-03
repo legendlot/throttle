@@ -189,11 +189,30 @@ export default function JourneysPage() {
         : `INTERNAL TEST GATE — sends off the allowlist are blocked.\n\n`) +
       `Turn ON "${r.name}"?\n\nIt will start enrolling customers on every ${triggerSummary(r.trigger, segments)} and sending messages.`
     )) return;
+    // Turning a journey OFF only stops NEW enrolments. Anyone already mid-journey keeps
+    // running on their own workflow instance and will still be messaged — which is how a real
+    // customer nearly got a send three minutes after a test journey was switched off (S230),
+    // recoverable then only via wrangler. Ask, because both answers are legitimate: draining
+    // is right for a copy tweak, stopping is right for pulling a journey.
+    let stopInFlight = false;
+    if (!next) {
+      stopInFlight = window.confirm(
+        `"${r.name}" will stop enrolling anyone new.\n\n`
+        + `Customers already part-way through it will otherwise CARRY ON and still receive their remaining messages.\n\n`
+        + `OK — stop them too (nobody else hears from this journey)\n`
+        + `Cancel — let them finish (only new entries stop)`);
+    }
     setTogglingId(r.id);
     setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: next ? 'active' : 'paused' } : x)));
     try {
-      await workerFetch('setJourneyStatus', { id: r.id, status: next ? 'active' : 'paused' }, session);
-      showToast(next ? `"${r.name}" is ON — now sending` : `"${r.name}" is OFF`, 'success');
+      const res = await workerFetch('setJourneyStatus',
+        { id: r.id, status: next ? 'active' : 'paused', ...(stopInFlight ? { stop_in_flight: true } : {}) }, session);
+      const n = Number(res?.in_flight_found || 0);
+      showToast(next
+        ? `"${r.name}" is ON — now sending`
+        : (stopInFlight
+            ? `"${r.name}" is OFF — ${n === 0 ? 'nobody was mid-journey' : `${n} mid-journey ${n === 1 ? 'customer' : 'customers'} stopped`}`
+            : `"${r.name}" is OFF — anyone mid-journey will finish`), 'success');
       refresh();
     } catch (e) {
       setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: r.status } : x)));
@@ -329,10 +348,23 @@ export default function JourneysPage() {
   async function setStatus(status) {
     if (!j.id) { showToast('Save the journey first', 'error'); return; }
     if (status === 'active' && !j.active_version) { showToast('Save a version before activating', 'error'); return; }
+    // Same ask as the list toggle — see the comment there. Flipping status only stops NEW
+    // enrolments; anyone already mid-journey keeps sending unless explicitly stopped.
+    let stopInFlight = false;
+    if (status !== 'active') {
+      stopInFlight = window.confirm(
+        `Customers already part-way through this journey will otherwise CARRY ON and still receive their remaining messages.\n\n`
+        + `OK — stop them too\n`
+        + `Cancel — let them finish (only new entries stop)`);
+    }
     setBusy(true);
     try {
-      await workerFetch('setJourneyStatus', { id: j.id, status }, session);
-      showToast(status === 'active' ? 'Journey activated' : `Journey ${status}`, 'success');
+      const res = await workerFetch('setJourneyStatus',
+        { id: j.id, status, ...(stopInFlight ? { stop_in_flight: true } : {}) }, session);
+      const n = Number(res?.in_flight_found || 0);
+      showToast(status === 'active'
+        ? 'Journey activated'
+        : `Journey ${status}${stopInFlight ? ` — ${n} mid-journey stopped` : ''}`, 'success');
       refresh();
     } catch (e) {
       if (String(e.message) === 'no_published_version') showToast("Can't activate — no published version yet", 'error');

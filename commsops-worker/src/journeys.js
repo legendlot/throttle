@@ -191,13 +191,53 @@ async function saveJourney(env, body, userId) {
 }
 
 // activate/pause/archive — flips journeys.status (trigger matching only fires on 'active').
-async function setJourneyStatus(env, id, status) {
+//
+// ⚠️ Flipping the status only closes the DOOR. Enrolments already in flight keep running on
+// their own Workflow instances and WILL still send. S230: a real customer enrolled during a
+// two-minute test window, and stopping them needed `wrangler workflows instances terminate`
+// plus manual row cleanup, three minutes before the send. `stopInFlight` is the supported way.
+//
+// Deliberately OPT-IN, and never applied when activating. Draining in-flight enrolments is the
+// right behaviour for a journey paused to tweak copy; stopping them is the right behaviour for
+// a journey being pulled. Only the operator knows which, so the UI asks rather than this
+// guessing — and the default stays exactly what it has always been.
+async function setJourneyStatus(env, id, status, opts = {}) {
   if (!['draft', 'active', 'paused', 'archived'].includes(status)) return { ok: false, error: 'bad_status' };
   const j = await getJourney(env, id);
   if (status === 'active' && !j?.active_version) return { ok: false, error: 'no_published_version' };
   await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(id)}`, env,
     { method: 'PATCH', body: JSON.stringify({ status, updated_at: nowIso() }) });
-  return { ok: true };
+
+  if (!opts.stopInFlight || status === 'active') return { ok: true };
+
+  let found = 0, signalled = 0;
+  // Paged, and bounded — a runaway loop here would hammer the Workflow binding.
+  for (let page = 0; page < 10; page++) {
+    const er = await A.sbComms(
+      `/rest/v1/enrolments?journey_id=eq.${A.enc(id)}&status=eq.active&select=id&limit=200`, env);
+    const rows = (er.ok && er.data) || [];
+    if (!rows.length) break;
+    found += rows.length;
+    for (const e of rows) {
+      try {
+        // The SAME signal the J1 max-duration sweep sends, so a parked instance ends through
+        // the ordinary #park -> #end path instead of being torn down underneath itself.
+        const inst = await env.JOURNEY_WORKFLOW.get(String(e.id));
+        await inst.sendEvent({ type: 'signal', payload: { kind: 'exit', outcome: 'journey_stopped', event: '__journey_stopped' } });
+        signalled++;
+      } catch (_) { /* not parked / already gone — the PATCH below is the backstop */ }
+    }
+    // Backstop, and the reason this is not signal-only: an instance that is mid-step is not
+    // parked, so it never receives the signal and its row would sit `active` forever — the
+    // journey would keep reading as live on /journeys and the next status flip would find the
+    // same rows again. `#end` is idempotent about a row that is already ended.
+    // NB the loop re-queries status=eq.active, so these rows drop out of the next page: this
+    // is a drain, not an offset walk (an offset would skip rows as the set shrinks).
+    await A.sbComms(`/rest/v1/enrolments?id=in.(${rows.map((r) => r.id).join(',')})`, env,
+      { method: 'PATCH', body: JSON.stringify({ status: 'journey_stopped', ended_at: nowIso() }) });
+    if (rows.length < 200) break;
+  }
+  return { ok: true, in_flight_found: found, signalled };
 }
 
 // enrol(env, {journeyId, profileId, eventId?}) — respects re-enrolment policy,
