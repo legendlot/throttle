@@ -2382,7 +2382,22 @@ function Bubble({ m, accent }) {
   const failed = m.status === 'failed';
   // Email HTML — render in a sandboxed iframe (no scripts / no same-origin) so
   // arbitrary customer markup can't run or escape. Wider bubble for readability.
-  const emailHtml = m.channel === 'email' && m.body_html ? m.body_html : null;
+  //
+  // The iframe's sandbox carries `allow-popups allow-popups-to-escape-sandbox`, and
+  // both flags are load-bearing. An EMPTY sandbox enables every restriction — popups
+  // and top-navigation included — so every anchor in every inbound email was silently
+  // inert: a click did nothing and raised no error (Maria 2026-08-01, on a customer's
+  // Gmail Drive video chip; 2,857 of 3,784 inbound emails carry a link, so this was
+  // never video-specific). `allow-popups-to-escape-sandbox` is required, not cosmetic:
+  // without it the opened tab INHERITS this sandbox and Drive — or any real site —
+  // renders blank, which reads as the very same bug. Scripts and same-origin stay OFF,
+  // so the markup still cannot run or open anything by itself; only a genuine agent
+  // click on a genuine anchor navigates.
+  //
+  // `<base target="_blank">` is prepended so a link with no target of its own opens
+  // a new tab instead of loading the site INSIDE the 560px bubble.
+  const emailHtml = m.channel === 'email' && m.body_html
+    ? `<base target="_blank">${m.body_html}` : null;
   // Email attachments (S201) — list every file as a download chip (multi-file safe).
   const emailAtts = m.channel === 'email' && Array.isArray(m.raw_meta?.attachments) ? m.raw_meta.attachments : null;
   return (
@@ -2442,7 +2457,7 @@ function Bubble({ m, accent }) {
           </a>
         ))}
         {emailHtml ? (
-          <iframe sandbox="" srcDoc={emailHtml} title="email body"
+          <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={emailHtml} title="email body"
             style={{ width: 'min(560px, 70vw)', minHeight: 90, maxHeight: 460, border: 'none',
               background: '#fff', borderRadius: 6, display: 'block' }} />
         ) : m.body && (
