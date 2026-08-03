@@ -195,6 +195,40 @@ at send time**, so it fails in the authoring UI rather than in front of a custom
 Both registries carry a status and both push a `Template` webhook event; never send on a template
 whose last known status is not Active/approved, on either channel.
 
+## 6c. Template authoring — LOT authors, and it is fully API-driven
+
+Confirmed against the vendor collection 2026-08-03. **We author templates; TrustSignal is the
+registry and the carrier route, not the author.** This makes SMS template management a first-class
+Relay feature (same shape as the WhatsApp template flow), not a vendor-panel chore.
+
+```
+POST /v1/accounts/templates   { name, content, headers:["LGNDRC"], dlt_entity_id }
+POST /v1/templates/:id        { name, content, headers, dlt_entity_id, template_type }
+```
+
+⚠️ **`template_type` is NOT accepted on create — only on update.** It is absent from the create
+payload and returns `""` in the create response. **Authoring is therefore a two-call sequence**, and
+a single-call implementation silently leaves every template with an empty consent type, which is
+precisely the F2 ambiguity. Treat create+set-type as one atomic operation in the adapter; if the
+second call fails, surface the template as *incomplete*, never as ready to send.
+
+Vocabulary: `Service-Explicit` · `Service-Implicit` · `Promotional`.
+
+⚠️ **TrustSignal does NOT perform the DLT registration.** `dlt_entity_id` is a **required input** on
+create (the failure case is literally `"Duplicate DLTID"`), so a DLT template id must already exist.
+That registration happens on the operator's DLT portal, where **LOT is the Principal Entity** — which
+is the arrangement the BACKLOG flagged as essential precisely so leaving a vendor never means
+re-registering the estate. Two independent systems, both LOT-controlled:
+
+| Layer | Owner | What it governs |
+|---|---|---|
+| DLT portal registration | LOT (Principal Entity) | the **real** consent category the carrier enforces (DND) |
+| TrustSignal `template_type` | LOT, via the API above | how TrustSignal routes the send |
+
+**Both must agree.** A TrustSignal label of `Service-Implicit` over a DLT registration of
+Promotional looks correct and still skips DND-registered customers — the carrier enforces on DLT,
+not on TrustSignal's copy. Validate the pair, do not assume the mirror is truth.
+
 ## 6a. `purpose` → `route`, and the DLT consent cross-check (F3)
 
 The spec previously left this undefined, which is how a compliance bug gets built by accident.
@@ -424,11 +458,18 @@ SMS.
 - **20 DLT templates are live**, covering Order Shipped/Delivered/Cancellation, COD + Prepaid
   confirmation, ABC 1/2 and the KwikPass browse set — good coverage of Relay's existing journeys.
   Any *new* SMS content variant still needs its own DLT registration.
-- 🔴 **Re-register the mis-classified templates.** `Order Shipped` (`plsFsHlz6`) and one twin each
-  of Order Cancellation / Prepaid Order Confirmation are `explicit`, so they will not reach
-  DND-registered numbers. Confirm with TrustSignal and re-register as `implicit`, or bind the
-  `implicit` twin. **This is the single highest-value external action** — it is the difference
-  between shipping notifications reaching everyone and silently skipping DND customers.
+- 🔴 **Fix the mis-classified templates — but diagnose which layer is wrong first (see §6c).**
+  `Order Shipped` (`plsFsHlz6`) and one twin each of Order Cancellation / Prepaid Order
+  Confirmation read `explicit`, so as things stand they will not reach DND-registered numbers.
+  **Two very different fixes:**
+  1. Mislabelled only in TrustSignal's mirror → a single `POST /v1/templates/:id` with
+     `template_type: "Service-Implicit"`. Minutes, and ours to do.
+  2. Genuinely registered as promotional on the **DLT portal** → must be re-registered there. The
+     carrier enforces on the DLT category, so no API call fixes it.
+  ⚠️ **Do not fix the label first.** A corrected TrustSignal label over an uncorrected DLT
+  registration looks fixed and still silently skips DND customers — the worst of both states.
+  **This remains the single highest-value external action**: it is the difference between shipping
+  notifications reaching everyone and quietly skipping a slice of customers with no error anywhere.
 - **Prune the duplicate templates** once the correct twin of each pair is chosen, so a future
   name-based lookup cannot pick wrong. (Binding is by id per F2, but removing the ambiguity is
   cheaper than relying on discipline forever.)
