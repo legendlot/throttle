@@ -137,4 +137,57 @@ h1{font-size:18px;margin:0 0 10px}p{color:#bbb;font-size:14px;line-height:1.5;ma
 <body><div class="card"><div class="bar"></div><h1>Legend of Toys</h1><p>${msg}</p>${extra || ''}</div></body></html>`;
 }
 
-module.exports = { handleResendWebhook, handleUnsubscribe };
+// TrustSignal SMS DLR → message status + DND suppression.
+// Only ever moves state FORWARD: a late 'sent' must not overwrite a 'delivered'.
+const TERMINAL = new Set(['delivered', 'failed', 'bounced']);
+
+async function handleTrustsignalSms(env, body) {
+  const events = require('./adapters/sms.js').parseStatusWebhook(body);
+  for (const ev of events) {
+    if (!ev.provider_message_id) continue;
+    const cur = await A.sbComms(
+      `/rest/v1/messages?provider_message_id=eq.${A.enc(ev.provider_message_id)}` +
+      `&select=id,status,to_address,profile_id,channel&limit=1`, env);
+    const row = cur.ok && cur.data?.[0];
+    if (!row) continue;                       // unknown id — log-only, never create a row
+    if (TERMINAL.has(row.status)) continue;   // forward-only
+    if (ev.canonical_status) {
+      await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: ev.canonical_status,
+          ...(ev.reason ? { reason: ev.reason } : {}),
+          ...(ev.canonical_status === 'delivered' && ev.at ? { delivered_at: ev.at } : {}),
+        }),
+      });
+    }
+    if (ev.suppress) {
+      // ⚠️ THE ADDRESS COMES FROM OUR OWN messages ROW, NOT FROM THE CALLBACK.
+      // gate.js:93 matches suppressions with `value=eq.<the address being sent to>`, and that
+      // address is canonical E.164 (+919876543210). But we SEND bare 10 digits to /v1/sms, so
+      // whatever the vendor echoes back is bare-10 or 919876543210 — and normalising it can
+      // strip punctuation but cannot invent a missing +91. Using the payload would write a row
+      // that looks correct in the suppressions list and is NEVER matched, so the channel keeps
+      // sending to a DND number forever. `to_address` is what the gate will compare against.
+      // It also removes a dependency on an undocumented field: the vendor collection publishes
+      // no SMS delivery-callback payload at all (25+ exist for WhatsApp, zero for SMS).
+      const addr = row.to_address || null;
+      if (addr) {
+        // Normalise exactly as index.js's manual addSuppression does, and use the same
+        // on_conflict target — `ignore-duplicates` with no target 409s on the second DND
+        // for the same number.
+        const norm = String(addr).replace(/[^\d+]/g, '');
+        await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            channel: ev.suppress_channel, value: norm,
+            profile_id: row.profile_id || null, reason: ev.suppress,
+          }),
+        });
+      }
+    }
+  }
+}
+
+module.exports = { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms };

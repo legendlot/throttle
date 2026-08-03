@@ -5,7 +5,8 @@ export { JourneyWorkflow } from './journey-workflow.js';
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
-const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
+const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms } = require('./webhooks.js');
+const TSC = require('./trustsignal-client.js');
 const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
 const WATPL = require('./wa-templates.js');
 const SEG = require('./segment-entry.js');
@@ -1452,7 +1453,12 @@ async function checkJourneySendHealth(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  // `ctx` is used by webhook routes that must ack 200 immediately and finish the work after
+  // the response (ctx.waitUntil). It was absent until 2026-08-03 — the ctx.waitUntil further
+  // down lives in scheduled(), a different handler — so a fetch route calling it would have
+  // been a runtime ReferenceError behind a green build (the PATTERN-226 shape). Cloudflare
+  // always passes it as the third argument, so widening the signature is additive.
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
     if (url.pathname === '/health' || url.pathname === '/healthz')
@@ -1595,6 +1601,19 @@ export default {
     if (url.pathname === '/webhooks/shopflo' && request.method === 'POST') {
       const r = await SHOPFLO.handleShopfloWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // TrustSignal SMS delivery receipts. There is NO signature on these callbacks, so the
+    // shared secret is a bearer token configured in TrustSignal's own "Header (JSON)" field
+    // on the webhook record. Reject anything without it — an unguessable path is not auth.
+    if (url.pathname === '/webhooks/trustsignal/sms' && request.method === 'POST') {
+      const auth = request.headers.get('authorization') || '';
+      if (!env.TRUSTSIGNAL_WEBHOOK_TOKEN || auth !== `Bearer ${env.TRUSTSIGNAL_WEBHOOK_TOKEN}`)
+        return new Response('unauthorized', { status: 401 });
+      const body = await request.json().catch(() => null);
+      // Respond 200 immediately and process asynchronously — these retry and reorder.
+      ctx.waitUntil(handleTrustsignalSms(env, body).catch((e) =>
+        console.log('ts_sms_webhook_error', TSC.redact(String(e?.message || e)))));
+      return new Response('ok', { status: 200 });
     }
     // Cashfree payment-link webhook (J3 COD→prepaid). HMAC-verified (x-webhook-signature
     // over x-webhook-timestamp + raw body, keyed on CASHFREE_CLIENT_SECRET). Maps a
