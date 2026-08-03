@@ -466,3 +466,19 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
 @media(max-width:720px){.po-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:1fr}.tb-search{width:150px}}
 
 .no-mo *,.no-mo *::before,.no-mo *::after{animation:none!important;transition:none!important}
+
+/* ---- print: documents only, never the app chrome ----
+   The shell is a fixed-height flex box (.app is 100dvh/overflow:hidden) with the
+   page scrolling inside .main, so a browser print captured ONE screenful plus the
+   sidebar and context bar — a screenshot rather than a document. Reported by
+   Vinayram on Order Confirmation 2026-07-31; the same defect applied to the GST
+   invoice, credit-note and PO prints, which is why this lives here and not on one
+   page. Unclip the shell so the document flows across pages, and drop the chrome. */
+@media print {
+  /* .cb covers the AppLauncher waffle too — it renders inside the context bar. */
+  .sb, .cb, .gs-backdrop, .gs-panel { display: none !important; }
+  .app { display: block !important; height: auto !important; overflow: visible !important; }
+  .main-wrap { display: block !important; overflow: visible !important; }
+  .main { overflow: visible !important; padding: 0 !important; height: auto !important; flex: none !important; }
+  .screen { max-width: none !important; margin: 0 !important; animation: none !important; }
+}
