@@ -212,7 +212,42 @@ a single-call implementation silently leaves every template with an empty consen
 precisely the F2 ambiguity. Treat create+set-type as one atomic operation in the adapter; if the
 second call fails, surface the template as *incomplete*, never as ready to send.
 
-Vocabulary: `Service-Explicit` · `Service-Implicit` · `Promotional`.
+Vocabulary (confirmed from the live Sigmo create form, 2026-08-03):
+`promotional` · `explicit` (Service-Explicit) · `implicit` (Service-Implicit). Default is
+`promotional`. The API examples use inconsistent spellings (`Service-Explicit`, `Service Explicit`,
+and the literal `Select`) — **use the form's `value=` tokens**, not the doc's display strings.
+
+### F15 🔴 — TrustSignal's template registry is an UNVERIFIED MIRROR
+
+**Investigated because the create-endpoint gap looked too basic for an established vendor** — the
+hypothesis being that `template_type` is returned by DLT after verification, not supplied by us.
+**It is not.** The live create form carries `Template Type` as a plain dropdown, *and* `Template
+Status` as a dropdown currently reading `Approved`. **Both the consent type and the approval status
+are self-declared values a human picks. Nothing in TrustSignal validates either against the actual
+DLT registration.**
+
+Consequences, all of which must survive into the implementation:
+
+1. **The `explicit`/`implicit` values on our 20 templates are claims, not facts.** `Order Shipped`
+   reading `explicit` may be a data-entry slip or a faithful mirror of DLT — **TrustSignal cannot
+   distinguish these, so §13's diagnose-first step is not answerable from this side.** It requires
+   DLT portal access. Do not attempt to resolve it from the API.
+2. **The §6a route↔template_type cross-check validates INTERNAL CONSISTENCY ONLY.** It catches our
+   own mistakes — a `utility` journey bound to a template we labelled `explicit` — and that is
+   worth having. It provides **no DLT-compliance assurance whatsoever**. Do not describe it, in
+   code comments or UI copy, as a compliance check; that is exactly the false confidence that lets
+   a genuinely non-compliant send through with a green tick beside it.
+3. **F10's status gate is likewise a self-declared field.** Still worth gating on — a template
+   nobody marked ready should not send — but it is not proof of carrier approval.
+4. **The DLT portal is the only authority.** Relay should store the DLT template id and, where
+   known, the DLT-registered category **separately** from TrustSignal's `template_type`, so a
+   divergence is visible rather than averaged away. Where the two disagree, the DLT value wins and
+   the send should be blocked pending reconciliation.
+
+⚠️ **This is the reverse of the usual vendor-integration assumption.** The normal instinct is to
+trust the provider's registry as the source of truth for provider-side objects. Here the registry
+is downstream user input, and the upstream authority (DLT) is a system TrustSignal does not
+reconcile against. Treat it accordingly.
 
 ⚠️ **TrustSignal does NOT perform the DLT registration.** `dlt_entity_id` is a **required input** on
 create (the failure case is literally `"Duplicate DLTID"`), so a DLT template id must already exist.
@@ -239,6 +274,10 @@ The spec previously left this undefined, which is how a compliance bug gets buil
 | `utility` | `transactional` | `implicit` |
 | `transactional` | `transactional` | `implicit` |
 | *(OTP, if ever)* | `otp` | `implicit` |
+
+⚠️ **This check is INTERNAL CONSISTENCY, not compliance — see F15.** TrustSignal's `template_type`
+is a self-declared dropdown value, so agreement here proves only that we bound the template the way
+we labelled it. The carrier enforces on the DLT registration, which this cannot see.
 
 ⚠️ **Route and template_type must agree, and the mismatch must be a hard error at bind time.**
 Sending a `utility` journey on an `explicit` template is exactly the F2 trap — it looks fine, it
