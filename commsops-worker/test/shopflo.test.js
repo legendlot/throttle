@@ -660,5 +660,39 @@ t('collection view yields no product_handle', () => {
   assert.equal(out.properties.collection_url, '/collections/all');
 });
 
+// ── add_to_cart empty-cart guard (2026-08-03, S258) ──────────────────────────
+// Shopflo sends ~0.6% of added_to_cart_ui events with an identified user but an entirely
+// empty cart (14 of 2,242 over 7 days). ATC-Cart Abandonment enrolled on them, slept 30
+// minutes and then hard-failed the send with `unresolved_variables:cart_link_suffix` —
+// the template binds that token into a Meta URL button, so it cannot take a fallback.
+// Deliberately the NARROW test ("no cart identity at all"), matching the product_viewed
+// guard: 0 of 2,242 events were named-but-without-variants, so both tests behave the same
+// on real traffic and this one leaves partial events alone.
+
+t('mapAddToCart DROPS an identified user with a completely empty cart', () => {
+  const e = FLO.mapAddToCart({
+    event_name: 'added_to_cart_ui', session_id: 'sess-empty', source: 'shopflo',
+    currency: 'INR', timestamp: 1779876657975,
+    user_data: { userId: 'flo-uid-9', phone: '+919777777777', email: 'empty@gmail.com' },
+  });
+  assert.equal(e, null);
+});
+
+t('a cart with ONLY names (no variant ids) still maps — guard is not over-tightened', () => {
+  const e = FLO.mapAddToCart({
+    ...ADDED_TO_CART, cart_variant_ids: null, cart_product_ids: null,
+    cart_product_names: 'Snowboard',
+  });
+  assert.ok(e, 'partial cart payloads are real signal and must survive');
+  assert.equal(e.name, 'add_to_cart');
+  assert.equal(e.properties.cart_link_suffix, null, 'no ids -> no button token, by design');
+});
+
+t('a normal add_to_cart is unaffected by the guard', () => {
+  const e = FLO.mapAddToCart(ADDED_TO_CART);
+  assert.ok(e);
+  assert.equal(e.properties.cart_link_suffix, '55589142888521:1');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

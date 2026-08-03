@@ -482,6 +482,31 @@ function mapAddToCart(body) {
     product_handle: productHandle(productUrl),
     source_surface: 'shopflo',
   };
+  // DROP an `add_to_cart` that names NO CART AT ALL (2026-08-03) — the same guard, for the same
+  // reason, as the `product_viewed` drop in mapBrowse below. Shopflo sends ~0.6% of its
+  // added_to_cart_ui events with an identified user but an entirely empty cart payload: no
+  // variant ids, no product ids, no names, no cart token.
+  //
+  // That is not a usable event, and it is actively harmful: ATC-Cart Abandonment enrolled on it,
+  // burned a Workflow instance and a 30-minute sleep, then failed the send with
+  // `unresolved_variables:cart_link_suffix` — the last 5 such failures, still occurring as of
+  // 2026-08-02. `atc_cart_abandonment_v2` binds that token into a Meta URL button
+  // (`/cart/<variant>:<qty>`), so like `product_handle` it is the one variable that CANNOT take
+  // a fallback: any placeholder sends a real customer a link to a cart that does not exist, and
+  // a bare `/cart/` 404s rather than degrading to their cart page.
+  //
+  // The test is "NO cart identity at all", not "no cart_link_suffix", on evidence: over 7 days
+  // the live split is 2,228 with variant ids / 14 with nothing / **0 named-but-without-variants**.
+  // Both guards behave identically on real traffic, so this takes the narrower one — it drops
+  // exactly the observed garbage and leaves a partially-populated event (real signal for
+  // analytics and segments) alone, rather than tightening the contract past the evidence.
+  // ⚠️ NB the 46 events carrying valid ids yet no suffix are NOT this class and need no guard —
+  // they are all dated 2026-07-27, the day `cart_link_suffix` was added to this mapper, and the
+  // count has been 0 every day since. Historical, not live; do not "fix" them.
+  if (!props.cart_variant_ids && !props.cart_product_ids && !props.cart_product_names
+      && !props.primary_product_name && !props.cart_token) {
+    return null;
+  }
   const cartId = cartIdentifier(body);
   if (cartId) identifiers.push(cartId);
   return {
