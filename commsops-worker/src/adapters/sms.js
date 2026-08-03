@@ -63,7 +63,16 @@ async function send(rendered, env) {
 
   const body = {
     sender_id: rendered.sender,
-    to: phone.value,
+    // ⚠️ ARRAY OF INT, not a string. The vendor's param table is `to []int` and its example is
+    // `"to": [9999999999]`; a bare string is rejected live with INVALID_JSON (verified against
+    // the real endpoint 2026-08-03 — the whole pipeline was correct and only this field was not).
+    //
+    // This is a deliberate, narrow exception to the design's "never transport a phone as a JSON
+    // number" rule, and it is safe HERE specifically: renderPhoneForSms guarantees exactly ten
+    // digits stripped from a well-formed +91, Indian mobiles never begin with 0 (so no leading
+    // zero can be eaten), and 10 digits is far below 2^53 so the value is exact. Do NOT
+    // generalise this to E.164 values or to RCS, which takes the full string.
+    to: [Number(phone.value)],
     route,
     message: rendered.body,
     template_id: rendered.provider_template_id,

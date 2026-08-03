@@ -80,7 +80,10 @@ const RENDERED = {
 (async () => {
   await withFetch(async (url, init) => {
     const b = JSON.parse(init.body);
-    assert.strictEqual(b.to, '9876543210', 'bare 10-digit');
+    // The vendor's param table is `to []int` and its example is `"to": [9999999999]`.
+    // Sending the bare STRING (which the plan specified, and this test originally asserted)
+    // is rejected live with INVALID_JSON — verified against the real endpoint 2026-08-03.
+    assert.deepStrictEqual(b.to, [9876543210], 'array of int, per the vendor contract');
     assert.strictEqual(b.route, 'promotional');
     assert.strictEqual(b.template_id, 'G38A46v1i');
     assert.strictEqual(b.sender_id, 'LGNDRC');
