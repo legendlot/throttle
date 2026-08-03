@@ -59,5 +59,64 @@ t('an EMPTY template_type is refused — create-without-update leaves it "" (F15
   assert.throws(() => assertBindable({ purpose: 'utility', template_type: '' }), /template_type_unset/);
 });
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// ── send() ──
+const { send } = require('../src/adapters/sms.js');
+const ENV = { TRUSTSIGNAL_API_KEY: 'k' };
+const origFetch = global.fetch;
+const withFetch = async (impl, fn) => { global.fetch = impl; try { return await fn(); } finally { global.fetch = origFetch; } };
+
+const RENDERED = {
+  to: '+919876543210',
+  sender: 'LGNDRC',
+  purpose: 'marketing',
+  provider_template_id: 'G38A46v1i',
+  template_type: 'explicit',
+  var_order: ['first_name'],
+  vars: { first_name: 'Riya' },
+  body: 'Hey Riya! ...',
+  has_link: true,
+};
+
+(async () => {
+  await withFetch(async (url, init) => {
+    const b = JSON.parse(init.body);
+    assert.strictEqual(b.to, '9876543210', 'bare 10-digit');
+    assert.strictEqual(b.route, 'promotional');
+    assert.strictEqual(b.template_id, 'G38A46v1i');
+    assert.strictEqual(b.sender_id, 'LGNDRC');
+    assert.strictEqual(b.pr1, 'Riya');
+    assert.strictEqual(b.isdesturl, 'true');
+    return { ok: true, status: 200, text: async () => JSON.stringify({ success: true, results: [{ phone: 919876543210, transaction_id: 'TX1', sms_cost: 1 }] }) };
+  }, async () => {
+    const r = await send(RENDERED, ENV);
+    t('send returns the transaction_id as provider_message_id', () => {
+      assert.strictEqual(r.provider_message_id, 'TX1');
+      assert.strictEqual(r.status, 'sent');
+    });
+    t('send captures cost as a NUMBER (F11)', () => assert.strictEqual(r.cost, 1));
+  });
+
+  await withFetch(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ success: true, results: [{ transaction_id: 'TX2', sms_cost: '0.5' }] }) }),
+    async () => {
+      const r = await send(RENDERED, ENV);
+      t('a STRING cost is coerced to a number (F11)', () => assert.strictEqual(r.cost, 0.5));
+    });
+
+  await withFetch(async () => { throw new Error('boom api_key=SECRET'); }, async () => {
+    const r = await send(RENDERED, ENV);
+    t('a network failure is a failed RESULT, not a throw', () => assert.strictEqual(r.status, 'failed'));
+    t('the api_key never appears in a failure reason', () => assert.ok(!r.reason.includes('SECRET')));
+  });
+
+  await withFetch(async () => { throw new Error('unreachable'); }, async () => {
+    const r = await send({ ...RENDERED, to: '+14155550123' }, ENV);
+    t('an international number fails BEFORE any network call (F1)', () => {
+      assert.strictEqual(r.status, 'failed');
+      assert.strictEqual(r.reason, 'unsupported_country');
+      assert.strictEqual(r.provider_message_id, null);
+    });
+  });
+
+  console.log(`\n${pass} passed, ${fail} failed\n`);
+  process.exit(fail ? 1 : 0);
+})();

@@ -46,4 +46,48 @@ function buildSmsParams(varOrder, vars) {
   return out;
 }
 
-module.exports = { buildSmsParams, routeForPurpose, assertBindable, PURPOSE_ROUTE, ROUTE_TYPE };
+async function send(rendered, env) {
+  // Phone first: an unsupported recipient must fail BEFORE any network call, so a bad number
+  // can never be partially attempted (F1).
+  const phone = TS.renderPhoneForSms(rendered.to);
+  if (!phone.ok) return { provider_message_id: null, status: 'failed', reason: phone.reason, raw: null, cost: null };
+
+  let route, params;
+  try {
+    route = routeForPurpose(rendered.purpose);
+    assertBindable({ purpose: rendered.purpose, template_type: rendered.template_type });
+    params = buildSmsParams(rendered.var_order, rendered.vars);
+  } catch (e) {
+    return { provider_message_id: null, status: 'failed', reason: String(e.message).slice(0, 140), raw: null, cost: null };
+  }
+
+  const body = {
+    sender_id: rendered.sender,
+    to: phone.value,
+    route,
+    message: rendered.body,
+    template_id: rendered.provider_template_id,
+    ...params,
+    // Vendor-side link shortening + click callbacks. Safe ONLY because the URL lives inside a
+    // {#var#} variable — a URL literal in approved DLT content would be rewritten and stop
+    // matching the registered template (F6), which the carrier rejects.
+    ...(rendered.has_link ? { isdesturl: 'true' } : {}),
+  };
+
+  const r = await TS.tsFetch(env, 'sms', '/v1/sms', { method: 'POST', body });
+  if (!r.ok) {
+    return { provider_message_id: null, status: 'failed',
+             reason: TS.redact(`${r.error.codeMsg || 'error'}:${r.error.message}`).slice(0, 140),
+             raw: r.data, cost: null };
+  }
+  const first = Array.isArray(r.data?.results) ? r.data.results[0] : null;
+  return {
+    provider_message_id: first?.transaction_id || null,
+    status: 'sent',                 // accepted, NOT delivered — the webhook moves it forward
+    reason: null,
+    raw: r.data,
+    cost: first?.sms_cost == null ? null : Number(first.sms_cost),
+  };
+}
+
+module.exports = { buildSmsParams, routeForPurpose, assertBindable, send, PURPOSE_ROUTE, ROUTE_TYPE };
