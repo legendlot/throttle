@@ -673,6 +673,18 @@ async function handlePost(body, auth, env) {
         for (const k of ['waba_id', 'header_handle', 'header_format', 'header_media_url']) {
           if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
         }
+        // Same class of protection for SMS (2026-08-03). The relay editor's buildPayload()
+        // branches ONLY on channel==='whatsapp'; every other channel — now including sms —
+        // falls into the EMAIL shape {subject, html_body, text_body, design_json}. So opening
+        // an SMS template and pressing Save would post email content and drop every field the
+        // SMS adapter needs, destroying the DLT body and the positional var_order mapping in
+        // one click. The row would then fail closed on send (empty_sms_body), so the damage is
+        // silent data loss rather than a bad customer message — which is exactly why it needs
+        // a guard rather than a reader noticing. Remove these entries only when the editor can
+        // genuinely author SMS.
+        for (const k of ['body', 'var_order', 'dlt_var_count', 'dlt_template_id', 'template_type', 'needs_variable_authoring', 'source', 'provider_status']) {
+          if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
+        }
         // ...but "carry it over when absent" is NOT enough for `waba_id`, because WaEditor always
         // SENDS one from client state — it keeps the value even while the select is `disabled`
         // (`locked = !!provider_template_id`). So the branch above never fired for it, and any tab
