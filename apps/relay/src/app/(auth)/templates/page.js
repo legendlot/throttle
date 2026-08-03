@@ -18,7 +18,7 @@ import ImageLibrary from '@/components/ImageLibrary.js';
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
-const CHANNELS = ['email', 'whatsapp']; // sms lands in Phase 2
+const CHANNELS = ['email', 'sms', 'whatsapp'];
 // List channel filter — SMS chip is present ahead of Phase 2 so the mental model is stable.
 const CHAN_FILTERS = [
   { key: 'all', label: 'All' },

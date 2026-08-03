@@ -92,7 +92,7 @@ function downloadCampaignsCsv(rows, overview, tab) {
 // later and nothing widened it, so a channel the whole backend supports was unreachable from
 // the UI. Same failure as the journey trigger picker's hardcoded 7-event list. If a new adapter
 // is added to send.js, add it here in the same change.
-const CHANNELS = ['email', 'whatsapp'];
+const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUS_TONE = {
   draft: 'gray', pending_approval: 'yellow', approved: 'blue', scheduled: 'yellow',

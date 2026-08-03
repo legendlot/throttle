@@ -37,7 +37,7 @@ const EVENT_PROP_OPS = [
 const CHANNELS = [
   { id: 'email', label: 'Email', live: true },
   { id: 'whatsapp', label: 'WhatsApp', live: true },
-  { id: 'sms', label: 'SMS (not live yet)', live: false },
+  { id: 'sms', label: 'SMS', live: true },
 ];
 // Event names arrive as the `eventDefs` prop, loaded once by the journeys page from the
 // live comms.event_definitions registry (@/lib/eventDefs.js). The hardcoded list that used
