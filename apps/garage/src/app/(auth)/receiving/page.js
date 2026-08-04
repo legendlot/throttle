@@ -443,6 +443,29 @@ export default function ReceivingPage() {
       const tag = v == null ? 'no expected qty set' : v === 0 ? 'matches' : (v > 0 ? `+${v} over` : `${v} short`);
       L.push(`${p.part_code} ${p.part_name} — expected ${p.expected}, received ${p.received}${p.damaged ? `, damaged ${p.damaged}` : ''} (${tag})`);
     }
+    // Per-box lines (Piyush asked for the report at box level). Deliberately a
+    // SUMMARY here and the full grain in the CSV: a Slack message listing every
+    // part of every box is unreadable at 20 boxes, and unreadable gets ignored.
+    // Clean boxes are still listed — "which boxes did I already check" is half
+    // the value, and silence would read as missing data.
+    const boxes = r.by_box || [];
+    if (boxes.length) {
+      L.push('');
+      L.push('By box:');
+      for (const b of boxes) {
+        const bits = [];
+        if (b.short_count) bits.push(`${b.short_count} short`);
+        if (b.over_count) bits.push(`${b.over_count} over`);
+        if (b.damaged_qty) bits.push(`${b.damaged_qty} damaged`);
+        L.push(`  ${b.mark_code} — ${bits.length ? bits.join(', ') : 'matches'}`);
+        // Name the offending parts inline; without them the summary tells you a box
+        // is wrong but not what to go and count.
+        for (const p of b.parts) {
+          if (p.variance == null || p.variance === 0) continue;
+          L.push(`      ${p.part_code} ${p.part_name} — expected ${p.expected}, received ${p.received} (${p.variance > 0 ? `+${p.variance} over` : `${p.variance} short`})`);
+        }
+      }
+    }
     if (r.po_complete && r.po_summary) {
       L.push('');
       L.push('PO complete:');
@@ -463,20 +486,38 @@ export default function ReceivingPage() {
     };
     const poBy = {};
     for (const p of (r.po || [])) poBy[p.part_code] = p;
+    // `Box` is the first column so the sheet filters by box, which is the whole
+    // point of the box-level ask. Two grains share the sheet: one row per
+    // box+part, then the arrival total per part on a row marked TOTAL.
+    // ⚠️ The PO columns are populated ONLY on the TOTAL rows. PO position is a
+    // per-part running figure against the contract, so repeating it on every box
+    // row would multiply it by the box count for anyone who sums the column —
+    // and a procurement sheet exists to be summed.
     const rows = [[
-      'Shipment', 'PO', 'Supplier', 'Part code', 'Part name',
+      'Box', 'Shipment', 'PO', 'Supplier', 'Part code', 'Part name',
       'Expected', 'Received', 'Damaged', 'Variance', 'Status',
       'PO ordered', 'PO received to date', 'PO outstanding',
     ]];
+    const status = (v) => v == null ? 'no expected qty set' : v === 0 ? 'matches' : v > 0 ? 'over' : 'short';
+    for (const b of (r.by_box || [])) {
+      for (const p of b.parts) {
+        rows.push([
+          b.mark_code, r.shipment_id, r.po_reference || '', r.supplier || '',
+          p.part_code, p.part_name,
+          p.expected, p.received, p.damaged || 0,
+          p.variance == null ? '' : p.variance, status(p.variance),
+          '', '', '',
+        ]);
+      }
+    }
     for (const p of (r.inward || [])) {
       const v = p.variance;
       const po = poBy[p.part_code] || {};
       rows.push([
-        r.shipment_id, r.po_reference || '', r.supplier || '',
+        'TOTAL', r.shipment_id, r.po_reference || '', r.supplier || '',
         p.part_code, p.part_name,
         p.expected, p.received, p.damaged || 0,
-        v == null ? '' : v,
-        v == null ? 'no expected qty set' : v === 0 ? 'matches' : v > 0 ? 'over' : 'short',
+        v == null ? '' : v, status(v),
         po.ordered ?? '', po.received_to_date ?? '', po.outstanding ?? '',
       ]);
     }
@@ -1284,6 +1325,36 @@ export default function ReceivingPage() {
                       })}
                     </tbody>
                   </table>
+                  {/* By box — the same inward split per box, so a short count points at
+                      the box to go and recount rather than at the arrival as a whole.
+                      Summary only on screen (and in the Slack text); the CSV carries
+                      every box×part row for anyone who wants to filter it. */}
+                  {(varReport.by_box || []).length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '.06em', marginBottom: 5 }}>BY BOX</div>
+                      {varReport.by_box.map(b => {
+                        const off = b.parts.filter(p => p.variance != null && p.variance !== 0);
+                        const clean = !off.length && !b.damaged_qty;
+                        return (
+                          <div key={b.mark_id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0', borderBottom: '1px solid var(--border)', fontSize: 11 }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', minWidth: 90 }}>{b.mark_code}</span>
+                            <span style={{ color: clean ? 'var(--state-success-fg)' : '#f59e0b' }}>
+                              {clean ? 'matches' : [
+                                b.short_count ? `${b.short_count} short` : null,
+                                b.over_count ? `${b.over_count} over` : null,
+                                b.damaged_qty ? `${b.damaged_qty} damaged` : null,
+                              ].filter(Boolean).join(' · ')}
+                            </span>
+                            {off.length > 0 && (
+                              <span style={{ color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)' }}>
+                                {off.map(p => `${p.part_code} ${p.variance > 0 ? `+${p.variance}` : p.variance}`).join('  ')}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   {varReport.po_complete && (
                     <div style={{ marginTop: 10, padding: '8px 10px', background: 'rgba(16,140,90,.08)', border: '1px solid rgba(16,140,90,.25)', borderRadius: 3, fontSize: 11 }}>
                       <strong>PO fully received.</strong>{' '}
