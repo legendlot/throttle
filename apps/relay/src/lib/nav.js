@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
-  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images,
+  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -35,6 +35,10 @@ export const NAV_GROUPS = [
       // to load images was to first open some template you might not want to edit —
       // so bulk upload, the actual job, had nowhere to happen.
       { id: 'library',   label: 'Library',   route: '/library',   icon: Images,    requires: 'relay_view' },
+      // Links sits beside Library for the same reason: it is an asset campaigns draw FROM, not a
+      // send surface. It is also the only place a link's destination can be changed after the
+      // artwork carrying it has been printed.
+      { id: 'links',     label: 'Links',     route: '/links',     icon: Link2,     requires: 'relay_view' },
       { id: 'analytics', label: 'Analytics', route: '/analytics', icon: BarChart3, requires: 'relay_view' },
     ],
   },
