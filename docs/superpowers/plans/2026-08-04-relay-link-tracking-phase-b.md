@@ -100,11 +100,12 @@ they carry the volume.
 "`go.legendoftoys.com` as a Worker route is sufficient and needs no new domain purchase" is WRONG, and
 this plan repeated it uncorrected.** A Cloudflare Worker custom domain requires the zone to be **on
 Cloudflare**; `dig NS legendoftoys.com` returns `ns37/ns38.domaincontrol.com` — **GoDaddy**. So there is
-no DNS record Afshaan can add today that would make it work. Either register a short domain as its own
-Cloudflare zone (the standing BACKLOG ask, and the better answer for SMS character budget), or delegate
-`go.legendoftoys.com` to Cloudflare via NS records at GoDaddy — confirm the latter is available on
-LOT's plan before promising it. Moving the apex zone is not the cheap option: it touches email/DKIM and
-the gh-pages targets.
+no DNS record Afshaan can add today that would make it work. **Register a short domain as its own
+Cloudflare zone** (the standing BACKLOG ask, and the better answer for SMS character budget).
+⚠️ **Subdomain delegation was floated here and is NOT available — Cloudflare subdomain setup is
+Enterprise-only** (checked 2026-08-04). Moving the apex zone is not the cheap option either: it touches
+email/DKIM and the gh-pages targets, and would not yield a short host anyway. The domain does not have
+to be bought at Cloudflare — Cloudflare only needs to be the DNS host.
 
 ⚠️ **The host must exist BEFORE the first Meta submission** — the base URL is frozen into the template
 at approval, so a `workers.dev` base would be permanent. Everything in this plan is buildable and

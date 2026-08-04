@@ -81,15 +81,27 @@ sufficient and needs no new domain purchase" — is WRONG, and it was repeated i
 plan before anyone checked.** A Cloudflare Worker custom domain requires the **zone to be on
 Cloudflare**, and `legendoftoys.com` is not: `dig NS legendoftoys.com` returns
 `ns37/ns38.domaincontrol.com`, i.e. **GoDaddy**. So no route can attach to `go.legendoftoys.com` as
-things stand. Two real options, both needing Afshaan:
-- **Register a short domain** and add it as its own Cloudflare zone (the standing BACKLOG ask). Also
-  the better answer for SMS, where every character is billed.
-- **Delegate the subdomain** — add `go.legendoftoys.com` to Cloudflare as its own zone and point NS
-  records at it from GoDaddy. Cheaper (no purchase), but confirm it is available on LOT's current
-  Cloudflare plan before promising it.
+things stand. **Register a short domain and add it as its own Cloudflare zone** — the standing BACKLOG
+ask, and the right answer anyway for SMS, where every character is billed.
 
-Moving the apex zone to Cloudflare is NOT the cheap third option — it would touch email/DKIM and the
-gh-pages deploy targets.
+⚠️ **Subdomain delegation is NOT an option — checked 2026-08-04.** Adding `go.legendoftoys.com` to
+Cloudflare as its own zone while the parent stays at GoDaddy is a **Cloudflare *subdomain setup*, which
+is Enterprise-only** (Free/Pro/Business: not available). This was briefly written up here as the cheap
+no-purchase path before it was verified; it is not one. Moving the apex zone to Cloudflare is not a
+cheap third option either — it touches email/DKIM and the gh-pages deploy targets, and it would not
+produce a *short* host anyway.
+
+**The domain need not be bought AT Cloudflare.** Cloudflare only has to be the DNS host: register
+anywhere (the short ccTLDs are generally not sold through Cloudflare Registrar), then add the zone and
+switch nameservers.
+
+**Where shortness actually pays:** not on WhatsApp — a URL button hides the link behind its label, and
+that is the case blocking today. It pays on **SMS** (160 GSM-7 chars per segment, TrustSignal bills per
+part) and on an RCS fallback leg. On a dedicated domain the `/r/` prefix can also be dropped and codes
+served at the root. `CODE_LENGTH` is tunable: 22 chars is ~131 bits (chosen for margin), 10 chars is
+~59 bits, still far beyond guessing for a capability that expires in 30 days.
+⚠️ **If `CODE_LENGTH` is shortened, make `mintLink`'s retry draw a FRESH code** — it currently re-posts
+the same row, which is correct when a collision is impossible and wrong once it is merely unlikely.
 
 ## Two things to design in from the start, not bolt on
 
