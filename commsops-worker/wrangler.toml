@@ -3,6 +3,19 @@ main = "src/index.js"
 compatibility_date = "2026-05-28"
 workers_dev = true
 
+# Phase-B short-link host. lottoys.in serves ONLY /r/<code>; every other path on it 302s to
+# legendoftoys.com (top of fetch(), gated on LINK_HOST below).
+#
+# ⚠️ This hostname is FROZEN once the first WhatsApp template is approved against it or the first
+# QR code is printed — both put the URL somewhere we cannot recall. Changing it later means a full
+# Meta re-approval wave AND dead artwork. Treat it as permanent.
+#
+# workers_dev stays true: the *.workers.dev host remains the API surface for /ingest, /send and the
+# webhooks, which must NOT move to a customer-facing domain.
+routes = [
+  { pattern = "lottoys.in", custom_domain = true }
+]
+
 # Relay — LOT's CX comms orchestration worker. service_role on the SAME Supabase
 # project as lotopsproxy/docketops/manifestops. Owns the `comms` schema (profiles,
 # identifiers, events, consent, suppressions, segments, templates, messages,
