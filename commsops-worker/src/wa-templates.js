@@ -71,8 +71,23 @@ function buildComponents(content) {
     // uses to address a button component at send time — never `pos`, which addresses {{n}}.
     const btnSlots = slotsFor('button');
     const buttons = content.buttons.map((b, i) => {
-      const btn = { ...b };
-      delete btn.example_suffix;
+      // ALLOW-LIST, not a blacklist. This used to be `{...b}` minus `example_suffix`, i.e. a
+      // deny-list of exactly one private key — so EVERY authoring-side field we ever add to a
+      // button leaks into the Meta payload, and Meta rejects unknown keys outright:
+      //   (#100) Unexpected key "target_base" on param "components[2]['buttons'][0]"
+      // That is precisely what `target_base` hit on its first submit (S261). `example_suffix`
+      // being deleted by name is the fossil of someone hitting the same wall earlier.
+      //
+      // Whitelisting makes every future private field safe BY CONSTRUCTION rather than by
+      // remembering to strip it — the PATTERN-218 lesson applied to a serialiser: one
+      // enforcement point that must be taught each new value is a defect generator.
+      // Union of Meta's documented button keys across all button types; anything not here is ours.
+      const btn = {};
+      for (const k of ['type', 'text', 'url', 'example', 'phone_number', 'otp_type',
+                       'autofill_text', 'package_name', 'signature_hash',
+                       'flow_id', 'flow_action', 'navigate_screen']) {
+        if (b[k] !== undefined) btn[k] = b[k];
+      }
       if (btn.type === 'URL' && /\{\{\d+\}\}/.test(btn.url || '')) {
         const suffix = b.example_suffix
           ?? btnSlots.find((s) => Number(s.index ?? 0) === i)?.example
