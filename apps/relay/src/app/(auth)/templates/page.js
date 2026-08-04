@@ -625,7 +625,16 @@ export default function TemplatesPage() {
         // ignored. SMS needs it: adapters/sms.js sends it as TrustSignal's `template_id`, and
         // without it the vendor gets `undefined` and the send is rejected. Harmless on the
         // other channels, which never read it.
-        template: { content: payload.content, variables: payload.variables, provider_template_id: t.provider_template_id || null },
+        // `id` rides along so finalize() can stamp comms.messages.template_id. Without it EVERY
+        // test send logged template_id NULL (69% of all WA test sends), which makes "has this
+        // template ever sent successfully?" unanswerable by join — it cost a diagnostic step
+        // during the S261 link test. finalize() is the ONLY reader of template.id, so this is
+        // inert everywhere else.
+        //
+        // ⚠️ Deliberately NOT sending `version`. This object is the ON-SCREEN draft, which may
+        // differ from the saved version's content; stamping template_version would assert the
+        // send used that archived version and quietly make comms.template_versions lie.
+        template: { id: t.id || null, content: payload.content, variables: payload.variables, provider_template_id: t.provider_template_id || null },
         constants: vals, recipient: vals,
       }, session);
       const res = r?.data || {};

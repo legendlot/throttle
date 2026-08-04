@@ -69,17 +69,30 @@ async function invalidate(env, phoneNumberId) {
 }
 
 // Upload the asset to Meta and return its media id, or null.
+// Every abort path logs WHY and returns null. The null contract is unchanged and load-bearing —
+// the caller falls back to the raw link, so this module can only ever help or do nothing. What was
+// missing is observability: before this, a refusal was indistinguishable from "no media header",
+// and a live asset that Meta silently rejected took four sends and a DB dig to even localise
+// (S261). Never throw from here, and never log the bearer token.
+function skip(reason, detail) {
+  console.log('wa_media_skip', JSON.stringify({ reason, ...detail }));
+  return null;
+}
+
 async function uploadMedia(env, assetUrl, phoneNumberId) {
   let bytes, mime;
   try {
     const res = await fetch(assetUrl);
-    if (!res.ok) return null;
+    if (!res.ok) return skip('asset_fetch_failed', { assetUrl, status: res.status });
     mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!SUPPORTED.has(mime)) return null;
+    // NB this is the SERVED content-type, not the file extension. A `.webp` URL that Shopify
+    // serves as image/png passes; a `.jpg` served as application/octet-stream does not.
+    if (!SUPPORTED.has(mime)) return skip('unsupported_mime', { assetUrl, mime });
     const buf = await res.arrayBuffer();
-    if (!buf || buf.byteLength === 0 || buf.byteLength > MAX_BYTES) return null;
+    if (!buf || buf.byteLength === 0) return skip('empty_asset', { assetUrl });
+    if (buf.byteLength > MAX_BYTES) return skip('too_large', { assetUrl, bytes: buf.byteLength, max: MAX_BYTES });
     bytes = buf;
-  } catch { return null; }
+  } catch (e) { return skip('asset_fetch_threw', { assetUrl, error: String(e?.message || e) }); }
 
   try {
     const form = new FormData();
@@ -93,15 +106,26 @@ async function uploadMedia(env, assetUrl, phoneNumberId) {
       body: form,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data?.id) return null;
+    // Meta's rejection reason lives in the BODY, not the status — this is the one line that would
+    // have answered "why won't it take this image?" without a live tail.
+    if (!res.ok || !data?.id) {
+      return skip('meta_upload_rejected', {
+        assetUrl, phoneNumberId, status: res.status, mime, bytes: bytes.byteLength,
+        meta_error: data?.error || data || null,
+      });
+    }
     return { id: String(data.id), size: bytes.byteLength, mime };
-  } catch { return null; }
+  } catch (e) { return skip('meta_upload_threw', { assetUrl, error: String(e?.message || e) }); }
 }
 
 // resolveMediaId(env, url, phoneNumberId) → media id string, or null to fall back to the link.
 async function resolveMediaId(env, assetUrl, phoneNumberId) {
-  if (!env?.WA_TOKEN || !assetUrl || !phoneNumberId) return null;
-  if (!/^https:\/\//i.test(String(assetUrl))) return null;
+  // ⚠️ A missing WA_TOKEN silently disables this ENTIRE feature — every send quietly reverts to
+  // the link path that 131053 exists to avoid, with `wa_media_id_enabled` still reading true.
+  // That is precisely the shape of failure this logging exists to make impossible.
+  if (!env?.WA_TOKEN) return skip('no_wa_token', {});
+  if (!assetUrl || !phoneNumberId) return skip('missing_args', { hasUrl: !!assetUrl, hasPhoneId: !!phoneNumberId });
+  if (!/^https:\/\//i.test(String(assetUrl))) return skip('not_https', { assetUrl });
   const hit = await cacheLookup(env, assetUrl, phoneNumberId);
   if (hit) return hit;
   const up = await uploadMedia(env, assetUrl, phoneNumberId);
