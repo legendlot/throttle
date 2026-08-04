@@ -142,7 +142,7 @@ async function shopifyLookup({ phone, email }, env) {
     amountSpent{ amount currencyCode }
     defaultAddress{ city province country }
     orders(first:10, sortKey: CREATED_AT, reverse:true){ edges{ node{
-      name createdAt displayFulfillmentStatus displayFinancialStatus
+      id name createdAt displayFulfillmentStatus displayFinancialStatus
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
       subtotalPriceSet{ shopMoney{ amount } }
       totalShippingPriceSet{ shopMoney{ amount } }
@@ -188,8 +188,14 @@ async function shopifyLookup({ phone, email }, env) {
         if (ti.number || ti.url) tracking.push({ number: ti.number, company: ti.company, url: ti.url });
       }
     }
+    // Deep link to the Shopify admin order page (Pruthvi 2026-07-31 — the order number
+    // was plain text, so "open this order" meant retyping it into Shopify). Built HERE,
+    // not in the app: the store domain is a worker secret and must not ship to the client.
+    // `id` is a gid (`gid://shopify/Order/123`); the admin route wants the trailing digits.
+    const legacyId = String(o.id || '').match(/(\d+)\s*$/)?.[1] || null;
     return {
       order_no: o.name, created_at: o.createdAt,
+      admin_url: legacyId ? `https://${env.SHOPIFY_STORE_DOMAIN}/admin/orders/${legacyId}` : null,
       fulfillment: o.displayFulfillmentStatus, financial: o.displayFinancialStatus,
       total: o.currentTotalPriceSet?.shopMoney?.amount, currency: o.currentTotalPriceSet?.shopMoney?.currencyCode,
       subtotal: o.subtotalPriceSet?.shopMoney?.amount,
@@ -744,6 +750,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'dismissCollabFlag':    return dismissCollabFlag(body, auth, env);
     case 'markThreadRead':       return markThreadRead(body, auth, env);
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
+    case 'setRoutingAgents':     return setRoutingAgents(body, auth, env);
     case 'createTag':            return createTag(body, auth, env);
     case 'updateTag':            return updateTag(body, auth, env);
     case 'deleteTag':            return deleteTag(body, auth, env);
@@ -770,6 +777,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'transferThread':           return transferThread(body, auth, env);
     case 'transferThreadToIgnition': return transferThreadToIgnition(body, auth, env);
     case 'bulkAssignThreads':        return bulkAssignThreads(body, auth, env);
+    case 'bulkSetThreadState':      return bulkSetThreadState(body, auth, env);
     case 'setThreadPriority':        return setThreadPriority(body, auth, env);
     case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
@@ -2063,7 +2071,35 @@ async function getRoutingConfig(_params, auth, env) {
   const g = require('cs_ticket_admin', auth); if (g) return g;
   const r = await sb(`/rest/v1/cs_routing_config?select=*&order=channel.asc`, env);
   if (!r.ok) return err('failed to load routing config', 500);
-  return ok({ config: r.data || [] });
+  // Participation roster per channel (S262, Pruthvi). Returned alongside the config so the
+  // admin screen renders both halves off one call. An EMPTY array means "every eligible
+  // agent" — the RPC's own convention; see the cs_routing_agents table comment.
+  const m = await sb(`/rest/v1/cs_routing_agents?select=channel,user_id`, env);
+  const agents = {};
+  for (const row of (m.data || [])) (agents[row.channel] ||= []).push(row.user_id);
+  return ok({ config: r.data || [], agents });
+}
+
+// Replace the participation roster for ONE channel (S262, Pruthvi). Whole-list replace,
+// not add/remove: the UI is a set of tick boxes, so a diff would just be the same thing
+// with more ways to desync. Delete-then-insert is safe here because the RPC treats a
+// momentarily-empty list as "everyone" rather than "nobody" — the worst case for a request
+// that dies between the two writes is a channel that routes wider than intended, never one
+// that silently stops routing.
+async function setRoutingAgents(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { channel, user_ids } = body || {};
+  if (!['instagram', 'messenger', 'whatsapp'].includes(channel)) return err('invalid channel');
+  if (!Array.isArray(user_ids)) return err('user_ids[] required');
+
+  const del = await sb(`/rest/v1/cs_routing_agents?channel=eq.${encodeURIComponent(channel)}`, env, { method: 'DELETE' });
+  if (!del.ok) return err('failed to clear routing agents', 500);
+  if (user_ids.length) {
+    const rows = user_ids.map(uid => ({ channel, user_id: uid, added_by_user_id: auth.userId }));
+    const ins = await sb(`/rest/v1/cs_routing_agents`, env, { method: 'POST', body: JSON.stringify(rows) });
+    if (!ins.ok) return err('failed to save routing agents', 500);
+  }
+  return ok({ channel, count: user_ids.length });
 }
 
 async function setRoutingConfig(body, auth, env) {
@@ -6845,6 +6881,13 @@ async function getMessagingThreads(params, auth, env) {
   // state === 'all' → no thread_state filter
   const priority = params.get('priority');         // urgent|high|normal|low facet (S164)
   if (priority) q += `&priority=eq.${encodeURIComponent(priority)}`;
+  // Which LOT number the customer wrote to (Pruthvi 2026-07-31). He asked to "segregate
+  // the WhatsApp inbox based on the numbers" so transactional/marketing threads can be
+  // cleared in bulk without mixing into support. A FACET, not a separate inbox — Afshaan's
+  // call that one inbox stays one inbox. Like agent/priority/tag it does not move the
+  // segment counts, which stay whole-channel.
+  const waba = params.get('waba');
+  if (waba) q += `&waba_phone_number_id=eq.${encodeURIComponent(waba)}`;
   const since = params.get('since');               // ISO — last activity ≥ (S164 date filter)
   if (since) q += `&last_message_at=gte.${encodeURIComponent(since)}`;
   const until = params.get('until');               // ISO — last activity ≤ (S164 date filter)
@@ -7128,6 +7171,50 @@ async function bulkAssignThreads(body, auth, env) {
   });
   if (!upd.ok) return err('Bulk assign failed', upd.status || 500);
   return ok({ updated: (upd.data || []).length, assigned_agent_id: agent_id || null, assigned_agent_name: name });
+}
+
+// Bulk resolve/close conversations (Pruthvi 2026-07-31). Same multi-select the bulk
+// assign uses; the missing half was an action other than "assign". The driver is the
+// transactional/marketing inbox — a number the team never converses on still accrues
+// threads, and closing them one at a time is the whole complaint.
+//
+// ADMIN-ONLY on purpose (`cs_ticket_admin`, Pruthvi's own ask): closing 200 conversations
+// is unauditable in aggregate, and the per-thread Resolve button is unchanged for agents.
+// A REASON IS STILL REQUIRED — the ask was to remove repetition, not the outcome record,
+// so every row lands in the reports with a real closed_reason exactly like a single close.
+async function bulkSetThreadState(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { thread_ids, state, closed_reason, closed_note } = body || {};
+  if (!Array.isArray(thread_ids) || thread_ids.length === 0) return err('thread_ids[] required');
+  if (thread_ids.length > 200) return err('too many conversations in one action (max 200)');
+  if (!['open', 'closed'].includes(state)) return err('invalid state (open|closed)');
+  // Unlike the single-thread path the reason is MANDATORY here. That handler leaves it
+  // optional only so the worker and app can deploy in either order; this action is new
+  // on both sides at once, so there is no such window to protect and no reason to allow
+  // a 200-row reasonless close.
+  if (state === 'closed' && !CONVO_CLOSE_REASONS.includes(closed_reason)) {
+    return err(`closed_reason required (one of: ${CONVO_CLOSE_REASONS.join(', ')})`, 422);
+  }
+
+  const patch = { thread_state: state };
+  if (state === 'closed') {
+    patch.closed_at = new Date().toISOString();
+    patch.closed_by_user_id = auth.userId;
+    patch.snoozed_until = null;
+    patch.closed_reason = closed_reason;
+    patch.closed_note = (closed_note && String(closed_note).trim()) || null;
+  } else {
+    clearClosedFields(patch);
+  }
+
+  const idList = thread_ids.map(id => encodeURIComponent(id)).join(',');
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=in.(${idList})`, env, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify(patch),
+  });
+  if (!upd.ok) return err('Bulk resolve failed', upd.status || 500);
+  return ok({ updated: (upd.data || []).length, thread_state: state, closed_reason: patch.closed_reason ?? null });
 }
 
 // Set a DM thread's priority (S164, Pruthvi). Urgent/High/Normal/Low; sortable

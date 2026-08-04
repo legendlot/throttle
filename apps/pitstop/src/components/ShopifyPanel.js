@@ -119,7 +119,17 @@ export function ShopifyPanel({ session, phone, email, onPick, autoLoad, onOrders
             {state.recent_orders.map(o => (
               <div key={o.order_no} style={{ border:'1px solid var(--border)', borderRadius:'var(--radius-md)', padding:'8px 10px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8, flexWrap:'wrap' }}>
-                  <span style={{ color:'var(--t1)', fontWeight:600 }}>{o.order_no}</span>
+                  {/* Order number opens the Shopify order (Pruthvi 2026-07-31). Falls back to
+                      plain text when admin_url is absent — pre-fix worker, or an order whose
+                      gid didn't parse — so the row never renders a dead link. */}
+                  {o.admin_url ? (
+                    <a href={o.admin_url} target="_blank" rel="noreferrer" title="Open in Shopify"
+                       style={{ color:'var(--brand-red)', fontWeight:600, display:'inline-flex', alignItems:'center', gap:3 }}>
+                      {o.order_no} <ExternalLink size={11} />
+                    </a>
+                  ) : (
+                    <span style={{ color:'var(--t1)', fontWeight:600 }}>{o.order_no}</span>
+                  )}
                   <span style={{ color:'var(--t3)' }}>{fmtDate(o.created_at)}</span>
                   <span style={{ marginLeft:'auto', color:'var(--t1)', fontWeight:600 }}>{money(o.total, o.currency)}</span>
                 </div>

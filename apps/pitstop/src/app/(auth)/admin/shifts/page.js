@@ -37,6 +37,9 @@ export default function ShiftsPage() {
   const [istNowMin, setIstNowMin] = useState(null);
   const [shifts, setShifts] = useState([]);
   const [routing, setRouting] = useState([]);
+  // { channel: [user_id, …] } — who takes part in auto-assignment on that channel.
+  // An EMPTY/absent list means every eligible agent, matching the RPC (S262, Pruthvi).
+  const [routingAgents, setRoutingAgents] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [savingId, setSavingId] = useState(null);
@@ -62,6 +65,7 @@ export default function ShiftsPage() {
     try {
       const r = await csopsGet('getRoutingConfig', {}, session);
       setRouting(r?.config || []);
+      setRoutingAgents(r?.agents || {});
     } catch { /* non-admins simply don't see this section */ }
   }, [session, canEdit]);
 
@@ -116,6 +120,14 @@ export default function ShiftsPage() {
   function patchRouting(channel, patch) {
     setRouting(prev => prev.map(c => c.channel === channel ? { ...c, ...patch } : c));
   }
+  function toggleRoutingAgent(channel, userId) {
+    setRoutingAgents(prev => {
+      const cur = new Set(prev[channel] || []);
+      cur.has(userId) ? cur.delete(userId) : cur.add(userId);
+      return { ...prev, [channel]: [...cur] };
+    });
+  }
+
   async function saveRouting(c) {
     setSavingChan(c.channel);
     try {
@@ -123,6 +135,12 @@ export default function ShiftsPage() {
         channel: c.channel,
         auto_assign_enabled: c.auto_assign_enabled,
         max_open_per_agent: (c.max_open_per_agent === '' || c.max_open_per_agent == null) ? null : Number(c.max_open_per_agent),
+      }, session);
+      // Roster saved in the same click as the toggle it belongs to — two Save buttons on one
+      // row would let the pool and the on/off switch drift apart.
+      await csopsPost('setRoutingAgents', {
+        channel: c.channel,
+        user_ids: routingAgents[c.channel] || [],
       }, session);
       await loadRouting();
     } catch (e) { setError(e.message); }
@@ -310,11 +328,38 @@ export default function ShiftsPage() {
                   }}>
                   <Save size={13} /> {savingChan === c.channel ? 'Saving…' : 'Save'}
                 </button>
+
+                {/* Participation roster (Pruthvi 2026-07-31): tick the agents this channel's
+                    round-robin may draw from. Full width under the row's controls so a long
+                    roster wraps instead of squeezing the toggles. */}
+                <div style={{ flexBasis: '100%', borderTop: '1px solid var(--border-1)', marginTop: 2, paddingTop: 10 }}>
+                  <div style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 6 }}>
+                    Agents in the rotation
+                    <span style={{ marginLeft: 8, color: 'var(--t4)' }}>
+                      {(routingAgents[c.channel] || []).length === 0
+                        ? 'none ticked — every eligible agent takes part'
+                        : `${(routingAgents[c.channel] || []).length} of ${sortedRoster.length} ticked`}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
+                    {sortedRoster.map(a => (
+                      <label key={a.user_id} style={{ fontSize: 12, color: 'var(--t2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <input type="checkbox"
+                          checked={(routingAgents[c.channel] || []).includes(a.user_id)}
+                          onChange={() => toggleRoutingAgent(c.channel, a.user_id)} />
+                        {a.full_name}
+                      </label>
+                    ))}
+                    {sortedRoster.length === 0 && <span style={{ fontSize: 12, color: 'var(--t4)' }}>No CS agents found.</span>}
+                  </div>
+                </div>
               </div>
             ))}
             <div style={{ fontSize: 11, color: 'var(--t4)', padding: '2px 4px' }}>
-              WhatsApp stays off until two-way send is live. New inbound threads route to the least-loaded eligible agent;
-              if nobody is eligible they stay Unassigned (claimable in the inbox). Blank max = unlimited.
+              All three channels are currently OFF — nothing auto-assigns until you tick &ldquo;Auto-assign enabled&rdquo;.
+              Once on, a new inbound thread goes to the least-loaded ticked agent who is online and inside their shift;
+              if nobody qualifies it stays Unassigned and is claimable in the inbox. Ticking nobody means everyone
+              takes part, so untick-all does not switch routing off — use the toggle for that. Blank max = unlimited.
             </div>
           </div>
         </section>

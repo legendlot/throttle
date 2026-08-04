@@ -121,6 +121,12 @@ const CLOSE_REASONS = [
 const CLOSE_REASON_LABEL = Object.fromEntries(CLOSE_REASONS);
 CLOSE_REASON_LABEL.resolved = 'Resolved';
 
+// Bulk close DOES offer 'resolved' in the list. Per-thread it is a separate one-click
+// button because that is the common case on a conversation you just handled; in bulk
+// there is no equivalent single gesture, and leaving it out would force the honest
+// outcome for a handled batch to be recorded as something else.
+const BULK_CLOSE_REASONS = [['resolved', 'Resolved'], ...CLOSE_REASONS];
+
 const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const relTime = (iso) => {
   if (!iso) return '';
@@ -222,6 +228,9 @@ export default function InboxPage() {
   const { setTopbarBadge } = useRefreshState();
   const canManage = !!perms?.cs_ticket_manage;
   const canReassign = !!(perms?.cs_ticket_reassign || perms?.cs_ticket_admin);
+  // Bulk resolve is admin-only (Pruthvi's own ask + the worker gate). Team leads keep bulk
+  // ASSIGN; closing 200 conversations at once is the part that needs the higher bar.
+  const canBulkResolve = !!perms?.cs_ticket_admin;
   const myId = user?.id || null;
 
   const [channel, setChannel] = useState('all');
@@ -232,6 +241,9 @@ export default function InboxPage() {
   const [priorityFilter, setPriorityFilter] = useState(''); // '' | urgent|high|normal|low (S164)
   const [agentFilter, setAgentFilter] = useState('');       // '' | assigned-agent id — managers (S164)
   const [sort, setSort] = useState('recent');               // recent | oldest | priority (S164)
+  // Which LOT WhatsApp number the customer wrote to (S262, Pruthvi) — lets the
+  // transactional/marketing traffic be isolated and cleared without a second inbox.
+  const [wabaFilter, setWabaFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');       // phone/name search box (S178, Pruthvi)
   const [search, setSearch] = useState('');                 // debounced → server query
   const [closeOpen, setCloseOpen] = useState(false);         // Close-with-reason popover (2026-07-28)
@@ -317,6 +329,7 @@ export default function InboxPage() {
   // selectedIds/bulkAssign path, just entered deliberately.
   const [selectMode, setSelectMode] = useState(false);
   const [bulkAgent, setBulkAgent] = useState('');         // target of the bulk assign action
+  const [bulkReason, setBulkReason] = useState('');       // outcome for the bulk resolve action (S262)
   const [bulkBusy, setBulkBusy] = useState(false);
   const scrollRef = useRef(null);
   const taRef = useRef(null);
@@ -360,6 +373,7 @@ export default function InboxPage() {
       if (tagFilter) p.tag = tagFilter;
       if (priorityFilter) p.priority = priorityFilter;
       if (agentFilter) p.agent = agentFilter;
+      if (wabaFilter) p.waba = wabaFilter;
       if (sort !== 'recent') p.sort = sort;
       if (search) p.q = search;   // phone/name search (S178, Pruthvi) — server-side
       p.limit = listLimit;        // grows via "Load more" (S202) — single query keeps the 20s poll append-safe
@@ -368,12 +382,12 @@ export default function InboxPage() {
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search, listLimit]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, sort, ignitionScope, search, listLimit]);
 
   // Reset the list window to the first page whenever a filter/channel/search changes
   // — an old expanded window must not carry into a different view. Setting PAGE when
   // it's already PAGE is a no-op (React bails), so this only refetches after Load-more.
-  useEffect(() => { setListLimit(PAGE); }, [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search]);
+  useEffect(() => { setListLimit(PAGE); }, [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, sort, ignitionScope, search]);
 
   // Debounce the search box → server query (S178)
   useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
@@ -846,6 +860,7 @@ export default function InboxPage() {
   function exitSelectMode() {
     setSelectedIds(new Set());
     setBulkAgent('');
+    setBulkReason('');
     setSelectMode(false);
   }
   async function bulkAssign() {
@@ -854,6 +869,23 @@ export default function InboxPage() {
     const agent_id = bulkAgent === '__release__' ? null : bulkAgent;
     try {
       await csopsPost('bulkAssignThreads', { thread_ids: [...selectedIds], agent_id }, session);
+      exitSelectMode();
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+    finally { setBulkBusy(false); }
+  }
+
+  // Bulk resolve (Pruthvi 2026-07-31). Deliberately confirms first: bulk assign is trivially
+  // undoable by assigning again, whereas this writes a closing outcome onto up to 200
+  // conversations, and reopening them individually is exactly the tedium being removed.
+  async function bulkResolve() {
+    if (selectedIds.size === 0 || !bulkReason) return;
+    const label = CLOSE_REASON_LABEL[bulkReason] || bulkReason;
+    if (!window.confirm(`Resolve ${selectedIds.size} conversation${selectedIds.size === 1 ? '' : 's'} as "${label}"?`)) return;
+    setErr(null); setBulkBusy(true);
+    try {
+      await csopsPost('bulkSetThreadState',
+        { thread_ids: [...selectedIds], state: 'closed', closed_reason: bulkReason }, session);
       exitSelectMode();
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
@@ -961,6 +993,20 @@ export default function InboxPage() {
   const isWa = thread?.channel === 'whatsapp';
   const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
+  // Meta's human-agent allowance: on Instagram/Messenger a reply still sends for 7 DAYS after
+  // the customer's last message, which is what sendMetaMessage already does (MESSAGE_TAG +
+  // HUMAN_AGENT). WhatsApp has no equivalent — there, past 24h is a real wall. Measured from
+  // last_inbound_at, NOT from customer_window_until: that column is stamped +24h on every
+  // channel, so deriving 7 days from it would silently be 6 days short.
+  const META_AGENT_DAYS = 7;
+  const metaLastInbound = (!isWa && hasWindow && thread?.last_inbound_at)
+    ? Date.parse(thread.last_inbound_at) : null;
+  const metaDaysLeft = metaLastInbound
+    ? Math.max(0, Math.ceil((metaLastInbound + META_AGENT_DAYS * 86400000 - Date.now()) / 86400000))
+    : null;
+  // Unknown last-inbound is treated as still-sendable: the worker will try the send either
+  // way, and telling an agent it is shut when it is not is the exact failure being fixed.
+  const metaStillSends = !isWa && hasWindow && !windowOpen && (metaDaysLeft == null || metaDaysLeft > 0);
   const tplSel = tplList.find((t) => t.id === tplId) || null;
   const canAttach = ['instagram', 'messenger', 'email', 'whatsapp', 'web'].includes(thread?.channel);   // IG/FB = Graph URL; email = MIME parts (S201); WA/Web = Chatwoot multipart
   const attachAccept = isEmail
@@ -977,8 +1023,8 @@ export default function InboxPage() {
     background: 'var(--surface)', color: 'var(--t1)', cursor: 'pointer' };
 
   // Filters popover carries an "off default" dot so a hidden filter is never silently applied.
-  const filtersDirty = sort !== 'recent' || !!priorityFilter || !!tagFilter || !!agentFilter;
-  function clearFilters() { setSort('recent'); setPriorityFilter(''); setTagFilter(''); setAgentFilter(''); }
+  const filtersDirty = sort !== 'recent' || !!priorityFilter || !!tagFilter || !!agentFilter || !!wabaFilter;
+  function clearFilters() { setSort('recent'); setPriorityFilter(''); setTagFilter(''); setAgentFilter(''); setWabaFilter(''); }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -995,6 +1041,7 @@ export default function InboxPage() {
         priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter}
         tagFilter={tagFilter} setTagFilter={setTagFilter}
         agentFilter={agentFilter} setAgentFilter={setAgentFilter}
+        wabaFilter={wabaFilter} setWabaFilter={setWabaFilter} waNumbers={waNumbers}
         allTags={allTags} agents={agents}
         filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
         filtersDirty={filtersDirty} clearFilters={clearFilters} miniSelect={miniSelect}
@@ -1044,6 +1091,25 @@ export default function InboxPage() {
                     cursor: (!bulkAgent || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkAgent || bulkBusy) ? 0.5 : 1 }}>
                   {bulkBusy ? '…' : 'Apply'}
                 </button>
+                {/* Bulk resolve (Pruthvi 2026-07-31), admin-only — the worker gates it too.
+                    An outcome is still required; picking one here replaces N modals, it does
+                    not skip the record. */}
+                {canBulkResolve && (
+                  <>
+                    <span style={{ width: 1, alignSelf: 'stretch', margin: '6px 2px', background: 'var(--border)' }} />
+                    <select value={bulkReason} onChange={e => setBulkReason(e.target.value)} title="Resolve selected as…"
+                      style={{ ...miniSelect, flex: '0 0 auto', minWidth: 150 }}>
+                      <option value="">Resolve as…</option>
+                      {BULK_CLOSE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                    <button onClick={bulkResolve} disabled={!bulkReason || bulkBusy}
+                      style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--ok-bd)', background: 'var(--ok-bg)', color: 'var(--ok-fg)',
+                        cursor: (!bulkReason || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkReason || bulkBusy) ? 0.5 : 1 }}>
+                      {bulkBusy ? '…' : `Resolve ${selectedIds.size}`}
+                    </button>
+                  </>
+                )}
                 <button onClick={exitSelectMode}
                   style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
                     border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
@@ -1214,7 +1280,7 @@ export default function InboxPage() {
                 </div>
 
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
+                  {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} agentDaysLeft={metaStillSends ? metaDaysLeft : null} />}
                   {/* Claim stays ONE click — it is the most-used control on this row. */}
                   {canManage && !isIgnitionThread && (
                     <AssignBadge thread={thread} mineThread={mineThread} myId={myId} onAssign={assign} />
@@ -1444,10 +1510,19 @@ export default function InboxPage() {
                     </div>
                   ) : !windowOpen && (
                     <div style={{ marginBottom: 7 }}>
-                      <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {/* Two DIFFERENT situations that used to read alike (Pruthvi 2026-08-03, who
+                          concluded Instagram was capped at 24h and asked for a 7-day window that
+                          already existed). On WhatsApp this is a genuine block. On Instagram and
+                          Messenger the reply still goes out under Meta's human-agent allowance for
+                          7 days, so it must not lead with "outside the window" or sound like a
+                          refusal — only past 7 days is it actually shut. */}
+                      <div style={{ fontSize: 10.5, color: metaStillSends ? 'var(--t3)' : 'var(--warn-fg)',
+                        display: 'flex', alignItems: 'center', gap: 5 }}>
                         <Clock size={11} /> {isWa
                           ? 'Outside the 24h window — free-text replies are blocked. Send an approved template to reopen the conversation.'
-                          : 'Outside the 24h window — sends with a HUMAN_AGENT tag.'}
+                          : metaStillSends
+                            ? `Past 24h — your reply still sends${metaDaysLeft != null ? ` (${metaDaysLeft} of 7 days left)` : ' under Meta\u2019s 7-day support window'}.`
+                            : 'Past 7 days — Meta no longer accepts a reply on this conversation.'}
                       </div>
                       {isWa && canManage && !tplOpen && (
                         <button onClick={openTemplates}
@@ -2014,6 +2089,7 @@ function InboxCommandBar(props) {
     searchInput, setSearchInput,
     sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
     agentFilter, setAgentFilter, allTags, agents,
+    wabaFilter, setWabaFilter, waNumbers,
     filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect,
     canManage, canReassign, selectMode, onToggleSelect, onCompose,
     listCollapsed, toggleListCollapse,
@@ -2200,6 +2276,20 @@ function InboxCommandBar(props) {
                 <option value="">All priorities</option>
                 {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
               </select>
+              {/* Which LOT number the customer wrote to (S262, Pruthvi). WhatsApp-only —
+                  no other channel has more than one inbound address — so it is hidden
+                  unless the WhatsApp segment (or All) is showing, where it applies. */}
+              {waNumbers.length > 1 && (channel === 'whatsapp' || channel === 'all') && (
+                <select value={wabaFilter} onChange={e => setWabaFilter(e.target.value)} title="Filter by the LOT number it came to"
+                  style={{ ...miniSelect, flex: 'none', width: '100%' }}>
+                  <option value="">All LOT numbers</option>
+                  {waNumbers.map(n => (
+                    <option key={n.phone_number_id} value={n.phone_number_id}>
+                      {n.label}{n.purpose ? ` · ${n.purpose}` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
               {allTags.length > 0 && (
                 <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag"
                   style={{ ...miniSelect, flex: 'none', width: '100%' }}>
@@ -2493,10 +2583,16 @@ function Bubble({ m, accent }) {
     </div>
   );
 }
-function WindowPill({ open, until }) {
+// `agentDaysLeft` is the Instagram/Messenger human-agent remainder (null on WhatsApp, which
+// has no such allowance). Past 24h those channels still send, so a flat "Window closed" was
+// factually wrong there and is what made the 7-day capability look missing (Pruthvi 2026-08-03).
+function WindowPill({ open, until, agentDaysLeft = null }) {
   if (!until) return null;
   const ms = new Date(until).getTime() - Date.now();
   if (ms <= 0 || !open) {
+    if (agentDaysLeft != null && agentDaysLeft > 0) {
+      return <ToneBadge tone="warn"><Clock size={10} style={{ marginRight: 3 }} /> {agentDaysLeft}d left (7-day)</ToneBadge>;
+    }
     return <ToneBadge tone="mute"><Clock size={10} style={{ marginRight: 3 }} /> Window closed</ToneBadge>;
   }
   const h = Math.floor(ms / 3600000); const mn = Math.floor((ms % 3600000) / 60000);
