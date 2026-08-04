@@ -11,6 +11,12 @@ workers_dev = true
 
 [vars]
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
+# Phase-B short-link host. This domain serves ONLY /r/<code>; every other path on it 302s to
+# legendoftoys.com (see the top of fetch()), because someone typing the bare domain off a printed
+# box must not meet a 401 from the auth block. Scoped by hostname so the API host is unaffected.
+# NB this is the HOST; the URL the app builds links from is comms.settings.link_base_url, which is
+# the feature's off switch and is set separately.
+LINK_HOST = "lottoys.in"
 # Cashfree environment for the payment-link mint (J3). production → api.cashfree.com;
 # anything else → sandbox.cashfree.com (default). LOT's Cashfree account is live
 # (same account powering the website/Shopflo), so the keys are production keys.

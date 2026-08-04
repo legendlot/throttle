@@ -1529,6 +1529,22 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
+
+    // ── The short-link host is a REDIRECT host, not an API host ─────────────────────────
+    // `lottoys.in` (env.LINK_HOST) exists only to serve /r/<code>. Everything else on it —
+    // most obviously someone typing the bare domain after seeing it on a box — must land
+    // somewhere sensible. Without this it falls through to the JWT block below and 401s,
+    // which reads as "the link is broken" to a customer holding printed packaging.
+    //
+    // Scoped to LINK_HOST so the API host is untouched: a bad path on commsops.workers.dev
+    // must still 401/404 rather than silently redirect, or a caller's typo looks like success.
+    if (env.LINK_HOST && url.hostname === env.LINK_HOST && !url.pathname.startsWith('/r/')) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: 'https://legendoftoys.com', 'Cache-Control': 'no-store' },
+      });
+    }
+
     if (url.pathname === '/health' || url.pathname === '/healthz')
       return ok({ service: 'commsops', time: nowIso() });
 
