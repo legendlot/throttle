@@ -190,6 +190,31 @@ async function handleInbound(env, payload) {
                     name: m.name, media: m.media, provider_message_id: m.provider_message_id },
     }).catch((e) => { console.log('wa_ingest_error', e?.message || String(e)); return null; });
 
+    // ⚠️ THE .catch ABOVE CANNOT SEE AN INGEST FAILURE (PATTERN-218 sweep, S261). `ingest()`
+    // returns {ok:false} on all four of its failure modes and never throws, and `sbComms` returns
+    // {ok:false} on any non-2xx — so that handler only ever fires on a network-layer rejection.
+    // Without this line an ordinary inbound whose event insert failed was completely silent: no
+    // row in comms.events, no log, and a 200 back to Meta so it never redelivers. The comment
+    // below already says this path "must keep logging and continuing"; this is what makes the
+    // logging real.
+    //
+    // A LOG, not a throw — deliberately, and the distinction is the whole design here: throwing
+    // for ordinary traffic would turn a transient events-insert blip into a Meta redelivery storm.
+    // The STOP/START guard below DOES throw, because a lost withdrawal is the one failure that
+    // must never 200.
+    //
+    // What is at stake is the journey reply-wake, not the agent's inbox: `forwardToCsops` is a
+    // separate write, so Pitstop still shows the message. A missing event means a journey parked
+    // on a reply never wakes and the customer is tagged No-Response despite having replied — the
+    // same harm documented at the send-failure branch above.
+    if (!res?.ok) {
+      console.log('wa_inbound_ingest_failed', JSON.stringify({
+        reason: res?.error || 'unknown',
+        provider_message_id: m.provider_message_id || null,
+        phone_number_id: m.phone_number_id || null,
+      }));
+    }
+
     // 2b. honour STOP/START. Our approved marketing templates carry "Reply STOP to
     // unsubscribe" and Meta requires opt-out requests to be respected. Marketing-only —
     // this never blocks the customer's order/shipping updates (see optout.js).
@@ -245,7 +270,7 @@ async function handleInbound(env, payload) {
     // signal is not a lost branch — the interpreter's own DB pre-check re-reads the
     // event on its next transition, and the node times out to `no_reply` regardless.
     if (m.button_id) {
-      await ingest(env, {
+      const rep = await ingest(env, {
         identifiers: [{ type: 'phone', value: `+${wa.toWaId(m.from)}` }],
         name: 'whatsapp_reply',
         occurred_at: m.ts,
@@ -255,6 +280,16 @@ async function handleInbound(env, payload) {
                       type: m.type, phone_number_id: m.phone_number_id,
                       provider_message_id: m.provider_message_id },
       }).catch((e) => { console.log('wa_reply_ingest_error', e?.message || String(e)); return null; });
+      // Same blind spot as the inbound call above — {ok:false} never reaches that .catch.
+      // Still best-effort by design (the comment above explains why a missed signal is survivable:
+      // the interpreter re-reads the event on its next transition and times out to no_reply), but
+      // survivable is not the same as invisible.
+      if (!rep?.ok) {
+        console.log('wa_reply_ingest_failed', JSON.stringify({
+          reason: rep?.error || 'unknown', provider_message_id: m.provider_message_id || null,
+          button_id: m.button_id,
+        }));
+      }
     }
   }
   // 2d. park any attachment's bytes somewhere Pitstop can actually open (S245).

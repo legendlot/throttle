@@ -82,11 +82,20 @@ async function handleResendWebhook(env, request) {
     // hard bounce / complaint → suppress forever
     if (u.reason === 'hard_bounce' || u.reason === 'complaint') {
       const addr = msg?.to_address || u.to;
-      if (addr) await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
-        method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates' },
-        body: JSON.stringify({ channel: msg?.channel || 'email', value: addr,
-          profile_id: msg?.profile_id || null, reason: u.reason }),
-      });
+      if (addr) {
+        const sup = await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
+          method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates' },
+          body: JSON.stringify({ channel: msg?.channel || 'email', value: addr,
+            profile_id: msg?.profile_id || null, reason: u.reason }),
+        });
+        // ⚠️ MUST be checked (PATTERN-218 sweep, S261). `comms.suppressions` is step ① of the send
+        // gate and blocks EVERY purpose including transactional, so a dropped write here means we
+        // keep mailing an address that hard-bounced or reported us as spam — a deliverability and
+        // consent consequence, not an analytics one. sbComms returns {ok:false} on a non-2xx and
+        // never throws, so without this the failure was completely silent.
+        if (!sup.ok) console.log('suppression_write_failed',
+          JSON.stringify({ channel: msg?.channel || 'email', reason: u.reason, detail: sup.data }));
+      }
     }
   }
   return { ok: true, processed: updates.length };
@@ -177,7 +186,7 @@ async function handleTrustsignalSms(env, body) {
         // on_conflict target — `ignore-duplicates` with no target 409s on the second DND
         // for the same number.
         const norm = String(addr).replace(/[^\d+]/g, '');
-        await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
+        const sup = await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
           method: 'POST',
           headers: { Prefer: 'resolution=merge-duplicates' },
           body: JSON.stringify({
@@ -185,6 +194,12 @@ async function handleTrustsignalSms(env, body) {
             profile_id: row.profile_id || null, reason: ev.suppress,
           }),
         });
+        // ⚠️ Same rule as the Resend bounce path above (PATTERN-218 sweep, S261): a dropped DND
+        // suppression means we keep texting a DND-registered number. India's DND is category-based,
+        // so this write is the ONLY record that this number withdrew — SMS has no inbound channel
+        // through which the customer could tell us again.
+        if (!sup.ok) console.log('suppression_write_failed',
+          JSON.stringify({ channel: ev.suppress_channel, reason: ev.suppress, detail: sup.data }));
       }
     }
   }
