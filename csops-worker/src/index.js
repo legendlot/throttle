@@ -2784,11 +2784,27 @@ async function handleMyOperatorWebhook(request, env) {
 // MyOperator wraps the call details in a nested `payload` object; the envelope
 // carries session_id / customer_identifier / system_identifier / direction /
 // timestamp / event_type at the top level. Normalise both into one flat shape.
+// MyOperator's `direction` lands in store.cs_calls.direction, which is CHECK-constrained to
+// exactly {'incoming','outgoing'}. Passing the vendor's string through raw is the same shape
+// that lost every shared Instagram reel (see metaAttachmentKind): one unfamiliar value and the
+// INSERT is rejected — and upsertCsCall does not check the result, so the call record would
+// vanish silently. NULL is deliberate for an unrecognised value: a CHECK passes on NULL, so the
+// call is still logged (minus its direction) instead of being dropped entirely.
+// Live vocabulary as of 2026-08-04: 15,906 rows, only 'incoming'/'outgoing' — so this is a
+// guard against future drift, not a bug being fixed.
+function myopDirection(v) {
+  const d = String(v || '').toLowerCase().trim();
+  if (d === 'incoming' || d === 'inbound')  return 'incoming';
+  if (d === 'outgoing' || d === 'outbound') return 'outgoing';
+  if (d) console.log(`[myop] unmapped direction "${v}" — storing null so the call still records`);
+  return null;
+}
+
 function parseMyOp(body) {
   const p = (body && body.payload) || {};
   return {
     session_id: body.session_id || null,
-    direction:  body.direction || p.direction || null,   // 'incoming' | 'outgoing'
+    direction:  myopDirection(body.direction || p.direction),   // 'incoming' | 'outgoing' | null
     did:        body.system_identifier || p.did || null,
     phone:      body.customer_identifier || p.customer_number || null,
     timestamp:  body.timestamp || null,
@@ -2887,6 +2903,14 @@ async function upsertCsCall(account, c, patch, env) {
       ...patch,
     }),
   });
+  // The result was never checked: a rejected INSERT returned null and the caller carried on,
+  // so a call could disappear with no trace anywhere. Log it — a customer phoning us and
+  // leaving no record is the same failure class as the dropped Instagram reels.
+  if (!ins.ok) {
+    console.error(`[myop] cs_calls insert failed ${ins.status} session=${c.session_id} `
+      + `dir=${c.direction} ${JSON.stringify(ins.data)?.slice(0, 200)}`);
+    return null;
+  }
   return ins.data?.[0] || null;
 }
 
