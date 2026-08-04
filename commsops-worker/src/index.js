@@ -24,6 +24,7 @@ const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
+const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -1549,6 +1550,40 @@ export default {
     }
 
     // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
+    // ── Phase-B first-party redirect. PUBLIC by nature — a customer taps this from a WhatsApp
+    //    button, so it must stay ABOVE the JWT block with the other public routes.
+    //
+    //    Three rules, all deliberate:
+    //    1. NOTHING here 404s or throws at a customer. An unknown, expired or malformed code 302s
+    //       to legendoftoys.com. Someone who tapped a real link must never meet a stack trace.
+    //    2. The 302 goes out FIRST; click accounting runs on ctx.waitUntil and is never awaited.
+    //       A failed analytics write must not cost the customer their click. (This is the exact
+    //       opposite of the MINT-side rule in send.js, and the asymmetry is the point: a failed
+    //       mint means there is no working link at all, so that one fails the send.)
+    //    3. Counting is filtered (HEAD / bot UA / sub-second) but redirecting never is.
+    if (url.pathname.startsWith('/r/') && (request.method === 'GET' || request.method === 'HEAD')) {
+      const code = url.pathname.slice(3);
+      const row = await LINKS.resolveLink(env, code).catch(() => null);
+      const target = LINKS.targetFor(row);
+      if (row) {
+        const counted = LINKS.countsAsClick({
+          method: request.method,
+          ua: request.headers.get('User-Agent') || '',
+          // The link is minted immediately before the adapter send, so its own created_at is the
+          // send time to within a few hundred ms — close enough for a 1s prefetch window, and it
+          // costs no extra subrequest on the click path. Deliberately NOT a query param: anything
+          // in the URL is caller-controllable, so a prefetcher could opt itself into being counted.
+          sentAt: row.created_at || null,
+        });
+        if (counted) ctx.waitUntil(LINKS.recordClick(env, row).catch(() => {}));
+      }
+      // 302, not 301: a permanent redirect would be cached by the handset and every later tap
+      // would skip us entirely — no click recorded, and the code could never be expired.
+      return new Response(null, {
+        status: 302,
+        headers: { Location: target, 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
     if (url.pathname === '/unsubscribe' && request.method === 'GET') {
       const r = await handleUnsubscribe(env, url.searchParams.get('token'), url.searchParams.get('all') === '1');
       return new Response(r.html, { status: r.status, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });

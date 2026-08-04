@@ -4,6 +4,7 @@
 const A = require('./auth.js');
 const { renderEmail, renderWhatsapp, renderSms } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');
+const LINKS = require('./links.js');   // Phase-B /r/<code> minting for redirect-backed buttons
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
 const whatsappAdapter = require('./adapters/whatsapp.js');
@@ -309,6 +310,38 @@ async function send(env, opts) {
           }
         } else if (typeof body.text === 'string') {
           body.text = tagText(body.text);
+        }
+      }
+
+      // ── Phase-B: redirect-backed URL buttons ────────────────────────────────────────────
+      // The block above still cannot touch buttons, and never will — but a button whose template
+      // declares `target_base` has been re-approved at Meta as `https://<host>/r/{{1}}`, so its
+      // parameter is no longer a suffix, it is a CODE we mint here.
+      //
+      // ⚠️ Runs for EVERY purpose, unlike the marketing-only UTM tagging above. Utility templates
+      // have buttons too (Order Placed's "Order Details", the Shipment-Update tracking button), and
+      // once one of those is approved in the `/r/{{1}}` form, skipping the mint would send the raw
+      // suffix as the code — i.e. a dead link on an order notification. UTM stays marketing-only:
+      // what is minted is the link, what is tagged is the attribution.
+      //
+      // Zero cost until a template opts in: the settings read only happens when a button on THIS
+      // template actually carries `target_base`, so today it never fires at all.
+      if (body.mode === 'template' && body.template?.components
+          && (template.content?.buttons || []).some((b) => b?.target_base)) {
+        const linkBase = await LINKS.getLinkBaseUrl(env);
+        if (linkBase) {
+          const utm = purpose === 'marketing'
+            ? resolveUtm({ channel, tracking: opts.tracking, template, defaults: utmDefaults })
+            : null;
+          // opts._reservedId is set by the dedup reserve above; null for a send without a dedup
+          // key (test sends). message_id is for attribution, not integrity, so null is fine.
+          await LINKS.applyButtonRedirects(body.template.components, {
+            template, baseUrl: linkBase,
+            mint: (target) => LINKS.mintLink(env, {
+              baseUrl: linkBase, target, utm,
+              messageId: opts._reservedId || null, profileId: opts.profileId || null, channel,
+            }),
+          });
         }
       }
       rendered = {
