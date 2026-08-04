@@ -16,7 +16,7 @@ import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
-  Bell, BellOff, ShoppingBag, SlidersHorizontal, Users,
+  Bell, BellOff, ShoppingBag, SlidersHorizontal, Users, PlayCircle,
 } from 'lucide-react';
 import { ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -2450,12 +2450,31 @@ function Bubble({ m, accent }) {
             <img src={m.media_url} alt={m.media_filename || 'image'}
               style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block' }} />
           </a>
+        ) : m.kind === 'share' ? (
+          /* A reel/post the customer shared. This is the whole point of the share work:
+             the agent has to see WHICH product is being asked about, so the link is a
+             prominent chip rather than the generic "media" anchor. The caption, when Meta
+             sends one, renders below as the message body. */
+          <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+            marginBottom: m.body ? 6 : 2, fontSize: 11.5, color: 'var(--accent)', border: '1px solid var(--border)',
+            borderRadius: 6, padding: '5px 9px', background: 'var(--surface-2)' }}>
+            <PlayCircle size={13} />Shared a post — view on Instagram
+          </a>
         ) : (
           <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 6,
             marginBottom: 4, fontSize: 11, color: 'var(--accent)' }}>
             <FileText size={12} />{m.media_filename || 'media'}
           </a>
         ))}
+        {/* A message with nothing to show must still be VISIBLE. Meta delivers some shares
+            as an empty envelope (49 of them since 24 Jul, and deleted/unsupported messages
+            land the same way), which rendered as a blank bubble — indistinguishable from a
+            rendering bug and impossible for an agent to act on. Say so instead. */}
+        {!emailHtml && !m.body && !m.media_url && !(m.attachments?.length) && (
+          <div style={{ fontSize: 12, color: 'var(--t3)', fontStyle: 'italic' }}>
+            {m.kind === 'share' ? 'Shared a post — Instagram sent no preview' : 'Message not supported — ask the customer to resend'}
+          </div>
+        )}
         {emailHtml ? (
           <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={emailHtml} title="email body"
             style={{ width: 'min(560px, 70vw)', minHeight: 90, maxHeight: 460, border: 'none',

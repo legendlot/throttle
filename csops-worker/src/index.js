@@ -4418,6 +4418,38 @@ function extractPhoneFromChatwoot(body) {
   return null;
 }
 
+// Meta (IG/Messenger) attachment.type → our `kind` enum.
+//
+// ⚠️ THIS MUST NEVER RETURN A VALUE OUTSIDE cs_wa_messages_kind_check. The original code
+// passed Meta's type through verbatim (`kind = t || 'document'`), so a shared reel
+// (attachment.type='ig_reel') failed the CHECK, the INSERT errored, and the handler
+// returned — the customer's message was LOST ENTIRELY. No row, nothing in the inbox, and
+// the only trace was a console.error nobody reads. That is the worst failure mode we have:
+// a customer wrote to us and no one can ever know. Found 2026-08-04 (Pruthvi's IG reel
+// report); the 21 Jul example thread holds the follow-up "Price" but no reel row at all.
+//
+// So the contract is: map what we know, and DEGRADE anything unknown to a storable kind.
+// Losing fidelity is acceptable; losing the message is not.
+const META_ATT_KIND = {
+  image: 'image', video: 'video', audio: 'audio',
+  file: 'document', document: 'document',
+  // Shares — one kind on purpose; the precise Meta type stays in raw_meta and the inbox
+  // renders them identically. A kind per vendor sub-type means a migration per Meta feature.
+  ig_reel: 'share', reel: 'share', ig_post: 'share', post: 'share',
+  share: 'share', media_share: 'share', story_mention: 'share',
+  template: 'template',
+  // Meta's own degraded shapes — storable, just not rich.
+  fallback: 'text', location: 'text', like_heart: 'text', unsupported: 'text',
+};
+function metaAttachmentKind(type) {
+  const k = META_ATT_KIND[String(type || '').toLowerCase()];
+  if (k) return k;
+  // Loud, because an unmapped type is how we find out Meta shipped something new —
+  // and it is now a fidelity bug rather than a data-loss bug.
+  console.log(`[meta] unmapped attachment type "${type}" — storing as document`);
+  return 'document';
+}
+
 // Chatwoot attachment.file_type → our kind enum
 function attachmentKindFromChatwoot(fileType) {
   switch ((fileType || '').toLowerCase()) {
@@ -5698,11 +5730,14 @@ async function metaHandleMessage(channel, ev, env) {
   }
 
   const att = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
-  let kind = 'text', mediaUrl = null;
+  let kind = 'text', mediaUrl = null, attTitle = null;
   if (att) {
-    const t = (att.type || '').toLowerCase();
-    kind = ['image', 'video', 'audio'].includes(t) ? t : t === 'file' ? 'document' : (t || 'document');
+    kind = metaAttachmentKind(att.type);           // never Meta's raw type — see the map
     mediaUrl = att.payload?.url || null;
+    // For a reel/post share Meta puts the caption in payload.title. The agent needs it to
+    // know WHICH product the customer means, which is the entire point of the report —
+    // falling back to it only when the customer sent no words of their own.
+    attTitle = att.payload?.title || null;
   }
   const ts = ev.timestamp ? new Date(Number(ev.timestamp)).toISOString() : new Date().toISOString();
 
@@ -5710,14 +5745,17 @@ async function metaHandleMessage(channel, ev, env) {
     method: 'POST',
     body: JSON.stringify({
       thread_id: thread.id, channel, direction, kind,
-      body: msg.text || null, media_url: mediaUrl, provider_message_id: mid,
+      body: msg.text || attTitle || null, media_url: mediaUrl, provider_message_id: mid,
       status: direction === 'outbound' ? 'sent' : null,
       received_at: direction === 'inbound' ? ts : null,
       sent_at: direction === 'outbound' ? ts : null,
       raw_meta: ev,
     }),
   });
-  if (!ins.ok) { console.error(`[meta] message insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return; }
+  // Name the kind in the error: the one time this fired in anger it was a CHECK violation
+  // on `kind`, and the old message said only "insert failed" — which is why a customer
+  // message going missing went unexplained for two weeks.
+  if (!ins.ok) { console.error(`[meta] message insert failed ${ins.status} kind=${kind} att=${att?.type || 'none'} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return; }
 
   const patch = { last_message_at: ts };
   if (direction === 'inbound') {
