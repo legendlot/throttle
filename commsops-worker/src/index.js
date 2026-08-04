@@ -243,6 +243,32 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
+    // ── Links (S261) — the campaign/QR half of comms.links ──────────────────────────────
+    // Scoped to kind='campaign' on purpose. Recipient links are one-per-message machine exhaust
+    // (they will run to millions) and each one maps to a single customer's cart — listing them in
+    // a UI would be both useless and a privacy surface. They are visible on the MESSAGE, not here.
+    case 'getLinks': {
+      const q = (url.searchParams.get('q') || '').trim();
+      let path = '/rest/v1/links?kind=eq.campaign&select=*&order=created_at.desc&limit=500';
+      if (q) path += `&or=(code.ilike.*${A.enc(q)}*,title.ilike.*${A.enc(q)}*,target_url.ilike.*${A.enc(q)}*)`;
+      const r = await A.sbComms(path, env);
+      return r.ok ? ok(r.data || []) : err('db_error', 500);
+    }
+
+    case 'getLink': {
+      const code = (url.searchParams.get('code') || '').trim();
+      if (!code) return err('code_required', 400);
+      const [link, daily, changes] = await Promise.all([
+        A.sbComms(`/rest/v1/links?code=eq.${A.enc(code)}&kind=eq.campaign&select=*&limit=1`, env),
+        // 90 days of the rollup — enough to see a print run land, bounded enough to send whole.
+        A.sbComms(`/rest/v1/link_click_daily?code=eq.${A.enc(code)}&select=day,clicks&order=day.desc&limit=90`, env),
+        A.sbComms(`/rest/v1/link_changes?code=eq.${A.enc(code)}&select=*&order=changed_at.desc&limit=50`, env),
+      ]);
+      const row = (link.ok && link.data?.[0]) || null;
+      if (!row) return err('not_found', 404);
+      return ok({ link: row, daily: (daily.ok && daily.data) || [], changes: (changes.ok && changes.data) || [] });
+    }
+
     case 'getSuppressions': {          // S253 — the hardest gate finally has a read path
       // `comms.suppressions` is step ① of the send gate and blocks EVERY purpose, including
       // transactional — a suppressed customer stops receiving order and shipping messages,
@@ -467,6 +493,34 @@ async function handleGet(url, auth, env) {
 // ── POST actions ─────────────────────────────────────────────────────────────
 async function handlePost(body, auth, env) {
   switch (body.action) {
+    // ── Links (S261) ────────────────────────────────────────────────────────────────────
+    // Gated on `campaign_build`, reusing the relayops layer rather than minting a new key —
+    // a link is a campaign asset. NB this is a REAL permission decision, not a formality:
+    // `updateLink` can repoint a QR code already printed on packaging, so whoever holds
+    // campaign_build can change where physical artwork sends customers. Every target change
+    // is audited to comms.link_changes for exactly that reason.
+    case 'createLink': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const r = await LINKS.createCampaignLink(env, {
+        slug: body.slug, target: body.target_url, title: body.title,
+        utm: body.utm, userId: auth.userId,
+      });
+      // Named errors, not a generic 400 — "that short name is taken" and "that is not a valid
+      // URL" need different things from the person at the form.
+      if (!r.ok) return err(r.error, r.error === 'slug_taken' ? 409 : 400);
+      return ok(r.link);
+    }
+
+    case 'updateLink': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const r = await LINKS.updateCampaignLink(env, {
+        code: body.code, target: body.target_url, title: body.title,
+        utm: body.utm, active: body.active, reason: body.reason, userId: auth.userId,
+      });
+      if (!r.ok) return err(r.error, r.error === 'not_found' ? 404 : 400);
+      return ok(r.link);
+    }
+
     case 'saveRole': {                 // create/clone/edit a custom role (M2)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const { role_key, label, description, permissions } = body;

@@ -97,15 +97,21 @@ async function mintLink(env, { baseUrl, target, utm, messageId, profileId, chann
   return null;
 }
 
-/** Look up a code. Returns the row, or null for unknown/expired/malformed. */
+/**
+ * Look up a code. Returns the row, or null for unknown / expired / retired / malformed.
+ *
+ * The charset here spans BOTH kinds: mixed-case base62 for a minted recipient code, and lower-case
+ * with `-` for a campaign slug. Hence `[A-Za-z0-9-]` rather than the mint alphabet.
+ */
 async function resolveLink(env, code) {
-  if (!code || !/^[A-Za-z0-9]{8,64}$/.test(code)) return null;
+  if (!code || !/^[A-Za-z0-9][A-Za-z0-9-]{1,63}$/.test(code)) return null;
   const r = await A.sbComms(
     `/rest/v1/links?code=eq.${encodeURIComponent(code)}` +
-    `&select=code,target_url,utm,message_id,profile_id,channel,created_at,expires_at,click_count,first_clicked_at&limit=1`, env
+    `&select=code,kind,target_url,utm,message_id,profile_id,channel,created_at,expires_at,active,click_count,first_clicked_at&limit=1`, env
   ).catch(() => ({ ok: false }));
   const row = (r.ok && r.data?.[0]) || null;
   if (!row) return null;
+  if (row.active === false) return null;    // retired — 302s to the fallback, never a 404
   if (row.expires_at && Date.parse(row.expires_at) < Date.now()) return null;
   return row;
 }
@@ -159,13 +165,26 @@ function countsAsClick({ method, ua, sentAt, now } = {}) {
  * SMS clicks land in the same place as email's Resend-sourced ones. Never `wa_clicked`/`sms_clicked`.
  */
 async function recordClick(env, row) {
-  const first = !row.first_clicked_at ? { first_clicked_at: new Date().toISOString() } : {};
+  const now = new Date();
+  const first = !row.first_clicked_at ? { first_clicked_at: now.toISOString() } : {};
   await A.sbComms(`/rest/v1/links?code=eq.${encodeURIComponent(row.code)}`, env, {
     method: 'PATCH',
-    body: JSON.stringify({ click_count: Number(row.click_count || 0) + 1, ...first }),
+    body: JSON.stringify({
+      click_count: Number(row.click_count || 0) + 1, last_clicked_at: now.toISOString(), ...first,
+    }),
   }).catch((e) => console.log('link_click_count_error', String(e?.message || e)));
 
-  if (!row.profile_id) return;   // events are profile-scoped; an unbound link has nowhere to land
+  // Daily rollup, via an atomic RPC. A read-modify-write would lose concurrent clicks, which on a
+  // printed QR is the normal case rather than the edge one. Dated in IST, matching every other LOT
+  // day-grain (RULE-SALES-001) so a chart here lines up with one in Odo.
+  const istDay = new Date(now.getTime() + 5.5 * 3600_000).toISOString().slice(0, 10);
+  await A.sbComms('/rest/v1/rpc/bump_link_click', env, {
+    method: 'POST', body: JSON.stringify({ p_code: row.code, p_day: istDay }),
+  }).catch((e) => console.log('link_click_daily_error', String(e?.message || e)));
+
+  // Events are profile-scoped, so a CAMPAIGN link has nowhere to land one — the rollup above is its
+  // entire analytics story, and that is by design, not a gap to "fix" by inventing a profile.
+  if (!row.profile_id) return;
   await A.sbComms('/rest/v1/events', env, {
     method: 'POST',
     body: JSON.stringify({
@@ -178,6 +197,97 @@ async function recordClick(env, row) {
       },
     }),
   }).catch((e) => console.log('link_clicked_event_error', String(e?.message || e)));
+}
+
+// ── Campaign links (kind='campaign') ─────────────────────────────────────────
+// A campaign slug is the OPPOSITE of a minted recipient code: chosen, memorable, permanent, printed
+// on packaging, shared with thousands of strangers. That is safe ONLY because a campaign link carries
+// no personal context. See migration 0040 for the full kind table — the two must not be unified.
+//
+// `-` but not `_`, no dots, no unicode: a slug has to survive being read off a printed box and typed
+// by hand. Lower-case only, so the same QR can never be two links.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
+function normalizeSlug(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  return SLUG_RE.test(s) ? s : null;
+}
+
+/**
+ * Create an author-made campaign link. Distinct from `mintLink` on purpose: different code source
+ * (chosen, not random), no expiry, and a title — the divergence is the point, not an oversight.
+ *
+ * `expires_at` is left NULL forever. A printed QR that expires is dead artwork nobody can recall.
+ */
+async function createCampaignLink(env, { slug, target, title, utm, userId } = {}) {
+  const code = normalizeSlug(slug);
+  if (!code) return { ok: false, error: 'invalid_slug' };
+  let parsed;
+  try { parsed = new URL(target); } catch { return { ok: false, error: 'invalid_target' }; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ok: false, error: 'invalid_target' };
+
+  const r = await A.sbComms('/rest/v1/links', env, {
+    method: 'POST', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      code, kind: 'campaign', target_url: target, title: title || null,
+      utm: utm || null, expires_at: null, created_by: userId || null,
+    }),
+  }).catch((e) => ({ ok: false, data: String(e?.message || e) }));
+
+  // 23505 = the slug is taken. Distinct error, because "that name is already used" and "something
+  // broke" want completely different things from the person at the form.
+  if (!r.ok) {
+    const dup = JSON.stringify(r.data || '').includes('23505');
+    return { ok: false, error: dup ? 'slug_taken' : 'create_failed', detail: r.data };
+  }
+  return { ok: true, link: Array.isArray(r.data) ? r.data[0] : r.data };
+}
+
+/**
+ * Edit a campaign link. Target, title, utm and active only.
+ *
+ * ⚠️ `code` and `kind` are NEVER editable. A printed code is immutable by definition — the artwork is
+ * already in customers' hands — and a recipient link must never become a campaign link, which would
+ * make one customer's cart context permanent and guessable.
+ *
+ * A target change writes an append-only `link_changes` row BEFORE the update. That log is the only
+ * thing that can answer "where did this QR point in March?", which the row itself cannot.
+ */
+async function updateCampaignLink(env, { code, target, title, utm, active, reason, userId } = {}) {
+  const cur = await A.sbComms(
+    `/rest/v1/links?code=eq.${encodeURIComponent(code || '')}&select=code,kind,target_url&limit=1`, env
+  ).catch(() => ({ ok: false }));
+  const row = (cur.ok && cur.data?.[0]) || null;
+  if (!row) return { ok: false, error: 'not_found' };
+  if (row.kind !== 'campaign') return { ok: false, error: 'not_a_campaign_link' };
+
+  const patch = { updated_by: userId || null, updated_at: new Date().toISOString() };
+  if (title !== undefined) patch.title = title || null;
+  if (utm !== undefined) patch.utm = utm || null;
+  if (active !== undefined) patch.active = !!active;
+
+  if (target !== undefined && target !== row.target_url) {
+    let parsed;
+    try { parsed = new URL(target); } catch { return { ok: false, error: 'invalid_target' }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ok: false, error: 'invalid_target' };
+    // Audit first: if the update then fails, we have a claimed change that did not happen, which is
+    // recoverable by reading the row. The reverse — a silent change with no record — is not.
+    await A.sbComms('/rest/v1/link_changes', env, {
+      method: 'POST',
+      body: JSON.stringify({
+        code: row.code, old_target_url: row.target_url, new_target_url: target,
+        reason: reason || null, changed_by: userId || null,
+      }),
+    }).catch((e) => console.log('link_change_audit_error', String(e?.message || e)));
+    patch.target_url = target;
+  }
+
+  const r = await A.sbComms(`/rest/v1/links?code=eq.${encodeURIComponent(row.code)}`, env, {
+    method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch),
+  }).catch((e) => ({ ok: false, data: String(e?.message || e) }));
+  if (!r.ok) return { ok: false, error: 'update_failed', detail: r.data };
+  return { ok: true, link: Array.isArray(r.data) ? r.data[0] : r.data };
 }
 
 /**
@@ -235,5 +345,6 @@ async function applyButtonRedirects(components, { template, baseUrl, mint } = {}
 module.exports = {
   newLinkCode, getLinkBaseUrl, mintLink, resolveLink, targetFor, countsAsClick, recordClick,
   buildButtonTarget, applyButtonRedirects,
+  normalizeSlug, createCampaignLink, updateCampaignLink, SLUG_RE,
   CODE_ALPHABET, CODE_LENGTH, FALLBACK_URL, DEFAULT_TTL_DAYS, BOT_UA,
 };
