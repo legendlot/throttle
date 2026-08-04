@@ -96,9 +96,19 @@ replacement is APPROVED**. Order when it starts: the five no-suffix buttons firs
 `Order Placed`, then the Shiprocket tracking button, and the four Shopflo cart-recovery templates last —
 they carry the volume.
 
-**External gate:** `go.legendoftoys.com` must exist as a Worker custom domain on `commsops`. That is a
-DNS record plus a `wrangler.toml` route, and `wrangler.toml` is permission-gated by CLAUDE.md — it needs
-Afshaan. Everything in this plan is buildable and testable on the existing `workers.dev` host first.
+**External gate — and it is bigger than this plan first said.** ⚠️ **CORRECTED 2026-08-04: the spec's
+"`go.legendoftoys.com` as a Worker route is sufficient and needs no new domain purchase" is WRONG, and
+this plan repeated it uncorrected.** A Cloudflare Worker custom domain requires the zone to be **on
+Cloudflare**; `dig NS legendoftoys.com` returns `ns37/ns38.domaincontrol.com` — **GoDaddy**. So there is
+no DNS record Afshaan can add today that would make it work. Either register a short domain as its own
+Cloudflare zone (the standing BACKLOG ask, and the better answer for SMS character budget), or delegate
+`go.legendoftoys.com` to Cloudflare via NS records at GoDaddy — confirm the latter is available on
+LOT's plan before promising it. Moving the apex zone is not the cheap option: it touches email/DKIM and
+the gh-pages targets.
+
+⚠️ **The host must exist BEFORE the first Meta submission** — the base URL is frozen into the template
+at approval, so a `workers.dev` base would be permanent. Everything in this plan is buildable and
+testable on `workers.dev`; only the submission wave is gated.
 
 ---
 

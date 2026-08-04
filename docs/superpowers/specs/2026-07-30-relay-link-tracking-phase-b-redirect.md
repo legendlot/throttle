@@ -72,10 +72,24 @@ the `/r/{{1}}` form and pass review. Sequencing that matters:
 2. Do the low-traffic templates first. The cart-recovery and browse-abandonment templates carry the
    volume and should move last, with the old version live until the new one is confirmed.
 
-**A short host is required.** `go.legendoftoys.com` as a Worker route is sufficient and needs no new
-domain purchase. It must be a host we control end to end — never a third-party shortener, which
-would put an outside party between LOT and its customers and break the attribution it exists to
-provide.
+**A short host is required.** It must be a host we control end to end — never a third-party
+shortener, which would put an outside party between LOT and its customers and break the attribution
+it exists to provide.
+
+⚠️ **CORRECTED 2026-08-04 (S261): the original line here — "`go.legendoftoys.com` as a Worker route is
+sufficient and needs no new domain purchase" — is WRONG, and it was repeated into the implementation
+plan before anyone checked.** A Cloudflare Worker custom domain requires the **zone to be on
+Cloudflare**, and `legendoftoys.com` is not: `dig NS legendoftoys.com` returns
+`ns37/ns38.domaincontrol.com`, i.e. **GoDaddy**. So no route can attach to `go.legendoftoys.com` as
+things stand. Two real options, both needing Afshaan:
+- **Register a short domain** and add it as its own Cloudflare zone (the standing BACKLOG ask). Also
+  the better answer for SMS, where every character is billed.
+- **Delegate the subdomain** — add `go.legendoftoys.com` to Cloudflare as its own zone and point NS
+  records at it from GoDaddy. Cheaper (no purchase), but confirm it is available on LOT's current
+  Cloudflare plan before promising it.
+
+Moving the apex zone to Cloudflare is NOT the cheap third option — it would touch email/DKIM and the
+gh-pages deploy targets.
 
 ## Two things to design in from the start, not bolt on
 
