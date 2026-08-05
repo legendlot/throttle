@@ -172,9 +172,24 @@ function lintWaTemplate(content = {}) {
           + 'url (static base + trailing variable). Anything else produces a broken link that '
           + 'still passes review.');
       }
-      if (vars.length === 1 && !b.example) {
+      // Ask the question the SUBMITTER will ask, not a narrower one. buildComponents()
+      // (wa-templates.js) derives the sample url from `example_suffix`, else the matching
+      // button mapping slot, else the literal 'sample' — and only falls back to the button's
+      // own `example` when none of that applies. Linting `b.example` alone therefore blocked
+      // templates that would have serialised perfectly well: a LOT Build template authored
+      // with the suffix in its mapping slot (the shape the editor writes) was refused with a
+      // bare `lint_failed` and could not be submitted at all (Pruthvi 2026-08-05).
+      // Slot matching mirrors the serialiser EXACTLY, `s.index ?? 0` included, so lint and
+      // submit can never disagree. NB that default collapses every `pos`-only slot onto
+      // button 0 — harmless for the single-URL-button templates we author, and a real
+      // multi-button mapping must carry an explicit `index` for either path to address it.
+      const btnSlots = mapping.filter((m) => (m.component || 'body') === 'button');
+      const hasExample = b.example != null
+        || b.example_suffix != null
+        || btnSlots.find((s) => Number(s.index ?? 0) === i)?.example != null;
+      if (vars.length === 1 && !hasExample) {
         err('button_no_example', `URL button ${i + 1} carries {{1}} but has no example. Meta requires `
-          + 'a fully-substituted sample url.');
+          + 'a fully-substituted sample url — set the button example, or give its mapping slot one.');
       }
       const mappedBtn = mapping.some((m) => m.component === 'button');
       // A mapping slot against a STATIC button is rejected at SEND time (the S241 finding).

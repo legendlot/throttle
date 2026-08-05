@@ -452,7 +452,13 @@ async function waSubmitTemplate(env, body) {
   // `force: true` is the deliberate escape hatch for a rule we believe has gone stale — logged.
   const lint = LINT.lintWaTemplate(content);
   if (!lint.ok && body.force !== true) {
-    return { ok: false, error: 'lint_failed', issues: lint.errors, warnings: lint.warnings };
+    // The linter's whole value is its `detail` text — "meta_name must be lowercase a-z…" tells
+    // the author exactly what to change. It was being dropped: the app surfaces `error` and
+    // nothing reads `issues`, so a blocked submit rendered as the bare word `lint_failed`
+    // (Pruthvi 2026-08-05), which is precisely the blind-iteration this file exists to end.
+    // Structured `issues` stays for any caller that wants it.
+    const detail = lint.errors.map((e) => e.detail || e.code).filter(Boolean).join(' · ');
+    return { ok: false, error: `lint_failed: ${detail}`, issues: lint.errors, warnings: lint.warnings };
   }
   if (!lint.ok) console.log('wa_submit_lint_forced', tpl.id, JSON.stringify(lint.errors));
 
