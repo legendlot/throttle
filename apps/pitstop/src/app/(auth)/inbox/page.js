@@ -121,6 +121,16 @@ const CLOSE_REASONS = [
 const CLOSE_REASON_LABEL = Object.fromEntries(CLOSE_REASONS);
 CLOSE_REASON_LABEL.resolved = 'Resolved';
 
+// ⚠️ Meta gates every reply past the 24h window behind the SEPARATE `human_agent` App Review
+// permission — it is not covered by instagram_business_manage_messages, which is what we hold.
+// Until it is approved, csops sends `messaging_type:MESSAGE_TAG, tag:HUMAN_AGENT` (index.js
+// ~5868) and Meta rejects it outright: IGApiException code 10, "To use 'Human Agent', your use
+// of this endpoint must be reviewed and approved by Facebook" (Pruthvi 2026-08-05, screenshot).
+// The 7-day machinery below is CORRECT and deliberately kept — the capability is real, the
+// approval is missing. Flip this to true the day it lands and the honest copy comes back with
+// it. Submit at: App Dashboard → App Review → Permissions & Features → Human Agent.
+const META_HUMAN_AGENT_APPROVED = false;
+
 // Bulk close DOES offer 'resolved' in the list. Per-thread it is a separate one-click
 // button because that is the common case on a conversation you just handled; in bulk
 // there is no equivalent single gesture, and leaving it out would force the honest
@@ -1528,19 +1538,22 @@ export default function InboxPage() {
                     </div>
                   ) : !windowOpen && (
                     <div style={{ marginBottom: 7 }}>
-                      {/* Two DIFFERENT situations that used to read alike (Pruthvi 2026-08-03, who
-                          concluded Instagram was capped at 24h and asked for a 7-day window that
-                          already existed). On WhatsApp this is a genuine block. On Instagram and
-                          Messenger the reply still goes out under Meta's human-agent allowance for
-                          7 days, so it must not lead with "outside the window" or sound like a
-                          refusal — only past 7 days is it actually shut. */}
-                      <div style={{ fontSize: 10.5, color: metaStillSends ? 'var(--t3)' : 'var(--warn-fg)',
+                      {/* THREE different situations. WhatsApp: a genuine block, escapable with a
+                          template. Instagram/Messenger: the 7-day human-agent allowance is real,
+                          but gated behind an App Review permission we do NOT hold, so until it
+                          lands the honest line is that Meta refuses the reply. "Your reply still
+                          sends" printed above a send that then fails is worse than the old flat
+                          "window closed" — it makes the app look broken rather than restricted
+                          (Pruthvi 2026-08-05). Past 7 days it is shut regardless of approval. */}
+                      <div style={{ fontSize: 10.5, color: (metaStillSends && META_HUMAN_AGENT_APPROVED) ? 'var(--t3)' : 'var(--warn-fg)',
                         display: 'flex', alignItems: 'center', gap: 5 }}>
                         <Clock size={11} /> {isWa
                           ? 'Outside the 24h window — free-text replies are blocked. Send an approved template to reopen the conversation.'
-                          : metaStillSends
+                          : (metaStillSends && META_HUMAN_AGENT_APPROVED)
                             ? `Past 24h — your reply still sends${metaDaysLeft != null ? ` (${metaDaysLeft} of 7 days left)` : ' under Meta\u2019s 7-day support window'}.`
-                            : 'Past 7 days — Meta no longer accepts a reply on this conversation.'}
+                            : metaStillSends
+                              ? 'Past 24h — Meta will refuse this reply. Replying this late needs its Human Agent approval, which is still pending. The customer messaging again reopens the chat.'
+                              : 'Past 7 days — Meta no longer accepts a reply on this conversation.'}
                       </div>
                       {isWa && canManage && !tplOpen && (
                         <button onClick={openTemplates}
@@ -2602,13 +2615,14 @@ function Bubble({ m, accent }) {
   );
 }
 // `agentDaysLeft` is the Instagram/Messenger human-agent remainder (null on WhatsApp, which
-// has no such allowance). Past 24h those channels still send, so a flat "Window closed" was
-// factually wrong there and is what made the 7-day capability look missing (Pruthvi 2026-08-03).
+// has no such allowance). The remainder is only worth showing while the allowance is usable —
+// without the `human_agent` App Review permission Meta refuses the send, so "3d left (7-day)"
+// would be counting down a window we cannot actually use (Pruthvi 2026-08-05).
 function WindowPill({ open, until, agentDaysLeft = null }) {
   if (!until) return null;
   const ms = new Date(until).getTime() - Date.now();
   if (ms <= 0 || !open) {
-    if (agentDaysLeft != null && agentDaysLeft > 0) {
+    if (META_HUMAN_AGENT_APPROVED && agentDaysLeft != null && agentDaysLeft > 0) {
       return <ToneBadge tone="warn"><Clock size={10} style={{ marginRight: 3 }} /> {agentDaysLeft}d left (7-day)</ToneBadge>;
     }
     return <ToneBadge tone="mute"><Clock size={10} style={{ marginRight: 3 }} /> Window closed</ToneBadge>;

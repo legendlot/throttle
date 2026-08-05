@@ -5669,6 +5669,22 @@ function metaGraphBase(channel) {
   return channel === 'instagram' ? 'https://graph.instagram.com/v21.0' : META_GRAPH;
 }
 
+// Meta's raw error JSON is what the agent sees banner-width across the top of the inbox, and
+// the one failure they hit routinely — replying past 24h — renders as an unreadable blob ending
+// in an fbtrace_id (Pruthvi 2026-08-05). Translate the known cause; anything unrecognised still
+// surfaces verbatim, since a swallowed error is worse than an ugly one.
+// The cause: past the window we send tag:HUMAN_AGENT, which Meta gates behind the separate
+// `human_agent` App Review permission (App Dashboard → App Review → Permissions & Features).
+// It is NOT covered by instagram_business_manage_messages, which is what we hold.
+function metaSendError(d, status) {
+  const e = (d && d.error) || {};
+  if (Number(e.code) === 10 && /human[_ ]agent/i.test(String(e.message || ''))) {
+    return err('Meta refused this reply. Replying more than 24 hours after the customer wrote '
+      + 'needs its Human Agent approval, which is still pending. The chat reopens if the customer messages again.', status);
+  }
+  return err(`Meta send failed: ${JSON.stringify(Object.keys(e).length ? e : d)}`, status);
+}
+
 function handleMetaVerify(url, env) {
   const mode = url.searchParams.get('hub.mode');
   const token = url.searchParams.get('hub.verify_token');
@@ -5872,7 +5888,7 @@ async function sendMetaMessage(body, auth, env) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) return err(`Meta send failed: ${JSON.stringify(d?.error || d)}`, r.status);
+  if (!r.ok) return metaSendError(d, r.status);
 
   const mid = d?.message_id || null;
   await sb(`/rest/v1/cs_wa_messages`, env, {
@@ -6216,7 +6232,7 @@ async function sendMetaAttachment(body, auth, env) {
     }),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) return err(`Meta send failed: ${JSON.stringify(d?.error || d)}`, r.status);
+  if (!r.ok) return metaSendError(d, r.status);
   const mid = d?.message_id || null;
 
   const senderName = auth.fullName || auth.name || auth.email || null;
