@@ -84,6 +84,13 @@ export default function SegmentsPage() {
   const [materializing, setMaterializing] = useState(false);
   const [eventDefs, setEventDefs] = useState([]);
 
+  // static-segment membership (S263)
+  const [members, setMembers] = useState({ total: 0, rows: [] });
+  const [memLoading, setMemLoading] = useState(false);
+  const [memInput, setMemInput] = useState('');
+  const [memBusy, setMemBusy] = useState(false);
+  const [addResult, setAddResult] = useState(null);
+
   const canEdit = !perms || perms.segment_manage;
 
   const load = useCallback(async () => {
@@ -151,6 +158,55 @@ export default function SegmentsPage() {
     finally { setSaving(false); }
   }
 
+  // ── static-segment membership (S263) ──
+  const loadMembers = useCallback(async (segId) => {
+    if (!segId || !session) return;
+    setMemLoading(true);
+    try {
+      const r = await garageFetch('getSegmentMembers', { id: segId, limit: 200 }, session);
+      setMembers({ total: r?.total ?? 0, rows: Array.isArray(r?.rows) ? r.rows : [] });
+    } catch (e) { showToast(e.message || 'Failed to load members', 'error'); }
+    finally { setMemLoading(false); }
+  }, [session, showToast]);
+
+  // Only static segments manage members by hand; a dynamic one's list comes from its rule.
+  useEffect(() => {
+    if (view === 'form' && seg.kind === 'static' && seg.id) loadMembers(seg.id);
+    else setMembers({ total: 0, rows: [] });
+  }, [view, seg.kind, seg.id, loadMembers]);
+
+  async function addMembers() {
+    if (!seg.id || !memInput.trim()) return;
+    setMemBusy(true); setAddResult(null);
+    try {
+      const r = await workerFetch('addSegmentMembers', { id: seg.id, values: memInput }, session);
+      const d = r?.data || {};
+      setAddResult(d);
+      // Keep whatever could not be matched in the box — it is the retry list, and clearing
+      // it would hide typos behind a count.
+      setMemInput(Array.isArray(d.unmatched) ? d.unmatched.join('\n') : '');
+      set('member_count', typeof d.total === 'number' ? d.total : seg.member_count);
+      await loadMembers(seg.id);
+      showToast(`${d.added || 0} added`, 'success');
+      load();
+    } catch (e) { showToast(e.message || 'Add failed', 'error'); }
+    finally { setMemBusy(false); }
+  }
+
+  async function removeMember(m) {
+    if (!seg.id) return;
+    const who = m.email || m.phone || m.display_name || 'this contact';
+    if (!window.confirm(`Remove ${who} from "${seg.name}"?`)) return;
+    setMemBusy(true);
+    try {
+      const r = await workerFetch('removeSegmentMember', { id: seg.id, profile_id: m.profile_id }, session);
+      set('member_count', typeof r?.data?.total === 'number' ? r.data.total : seg.member_count);
+      await loadMembers(seg.id);
+      load();
+    } catch (e) { showToast(e.message || 'Remove failed', 'error'); }
+    finally { setMemBusy(false); }
+  }
+
   async function refreshMembers() {
     if (!seg.id) { showToast('Save the segment first', 'error'); return; }
     setMaterializing(true);
@@ -193,9 +249,83 @@ export default function SegmentsPage() {
             </div>
           </div>
           {seg.kind === 'static' && (
-            <div className="tw-note" style={{ marginTop: 12 }}>Static membership is managed by ingestion / API, not by a rule. Save the segment, then add members programmatically.</div>
+            <div className="tw-note" style={{ marginTop: 12 }}>Static membership is a fixed list you manage here — no rule, and nothing re-evaluates it. Save the segment, then add people below.</div>
           )}
         </Panel>
+
+        {seg.kind === 'static' && (
+          <Panel title="Members" pad>
+            {!seg.id ? (
+              <div className="dim" style={{ fontSize: 12.5 }}>Save the segment first, then add people to it.</div>
+            ) : (
+              <>
+                {canEdit && (
+                  <div style={{ marginBottom: 14 }}>
+                    <textarea className="f-inp" rows={4} value={memInput} onChange={(e) => setMemInput(e.target.value)}
+                      placeholder={'Paste emails or phone numbers — one per line, or comma separated\nhello@legendoftoys.com\n+91 70191 03926'}
+                      disabled={memBusy} style={{ resize: 'vertical', fontFamily: 'var(--mono)', fontSize: 12.5 }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                      <Btn kind="primary" onClick={addMembers} disabled={memBusy || !memInput.trim()}>
+                        <Plus size={14} /> {memBusy ? 'Adding…' : 'Add to list'}
+                      </Btn>
+                      <span className="dim" style={{ fontSize: 12 }}>
+                        Only people already known to Relay can be added — a pasted contact we have never seen is reported back, not created.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {addResult && (
+                  <div className="tw-note" style={{ marginBottom: 14 }}>
+                    <div><strong>{addResult.added}</strong> added{addResult.already > 0 ? ` · ${addResult.already} already on the list` : ''} · <strong>{addResult.total}</strong> total.</div>
+                    {Array.isArray(addResult.unmatched) && addResult.unmatched.length > 0 && (
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ color: 'var(--warn-fg, var(--text-2))' }}>
+                          {addResult.unmatched.length} not found in Relay and skipped:
+                        </div>
+                        <div className="mono" style={{ fontSize: 12, marginTop: 4, wordBreak: 'break-all' }}>
+                          {addResult.unmatched.slice(0, 50).join(', ')}{addResult.unmatched.length > 50 ? ` … +${addResult.unmatched.length - 50} more` : ''}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {memLoading ? <Spinner /> : (members.rows.length === 0
+                  ? <EmptyState title="No members yet" hint="Paste emails or phone numbers above to build the list." />
+                  : (
+                    <>
+                      <table className="dt">
+                        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Added</th>{canEdit && <th />}</tr></thead>
+                        <tbody>
+                          {members.rows.map((m) => (
+                            <tr key={m.profile_id}>
+                              <td>{m.display_name || <span className="dim">—</span>}</td>
+                              <td className="mono">{m.email || <span className="dim">—</span>}</td>
+                              <td className="mono">{m.phone || <span className="dim">—</span>}</td>
+                              <td className="dim">{fmtDateTime(m.added_at)}</td>
+                              {canEdit && (
+                                <td style={{ textAlign: 'right' }}>
+                                  <Btn onClick={() => removeMember(m)} disabled={memBusy}>
+                                    <Trash2 size={13} /> Remove
+                                  </Btn>
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {members.total > members.rows.length && (
+                        <div className="dim" style={{ fontSize: 12, marginTop: 10 }}>
+                          Showing {members.rows.length} of {members.total} — newest first.
+                        </div>
+                      )}
+                    </>
+                  ))}
+              </>
+            )}
+          </Panel>
+        )}
 
         {seg.kind === 'dynamic' && (
           <Panel title="Audience rule" pad>

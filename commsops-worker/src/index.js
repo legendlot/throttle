@@ -402,6 +402,19 @@ async function handleGet(url, auth, env) {
       ]);
       return ok({ segment: s.data?.[0] || null, member_count: Array.isArray(mc.data) ? mc.data.length : 0 });
     }
+    case 'getSegmentMembers': {        // S263 — who is actually in this segment
+      // Same segment_manage gate as previewSegment: this returns addresses, so relay_view
+      // alone must not turn it into a PII reader.
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const r = await A.sbComms('/rest/v1/rpc/segment_member_page', env, {
+        method: 'POST',
+        body: JSON.stringify({ p_segment_id: id,
+          p_limit: Math.min(Number(url.searchParams.get('limit')) || 50, 200),
+          p_offset: Math.max(Number(url.searchParams.get('offset')) || 0, 0) }),
+      });
+      return r.ok ? ok(r.data || { total: 0, rows: [] }) : err('db_error', 500);
+    }
     case 'getCampaigns': {
       const r = await A.sbComms('/rest/v1/campaigns?select=*&order=updated_at.desc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
@@ -1168,6 +1181,35 @@ async function handlePost(body, auth, env) {
       if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
       const r = await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: body.id }) });
       return r.ok ? ok({ members: r.data }) : err('db_error', 500);
+    }
+    // Static-segment membership (S263). `kind='static'` has existed since M6 with nothing
+    // able to fill it — materialize_segment no-ops on static by design, so a static segment
+    // was creatable and permanently empty (Pruthvi 2026-08-05).
+    case 'addSegmentMembers': {
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
+      const { id, values } = body;
+      if (!id) return err('id_required', 400);
+      const list = Array.isArray(values) ? values
+        : String(values || '').split(/[\n,;]+/);                 // paste: newline / comma / semicolon
+      const clean = list.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 5000);
+      if (clean.length === 0) return err('no_values', 400);
+      const r = await A.sbComms('/rest/v1/rpc/add_static_segment_members', env, {
+        method: 'POST', body: JSON.stringify({ p_segment_id: id, p_values: clean }),
+      });
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      if (r.data?.error) return err(r.data.error, 400);          // not_static / segment_not_found
+      return ok(r.data);
+    }
+    case 'removeSegmentMember': {
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
+      const { id, profile_id } = body;
+      if (!id || !profile_id) return err('id_and_profile_id_required', 400);
+      const r = await A.sbComms('/rest/v1/rpc/remove_static_segment_member', env, {
+        method: 'POST', body: JSON.stringify({ p_segment_id: id, p_profile_id: profile_id }),
+      });
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      if (r.data?.error) return err(r.data.error, 400);
+      return ok(r.data);
     }
 
     // ── M6: campaigns + approval lifecycle ──

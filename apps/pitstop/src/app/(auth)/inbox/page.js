@@ -330,6 +330,7 @@ export default function InboxPage() {
   const [selectMode, setSelectMode] = useState(false);
   const [bulkAgent, setBulkAgent] = useState('');         // target of the bulk assign action
   const [bulkReason, setBulkReason] = useState('');       // outcome for the bulk resolve action (S262)
+  const [bulkNote, setBulkNote] = useState('');           // note carried with the bulk outcome (S263)
   const [bulkBusy, setBulkBusy] = useState(false);
   const scrollRef = useRef(null);
   const taRef = useRef(null);
@@ -861,6 +862,7 @@ export default function InboxPage() {
     setSelectedIds(new Set());
     setBulkAgent('');
     setBulkReason('');
+    setBulkNote('');
     setSelectMode(false);
   }
   async function bulkAssign() {
@@ -875,17 +877,24 @@ export default function InboxPage() {
     finally { setBulkBusy(false); }
   }
 
+  // 'Other' is labelled "(add a note)", so in bulk it must actually take one — the S262
+  // build offered the option with nowhere to type, which reads as the app refusing to
+  // resolve (Pruthvi 2026-08-04). Every other outcome names itself; the note stays optional
+  // there, matching the per-thread Close popover.
+  const bulkNoteMissing = bulkReason === 'other' && !bulkNote.trim();
+
   // Bulk resolve (Pruthvi 2026-07-31). Deliberately confirms first: bulk assign is trivially
   // undoable by assigning again, whereas this writes a closing outcome onto up to 200
   // conversations, and reopening them individually is exactly the tedium being removed.
   async function bulkResolve() {
-    if (selectedIds.size === 0 || !bulkReason) return;
+    if (selectedIds.size === 0 || !bulkReason || bulkNoteMissing) return;
     const label = CLOSE_REASON_LABEL[bulkReason] || bulkReason;
     if (!window.confirm(`Resolve ${selectedIds.size} conversation${selectedIds.size === 1 ? '' : 's'} as "${label}"?`)) return;
     setErr(null); setBulkBusy(true);
     try {
       await csopsPost('bulkSetThreadState',
-        { thread_ids: [...selectedIds], state: 'closed', closed_reason: bulkReason }, session);
+        { thread_ids: [...selectedIds], state: 'closed', closed_reason: bulkReason,
+          closed_note: bulkNote.trim() || null }, session);
       exitSelectMode();
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
@@ -1102,10 +1111,19 @@ export default function InboxPage() {
                       <option value="">Resolve as…</option>
                       {BULK_CLOSE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                    <button onClick={bulkResolve} disabled={!bulkReason || bulkBusy}
+                    {bulkReason && (
+                      <input value={bulkNote} onChange={e => setBulkNote(e.target.value)} maxLength={300}
+                        placeholder={bulkReason === 'other' ? 'Note (required)' : 'Note (optional)'}
+                        title="Saved on every conversation in this batch"
+                        style={{ fontSize: 11, padding: '4px 8px', flex: '1 1 160px', minWidth: 120, maxWidth: 320,
+                          borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)', color: 'var(--t1)',
+                          border: `1px solid ${bulkNoteMissing ? 'var(--bad-bd)' : 'var(--border)'}` }} />
+                    )}
+                    <button onClick={bulkResolve} disabled={!bulkReason || bulkNoteMissing || bulkBusy}
                       style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
                         border: '1px solid var(--ok-bd)', background: 'var(--ok-bg)', color: 'var(--ok-fg)',
-                        cursor: (!bulkReason || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkReason || bulkBusy) ? 0.5 : 1 }}>
+                        cursor: (!bulkReason || bulkNoteMissing || bulkBusy) ? 'default' : 'pointer',
+                        opacity: (!bulkReason || bulkNoteMissing || bulkBusy) ? 0.5 : 1 }}>
                       {bulkBusy ? '…' : `Resolve ${selectedIds.size}`}
                     </button>
                   </>
