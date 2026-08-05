@@ -767,6 +767,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'startWaConversation':      return startWaConversation(body, auth, env);
     case 'startEmailConversation':   return startEmailConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
+    case 'diagIgPageRoute':          return diagIgPageRoute(body, auth, env);   // TEMPORARY — remove after the S263 human_agent test
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
@@ -5863,6 +5864,58 @@ async function metaHandleMessage(channel, ev, env) {
       method: 'POST', body: JSON.stringify({ p_thread_id: thread.id }),
     }).catch(() => {});
   }
+}
+
+// ⚠️ TEMPORARY DIAGNOSTIC (S263) — DELETE once the human_agent question is settled.
+// Instagram DMs can be driven two ways: the Instagram-Login API we use (graph.instagram.com
+// + IGAA token), where HUMAN_AGENT is a reviewed feature and is REFUSED for us (measured
+// 2026-08-05: IGApiException code 10), or the Messenger Platform (graph.facebook.com + Page
+// token), where HUMAN_AGENT is a native message tag. This sends ONE message on the second
+// route and returns Meta's raw response so the answer is measured, not argued.
+// Writes nothing to cs_wa_messages — it is a probe, not a send path.
+// The Graph API Explorer could not do this test: its token helper still requests the
+// long-dead `manage_pages` scope and dies before granting a Page token.
+async function diagIgPageRoute(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { thread_id, text, probe, recipient_override } = body || {};
+
+  // READ-ONLY probe: does the Page even see Instagram conversations? IG-scoped user ids are
+  // PER-SURFACE — the id the Instagram-Login webhook gave us is not the id the Messenger
+  // Platform knows that person by, so sending to it returns (#100) No matching user found
+  // and never reaches the human_agent question. This lists ids valid on THIS route.
+  if (probe === 'conversations') {
+    if (!env.META_PAGE_TOKEN) return err('META_PAGE_TOKEN not set', 503);
+    const q = `${META_GRAPH}/me/conversations?platform=instagram`
+      + `&fields=participants,updated_time,message_count&limit=10&access_token=${env.META_PAGE_TOKEN}`;
+    const r = await fetch(q);
+    const d = await r.json().catch(() => ({}));
+    return ok({ probe: 'conversations', http_status: r.status, ok: r.ok, meta_response: d });
+  }
+
+  if (!thread_id) return err('thread_id required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
+  if (!env.META_PAGE_TOKEN) return err('META_PAGE_TOKEN not set', 503);
+
+  const payload = {
+    recipient: { id: thread.external_user_id },
+    message: { text: text || 'Human agent route test — please ignore' },
+    messaging_type: 'MESSAGE_TAG',
+    tag: 'HUMAN_AGENT',
+  };
+  const r = await fetch(`${META_GRAPH}/me/messages?access_token=${env.META_PAGE_TOKEN}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const d = await r.json().catch(() => ({}));
+  return ok({
+    route: 'graph.facebook.com + META_PAGE_TOKEN',
+    http_status: r.status,
+    ok: r.ok,
+    recipient: thread.external_user_id,
+    window_shut: !(thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now()),
+    meta_response: d,
+  });
 }
 
 // Outbound send via Graph API. Inert without META_PAGE_TOKEN. Gated cs_ticket_manage.
