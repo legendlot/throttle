@@ -10,34 +10,79 @@ import { AppShell } from '@/components/throttle/AppShell';
 import { Icon } from '@/components/throttle/Icon';
 import { Card, ProductTag, PrimaryBtn, Pill } from '@/components/throttle/ui';
 import { toast } from '@/components/throttle/ToastHost';
-import { CHANNELS, POST_STATUS, SOCIAL_WEEK, SOCIAL_MONTH, MONTH_META, PRODUCTS, lsGet, lsSet } from '@/lib/throttleData';
-import { fetchSocialFeed, fetchChannels, createSocialPostLive, moveSocialPostLive } from '@/lib/throttleApi';
+import { CHANNELS, POST_STATUS, SOCIAL_WEEK, SOCIAL_MONTH, PRODUCTS, lsGet, lsSet } from '@/lib/throttleData';
+import { fetchSocialFeed, fetchChannels, createSocialPostLive, moveSocialPostLive, fetchProducts } from '@/lib/throttleApi';
 
 const REAL_TO_PROTO = { published: 'posted', approved: 'scheduled', idea: 'draft', draft: 'draft', cancelled: 'draft', review: 'review' };
 const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 const pad2 = n => String(n).padStart(2, '0');
 
-function buildFromFeed(feed) {
-  const byDay = {};
+/* ── Calendar grids are DERIVED from a cursor date, never hardcoded ──────────
+   Until 2026-08-05 this screen was pinned to June 2026 (a `MONTH_META` seed
+   constant, a literal "JUNE 2026" heading and `Jun ${day}` labels), so the
+   month arrows had nothing to move and the team could not schedule outside
+   June (Kirti, #bugs 1785911751). Everything below keys off `iso` — a real
+   YYYY-MM-DD — so posts can never be attributed to the same day-of-month in
+   the wrong month, which the old day-number keying did silently. */
+const DOWS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+const isoOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const startOfMonth = d => new Date(d.getFullYear(), d.getMonth(), 1);
+const dowIdxOf = d => (d.getDay() + 6) % 7;            // 0 = Monday, matching the grid header
+const mondayOf = d => { const x = new Date(d); x.setDate(x.getDate() - dowIdxOf(x)); x.setHours(0, 0, 0, 0); return x; };
+const shortDow = i => DOWS[i].charAt(0) + DOWS[i].slice(1).toLowerCase();
+
+function monthGrid(cursor) {
+  const y = cursor.getFullYear(), m = cursor.getMonth();
+  const total = new Date(y, m + 1, 0).getDate();
+  const leadBlanks = dowIdxOf(new Date(y, m, 1));
+  const days = [];
+  for (let day = 1; day <= total; day++) {
+    const d = new Date(y, m, day);
+    days.push({ day, dow: DOWS[dowIdxOf(d)], dowIdx: dowIdxOf(d), iso: isoOf(d), posts: [] });
+  }
+  return { days, leadBlanks, label: `${MONTH_NAMES[m]} ${y}`.toUpperCase(), monthName: MONTH_NAMES[m] };
+}
+
+function weekGrid(weekStart) {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
+    return { date: pad2(d.getDate()), dow: DOWS[dowIdxOf(d)], label: `${shortDow(dowIdxOf(d))} ${d.getDate()}`,
+      iso: isoOf(d), day: d.getDate(), posts: [] };
+  });
+}
+
+function weekLabel(weekStart) {
+  const end = new Date(weekStart); end.setDate(weekStart.getDate() + 6);
+  const a = MONTH_NAMES[weekStart.getMonth()].slice(0, 3);
+  const b = MONTH_NAMES[end.getMonth()].slice(0, 3);
+  return a === b
+    ? `WEEK OF ${a} ${weekStart.getDate()} – ${end.getDate()}`.toUpperCase()
+    : `WEEK OF ${a} ${weekStart.getDate()} – ${b} ${end.getDate()}`.toUpperCase();
+}
+
+function buildFromFeed(feed, monthDays, weekDays) {
+  const byIso = {};
   (feed || []).forEach(p => {
-    const day = parseInt(String(p.scheduled_date || '').slice(8, 10), 10);
-    if (!day) return;
+    const iso = String(p.scheduled_date || '').slice(0, 10);
+    if (!iso) return;
     const v0 = (p.variants || [])[0];
     const platform = v0?.channel?.platform;
     const channel = ['instagram', 'youtube', 'whatsapp', 'linkedin'].includes(platform) ? platform : 'instagram';
-    (byDay[day] = byDay[day] || []).push({
+    (byIso[iso] = byIso[iso] || []).push({
       id: p.id, time: (p.scheduled_time || '12:00').slice(0, 5), channel,
       product: p.product_code ? String(p.product_code).toUpperCase() : null,
       title: p.title, status: REAL_TO_PROTO[p.status] || 'draft',
       fmt: v0?.content_type ? cap(v0.content_type) : 'Post',
     });
   });
-  const month = SOCIAL_MONTH.map(d => ({ ...d, posts: (byDay[d.day] || []).slice() }));
-  const week = SOCIAL_WEEK.map(d => ({ ...d, posts: (byDay[parseInt(d.date, 10)] || []).slice().sort((a, b) => a.time.localeCompare(b.time)) }));
+  const month = monthDays.map(d => ({ ...d, posts: (byIso[d.iso] || []).slice() }));
+  const week = weekDays.map(d => ({ ...d, posts: (byIso[d.iso] || []).slice().sort((a, b) => a.time.localeCompare(b.time)) }));
   return { month, week };
 }
 
-function SchedulePostModal({ open, onClose, onSave, preset, dayOptions, monthMode }) {
+function SchedulePostModal({ open, onClose, onSave, preset, dayOptions, monthMode, products, periodName }) {
   const opts = dayOptions || SOCIAL_WEEK.map(d => ({ value: d.date, label: d.label }));
   const [form, setForm] = useState({ channel: 'instagram', product: '', title: '', date: preset || opts[0].value, time: '12:00', fmt: 'Reel', status: 'draft' });
   useEffect(() => { if (open) setForm({ channel: 'instagram', product: '', title: '', date: preset || opts[0].value, time: '12:00', fmt: 'Reel', status: 'draft' }); }, [open, preset]);
@@ -51,7 +96,12 @@ function SchedulePostModal({ open, onClose, onSave, preset, dayOptions, monthMod
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const field = { width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '10px 12px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 14, outline: 'none' };
   const label = { fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', display: 'block', marginBottom: 7 };
-  const save = () => { onSave({ ...form, id: 'p' + Math.random().toString(36).slice(2, 6) }); toast(`Post scheduled · ${CHANNELS[form.channel].label} · Jun ${form.date}`, 'ok', 'send'); onClose(); };
+  const save = () => {
+    const picked = opts.find(o => String(o.value) === String(form.date));
+    onSave({ ...form, id: 'p' + Math.random().toString(36).slice(2, 6) });
+    toast(`Post scheduled · ${CHANNELS[form.channel].label} · ${picked?.label || form.date}`, 'ok', 'send');
+    onClose();
+  };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 420, background: 'rgba(8,8,10,0.62)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '9vh' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(540px, 94vw)', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-pop)', overflow: 'hidden' }}>
@@ -74,10 +124,12 @@ function SchedulePostModal({ open, onClose, onSave, preset, dayOptions, monthMod
             <input autoFocus value={form.title} onChange={e => set('title', e.target.value)} placeholder="e.g. Corner fast — Flare drift reel" style={field} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* Every product, from product_master — NOT a hardcoded slice. The old
+                `PRODUCTS.slice(0, 4)` showed four of eight and no new product ever. */}
             <div><label style={label}>Product</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 132, overflowY: 'auto' }}>
                 <button onClick={() => set('product', '')} className="t-chip" data-on={form.product === ''}>Brand</button>
-                {PRODUCTS.slice(0, 4).map(p => <button key={p.code} onClick={() => set('product', p.code)} className="t-chip" data-on={form.product === p.code}>{p.code}</button>)}
+                {(products || []).map(code => <button key={code} onClick={() => set('product', code)} className="t-chip" data-on={form.product === code}>{code}</button>)}
               </div>
             </div>
             <div><label style={label}>Format</label>
@@ -87,7 +139,7 @@ function SchedulePostModal({ open, onClose, onSave, preset, dayOptions, monthMod
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div><label style={label}>Day (June)</label>
+            <div><label style={label}>Day{periodName ? ` (${periodName})` : ''}</label>
               <select value={form.date} onChange={e => set('date', e.target.value)} style={field}>
                 {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select></div>
@@ -163,14 +215,16 @@ function PostCard({ post, onOpen }) {
   );
 }
 
-function MonthView({ month, channel, onMovePost, onOpenPost, onOpenDay }) {
+function MonthView({ month, channel, onMovePost, onOpenPost, onOpenDay, leadBlanks = 0 }) {
   const dayPosts = d => channel ? d.posts.filter(p => p.channel === channel) : d.posts;
   const planned = month.filter(d => dayPosts(d).length > 0).length;
   const totalPosts = month.reduce((s, d) => s + dayPosts(d).length, 0);
-  const coverage = Math.round((planned / month.length) * 100);
+  const coverage = month.length ? Math.round((planned / month.length) * 100) : 0;
   const weeks = [];
-  for (let w = 0; w < Math.ceil((MONTH_META.leadBlanks + month.length) / 7); w++) weeks.push(month.slice(w * 7, w * 7 + 7));
-  const DOWS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+  for (let w = 0; w < Math.ceil((leadBlanks + month.length) / 7); w++) weeks.push(month.slice(w * 7, w * 7 + 7));
+  // "Today"/"past" are real dates now, so they are correct in every month —
+  // and a future month has no past days rather than half the grid dimmed.
+  const todayIso = isoOf(new Date());
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -213,11 +267,11 @@ function MonthView({ month, channel, onMovePost, onOpenPost, onOpenDay }) {
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
           {DOWS.map(d => <div key={d} style={{ textAlign: 'center', fontFamily: 'var(--font-display)', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--t4)', paddingBottom: 2 }}>{d}</div>)}
-          {Array.from({ length: MONTH_META.leadBlanks }).map((_, i) => <div key={'b' + i} />)}
+          {Array.from({ length: leadBlanks }).map((_, i) => <div key={'b' + i} />)}
           {month.map(d => {
             const posts = dayPosts(d);
-            const today = d.day === MONTH_META.today;
-            const past = d.day < MONTH_META.today;
+            const today = d.iso === todayIso;
+            const past = !!d.iso && d.iso < todayIso;
             const empty = posts.length === 0;
             const gap = empty && d.dowIdx < 5 && !past;
             return (
@@ -278,7 +332,8 @@ function DayPopover({ day, pos, channel, onClose, onOpenPost, onSchedule }) {
       <div style={{ position: 'fixed', left, top, width: W, zIndex: 361, background: 'var(--surface)', border: '1px solid var(--border-2)',
         borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-pop)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, letterSpacing: '0.04em', color: 'var(--t1)' }}>JUN {day.day}</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, letterSpacing: '0.04em', color: 'var(--t1)' }}>
+            {day.iso ? `${MONTH_NAMES[Number(day.iso.slice(5, 7)) - 1].slice(0, 3).toUpperCase()} ${day.day}` : `DAY ${day.day}`}</span>
           <span className="eyebrow" style={{ padding: 0 }}>{day.dow}</span>
           <span className="num" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t4)' }}>{posts.length} post{posts.length === 1 ? '' : 's'}</span>
         </div>
@@ -310,22 +365,32 @@ function DayPopover({ day, pos, channel, onClose, onOpenPost, onSchedule }) {
   );
 }
 
-// Empty calendar scaffold (real June-2026 dates, no seed posts) for the live app.
-const EMPTY_WEEK = SOCIAL_WEEK.map(d => ({ ...d, posts: [] }));
-const EMPTY_MONTH = SOCIAL_MONTH.map(d => ({ ...d, posts: [] }));
+// The seed prototype's posts are June-2026 dated, so the unauthenticated demo
+// still opens on June. A signed-in user opens on the real current month.
+const SEED_MONTH = new Date(2026, 5, 1);
 
 function SocialScreen() {
   const { session } = useAuth();
   const live = !!session; // logged in → server-backed, never seed/localStorage
   const [channel, setChannel] = useState(null);
   const [view, setView] = useState('week');
-  const [week, setWeek] = useState(() => live ? EMPTY_WEEK : lsGet('throttle_week_v1', SOCIAL_WEEK));
-  const [month, setMonth] = useState(() => live ? EMPTY_MONTH : lsGet('throttle_month_v1', SOCIAL_MONTH));
+  const [cursor, setCursor] = useState(() => live ? startOfMonth(new Date()) : SEED_MONTH);
+  const [weekStart, setWeekStart] = useState(() => mondayOf(live ? new Date() : new Date(2026, 5, 9)));
+  const [products, setProducts] = useState(() => PRODUCTS.map(p => p.code));
+  const grid = React.useMemo(() => monthGrid(cursor), [cursor]);
+  const weekScaffold = React.useMemo(() => weekGrid(weekStart), [weekStart]);
+  const [week, setWeek] = useState(() => live ? weekGrid(mondayOf(new Date())) : lsGet('throttle_week_v1', SOCIAL_WEEK));
+  const [month, setMonth] = useState(() => live ? monthGrid(startOfMonth(new Date())).days : lsGet('throttle_month_v1', SOCIAL_MONTH));
   const [selected, setSelected] = useState(null);
   const [scheduling, setScheduling] = useState(false);
   const [presetDate, setPresetDate] = useState(null);
   const [dayPop, setDayPop] = useState(null);
   const channelMapRef = useRef({}); // platform -> channel_id
+
+  const stepPeriod = dir => {
+    if (view === 'month') setCursor(c => new Date(c.getFullYear(), c.getMonth() + dir, 1));
+    else setWeekStart(w => { const n = new Date(w); n.setDate(w.getDate() + dir * 7); return n; });
+  };
 
   useEffect(() => {
     const onSchedule = () => { setPresetDate(null); setScheduling(true); };
@@ -333,49 +398,95 @@ function SocialScreen() {
     return () => window.removeEventListener('throttle:schedulepost', onSchedule);
   }, []);
 
+  // Fetch the union of the visible month and the visible week — the two can sit
+  // in different months once you page around, so one range would starve the other.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
+    const from = [grid.days[0].iso, isoOf(weekStart)].sort()[0];
+    const to = [grid.days[grid.days.length - 1].iso, isoOf(weekEnd)].sort().slice(-1)[0];
     (async () => {
       const [feed, channels] = await Promise.all([
-        fetchSocialFeed(session, '2026-06-01', '2026-06-30'),
+        fetchSocialFeed(session, from, to),
         fetchChannels(session),
       ]);
       if (cancelled) return;
       if (channels) { const m = {}; channels.forEach(c => { if (!m[c.platform]) m[c.platform] = c.id; }); channelMapRef.current = m; }
-      const built = buildFromFeed(feed || []); setWeek(built.week); setMonth(built.month);
+      const built = buildFromFeed(feed || [], grid.days, weekScaffold);
+      setWeek(built.week); setMonth(built.month);
     })();
+    return () => { cancelled = true; };
+  }, [session, grid, weekScaffold, weekStart]);
+
+  // Live product list (product_master) for the schedule modal's chips.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    fetchProducts(session).then(list => { if (!cancelled && list?.length) setProducts(list); }).catch(() => {});
     return () => { cancelled = true; };
   }, [session]);
 
-  useEffect(() => { if (!live) lsSet('throttle_week_v1', week); }, [week, live]);
-  useEffect(() => { if (!live) lsSet('throttle_month_v1', month); }, [month, live]);
+  /* Seed/prototype path (logged out). It must rebuild off the same derived grid as
+     the live path, otherwise paging to a 31-day month keeps rendering the 30-cell
+     June scaffold — "22 of 30 days planned" in August. Storage is keyed per period
+     so navigating away no longer overwrites another month's demo posts. */
+  const monthKey = `throttle_month_v1_${cursor.getFullYear()}-${pad2(cursor.getMonth() + 1)}`;
+  const weekKey = `throttle_week_v1_${isoOf(weekStart)}`;
+  const isSeedMonth = cursor.getFullYear() === 2026 && cursor.getMonth() === 5;
+  const isSeedWeek = isoOf(weekStart) === '2026-06-08';
+
+  useEffect(() => {
+    if (live) return;
+    const stored = lsGet(monthKey, null) || (isSeedMonth ? SOCIAL_MONTH : []);
+    const byDay = {};
+    stored.forEach(d => { byDay[d.day] = d.posts || []; });
+    setMonth(grid.days.map(d => ({ ...d, posts: (byDay[d.day] || []).slice() })));
+  }, [live, grid, monthKey, isSeedMonth]);
+
+  useEffect(() => {
+    if (live) return;
+    const stored = lsGet(weekKey, null) || (isSeedWeek ? SOCIAL_WEEK : []);
+    const byDate = {};
+    stored.forEach(d => { byDate[String(d.date)] = d.posts || []; });
+    setWeek(weekScaffold.map(d => ({ ...d, posts: (byDate[d.date] || []).slice() })));
+  }, [live, weekScaffold, weekKey, isSeedWeek]);
+
+  useEffect(() => { if (!live && week.length) lsSet(weekKey, week); }, [week, live, weekKey]);
+  useEffect(() => { if (!live && month.length) lsSet(monthKey, month); }, [month, live, monthKey]);
+
+  // The visible rows carry their own `iso`, so a scheduled/moved post lands on the
+  // date the user actually sees — not on that day-number in a fixed month.
+  const isoForDay = dayVal => (view === 'month'
+    ? month.find(d => String(d.day) === String(dayVal))
+    : week.find(d => String(d.date) === String(dayVal)))?.iso;
 
   const addPost = p => {
+    const iso = isoForDay(p.date);
     if (view === 'month') setMonth(prev => prev.map(d => String(d.day) === String(p.date) ? { ...d, posts: [...d.posts, p] } : d));
     else setWeek(prev => prev.map(d => d.date === p.date ? { ...d, posts: [...d.posts, p].sort((a, b) => a.time.localeCompare(b.time)) } : d));
-    if (live && session) {
-      const day = parseInt(p.date, 10);
+    if (live && session && iso) {
       createSocialPostLive(session, {
-        title: p.title || `${p.product || 'Brand'} ${p.fmt}`, dateISO: `2026-06-${pad2(day)}`, time: p.time, status: p.status,
+        title: p.title || `${p.product || 'Brand'} ${p.fmt}`, dateISO: iso, time: p.time, status: p.status,
         productCode: p.product || undefined, channelId: channelMapRef.current[p.channel], platform: p.channel, fmt: p.fmt,
       }).catch(() => toast('Saved locally — could not sync to server.', 'warn', 'alert'));
     }
   };
   const movePost = (postId, fromDay, toDay) => {
     if (String(fromDay) === String(toDay)) return;
+    const target = month.find(d => String(d.day) === String(toDay));
     setMonth(prev => {
       let moved = null;
       const cleared = prev.map(d => { if (String(d.day) === String(fromDay)) { const p = d.posts.find(x => x.id === postId); if (p) moved = p; return { ...d, posts: d.posts.filter(x => x.id !== postId) }; } return d; });
       if (!moved) return prev;
       return cleared.map(d => String(d.day) === String(toDay) ? { ...d, posts: [...d.posts, moved] } : d);
     });
-    toast(`Post moved to Jun ${toDay}`, 'ok', 'calendar');
-    if (live && session) moveSocialPostLive(session, postId, `2026-06-${pad2(parseInt(toDay, 10))}`).catch(() => {});
+    toast(`Post moved to ${grid.monthName.slice(0, 3)} ${toDay}`, 'ok', 'calendar');
+    if (live && session && target?.iso) moveSocialPostLive(session, postId, target.iso).catch(() => {});
   };
   const openSchedule = date => { setPresetDate(date); setDayPop(null); setScheduling(true); };
   const openDay = (day, e) => { const r = e.currentTarget.getBoundingClientRect(); setDayPop({ day, x: r.left, y: r.bottom + 6 }); };
-  const monthDayOpts = month.map(d => ({ value: String(d.day), label: `Jun ${d.day} · ${d.dow.charAt(0) + d.dow.slice(1).toLowerCase()}` }));
+  const monthDayOpts = month.map(d => ({ value: String(d.day), label: `${grid.monthName.slice(0, 3)} ${d.day} · ${d.dow.charAt(0) + d.dow.slice(1).toLowerCase()}` }));
   const popDay = dayPop && month.find(d => d.day === dayPop.day);
 
   const allPosts = week.flatMap(d => d.posts);
@@ -387,9 +498,11 @@ function SocialScreen() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, flexShrink: 0, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button className="t-iconbtn" style={{ width: 30, height: 30 }}><Icon name="chevronLeft" size={15} /></button>
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--t1)', minWidth: view === 'month' ? 110 : 168, textAlign: 'center' }}>{view === 'month' ? 'JUNE 2026' : 'WEEK OF JUN 9 – 15'}</span>
-          <button className="t-iconbtn" style={{ width: 30, height: 30 }}><Icon name="chevronRight" size={15} /></button>
+          <button onClick={() => stepPeriod(-1)} title={view === 'month' ? 'Previous month' : 'Previous week'} className="t-iconbtn" style={{ width: 30, height: 30 }}><Icon name="chevronLeft" size={15} /></button>
+          <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--t1)', minWidth: view === 'month' ? 130 : 190, textAlign: 'center' }}>{view === 'month' ? grid.label : weekLabel(weekStart)}</span>
+          <button onClick={() => stepPeriod(1)} title={view === 'month' ? 'Next month' : 'Next week'} className="t-iconbtn" style={{ width: 30, height: 30 }}><Icon name="chevronRight" size={15} /></button>
+          <button onClick={() => { setCursor(startOfMonth(new Date())); setWeekStart(mondayOf(new Date())); }}
+            className="t-chip" style={{ marginLeft: 2 }}>Today</button>
         </div>
         <div style={{ display: 'flex', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: 2 }}>
           {['week', 'month'].map(v => (
@@ -431,7 +544,7 @@ function SocialScreen() {
       )}
 
       {view === 'month' ? (
-        <MonthView month={month} channel={channel} onMovePost={movePost} onOpenPost={setSelected} onOpenDay={openDay} />
+        <MonthView month={month} channel={channel} onMovePost={movePost} onOpenPost={setSelected} onOpenDay={openDay} leadBlanks={grid.leadBlanks} />
       ) : (
       <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden', minHeight: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(170px, 1fr))', gap: 12, height: '100%', minWidth: 'max-content' }}>
@@ -464,7 +577,10 @@ function SocialScreen() {
       </div>
       )}
 
-      <SchedulePostModal open={scheduling} preset={presetDate} monthMode={view === 'month'} dayOptions={view === 'month' ? monthDayOpts : undefined} onClose={() => setScheduling(false)} onSave={addPost} />
+      <SchedulePostModal open={scheduling} preset={presetDate} monthMode={view === 'month'}
+        dayOptions={view === 'month' ? monthDayOpts : week.map(d => ({ value: d.date, label: d.label }))}
+        products={products} periodName={view === 'month' ? grid.monthName : undefined}
+        onClose={() => setScheduling(false)} onSave={addPost} />
       <PostDrawer post={selected} onClose={() => setSelected(null)} />
       {dayPop && popDay && (
         <DayPopover day={popDay} pos={dayPop} channel={channel} onClose={() => setDayPop(null)} onOpenPost={p => { setDayPop(null); setSelected(p); }} onSchedule={() => openSchedule(String(dayPop.day))} />
