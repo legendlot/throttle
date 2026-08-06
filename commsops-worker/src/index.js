@@ -258,15 +258,26 @@ async function handleGet(url, auth, env) {
     case 'getLink': {
       const code = (url.searchParams.get('code') || '').trim();
       if (!code) return err('code_required', 400);
-      const [link, daily, changes] = await Promise.all([
+      const [link, daily, changes, stats] = await Promise.all([
         A.sbComms(`/rest/v1/links?code=eq.${A.enc(code)}&kind=eq.campaign&select=*&limit=1`, env),
         // 90 days of the rollup — enough to see a print run land, bounded enough to send whole.
         A.sbComms(`/rest/v1/link_click_daily?code=eq.${A.enc(code)}&select=day,clicks&order=day.desc&limit=90`, env),
         A.sbComms(`/rest/v1/link_changes?code=eq.${A.enc(code)}&select=*&order=changed_at.desc&limit=50`, env),
+        // Breakdowns (0042). Aggregated in Postgres — a printed QR can hold thousands of click rows
+        // and this is a modal someone opens casually. Fail-soft: the detail table is the NEWEST part
+        // of this page, so an error reading it must degrade the panel, never 500 the whole thing.
+        A.sbComms('/rest/v1/rpc/link_click_stats', env, {
+          method: 'POST', body: JSON.stringify({ p_code: code, p_days: 90 }),
+        }).catch(() => ({ ok: false })),
       ]);
       const row = (link.ok && link.data?.[0]) || null;
       if (!row) return err('not_found', 404);
-      return ok({ link: row, daily: (daily.ok && daily.data) || [], changes: (changes.ok && changes.data) || [] });
+      return ok({
+        link: row,
+        daily: (daily.ok && daily.data) || [],
+        changes: (changes.ok && changes.data) || [],
+        stats: (stats.ok && stats.data) || null,
+      });
     }
 
     case 'getSuppressions': {          // S253 — the hardest gate finally has a read path
@@ -1687,7 +1698,25 @@ export default {
           // in the URL is caller-controllable, so a prefetcher could opt itself into being counted.
           sentAt: row.created_at || null,
         });
-        if (counted) ctx.waitUntil(LINKS.recordClick(env, row).catch(() => {}));
+        if (counted) {
+          // Request context for the per-click row (0042). Gathered HERE because none of it survives
+          // into waitUntil otherwise — `request` is not safe to touch after the response is returned.
+          //
+          // ⚠️ `?s=` is read as a LABEL ONLY and is whitelisted downstream. It deliberately does not
+          // reach countsAsClick: everything in a URL is caller-controllable, so letting it influence
+          // counting would let a prefetcher opt itself in — the same reasoning that keeps `sentAt`
+          // off the query string above.
+          //
+          // The IP is passed for hashing and is NEVER stored; see visitorKey.
+          const meta = {
+            ua: request.headers.get('User-Agent') || null,
+            referer: request.headers.get('Referer') || null,
+            country: request.cf?.country || null,
+            source: url.searchParams.get('s'),
+            ip: request.headers.get('CF-Connecting-IP') || null,
+          };
+          ctx.waitUntil(LINKS.recordClick(env, row, meta).catch(() => {}));
+        }
       }
       // 302, not 301: a permanent redirect would be cached by the handset and every later tap
       // would skip us entirely — no click recorded, and the code could never be expired.

@@ -69,6 +69,9 @@ export function UtmFields({ value, onChange, auto = {}, disabled = false, scope 
         {scope === 'journey' && <>Applies to every marketing send in this journey. A <b>template</b> can override any field; blank falls back to the account default, then to the journey name.</>}
         {scope === 'campaign' && <>Applies to this broadcast. A <b>template</b> can override any field; blank falls back to the account default, then to the campaign name.</>}
         {scope === 'account' && <>The account-wide floor. Any journey, campaign or template can override these.</>}
+        {/* A short link has no template or journey above it — whatever is set here is simply what
+            gets appended, so the inheritance copy above would be actively misleading. */}
+        {scope === 'link' && <>Appended whenever someone taps this link. Nothing overrides it — a short link sits under no template or journey. <b>Only applied to legendoftoys.com destinations</b>; a link pointing anywhere else is passed through untouched.</>}
         {' '}Leave a field blank to inherit — blank never means empty.
       </div>
       <div className="form-grid">

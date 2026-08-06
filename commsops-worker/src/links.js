@@ -155,6 +155,85 @@ function countsAsClick({ method, ua, sentAt, now } = {}) {
   return true;
 }
 
+// ── Per-click detail (0042) ──────────────────────────────────────────────────
+// These are pure so the whole classification is testable without a request.
+
+// The IST day for a moment. Extracted rather than inlined because the daily rollup and the
+// per-day visitor hash MUST agree on which day a click belongs to — computing it twice from
+// two expressions is how they would silently drift apart at the midnight boundary.
+function istDayOf(now) {
+  return new Date((now instanceof Date ? now.getTime() : now) + 5.5 * 3600_000)
+    .toISOString().slice(0, 10);
+}
+
+// `?s=` on the incoming URL, from the QR image. WHITELISTED, never free text: this value is
+// entirely caller-controllable, so an open string would let anyone write arbitrary data into the
+// analytics table by hand-crafting a URL. It is a label and nothing more — see countsAsClick,
+// which it must never influence.
+const CLICK_SOURCES = new Set(['qr', 'link']);
+function clickSource(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase();
+  return CLICK_SOURCES.has(s) ? s : null;
+}
+
+// HOST ONLY, deliberately. A full referrer can carry search terms or a private page path, and we
+// have no reason to keep either — "which site sent them" is the whole question.
+function refererHost(referer) {
+  if (!referer) return null;
+  try { return new URL(String(referer)).hostname || null; } catch { return null; }
+}
+
+/**
+ * Coarse device/os/browser buckets from a user agent.
+ *
+ * Deliberately crude: a UA-parsing library would be a dependency, a bundle cost and a maintenance
+ * tail for a question ("was this a phone?") that only needs three buckets. Order matters in the
+ * browser ladder — Edge, Opera, Samsung and Chrome UAs all contain "Safari", and Chrome's contains
+ * "Safari" too, so the specific engines must be tested BEFORE the generic ones.
+ */
+function parseUa(ua) {
+  const s = ua ? String(ua) : '';
+  if (!s) return { device: null, os: null, browser: null };
+  // Android tablets are identified by the ABSENCE of "Mobile", which is the documented convention.
+  const tablet = /iPad|Tablet|PlayBook|Silk/i.test(s) || (/Android/i.test(s) && !/Mobile/i.test(s));
+  const mobile = !tablet && /Mobi|iPhone|iPod|Android|Windows Phone/i.test(s);
+  return {
+    device: tablet ? 'tablet' : mobile ? 'mobile' : 'desktop',
+    os: /iPhone|iPad|iPod|iOS/i.test(s) ? 'iOS'
+      : /Android/i.test(s) ? 'Android'
+      : /Windows/i.test(s) ? 'Windows'
+      : /Mac OS X|Macintosh/i.test(s) ? 'macOS'
+      : /Linux/i.test(s) ? 'Linux' : null,
+    browser: /Edg[A-Z]?\//i.test(s) ? 'Edge'
+      : /OPR\/|Opera/i.test(s) ? 'Opera'
+      : /SamsungBrowser/i.test(s) ? 'Samsung Internet'
+      : /Firefox\/|FxiOS/i.test(s) ? 'Firefox'
+      : /Chrome\/|CriOS/i.test(s) ? 'Chrome'
+      : /Safari\//i.test(s) ? 'Safari' : null,
+  };
+}
+
+/**
+ * A per-DAY visitor key. Enables "how many distinct people clicked today" without storing anything
+ * that identifies anyone.
+ *
+ * ⚠️ The IST day is part of the hash INPUT, which is the entire privacy property: the same person
+ * hashes to a different value tomorrow, so these keys cannot be joined across days to build a
+ * history of one person. The link code is also mixed in, so the same person on two links does not
+ * collide either. NO IP IS EVER STORED — only this digest.
+ *
+ * Consequence for the UI: a lifetime "unique visitors" number is NOT derivable and must not be
+ * shown. Per-day uniques are honest; summing them is not.
+ */
+async function visitorKey({ code, ip, ua, istDay } = {}) {
+  if (!code || (!ip && !ua)) return null;
+  const bytes = new TextEncoder().encode(`${istDay || ''}|${code}|${ip || ''}|${ua || ''}`);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * Record a counted click: increment the row and emit `link_clicked`.
  *
@@ -164,7 +243,7 @@ function countsAsClick({ method, ua, sentAt, now } = {}) {
  * ⚠️ The event name is `link_clicked`, channel-agnostic. S189 renamed it precisely so WhatsApp and
  * SMS clicks land in the same place as email's Resend-sourced ones. Never `wa_clicked`/`sms_clicked`.
  */
-async function recordClick(env, row) {
+async function recordClick(env, row, meta = {}) {
   const now = new Date();
   const first = !row.first_clicked_at ? { first_clicked_at: now.toISOString() } : {};
   await A.sbComms(`/rest/v1/links?code=eq.${encodeURIComponent(row.code)}`, env, {
@@ -177,10 +256,39 @@ async function recordClick(env, row) {
   // Daily rollup, via an atomic RPC. A read-modify-write would lose concurrent clicks, which on a
   // printed QR is the normal case rather than the edge one. Dated in IST, matching every other LOT
   // day-grain (RULE-SALES-001) so a chart here lines up with one in Odo.
-  const istDay = new Date(now.getTime() + 5.5 * 3600_000).toISOString().slice(0, 10);
+  const istDay = istDayOf(now);
   await A.sbComms('/rest/v1/rpc/bump_link_click', env, {
     method: 'POST', body: JSON.stringify({ p_code: row.code, p_day: istDay }),
   }).catch((e) => console.log('link_click_daily_error', String(e?.message || e)));
+
+  // Per-click detail (0042). The rollup above cannot attribute a click to a DESTINATION, so after a
+  // campaign link is repointed it can no longer say which target a click actually reached. This row
+  // can, because it copies the destination resolved at THIS tap.
+  //
+  // Independently try/caught from everything else on purpose: this is the newest and least
+  // load-bearing of the three writes, and it must never be the reason a click goes uncounted in the
+  // two aggregates that predate it.
+  try {
+    const ua = meta.ua || null;
+    const { device, os, browser } = parseUa(ua);
+    await A.sbComms('/rest/v1/link_click', env, {
+      method: 'POST', headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        code: row.code,
+        clicked_at: now.toISOString(),
+        // targetFor(), NOT row.target_url — the stored utm is part of where the customer actually
+        // landed, and this column is a record of that, not of the row's configuration.
+        target_url: targetFor(row),
+        source: clickSource(meta.source),
+        device, os, browser,
+        referrer_host: refererHost(meta.referer),
+        country: meta.country || null,
+        visitor_key: await visitorKey({ code: row.code, ip: meta.ip, ua, istDay }),
+        message_id: row.message_id || null,
+        profile_id: row.profile_id || null,
+      }),
+    });
+  } catch (e) { console.log('link_click_detail_error', String(e?.message || e)); }
 
   // Events are profile-scoped, so a CAMPAIGN link has nowhere to land one — the rollup above is its
   // entire analytics story, and that is by design, not a gap to "fix" by inventing a profile.
@@ -345,6 +453,7 @@ async function applyButtonRedirects(components, { template, baseUrl, mint } = {}
 module.exports = {
   newLinkCode, getLinkBaseUrl, mintLink, resolveLink, targetFor, countsAsClick, recordClick,
   buildButtonTarget, applyButtonRedirects,
+  istDayOf, clickSource, refererHost, parseUa, visitorKey,
   normalizeSlug, createCampaignLink, updateCampaignLink, SLUG_RE,
   CODE_ALPHABET, CODE_LENGTH, FALLBACK_URL, DEFAULT_TTL_DAYS, BOT_UA,
 };

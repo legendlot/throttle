@@ -17,7 +17,8 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Link2, Plus, Search, QrCode, Pencil, ExternalLink, Copy, History, BarChart3, X, Check,
 } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel, InfoDot } from '@/components/ui.js';
+import { UtmFields } from '@/components/utm.js';
 import { fmtDateTime, fmtDateShort } from '@/components/format.js';
 
 // Kept byte-identical to the worker's SLUG_RE (commsops src/links.js). A form that accepts what the
@@ -97,12 +98,12 @@ export default function LinksPage() {
       const session = await getValidSession();
       if (d.mode === 'create') {
         await workerFetch('createLink', {
-          slug: d.slug, target_url: d.target_url, title: d.title || null,
+          slug: d.slug, target_url: d.target_url, title: d.title || null, utm: d.utm || null,
         }, session);
         showToast('Link created', 'success');
       } else {
         await workerFetch('updateLink', {
-          code: d.code, target_url: d.target_url, title: d.title || null,
+          code: d.code, target_url: d.target_url, title: d.title || null, utm: d.utm || null,
           active: d.active, reason: d.reason || null,
         }, session);
         showToast('Link updated', 'success');
@@ -125,12 +126,19 @@ export default function LinksPage() {
     } catch (e) { showToast(e.message || 'Could not load link', 'error'); }
   }
 
+  // The QR encodes `?s=qr` so a scan is distinguishable from a tap on the same link. Without it the
+  // two are IDENTICAL at the server — a QR resolves to the very same URL — and the split can never
+  // be recovered afterwards, so it has to be baked into the artwork at generation time.
+  //
+  // ⚠️ Read as a LABEL only, never as permission to count: the parameter is caller-controllable.
+  const qrUrl = (code) => `${fullUrl(code)}?s=qr`;
+
   async function makeQr(code) {
     try {
       // Dynamic import: qrcode is only needed when someone actually asks for one, and it is not
       // worth putting in the initial bundle of a page that is mostly a table.
       const QR = (await import('qrcode')).default;
-      const dataUrl = await QR.toDataURL(fullUrl(code), { width: 1024, margin: 2 });
+      const dataUrl = await QR.toDataURL(qrUrl(code), { width: 1024, margin: 2 });
       setQr({ code, dataUrl });
     } catch (e) { showToast(e.message || 'Could not build the QR code', 'error'); }
   }
@@ -141,7 +149,7 @@ export default function LinksPage() {
     <>
       <PageHead
         title="Links"
-        sub="Short links you own — change where they point at any time, including after they are printed."
+        sub="Short links you own — repoint them any time, including after printing."
         actions={canEdit && (
           <Btn kind="primary" onClick={() => setEditing({ mode: 'create', slug: '', target_url: '', title: '' })}>
             <Plus size={14} /> New link
@@ -155,11 +163,17 @@ export default function LinksPage() {
         <div style={{
           margin: '0 0 14px', padding: '10px 12px', borderRadius: 8, fontSize: 13,
           border: '1px solid var(--line)', background: 'var(--surface-2, var(--surface))', color: 'var(--t2)',
+          display: 'flex', alignItems: 'center', gap: 7,
         }}>
-          <strong style={{ color: 'var(--t1)' }}>No short domain is configured yet.</strong>{' '}
-          Links can be created and will work, but there is no public host to put them on until
-          <code style={{ margin: '0 4px' }}>link_base_url</code> is set. Do not print a QR code before then —
-          a printed code cannot be re-issued.
+          {/* Kept as a banner, NOT folded into an ⓘ: this is a live blocking state, not documentation.
+              Hiding it would let someone print a QR that can never be re-issued. */}
+          <strong style={{ color: 'var(--t1)' }}>No short domain configured — do not print any QR yet.</strong>
+          <InfoDot label="About the short domain">
+            <p>Links can be created and will work, but there is no public host to serve them until{' '}
+              <code>link_base_url</code> is set.</p>
+            <p>A printed code cannot be re-issued, so printing before the domain is live produces
+              artwork that is permanently dead.</p>
+          </InfoDot>
         </div>
       )}
 
@@ -222,6 +236,9 @@ export default function LinksPage() {
                       <Btn onClick={() => setEditing({
                         mode: 'edit', code: l.code, target_url: l.target_url,
                         title: l.title || '', active: l.active, reason: '',
+                        // Carry the stored utm into the draft. Omitting it would make an unrelated
+                        // edit (a title tweak) silently POST utm:null and wipe the tagging.
+                        utm: l.utm || null,
                       })}><Pencil size={13} /></Btn>
                     )}
                   </td>
@@ -238,7 +255,13 @@ export default function LinksPage() {
                title={editing.mode === 'create' ? 'New link' : `Edit /r/${editing.code}`}>
           {editing.mode === 'create' ? (
             <>
-              <FieldLabel hint="Lower-case letters, numbers and hyphens. This is permanent — it may end up printed.">Short name</FieldLabel>
+              <FieldLabel info={(
+                <>
+                  <p>Lower-case letters, numbers and hyphens, 2–31 characters.</p>
+                  <p><b>Permanent.</b> The short name can never be changed afterwards, because it may
+                    end up printed on packaging that is already in customers&rsquo; hands.</p>
+                </>
+              )}>Short name</FieldLabel>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
                 <span style={{ color: 'var(--t3)', fontSize: 13 }}>{base || '(no domain yet)'}/r/</span>
                 <input style={input} value={editing.slug} autoFocus
@@ -246,38 +269,46 @@ export default function LinksPage() {
                        placeholder="diwali26" />
               </div>
             </>
-          ) : (
-            <p style={{ fontSize: 12, color: 'var(--t3)', margin: '0 0 12px' }}>
-              The short name can never change — it may already be printed. You can change where it
-              goes, and every change is recorded.
-            </p>
-          )}
+          ) : null}
 
-          <FieldLabel hint="Where someone who taps this link ends up. Changeable at any time.">Destination</FieldLabel>
+          <FieldLabel info={(
+            <>
+              <p>Where someone who taps this link ends up. Changeable at any time — that is the
+                point of a short link.</p>
+              <p>Every change is recorded, and clicks are counted separately for each destination,
+                so you can see how many landed where.</p>
+            </>
+          )}>Destination</FieldLabel>
           <input style={{ ...input, marginBottom: 12 }} value={editing.target_url}
                  onChange={(e) => setEditing({ ...editing, target_url: e.target.value })}
                  placeholder="https://www.legendoftoys.com/products/ghost" />
 
-          <FieldLabel hint="For your own reference — never shown to a customer.">Name</FieldLabel>
+          <FieldLabel info="For your own reference in this list — never shown to a customer.">Name</FieldLabel>
           <input style={{ ...input, marginBottom: 12 }} value={editing.title}
                  onChange={(e) => setEditing({ ...editing, title: e.target.value })}
                  placeholder="Diwali 2026 catalogue insert" />
 
+          <div style={{ marginBottom: 12 }}>
+            <UtmFields scope="link" value={editing.utm || null}
+                       onChange={(next) => setEditing({ ...editing, utm: next })} />
+          </div>
+
           {editing.mode === 'edit' && (
             <>
-              <FieldLabel hint="Recorded against this change so the history explains itself later.">Why (optional)</FieldLabel>
+              <FieldLabel info="Recorded against this change in the destination history, so it explains itself months later.">Why (optional)</FieldLabel>
               <input style={{ ...input, marginBottom: 12 }} value={editing.reason}
                      onChange={(e) => setEditing({ ...editing, reason: e.target.value })}
                      placeholder="Campaign moved to the new landing page" />
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 4 }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 12 }}>
                 <input type="checkbox" checked={!!editing.active}
                        onChange={(e) => setEditing({ ...editing, active: e.target.checked })} />
                 Active
+                <InfoDot label="About retiring a link">
+                  <p>Retiring sends anyone who taps it to the homepage instead of the destination.</p>
+                  <p>The link is <b>never deleted</b> — printed copies keep being scanned for years,
+                    and a dead code must never show an error page.</p>
+                </InfoDot>
               </label>
-              <p style={{ fontSize: 12, color: 'var(--t3)', margin: '0 0 12px' }}>
-                Retiring sends anyone who taps it to the homepage instead. The link is never deleted —
-                printed copies keep getting scanned for years.
-              </p>
             </>
           )}
 
@@ -294,8 +325,15 @@ export default function LinksPage() {
       {qr && (
         <Modal onClose={() => setQr(null)} title={`QR — /r/${qr.code}`}>
           <img src={qr.dataUrl} alt="" style={{ width: '100%', maxWidth: 320, display: 'block', margin: '0 auto 12px' }} />
-          <p style={{ fontSize: 12, color: 'var(--t3)', textAlign: 'center', margin: '0 0 12px' }}>
-            {fullUrl(qr.code)}
+          <p style={{ fontSize: 12, color: 'var(--t3)', textAlign: 'center', margin: '0 0 12px',
+                      display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <span>{qrUrl(qr.code)}</span>
+            <InfoDot label="About the ?s=qr marker">
+              <p>The QR encodes <code>?s=qr</code> so a scan can be told apart from someone tapping
+                the same link. It lands on the identical destination.</p>
+              <p>It has to be in the artwork — once printed, a scan and a tap are otherwise
+                indistinguishable and the split can never be recovered.</p>
+            </InfoDot>
             {!base && <><br /><strong>No short domain is set — do not print this yet.</strong></>}
           </p>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
@@ -318,13 +356,19 @@ export default function LinksPage() {
               <div>{detail.link.last_clicked_at ? fmtDateTime(detail.link.last_clicked_at) : '—'}</div></div>
           </div>
 
-          <p style={{ fontSize: 12, color: 'var(--t3)', margin: '0 0 12px' }}>
-            Counted clicks only — link previews, crawlers and bots are excluded, so this reads lower
-            than raw traffic and is the more honest number.
-          </p>
-
-          <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', marginBottom: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', marginBottom: 6,
+                        display: 'flex', gap: 5, alignItems: 'center' }}>
             Clicks per day
+            <InfoDot label="About these numbers">
+              <p><b>Counted clicks only.</b> Link previews, crawlers and bots are excluded, so this
+                reads lower than raw traffic and is the more honest number.</p>
+              <p>Days are IST, matching every other date in LOT. Hover a bar for that day&rsquo;s
+                clicks and how many distinct people they came from.</p>
+              <p><b>There is no lifetime &ldquo;unique visitors&rdquo; figure, deliberately.</b> Telling
+                people apart across days would mean fingerprinting them; we identify a visitor only
+                within a single day and store no IP address at all. Adding the daily numbers up
+                would count the same person twice, so it is not offered.</p>
+            </InfoDot>
           </div>
           {!detail.daily?.length ? (
             <p style={{ fontSize: 13, color: 'var(--t3)', margin: '0 0 14px' }}>No clicks yet.</p>
@@ -332,14 +376,51 @@ export default function LinksPage() {
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 70, marginBottom: 14 }}>
               {[...detail.daily].reverse().map((d) => {
                 const max = Math.max(...detail.daily.map((x) => x.clicks), 1);
+                // Uniques are per-day by construction (the visitor key rotates daily), so they can
+                // only ever be shown against a single day — never summed into a lifetime figure.
+                const u = (detail.stats?.daily_unique || []).find((x) => x.day === d.day);
                 return (
-                  <div key={d.day} title={`${fmtDateShort(d.day)} — ${d.clicks}`}
+                  <div key={d.day}
+                       title={`${fmtDateShort(d.day)} — ${d.clicks} click${d.clicks === 1 ? '' : 's'}`
+                              + (u ? ` from ${u.uniques} ${u.uniques === 1 ? 'person' : 'people'}` : '')}
                        style={{ flex: 1, minWidth: 3, height: `${(d.clicks / max) * 100}%`,
                                 background: 'var(--accent, #6aa9ff)', borderRadius: 2 }} />
                 );
               })}
             </div>
           )}
+
+          {/* ── where the clicks actually went ──────────────────────────────
+              The reason the per-click table exists. After a repoint, the totals above cannot say
+              which destination a click reached; this can, because each click stores the URL that
+              was live when it happened. */}
+          {detail.stats?.by_destination?.length > 1 && (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', marginBottom: 6,
+                            display: 'flex', gap: 5, alignItems: 'center' }}>
+                Clicks by destination
+                <InfoDot label="About the destination split">
+                  <p>Each click records the destination that was live at the moment it happened, so a
+                    repoint splits the numbers here rather than blurring them into one total.</p>
+                  <p>Only clicks from 6 Aug 2026 onward are split this way — earlier ones predate
+                    per-click recording and are counted in the total only.</p>
+                </InfoDot>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 14 }}>
+                <tbody>
+                  {detail.stats.by_destination.map((d) => (
+                    <tr key={d.target_url} style={{ borderTop: '1px solid var(--line)' }}>
+                      <td style={{ padding: '5px 0', color: 'var(--t2)', wordBreak: 'break-all' }}>{d.target_url}</td>
+                      <td style={{ padding: '5px 0', textAlign: 'right', width: 60,
+                                   fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{d.clicks}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          <Breakdowns stats={detail.stats} />
 
           <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', marginBottom: 6,
                         display: 'flex', gap: 5, alignItems: 'center' }}>
@@ -362,6 +443,56 @@ export default function LinksPage() {
         </Modal>
       )}
     </>
+  );
+}
+
+// Scan-vs-tap, device, browser, referrer, country — the detail a shortener is expected to have.
+//
+// Rendered only where there is something to say: an all-'unknown' column is noise, and a single
+// row is not a breakdown. Each list is capped — a long tail of one-click referrers pushes the
+// useful rows off screen and tells you nothing.
+function Breakdowns({ stats }) {
+  if (!stats) return null;
+
+  const groups = [
+    { key: 'by_source', label: 'Scan vs tap', field: 'source',
+      info: 'A QR code encodes ?s=qr, so a scan is distinguishable from someone tapping the same link. Codes printed before 6 Aug 2026 carry no marker and read as unknown.' },
+    { key: 'by_device', label: 'Device', field: 'device' },
+    { key: 'by_browser', label: 'Browser', field: 'browser' },
+    { key: 'by_referrer', label: 'Came from', field: 'referrer_host',
+      info: 'The site that linked here. "direct" means no referrer was sent — normal for a QR scan, a messaging app or a typed URL.' },
+    { key: 'by_country', label: 'Country', field: 'country' },
+  ];
+
+  const shown = groups
+    .map((g) => ({ ...g, rows: (stats[g.key] || []).slice(0, 6) }))
+    // A breakdown with one row, or one that is entirely 'unknown', is not information.
+    .filter((g) => g.rows.length > 1
+      || (g.rows.length === 1 && !['unknown', 'direct'].includes(String(g.rows[0][g.field]))));
+
+  if (!shown.length) return null;
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 14, marginBottom: 14 }}>
+      {shown.map((g) => (
+        <div key={g.key}>
+          <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', marginBottom: 4,
+                        display: 'flex', gap: 5, alignItems: 'center' }}>
+            {g.label}
+            {g.info && <InfoDot label={`About ${g.label}`}>{g.info}</InfoDot>}
+          </div>
+          {g.rows.map((r) => (
+            <div key={String(r[g.field])}
+                 style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12,
+                          color: 'var(--t2)', padding: '2px 0' }}>
+              <span>{String(r[g.field])}</span>
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.clicks}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 
