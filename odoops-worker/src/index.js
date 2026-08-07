@@ -2736,10 +2736,24 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
   const pm = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,sku,ean');
   const bySku = {}, byEan = {}, byCode = {};
   for (const p of (pm.ok ? pm.data : [])) { if (p.sku) bySku[p.sku] = p.product_code; if (p.ean) byEan[p.ean] = p.product_code; byCode[p.product_code] = p.product_code; }
+  // Anything the exact pass missed goes to sales.match_channel_skus — the SAME matcher
+  // reconcile_unmapped_sku uses (normalised catalogue sku, normalised product+model+colour,
+  // allow-listed channel prefix / marketplace suffix). ONE subrequest for the whole run.
+  // Do NOT reimplement that ladder here: keeping it in one place is the point — the exact-match
+  // rule lived in both call sites and neither learnt the channels that spell a SKU differently,
+  // which excluded ₹48.75L of GT/Cred/Amazon sales from sales_fact (found 2026-08-07).
+  const byNorm = {};
+  const stillUnknown = unknown.filter(s => !(bySku[s] || byEan[s] || byCode[s]));
+  if (stillUnknown.length) {
+    const mR = await rpcSales('match_channel_skus', { p_skus: stillUnknown });
+    for (const row of (mR.ok && Array.isArray(mR.data) ? mR.data : [])) {
+      if (row.product_code) byNorm[row.channel_sku] = row.product_code;
+    }
+  }
   const mapInserts = [], unmappedRows = [];
   for (const s of unknown) {
-    const code = bySku[s] || byEan[s] || byCode[s] || null;
-    if (code) mapInserts.push({ channel_id: channelId, channel_sku: s, product_code: code, match_on: bySku[s] ? 'sku' : (byEan[s] ? 'ean' : 'product_code'), created_by: userId || null });
+    const code = bySku[s] || byEan[s] || byCode[s] || byNorm[s] || null;
+    if (code) mapInserts.push({ channel_id: channelId, channel_sku: s, product_code: code, match_on: bySku[s] ? 'sku' : (byEan[s] ? 'ean' : (byCode[s] ? 'product_code' : 'auto')), created_by: userId || null });
     else unmappedRows.push({ channel_id: channelId, channel_sku: s, sample_title: agg[s].title || null, last_seen: nowISO(), pending_units: Math.round(agg[s].units), pending_gross: agg[s].gross, status: 'open' });
   }
   if (mapInserts.length) await sbSales('/rest/v1/sku_map', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(mapInserts) });
