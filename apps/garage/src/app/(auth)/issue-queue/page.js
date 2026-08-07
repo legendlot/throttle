@@ -395,6 +395,21 @@ export default function IssueQueuePage() {
             available: stock[p.part_code] || 0,
           }));
           setSelectedItem({ ...row, wo, lines });
+        } else if (Array.isArray(wo.lines) && wo.lines.length) {
+          // Rework — the WO carries its own PART lines, from a flush "Rework Queue"
+          // disposition. Render those. Do NOT fall through to calcKit: that computes a
+          // whole PRODUCT kit, so it would demand the entire BOM instead of the parts
+          // actually sent for rework (and with the blank product a rework WO always
+          // carries, it returns nothing at all — WO-2174).
+          const [, stock] = await Promise.all([ensureMaterialCache(), ensureStockCache()]);
+          const lines = wo.lines.map((l) => ({
+            part_code: l.part_code,
+            part_name: l.part_name || '',
+            product:   l.product || wo.product || '',
+            required:  Number(l.qty) || 0,
+            available: stock[l.part_code] || 0,
+          }));
+          setSelectedItem({ ...row, wo, lines });
         } else {
           // Rework / standalone — calc kit
           await ensureMaterialCache();
