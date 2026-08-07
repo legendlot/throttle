@@ -2619,6 +2619,98 @@ async function syncUniwareTracking(env, opts = {}) {
            packages: rows.length, windowDone, cursor: uniISO(windowDone ? winEnd : winStart) };
 }
 
+// ── Ad live-status: Google + Amazon → mkt_entity_status ───────────────────────
+// The Live/Paused marker on the Marketing tables was META-ONLY, so 129 of 149 campaigns showed
+// no state at all (measured 2026-08-07: meta 20/20, amazon 0/119, google 0/8). Same target table
+// and the same `is_live` contract as metaStatusAdapter, so the marker lights up for these
+// platforms with no reader change anywhere.
+// ⚠️ Amazon DSP is deliberately NOT here — it is a different API (audience/DSP, not the
+// Advertising campaign endpoints) and only 2 campaigns; folding it in would mean a fourth auth
+// path for a rounding error. Its rows keep reading "no status", which is honest.
+const adStatusAdapter = {
+  kind: 'ad_status', stgTable: 'mkt_entity_status',
+  datesOf() { return []; },
+  async fetch({ env, config, budget = 40 }) {
+    const cfg = config || {};
+    const rows = []; const errors = []; let subreqs = 0;
+
+    // ── Google Ads: one GAQL query per customer. status ENABLED | PAUSED | REMOVED.
+    try {
+      const customers = (cfg.google_customer_ids || []).map(c => String(c).replace(/[^0-9]/g, '')).filter(Boolean);
+      if (customers.length) {
+        const token = await getGoogleAdsToken(env); subreqs++;
+        const H = { 'developer-token': env.GOOGLE_ADS_DEVELOPER_TOKEN, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+        const loginCid = String(cfg.google_login_customer_id || '').replace(/[^0-9]/g, '');
+        if (loginCid) H['login-customer-id'] = loginCid;
+        const query = 'SELECT campaign.id, campaign.name, campaign.status FROM campaign';
+        for (const cid of customers) {
+          if (subreqs >= budget) break;
+          const res = await fetch(`https://googleads.googleapis.com/${GADS_API_VER}/customers/${cid}/googleAds:searchStream`,
+            { method: 'POST', headers: H, body: JSON.stringify({ query }) }); subreqs++;
+          if (!res.ok) throw new Error(`Google Ads ${res.status} cust ${cid}: ${(await res.text().catch(() => '')).slice(0, 160)}`);
+          for (const batch of (await res.json() || [])) {
+            for (const r of (batch.results || [])) {
+              const c = r.campaign || {};
+              if (!c.id) continue;
+              rows.push({ platform: 'google', level: 'campaign', entity_id: String(c.id),
+                          status: c.status || null, is_live: c.status === 'ENABLED', name: c.name || null });
+            }
+          }
+        }
+      }
+    } catch (e) { errors.push('google: ' + (e?.message || e)); }
+
+    // ── Amazon Ads: SP / SB / SD campaign lists. state ENABLED | PAUSED | ARCHIVED.
+    // Each ad product has its OWN versioned content type — they are not interchangeable, and a
+    // wrong Accept header returns 406 rather than a useful error.
+    try {
+      const profileId = cfg.amazon_profile_id;
+      if (profileId) {
+        const host = cfg.amazon_region_host || 'https://advertising-api-eu.amazon.com';
+        const token = await getAmazonAdsToken(env); subreqs++;
+        const base = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID,
+                       'Amazon-Advertising-API-Scope': String(profileId), Authorization: `Bearer ${token}` };
+        const specs = [
+          { path: '/sp/campaigns/list', ct: 'application/vnd.spCampaign.v3+json', method: 'POST' },
+          { path: '/sb/v4/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
+          { path: '/sd/campaigns', ct: 'application/json', method: 'GET' },
+        ];
+        for (const s of specs) {
+          try {
+            let nextToken = null, pages = 0;
+            do {
+              if (subreqs >= budget) break;
+              const init = s.method === 'POST'
+                ? { method: 'POST', headers: { ...base, 'Content-Type': s.ct, Accept: s.ct },
+                    body: JSON.stringify(nextToken ? { maxResults: 500, nextToken } : { maxResults: 500 }) }
+                : { method: 'GET', headers: { ...base, Accept: s.ct } };
+              const res = await fetch(`${host}${s.path}${s.method === 'GET' ? '?count=500' : ''}`, init); subreqs++; pages++;
+              if (!res.ok) throw new Error(`${res.status} ${s.path}: ${(await res.text().catch(() => '')).slice(0, 140)}`);
+              const j = await res.json().catch(() => null);
+              const list = Array.isArray(j) ? j : (j?.campaigns || []);
+              for (const c of list) {
+                const id = c.campaignId ?? c.campaign_id;
+                if (id === undefined || id === null) continue;
+                const st = String(c.state || '').toUpperCase();
+                rows.push({ platform: 'amazon', level: 'campaign', entity_id: String(id),
+                            status: st || null, is_live: st === 'ENABLED', name: c.name || null });
+              }
+              nextToken = (!Array.isArray(j) && j?.nextToken) ? j.nextToken : null;
+            } while (nextToken && pages < 6);
+          } catch (e) { errors.push(`amazon ${s.path}: ${e?.message || e}`); }
+        }
+      }
+    } catch (e) { errors.push('amazon: ' + (e?.message || e)); }
+
+    // A platform failing must not discard the platform that succeeded — but a run that got
+    // NOTHING is a real failure and should surface as one rather than a silent green tick.
+    if (!rows.length) throw new Error('ad_status: no rows — ' + (errors.join(' | ') || 'no platforms configured'));
+    if (errors.length) console.log('odoops ad_status partial:', errors.join(' | '));
+    return { rows, cursorAfter: null, subreqs, partial: false };
+  },
+  stage: metaStatusAdapter.stage,   // identical upsert + dedupe; one writer for one table
+};
+
 // ── Amazon Sales & Traffic (GET_SALES_AND_TRAFFIC_REPORT) ─────────────────────
 // The one metric family the e-commerce team asked for that Odo had NO feed for: sessions, page
 // views and unit-session conversion. The Amazon analogue of the GA4 website funnel.
@@ -2729,7 +2821,7 @@ const amazonTrafficAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, ad_status: adStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
