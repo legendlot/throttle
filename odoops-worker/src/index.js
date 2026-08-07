@@ -1759,13 +1759,31 @@ const uniwareAggAdapter = {
       // whole window is staged we advance by winEnd — no dependence on the cursor clearing the second.
       codes.sort((a, b) => a.updated - b.updated);
       const allIds = uniq(codes.map(c => c.code));
-      const already = new Set();
+      // ⚠️ Skip on "staged AND UNCHANGED SINCE we staged it" — NOT on "staged" alone.
+      // The bare skip kept the same-second drain working but also made the feed WRITE-ONCE: an
+      // order staged as FULFILLABLE could never be re-read, so its later transition to
+      // DELIVERED / CANCELLED / returned was invisible forever. Measured 2026-08-07: **1,449
+      // orders (28.7% of the feed, ₹19.19L) frozen in a non-final state**, with ZERO delivered in
+      // the last 30 days — i.e. the recent edge was entirely stuck.
+      // The search is keyed `dateType:'UPDATED'`, so a changed order re-appears in a later window
+      // by itself; comparing its `updated` against our `ingested_at` is all that was missing.
+      // Same-second drain is preserved: orders staged by an earlier run of the same pile have
+      // ingested_at > their updated, so they still skip and each run takes a fresh slice.
+      // Staging upserts on source_line_id, so a re-read overwrites in place and cannot duplicate.
+      const stagedAt = new Map();
       if (allIds.length) {
-        const sr = await sbSales(`/rest/v1/stg_uniware?source_order_id=in.${inList(allIds)}&select=source_order_id`); subreqs++;
-        if (sr.ok) for (const x of sr.data) already.add(x.source_order_id);
+        const sr = await sbSales(`/rest/v1/stg_uniware?source_order_id=in.${inList(allIds)}&select=source_order_id,ingested_at`); subreqs++;
+        if (sr.ok) for (const x of sr.data) {
+          const t = Date.parse(x.ingested_at || '') || 0;
+          const prev = stagedAt.get(x.source_order_id) || 0;
+          if (t > prev) stagedAt.set(x.source_order_id, t);   // an order has many lines — keep the latest
+        }
       }
-      const toGet = codes.filter(c => !already.has(c.code));
-      if (!toGet.length) { cursorAfter = uniISO(winEnd); partial = winEnd < now; break; }   // every member already staged → step the window
+      const toGet = codes.filter(c => {
+        const st = stagedAt.get(c.code);
+        return st === undefined || c.updated > st;   // never staged, or changed since we staged it
+      });
+      if (!toGet.length) { cursorAfter = uniISO(winEnd); partial = winEnd < now; break; }   // nothing new or changed in this window → step it
       let drained = true, lastGot = winStart;
       for (const c of toGet) {
         if (subreqs >= budget - 1) { drained = false; break; }
