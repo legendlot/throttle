@@ -2670,34 +2670,52 @@ const adStatusAdapter = {
         const token = await getAmazonAdsToken(env); subreqs++;
         const base = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID,
                        'Amazon-Advertising-API-Scope': String(profileId), Authorization: `Bearer ${token}` };
+        // Each entry may carry FALLBACKS: Sponsored Brands returned nothing on the first live run
+        // (27 campaigns, 25 active that week) while SP and SD both worked, and the v4 shape could
+        // not be confirmed from Amazon's docs (JS-rendered, not fetchable). Rather than guess one
+        // shape, try the known ones in order and take the first that answers; whatever still fails
+        // is reported through last_platform_errors instead of vanishing.
         const specs = [
-          { path: '/sp/campaigns/list', ct: 'application/vnd.spCampaign.v3+json', method: 'POST' },
-          { path: '/sb/v4/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
-          { path: '/sd/campaigns', ct: 'application/json', method: 'GET' },
+          [{ path: '/sp/campaigns/list', ct: 'application/vnd.spCampaign.v3+json', method: 'POST' }],
+          [{ path: '/sb/v4/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
+           { path: '/sb/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
+           { path: '/sb/campaigns', ct: 'application/json', method: 'GET' }],
+          [{ path: '/sd/campaigns', ct: 'application/json', method: 'GET' }],
         ];
-        for (const s of specs) {
-          try {
-            let nextToken = null, pages = 0;
-            do {
-              if (subreqs >= budget) break;
-              const init = s.method === 'POST'
-                ? { method: 'POST', headers: { ...base, 'Content-Type': s.ct, Accept: s.ct },
-                    body: JSON.stringify(nextToken ? { maxResults: 500, nextToken } : { maxResults: 500 }) }
-                : { method: 'GET', headers: { ...base, Accept: s.ct } };
-              const res = await fetch(`${host}${s.path}${s.method === 'GET' ? '?count=500' : ''}`, init); subreqs++; pages++;
-              if (!res.ok) throw new Error(`${res.status} ${s.path}: ${(await res.text().catch(() => '')).slice(0, 140)}`);
-              const j = await res.json().catch(() => null);
-              const list = Array.isArray(j) ? j : (j?.campaigns || []);
-              for (const c of list) {
-                const id = c.campaignId ?? c.campaign_id;
-                if (id === undefined || id === null) continue;
-                const st = String(c.state || '').toUpperCase();
-                rows.push({ platform: 'amazon', level: 'campaign', entity_id: String(id),
-                            status: st || null, is_live: st === 'ENABLED', name: c.name || null });
-              }
-              nextToken = (!Array.isArray(j) && j?.nextToken) ? j.nextToken : null;
-            } while (nextToken && pages < 6);
-          } catch (e) { errors.push(`amazon ${s.path}: ${e?.message || e}`); }
+        for (const variants of specs) {
+          const attempts = [];
+          let got = false;
+          for (const s of variants) {
+            if (got || subreqs >= budget) break;
+            const before = rows.length;
+            try {
+              let nextToken = null, pages = 0;
+              do {
+                if (subreqs >= budget) break;
+                const init = s.method === 'POST'
+                  ? { method: 'POST', headers: { ...base, 'Content-Type': s.ct, Accept: s.ct },
+                      body: JSON.stringify(nextToken ? { maxResults: 500, nextToken } : { maxResults: 500 }) }
+                  : { method: 'GET', headers: { ...base, Accept: s.ct } };
+                const res = await fetch(`${host}${s.path}${s.method === 'GET' ? '?count=500' : ''}`, init); subreqs++; pages++;
+                if (!res.ok) throw new Error(`${res.status}: ${(await res.text().catch(() => '')).slice(0, 140)}`);
+                const j = await res.json().catch(() => null);
+                const list = Array.isArray(j) ? j : (j?.campaigns || []);
+                for (const c of list) {
+                  const id = c.campaignId ?? c.campaign_id;
+                  if (id === undefined || id === null) continue;
+                  const st = String(c.state || '').toUpperCase();
+                  rows.push({ platform: 'amazon', level: 'campaign', entity_id: String(id),
+                              status: st || null, is_live: st === 'ENABLED', name: c.name || null });
+                }
+                nextToken = (!Array.isArray(j) && j?.nextToken) ? j.nextToken : null;
+              } while (nextToken && pages < 6);
+              // A 200 that yields no campaigns is NOT success — it is the exact silent failure
+              // that let Sponsored Brands look fine while returning nothing. Rows are the proof.
+              if (rows.length > before) got = true;
+              else attempts.push(`${s.path}: 200 but 0 campaigns`);
+            } catch (e) { attempts.push(`${s.path}: ${e?.message || e}`); }
+          }
+          if (!got && attempts.length) errors.push('amazon ' + attempts.join(' ; '));
         }
       }
     } catch (e) { errors.push('amazon: ' + (e?.message || e)); }
@@ -2705,10 +2723,21 @@ const adStatusAdapter = {
     // A platform failing must not discard the platform that succeeded — but a run that got
     // NOTHING is a real failure and should surface as one rather than a silent green tick.
     if (!rows.length) throw new Error('ad_status: no rows — ' + (errors.join(' | ') || 'no platforms configured'));
-    if (errors.length) console.log('odoops ad_status partial:', errors.join(' | '));
-    return { rows, cursorAfter: null, subreqs, partial: false };
+    // ⚠️ A PARTIAL failure must not report `ok` either. The first live run returned 235 rows and
+    // status ok while Sponsored Brands had silently returned nothing — 27 campaigns, 25 of them
+    // active that week, left with no status and no signal anywhere. console.log alone is not an
+    // error channel: it is invisible outside a live tail. Errors now ride back to the run record.
+    // `partial` is the visible signal: the run reads 'partial', not 'ok', whenever a platform
+    // failed. The detail rides in config (NOT last_error — executeRun clears that on the success
+    // path AFTER stage, so anything written there is clobbered).
+    return { rows, cursorAfter: null, subreqs, partial: errors.length > 0,
+             configAfter: { ...cfg, last_platform_errors: errors.length ? errors.join(' | ').slice(0, 500) : null } };
   },
-  stage: metaStatusAdapter.stage,   // identical upsert + dedupe; one writer for one table
+  async stage(rows, runId, channelId, fetched) {
+    await metaStatusAdapter.stage(rows);   // identical upsert + dedupe; one writer for one table
+    // configAfter already spreads the whole config, so {} as the base cannot drop a key.
+    if (fetched?.configAfter) await patchConnectorConfig(channelId, {}, fetched.configAfter);
+  },
 };
 
 // ── Amazon Sales & Traffic (GET_SALES_AND_TRAFFIC_REPORT) ─────────────────────
