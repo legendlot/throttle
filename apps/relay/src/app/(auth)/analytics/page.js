@@ -79,7 +79,8 @@ function downloadJourneysCsv(rows) {
         j.failed ?? '', f.our_defect ?? 0, f.meta_declined ?? 0, f.invalid_recipient ?? 0,
         f.transient ?? 0, f.other ?? 0,
         j.skipped ?? '', j.unsubscribes ?? '', j.attributed_orders ?? '',
-        j.attributed_revenue ?? '', j.cost_inr ?? '', j.unpriced ?? '', j.roi ?? '',
+        j.attributed_revenue ?? '', j.cost_inr ?? '', j.unpriced ?? '',
+        j.send_purpose === 'utility' ? '' : (j.roi ?? ''),
         j.read_rate ?? '', j.click_rate ?? '', j.order_rate ?? '', j.defect_rate ?? '',
         j.fail_rate ?? '', j.skip_rate ?? '', j.window_days ?? ''];
     }));
@@ -376,7 +377,14 @@ export default function AnalyticsPage() {
                             {inr(j.attributed_revenue ?? 0)}{isUtility ? <span className="dim"> *</span> : null}
                           </td>
                           <td className="num mono">{Number(j.cost_inr) > 0 ? inr(j.cost_inr) : <span className="dim">—</span>}</td>
-                          <td className="num mono">{fmtRoi(j.roi == null ? null : Number(j.roi))}</td>
+                          {/* ROI is SUPPRESSED for utility journeys. Their revenue is excluded
+                              from the headline as non-causal, so dividing it by a tiny
+                              transactional spend produces a spectacular and meaningless ratio —
+                              Order Cancelled read 1806.56x purely because it costs Rs 21 and the
+                              7-day window happened to catch Rs 38k of unrelated orders. A number
+                              that large is read as a result no matter how much fine print sits
+                              beside it. Computed and exported raw; hidden where it would mislead. */}
+                          <td className="num mono">{isUtility ? <span className="dim" title="Not meaningful — transactional revenue is not attributable to this message">—</span> : fmtRoi(j.roi == null ? null : Number(j.roi))}</td>
                         </tr>
                         {isOpen && (
                           <tr>
