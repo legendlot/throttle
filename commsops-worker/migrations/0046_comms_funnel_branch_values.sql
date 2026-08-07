@@ -1,0 +1,21 @@
+-- 0046 — journey_funnel: per-branch VALUES, and prefer the branch over the transport status.
+--
+-- (1) result_values — the TRIGGERING event's value summed per branch, so a branch reads as
+--     "how much order value went this way". For C2P: Rs 6.52L confirmed COD, Rs 1.63L asked to
+--     cancel, Rs 18.5k asked to pay.
+--
+--     WARNING: a branch value is INTENT, not realisation. 13 people tapped Make Payment carrying
+--     Rs 18,572 of orders; 2 actually paid, worth Rs 598. A branch says how much money reached a
+--     decision, never how much was collected — read the downstream steps for that.
+--
+-- (2) The result-key ladder now prefers `outcome` over `status`. An INTERACTIVE send row carries
+--     BOTH (status='sent' AND outcome='Confirm COD Order'), so status-first collapsed every button
+--     into `sent`: C2P's ask step reported {sent: 634, failed: 1} when the truth is
+--     Confirm COD 295 / no_reply 239 / Cancel 76 / Make Payment 13. The single most valuable
+--     signal in the engine had been recorded since day one and was never once readable.
+--     A plain send has no `outcome` key, so it still reports sent/skipped/failed unchanged.
+--     Delivery failures are not lost: those rows carry outcome='exit:send_failed', which
+--     branchTone() renders red, and unknown keys there fall through to gray.
+--
+-- Applied as comms_funnel_branch_values + comms_funnel_prefer_branch_outcome.
+-- Definitive body lives in the DB; see systems/relay.md for the measurements.
