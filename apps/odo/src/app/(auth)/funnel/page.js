@@ -623,6 +623,9 @@ export default function FunnelPage() {
             const f = (pay && pay.funnel) || {}, rc = (pay && pay.recon) || {};
             const attempts = Number(f.attempts || 0), captured = Number(f.captured || 0), failed = Number(f.failed || 0);
             const sr = Number(f.success_rate || 0), capAmt = Number(f.captured_amount || 0), cod = Number(f.cod_orders || 0);
+            const abandoned = Number(f.abandoned || 0), psr = Number(f.payment_success_rate || 0);
+            const byProvider = f.by_provider || {};
+            const provNames = Object.keys(byProvider).sort();
             const byMethod = f.by_method || {}, byReason = f.by_failure_reason || {};
             const methods = Object.entries(byMethod).sort((a, b) => (Number(b[1].attempts) || 0) - (Number(a[1].attempts) || 0));
             const reasons = Object.entries(byReason).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 8);
@@ -637,7 +640,7 @@ export default function FunnelPage() {
             );
             return (
               <div className="so-card">
-                <PanelHead title="Checkout & payment" qual="· Razorpay" />
+                <PanelHead title="Checkout & payment" qual={provNames.length ? `· ${provNames.join(' + ')}` : ''} />
                 {!pay ? <div style={{ padding: 20, textAlign: 'center' }}><Spinner /></div>
                   : (attempts === 0 && cod === 0) ? <div className="so-sub" style={{ color: 'var(--t3)', fontSize: 12.5, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
                     : (

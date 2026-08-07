@@ -3790,7 +3790,10 @@ export default {
             if (!canView(P)) return err('No permission', 403);
             const from = qp('from') || todayISO(), to = qp('to') || todayISO();
             const [fr, rc] = await Promise.all([
-              rpcSales('f_payment_funnel', { p_from: from, p_to: to, p_provider: qp('provider') || 'razorpay' }),
+              // provider omitted = ALL providers. Was hard-defaulted to 'razorpay', which hid the
+              // whole Cashfree side of a live gateway migration (Rs 20.7L captured since 18 Jul).
+              // Safe to union: 0 orders appear under both providers.
+              rpcSales('f_payment_funnel', { p_from: from, p_to: to, p_provider: qp('provider') || null }),
               rpcSales('f_payment_recon', { p_from: from, p_to: to }),
             ]);
             if (!fr.ok) return err('Payment funnel failed: ' + JSON.stringify(fr.data), 502);
