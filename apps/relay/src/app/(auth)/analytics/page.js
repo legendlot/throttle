@@ -394,14 +394,37 @@ export default function AnalyticsPage() {
                                 : (f.steps || []).length === 0 ? <span className="dim" style={{ fontSize: 12 }}>No enrolments yet.</span>
                                 : (
                                   <div style={{ display: 'grid', gap: 4 }}>
-                                    {f.steps.map((s) => (
+                                    {f.steps.map((s) => {
+                                      // Per-branch outcomes. A multi-step journey's real signal is
+                                      // WHICH WAY people went — for C2P, 295 confirmed COD, 76
+                                      // cancelled, 13 asked to pay. That was recorded from day one
+                                      // and never rendered anywhere. Only shown when a step
+                                      // actually branched; a single-outcome step is just its bar.
+                                      const rk = Object.keys(s.results || {});
+                                      const vals = s.result_values || {};
+                                      return (
                                       <div key={s.step_id} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 70px', gap: 8, alignItems: 'center' }}>
                                         <span className="dim mono" style={{ fontSize: 11 }}>{s.step_type} · {s.step_id}</span>
-                                        <span style={{ background: 'var(--accent,#F2CD1A)', height: 8, borderRadius: 4,
-                                                       width: `${Math.max(2, (Number(s.entered || 0) / maxEntered) * 100)}%` }} />
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                          <span style={{ background: 'var(--accent,#F2CD1A)', height: 8, borderRadius: 4, flexShrink: 0,
+                                                         width: `${Math.max(2, (Number(s.entered || 0) / maxEntered) * 100)}%` }} />
+                                          {rk.length > 1 && (
+                                            <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                              {rk.sort((a, b) => Number(s.results[b]) - Number(s.results[a])).map((k) => (
+                                                <span key={k} className="mono" style={{ fontSize: 10.5, color: 'var(--t3,#9aa0aa)',
+                                                        border: '1px solid var(--line,rgba(255,255,255,.11))', borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap' }}
+                                                      title={vals[k] != null ? `${inr(vals[k])} of triggering order value took this branch` : undefined}>
+                                                  {k} {Number(s.results[k]).toLocaleString('en-IN')}
+                                                  {vals[k] ? <span className="dim"> · {inr(vals[k])}</span> : null}
+                                                </span>
+                                              ))}
+                                            </span>
+                                          )}
+                                        </span>
                                         <span className="num mono" style={{ fontSize: 12 }}>{Number(s.entered || 0).toLocaleString('en-IN')}</span>
                                       </div>
-                                    ))}
+                                      );
+                                    })}
                                     <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
                                       {Object.entries(f.enrolments || {}).map(([k, v]) => `${k}: ${v}`).join(' · ')}
                                     </div>
