@@ -10,9 +10,9 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../lib/api.js';
 import { familyOf, FAMILIES, FAMILY_ORDER, SUBCHANNEL_PALETTE } from '../lib/families.js';
-import { aggOrders } from '../lib/segregation.js';
+import { aggOrders, GST_RATE } from '../lib/segregation.js';
 import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
-import { ScopeTab, Swatch } from './prism.js';
+import { PageHead, ScopeTab, Swatch } from './prism.js';
 import { HUE } from '../lib/hues.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
@@ -203,10 +203,16 @@ export default function AmazonPage() {
 
   return (
     <div className="so-page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Swatch color={AMZ} size={11} glow />
-        <span className="so-h2" style={{ fontSize: 18 }}>Amazon</span>
-      </div>
+      {/* Same PageHead as ChannelFamilyPage — this page hand-rolled its own header div, so it
+          silently missed the h1 type scale, the swatch treatment and the sub-line every other
+          family page shows. Amazon renders a bespoke component rather than the shared family
+          page, which is exactly how the two drift. */}
+      <PageHead
+        title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+          <Swatch color={AMZ} size={13} glow style={{ borderRadius: 4 }} />{FAMILIES.amazon.label}
+        </span>}
+        sub={`${(amzCh || []).length} sub-channel${(amzCh || []).length === 1 ? '' : 's'} · vs prior period`}
+      />
       {/* family scope tabs — identical strip to ChannelFamilyPage, and kept in the same position
           (ABOVE the RangePicker) so the two Channels surfaces agree. Amazon has its own bespoke
           page rather than the generic family page, so without this the route is a dead end: the
@@ -227,7 +233,14 @@ export default function AmazonPage() {
           <div className="so-eyebrow" style={{ marginTop: 4 }}>Orders &amp; sales value</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
             <Kpi hue={HUE.count} lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled" now={seg.totalOrders} prev={segP.totalOrders} />
-            <Kpi hue={HUE.primary} lbl="Total Sales" val={inr(gross)} sub="gross (tax-incl)" now={gross} prev={pGross} />
+            {/* Both bases, deliberately. The e-commerce team works off the tax-INCLUSIVE figure
+                (Akshay, 2026-07-31) while Odo reports ex-GST everywhere, and the two sitting ~15%
+                apart with only one shown is what kept producing the "are we 17% out?" question.
+                Presentation only — RULE-SALES-001 fixes the stored basis as tax-incl with GST
+                captured separately, so do NOT change what is stored to make these agree. */}
+            <Kpi hue={HUE.primary} lbl="Total Sales" val={inr(gross)}
+                 sub={`gross incl-GST · ${inr(gross / (1 + GST_RATE))} ex-GST`}
+                 now={gross} prev={pGross} />
             <Kpi hue={HUE.gross} lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
             <Kpi hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
             <Kpi hue={HUE.gross} lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />

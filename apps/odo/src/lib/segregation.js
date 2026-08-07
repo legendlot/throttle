@@ -4,7 +4,9 @@
 // sale; using it for the headline would make recent net lag/wobble as orders trickle in. So the
 // metric derives GST here; the exact settled GST is kept as `gstSettled` for reconciliation only.
 // (Afshaan S166 — "live recent data, settled as a refinement".)
-const GST_RATE = 0.18;
+// Exported so a surface needing the ex-GST basis strips at THIS rate rather than restating
+// 0.18 of its own — one rate, one place.
+export const GST_RATE = 0.18;
 
 // Order-grain ladder math over f_order_rollup rows (per sale_date × channel).
 // Single definition shared by /performance and the Channels family pages.
