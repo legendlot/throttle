@@ -319,6 +319,7 @@ export default function AnalyticsPage() {
             {journeys.length === 0
               ? <EmptyState icon="git-branch" title="No journeys yet" hint="Triggered, revenue and conversion per journey appear here once enrolments run." />
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr>
                     <th>Journey</th><th>Purpose</th><th>Status</th><th className="num">Triggered</th><th className="num">Sent</th>
@@ -347,7 +348,11 @@ export default function AnalyticsPage() {
                               <span className="dim" style={{ marginRight: 6 }}>{isOpen ? '▾' : '▸'}</span>{j.name}
                             </button>
                           </td>
-                          <td><Badge label={j.send_purpose || '—'} tone={isUtility ? 'gray' : 'green'} /></td>
+                          {/* Purpose gets its OWN colour space: marketing green, utility blue.
+                              It must never be gray — gray is the STATUS vocabulary (draft/archived),
+                              and a utility badge sharing it reads as "inactive" rather than
+                              "transactional". Different axis, different colour. */}
+                          <td><Badge label={j.send_purpose || '—'} tone={isUtility ? 'blue' : 'green'} /></td>
                           <td><Badge label={j.status} tone={j.status === 'active' ? 'green' : 'gray'} /></td>
                           <td className="num mono">{j.enrolled ?? 0}</td>
                           <td className="num mono">{j.sent ?? 0}</td>
@@ -402,6 +407,7 @@ export default function AnalyticsPage() {
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
 
@@ -412,6 +418,7 @@ export default function AnalyticsPage() {
             {health.length === 0
               ? <EmptyState icon="mail" title="No sender activity" hint="Bounce and complaint rates per sender identity appear here once emails are sent." />
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr>
                     <th>Sender</th><th>Channel</th><th>Quality</th><th className="num">Sent</th><th className="num">Delivered</th>
@@ -462,6 +469,7 @@ export default function AnalyticsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
         </>

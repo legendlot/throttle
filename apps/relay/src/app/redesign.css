@@ -121,6 +121,21 @@
 .panel-scroll{overflow-x:auto}
 .panel-scroll .dt{min-width:640px}
 
+/* Wide tables inside a PADDED panel. `.panel-body` has no overflow, so a table wider than the
+   panel was simply clipped with no way to reach the right-hand columns — which is what happened
+   to the journeys table once it grew to 14 columns. Opt in per table rather than putting
+   overflow-x on .panel-body globally: that would turn every padded panel into a scroll container
+   and clip any absolutely-positioned child that isn't portalled.
+   The negative margin lets the scroll area span the full panel width so the scrollbar sits at the
+   panel edge instead of floating inside the padding. */
+.table-scroll{overflow-x:auto;margin:calc(var(--panel-pad) * -1);padding:var(--panel-pad)}
+.table-scroll .dt{min-width:1180px}
+/* Keep the row's identity visible while scrolling 14 columns — a number you cannot attribute to a
+   row is not readable. Opaque background is required or the scrolled cells show through. */
+.table-scroll .dt th:first-child,
+.table-scroll .dt td:first-child{position:sticky;left:0;z-index:1;background:var(--surface)}
+.table-scroll .dt tbody tr:hover td:first-child{background:var(--surface-2,var(--surface))}
+
 /* ---- KPI strip (§3.3 / §6) ---- */
 .kstrip{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);overflow:hidden;margin-bottom:16px}
 .ks-cell{flex:1;padding:15px 18px;border-right:1px solid var(--border-sb);position:relative;min-width:0}
