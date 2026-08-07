@@ -9,6 +9,7 @@ const G = require('./journey-graph.js');
 const CF = require('./cashfree.js');
 const SH = require('./shopify.js');
 const AL = require('./alerts.js');
+const LINKS = require('./links.js');
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -507,15 +508,46 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         notes: { enrolment: String(enrolmentId), ...(orderId ? { order_id: String(orderId) } : {}) },
       });
       if (!r.ok) return { outcome: 'failed', reason: r.error };
+
+      // Wrap the Cashfree URL in our own /r/ redirect so the tap is MEASURABLE.
+      //
+      // WHY THIS ONE MATTERS MOST. Every other customer-facing link in Relay (cart, browse,
+      // tracking) already goes through /r/. The payment link — the single most valuable click in
+      // the business, a customer who has said they want to pay — was the only raw URL left, so
+      // "never opened the link" and "opened it and abandoned on the payment page" were
+      // indistinguishable. Measured 2026-08-07: of 11 links sent, 7 were READ and 0 paid; without
+      // this there is no way to tell which of those two problems to fix.
+      //
+      // Fail-SOFT, unlike the template-button redirect which deliberately throws: there the
+      // template is already approved as /r/{{1}} and a mint failure would ship a dead CTA, but
+      // here the raw Cashfree URL is a perfectly good fallback. Never lose a payment to
+      // instrumentation.
+      //
+      // ⚠️ `messageId` is null: this action runs BEFORE the send that carries the link, so no
+      // message row exists yet. The click still records against the PROFILE (comms.link_click +
+      // a link_clicked event), which is what answers "did they open the payment page" — but it
+      // will NOT appear in a journey's `clicked` column, which joins on message_id.
+      let payUrl = r.link_url;
+      try {
+        const base = await LINKS.getLinkBaseUrl(env);
+        if (base) {
+          const code = await LINKS.mintLink(env, {
+            baseUrl: base, target: r.link_url, utm: null,
+            messageId: null, profileId: profileId || null, channel: 'whatsapp',
+          });
+          if (code) payUrl = `${base.replace(/\/+$/, '')}/r/${code}`;
+        }
+      } catch (e) { /* keep the raw Cashfree URL */ }
+
       const pr = await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}&select=attributes&limit=1`, env);
       const attrs = (pr.ok && pr.data?.[0]?.attributes) || {};
-      attrs.payment_link_url = r.link_url; attrs.payment_link_id = r.link_id;
+      attrs.payment_link_url = payUrl; attrs.payment_link_id = r.link_id;
       await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}`, env,
         { method: 'PATCH', body: JSON.stringify({ attributes: attrs, updated_at: new Date().toISOString() }) });
       // Expose the priced amounts to LATER send steps (see runCtx). Without this the payment
       // message cannot state what the customer is being asked to pay.
       return { outcome: 'next', link_id: r.link_id,
-               context: { payment_link_url: r.link_url, ...(pricing || {}) } };
+               context: { payment_link_url: payUrl, ...(pricing || {}) } };
     }
     if (kind === 'order_modify') {
       // The Shopify COD→prepaid reconciliation (mirrors BiteSpeed's Modify Order node —

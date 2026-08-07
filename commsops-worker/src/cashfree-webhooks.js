@@ -38,7 +38,23 @@ async function handleCashfreeWebhook(env, request) {
   const sig = request.headers.get('x-webhook-signature') || '';
   const ts = request.headers.get('x-webhook-timestamp') || '';
   const good = await CF.verifyWebhook(env, ts, raw, sig);
-  if (!good) return { ok: false, error: 'bad_signature', status: 401 };
+  if (!good) {
+    // CAPTURE THE REJECTION. Previously this returned 401 with no trace, which made the one
+    // failure mode that silently kills C2P payments — a rotated CLIENT_SECRET — completely
+    // indistinguishable from "nobody paid". Measured 2026-08-07: zero Cashfree captures since
+    // 2026-07-29 20:55 across 8 payment links, and there was no way to tell whether Cashfree had
+    // stopped calling or we had started rejecting. Silence must never be ambiguous on a money path.
+    //
+    // ⚠️ Body is TRUNCATED and the response is still 401. This path is reachable by anyone who
+    // finds the URL, so it must not become an unbounded write primitive for unauthenticated
+    // callers — enough to recognise a real Cashfree payload and its timestamp, not enough to be
+    // worth abusing.
+    await capture(env, request, { _rejected: true, _excerpt: String(raw || '').slice(0, 512) },
+                  `bad_signature:ts=${ts ? 'present' : 'absent'},sig=${sig ? 'present' : 'absent'}`)
+      .catch(() => {});
+    console.log('cashfree_bad_signature', { ts_present: !!ts, sig_present: !!sig, bytes: (raw || '').length });
+    return { ok: false, error: 'bad_signature', status: 401 };
+  }
 
   let body;
   try { body = raw ? JSON.parse(raw) : {}; } catch { body = { _unparsed: raw }; }
