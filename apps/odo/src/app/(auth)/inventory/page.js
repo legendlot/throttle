@@ -168,6 +168,7 @@ function Watch({ session, isAdmin }) {
   const [touched, setTouched] = useState({});   // family → explicit open/closed, overrides auto
   const [variants, setVariants] = useState([]);
   const [thresholds, setThresholds] = useState({});   // product_code → per-variant low-stock override
+  const [alerts, setAlerts] = useState([]);
   const [err, setErr] = useState('');
   const now = Date.now();
 
@@ -178,11 +179,13 @@ function Watch({ session, isAdmin }) {
       salesGet('getInventoryStatus', { include_unmapped: showUnmapped ? '1' : '0' }, session),
       salesGet('getVariants', {}, session),
       salesGet('getInvThresholds', {}, session),
-    ]).then(([s, v, t]) => {
+      salesGet('getStockAlerts', { limit: '60' }, session),
+    ]).then(([s, v, t, al]) => {
       setRows(Array.isArray(s?.rows) ? s.rows : []);
       setMeta({ history_start: s?.history_start || null, low_threshold: Number(s?.low_threshold) || 10 });
       setVariants(Array.isArray(v?.rows) ? v.rows : []);
       setThresholds(Object.fromEntries((Array.isArray(t?.rows) ? t.rows : []).map(x => [x.product_code, Number(x.low_stock_qty)])));
+      setAlerts(Array.isArray(al?.rows) ? al.rows : []);
     }).finally(() => setLoading(false));
   }, [session, showUnmapped]);
 
@@ -471,7 +474,70 @@ function Watch({ session, isAdmin }) {
           therefore a floor, not an exact age.
         </p>
       </div>
+
+      <StockAlertLog alerts={alerts} />
     </>
+  );
+}
+
+/* Stock-alert history. The outbox has been posting to #stock-alerts since 2026-07-20 but had no
+   in-app surface at all, so the only record of what was announced lived in Slack scrollback.
+   Read-only — this reports what the sender did, it never re-sends. */
+function StockAlertLog({ alerts }) {
+  const [open, setOpen] = useState(false);
+  if (!alerts.length) return null;
+  const sent = alerts.filter(a => a.status === 'sent').length;
+  return (
+    <div className="so-card">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+           onClick={() => setOpen(o => !o)}>
+        <div className="so-eyebrow" style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          {open ? <ChevronDown size={13} strokeWidth={2} color="var(--t3)" /> : <ChevronRight size={13} strokeWidth={2} color="var(--t3)" />}
+          Recent stock alerts
+        </div>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+          {sent} sent{alerts.length > sent ? ` · ${alerts.length - sent} not sent` : ''}
+        </span>
+      </div>
+      {open && (
+        <div style={{ overflowX: 'auto', marginTop: 12 }}>
+          <table className="so-table">
+            <thead><tr>
+              <th>Flipped (IST)</th><th>What</th><th>Direction</th><th className="so-num">Units</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              {alerts.map(a => (
+                <tr key={a.id}>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'nowrap' }}>{istTime(a.flipped_at)}</td>
+                  <td>
+                    {a.scope === 'product' ? (a.product_family || a.product_title || a.sku) : (a.product_title || a.sku)}
+                    {a.scope === 'product' && <Pill color={HUE.neutral} style={{ marginLeft: 8 }}>whole product</Pill>}
+                  </td>
+                  <td>
+                    <StatusChip status={a.direction === 'oos' ? 'oos' : 'ok'} />
+                    <span style={{ marginLeft: 6, color: 'var(--t2)', fontSize: 11 }}>{a.direction === 'oos' ? 'went out' : 'restocked'}</span>
+                  </td>
+                  <td className="so-num" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>
+                    {a.qty_before ?? '—'} → {a.qty_after ?? '—'}
+                  </td>
+                  <td>
+                    {a.status === 'sent'
+                      ? <span style={{ color: 'var(--t2)', fontSize: 11 }}>sent {a.sent_at ? istTime(a.sent_at) : ''}</span>
+                      /* `skipped` is not a failure: it is the deliberate staleness guard + the
+                         day-one baseline, both of which exist so the channel is never blasted
+                         with history. Say that rather than showing a bare red word. */
+                      : <span style={{ color: 'var(--t4)', fontSize: 11 }}
+                              title="Retired unsent — either the day-one baseline or older than the staleness window when the sender ran.">
+                          not sent · {a.status}
+                        </span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

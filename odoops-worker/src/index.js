@@ -4107,6 +4107,15 @@ export default {
             if (!r.ok) return err('Read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
+          case 'getStockAlerts': {   // S265 — stock-alert history; the outbox had no in-app surface
+            if (!canView(P)) return err('No permission', 403);
+            const lim = Math.min(Number(qp('limit')) || 60, 200);
+            // Newest FLIP first, not newest sent — the flip is when the stock actually moved; sent_at
+            // only records when the digest went out and clusters every row of a tick onto one instant.
+            const r = await sbSales(`/rest/v1/stock_alert_outbox?select=*&order=flipped_at.desc&limit=${lim}`);
+            if (!r.ok) return err('Stock alerts failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
           case 'getInvThresholds': {   // S265 — per-product low-stock overrides
             if (!canView(P)) return err('No permission', 403);
             const r = await sbSales('/rest/v1/inv_threshold?select=*&order=product_code.asc');
