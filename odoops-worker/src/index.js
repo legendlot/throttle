@@ -520,10 +520,12 @@ const AMZ_REPORT_TYPE = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL';
 const AMZ_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const ORDERS_TRAIL_DAYS = 30;                       // once caught up, re-walk this many trailing days to refresh order status
 const ORDERS_TRAIL_INTERVAL_MS = 24 * 3600 * 1000;  // ...at most once per day (one extra report/day)
-async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = AMZ_REPORT_TYPE) {
+async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = AMZ_REPORT_TYPE, reportOptions = null) {
+  const body = { reportType, marketplaceIds: [mkt], dataStartTime: startISO, dataEndTime: endISO };
+  if (reportOptions) body.reportOptions = reportOptions;   // Sales & Traffic needs date/asin granularity
   const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
     method: 'POST', headers: H,
-    body: JSON.stringify({ reportType, marketplaceIds: [mkt], dataStartTime: startISO, dataEndTime: endISO }),
+    body: JSON.stringify(body),
   });
   if (!cr.ok) throw new Error(`Amazon createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
   const cj = await cr.json();
@@ -2617,7 +2619,117 @@ async function syncUniwareTracking(env, opts = {}) {
            packages: rows.length, windowDone, cursor: uniISO(windowDone ? winEnd : winStart) };
 }
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
+// ── Amazon Sales & Traffic (GET_SALES_AND_TRAFFIC_REPORT) ─────────────────────
+// The one metric family the e-commerce team asked for that Odo had NO feed for: sessions, page
+// views and unit-session conversion. The Amazon analogue of the GA4 website funnel.
+//
+// ⚠️ ONE REPORT PER DAY, deliberately. With a multi-day window this report returns
+// `salesAndTrafficByDate` per day but `salesAndTrafficByAsin` **aggregated over the WHOLE
+// range** — so a 30-day window would yield one undated lump per SKU and there would be no way
+// to build a per-SKU daily series from it afterwards. Requesting a single day gives both grains
+// exactly, at the cost of one report per day of history. The hourly cron walks the backfill
+// forward a day per tick; steady state is ~1 report/day plus the trailing refresh.
+const AMZ_TRAFFIC_REPORT_TYPE = 'GET_SALES_AND_TRAFFIC_REPORT';
+const TRAFFIC_TRAIL_MS = 6 * 3600 * 1000;   // once caught up, refresh yesterday at most this often
+// Amazon revises recent traffic for a couple of days after the fact, so "caught up" still re-reads.
+const amazonTrafficAdapter = {
+  kind: 'amazon_traffic', stgTable: 'stg_amazon_traffic',
+  datesOf() { return []; },   // read directly off staging — no fact recompute (same call as stg_payments)
+  async fetch({ env, cursor, config }) {
+    const cfg = config || {};
+    const host = cfg.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+    const mkt = cfg.marketplace_id || 'A21TJRUUN4KGV';
+    const token = await getAmazonToken(env);
+    const H = { 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+    let subreqs = 1;
+    const nowMs = Date.now();
+    const dayMs = 24 * 3600 * 1000;
+    const istDay = ms => istDate(new Date(ms).toISOString());   // IST calendar day
+
+    // ── phase 2: a report is already pending → poll it
+    if (cfg.traffic_pending_report_id) {
+      const rr = await fetch(`${host}/reports/2021-06-30/reports/${cfg.traffic_pending_report_id}`, { headers: H }); subreqs++;
+      if (!rr.ok) throw new Error(`Amazon traffic getReport ${rr.status}`);
+      const rep = await rr.json();
+      const st = rep.processingStatus;
+      if (st === 'IN_QUEUE' || st === 'IN_PROGRESS') return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: cfg };
+      if (st !== 'DONE') {
+        // FATAL/CANCELLED: clear the pending slot and step PAST this day, else the same day is
+        // retried forever. A day Amazon refuses to build is a hole, not a stall.
+        const skipped = cfg.traffic_pending_date;
+        return { rows: [], cursorAfter: skipped || null, subreqs, partial: true,
+                 configAfter: { ...cfg, traffic_pending_report_id: null, traffic_pending_date: null,
+                                traffic_last_error: `${st} on ${skipped}` } };
+      }
+      const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
+      if (!dr.ok) throw new Error(`Amazon traffic getDocument ${dr.status}`);
+      const doc = await dr.json();
+      const text = await fetchAmazonDoc(doc); subreqs++;
+      let j = null;
+      try { j = JSON.parse(text); } catch (_) { throw new Error('Amazon traffic: report body is not JSON — ' + text.slice(0, 120)); }
+      const theDate = cfg.traffic_pending_date;
+      const rows = [];
+      for (const a of (j?.salesAndTrafficByAsin || [])) {
+        const t = a.trafficByAsin || {}, s = a.salesByAsin || {};
+        const sku = a.sku || null, child = a.childAsin || null;
+        if (!sku && !child) continue;                    // nothing to key on
+        rows.push({
+          the_date: theDate, sku, parent_asin: a.parentAsin || null, child_asin: child,
+          sessions: Math.round(num(t.sessions)), session_pct: num(t.sessionPercentage),
+          page_views: Math.round(num(t.pageViews)), page_views_pct: num(t.pageViewsPercentage),
+          buy_box_pct: num(t.buyBoxPercentage), unit_session_pct: num(t.unitSessionPercentage),
+          units_ordered: Math.round(num(s.unitsOrdered)),
+          ordered_product_sales: num(s.orderedProductSales?.amount),
+          total_order_items: Math.round(num(s.totalOrderItems)),
+          raw: a,
+        });
+      }
+      // Amazon also reports whole-day totals. We store the per-SKU grain and derive day totals by
+      // summing it, so log when the two disagree rather than silently trusting the sum.
+      const byDate = (j?.salesAndTrafficByDate || [])[0];
+      const daySessions = Math.round(num(byDate?.trafficByDate?.sessions));
+      const sumSessions = rows.reduce((n, r) => n + r.sessions, 0);
+      if (daySessions && Math.abs(daySessions - sumSessions) > Math.max(5, daySessions * 0.02))
+        console.log(`odoops amazon_traffic ${theDate}: per-SKU sessions ${sumSessions} vs day total ${daySessions} (>2% apart)`);
+      return { rows, cursorAfter: theDate, subreqs, partial: true,
+               configAfter: { ...cfg, traffic_pending_report_id: null, traffic_pending_date: null } };
+    }
+
+    // ── phase 1: pick the next day and request it
+    const yesterday = istDay(nowMs - dayMs);            // today is still accruing — never request it
+    let nextDay;
+    if (!cursor) {
+      nextDay = cfg.backfill_start || istDay(nowMs - 90 * dayMs);
+    } else if (cursor < yesterday) {
+      nextDay = istDay(Date.parse(cursor + 'T12:00:00Z') + dayMs);   // midday anchor: DST-free, no off-by-one
+    } else {
+      // caught up. Re-read yesterday periodically (Amazon revises recent traffic); staging is
+      // upsert-keyed so a re-read overwrites in place and can never double-count.
+      if (nowMs - (Date.parse(cfg.traffic_trail_at || '') || 0) < TRAFFIC_TRAIL_MS)
+        return { rows: [], cursorAfter: null, subreqs, partial: false, configAfter: cfg };
+      nextDay = yesterday;
+    }
+    if (nextDay > yesterday) return { rows: [], cursorAfter: null, subreqs, partial: false, configAfter: cfg };
+
+    const rid = await createAmazonReport(
+      host, H, mkt, `${nextDay}T00:00:00Z`, `${nextDay}T23:59:59Z`,
+      AMZ_TRAFFIC_REPORT_TYPE, { dateGranularity: 'DAY', asinGranularity: 'SKU' },
+    ); subreqs++;
+    const cfgOut = { ...cfg, traffic_pending_report_id: rid, traffic_pending_date: nextDay };
+    if (nextDay === yesterday) cfgOut.traffic_trail_at = new Date(nowMs).toISOString();
+    return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: cfgOut };
+  },
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const body = rows.map(r => ({ run_id: runId, channel_id: channelId, ...r }));
+      await sbInsertChunked('/rest/v1/stg_amazon_traffic?on_conflict=channel_id,the_date,entity_key',
+        body, 'return=minimal,resolution=merge-duplicates');
+    }
+    if (fetched?.configAfter) await patchConnectorConfig(channelId, {}, fetched.configAfter);
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -3626,6 +3738,12 @@ export default {
             if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_amazon_returns_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'overall' });
             if (!r.ok) return err('Returns rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'getAmazonTraffic': {   // S265 — Amazon sessions / page views / unit-session conversion
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_amazon_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'overall' });
+            if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
           case 'getProductDrr': {
