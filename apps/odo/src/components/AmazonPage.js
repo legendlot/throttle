@@ -168,6 +168,9 @@ export default function AmazonPage() {
     }
     return by;
   }, [d, grp, c2p]);
+  // Only add the traffic columns once the feed actually covers this range — two permanently-dashed
+  // columns read as broken, where their absence reads as "not applicable to this range".
+  const hasTraffic = Object.keys(trafficByCode).length > 0;
   const EMPTY_RET = { rtoUnits: 0, rtoValue: 0, rtvUnits: 0, rtvReported: 0, rtvValue: 0, unknownUnits: 0 };
   const retOf = code => {
     const t = retByKey[code] || EMPTY_RET;
