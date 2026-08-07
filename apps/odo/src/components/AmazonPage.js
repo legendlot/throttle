@@ -94,8 +94,11 @@ export default function AmazonPage() {
       // per-product returns for the sellers table. f_amazon_returns_rollup already supported
       // group='product'; only the read side was overall-only.
       salesGet('getAmazonReturns', { from, to, group: 'product' }, session),
-    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp, setl, retP]) => {
-      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [], retProd: retP?.rows || [], settle: { by_date: setl?.by_date || [], by_product: setl?.by_product || [], recon: setl?.recon || [] } });
+      salesGet('getAmazonTraffic', { from, to, group: 'overall' }, session),
+      salesGet('getAmazonTraffic', { from, to, group: 'date' }, session),
+      salesGet('getAmazonTraffic', { from, to, group: 'product' }, session),
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp, setl, retP, trO, trD, trP]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [], retProd: retP?.rows || [], trafficAll: trO?.rows || [], trafficDay: trD?.rows || [], trafficProd: trP?.rows || [], settle: { by_date: setl?.by_date || [], by_product: setl?.by_product || [], recon: setl?.recon || [] } });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, amzCh, idsKey, from, to]);
 
@@ -140,6 +143,31 @@ export default function AmazonPage() {
     }
     return by;
   }, [d, grp, c2p]);
+  // Amazon traffic (S265). Absent until the connector has walked to this range, so every consumer
+  // must tolerate zero rows — this is a backfilling feed, not a guaranteed one.
+  const traffic = useMemo(() => {
+    const t = (d?.trafficAll || [])[0] || null;
+    if (!t) return null;
+    const sessions = Number(t.sessions) || 0, units = Number(t.units_ordered) || 0;
+    return {
+      sessions, pageViews: Number(t.page_views) || 0, units,
+      buyBox: t.buy_box_pct == null ? null : Number(t.buy_box_pct),
+      usp: sessions ? (units / sessions) * 100 : 0,
+      adClicks: Number(t.ad_clicks) || 0,
+      inorganic: Number(t.inorganic_sessions) || 0,
+      organic: Number(t.organic_sessions) || 0,
+    };
+  }, [d]);
+  const trafficByCode = useMemo(() => {
+    const by = {};
+    for (const r of (d?.trafficProd || [])) {
+      const code = r.grp; if (!code || code === 'UNMAPPED') continue;
+      const key = grp === 'product' ? (c2p[code] || code) : code;
+      const t = (by[key] = by[key] || { sessions: 0, units: 0 });
+      t.sessions += Number(r.sessions) || 0; t.units += Number(r.units_ordered) || 0;
+    }
+    return by;
+  }, [d, grp, c2p]);
   const EMPTY_RET = { rtoUnits: 0, rtoValue: 0, rtvUnits: 0, rtvReported: 0, rtvValue: 0, unknownUnits: 0 };
   const retOf = code => {
     const t = retByKey[code] || EMPTY_RET;
@@ -154,6 +182,8 @@ export default function AmazonPage() {
   };
   const sellerSort = useTableSort(sellers.arr, { initialKey: 'gross', valueOf: (v, k) => {
     const a = adByKey[v.code] || { spend: 0, adSales: 0 };
+    if (k === 'sessions') return (trafficByCode[v.code] || {}).sessions || 0;
+    if (k === 'cvr') { const t = trafficByCode[v.code] || {}; return t.sessions ? t.units / t.sessions : 0; }
     if (k === 'rto') return retOf(v.code).rtoUnits;
     if (k === 'rtv') return retOf(v.code).rtvShown;
     if (k === 'retpct') return v.units ? retOf(v.code).totalReturned / v.units : 0;
@@ -450,6 +480,64 @@ export default function AmazonPage() {
             )}
           </div>
 
+          {/* ── Traffic & conversion (S265) ── the Amazon analogue of the GA4 website funnel.
+              Renders only once the connector has data for the range: it backfills one day per
+              report, so an empty state here means "not walked back this far yet", NOT zero traffic.
+              Saying so beats a row of honest-looking zeros. */}
+          <div className="so-eyebrow" style={{ marginTop: 4 }}>Traffic &amp; conversion</div>
+          {!traffic || !traffic.sessions ? (
+            <div className="so-card so-sub" style={{ color: 'var(--t3)', fontSize: 12.5 }}>
+              No Amazon traffic for this range yet — the Sales &amp; Traffic connector backfills one day per report, so recent ranges fill in first. It is not reporting zero sessions.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+                <Kpi hue={HUE.count} lbl="Sessions" val={fmtInt(traffic.sessions)} sub="visits to the listing" />
+                <Kpi hue={HUE.neutral} lbl="Page views" val={fmtInt(traffic.pageViews)} sub={traffic.sessions ? `${(traffic.pageViews / traffic.sessions).toFixed(2)} per session` : null} tone="neutral" />
+                <Kpi hue={HUE.units} lbl="Unit-session %" val={`${traffic.usp.toFixed(2)}%`} sub="units ordered / sessions" />
+                {traffic.buyBox == null ? null : <Kpi hue={HUE.derived} lbl="Buy Box %" val={`${traffic.buyBox.toFixed(1)}%`} sub="session-weighted" />}
+                <Kpi hue={HUE.gross} lbl="Organic sessions" val={fmtInt(traffic.organic)} sub={`${traffic.sessions ? ((traffic.organic / traffic.sessions) * 100).toFixed(0) : 0}% · estimated`} />
+                <Kpi hue={HUE.cancel} lbl="Inorganic sessions" val={fmtInt(traffic.inorganic)} sub="= ad clicks · estimated" tone="neutral" />
+              </div>
+              <div className="so-sub" style={{ fontSize: 11, color: 'var(--t3)', marginTop: -2, lineHeight: 1.55 }}>
+                Organic / inorganic is an <b>estimate</b>: Amazon reports no traffic source, so inorganic uses Sponsored ad clicks as the proxy (the e-commerce team&apos;s own definition) and organic is the remainder, floored at zero. A click is not a session — treat the split as directional, and the total Sessions figure as the measured one.
+                {traffic.adClicks > traffic.sessions ? <> <b style={{ color: 'var(--t2)' }}>In this range ad clicks ({fmtInt(traffic.adClicks)}) exceed sessions ({fmtInt(traffic.sessions)}), so the proxy has broken down and organic is pinned at 0 — read the split as unavailable, not as “no organic traffic”.</b></> : null}
+              </div>
+              {(d?.trafficDay || []).length > 1 && (
+                <div className="so-card">
+                  <div className="so-eyebrow" style={{ marginBottom: 10 }}>Sessions vs conversion by day</div>
+                  {(() => {
+                    const rows = (d.trafficDay || []).map(r => ({
+                      date: r.grp, sessions: Number(r.sessions) || 0,
+                      usp: Number(r.unit_session_pct) || 0,
+                    }));
+                    const maxS = Math.max(...rows.map(r => r.sessions), 1);
+                    const maxC = Math.max(...rows.map(r => r.usp), 1);
+                    return (
+                      <div style={{ overflowX: 'auto' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 120, minWidth: Math.max(rows.length * 14, 200) }}>
+                          {rows.map(r => (
+                            <div key={r.date} title={`${r.date} · ${fmtInt(r.sessions)} sessions · ${r.usp.toFixed(2)}% conversion`}
+                                 style={{ flex: '1 0 9px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', position: 'relative' }}>
+                              <div style={{ height: `${(r.sessions / maxS) * 100}%`, background: 'rgba(45,168,240,.55)', borderRadius: '2px 2px 0 0' }} />
+                              <div style={{ position: 'absolute', left: 0, right: 0, bottom: `${(r.usp / maxC) * 100}%`, height: 2, background: HUE.units, opacity: .95 }} />
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--t5)' }}>
+                          <span>{rows[0]?.date}</span>
+                          <span style={{ color: 'rgba(45,168,240,.9)' }}>▮ sessions</span>
+                          <span style={{ color: HUE.units }}>▬ unit-session %</span>
+                          <span>{rows[rows.length - 1]?.date}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          )}
+
           {/* ── Top sellers (Model/SKU) ── */}
           <div className="so-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -466,6 +554,7 @@ export default function AmazonPage() {
                     <SortHeader k="units" label="Units" sort={sellerSort} numeric /><SortHeader k="gross" label="Gross" sort={sellerSort} numeric /><SortHeader k="asp" label="ASP" sort={sellerSort} numeric />
                     <SortHeader k="spend" label="Spend" sort={sellerSort} numeric /><SortHeader k="adSales" label="Ad Sales" sort={sellerSort} numeric />
                     <SortHeader k="roas" label="ROAS" sort={sellerSort} numeric /><SortHeader k="acos" label="ACOS" sort={sellerSort} numeric /><SortHeader k="tacos" label="TACOS" sort={sellerSort} numeric /><SortHeader k="organic" label="Organic%" sort={sellerSort} numeric />
+                    {hasTraffic ? <><SortHeader k="sessions" label="Sessions" sort={sellerSort} numeric /><SortHeader k="cvr" label="CVR" sort={sellerSort} numeric /></> : null}
                     <SortHeader k="rto" label="RTO" sort={sellerSort} numeric /><SortHeader k="rtv" label="RTV" sort={sellerSort} numeric /><SortHeader k="retpct" label="Ret%" sort={sellerSort} numeric />
                   </tr></thead>
                   <tbody>
@@ -488,6 +577,13 @@ export default function AmazonPage() {
                           <td className="so-num">{has ? acos.toFixed(1) + '%' : '—'}</td>
                           <td className="so-num">{has ? tacos.toFixed(1) + '%' : '—'}</td>
                           <td className="so-num">{has ? organicPct.toFixed(0) + '%' : '—'}</td>
+                          {hasTraffic ? (() => {
+                            const t = trafficByCode[v.code] || { sessions: 0, units: 0 };
+                            return (<>
+                              <td className="so-num">{t.sessions ? fmtInt(t.sessions) : '—'}</td>
+                              <td className="so-num">{t.sessions ? ((t.units / t.sessions) * 100).toFixed(2) + '%' : '—'}</td>
+                            </>);
+                          })() : null}
                           {(() => {
                             const rr = retOf(v.code);
                             return (<>

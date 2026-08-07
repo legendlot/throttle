@@ -126,15 +126,18 @@
    to the journeys table once it grew to 14 columns. Opt in per table rather than putting
    overflow-x on .panel-body globally: that would turn every padded panel into a scroll container
    and clip any absolutely-positioned child that isn't portalled.
-   The negative margin lets the scroll area span the full panel width so the scrollbar sits at the
-   panel edge instead of floating inside the padding. */
-.table-scroll{overflow-x:auto;margin:calc(var(--panel-pad) * -1);padding:var(--panel-pad)}
+   ⚠️ NO negative margin + padding here. `position:sticky;left:0` resolves against the scroll
+   container's PADDING box, so padding on this element leaves a strip to the left of the pinned
+   column that scrolled cells slide visibly through — badges from column 2 appeared beside the
+   journey name. Keep this element padding-free so left:0 lands on the table's own edge. */
+.table-scroll{overflow-x:auto}
 .table-scroll .dt{min-width:1180px}
 /* Keep the row's identity visible while scrolling 14 columns — a number you cannot attribute to a
-   row is not readable. Opaque background is required or the scrolled cells show through. */
+   row is not readable. The background must be OPAQUE (--surface is #1c1f25, not a blend) or the
+   cells passing underneath show through. */
 .table-scroll .dt th:first-child,
-.table-scroll .dt td:first-child{position:sticky;left:0;z-index:1;background:var(--surface)}
-.table-scroll .dt tbody tr:hover td:first-child{background:var(--surface-2,var(--surface))}
+.table-scroll .dt td:first-child{position:sticky;left:0;z-index:2;background:var(--surface)}
+.table-scroll .dt th:first-child{z-index:3}
 
 /* ---- KPI strip (§3.3 / §6) ---- */
 .kstrip{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);overflow:hidden;margin-bottom:16px}
