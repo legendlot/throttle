@@ -2670,17 +2670,16 @@ const adStatusAdapter = {
         const token = await getAmazonAdsToken(env); subreqs++;
         const base = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID,
                        'Amazon-Advertising-API-Scope': String(profileId), Authorization: `Bearer ${token}` };
-        // Each entry may carry FALLBACKS: Sponsored Brands returned nothing on the first live run
-        // (27 campaigns, 25 active that week) while SP and SD both worked, and the v4 shape could
-        // not be confirmed from Amazon's docs (JS-rendered, not fetchable). Rather than guess one
-        // shape, try the known ones in order and take the first that answers; whatever still fails
-        // is reported through last_platform_errors instead of vanishing.
+        // ⚠️ `maxResults` is NOT uniform across ad products. Sponsored Brands v4 rejects 500 with
+        // 400 INVALID_ARGUMENT on `$.maxResults`, which is what made SB return nothing on the
+        // first two live runs while SP and SD worked — the endpoint and content type were right
+        // all along, only the page size was out of range. Diagnosed off the persisted
+        // last_platform_errors; the two fallback paths tried alongside it returned 403 and 406
+        // and are removed rather than left in to burn a subrequest each tick proving it.
         const specs = [
-          [{ path: '/sp/campaigns/list', ct: 'application/vnd.spCampaign.v3+json', method: 'POST' }],
-          [{ path: '/sb/v4/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
-           { path: '/sb/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST' },
-           { path: '/sb/campaigns', ct: 'application/json', method: 'GET' }],
-          [{ path: '/sd/campaigns', ct: 'application/json', method: 'GET' }],
+          [{ path: '/sp/campaigns/list', ct: 'application/vnd.spCampaign.v3+json', method: 'POST', max: 500 }],
+          [{ path: '/sb/v4/campaigns/list', ct: 'application/vnd.sbcampaignresource.v4+json', method: 'POST', max: 100 }],
+          [{ path: '/sd/campaigns', ct: 'application/json', method: 'GET', max: 500 }],
         ];
         for (const variants of specs) {
           const attempts = [];
@@ -2694,9 +2693,9 @@ const adStatusAdapter = {
                 if (subreqs >= budget) break;
                 const init = s.method === 'POST'
                   ? { method: 'POST', headers: { ...base, 'Content-Type': s.ct, Accept: s.ct },
-                      body: JSON.stringify(nextToken ? { maxResults: 500, nextToken } : { maxResults: 500 }) }
+                      body: JSON.stringify(nextToken ? { maxResults: s.max, nextToken } : { maxResults: s.max }) }
                   : { method: 'GET', headers: { ...base, Accept: s.ct } };
-                const res = await fetch(`${host}${s.path}${s.method === 'GET' ? '?count=500' : ''}`, init); subreqs++; pages++;
+                const res = await fetch(`${host}${s.path}${s.method === 'GET' ? `?count=${s.max}` : ''}`, init); subreqs++; pages++;
                 if (!res.ok) throw new Error(`${res.status}: ${(await res.text().catch(() => '')).slice(0, 140)}`);
                 const j = await res.json().catch(() => null);
                 const list = Array.isArray(j) ? j : (j?.campaigns || []);
@@ -2727,16 +2726,24 @@ const adStatusAdapter = {
     // status ok while Sponsored Brands had silently returned nothing — 27 campaigns, 25 of them
     // active that week, left with no status and no signal anywhere. console.log alone is not an
     // error channel: it is invisible outside a live tail. Errors now ride back to the run record.
-    // `partial` is the visible signal: the run reads 'partial', not 'ok', whenever a platform
-    // failed. The detail rides in config (NOT last_error — executeRun clears that on the success
-    // path AFTER stage, so anything written there is clobbered).
-    return { rows, cursorAfter: null, subreqs, partial: errors.length > 0,
+    // ⚠️ `partial` MUST stay false here. In ConnectorWorkflow it means "more work remains, loop
+    // again" — it is a control signal, not a health signal. Returning true to mean "a platform
+    // failed" made the workflow re-run this adapter until it hit MAX_WINDOWS: 24 identical runs
+    // in one tick, ~216 pointless calls an hour at Google and Amazon. This adapter is a single
+    // full pull; there is never more work to do.
+    return { rows, cursorAfter: null, subreqs, partial: false,
              configAfter: { ...cfg, last_platform_errors: errors.length ? errors.join(' | ').slice(0, 500) : null } };
   },
   async stage(rows, runId, channelId, fetched) {
     await metaStatusAdapter.stage(rows);   // identical upsert + dedupe; one writer for one table
     // configAfter already spreads the whole config, so {} as the base cannot drop a key.
     if (fetched?.configAfter) await patchConnectorConfig(channelId, {}, fetched.configAfter);
+    // Health is signalled by THROWING, after the good rows are safely staged: executeRun's catch
+    // marks the run `error` and writes last_error, and returns partial:false so the workflow stops
+    // rather than looping. That keeps a degraded platform loud without abusing the control flag,
+    // and without discarding the platforms that did succeed.
+    const errs = (fetched && fetched.configAfter && fetched.configAfter.last_platform_errors) || null;
+    if (errs) throw new Error('ad_status degraded — ' + errs);
   },
 };
 
