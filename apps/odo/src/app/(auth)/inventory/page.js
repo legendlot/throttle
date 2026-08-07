@@ -12,7 +12,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, Combobox } from '@throttle/ui';
 import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea } from 'recharts';
-import { salesGet, fmtInt, istToday, istDaysAgo, downloadCsv } from '../../../lib/api.js';
+import { salesGet, salesPost, fmtInt, istToday, istDaysAgo, downloadCsv } from '../../../lib/api.js';
 import { downloadXlsx } from '../../../lib/xlsx.js';
 import { Kpi, SegmentedToggle, RangePicker, useTableSort, SortHeader } from '../../../components/kit.js';
 import { PageHead, PanelHead, Pill, Nil } from '../../../components/prism.js';
@@ -137,7 +137,8 @@ function StatusChip({ status }) {
 }
 
 export default function InventoryPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
+  const isAdmin = !!(perms && perms.salesops_admin);
   const [tab, setTab] = useState('watch');
   return (
     <div className="so-page" style={{ gap: 12 }}>
@@ -151,14 +152,14 @@ export default function InventoryPage() {
           />
         }
       />
-      {tab === 'watch' ? <Watch session={session} /> : <History session={session} />}
+      {tab === 'watch' ? <Watch session={session} isAdmin={isAdmin} /> : <History session={session} />}
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- Watch */
 
-function Watch({ session }) {
+function Watch({ session, isAdmin }) {
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({});
   const [loading, setLoading] = useState(true);
@@ -166,6 +167,8 @@ function Watch({ session }) {
   const [showUnmapped, setShowUnmapped] = useState(false);
   const [touched, setTouched] = useState({});   // family → explicit open/closed, overrides auto
   const [variants, setVariants] = useState([]);
+  const [thresholds, setThresholds] = useState({});   // product_code → per-variant low-stock override
+  const [err, setErr] = useState('');
   const now = Date.now();
 
   useEffect(() => {
@@ -174,12 +177,34 @@ function Watch({ session }) {
     Promise.all([
       salesGet('getInventoryStatus', { include_unmapped: showUnmapped ? '1' : '0' }, session),
       salesGet('getVariants', {}, session),
-    ]).then(([s, v]) => {
+      salesGet('getInvThresholds', {}, session),
+    ]).then(([s, v, t]) => {
       setRows(Array.isArray(s?.rows) ? s.rows : []);
       setMeta({ history_start: s?.history_start || null, low_threshold: Number(s?.low_threshold) || 10 });
       setVariants(Array.isArray(v?.rows) ? v.rows : []);
+      setThresholds(Object.fromEntries((Array.isArray(t?.rows) ? t.rows : []).map(x => [x.product_code, Number(x.low_stock_qty)])));
     }).finally(() => setLoading(false));
   }, [session, showUnmapped]);
+
+  // null = no override, inheriting the global. Kept distinct from 0, which is a legitimate
+  // "never warn" setting — conflating the two would silently switch alerting off.
+  const thresholdOf = code => (code && Object.prototype.hasOwnProperty.call(thresholds, code) ? thresholds[code] : null);
+  const saveThreshold = async (code, raw) => {
+    if (!code) return;
+    const v = String(raw ?? '').trim();
+    const next = v === '' ? null : Number(v);
+    if (next !== null && (!Number.isFinite(next) || next < 0)) return;
+    if (next === thresholdOf(code)) return;                    // no-op edit — don't write
+    // Optimistic, then reload so `status`/`low_threshold` come back from the RPC rather than
+    // being recomputed client-side — the threshold decides the row's status and only one place
+    // should own that rule.
+    setThresholds(prev => { const n = { ...prev }; if (next === null) delete n[code]; else n[code] = next; return n; });
+    try {
+      await salesPost('setInvThreshold', { product_code: code, low_stock_qty: next }, session);
+      const s = await salesGet('getInventoryStatus', { include_unmapped: showUnmapped ? '1' : '0' }, session);
+      setRows(Array.isArray(s?.rows) ? s.rows : []);
+    } catch (e) { setErr(e.message || String(e)); }
+  };
 
   const nameOf = useMemo(() => Object.fromEntries(variants.map(v => [v.product_code, {
     family: v.product || '—',
@@ -286,6 +311,7 @@ function Watch({ session }) {
 
   return (
     <>
+      {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       <InventoryKpis counts={counts} lowThreshold={meta.low_threshold} />
 
       <div className="so-card flush" style={{ overflow: 'hidden' }}>
@@ -350,6 +376,7 @@ function Watch({ session }) {
                 <SortHeader k="attention" label="Availability" sort={sort} />
                 <SortHeader k="total" label="Variants" sort={sort} numeric />
                 <SortHeader k="units" label="Units" sort={sort} numeric />
+                <th className="so-num" title="Low-stock threshold. Blank = the global default; set a per-variant number where the default over- or under-warns.">Low &lt;</th>
                 <th className="so-num">Longest out</th>
               </tr>
             </thead>
@@ -376,6 +403,9 @@ function Watch({ session }) {
                         )}
                       </td>
                       <td className="so-num bright">{fmtInt(g.units)}</td>
+                      {/* threshold is per-variant, so the product row stays blank rather than
+                          showing an average that belongs to nothing */}
+                      <td />
                       <td className="so-num" style={{ color: g.oldest ? 'var(--t2-cell)' : undefined }}>
                         {g.oldest ? durationLabel(new Date(g.oldest).toISOString(), now,
                           meta.history_start && g.oldest <= new Date(meta.history_start).getTime()) : <Nil />}
@@ -393,6 +423,29 @@ function Watch({ session }) {
                         <td><StatusChip status={r.status} /></td>
                         <td />
                         <td className="so-num">{r.status === 'gone' ? <Nil /> : fmtInt(r.available_qty)}</td>
+                        {/* Per-variant low-stock override. Blank input = inheriting the global, which
+                            is why the placeholder shows the global value rather than 0 — an empty box
+                            that behaves like "10" must say so. Admins only; everyone else sees the
+                            effective number, since the threshold explains the row's own status. */}
+                        <td className="so-num">
+                          {r.status === 'gone' ? <Nil /> : isAdmin ? (
+                            <input
+                              type="number" min="0"
+                              defaultValue={thresholdOf(r.product_code) ?? ''}
+                              placeholder={String(meta.low_threshold)}
+                              title={thresholdOf(r.product_code) == null ? `Inheriting the global default (${meta.low_threshold}). Type a number to override.` : 'Per-variant override. Clear the box to fall back to the global.'}
+                              onClick={e => e.stopPropagation()}
+                              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                              onBlur={e => saveThreshold(r.product_code, e.currentTarget.value)}
+                              style={{ width: 56, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11,
+                                       background: 'var(--control)', border: '1px solid var(--border-ctl)',
+                                       borderRadius: 6, padding: '2px 6px', color: 'var(--t1)' }} />
+                          ) : (
+                            <span style={{ color: thresholdOf(r.product_code) == null ? 'var(--t4)' : 'var(--t2)' }}>
+                              {r.low_threshold}
+                            </span>
+                          )}
+                        </td>
                         <td className="so-num" style={{ color: 'var(--t2)' }}>
                           {r.status === 'gone'
                             ? <span style={{ fontSize: 10.5, color: 'var(--t4)' }}>last seen {istTime(r.last_seen_at)}</span>

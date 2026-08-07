@@ -4015,6 +4015,12 @@ export default {
             if (!r.ok) return err('Read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
+          case 'getInvThresholds': {   // S265 — per-product low-stock overrides
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales('/rest/v1/inv_threshold?select=*&order=product_code.asc');
+            if (!r.ok) return err('Thresholds failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
           case 'getInventoryStatus': {   // S223 — Inventory tab: current availability per channel/SKU
             if (!canView(P)) return err('No permission', 403);
             const chans = qp('channels') ? qp('channels').split(',').filter(Boolean) : null;
@@ -4522,6 +4528,22 @@ export default {
             const r = await sbSales('/rest/v1/pnl_manual?on_conflict=month,channel_key,line_key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ month: month + '-01', channel_key: chKey, line_key: d.line_key, amount_inr: amt, note: d.note || null, updated_by: userId, updated_at: nowISO() }) });
             if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
             return ok({ month: month + '-01', channel_key: chKey, line_key: d.line_key, amount_inr: amt });
+          }
+          case 'setInvThreshold': {   // S265 — per-product low-stock override; null qty clears it
+            if (!canAdmin(P)) return err('No permission', 403);
+            if (!d.product_code) return err('product_code required');
+            if (d.low_stock_qty === null || d.low_stock_qty === undefined || d.low_stock_qty === '') {
+              await sbSales(`/rest/v1/inv_threshold?product_code=eq.${encodeURIComponent(d.product_code)}`, { method: 'DELETE', prefer: 'return=minimal' });
+              return ok({ product_code: d.product_code, low_stock_qty: null, cleared: true });
+            }
+            const q = Number(d.low_stock_qty);
+            if (!Number.isFinite(q) || q < 0) return err('low_stock_qty must be a number >= 0');
+            const r = await sbSales('/rest/v1/inv_threshold?on_conflict=product_code', {
+              method: 'POST', prefer: 'return=representation,resolution=merge-duplicates',
+              body: JSON.stringify({ product_code: d.product_code, low_stock_qty: Math.round(q), note: d.note || null, updated_at: nowISO(), updated_by: userId }),
+            });
+            if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
           case 'createSkuMap':
           case 'updateSkuMap': {
