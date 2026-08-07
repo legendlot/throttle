@@ -36,6 +36,30 @@ const MAX_PER_RUN = 15;   // keeps the cron tick well inside its subrequest budg
 // reconciliation, not news a customer should be messaged about. See the age-cap filter below.
 const MAX_EVENT_AGE_MS = 30 * 86400000;
 
+// Public tracking-page templates, keyed by `ecom_shipments.courier`.
+//
+// ⚠️ BOTH SHAPES ARE COPIED FROM URLS SHOPIFY ACTUALLY SENT US, not from the couriers'
+// websites — 2,052 live delhivery samples and 263 shiprocket samples in comms.events
+// (source='shopify_webhook'). That matters twice over: a guessed URL that 404s is worse for
+// the customer than the account-page fallback, AND matching Shopify's exact shape means one
+// courier renders identically no matter which of the two feeds produced the event.
+//
+// ⚠️ DELIBERATELY INCOMPLETE. xpressbees (196) / shadowfax (118) / self (131) / other (66) /
+// no-courier (213) — 14.2% of 30-day volume — are NOT here because we have no observed URL for
+// them, and `self` has no public tracker at all. They return null and the template's declared
+// fallback takes over, which is the pre-existing behaviour. Add a courier here only when a real
+// URL for it has been seen in the wild; do not fill these in from memory.
+const TRACKING_URL_BY_COURIER = {
+  delhivery: (awb) => `https://www.delhivery.com/track/package/${encodeURIComponent(awb)}`,
+  shiprocket: (awb) => `https://shiprocket.co/tracking/${encodeURIComponent(awb)}`,
+};
+
+function trackingUrlFor(courier, awb) {
+  if (!courier || !awb) return null;
+  const f = TRACKING_URL_BY_COURIER[String(courier).trim().toLowerCase()];
+  return f ? f(String(awb).trim()) : null;
+}
+
 // When did this lifecycle transition actually HAPPEN upstream? Deliberately not "when did we
 // poll it" — see the watermark note below. `delivered` carries a real delivery stamp (populated
 // on 9,884 of 9,885 live rows).
@@ -170,7 +194,15 @@ async function emitShipmentEvents(env, ingest) {
         shopify_order_id: s.shopify_order_id,
         courier: s.courier,
         tracking_number: s.tracking_number,
-        tracking_url: s.tracking_link,
+        // `ecom_shipments.tracking_link` is NEVER populated — 0 of 5,104 rows over 30 days
+        // (measured 2026-08-07), while courier + tracking_number are present on 95.8%. So this
+        // feed emitted a blank tracking_url on 100% of its events (3,862 in 14 days across
+        // shipped/OFD/delivered/rto) while the much smaller shopify_webhook feed emitted real
+        // URLs on 92–100%. Every template that binds tracking_url was therefore silently living
+        // on its declared fallback, and a template WITHOUT a fallback fails the send outright —
+        // which is exactly what broke the OFD redirect bind. Derive the URL instead of waiting
+        // for the upstream column to be filled: it needs no backfill and fixes all four events.
+        tracking_url: s.tracking_link || trackingUrlFor(s.courier, s.tracking_number),
         shipping_package: s.uniware_package_code,
       },
     });
