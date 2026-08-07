@@ -119,6 +119,28 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return r.data?.[0]?.utm || null;
     });
 
+    // Opt-in: re-resolve the trigger event at SEND time rather than using the one pinned at
+    // enrolment. `once_while_active` swallows a second abandonment arriving during the wait, so
+    // the message described the FIRST cart — measured 2026-08-07 at 12.2% of ATC-Cart and 3.3%
+    // of Cart Recovery enrolments over 14 days. Fixing it by loosening re-enrolment would have
+    // re-opened the double-send hole that policy exists to close, so nothing about enrolment
+    // moves: only which event the send binds its variables from.
+    //
+    // ⚠️ DEFAULT FALSE AND MUST STAY THAT WAY. Correct only where the trigger payload describes
+    // a MUTATING thing (a cart). Order Placed / Order Cancelled / Shipment Update are also
+    // `once_while_active`, and refreshing there would describe the customer's LATEST order
+    // instead of the one being confirmed — an attribution fix turned into a transactional defect.
+    //
+    // Separate step name, per the `load-journey-utm` note above: widening an existing step would
+    // hand in-flight instances their cached old value and the flag would silently never apply.
+    const refreshCfg = await step.do('load-refresh-cfg', async () => {
+      const r = await A.sbComms(
+        `/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=refresh_trigger_on_send,trigger&limit=1`, env);
+      if (!r.ok) return { on: false, event: null };   // fail-soft: never strand an enrolment over this
+      const row = r.data?.[0] || {};
+      return { on: row.refresh_trigger_on_send === true, event: row.trigger?.name || null };
+    });
+
     // J1: journey-level escalation config (exit rules + lifetime cap).
     const jcfg = await step.do('load-journey-cfg', async () => {
       const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=exit_rules,max_duration&limit=1`, env);
@@ -163,6 +185,40 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     // memoised result rather than re-executing. The merge order is the (deterministic) graph
     // walk, so runCtx reconstructs identically on resume.
     let runCtx = { ...(triggerProps || {}) };
+    // Tracked SEPARATELY as well as merged into runCtx, purely so a refreshed trigger event
+    // cannot shadow a value an action computed. Action context is derived (the C2P amount, the
+    // recreated order id) and must outrank raw event properties whichever event they came from.
+    // Without this, refreshing would silently undo an action's contribution on any shared key.
+    let actionCtx = {};
+
+    // Build the variable context for ONE send attempt. Refresh off ⇒ returns runCtx unchanged,
+    // so every journey that has not opted in is byte-identical to before.
+    //
+    // ⚠️ The newer event is taken WHOLESALE, never merged key-by-key, and only when its keys are
+    // a SUPERSET of the pinned event's. `add_to_cart` has two payload shapes (Shopflo carries
+    // cart_token/total/product_names; shopify_pixel carries cart_id/sku/variant_id). A shallow
+    // merge across those yields the NEW cart's link beside the OLD cart's product image — a
+    // silent, customer-facing mismatch. A wholesale swap of a narrower shape throws
+    // `unresolved_variables` and loses the send. Measured 2026-08-07: 127 of 956 ATC cases are
+    // non-superset, and those correctly keep the pinned event rather than degrade either way.
+    const ctxForSend = async (stepKey) => {
+      // enrolledAt is the lower bound; without it "latest event" could reach back before the
+      // enrolment and message a cart the customer has already checked out. Rather than widen
+      // the window, fall back to the pinned event.
+      if (!refreshCfg.on || !refreshCfg.event || !enrolledAt) return runCtx;
+      const fresh = await step.do(`refresh:${stepKey}`, async () => {
+        const r = await A.sbComms(
+          `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(refreshCfg.event)}` +
+          `&occurred_at=gt.${A.enc(enrolledAt)}&select=properties&order=occurred_at.desc&limit=1`, env);
+        if (!r.ok) return null;   // fail-soft: a read blip must not lose the send
+        const p = r.data?.[0]?.properties || null;
+        if (!p) return null;      // no newer event — the pinned one is still the truth
+        const pinned = triggerProps || {};
+        for (const k of Object.keys(pinned)) if (!(k in p)) return null;   // narrower shape → keep pinned
+        return p;
+      });
+      return fresh ? { ...fresh, ...actionCtx } : runCtx;
+    };
 
     let cur = def.entry;
     for (let i = 0; i < MAX_TRANSITIONS; i++) {
@@ -248,7 +304,8 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, runCtx, journeyName, journeyUtm));
+        const sendCtx = await ctxForSend(cur);
+        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, sendCtx, journeyName, journeyUtm));
         if (s.interactive) {
           // Interactive send (WA quick-reply buttons): after sending, park on the reply
           // event and route by which button was tapped (else no_reply on timeout). Inert
@@ -278,8 +335,12 @@ class JourneyWorkflow extends WorkflowEntrypoint {
               if (pre) { await this.#end(env, step, enrolmentId, exitOutcomeFor(pre), cur); return; }
               const woke = await this.#park(step, `qhwait:${cur}`, deferMs);
               if (woke.kind === 'exit') { await this.#end(env, step, enrolmentId, woke.outcome, cur); return; }
+              // Re-resolve for the retry rather than reusing sendCtx: this fires AFTER an
+              // overnight park (up to ~10h), which is the longest staleness window in the
+              // whole engine — the one attempt that most needs the current cart.
+              const retryCtx = await ctxForSend(`${cur}:qhretry`);
               finalRes = await step.do(`${cur}:qhretry`, async () =>
-                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, runCtx, journeyName, journeyUtm));
+                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, retryCtx, journeyName, journeyUtm));
               deferred = true;
             }
           }
@@ -294,7 +355,10 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         // outcome handle ('next'|'failed') the graph routes on.
         const res = await step.do(cur, async () => this.#doAction(env, s, profileId, enrolmentId, cur, runCtx));
         // Opt-in only: an action exposes values to later sends via `context`. See runCtx above.
-        if (res && typeof res.context === 'object' && res.context) runCtx = { ...runCtx, ...res.context };
+        if (res && typeof res.context === 'object' && res.context) {
+          runCtx = { ...runCtx, ...res.context };
+          actionCtx = { ...actionCtx, ...res.context };   // so a refreshed event cannot shadow it
+        }
         await this.#logStep(env, step, enrolmentId, cur, s.type, { kind: s.kind || null, ...res });
         cur = G.resolveTarget(s, res.outcome || 'next');
       } else if (s.type === 'exit') {
