@@ -91,8 +91,11 @@ export default function AmazonPage() {
       salesGet('getSales', { from, to, group: 'variant', channel_id: idsKey }, session),
       salesGet('getAdProduct', { from, to }, session),
       salesGet('getSettlement', { from, to }, session),
-    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp, setl]) => {
-      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [], settle: { by_date: setl?.by_date || [], by_product: setl?.by_product || [], recon: setl?.recon || [] } });
+      // per-product returns for the sellers table. f_amazon_returns_rollup already supported
+      // group='product'; only the read side was overall-only.
+      salesGet('getAmazonReturns', { from, to, group: 'product' }, session),
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp, setl, retP]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [], retProd: retP?.rows || [], settle: { by_date: setl?.by_date || [], by_product: setl?.by_product || [], recon: setl?.recon || [] } });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, amzCh, idsKey, from, to]);
 
@@ -120,8 +123,40 @@ export default function AmazonPage() {
     }
     return by;
   }, [d, grp, c2p]);
+  // returns per sellers-key. Same bucket discipline as aggReturns: 'rtv_reported' is a COUNT that
+  // stays current where its refund posts weeks later, so RTV units prefer it and fall back to the
+  // refund-derived count — but it is NEVER added to a value total (that double-counts the refund).
+  const retByKey = useMemo(() => {
+    const by = {};
+    for (const r of (d?.retProd || [])) {
+      const code = r.product_code; if (!code || code === 'UNMAPPED') continue;
+      const key = grp === 'product' ? (c2p[code] || code) : code;
+      const t = (by[key] = by[key] || { rtoUnits: 0, rtoValue: 0, rtvUnits: 0, rtvReported: 0, rtvValue: 0, unknownUnits: 0 });
+      const units = Number(r.units) || 0, value = Number(r.value) || 0;
+      if (r.return_kind === 'rto') { t.rtoUnits += units; t.rtoValue += value; }
+      else if (r.return_kind === 'rtv') { t.rtvUnits += units; t.rtvValue += value; }
+      else if (r.return_kind === 'rtv_reported') { t.rtvReported += units; }
+      else { t.unknownUnits += units; }   // refund posted, reason not yet classified
+    }
+    return by;
+  }, [d, grp, c2p]);
+  const EMPTY_RET = { rtoUnits: 0, rtoValue: 0, rtvUnits: 0, rtvReported: 0, rtvValue: 0, unknownUnits: 0 };
+  const retOf = code => {
+    const t = retByKey[code] || EMPTY_RET;
+    // Ret% must count UNCLASSIFIED refunds too. Classification trails the Finances feed by weeks,
+    // so at any given moment `unknown` is the biggest bucket (1,061u vs 33 rtv / 1 rto over the
+    // last 30d) — a rate built on rto+rtv alone would read ~0% for products that are genuinely
+    // being returned. rto/rtv/unknown are mutually exclusive (one return_kind per row) so they
+    // sum cleanly; rtv_reported is DELIBERATELY excluded from the sum because it re-counts the
+    // same physical return once its refund posts.
+    return { ...t, rtvShown: t.rtvReported || t.rtvUnits,
+             totalReturned: t.rtoUnits + t.rtvUnits + t.unknownUnits };
+  };
   const sellerSort = useTableSort(sellers.arr, { initialKey: 'gross', valueOf: (v, k) => {
     const a = adByKey[v.code] || { spend: 0, adSales: 0 };
+    if (k === 'rto') return retOf(v.code).rtoUnits;
+    if (k === 'rtv') return retOf(v.code).rtvShown;
+    if (k === 'retpct') return v.units ? retOf(v.code).totalReturned / v.units : 0;
     if (k === 'label') return v.label;
     if (k === 'asp') return v.units ? v.gross / v.units : 0;
     if (k === 'spend') return a.spend;
@@ -431,6 +466,7 @@ export default function AmazonPage() {
                     <SortHeader k="units" label="Units" sort={sellerSort} numeric /><SortHeader k="gross" label="Gross" sort={sellerSort} numeric /><SortHeader k="asp" label="ASP" sort={sellerSort} numeric />
                     <SortHeader k="spend" label="Spend" sort={sellerSort} numeric /><SortHeader k="adSales" label="Ad Sales" sort={sellerSort} numeric />
                     <SortHeader k="roas" label="ROAS" sort={sellerSort} numeric /><SortHeader k="acos" label="ACOS" sort={sellerSort} numeric /><SortHeader k="tacos" label="TACOS" sort={sellerSort} numeric /><SortHeader k="organic" label="Organic%" sort={sellerSort} numeric />
+                    <SortHeader k="rto" label="RTO" sort={sellerSort} numeric /><SortHeader k="rtv" label="RTV" sort={sellerSort} numeric /><SortHeader k="retpct" label="Ret%" sort={sellerSort} numeric />
                   </tr></thead>
                   <tbody>
                     {sellerSort.sorted.map(v => {
@@ -452,6 +488,16 @@ export default function AmazonPage() {
                           <td className="so-num">{has ? acos.toFixed(1) + '%' : '—'}</td>
                           <td className="so-num">{has ? tacos.toFixed(1) + '%' : '—'}</td>
                           <td className="so-num">{has ? organicPct.toFixed(0) + '%' : '—'}</td>
+                          {(() => {
+                            const rr = retOf(v.code);
+                            return (<>
+                              <td className="so-num" title={rr.rtoValue ? `${inr(rr.rtoValue)} refunded` : undefined}>{rr.rtoUnits ? fmtInt(rr.rtoUnits) : '—'}</td>
+                              <td className="so-num" title={rr.rtvValue ? `${inr(rr.rtvValue)} refunded so far` : undefined}>{rr.rtvShown ? fmtInt(rr.rtvShown) : '—'}</td>
+                              <td className="so-num" title={rr.unknownUnits ? `incl. ${fmtInt(rr.unknownUnits)}u refunded but not yet classified rto/rtv` : undefined}>
+                                {rr.totalReturned && v.units ? ((rr.totalReturned / v.units) * 100).toFixed(1) + '%' : '—'}
+                              </td>
+                            </>);
+                          })()}
                         </tr>
                       );
                     })}
