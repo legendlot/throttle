@@ -1982,6 +1982,96 @@ function mapCashfreePayment(data, channelId) {
     raw: data,
   };
 }
+// ── Cashfree payments backfill/reconcile (PG Recon API) ───────────────────────
+// The `/webhook/cashfree` receiver is FORWARD-ONLY, so nothing before the webhook went live
+// (2026-07-18) exists, and a status that changes after the event is never re-read. This walks
+// POST /pg/recon by date window — the endpoint, headers and body shape are taken from the
+// published spec (x-api-version 2026-01-01), not inferred.
+//
+// ⚠️ UNVERIFIED UNTIL AN OVERLAP RUN: recon is a SETTLEMENT feed, so it may return only
+// successful/settled events. If it does, backfilling a pre-webhook period would add successes
+// with none of their matching failures or user_drops and would SILENTLY INFLATE the funnel's
+// success rate for those dates. `config.allow_prewebhook` therefore gates the deep backfill and
+// starts FALSE: until an overlapping day is compared against webhook-staged rows and the status
+// mix is shown to match, this adapter only re-reads dates the webhook already covers, where the
+// upsert can correct a status but cannot invent a missing row.
+const CASHFREE_WEBHOOK_LIVE_FROM = '2026-07-18';
+const cashfreePaymentsAdapter = {
+  kind: 'cashfree_payments', stgTable: 'stg_payments',
+  datesOf() { return []; },   // stage-only — f_payment_funnel reads staging directly
+  async fetch({ env, channelId, cursor, config, budget = 40 }) {
+    const cfg = config || {};
+    const clientId = cfg.client_id;
+    const secret = env.CASHFREE_CLIENT_SECRET || '';
+    if (!clientId) throw new Error('Cashfree not configured (connector_config.config.client_id)');
+    if (!secret) throw new Error('Cashfree not configured (set CASHFREE_CLIENT_SECRET)');
+    const host = cfg.api_host || 'https://api.cashfree.com';
+    // The dashboard labels the credential `x-secret-key` while the recon spec names it
+    // `x-client-secret`. Send BOTH rather than pick one and burn a round-trip finding out —
+    // an unexpected auth header is ignored, a missing one is a 401.
+    const H = {
+      'Content-Type': 'application/json', Accept: 'application/json',
+      'x-api-version': cfg.api_version || '2026-01-01',
+      'x-client-id': String(clientId),
+      'x-client-secret': secret,
+      'x-secret-key': secret,
+    };
+    const dayMs = 24 * 3600 * 1000;
+    const floor = cfg.allow_prewebhook ? (cfg.backfill_start || CASHFREE_WEBHOOK_LIVE_FROM)
+                                       : CASHFREE_WEBHOOK_LIVE_FROM;
+    const startDay = (cursor && cursor.slice(0, 10) > floor) ? cursor.slice(0, 10) : floor;
+    const endDay = new Date(Date.parse(startDay + 'T00:00:00Z') + dayMs).toISOString().slice(0, 10);
+    const today = istDate(nowISO());
+    if (startDay > today) return { rows: [], cursorAfter: null, subreqs: 0, partial: false };
+
+    const rows = []; let subreqs = 0, nextCursor = null, pages = 0;
+    do {
+      if (subreqs >= budget - 1) break;
+      const body = {
+        pagination: { limit: 1000, cursor: nextCursor },
+        filters: { start_date: `${startDay}T00:00:00Z`, end_date: `${endDay}T00:00:00Z` },
+      };
+      const res = await fetch(`${host}/pg/recon`, { method: 'POST', headers: H, body: JSON.stringify(body) }); subreqs++; pages++;
+      if (!res.ok) throw new Error(`Cashfree recon ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+      const j = await res.json().catch(() => null);
+      for (const d of (j?.data || [])) {
+        const ev = d.event_details || {}, pay = d.payment_details || {}, ord = d.order_details || {};
+        // PAYMENT events only. Refunds/disputes/chargebacks are their own event types and are NOT
+        // payment attempts — folding them into stg_payments would double-count the funnel.
+        if (String(ev.event_type || '').toUpperCase() !== 'PAYMENT') continue;
+        const id = pay.cf_payment_id;
+        if (id == null) continue;
+        const amt = Number(pay.payment_amount != null ? pay.payment_amount : ord.order_amount);
+        rows.push({
+          channel_id: channelId, provider: 'cashfree',
+          provider_payment_id: String(id),
+          order_ref: ord.order_id != null ? String(ord.order_id) : null,
+          // lowercased to match mapCashfreePayment exactly — sales.canon_payment_status keys off
+          // these values, and two writers for one table must not disagree on their spelling.
+          status: pay.status ? String(pay.status).toLowerCase() : (ev.event_status ? String(ev.event_status).toLowerCase() : null),
+          method: pay.payment_group || null,
+          error_code: null, error_reason: null,
+          amount: Number.isFinite(amt) ? amt : 0,
+          currency: pay.payment_currency || ord.order_currency || 'INR',
+          created_at: pay.payment_time || ev.event_time || null,
+          raw: d,
+        });
+      }
+      nextCursor = j?.cursor || null;
+    } while (nextCursor && pages < 20);
+
+    // Advance a day at a time; the window still ends at `endDay`, so the cursor never regresses.
+    return { rows, cursorAfter: endDay, subreqs, partial: endDay <= today };
+  },
+  async stage(rows) {
+    if (!rows.length) return;
+    const seen = new Map();
+    for (const r of rows) seen.set(r.provider_payment_id, r);   // dedupe before upsert (PG 21000)
+    await sbInsertChunked('/rest/v1/stg_payments?on_conflict=provider,provider_payment_id',
+      [...seen.values()], 'return=minimal,resolution=merge-duplicates');
+  },
+};
+
 const razorpayPaymentsAdapter = {
   kind: 'razorpay_payments', stgTable: 'stg_payments',
   datesOf() { return []; },   // stage-only — f_payment_funnel reads staging directly
@@ -2857,7 +2947,7 @@ const amazonTrafficAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, ad_status: adStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, ad_status: adStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter, cashfree_payments: cashfreePaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
