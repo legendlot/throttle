@@ -647,11 +647,35 @@ export default function FunnelPage() {
                       <>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 18 }}>
                           {stat('Prepaid attempts', numfmt(attempts))}
-                          {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% success`, STATUS.good)}
+                          {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% of attempts · ${psr.toFixed(1)}% of completed`, STATUS.good)}
                           {stat('Failed', numfmt(failed), failed ? `${(100 * failed / Math.max(attempts, 1)).toFixed(1)}% of attempts` : null, STATUS.bad)}
+                          {abandoned ? stat('Abandoned', numfmt(abandoned), 'left before paying', 'var(--t2)') : null}
                           {stat('COD orders', numfmt(cod), 'captured on delivery', 'var(--t2)')}
                           {stat('Captured value', inr(capAmt))}
                         </div>
+                        {/* Per-gateway split. During a migration a blended rate hides which side is
+                            degrading -- and the two are NOT directly comparable on success_rate,
+                            because only Cashfree records abandonment. Hence both rates. */}
+                        {provNames.length > 1 && (
+                          <div style={{ marginBottom: 18 }}>
+                            <div className="so-eyebrow" style={{ marginBottom: 10 }}>By gateway</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>
+                              {provNames.map(pn => {
+                                const o = byProvider[pn] || {};
+                                const a = Number(o.attempts) || 0, cap = Number(o.captured) || 0, fl = Number(o.failed) || 0, ab = Number(o.abandoned) || 0;
+                                const pRate = (cap + fl) ? (100 * cap / (cap + fl)) : 0;
+                                return (
+                                  <span key={pn}>
+                                    {pn} <b style={{ color: 'var(--t1)' }}>{numfmt(cap)}</b>/{numfmt(a)}
+                                    <span style={{ color: 'var(--t5)' }}> · {pRate.toFixed(1)}% of completed</span>
+                                    <span style={{ color: 'var(--t5)' }}> · {inr(Number(o.captured_amount) || 0)}</span>
+                                    {ab ? <span style={{ color: 'var(--t5)' }}> · {numfmt(ab)} abandoned</span> : null}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 24 }}>
                           <div>
                             <div className="so-eyebrow" style={{ marginBottom: 10 }}>Why payments fail</div>
@@ -687,7 +711,7 @@ export default function FunnelPage() {
                             <span style={{ color: 'var(--t5)' }}>·</span>
                             <span>Razorpay captured <b style={{ color: 'var(--t1)' }}>{numfmt(rc.razorpay_captured)}</b> <span style={{ color: 'var(--t5)' }}>({inr(rc.razorpay_captured_amount)})</span></span>
                           </div>
-                          <p className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 8, lineHeight: 1.55 }}>Prepaid captures come from Razorpay; COD orders have no online capture (they appear in Shopify orders, not here). GA4 typically over-counts slightly.</p>
+                          <p className="so-sub" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 8, lineHeight: 1.55 }}>Prepaid captures span every live gateway{provNames.length ? ` (${provNames.join(' + ')})` : ''}; COD orders have no online capture (they appear in Shopify orders, not here). GA4 typically over-counts slightly. The reconciliation line below counts Razorpay only.{abandoned ? ' “% of completed” excludes abandoned checkouts — use it to compare gateways, since only Cashfree reports abandonment and Razorpay records none.' : ''}</p>
                         </div>
                       </>
                     )}
