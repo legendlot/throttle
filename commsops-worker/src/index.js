@@ -25,6 +25,7 @@ const OPTOUT = require('./optout.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
+const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -1445,6 +1446,15 @@ async function runScheduled(env) {
   try { await checkDeliverabilitySpike(env); }
   catch (e) { console.log('spike_check_error', e?.message || String(e)); }
 
+  // 2a. WA sender quality pull (hourly, self-throttled off settings.wa_quality_pulled_at).
+  // The quality webhook only fires on a TRANSITION, so a rating that has not moved is never
+  // reported and the Deliverability panel reads "no signal yet" forever. Best-effort, same
+  // contract as every other sweep here: a Graph outage must not break the campaign scheduler.
+  try {
+    const q = await WAQ.pullSenderQualityIfDue(env);
+    if (q && !q.skipped) console.log('wa_quality_pull', JSON.stringify(q));
+  } catch (e) { console.log('wa_quality_pull_error', e?.message || String(e)); }
+
   // 2b. segment-entry triggers — detect who newly entered a watched segment and enrol.
   // Self-contained + never throws; a segment scan must not break the sweeps above.
   try {
@@ -1849,6 +1859,17 @@ export default {
       if (!want || bearer !== want) return err('unauthorised', 401);
       let b = {}; try { b = await request.json(); } catch {}
       const r = await WATPL.waAccountInfo(env, b.wabaIds || []);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    // Force a WA quality pull now, bypassing the hourly throttle. The cron covers the steady
+    // state; this exists so the pull can be exercised the moment it is deployed rather than
+    // waiting out a tick, and so a suspected throttling event can be checked on demand.
+    if (url.pathname === '/internal/wa-quality-pull' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      const r = await WAQ.pullSenderQuality(env);
       return r.ok ? ok(r) : err(r.error, 400);
     }
     // What WA_TOKEN can do (scopes only — never the token). Distinguishes a missing
