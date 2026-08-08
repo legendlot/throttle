@@ -20,7 +20,8 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const [revisedDate, setRevisedDate] = useState('');
   const [rating, setRating] = useState('');                  // ⑤ — required at live
   const [ratingNotes, setRatingNotes] = useState('');
-  const [shipOrderId, setShipOrderId] = useState('');        // #7 — required for shipped
+  const [shipOrderId, setShipOrderId] = useState('');        // #7 — required for shipped (video deals)
+  const [trackUrl, setTrackUrl] = useState('');              // C1 #2 — required for shipped (UGC)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   if (!engagement) return null;
@@ -36,6 +37,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const existingRating = (engagement.influencer?.quality_rating || '').trim();
   const isRated        = ['green', 'yellow', 'red'].includes(existingRating);
   const existingOrder  = (engagement.shipping_order_id || '').trim();
+  const existingTrack  = (engagement.tracking_url || '').trim();
   const isDelayed      = isSchedule && trackChoice === 'delayed';
 
   // ② — a video post date is mandatory at go-live (drives monthly-target views);
@@ -43,8 +45,12 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const needsPostDate  = isLive && !isUgc && !existingPost;
   // ⑤ — going live requires a colour rating (video deals); only prompt if unrated.
   const needsRating    = isLive && !isUgc && !isRated;
-  // #7 — only prompt for an order id when one isn't already on the deal.
-  const needsOrderId   = isShipped && !existingOrder;
+  // Shipped mirrors the worker's split guard (advanceStage): UGC needs a tracking
+  // LINK, video deals need the Shopify order id. Only prompt when the deal doesn't
+  // already carry the field. Prompting for the wrong one made the UGC deal
+  // unadvanceable from this modal — the worker 422'd whatever was typed in.
+  const needsOrderId   = isShipped && !isUgc && !existingOrder;
+  const needsTrackUrl  = isShipped && isUgc && !existingTrack;
 
   // B11 — soft skip-stage warning (transitions are free by design; this only nudges).
   const _fromIdx = HAPPY_PATH.indexOf(engagement.stage);
@@ -56,7 +62,8 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const missingRevised  = isDelayed && !revisedDate;
   const missingRating   = needsRating && !rating;
   const missingOrderId  = needsOrderId && !shipOrderId.trim();
-  const canSubmit = !!target && !busy && !missingVideo && !missingPostDate && !missingRevised && !missingRating && !missingOrderId;
+  const missingTrackUrl = needsTrackUrl && !trackUrl.trim();
+  const canSubmit = !!target && !busy && !missingVideo && !missingPostDate && !missingRevised && !missingRating && !missingOrderId && !missingTrackUrl;
 
   async function submit() {
     if (!canSubmit) return;
@@ -72,6 +79,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
         if (ratingNotes.trim()) extra.rating_notes = ratingNotes.trim();
       }
       if (needsOrderId && shipOrderId.trim()) extra.shipping_order_id = shipOrderId.trim();
+      if (needsTrackUrl && trackUrl.trim()) extra.tracking_url = trackUrl.trim();
       if (isDelayed) {
         // "Delayed" routes to the delayed stage with a revised post date; the
         // original is preserved in the history note (#10, no new column).
@@ -89,6 +97,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
       if (/rating_required_for_live/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this live.');
       else if (/post_date_required_for_live/.test(m)) setErr('A video posting date is required to mark this live.');
       else if (/shipping_order_id_required_for_shipped/.test(m)) setErr('A Shopify order ID is required to mark this shipped.');
+      else if (/tracking_url_required_for_shipped/.test(m)) setErr('A tracking link is required to mark this shipped.');
       else if (/video_link_required_for_live/.test(m)) setErr('A video link is required to mark this live.');
       else setErr(m || 'Could not advance');
     } finally { setBusy(false); }
@@ -192,6 +201,20 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
               style={fieldStyle}
             />
             {missingOrderId && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark shipped</div>}
+          </div>
+        )}
+
+        {/* C1 #2 — a UGC deal is marked shipped against a tracking link, not an order id */}
+        {needsTrackUrl && (
+          <div>
+            <label style={lblStyle}>Tracking link *</label>
+            <input
+              value={trackUrl}
+              onChange={(e) => setTrackUrl(e.target.value)}
+              placeholder="https://…"
+              style={fieldStyle}
+            />
+            {missingTrackUrl && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark shipped</div>}
           </div>
         )}
 
