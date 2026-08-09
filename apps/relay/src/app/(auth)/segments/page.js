@@ -94,7 +94,22 @@ function parseDef(def) {
   return { group: 'all', rows: [] };
 }
 
-function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', rows: [], member_count: null }; }
+function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', rows: [], member_count: null, materialized_at: null }; }
+
+// A dynamic segment's member_count is COUNT(segment_members) — so a segment nobody has ever
+// refreshed counts 0, which rendered as a bare "0" and read as "this audience is empty".
+// "Winback 90 — Email" showed 0 against a live rule matching 25,084. `materialized_at`
+// (migration comms_segment_materialized_at_v1, NULL = never) is what separates the two.
+// Static segments are the opposite case: membership is an explicit list, so 0 IS the answer.
+function memberState(kind, memberCount, materializedAt) {
+  if (kind !== 'dynamic') return { text: memberCount != null ? Number(memberCount).toLocaleString('en-IN') : '—', stale: false };
+  if (!materializedAt) {
+    return { text: 'Not counted', stale: true,
+      title: 'This rule has never been counted. The number of people it matches is unknown — it is NOT zero. Open the segment and press "Refresh members".' };
+  }
+  return { text: Number(memberCount || 0).toLocaleString('en-IN'), stale: false,
+    title: `As of ${fmtDateTime(materializedAt)}. A dynamic rule is re-evaluated on every send, so the live audience may differ — press "Refresh members" to recount.` };
+}
 
 export default function SegmentsPage() {
   const { session, perms } = useAuth();
@@ -145,12 +160,12 @@ export default function SegmentsPage() {
   useNewParam(canEdit, startNew);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
-    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, rows: parsed.rows, member_count: null });
+    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, rows: parsed.rows, member_count: null, materialized_at: r.materialized_at ?? null });
     setPv(null);
     setView('form');
     try {
       const d = await garageFetch('getSegment', { id: r.id }, session);
-      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null }));
+      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null }));
     } catch { /* non-fatal */ }
   }
   function set(k, v) { setSeg((s) => ({ ...s, [k]: v })); }
@@ -245,7 +260,9 @@ export default function SegmentsPage() {
     try {
       const r = await workerFetch('materializeSegment', { id: seg.id }, session);
       const n = r?.data?.members;
-      set('member_count', typeof n === 'number' ? n : seg.member_count);
+      // Stamp locally too, so the "Not counted" badge flips immediately. The RPC is the
+      // authority (it sets materialized_at server-side); this just avoids a reload.
+      setSeg((s) => ({ ...s, member_count: typeof n === 'number' ? n : s.member_count, materialized_at: new Date().toISOString() }));
       showToast(`Members refreshed${typeof n === 'number' ? ` — ${n}` : ''}`, 'success');
     } catch (e) { showToast(e.message || 'Refresh failed', 'error'); }
     finally { setMaterializing(false); }
@@ -260,7 +277,10 @@ export default function SegmentsPage() {
           <div className="po-head-l">
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to segments</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{seg.id ? (seg.name || 'Segment') : 'New Segment'}</span>
-            {seg.member_count != null && <Badge label={`${seg.member_count} members`} tone="blue" dot />}
+            {/* Never show a bare "0 members" for a rule nobody has counted — see memberState(). */}
+            {seg.kind === 'dynamic' && seg.id && !seg.materialized_at
+              ? <Badge label="Not counted" tone="gray" dot />
+              : (seg.member_count != null && <Badge label={`${seg.member_count} members`} tone="blue" dot />)}
           </div>
           <div className="po-head-r">
             {seg.id && seg.kind === 'dynamic' && canEdit && <Btn onClick={refreshMembers} disabled={materializing}><RefreshCw size={14} /> {materializing ? 'Refreshing…' : 'Refresh members'}</Btn>}
@@ -495,11 +515,14 @@ export default function SegmentsPage() {
           ? <Panel><EmptyState icon="users" title="No segments yet" hint="Build your first audience to target a campaign." /></Panel>
           : (
             <Panel title="Segments" count={rows.length}>
-              {/* Members column backed by the S231 §9 read extension (getSegments now
-                  returns member_count from comms.segment_members). For DYNAMIC segments
-                  it counts the last materialized set (PATTERN-176) — a rule edited since
-                  the last refresh isn't recounted until "Refresh members" runs, hence
-                  the as-of-last-refresh tooltip. */}
+              {/* Members column backed by the S231 §9 read extension (getSegments returns
+                  member_count from comms.segment_members). For DYNAMIC segments it counts
+                  the last materialized set (PATTERN-176) — a rule edited since the last
+                  refresh isn't recounted until "Refresh members" runs.
+                  S268: it used to print a bare 0 when a segment had NEVER been materialized,
+                  which reads as "this audience is empty" rather than "nobody has counted it"
+                  — Winback 90 showed 0 against a live 25,084. memberState() splits the two
+                  on materialized_at. Do NOT collapse it back to a plain number. */}
               <table className="dt">
                 <thead><tr><th>Name</th><th>Kind</th><th>Conditions</th><th className="num">Members</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
@@ -515,10 +538,14 @@ export default function SegmentsPage() {
                         </td>
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
                         <td className="dim">{r.kind === 'static' ? '—' : (p.rows.length === 0 ? 'everyone' : `${p.rows.length} · match ${p.group}`)}</td>
-                        <td className="num mono"
-                          title={r.kind === 'dynamic' ? 'As of the last refresh — open the segment and Refresh members to recount' : undefined}>
-                          {r.member_count != null ? Number(r.member_count).toLocaleString('en-IN') : '—'}
-                        </td>
+                        {(() => {
+                          const ms = memberState(r.kind, r.member_count, r.materialized_at);
+                          return (
+                            <td className={ms.stale ? 'num dim' : 'num mono'} title={ms.title}>
+                              {ms.text}
+                            </td>
+                          );
+                        })()}
                         <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
                         <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
                       </tr>
