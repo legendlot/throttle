@@ -334,7 +334,12 @@ class JourneyWorkflow extends WorkflowEntrypoint {
             // global end hour, so an SMS send skipped at 21:30 would have woken at WhatsApp's
             // 08:00 — an hour before SMS is deliverable — and burned its single retry on a
             // second guaranteed skip.
-            const deferMs = await step.do(`qhcalc:${cur}`, async () => this.#msUntilQuietEnd(env, s.channel));
+            // `s.channel || 'email'` MIRRORS #doSend (~line 388). Passing s.channel raw would
+            // resolve a channel-less step to the GLOBAL window here while the gate had judged it
+            // as email — the two must agree or the retry wakes at a boundary the gate never used.
+            // Unreachable while email is exempt (no quiet_hours skip → no park), which is exactly
+            // why it would sit latent until someone turns email's quiet hours on.
+            const deferMs = await step.do(`qhcalc:${cur}`, async () => this.#msUntilQuietEnd(env, s.channel || 'email'));
             if (deferMs > 0) {
               const pre = exitEventSet.size
                 ? await step.do(`qhprecheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
@@ -811,8 +816,12 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   // it — but return 0 defensively so a misconfig degrades to "send now", not "park forever".
   async #msUntilQuietEnd(env, channel) {
     try {
-      const [settings, rows] = await Promise.all([GATE.getSettings(env), GATE.getChannelQuietHours(env)]);
-      const win = GATE.resolveQuietWindow(rows, channel, settings);
+      const [settings, cqh] = await Promise.all([GATE.getSettings(env), GATE.getChannelQuietHours(env)]);
+      // Unreadable table → the gate returns gate_error, not quiet_hours, so this is unreachable
+      // from a real skip. Park to the global end hour if it ever is: a wrong-but-bounded wake is
+      // better than 0, which would retry immediately into the same failure.
+      if (!cqh.ok) return G.msUntilIstHour(Date.now(), Number(settings.quiet_hours_end ?? 9));
+      const win = GATE.resolveQuietWindow(cqh.rows, channel, settings);
       if (!win) return 0;
       return G.msUntilIstMinute(Date.now(), win.endMin);
     } catch (_) {

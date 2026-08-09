@@ -327,11 +327,16 @@ export default function SettingsPage() {
               </tbody>
             </table>
             <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Btn kind="primary" onClick={saveQuiet} disabled={savingQuiet}>
+              {/* Disabled on an empty list: that state means the READ failed (or the table is
+                  genuinely empty), and saving nothing is never what the author wants — it would
+                  just POST an empty batch and look like it worked. */}
+              <Btn kind="primary" onClick={saveQuiet} disabled={savingQuiet || quiet.length === 0}>
                 <Check size={14} /> {savingQuiet ? 'Saving…' : 'Save quiet hours'}
               </Btn>
               <span className="dim" style={{ fontSize: 11.5 }}>
-                Saved separately from the fields above.
+                {quiet.length === 0
+                  ? 'Nothing to save — reload the page; if this persists the channel table could not be read.'
+                  : 'Saved separately from the fields above.'}
               </span>
             </div>
           </Panel>

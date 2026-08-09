@@ -57,14 +57,23 @@ function inQuietWindow(startMin, endMin, nowMin) {
 
 let _cqhCache = null;
 let _cqhAt = 0;
+// Returns { ok:true, rows } or { ok:false }. ⚠️ The distinction is load-bearing and was a REAL
+// BUG in the first cut of this: "unreadable" must NOT collapse into "no row for this channel".
+// The global fallback pair is 22:00–08:00, which is MORE PERMISSIVE than SMS's own 21:00–10:00 —
+// so silently falling back on a read failure would let SMS send at 21:30 and at 09:00, both
+// outside the TCCCPR window. A table we cannot read fails CLOSED instead, matching the freq-cap
+// precedent above ("a DB error must BLOCK, never pass" — gate-failclosed.test.js). Blocking
+// marketing for a minute is recoverable; a non-compliant SMS is not.
 async function getChannelQuietHours(env) {
   if (_cqhCache && (Date.now() - _cqhAt) < SETTINGS_TTL_MS) return _cqhCache;
-  const r = await A.sbComms('/rest/v1/channel_quiet_hours?select=*', env);
-  // Unreadable → null, NOT {}. `{}` would read as "no row for this channel" and silently fall
-  // back to the global window for every channel, which is a quiet behaviour change on a table
-  // outage. null makes resolveQuietWindow fall back explicitly and identically, but the
-  // distinction is kept so the reason is legible if this ever needs debugging.
-  _cqhCache = (r.ok && Array.isArray(r.data)) ? Object.fromEntries(r.data.map((x) => [x.channel, x])) : null;
+  let r;
+  // sbProfile does not catch a fetch rejection, so a transport failure throws. Catch it here so
+  // it becomes the same explicit fail-closed signal as a non-2xx, rather than an exception that
+  // escapes runGate from a step that previously made no network call at all.
+  try { r = await A.sbComms('/rest/v1/channel_quiet_hours?select=*', env); }
+  catch (_) { r = { ok: false }; }
+  if (!r.ok || !Array.isArray(r.data)) return { ok: false };   // NOT cached — retry next send
+  _cqhCache = { ok: true, rows: Object.fromEntries(r.data.map((x) => [x.channel, x])) };
   _cqhAt = Date.now();
   return _cqhCache;
 }
@@ -180,7 +189,9 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
     //    S268: the window is now PER CHANNEL (a null window means the channel is exempt —
     //    email, by decision). The allowlist bypass and the skip reason are unchanged, so
     //    journey defer-and-retry keys off exactly the same signal as before.
-    const win = resolveQuietWindow(await getChannelQuietHours(env), channel, s);
+    const cqh = await getChannelQuietHours(env);
+    if (!cqh.ok) return { pass: false, reason: 'gate_error:quiet_hours' };
+    const win = resolveQuietWindow(cqh.rows, channel, s);
     if (win && inQuietWindow(win.startMin, win.endMin, istMinutes())
         && !testModeAllows(to, s.test_mode_allow))
       return { pass: false, reason: 'quiet_hours' };
