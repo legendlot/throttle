@@ -38,6 +38,32 @@ const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 
+// A row MUST carry every key its leaf type needs, from the moment it exists.
+// Switching the type dropdown used to be a merge patch (`setLeaf(i,{type})`), so an
+// attr row became {type:'consent', attr:'', op:'eq', value:''} — no channel/purpose/state.
+// Those three <select>s then rendered with value={undefined}, went UNCONTROLLED, and
+// displayed their first option while holding nothing; only a dropdown the author actually
+// changed got committed. `eval_segment_node` filters `c.purpose = node->>'purpose'`, and a
+// missing key makes that `= NULL` — never true — so the leaf silently matched ZERO profiles
+// and the enclosing AND wiped out the whole segment. The badge then read "0 MEMBERS", which
+// is indistinguishable from "no such customers". Cost: the "T-120 purchasers" segment read 0
+// when the real audience was 4,193 (2026-08-09). Always REPLACE the row on a type change.
+function blankRow(type) {
+  if (type === 'event') return { type: 'event', event: '', count: 1, within: '' };
+  if (type === 'consent') return { type: 'consent', channel: 'email', purpose: 'marketing', state: 'opted_in' };
+  return { type: 'attr', attr: '', op: 'eq', value: '' };
+}
+
+// The `within` value is cast straight to ::interval by eval_segment_node, and Postgres reads a
+// BARE NUMBER as seconds — '120'::interval is 00:02:00, not 120 days. The field sits behind a
+// label that reads "within [120]", so a bare number is the natural thing to type and it silently
+// asked for "ordered in the last two minutes". Normalise it to days (the only unit a segment
+// author means here); an explicit interval string like '6 hours' is passed through untouched.
+function normalizeWithin(v) {
+  const s = String(v || '').trim();
+  return /^\d+$/.test(s) ? `${s} days` : s;
+}
+
 const csvToArr = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
 
 // stored leaf → editor row
@@ -51,10 +77,13 @@ function toRow(leaf) {
 function toLeaf(row) {
   if (row.type === 'event') {
     const o = { event: row.event, count: Number(row.count) || 1 };
-    if (row.within && row.within.trim()) o.within = row.within.trim();
+    if (row.within && row.within.trim()) o.within = normalizeWithin(row.within);
     return o;
   }
-  if (row.type === 'consent') return { consent: true, channel: row.channel, purpose: row.purpose, state: row.state };
+  // Defaults repeated here on purpose: blankRow() now guarantees these keys, but this is the
+  // last gate before the AST is persisted, and a consent leaf missing purpose/state is the one
+  // shape that fails SILENTLY (matches nobody) instead of erroring. Belt and braces.
+  if (row.type === 'consent') return { consent: true, channel: row.channel || 'email', purpose: row.purpose || 'marketing', state: row.state || 'opted_in' };
   return { attr: row.attr, op: row.op, value: row.op === 'in' ? csvToArr(row.value) : String(row.value) };
 }
 function parseDef(def) {
@@ -125,7 +154,10 @@ export default function SegmentsPage() {
     } catch { /* non-fatal */ }
   }
   function set(k, v) { setSeg((s) => ({ ...s, [k]: v })); }
-  function addLeaf() { setSeg((s) => ({ ...s, rows: [...s.rows, { type: 'attr', attr: '', op: 'eq', value: '' }] })); }
+  function addLeaf() { setSeg((s) => ({ ...s, rows: [...s.rows, blankRow('attr')] })); }
+  // REPLACE, never merge — see blankRow(). The old `setLeaf(i,{type})` left the new type's
+  // fields undefined, which is what made the selects uncontrolled and the leaf match nobody.
+  function setLeafType(i, type) { setSeg((s) => ({ ...s, rows: s.rows.map((r, j) => j === i ? blankRow(type) : r) })); }
   function setLeaf(i, patch) { setSeg((s) => ({ ...s, rows: s.rows.map((r, j) => j === i ? { ...r, ...patch } : r) })); }
   function removeLeaf(i) { setSeg((s) => ({ ...s, rows: s.rows.filter((_, j) => j !== i) })); }
 
@@ -344,7 +376,7 @@ export default function SegmentsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {seg.rows.map((r, i) => (
                     <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7, padding: 10 }}>
-                      <select className="f-inp" style={{ width: 110 }} value={r.type} onChange={(e) => setLeaf(i, { type: e.target.value })} disabled={saving || !canEdit}>
+                      <select className="f-inp" style={{ width: 110 }} value={r.type} onChange={(e) => setLeafType(i, e.target.value)} disabled={saving || !canEdit}>
                         {LEAF_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
                       </select>
 
@@ -376,8 +408,11 @@ export default function SegmentsPage() {
                         </div>
                         <span className="dim" style={{ fontSize: 12 }}>≥</span>
                         <input className="f-inp mono" style={{ width: 64 }} type="number" min="1" value={r.count} onChange={(e) => setLeaf(i, { count: e.target.value })} disabled={saving || !canEdit} />
-                        <span className="dim" style={{ fontSize: 12 }}>within</span>
-                        <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => setLeaf(i, { within: e.target.value })} placeholder="30 days (opt)" disabled={saving || !canEdit} />
+                        <span className="dim" style={{ fontSize: 12 }}>within last</span>
+                        <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => setLeaf(i, { within: e.target.value })} placeholder="120 days (opt)" disabled={saving || !canEdit} />
+                        {/* Echo what a bare number will actually be saved as — the old field read
+                            "within [120]" and silently meant 120 SECONDS. */}
+                        {/^\d+$/.test(String(r.within || '').trim()) && <span className="dim" style={{ fontSize: 11.5 }}>= {normalizeWithin(r.within)}</span>}
                       </>}
 
                       {r.type === 'consent' && <>
