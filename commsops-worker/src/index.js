@@ -72,6 +72,30 @@ function validateSegmentDef(def) {
         problem = 'event property filter needs both a property and a value';
       }
     }
+    // An ATTR leaf is the SAME hole one branch down, and it was left open when the event
+    // `where` was closed. The UI walks straight into it: `addLeaf()` appends a BLANK attr
+    // row, so an author who clicks "add condition" and then fills a different row leaves
+    // {attr:'', op:'eq', value:''} behind. eval_segment_node dispatches on key PRESENCE,
+    // so that row still takes the attr branch, comms._attr(p,'') is NULL for every profile,
+    // and the INTERSECT wipes the whole set.
+    //
+    // Measured 2026-08-09 on "High Speed Browsers_Mishica" (#bugs 1786261584.104239, the
+    // follow-up to the product-filter fix): product_viewed alone 13,235 profiles, the blank
+    // row 0, the two ANDed 0 — a real audience reported as empty, PATTERN-277 exactly.
+    //
+    // Rejects rather than dropping the row. Silently discarding an empty condition is the
+    // OTHER harmful direction: the author gets a bigger audience than the rule they think
+    // they saved, which on a marketing send means messaging people they excluded.
+    if (leaf && 'attr' in leaf) {
+      const v = leaf.value;
+      const emptyValue = v == null || v === ''
+        || (Array.isArray(v) && (v.length === 0 || v.every((x) => String(x).trim() === '')));
+      if (!String(leaf.attr || '').trim()) {
+        problem = 'a condition row is empty — pick an attribute or remove the row (an empty condition matches nobody)';
+      } else if (emptyValue) {
+        problem = `the "${leaf.attr}" condition has no value — fill it in or remove the row (it matches nobody as it stands)`;
+      }
+    }
   });
   return problem;
 }
