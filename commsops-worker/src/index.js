@@ -38,6 +38,54 @@ const ok  = (data) => json({ ok: true, data });
 const err = (msg, status = 400) => json({ ok: false, error: msg }, status);
 const nowIso = () => new Date().toISOString();
 
+// ── Segment-definition guards (S268) ────────────────────────────────────────────
+// These exist because a CLIENT-SIDE fix cannot protect a static-export app: the
+// segment builder's fix shipped at 12:35 IST and a browser still running the
+// pre-fix bundle re-saved the broken shape at 13:01 IST, silently turning a
+// 4,193-person audience back into 0. Anything that guards data integrity has to
+// live behind the API, where a cached tab cannot reach it.
+//
+// Two different treatments, on purpose:
+//   • AMBIGUOUS  → reject 422. A consent leaf with no `purpose` is not defaultable;
+//     guessing "marketing" could mail people who only consented to transactional.
+//     eval_segment_node matches NOBODY for it, which reads as a real empty audience.
+//   • UNAMBIGUOUS → normalise. A bare `within: "120"` can only mean 120 days to an
+//     author, but Postgres reads a bare interval number as SECONDS (= 2 minutes).
+function walkSegmentLeaves(node, fn) {
+  if (!node || typeof node !== 'object') return;
+  for (const g of ['all', 'any', 'none']) {
+    if (Array.isArray(node[g])) { node[g].forEach((c) => walkSegmentLeaves(c, fn)); return; }
+  }
+  fn(node);
+}
+function validateSegmentDef(def) {
+  let problem = null;
+  walkSegmentLeaves(def, (leaf) => {
+    if (problem) return;
+    if (leaf && 'consent' in leaf) {
+      for (const k of ['channel', 'purpose', 'state']) {
+        if (!leaf[k]) { problem = `consent condition is missing "${k}" — reload the page and re-pick it (a consent rule without all three matches nobody)`; return; }
+      }
+    }
+    if (leaf && leaf.event != null && leaf.where) {
+      if (!leaf.where.prop || leaf.where.value == null || leaf.where.value === '') {
+        problem = 'event property filter needs both a property and a value';
+      }
+    }
+  });
+  return problem;
+}
+function normalizeSegmentDef(def) {
+  if (!def || typeof def !== 'object') return def;
+  const copy = JSON.parse(JSON.stringify(def));
+  walkSegmentLeaves(copy, (leaf) => {
+    if (leaf && leaf.event != null && typeof leaf.within === 'string' && /^\d+$/.test(leaf.within.trim())) {
+      leaf.within = `${leaf.within.trim()} days`;
+    }
+  });
+  return copy;
+}
+
 // Order-independent JSON for change detection. A plain JSON.stringify compares KEY ORDER, and
 // the template editor rebuilds `content`/`variables` from form state on every render — so the
 // same data serialises differently between loads and every save would look like a change,
@@ -1177,7 +1225,17 @@ async function handlePost(body, auth, env) {
       if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
       const { id, name, kind, definition } = body;
       if (!name) return err('name_required', 400);
-      const row = { name, kind: kind || 'dynamic', definition: definition || {}, updated_at: nowIso() };
+      // S268 — the server is the LAST line of defence, and it is not theoretical: the client
+      // fix for the match-nobody consent leaf shipped at 12:35 IST and a browser still holding
+      // the PRE-FIX bundle re-saved the broken shape over the corrected one at 13:01 IST,
+      // silently returning a 4,193-person audience to 0. A static export is cached, so "we
+      // deployed" never means "every open tab is fixed". Validate here, where staleness
+      // cannot reach. Rejects LOUDLY rather than guessing: a consent leaf with no purpose is
+      // not defaultable — we cannot know what was meant — and both silent directions are
+      // harmful (see PATTERN-277).
+      const bad = validateSegmentDef(definition);
+      if (bad) return err('invalid_definition:' + bad, 422);
+      const row = { name, kind: kind || 'dynamic', definition: normalizeSegmentDef(definition) || {}, updated_at: nowIso() };
       const r = id
         ? await A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}`, env, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
         : await A.sbComms('/rest/v1/segments', env, { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...row, created_by: auth.userId }) });
