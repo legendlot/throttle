@@ -10,6 +10,8 @@ const CF = require('./cashfree.js');
 const SH = require('./shopify.js');
 const AL = require('./alerts.js');
 const LINKS = require('./links.js');
+const GATE = require('./gate.js');   // S268 — per-channel quiet window, so the park boundary
+                                     // and the gate that produced the skip share one resolver
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -328,7 +330,11 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           // deliberately no loop.
           let finalRes = res, deferred = false;
           if (res && res.status === 'skipped' && res.reason === 'quiet_hours') {
-            const deferMs = await step.do(`qhcalc:${cur}`, async () => this.#msUntilQuietEnd(env));
+            // S268: park to THIS CHANNEL's boundary. Before per-channel windows this read one
+            // global end hour, so an SMS send skipped at 21:30 would have woken at WhatsApp's
+            // 08:00 — an hour before SMS is deliverable — and burned its single retry on a
+            // second guaranteed skip.
+            const deferMs = await step.do(`qhcalc:${cur}`, async () => this.#msUntilQuietEnd(env, s.channel));
             if (deferMs > 0) {
               const pre = exitEventSet.size
                 ? await step.do(`qhprecheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
@@ -799,13 +805,19 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   // ms from now until the next quiet-hours END boundary in IST (default 09:00).
   // Settings unreadable → default end hour 9 (mirrors gate.js's fail-safe defaults).
   // The boundary math is G.msUntilIstHour (pure, unit-tested).
-  async #msUntilQuietEnd(env) {
-    let end = 9;
+  // S268 — resolves the END of the quiet window for THIS channel (minute precision), reusing
+  // gate.js's resolver so the park boundary can never disagree with the gate that caused it.
+  // A channel that is exempt (email) can't reach here — the gate never returns quiet_hours for
+  // it — but return 0 defensively so a misconfig degrades to "send now", not "park forever".
+  async #msUntilQuietEnd(env, channel) {
     try {
-      const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=quiet_hours_end&limit=1', env);
-      if (r.ok && r.data?.[0]?.quiet_hours_end != null) end = Number(r.data[0].quiet_hours_end);
-    } catch (_) { /* default */ }
-    return G.msUntilIstHour(Date.now(), end);
+      const [settings, rows] = await Promise.all([GATE.getSettings(env), GATE.getChannelQuietHours(env)]);
+      const win = GATE.resolveQuietWindow(rows, channel, settings);
+      if (!win) return 0;
+      return G.msUntilIstMinute(Date.now(), win.endMin);
+    } catch (_) {
+      return G.msUntilIstHour(Date.now(), 9);   // same fail-safe as before
+    }
   }
 
   // Park on the single 'signal' event type with a timeout. Returns:

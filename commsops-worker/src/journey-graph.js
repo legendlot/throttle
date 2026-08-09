@@ -81,6 +81,19 @@ function durationToMs(str) {
 // cushion keeps a quiet-hours retry from landing a hair inside the window it just left.
 // Pure so the boundary cases are unit-testable (the workflow wraps it with settings I/O).
 const _IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+// S268 — minute-precision sibling of msUntilIstHour, for per-channel quiet windows whose
+// end is a `time` rather than an hour. Same +30s nudge past the boundary so a retry lands
+// just inside the sending window, never exactly on the edge.
+function msUntilIstMinute(nowMs, minutesFromMidnight) {
+  let m = Number(minutesFromMidnight);
+  if (!isFinite(m) || m < 0 || m > 1439) m = 9 * 60;
+  const nowIst = nowMs + _IST_OFFSET_MS;
+  const target = new Date(nowIst);
+  target.setUTCHours(Math.floor(m / 60), m % 60, 30, 0);
+  if (target.getTime() <= nowIst) target.setUTCDate(target.getUTCDate() + 1);
+  return target.getTime() - nowIst;
+}
+
 function msUntilIstHour(nowMs, hour) {
   let h = Number(hour);
   if (!isFinite(h) || h < 0 || h > 23) h = 9;
@@ -134,4 +147,4 @@ function resolveSendNext(step, res, def) {
   return { next: plainNext };
 }
 
-module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, msUntilIstHour, sendWentOut, resolveSendNext, evalEventProperty };
+module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, msUntilIstHour, msUntilIstMinute, sendWentOut, resolveSendNext, evalEventProperty };

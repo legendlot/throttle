@@ -34,10 +34,14 @@ const FIELDS = [
     hint: 'Max messages a single contact can receive within the window.' },
   { key: 'frequency_cap_window_hours', label: 'Frequency cap window (hours)', type: 'number',
     hint: 'Rolling window the per-day cap is measured over.' },
-  { key: 'quiet_hours_start', label: 'Quiet hours start (HH:MM)', type: 'text',
-    hint: 'No sends after this local time.' },
-  { key: 'quiet_hours_end', label: 'Quiet hours end (HH:MM)', type: 'text',
-    hint: 'Sends resume from this local time.' },
+  // S268: quiet hours moved to their own per-channel panel below. These two remain as the
+  // FALLBACK for any channel with no row of its own — kept whole-hour because that is what
+  // the columns are (int), and relabelled: they previously claimed "HH:MM" while storing an
+  // integer hour, which is how the pair got read as more configurable than it was.
+  { key: 'quiet_hours_start', label: 'Fallback quiet start (hour, 0–23)', type: 'number',
+    hint: 'Used only by channels with no row in the per-channel table below.' },
+  { key: 'quiet_hours_end', label: 'Fallback quiet end (hour, 0–23)', type: 'number',
+    hint: 'Used only by channels with no row in the per-channel table below.' },
   { key: 'attribution_window_days', label: 'Attribution window (days)', type: 'number',
     hint: 'Conversions within this window after a send are attributed to it.' },
   { key: 'daily_send_budget', label: 'Daily send budget (marketing)', type: 'number',
@@ -70,15 +74,26 @@ export default function SettingsPage() {
   const [allowText, setAllowText] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // S268 — per-channel quiet windows. Separate table, separate save, so a validation failure
+  // on one channel can never half-write the global settings form.
+  const [quiet, setQuiet] = useState([]);
+  const [savingQuiet, setSavingQuiet] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
     try {
-      const s = await garageFetch('getRelaySettings', {}, session);
+      const [s, q] = await Promise.all([
+        garageFetch('getRelaySettings', {}, session),
+        garageFetch('getChannelQuietHours', {}, session).catch(() => []),
+      ]);
       setSavedCourierFrom(s?.courier_emit_from || null);
       setForm(s || {});
       setAllowText(Array.isArray(s?.test_mode_allow) ? s.test_mode_allow.join('\n') : '');
+      // `time` comes back as HH:MM:SS; the input wants HH:MM.
+      setQuiet((Array.isArray(q) ? q : []).map((r) => ({
+        ...r, start_time: String(r.start_time || '').slice(0, 5), end_time: String(r.end_time || '').slice(0, 5),
+      })));
     } catch (e) { showToast(e.message || 'Failed to load settings', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -150,6 +165,21 @@ export default function SettingsPage() {
         + `These are real WhatsApp messages about orders, deliveries and returns.`)) return;
     }
     await save();
+  }
+
+  function setQuietRow(ch, patch) {
+    setQuiet((rows) => rows.map((r) => (r.channel === ch ? { ...r, ...patch } : r)));
+  }
+  async function saveQuiet() {
+    setSavingQuiet(true);
+    try {
+      await workerFetch('saveChannelQuietHours', {
+        rows: quiet.map(({ channel, enabled, start_time, end_time, note }) => ({ channel, enabled, start_time, end_time, note })),
+      }, session);
+      showToast('Quiet hours saved', 'success');
+      load();
+    } catch (e) { showToast(e.message || 'Save failed', 'error'); }
+    finally { setSavingQuiet(false); }
   }
 
   async function save() {
@@ -257,6 +287,52 @@ export default function SettingsPage() {
             </div>
             <div className="form-foot">
               <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save settings'}</Btn>
+            </div>
+          </Panel>
+
+          {/* S268 — per-channel quiet hours. One global pair could not serve every channel:
+              promotional SMS in India is deliverable 10:00–21:00 only (TCCCPR, scrubbed at the
+              carrier), WhatsApp sits outside TCCCPR, and email is not a telecom resource. */}
+          <Panel title="Quiet hours — per channel" pad>
+            <div style={{ fontSize: 12.5, color: 'var(--t3)', marginBottom: 12, lineHeight: 1.55 }}>
+              Applies to <strong>marketing sends only</strong> — transactional and utility messages
+              bypass quiet hours entirely, and so do allowlisted test recipients. Times are IST.
+              A window may cross midnight (21:00 → 10:00). Journey sends <strong>park and retry</strong> at
+              the channel’s own boundary rather than being dropped.
+            </div>
+            <table className="dt">
+              <thead><tr><th>Channel</th><th>Quiet hours</th><th>From</th><th>To</th><th>Why</th></tr></thead>
+              <tbody>
+                {quiet.length === 0
+                  ? <tr><td colSpan={5} className="dim">No per-channel rows — every channel is using the fallback hours above.</td></tr>
+                  : quiet.map((r) => (
+                    <tr key={r.channel}>
+                      <td style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.channel}</td>
+                      <td>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!r.enabled}
+                            onChange={(e) => setQuietRow(r.channel, { enabled: e.target.checked })} />
+                          <span className={r.enabled ? '' : 'dim'}>{r.enabled ? 'On' : 'Off — always sends'}</span>
+                        </label>
+                      </td>
+                      <td><input className="f-inp mono" style={{ width: 96 }} type="time" value={r.start_time || ''}
+                        disabled={!r.enabled}
+                        onChange={(e) => setQuietRow(r.channel, { start_time: e.target.value })} /></td>
+                      <td><input className="f-inp mono" style={{ width: 96 }} type="time" value={r.end_time || ''}
+                        disabled={!r.enabled}
+                        onChange={(e) => setQuietRow(r.channel, { end_time: e.target.value })} /></td>
+                      <td className="dim" style={{ fontSize: 11.5, maxWidth: 460, whiteSpace: 'normal', lineHeight: 1.5 }}>{r.note}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Btn kind="primary" onClick={saveQuiet} disabled={savingQuiet}>
+                <Check size={14} /> {savingQuiet ? 'Saving…' : 'Save quiet hours'}
+              </Btn>
+              <span className="dim" style={{ fontSize: 11.5 }}>
+                Saved separately from the fields above.
+              </span>
             </div>
           </Panel>
 

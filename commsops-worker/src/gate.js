@@ -29,6 +29,62 @@ function inQuietHours(start, end) {
   return start > end ? (h >= start || h < end) : (h >= start && h < end);
 }
 
+// ── Per-channel quiet hours (S268) ──────────────────────────────────────────────
+// One global pair could not serve every channel: promotional SMS in India is deliverable
+// 10:00–21:00 only (TCCCPR, scrubbed at the carrier), WhatsApp is outside TCCCPR, and email
+// is not a telecom resource at all. Minute precision because the column is a `time`.
+const _IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+function istMinutes() {
+  const d = new Date(Date.now() + _IST_OFFSET_MS);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+// 'HH:MM' | 'HH:MM:SS' → minutes since IST midnight. null on anything unparseable, so a
+// malformed row falls back rather than silently resolving to 00:00 (= quiet all day).
+function toMinutes(t) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (!isFinite(h) || !isFinite(min) || h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+function inQuietWindow(startMin, endMin, nowMin) {
+  // start === end would mean a zero-length window; treat as "never quiet" rather than
+  // "always quiet" — the latter would silently halt a channel forever.
+  if (startMin === endMin) return false;
+  return startMin > endMin ? (nowMin >= startMin || nowMin < endMin)   // wraps midnight
+                           : (nowMin >= startMin && nowMin < endMin);
+}
+
+let _cqhCache = null;
+let _cqhAt = 0;
+async function getChannelQuietHours(env) {
+  if (_cqhCache && (Date.now() - _cqhAt) < SETTINGS_TTL_MS) return _cqhCache;
+  const r = await A.sbComms('/rest/v1/channel_quiet_hours?select=*', env);
+  // Unreadable → null, NOT {}. `{}` would read as "no row for this channel" and silently fall
+  // back to the global window for every channel, which is a quiet behaviour change on a table
+  // outage. null makes resolveQuietWindow fall back explicitly and identically, but the
+  // distinction is kept so the reason is legible if this ever needs debugging.
+  _cqhCache = (r.ok && Array.isArray(r.data)) ? Object.fromEntries(r.data.map((x) => [x.channel, x])) : null;
+  _cqhAt = Date.now();
+  return _cqhCache;
+}
+
+// Resolution order, deliberately: row + enabled → that window · row + disabled → NO quiet
+// hours · no row (or table unreadable) → the global settings pair. The fallback direction
+// matters — a channel added later must arrive GUARDED, because the failure that actually
+// reaches customers is sending at 3am, not skipping a send.
+function resolveQuietWindow(rows, channel, settings) {
+  const row = rows && rows[channel];
+  if (row) {
+    if (!row.enabled) return null;                       // channel is exempt
+    const s = toMinutes(row.start_time), e = toMinutes(row.end_time);
+    if (s != null && e != null) return { startMin: s, endMin: e, source: `channel:${channel}` };
+    // malformed row → fall through to the global pair rather than trusting a bad value
+  }
+  const gs = Number(settings.quiet_hours_start ?? 21), ge = Number(settings.quiet_hours_end ?? 9);
+  return { startMin: gs * 60, endMin: ge * 60, source: 'global' };
+}
+
 // Test-mode allowlist match: '@domain' = suffix match, else exact email. Case-insensitive.
 // Phone numbers get typed the way people read them — "+91 70191 03926", "+91-7019103926" —
 // while the allow-list entry is compact. Exact equality made FORMATTING decide whether the gate
@@ -121,7 +177,11 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
     //    regardless of test_mode: an end-to-end send test at 23:00 IST must be able to
     //    reach the tester's own phone tonight, not tomorrow morning. This can never widen
     //    to a customer — the allowlist is the internal-test list by definition.
-    if (inQuietHours(Number(s.quiet_hours_start ?? 21), Number(s.quiet_hours_end ?? 9))
+    //    S268: the window is now PER CHANNEL (a null window means the channel is exempt —
+    //    email, by decision). The allowlist bypass and the skip reason are unchanged, so
+    //    journey defer-and-retry keys off exactly the same signal as before.
+    const win = resolveQuietWindow(await getChannelQuietHours(env), channel, s);
+    if (win && inQuietWindow(win.startMin, win.endMin, istMinutes())
         && !testModeAllows(to, s.test_mode_allow))
       return { pass: false, reason: 'quiet_hours' };
   }
@@ -157,4 +217,7 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   return { pass: true, reason: null };
 }
 
-module.exports = { runGate, getSettings, inQuietHours, testModeAllows, testRecipientAllowed, testUnion, _clearSettingsCache: () => { _settingsCache = null; } };
+module.exports = { runGate, getSettings, inQuietHours, testModeAllows, testRecipientAllowed, testUnion,
+  // S268 per-channel quiet hours — exported for the journey park boundary + unit tests.
+  getChannelQuietHours, resolveQuietWindow, inQuietWindow, toMinutes, istMinutes,
+  _clearSettingsCache: () => { _settingsCache = null; _cqhCache = null; } };

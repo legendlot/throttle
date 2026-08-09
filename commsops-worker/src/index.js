@@ -218,6 +218,10 @@ async function handleGet(url, auth, env) {
       const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
       return r.ok ? ok(r.data?.[0] || null) : err('db_error', 500);
     }
+    case 'getChannelQuietHours': {     // S268 — per-channel marketing quiet windows
+      const r = await A.sbComms('/rest/v1/channel_quiet_hours?select=*&order=channel.asc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
     case 'getSenderIdentities': {
       const r = await A.sbComms('/rest/v1/sender_identities?select=*&order=channel.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
@@ -682,6 +686,37 @@ async function handlePost(body, auth, env) {
         }),
       });
       return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
+    }
+    case 'saveChannelQuietHours': {    // S268 — per-channel marketing quiet windows
+      // Same super-admin gate as saveRelaySettings: this decides when customers can be
+      // messaged, and getting SMS wrong is a compliance breach, not a UX preference.
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      const rows = Array.isArray(body.rows) ? body.rows : null;
+      if (!rows) return err('rows_required', 400);
+      const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+      const patch = [];
+      for (const r of rows) {
+        const ch = String(r?.channel || '').trim();
+        if (!ch) return err('channel_required', 400);
+        const enabled = !!r.enabled;
+        // Validate the times even when the channel is disabled — they are retained so that
+        // re-enabling restores the intended window, and a blank stored while disabled would
+        // surface later as a silently-wrong window on the day someone flips it back on.
+        const st = String(r.start_time || '').slice(0, 5), en = String(r.end_time || '').slice(0, 5);
+        if (!HHMM.test(st) || !HHMM.test(en))
+          return err(`invalid_time:${ch} — start/end must be HH:MM (24h)`, 422);
+        // A zero-length window reads as "never quiet", which is almost certainly not what an
+        // author who filled both fields meant. Make them use the enabled toggle instead.
+        if (enabled && st === en)
+          return err(`invalid_window:${ch} — start and end are identical; switch the channel off instead`, 422);
+        patch.push({ channel: ch, enabled, start_time: st, end_time: en, note: r.note ?? null, updated_at: nowIso() });
+      }
+      const w = await A.sbComms('/rest/v1/channel_quiet_hours', env, {
+        method: 'POST',
+        headers: { Prefer: 'return=representation,resolution=merge-duplicates' },
+        body: JSON.stringify(patch),
+      });
+      return w.ok ? ok(w.data) : err('db_error:' + JSON.stringify(w.data), 500);
     }
     case 'saveRelaySettings': {        // approval thresholds, freq caps, quiet hours (M2)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
