@@ -49,7 +49,7 @@ const STATES = ['opted_in', 'opted_out', 'unknown'];
 // is indistinguishable from "no such customers". Cost: the "T-120 purchasers" segment read 0
 // when the real audience was 4,193 (2026-08-09). Always REPLACE the row on a type change.
 function blankRow(type) {
-  if (type === 'event') return { type: 'event', event: '', count: 1, within: '' };
+  if (type === 'event') return { type: 'event', event: '', count: 1, within: '', whereProp: '', whereValue: '' };
   if (type === 'consent') return { type: 'consent', channel: 'email', purpose: 'marketing', state: 'opted_in' };
   return { type: 'attr', attr: '', op: 'eq', value: '' };
 }
@@ -68,7 +68,9 @@ const csvToArr = (s) => String(s || '').split(',').map((x) => x.trim()).filter(B
 
 // stored leaf → editor row
 function toRow(leaf) {
-  if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1, within: leaf.within || '' };
+  if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1, within: leaf.within || '',
+    whereProp: leaf.where?.prop || '',
+    whereValue: Array.isArray(leaf.where?.value) ? leaf.where.value.join(', ') : (leaf.where?.value || '') };
   if (leaf && 'consent' in leaf) return { type: 'consent', channel: leaf.channel || 'email', purpose: leaf.purpose || 'marketing', state: leaf.state || 'opted_in' };
   const v = leaf?.value;
   return { type: 'attr', attr: leaf?.attr || '', op: leaf?.op || 'eq', value: Array.isArray(v) ? v.join(', ') : (v ?? '') };
@@ -78,6 +80,14 @@ function toLeaf(row) {
   if (row.type === 'event') {
     const o = { event: row.event, count: Number(row.count) || 1 };
     if (row.within && row.within.trim()) o.within = normalizeWithin(row.within);
+    // Emit `where` ONLY when both halves are filled. A half-written filter is rejected
+    // outright by eval_segment_node (deliberately loud — silently ignoring it would mail an
+    // unfiltered audience, silently zeroing it would hide a real one), so never send one.
+    const wp = (row.whereProp || '').trim(), wv = (row.whereValue || '').trim();
+    if (wp && wv) {
+      const list = csvToArr(wv);
+      o.where = { prop: wp, value: list.length > 1 ? list : wv };
+    }
     return o;
   }
   // Defaults repeated here on purpose: blankRow() now guarantees these keys, but this is the
@@ -127,6 +137,9 @@ export default function SegmentsPage() {
   const [pvLoading, setPvLoading] = useState(false);
   const [materializing, setMaterializing] = useState(false);
   const [eventDefs, setEventDefs] = useState([]);
+  // S268 — per-event property options, cached by event name: { [event]: [{key,coverage_pct,top_values}] }.
+  // Loaded on demand because it aggregates real event rows; only fetched for events actually used.
+  const [propOpts, setPropOpts] = useState({});
 
   // static-segment membership (S263)
   const [members, setMembers] = useState({ total: 0, rows: [] });
@@ -168,6 +181,25 @@ export default function SegmentsPage() {
       if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null }));
     } catch { /* non-fatal */ }
   }
+  // Fetch property options for every event named in the rule, once each. Failure is
+  // non-fatal — the pickers just stay empty rather than blocking the builder.
+  useEffect(() => {
+    if (view !== 'form') return;
+    const wanted = [...new Set(seg.rows.filter((r) => r.type === 'event' && r.event).map((r) => r.event))];
+    const missing = wanted.filter((e) => !(e in propOpts));
+    if (!missing.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const ev of missing) {
+        try {
+          const r = await garageFetch('getEventPropertyOptions', { event: ev, days: 90 }, session);
+          if (!cancelled) setPropOpts((p) => ({ ...p, [ev]: Array.isArray(r) ? r : [] }));
+        } catch { if (!cancelled) setPropOpts((p) => ({ ...p, [ev]: [] })); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [view, seg.rows, propOpts, session]);
+
   function set(k, v) { setSeg((s) => ({ ...s, [k]: v })); }
   function addLeaf() { setSeg((s) => ({ ...s, rows: [...s.rows, blankRow('attr')] })); }
   // REPLACE, never merge — see blankRow(). The old `setLeaf(i,{type})` left the new type's
@@ -433,6 +465,48 @@ export default function SegmentsPage() {
                         {/* Echo what a bare number will actually be saved as — the old field read
                             "within [120]" and silently meant 120 SECONDS. */}
                         {/^\d+$/.test(String(r.within || '').trim()) && <span className="dim" style={{ fontSize: 11.5 }}>= {normalizeWithin(r.within)}</span>}
+
+                        {/* Narrow to a specific product (S268, Mishica). Both pickers are fed by
+                            live event data — a typed-in property name would resolve to NULL and
+                            match nobody, silently. Coverage is shown because it decides the answer:
+                            `sku` sits on ~60% of product_viewed events, `product_handle` on 100%. */}
+                        {r.event && <>
+                          <span className="dim" style={{ fontSize: 12 }}>where</span>
+                          <div style={{ width: 190 }}>
+                            <Combobox
+                              value={r.whereProp || ''}
+                              options={(propOpts[r.event] || []).map((o) => ({
+                                value: o.key,
+                                label: `${o.key} · ${o.coverage_pct}% of events`,
+                              }))}
+                              onChange={(v) => setLeaf(i, { whereProp: v || '', whereValue: v ? r.whereValue : '' })}
+                              placeholder={propOpts[r.event] ? 'any (no filter)' : 'loading…'}
+                              disabled={saving || !canEdit}
+                              emptyLabel="This event carries no filterable properties"
+                            />
+                          </div>
+                          {r.whereProp && <>
+                            <span className="dim" style={{ fontSize: 12 }}>is</span>
+                            <div style={{ width: 250 }}>
+                              <Combobox
+                                value={r.whereValue || ''}
+                                options={((propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.top_values || [])
+                                  .map((v) => ({ value: v, label: v }))}
+                                onChange={(v) => setLeaf(i, { whereValue: v || '' })}
+                                placeholder="pick a value"
+                                disabled={saving || !canEdit}
+                                allowClear={false}
+                                emptyLabel="No values seen in the last 90 days"
+                              />
+                            </div>
+                            {(() => {
+                              const cov = (propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.coverage_pct;
+                              return cov != null && cov < 100
+                                ? <span className="dim" style={{ fontSize: 11.5 }}>⚠ only {cov}% of these events carry {r.whereProp}</span>
+                                : null;
+                            })()}
+                          </>}
+                        </>}
                       </>}
 
                       {r.type === 'consent' && <>

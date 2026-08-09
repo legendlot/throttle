@@ -397,6 +397,22 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data || []) : err('db_error', 500);
     }
 
+    case 'getEventPropertyOptions': { // S268 — narrow an event condition to ONE product
+      // Which properties a given event actually carries, plus their live values, derived
+      // from the events themselves. Deliberately NOT a hardcoded key list: that is exactly
+      // how EVENT_SUGGEST rotted (S233). It also has to be a picker rather than a text box —
+      // a mistyped property name resolves to NULL and matches NOBODY, silently, which is the
+      // PATTERN-277 failure all over again. `coverage_pct` is the number that matters: on
+      // product_viewed, `sku` is on ~60% of events and `product_handle` on 100%, so choosing
+      // sku quietly drops 40% of the views.
+      const ev = url.searchParams.get('event');
+      if (!ev) return err('event_required', 400);
+      const days = Number(url.searchParams.get('days')) || 90;
+      const r = await A.sbComms('/rest/v1/rpc/event_property_options', env,
+        { method: 'POST', body: JSON.stringify({ p_event: ev, p_days: days }) });
+      return r.ok ? ok(r.data || []) : err('db_error', 500);
+    }
+
     case 'getSegments': {              // M6 (+member_count S231)
       // Set-based RPC — segments PLUS the current comms.segment_members count
       // per segment (§9 read extension for the COMMAND list). For dynamic
