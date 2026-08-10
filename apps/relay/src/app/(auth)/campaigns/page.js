@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip } from '@/components/ui.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
@@ -23,17 +23,8 @@ function ChannelIcon({ channel }) {
   return <Send size={13} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
 }
 
-// COMMAND channel chip — mono short-code pill (WA green / EM neutral), §7.2.
-function ChannelChip({ channel }) {
-  const c = String(channel || '').toLowerCase();
-  const map = {
-    whatsapp: { short: 'WA', fg: 'var(--wa, #25D366)', bg: 'rgba(37,211,102,.13)' },
-    email:    { short: 'EM', fg: 'var(--em, #a78bfa)', bg: 'rgba(167,139,250,.13)' },
-    sms:      { short: 'SM', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
-  };
-  const m = map[c] || { short: (c || '?').slice(0, 2).toUpperCase(), fg: 'var(--t3)', bg: 'rgba(255,255,255,.06)' };
-  return <span className="chch" style={{ color: m.fg, background: m.bg }}>{m.short}</span>;
-}
+// ChannelChip moved to @/components/ui.js (2026-08-10) — the Analytics campaigns table had no
+// channel marker at all because this definition was local to this page. One copy only.
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Which tab a campaign belongs to. Mirrors campaignStatus() so the chip and the tab can

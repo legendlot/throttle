@@ -7,7 +7,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { BarChart3, RefreshCw, Download } from 'lucide-react';
-import { PageHead, Panel, Kpi, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Kpi, Badge, Btn, EmptyState, ChannelChip } from '@/components/ui.js';
 import { fmtDateShort, inr } from '@/components/format.js';
 import { istPresetRange, PRESETS } from '@/lib/dateRanges.js';
 
@@ -294,11 +294,22 @@ export default function AnalyticsPage() {
                       const s = c.stats || {}, a = c.attr || {};
                       return (
                         <tr key={c.id}>
-                          <td>{c.name} <Badge label={c.purpose} tone="blue" /></td>
+                          <td>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                              <ChannelChip channel={c.channel} />
+                              {c.name}
+                              <Badge label={c.purpose} tone="blue" />
+                            </span>
+                          </td>
                           <td className="num mono">{s.sent ?? 0}</td>
                           <td className="num mono">{s.delivered ?? 0}<span className="dim"> · {pct(s.delivered, s.sent)}%</span></td>
                           <td className="num mono">{s.opened ?? 0}</td>
-                          <td className="num mono">{s.clicked ?? 0}</td>
+                          {/* Same shared-slug case the campaigns page handles: a campaign-kind link
+                              emits no per-recipient link_clicked event, so `clicked` alone printed a
+                              confident 0 here too (S269). Prefer the slug count when one exists. */}
+                          <td className="num mono" title={s.slug_codes?.length ? `Shared campaign link /r/${s.slug_codes.join(', /r/')} — ${s.slug_unique ?? 0} unique visitor(s), not per-recipient` : undefined}>
+                            {s.slug_codes?.length ? <>{s.slug_clicks ?? 0}<span className="dim"> ↗</span></> : (s.clicked ?? 0)}
+                          </td>
                           <td className="num mono" style={{ color: s.bounced ? '#ff7a7a' : undefined }}>{s.bounced ?? 0}</td>
                           <td className="num mono">{s.unsubscribes ?? 0}</td>
                           <td className="num mono">{a.attributed_orders ?? 0}</td>

@@ -11,6 +11,24 @@ const prefersReducedMotion = () =>
   window.matchMedia &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/* ---- ChannelChip ------------------------------------------------------ */
+// Mono short-code pill (WA green / EM violet / SM blue), COMMAND §7.2.
+// SHARED on purpose: this lived only in campaigns/page.js, so the Analytics campaigns
+// table shipped with no channel marker at all — you could not tell a WhatsApp broadcast
+// from an email one (Afshaan, 2026-08-10). One definition, or the colour map drifts.
+// An unknown channel degrades to its first two letters rather than rendering nothing.
+export function ChannelChip({ channel }) {
+  const c = String(channel || '').toLowerCase();
+  const map = {
+    whatsapp: { short: 'WA', fg: 'var(--wa, #25D366)', bg: 'rgba(37,211,102,.13)' },
+    email:    { short: 'EM', fg: 'var(--em, #a78bfa)', bg: 'rgba(167,139,250,.13)' },
+    sms:      { short: 'SM', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
+    rcs:      { short: 'RC', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
+  };
+  const m = map[c] || { short: (c || '?').slice(0, 2).toUpperCase(), fg: 'var(--t3)', bg: 'rgba(255,255,255,.06)' };
+  return <span className="chch" style={{ color: m.fg, background: m.bg }} title={c || 'unknown channel'}>{m.short}</span>;
+}
+
 /* ---- Badge ----------------------------------------------------------- */
 export function Badge({ label, tone = 'gray', dot = false, soft = true }) {
   const t = TONES[tone] || TONES.gray;
