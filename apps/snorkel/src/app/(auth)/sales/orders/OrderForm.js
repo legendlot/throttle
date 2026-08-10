@@ -18,6 +18,17 @@ function Field({ label, children, span }) {
 
 const blankLine = () => ({ product: '', model: '', color: '', sku: '', hsn_code: '', description: '', qty: 1, rate: 0, discount_pct: 0, gst_pct: 18 });
 
+// The SKU box is OPTIONAL and cosmetic — the product+model+colour triple below is what
+// identifies the variant. But it is not harmless: Odo's snorkel adapter preferred this
+// field over the triple, so 57 GT lines typed `1` here and took ₹3,30,262 of sales out of
+// `sales_fact` (2026-08-10). A real identifier is a slug/code (has a letter) or a 12–14
+// digit EAN; a bare number is neither. Blank stays perfectly valid. The adapter no longer
+// trusts a bare number either — belt and braces, since this only guards NEW entry.
+export const isUsableSku = (s) => {
+  const t = String(s || '').trim();
+  return !t || /[A-Za-z]/.test(t) || /^\d{12,14}$/.test(t);
+};
+
 export function lineMath(l) {
   const qty = Math.round(Number(l.qty) || 0);
   const rate = Number(l.rate) || 0;
@@ -140,6 +151,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     if (!(Number(l.qty) > 0)) miss.push('quantity');
     if (l.product && (PRODUCT_VARIANTS[l.product] || []).length && !l.model) miss.push('model');
     if (l.product && ((PRODUCT_COLORS[l.product] || {})[l.model] || []).length && !l.color) miss.push('colour');
+    if (!isUsableSku(l.sku)) miss.push('a real SKU in the SKU box (letters or a 13-digit EAN) — or clear it');
     return miss.length ? { i, miss } : null;
   }).filter(Boolean), [lines, PRODUCT_VARIANTS, PRODUCT_COLORS]);
 
@@ -275,7 +287,13 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                         portal
                       />
                     </td>
-                    <td style={tableTdStyle}><input style={cell} value={l.sku || ''} onChange={e => setLine(i, 'sku', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input
+                      style={isUsableSku(l.sku) ? cell : { ...cell, borderColor: '#ff7070' }}
+                      value={l.sku || ''}
+                      onChange={e => setLine(i, 'sku', e.target.value)}
+                      placeholder="optional"
+                      title="Optional. The product + model + colour to the left is what identifies the variant — leave this blank unless you have the partner's own item code or an EAN."
+                    /></td>
                     <td style={tableTdStyle}><input style={{ ...cell, fontFamily: 'var(--mono)' }} value={l.hsn_code || ''} onChange={e => setLine(i, 'hsn_code', e.target.value)} placeholder="9503" /></td>
                     <td style={tableTdStyle}><input type="number" style={numCell} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} /></td>
                     <td style={tableTdStyle}><input type="number" style={numCell} value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} /></td>

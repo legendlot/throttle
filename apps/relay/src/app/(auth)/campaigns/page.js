@@ -586,13 +586,40 @@ export default function CampaignsPage() {
               <Kpi label="Sent" value={stats.sent ?? 0} tone="gray" sub={`${stats.total ?? 0} targeted`} />
               <Kpi label="Delivered" value={stats.delivered ?? 0} tone="green" sub={`${pct(stats.delivered, stats.sent)}% of sent`} />
               <Kpi label="Opened" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
-              <Kpi label="Clicked" value={stats.clicked ?? 0} tone="blue" sub={`${pct(stats.clicked, stats.delivered)}% of delivered`} />
+              {/* Click-through. A campaign-kind (slug) link is ONE shared code sent to everyone, so
+                  it deliberately emits no per-recipient `link_clicked` event and its taps live in
+                  comms.link_click instead. Reading `stats.clicked` alone printed a confident 0 on
+                  every slug campaign while real clicks were accruing (S269). Prefer the slug number
+                  whenever the template actually carries a slug link. */}
+              {stats.slug_codes?.length ? (
+                <Kpi label="Clicked" value={stats.slug_clicks ?? 0} tone="blue"
+                     sub={`${pct(stats.slug_clicks, stats.delivered)}% of delivered · ${stats.slug_unique ?? 0} unique`} />
+              ) : (
+                <Kpi label="Clicked" value={stats.clicked ?? 0} tone="blue"
+                     sub={`${pct(stats.clicked, stats.delivered)}% of delivered`} />
+              )}
+              {/* Both can coexist if a template mixes a shared slug with per-recipient links. */}
+              {stats.slug_codes?.length > 0 && stats.clicked > 0 && (
+                <Kpi label="Clicked (per-recipient)" value={stats.clicked} tone="blue"
+                     sub={`${pct(stats.clicked, stats.delivered)}% · attributable to a person`} />
+              )}
               <Kpi label="Bounced" value={stats.bounced ?? 0} tone={stats.bounced ? 'red' : 'gray'} sub="hard bounces" />
               <Kpi label="Complaints" value={stats.complained ?? 0} tone={stats.complained ? 'red' : 'gray'} sub="spam reports" />
               <Kpi label="Unsubscribes" value={stats.unsubscribes ?? 0} tone={stats.unsubscribes ? 'yellow' : 'gray'} sub="opted out after send" />
               <Kpi label="Skipped" value={(stats.skipped ?? 0) + (stats.suppressed ?? 0)} tone={((stats.skipped ?? 0) + (stats.suppressed ?? 0)) ? 'yellow' : 'gray'} sub="gate-blocked" />
               {attr && <Kpi label="Attributed orders" value={attr.attributed_orders ?? 0} tone="green" sub={`${inr(attr.attributed_revenue ?? 0)} · ${attr.window_days ?? 7}d window`} />}
             </div>
+            {stats.slug_codes?.length > 0 && (
+              <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
+                <strong>Clicks are measured on the shared campaign link</strong>{' '}
+                <span className="mono">/r/{stats.slug_codes.join(', /r/')}</span>{' '}
+                — one code sent to everyone, so these are taps and unique visitors,{' '}
+                <strong>not</strong> per-recipient attribution: they cannot say <em>who</em> clicked,
+                and cannot feed order attribution. Counted from the first send
+                {stats.slug_window_from ? ` (${fmtDateTime(stats.slug_window_from)})` : ''}, so
+                earlier taps on this permanent link are excluded.
+              </div>
+            )}
             {stats.skipped_by_reason && Object.keys(stats.skipped_by_reason).length > 0 && (
               <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
                 <strong>Skipped by reason:</strong>{' '}
@@ -692,7 +719,12 @@ export default function CampaignsPage() {
                           : <span style={{ color: 'var(--t5)' }}>—</span>}
                       </td>
                       <td className="num mono dim">{rate(o?.read_rate)}</td>
-                      <td className="num mono dim">{rate(o?.click_rate)}</td>
+                      {/* Slug campaigns have no per-recipient click_rate — fall back to the shared
+                          link's rate rather than printing 0.0% (S269). */}
+                      <td className="num mono dim" title={o?.slug_codes?.length ? `Shared campaign link: /r/${o.slug_codes.join(', /r/')} · ${o.slug_unique ?? 0} unique visitor(s)` : undefined}>
+                        {rate(o?.slug_click_rate ?? o?.click_rate)}
+                        {o?.slug_codes?.length ? <span style={{ color: 'var(--t5)', fontSize: 10 }}> ↗</span> : null}
+                      </td>
                       <td className="num mono">
                         {o?.attributed_revenue ? inr(o.attributed_revenue) : <span style={{ color: 'var(--t5)' }}>—</span>}
                         {o?.unpriced > 0 && (

@@ -118,6 +118,13 @@ function istDate(iso) {
 }
 const uniq = arr => [...new Set(arr.filter(Boolean))];
 const inList = arr => `(${uniq(arr).map(x => `"${String(x).replace(/"/g, '')}"`).join(',')})`; // PostgREST in.(...)
+// A free-text SKU field is only an IDENTIFIER when it is a slug/code (has a letter → the exact
+// `bySku` path) or a 12–14 digit EAN (→ `byEan`). A bare number like `1` is neither; treating it
+// as one silently unmaps real sales. Returns '' so callers can `||` to a better identity.
+const usableSku = (s) => {
+  const t = String(s || '').trim();
+  return (t && (/[A-Za-z]/.test(t) || /^\d{12,14}$/.test(t))) ? t : '';
+};
 
 // ── auth ─────────────────────────────────────────────────────────
 async function getSalesPerms(userId) {
@@ -359,7 +366,15 @@ const snorkelAdapter = {
         og += gross; od += discIncl; ot += tax;
         rows.push({
           source_line_id: String(l.id), source_order_id: o.order_no,
-          channel_sku: l.sku || [l.product, l.model, l.color].filter(Boolean).join(' '),
+          // ⚠️ The Snorkel line's `sku` box is free text and COSMETIC — product+model+colour is
+          // the real identity. Letting `sku` win unconditionally meant one line typed `1` took
+          // ₹3,30,262 of Wisp GT sales out of sales_fact (2026-08-10). Only trust it when it is
+          // actually an identifier: a slug/code (has a letter, → the exact `bySku` path) or a
+          // 12–14 digit EAN (→ `byEan`). A bare number is neither, so fall through to the triple,
+          // which `match_channel_skus` resolves on its own — verified 24 of the 25 distinct
+          // composed strings behind the `sku='1'` lines auto-resolve, the 25th being a genuinely
+          // colourless triple the order form now blocks.
+          channel_sku: usableSku(l.sku) || [l.product, l.model, l.color].filter(Boolean).join(' '),
           title: [l.product, l.model, l.color].filter(Boolean).join(' '),
           qty: num(l.qty), gross_value: gross, discount_value: discIncl, tax_value: tax,
           occurred_at: o.order_date, sale_date: o.order_date, order_status: o.status, is_cancelled: cancelled, raw: l,
