@@ -130,9 +130,9 @@ export default function AdminPage() {
           <PanelHead title="Settings" />
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '11px 0', borderBottom: '1px solid var(--border-table)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t1)', fontWeight: 500 }}>DRR window</div>
+              <div style={{ fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t1)', fontWeight: 500 }}>DRR window · default</div>
               <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, color: 'var(--t3)', marginTop: 2, lineHeight: 1.45 }}>
-                Daily Run Rate = average units sold per day over the last N full days (ending yesterday). This is global — it sets the DRR shown on Products and the metric other systems read.
+                Daily Run Rate = average units sold per day over the last N full days (ending yesterday). <b>Products no longer uses this</b> — since 2026-08-10 that page divides by whatever range you pick, so DRR sits on the same period as the Units and Gross beside it. This stays the fallback for any caller that asks for DRR without naming a window.
               </div>
             </div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flex: 'none', fontFamily: 'var(--mono)', fontSize: 12.5,

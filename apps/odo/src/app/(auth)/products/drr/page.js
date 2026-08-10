@@ -1,11 +1,19 @@
 'use client';
 // Products — cross-channel matrix. Rows = products (families), columns = channels, cells = the
 // chosen metric (DRR default · Units · Gross). Read across a product's row for its channel-wise
-// DRR; click a product to expand its SKUs as channel-wise sub-rows. DRR comes from the reusable
-// sales.f_product_drr contract (trailing global window); Units/Gross are for the selected range.
+// DRR; click a product to expand its SKUs as channel-wise sub-rows.
 //
-// Prism redesign (§9.7): the pivot, the colMax heat-shading maths and the drrWindow contract are
-// untouched — only the chrome changed. Channel headers now carry their family swatch, the sticky
+// ⭐ DRR IS DRIVEN BY THE RANGE PICKER (2026-08-10, Afshaan). The denominator IS the selected
+// range: 7D → a 7-day DRR, 90D → a 90-day DRR, a custom range → its own day count. It used to be
+// a fixed trailing window from the `drr_window_days` admin setting, which meant DRR and the
+// Units/Gross beside it described DIFFERENT periods on the same row — the thing that made the
+// matrix hard to read. No API or SQL change was needed: `sales.f_product_drr(p_window, p_ref_date)`
+// already computes over `[ref-(w-1) … ref]`, so passing `window = days in range` and
+// `ref_date = to` reproduces the range exactly. The admin setting now only supplies the RPC's
+// default for callers that pass no window (nothing else does today).
+//
+// Prism redesign (§9.7): the pivot and the colMax heat-shading maths are untouched — only the
+// chrome changed (the DRR window contract above post-dates it). Channel headers now carry their family swatch, the sticky
 // product column is OPAQUE (--surface-solid) so the matrix can't bleed through it while scrolling,
 // and expanded SKU rows sit on --surface2 with the code in mono beneath the name.
 import { useEffect, useMemo, useState } from 'react';
@@ -36,11 +44,22 @@ export default function ProductsPage() {
 
   const [chName, setChName] = useState({});
   const [c2p, setC2p] = useState({});
-  const [drrWindow, setDrrWindow] = useState(7);
+  // Days in the selected range, inclusive of both ends — the DRR denominator, and exactly what
+  // the range chip says (7D → 7). Dates are IST `YYYY-MM-DD`; parsed as UTC midnight on both
+  // sides so the subtraction can't be knocked off by a DST/offset shift.
+  const rangeDays = useMemo(() => {
+    const a = Date.parse(`${from}T00:00:00Z`), b = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return 1;
+    return Math.max(1, Math.round((b - a) / 86400000) + 1);
+  }, [from, to]);
+  // A range ending today counts a day that is still being lived, so its DRR is understated until
+  // midnight. Say so rather than quietly shrinking the window — the denominator must keep matching
+  // the chip the user pressed.
+  const partialToday = to >= rangePresets()[0].to;
   useEffect(() => {
     if (!session) return;
     salesGet('getBootstrap', {}, session)
-      .then(b => { setChName(Object.fromEntries((b?.channels || []).map(c => [c.channel_id || c.id, c.name]))); if (b?.drr_window_days) setDrrWindow(b.drr_window_days); })
+      .then(b => { setChName(Object.fromEntries((b?.channels || []).map(c => [c.channel_id || c.id, c.name]))); })
       .catch(() => {});
     salesGet('getVariants', {}, session)
       .then(r => { const m = {}; (r?.rows || []).forEach(v => { m[v.product_code] = v.product; }); setC2p(m); })
@@ -52,10 +71,10 @@ export default function ProductsPage() {
     setD(null); setErr('');
     Promise.all([
       salesGet('getSales', { from, to, group: 'variant' }, session),
-      salesGet('getProductDrr', {}, session),
+      salesGet('getProductDrr', { window: rangeDays, ref_date: to }, session),
     ]).then(([sv, dr]) => setD({ salesVar: sv?.rows || [], drr: dr?.rows || [] }))
       .catch(e => setErr(e.message || String(e)));
-  }, [session, from, to]);
+  }, [session, from, to, rangeDays]);
 
   // Build the matrix: family → {ch:{cid:{units,gross,drr}}, tot, codes:{code:{...}}}, + per-channel totals.
   const { fams, cols, chTot } = useMemo(() => {
@@ -97,7 +116,7 @@ export default function ProductsPage() {
   );
 
   const drrNote = metric === 'drr'
-    ? `DRR = avg units/day over the last ${drrWindow} days (independent of the range above). Click a product to expand its SKUs.`
+    ? `DRR = avg units/day across the selected range — ${rangeDays} ${rangeDays === 1 ? 'day' : 'days'}${partialToday ? ', today still in progress' : ''}. Click a product to expand its SKUs.`
     : 'For the selected range. Click a product to expand its SKUs.';
 
   return (
@@ -106,7 +125,7 @@ export default function ProductsPage() {
         title="Products · cross-channel"
         sub={drrNote}
         right={<>
-          <Pill color="#F2CD1A" title={`DRR = avg units sold/day over the last ${drrWindow} full days (set in Admin). Units/Gross use the selected range.`}>DRR · {drrWindow}d</Pill>
+          <Pill color="#F2CD1A" title={`DRR = units sold in the selected range ÷ ${rangeDays} ${rangeDays === 1 ? 'day' : 'days'}. Change the range to change the denominator — DRR, Units and Gross all describe the same period.${partialToday ? ' The range ends today, which is still in progress, so DRR reads low until midnight.' : ''}`}>DRR · {rangeDays}d</Pill>
           <SegmentedToggle options={[['drr', 'DRR /day'], ['units', 'Units'], ['gross', 'Gross']]} value={metric} onChange={setMetric} />
         </>} />
 
