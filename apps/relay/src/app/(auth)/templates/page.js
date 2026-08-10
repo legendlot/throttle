@@ -82,7 +82,7 @@ function waSnapshot(t) {
 function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
-    status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
+    status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, mjml: '', variables: [],
     wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', header_format: '', header_media_url: '', body: '', footer: '', buttons: [], mapping: [] },
     sms: { body: '', var_order: [], template_type: '', dlt_template_id: '', dlt_var_count: null, header: '' },
     approval_status: null, provider_template_id: null, utm: null,
@@ -322,7 +322,7 @@ export default function TemplatesPage() {
       id: r.id, channel: r.channel || 'email', name: r.name || '', purpose: r.purpose || 'marketing',
       language: r.language || 'en', status: r.status || 'draft',
       subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
-      design_json: c.design_json || null,
+      design_json: c.design_json || null, mjml: c.mjml || '',
       variables: Array.isArray(r.variables) ? r.variables : [],
       wa: {
         meta_name: c.meta_name || '', category: c.category || 'MARKETING',
@@ -355,7 +355,7 @@ export default function TemplatesPage() {
     setT(loaded);
     // M13 — flag templates authored outside the visual editor (html_body present, no
     // design_json) so save() can warn before the canvas's blank scaffold overwrites it.
-    setHtmlOnly((r.channel || 'email') === 'email' && !!(c.html_body || c.html) && !c.design_json);
+    setHtmlOnly((r.channel || 'email') === 'email' && !!(c.html_body || c.html) && !c.design_json && !c.mjml);
     setWaDirty(false);
     setBaseline(waSnapshot(loaded));
     resetTest();
@@ -400,7 +400,7 @@ export default function TemplatesPage() {
       language: r.language || 'en',
       status: 'draft',
       subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
-      design_json: c.design_json || null,
+      design_json: c.design_json || null, mjml: c.mjml || '',
       variables: Array.isArray(r.variables) ? JSON.parse(JSON.stringify(r.variables)) : [],
       wa: {
         meta_name: isWa ? uniqueMetaName(c.meta_name, takenMeta) : '',
@@ -417,7 +417,7 @@ export default function TemplatesPage() {
       utm: (r.utm && typeof r.utm === 'object') ? JSON.parse(JSON.stringify(r.utm)) : null,
     };
     setT(copy);
-    setHtmlOnly(!isWa && !!(c.html_body || c.html) && !c.design_json);
+    setHtmlOnly(!isWa && !!(c.html_body || c.html) && !c.design_json && !c.mjml);
     setWaDirty(false);
     // baseline null → the Save button starts ENABLED. A duplicate is unsaved by definition,
     // and waSnapshot(copy) would have matched it exactly and greyed Save out on arrival.
@@ -516,15 +516,15 @@ export default function TemplatesPage() {
       content.needs_variable_authoring = /\{#var#\}/.test(content.body) || content.var_order.length === 0;
     } else if (edRef.current && !preserveBodyRef.current) {
       const ex = edRef.current.export();
-      content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
+      content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design, mjml: ex.mjml || '' };
     } else if (preserveBodyRef.current) {
       // HTML-ONLY TEMPLATE, BODY PRESERVED. The canvas is sitting on the blank scaffold because
       // there is no design_json to load, so exporting it would replace hand-authored HTML with an
       // empty email. Keep the loaded body and let the metadata edit (subject/name/status) through
       // — that is the whole reason someone opens this screen on such a template.
-      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
+      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null, mjml: t.mjml || '' };
     } else {
-      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
+      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null, mjml: t.mjml || '' };
     }
     return {
       channel: t.channel, name: t.name.trim(), purpose: t.purpose, language: t.language || 'en',
@@ -1001,7 +1001,7 @@ export default function TemplatesPage() {
                     ))}
                   </div>
                 )}
-                <EmailEditor key={editorKey} onReady={(api) => { edRef.current = api; }} initialDesign={t.design_json} session={session} />
+                <EmailEditor key={editorKey} onReady={(api) => { edRef.current = api; }} initialDesign={t.design_json} initialMjml={t.mjml} session={session} />
               </>
             ) : (
               <iframe title="Email preview" sandbox="" srcDoc={t.html_body || '<p style="font-family:sans-serif;color:#888;padding:24px">No content</p>'}

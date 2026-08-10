@@ -1,0 +1,14 @@
+globalThis.window = globalThis;
+globalThis.self = globalThis;
+if (!globalThis.document) globalThis.document = { createElement: () => ({ style:{} }), head:{appendChild(){}}, body:{} };
+const mod = await import('mjml-browser');
+const { LOT_LAUNCH_MJML } = await import('./apps/relay/src/components/email-editor/starters/lotLaunch.js');
+const compile = mod.default?.default || mod.default || mod;
+const { html, errors } = compile(LOT_LAUNCH_MJML, { validationLevel: 'soft', minify: false });
+console.log('ERRORS:', JSON.stringify((errors||[]).map(e=>e.formattedMessage||e.message).slice(0,10)));
+console.log('HTML bytes:', (html||'').length);
+console.log('unsubscribe token:', (html||'').includes('{unsubscribe_url}'));
+console.log('tracked links:', ((html||'').match(/roxie-launch-emailer/g)||[]).length);
+console.log('address:', (html||'').includes('560043'));
+const fs = await import('fs');
+fs.writeFileSync('/private/tmp/claude-501/-Users-afshaansiddiqui-Documents-Claude/02b51960-bf7d-4b1b-a962-58ce92664e00/scratchpad/lot_launch.html', html||'');

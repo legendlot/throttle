@@ -22,7 +22,7 @@ async function uploadAsset(file, session) {
   return d.public_url;
 }
 
-export default function EmailEditor({ initialDesign, session, onReady }) {
+export default function EmailEditor({ initialDesign, initialMjml, session, onReady }) {
   const holderRef = useRef(null);
   const { showToast } = useToast();
   useEffect(() => {
@@ -48,7 +48,14 @@ export default function EmailEditor({ initialDesign, session, onReady }) {
         },
       },
     });
+    // Load order matters. A saved design_json is the editor's own round-trippable state, so it
+    // always wins. Failing that, MJML SOURCE is loadable too — `setComponents` parses it into
+    // real components, which is how a template authored outside the canvas can still be opened,
+    // edited and cloned instead of showing a blank email. Only with neither do we scaffold.
+    // (2026-08-10: added so there is one canvas-native launch template to copy from — building
+    // each new campaign from the blank scaffold was the actual cost being paid.)
     if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(initialDesign);
+    else if (initialMjml && initialMjml.trim()) editor.setComponents(initialMjml);
     else editor.setComponents(BLANK_MJML);
 
     // Seed the asset manager from the shared library (S251).
