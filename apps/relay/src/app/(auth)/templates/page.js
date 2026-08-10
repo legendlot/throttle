@@ -231,6 +231,10 @@ export default function TemplatesPage() {
   // silently replacing the real hand-authored HTML with the empty scaffold. There was no
   // existing guard against this — startEdit/save never checked for design_json presence.
   const [htmlOnly, setHtmlOnly] = useState(false);
+  // Set by save() for the duration of one save, read by buildPayload(). A ref, not state,
+  // because buildPayload runs synchronously inside the same save() call — a setState would
+  // not have flushed yet and the body would be replaced anyway.
+  const preserveBodyRef = useRef(false);
 
   // test-send state
   const [testTo, setTestTo] = useState('');
@@ -510,9 +514,15 @@ export default function TemplatesPage() {
       if (typeof s.dlt_var_count === 'number') content.dlt_var_count = s.dlt_var_count;
       // Once a body has real {token}s and an order, it is no longer the raw catalogue mirror.
       content.needs_variable_authoring = /\{#var#\}/.test(content.body) || content.var_order.length === 0;
-    } else if (edRef.current) {
+    } else if (edRef.current && !preserveBodyRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
+    } else if (preserveBodyRef.current) {
+      // HTML-ONLY TEMPLATE, BODY PRESERVED. The canvas is sitting on the blank scaffold because
+      // there is no design_json to load, so exporting it would replace hand-authored HTML with an
+      // empty email. Keep the loaded body and let the metadata edit (subject/name/status) through
+      // — that is the whole reason someone opens this screen on such a template.
+      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
     } else {
       content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
     }
@@ -530,10 +540,22 @@ export default function TemplatesPage() {
     // visual editor is sitting on the BLANK scaffold (EmailEditor.js never loaded the real
     // HTML into it), so buildPayload()'s export() below would silently replace the
     // hand-authored HTML with that empty canvas. Confirm before it's irreversible.
+    // M13, HARDENED 2026-08-10 after this destroyed a live template. The old guard was a confirm
+    // whose OK path was DESTRUCTIVE, so the reflex action — dismiss the dialog and carry on —
+    // replaced 22,930 bytes of hand-authored email with a blank canvas. A dialog you have to read
+    // correctly to avoid data loss is a speed bump, not a guard.
+    // Now the SAFE outcome is the default: the body is preserved and the metadata edit still goes
+    // through, so changing a subject line no longer risks the email. Replacing the body is still
+    // possible, but it is now the deliberate, explicitly-confirmed branch.
+    preserveBodyRef.current = false;
     if (t.channel === 'email' && htmlOnly && edRef.current) {
-      if (!window.confirm(
-        'This template was authored outside the visual editor. Saving will REPLACE its HTML with the canvas content. Continue?'
-      )) return;
+      preserveBodyRef.current = !window.confirm(
+        'REPLACE this email\'s HTML with the visual canvas?\n\n'
+        + 'This template was authored outside the editor, so the canvas is EMPTY — replacing means '
+        + 'losing the hand-authored email.\n\n'
+        + 'OK  = replace the body with the canvas (destructive)\n'
+        + 'Cancel = keep the HTML, save only name / subject / status'
+      );
     }
     const payload = buildPayload();
     // WS review follow-up: without this, a live/APPROVED template could be saved with
@@ -587,9 +609,14 @@ export default function TemplatesPage() {
       const r = await workerFetch('saveTemplate', payload, session);
       const saved = r?.data;
       set('design_json', payload.content.design_json || null);
-      // Whatever happened (user confirmed the overwrite, or this was never html-only), the
-      // saved content now carries the editor's real design_json — no longer html-only.
-      if (t.channel === 'email') setHtmlOnly(false);
+      // Only clear html-only when the body ACTUALLY came from the canvas. On the preserve path
+      // the template is still hand-authored HTML with no design_json, so the guard must stay
+      // armed for the next save — clearing it unconditionally (the pre-2026-08-10 behaviour)
+      // disarmed it after one metadata edit and made the SECOND save the silent, unguarded one.
+      if (t.channel === 'email' && !preserveBodyRef.current) setHtmlOnly(false);
+      if (preserveBodyRef.current) {
+        showToast('Saved. The hand-authored HTML was kept — only name/subject/status changed.', 'success');
+      }
       setWaDirty(false);
       // Re-baseline so the Save button greys out again until something actually changes.
       setBaseline(waSnapshot(t));
