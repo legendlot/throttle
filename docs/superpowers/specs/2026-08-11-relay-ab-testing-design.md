@@ -4,6 +4,14 @@
 > Author: Afshaan + Claude, 2026-08-11. Supersedes the `[relay] [build] [MED]` "A/B testing does
 > not exist" backlog item, which stays open until this ships and which this spec corrects in two
 > places (see §12).
+>
+> **Revision 2, same day — after a hostile review.** The primary metric was reversed from
+> read÷delivered to read÷**sent** (§6), because conditioning on delivery is post-treatment
+> conditioning and Meta's `wa_131049` block rate varies 26–39% across templates. Five further
+> holes were closed: the variants read must throw rather than silently degrade to all-arm-A (§5),
+> templates freeze alongside variants (§10.3), a Meta status change mid-flight pauses the campaign
+> (§10.4), test sends target a named arm (§10.5), and recording a learning snapshots the verdict
+> (§8.3). Details of what was wrong and why are kept inline rather than tidied away.
 
 ---
 
@@ -75,8 +83,17 @@ it fails **silently** as a not-found (CORE.md; cost a debugging round in S239).
 
 ### `comms.messages` gains `variant_id uuid NULL`
 
-→ `campaign_variants(id)`. Nullable: every existing message and every non-campaign send has none.
-No backfill.
+→ `campaign_variants(id)`, **`ON DELETE NO ACTION`** — matching the house pattern
+(`messages_template_id_fkey` and `messages_sender_identity_id_fkey` are both NO ACTION; only
+`profile_id` is SET NULL, because a profile can be erased on request and a message log cannot).
+Nullable: every existing message and every non-campaign send has none. No backfill.
+
+⚠️ **That FK rule collides with the CASCADE above, deliberately.** `campaign_variants.campaign_id`
+cascades from `campaigns`, so deleting a campaign tries to delete its variants — and NO ACTION on
+`messages.variant_id` then blocks it. **This is the correct outcome** (you must not be able to erase
+the record of what was sent to whom) **but it surfaces as a raw FK violation.** The worker must
+catch it on campaign delete and return a named error — *"this campaign has sent messages and cannot
+be deleted"* — rather than leaking a 23503 to the UI.
 
 **It is written on every outcome, not just sends** — `finalize()` already writes a `messages` row
 for skipped/suppressed/failed, so the variant rides along. That is what makes §7's asymmetry checks
@@ -119,15 +136,74 @@ Three properties, all load-bearing:
    cancelled or stalled campaign's sent prefix is still split to the configured weights.
    ⚠️ Do not "improve" this into a pre-assigned table — that property is why it is a hash.
 
+### The variants read must THROW on failure, never fall back
+
+`processQueueMessage` reads the campaign's variants once per page. **If that read fails it must
+throw**, so Queues redeliver the page and it eventually DLQs with an alert.
+
+⚠️ **The tempting alternative silently destroys the experiment.** A failed read returning `[]`
+falls through to "no variants → send `campaigns.template_id`" — i.e. **arm A for everyone** — so a
+transient 5xx thirty minutes into a fan-out produces a campaign that is half a clean A/B and half
+all-A, with nothing in the data saying where the boundary was. The verdict computed off that is
+garbage that looks fine.
+
+This is the same rule and the same reasoning as the existing `campaign_recipients` guard directly
+above it in the same function (*"An RPC failure is NOT fan-out complete (review C2)"*). Follow the
+established pattern rather than inventing a softer one.
+
+**Cost note:** one variants read per page. At `SENDS_PER_MSG = 4` a 4,255-person campaign is ~1,064
+pages, so ~1,064 extra reads — proportionally minor next to the `getCampaign` and
+`campaign_recipients` reads already on that path, and it shrinks directly with the open item to
+raise `SENDS_PER_MSG` to ~8. Do not cache variants in the queue message body: they are frozen at
+`approved` (§10.1) so staleness is not the risk, but an in-flight message body that predates a
+re-approval would be.
+
 ---
 
 ## 6. Measurement
 
-**Read rate = `read_at IS NOT NULL` ÷ `delivered_at IS NOT NULL`.**
+### The primary metric is read ÷ **sent**, not read ÷ delivered
 
-Delivered is the correct denominator: someone skipped for consent or on an undeliverable number
-never had the chance to read. Gate outcomes are independent of arm, so using delivered makes those
-differences drop out instead of contaminating the comparison.
+> ⚠️ **This reverses an earlier decision in this design, and the reversal matters.** The first draft
+> used delivered as the denominator, on the reasoning that someone on an undeliverable number never
+> had a chance to read. That reasoning is wrong in a way that is easy to miss: **delivery happens
+> AFTER the treatment is applied, so conditioning on it is post-treatment conditioning** — the
+> classic collider. If the copy itself affects whether Meta delivers, then comparing read-rates
+> *among the delivered* compares two differently-filtered populations and can invent a winner.
+
+The mechanism is concrete, not hypothetical. Meta's `wa_131049` ("not delivered to maintain healthy
+ecosystem engagement") is a per-recipient pacing block, and measured 2026-08-11 across WhatsApp
+marketing conditioned on **provider attempts** (i.e. excluding gate skips, which would otherwise
+swamp it):
+
+| template | provider attempts | blocked 131049 | delivered |
+|---|---|---|---|
+| `atc_cart_abandonment_v2` | 189 | 38.6% | 52.9% |
+| Browse Abandonment v2 (redirect) | 759 | 32.9% | 63.5% |
+| Browse Abandonment v2 | 1,142 | 30.2% | 64.9% |
+| Abandoned Cart v3 | 2,808 | 28.5% | 66.7% |
+| Abandoned Cart v3 (redirect) | 1,034 | 27.9% | 67.3% |
+| `Roxie Launch_Mishica` | 246 | 26.4% | 69.5% |
+| `atc_cart_abandonment_v2` (redirect) | 214 | 26.2% | 65.4% |
+
+A 12pp spread in block rate. **This does not prove content drives it** — these templates also have
+different audiences, and the spread is at least as consistent with recipient-level marketing
+frequency as with copy. But it is more than enough to stop us conditioning on delivery.
+
+So:
+
+- **Primary: read ÷ sent (intention-to-treat).** Immune to the problem by construction — random
+  assignment equalises bad numbers and pacing-prone recipients across arms *in expectation*, so any
+  difference is attributable to the treatment. This is the number the verdict is computed on.
+- **Secondary, diagnostic: read ÷ delivered.** Shown, clearly labelled as such, because it is what
+  a marketer intuitively wants and it is informative when delivery is balanced.
+- **Third, and new: delivery rate per arm, tested with the same z-test.** If it differs
+  significantly, the results screen says so and marks read÷delivered untrustworthy for that test.
+
+⚠️ **A side effect worth naming: this makes the A/B feature the instrument that finally settles
+whether `wa_131049` is content-sensitive.** Nobody currently knows, because in every existing send
+content and audience vary together. Inside an A/B the audience is randomised, so a significant
+per-arm delivery difference is clean evidence. Log those results in the experiment log (§8.4).
 
 **RPC `comms.campaign_variant_stats(p_campaign_id)`** returns, per arm: assigned / sent / delivered
 / read / read-rate / failure count / skip count by reason / cost — plus the verdict and the reason
@@ -146,34 +222,41 @@ z  = (p₁−p₂) / √( p̄(1−p̄)(1/n₁ + 1/n₂) )
 **Setup guardrail — minimum detectable effect:**
 
 ```
-MDE ≈ 2.8 · √( 2·p̄(1−p̄) / n_delivered_per_arm )
+MDE ≈ 2.8 · √( 2·p̄(1−p̄) / n_sent_per_arm )        p̄ = read ÷ sent
 ```
 
-Measured baselines, 2026-08-11, **stated with their denominators because they differ a lot**:
+⚠️ **On `n_sent_per_arm`, not delivered — which is a real simplification, not just a consequence.**
+Because the primary metric is now ITT, the setup guardrail no longer needs a delivery-rate
+assumption at all: sent-per-arm is just `reachable ÷ arms`, which is known at setup. The earlier
+draft had to guess a 69.7% delivery rate to state the guardrail, and that guess was itself drawn
+from 244 messages.
 
-| population | sent | delivery | read (of delivered) |
-|---|---|---|---|
-| campaign (broadcast) | **244** | 69.7% | **57.1%** |
-| journey (triggered) | 6,095 | 65.5% | 72.8% |
+Measured baselines, 2026-08-11, **stated with denominators because they differ a lot**:
 
-Use the **broadcast** row — journey sends are behaviourally triggered and are read more, so they
-are the wrong reference for a campaign. It rests on one 244-person campaign and will firm up.
+| population | sent | delivery | read ÷ delivered | **read ÷ sent (ITT)** |
+|---|---|---|---|---|
+| campaign (broadcast) | **244** | 69.7% | 57.1% | **≈39.8%** |
+| journey (triggered) | 6,095 | 65.5% | 72.8% | ≈47.7% |
 
-⚠️ **The guardrail survives that thinness:** across p̄ = 0.57 → 0.73 the MDE moves only
-**5.3pp → 4.7pp**. Quote it as "about 5 points". Recompute the baselines as real campaigns land;
-do not hardcode 0.57.
+Use the **broadcast** row — journey sends are behaviourally triggered and read more, so they are
+the wrong reference for a campaign. It rests on one 244-person campaign and will firm up.
 
-Worked example — Roxie's 4,255 WA-reachable: ~2,127 assigned/arm → ~1,480 delivered/arm →
-**MDE ≈ 5pp.**
+**ITT is also better powered, not just less biased**: n per arm is the full sent count rather than
+the ~70% that were delivered, and that gain outweighs p̄ sitting nearer 0.5.
 
-The curve, at p̄ = 0.57 — these are the numbers the UI thresholds in §8.1 are set from:
+The curve at p̄ ≈ 0.40 — the numbers the §8.1 UI thresholds are set from:
 
-| delivered per arm | detectable difference |
+| sent per arm | detectable difference |
 |---|---|
-| 1,480 | ~5.1pp |
+| 2,127 (Roxie split 50/50) | ~4.2pp |
+| 1,480 | ~5.0pp |
 | 800 | ~6.9pp |
-| 400 | ~9.8pp |
+| 400 | ~9.7pp |
 | < 400 | not worth running |
+
+⚠️ **The guardrail is robust to the thin baseline:** across p̄ = 0.40 → 0.57 the MDE at n=800 moves
+only 6.9 → 6.9pp (p̄ nearer 0.5 raises variance, but only slightly over this range). Quote it as
+"about 7 points at 800 per arm". Recompute p̄ as real campaigns land; do not hardcode it.
 
 Typical copy effects are 2–5pp, so anything under ~800 per arm can only catch an unusually large
 difference, and under ~400 it is close to a coin toss.
@@ -236,12 +319,14 @@ experiments/
 ### 8.1 Setup — "should I test, and are my arms comparable?"
 
 - **Add a B version** → pick a second template. A only ever mirrors `campaigns.template_id`.
-- **Power line, live as the segment changes:** *"~1,480 delivered per arm — you can detect a
-  difference of about 5 points. Smaller than that will not be distinguishable."* Thresholds from
-  the §6 curve, so the colour means something specific:
-  **green** ≥ 800 delivered/arm (≤ ~7pp) · **amber** 400–800 (*"only a large difference will show
+- **Power line, live as the segment changes:** *"~2,127 per arm — you can detect a difference of
+  about 4 points. Smaller than that will not be distinguishable."* Thresholds from the §6 curve, so
+  the colour means something specific:
+  **green** ≥ 800 **sent**/arm (≤ ~7pp) · **amber** 400–800 (*"only a large difference will show
   up"*) · **red** < 400 (*"this audience cannot answer the question — send it as a normal campaign"*).
   Red does not block: it is the marketer's call, and stating the consequence plainly is the job.
+  ⚠️ **Sent per arm, not delivered** — a direct consequence of the ITT switch in §6, and it is what
+  lets this line be computed at setup from `reachable ÷ arms` with no delivery-rate guess in it.
 - **Pre-flight checklist, each item pass/fail with the fix, blocking where it must be:**
   - both templates Meta-approved (`approval_status`) — *blocking*
   - variables diff clean between arms — *blocking* (§7)
@@ -264,7 +349,9 @@ rather than at the end.
 - **Verdict banner first**, in plain English: *"B won — 62.1% vs 57.4%, and that gap is larger than
   chance would produce (p < 0.05)."* Or a refusal from §7, stating which one and what to do about
   it.
-- **Per-arm funnel:** assigned → sent → delivered → read, with rates. The funnel, not just the read
+- **Per-arm funnel:** assigned → sent → delivered → read, with rates, and **the primary
+  (read ÷ sent) visually distinguished from the diagnostic (read ÷ delivered)** so nobody reads the
+  wrong one as the answer. The funnel, not just the read
   rate, is what makes quiet-hours truncation and failure asymmetry legible.
 - **Skips and failures by reason, per arm.**
 - **Cost per arm** — and a line stating there is no cost *delta*: two arms send the same total
@@ -275,6 +362,13 @@ rather than at the end.
   the recipient, so read rate is a **floor**, not "% who read it".
 - **"Record what we learned"** — a short free-text conclusion saved against the experiment. This is
   what stops the result evaporating the moment the tab closes.
+  ⚠️ **Recording the learning SNAPSHOTS the verdict and its numbers onto the experiment row.**
+  Without this the verdict is recomputed on every page view forever, so late-arriving reads (5% land
+  after 39h) can flip it *after* someone wrote down "B won" and acted on it — leaving the log and
+  the live screen permanently contradicting each other, with no way to tell which was ever true.
+  The snapshot is the record of what was decided and when; the live figure stays visible beside it,
+  and a divergence is shown rather than hidden, because "the numbers moved after we called it" is
+  itself worth knowing.
 
 ### 8.4 Experiment log — "what have we already tried?"
 
@@ -321,13 +415,30 @@ runs `next build`.
    ⚠️ Without this the feature is a way around the approval gate.
 2. **Mid-flight edits rejected** once `sending`: re-weighting after some recipients are assigned
    makes the arms incomparable.
-3. **`startCampaign` refuses before any send** if any arm's template is missing or not
+3. **The arms' TEMPLATES are frozen too, not just the variant rows.** Freezing weights while
+   leaving template content editable is a half-measure: `messages.template_version` is stamped per
+   send, so editing an arm's template at page 500 of 1,064 splits that arm across two versions and
+   the "arm" stops being one thing. Block edits to any template bound to a campaign in `approved`
+   or `sending`. `comms.template_versions` (S241) already archives versions, so the results screen
+   can state which version each arm ran — and if a mid-send edit ever does occur, the per-arm stats
+   must surface the version split rather than silently averaging across it.
+4. **A Meta-side template status change mid-flight pauses the campaign.** `wa-webhooks.js` already
+   receives `message_template_status_update` and alerts on REJECTED/DISABLED/PAUSED. If that lands
+   for a template bound to a `sending` campaign, pause the campaign rather than letting one arm
+   fail its way to the end — an arm that Meta disabled halfway produces exactly the asymmetric,
+   biased sample §7 exists to refuse.
+5. **Test sends target ONE named arm.** `sendCampaignTest` currently uses `campaigns.template_id`,
+   which would silently only ever preview arm A. It takes a `variant_id`, and the UI offers *"send
+   test of A"* / *"send test of B"* separately, because the whole point of the test send is seeing
+   the thing on a real handset and the arms differ. Test sends keep `source='campaign_test:<id>'`
+   so they stay out of the campaign's stats, and therefore out of the experiment.
+6. **`startCampaign` refuses before any send** if any arm's template is missing or not
    Meta-approved, naming the arm. This also closes the open F10 gap for the variant path.
-4. **< 2 variants = a normal campaign.** A half-built test sends correctly and the results screen
+7. **< 2 variants = a normal campaign.** A half-built test sends correctly and the results screen
    simply does not claim a test happened.
-5. **Zero-variant campaigns** (the 12 existing ones) must return cleanly from
+8. **Zero-variant campaigns** (the 12 existing ones) must return cleanly from
    `campaign_variant_stats` as a single arm.
-6. Weights are all > 0; Σ > 0.
+9. Weights are all > 0; Σ > 0.
 
 ---
 
