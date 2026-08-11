@@ -459,11 +459,28 @@ runs `next build`.
    so they stay out of the campaign's stats, and therefore out of the experiment.
 6. **`startCampaign` refuses before any send** if any arm's template is missing or not
    Meta-approved, naming the arm. This also closes the open F10 gap for the variant path.
-7. **< 2 variants = a normal campaign.** A half-built test sends correctly and the results screen
-   simply does not claim a test happened.
-8. **Zero-variant campaigns** (the 12 existing ones) must return cleanly from
+7. **< 2 variants = a normal campaign** *as far as the RESULTS are concerned* — a half-built test
+   sends correctly and the results screen does not claim a test happened.
+   ⚠️ **CORRECTED during implementation (S272) — this was sloppy and it opened a real hole.**
+   "Normal campaign" is true of the *verdict*, not of the *send path*: `pickVariant` treats one arm
+   as a valid 100% assignment and routes every recipient to **that arm's** template, bypassing
+   `campaigns.template_id`. So a 1-variant campaign is NOT a normal send, and the pre-send approval
+   guard must therefore run at **≥ 1 variant, not ≥ 2** — otherwise a single-arm campaign fans out
+   on a template that was never checked to exist or be Meta-approved.
+8. **A holdout arm must be SKIPPED, and that is three states, not two.** `template_id IS NULL` means
+   send nothing. The fan-out must distinguish:
+   `arm === null` (no variants → use `campaigns.template_id`) · `arm.template_id == null` (holdout →
+   **send nothing**) · otherwise (use the arm's template).
+   ⚠️ **The obvious one-liner `arm?.template_id || camp.template_id` collapses the middle case into
+   the first and SENDS THE BASE TEMPLATE to the holdout group** — while still stamping the message
+   with the holdout's `variant_id`, so the results would report that the holdout delivered messages.
+   Caught in review before it shipped. It is reachable precisely because holdouts are already
+   handled correctly in `startCampaign` and `sendCampaignTest`, which made the fan-out the odd one
+   out rather than uniformly unimplemented. Holdouts being "seam only, nothing built yet" (§2) does
+   **not** mean the send path may ignore them.
+9. **Zero-variant campaigns** (the 12 existing ones) must return cleanly from
    `campaign_variant_stats` as a single arm.
-9. Weights are all > 0; Σ > 0.
+10. Weights are all > 0; Σ > 0.
 
 ---
 
