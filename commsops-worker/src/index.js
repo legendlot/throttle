@@ -1775,7 +1775,8 @@ async function handlePost(body, auth, env) {
       // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
       // been sent to and some have not — so editing its arms now would mean the two halves of
       // the same send used different definitions, which is exactly what the freeze prevents.
-      // (It is reachable: wa-webhooks pauses a campaign when Meta blocks a bound template.)
+      // (Reachable: wa-webhooks pauses a campaign when Meta blocks a template bound to it —
+      // either as campaigns.template_id or via any campaign_variants arm.)
       if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
       if (camp.status === 'approved' || camp.status === 'scheduled') {
         await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
@@ -1823,7 +1824,8 @@ async function handlePost(body, auth, env) {
       // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
       // been sent to and some have not — so editing its arms now would mean the two halves of
       // the same send used different definitions, which is exactly what the freeze prevents.
-      // (It is reachable: wa-webhooks pauses a campaign when Meta blocks a bound template.)
+      // (Reachable: wa-webhooks pauses a campaign when Meta blocks a template bound to it —
+      // either as campaigns.template_id or via any campaign_variants arm.)
       if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
       if (camp.status === 'approved' || camp.status === 'scheduled') {
         await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
