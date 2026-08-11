@@ -5,6 +5,7 @@
 const A = require('./auth.js');
 const { send } = require('./send.js');
 const G = require('./gate.js');
+const { pickVariant } = require('./variants.js');
 
 const SENDS_PER_MSG = 4;   // recipients handled per consumer invocation (~8 subreq each → safe)
 const nowIso = () => new Date().toISOString();
@@ -20,6 +21,21 @@ async function setStatus(env, id, patch) {
 async function getSettings(env) {
   const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
   return (r.ok && r.data?.[0]) || {};
+}
+
+// ⚠️ THROWS on a read failure — never returns [] as a fallback.
+// A soft failure here is silently catastrophic: `[]` means "no variants", which sends
+// campaigns.template_id — i.e. ARM A FOR EVERYONE. A transient 5xx thirty minutes into a fan-out
+// would produce a campaign that is half a clean A/B and half all-A, with nothing in the data
+// marking the boundary, and a verdict computed off it that looks perfectly fine.
+// Throwing lets Queues redeliver the page and eventually DLQ with an alert — the same rule and
+// the same reasoning as the campaign_recipients guard below (review C2).
+async function loadVariants(env, campaignId) {
+  const r = await A.sbComms(
+    `/rest/v1/campaign_variants?campaign_id=eq.${A.enc(campaignId)}`
+    + `&select=id,label,template_id,weight,sort_order&order=sort_order.asc,label.asc`, env);
+  if (!r.ok) throw new Error(`campaign_variants_failed:${campaignId}:${r.status}`);
+  return Array.isArray(r.data) ? r.data : [];
 }
 
 // Does this campaign need an approver before it can send?
@@ -48,6 +64,32 @@ async function startCampaign(env, id, sentBy) {
   if (!['approved', 'scheduled'].includes(camp.status))
     return { ok: false, error: `not_sendable_from_${camp.status}` };
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
+
+  // Every arm must be sendable BEFORE a single message goes out. Discovering an unapproved
+  // template mid-fan-out leaves a half-run experiment that can never be completed or compared.
+  //
+  // ⚠️ loadVariants THROWS by design (it must, in the fan-out). Here that would surface as an
+  // unhandled 500 on a button press, so catch it and return a normal error result.
+  let variants;
+  try { variants = await loadVariants(env, id); }
+  catch { return { ok: false, error: 'variants_unreadable' }; }
+
+  if (variants.length >= 1) {
+    const ids = variants.map((v) => v.template_id).filter(Boolean);
+    // ⚠️ An all-holdout set leaves ids empty, and `id=in.()` is a malformed PostgREST filter.
+    if (ids.length === 0) return { ok: false, error: 'no_sendable_arm' };
+    const tr = await A.sbComms(
+      `/rest/v1/templates?id=in.(${ids.map(A.enc).join(',')})&select=id,name,approval_status`, env);
+    if (!tr.ok) return { ok: false, error: 'variant_templates_unreadable' };
+    const byId = new Map((tr.data || []).map((t) => [t.id, t]));
+    for (const v of variants) {
+      if (!v.template_id) continue;                      // holdout arm — nothing to approve
+      const t = byId.get(v.template_id);
+      if (!t) return { ok: false, error: `variant_${v.label}_template_missing` };
+      if (camp.channel === 'whatsapp' && String(t.approval_status || '').toUpperCase() !== 'APPROVED')
+        return { ok: false, error: `variant_${v.label}_template_not_approved` };
+    }
+  }
 
   const { reachable } = await reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
 
@@ -78,6 +120,7 @@ async function processQueueMessage(env, body) {
   const { campaignId, after } = body;
   const camp = await getCampaign(env, campaignId);
   if (!camp || camp.status !== 'sending') return;     // cancelled/finished → stop
+  const variants = await loadVariants(env, campaignId);
 
   const r = await A.sbComms('/rest/v1/rpc/campaign_recipients', env, {
     method: 'POST',
@@ -93,9 +136,22 @@ async function processQueueMessage(env, body) {
   for (const rec of recs) {
     if (!rec.address) continue;
     try {
+      // Per-recipient assignment INSIDE the page — never "all of A then all of B". The fan-out is
+      // serial at ~1,200/hr, so batching by arm would push B hours later in the day and the test
+      // would measure time-of-day rather than copy.
+      const arm = pickVariant(campaignId, rec.profile_id, variants);
+      // ⚠️ THREE states here, not two, and collapsing them sends real messages to people who
+      // were meant to receive nothing:
+      //   arm === null            → no variants at all → normal campaign, use camp.template_id
+      //   arm.template_id == null → a HOLDOUT arm      → send NOTHING, deliberately
+      //   otherwise               → a real arm         → use its template
+      // `arm?.template_id || camp.template_id` collapsed the middle case into the first.
+      if (arm && !arm.template_id) continue;   // holdout — no message, by design
       await send(env, {
         channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
-        templateId: camp.template_id, constants: camp.vars || {},
+        templateId: arm?.template_id || camp.template_id,
+        variantId: arm?.id || null,
+        constants: camp.vars || {},
         tracking: { campaign: camp.name, utm: camp.utm },
         source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
       });
@@ -162,7 +218,7 @@ async function profileIdForAddress(env, channel, address) {
 // exercise what is ON SCREEN, not what was last saved — otherwise the preview and the test
 // disagree, which is exactly how someone concludes their values "don't work" when they were
 // simply never persisted. Anything the caller omits falls back to the stored campaign.
-async function sendCampaignTest(env, { id, to, draft }) {
+async function sendCampaignTest(env, { id, to, draft, variantId }) {
   const stored = await getCampaign(env, id);
   if (!stored) return { ok: false, error: 'not_found' };
   const d = draft || {};
@@ -174,6 +230,18 @@ async function sendCampaignTest(env, { id, to, draft }) {
     vars: d.vars && typeof d.vars === 'object' ? d.vars : stored.vars,
   };
   if (!camp.template_id) return { ok: false, error: 'template_required' };
+
+  // Which ARM is being previewed. Without this the test send always shows arm A.
+  let templateId = camp.template_id;
+  if (variantId) {
+    const vr = await A.sbComms(
+      `/rest/v1/campaign_variants?id=eq.${A.enc(variantId)}&campaign_id=eq.${A.enc(id)}`
+      + `&select=id,label,template_id&limit=1`, env);
+    const v = vr.ok && vr.data?.[0];
+    if (!v) return { ok: false, error: 'variant_not_found' };
+    if (!v.template_id) return { ok: false, error: 'holdout_arm_has_nothing_to_send' };
+    templateId = v.template_id;
+  }
 
   const list = (Array.isArray(to) ? to : String(to || '').split(','))
     .map((s) => String(s).trim()).filter(Boolean).slice(0, MAX_TEST_RECIPIENTS);
@@ -194,7 +262,7 @@ async function sendCampaignTest(env, { id, to, draft }) {
       const r = await send(env, {
         channel: camp.channel, purpose: camp.purpose, isTest: true,
         profileId, to: addr,
-        templateId: camp.template_id,
+        templateId,
         constants: camp.vars || {},
         tracking: { campaign: `${camp.name} (test)`, utm: camp.utm },
         source: `campaign_test:${id}`,

@@ -154,7 +154,10 @@ export default function AnalyticsPage() {
 
       const list = Array.isArray(cs) ? cs : [];
       // Pull per-campaign stats + attribution only for campaigns that have actually sent.
-      const sent = list.filter((c) => ['sending', 'sent'].includes(c.status));
+      // 'paused' belongs here too — Meta blocking a bound template mid-send does not undo the
+      // messages that already went out before the block, so without it a genuinely-sent campaign
+      // vanishes from Analytics entirely (review gap c).
+      const sent = list.filter((c) => ['sending', 'sent', 'paused'].includes(c.status));
       const enriched = await Promise.all(sent.map(async (c) => {
         try {
           const [st, at] = await Promise.all([

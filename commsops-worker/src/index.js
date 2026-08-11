@@ -26,6 +26,7 @@ const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
+const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -165,6 +166,22 @@ async function archiveTemplateVersion(env, row, userId) {
     });
     return !!r.ok;
   } catch { return false; }
+}
+
+// Per-arm stats + verdict for one campaign. Shared by getVariantStats (recomputed on every
+// view) and recordExperimentLearning (frozen into verdict_snapshot at the moment of decision —
+// see the comment there for why the snapshot has to exist at all). Returns null on RPC failure.
+async function computeVariantStats(env, campaignId) {
+  const rpc = await A.sbComms('/rest/v1/rpc/campaign_variant_stats', env,
+    { method: 'POST', body: JSON.stringify({ p_campaign_id: campaignId }) });
+  if (!rpc.ok) return null;
+  const rows = Array.isArray(rpc.data) ? rpc.data : [];
+  // ⚠️ PostgREST returns numerics as STRINGS. ab-stats coerces internally, but hoursSinceSent
+  // is computed here, outside that coercion, so it must be explicit.
+  const last = rows.map((r) => r.last_sent_at).filter(Boolean).sort().pop() || null;
+  const hoursSinceSent = last ? (Date.now() - new Date(last).getTime()) / 3600000 : 0;
+  const v = AB.verdict(rows, { hoursSinceSent });
+  return { arms: rows, verdict: v };
 }
 
 // ── GET actions ──────────────────────────────────────────────────────────────
@@ -602,6 +619,223 @@ async function handleGet(url, auth, env) {
         { method: 'POST', body: JSON.stringify({ p_journey_id: id, p_version: v ? Number(v) : null }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
+
+    // ── S272: A/B testing ──
+    case 'getCampaignVariants': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const [vr, er] = await Promise.all([
+        A.sbComms(`/rest/v1/campaign_variants?campaign_id=eq.${A.enc(id)}`
+          + `&select=*&order=sort_order.asc,label.asc`, env),
+        A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(id)}&select=*&limit=1`, env),
+      ]);
+      if (!vr.ok) return err('db_error', 500);
+      return ok({ variants: vr.data || [], experiment: (er.ok && er.data?.[0]) || null });
+    }
+    case 'getVariantStats': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const stats = await computeVariantStats(env, id);
+      if (!stats) return err('db_error', 500);
+      return ok(stats);
+    }
+    case 'getVariantPreflight': {      // blocking comparability checks before an A/B send
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const camp = await CAMP.getCampaign(env, id);
+      if (!camp) return err('not_found', 404);
+
+      const vr = await A.sbComms(`/rest/v1/campaign_variants?campaign_id=eq.${A.enc(id)}`
+        + `&select=*&order=sort_order.asc,label.asc`, env);
+      if (!vr.ok) return err('db_error', 500);
+      const variants = Array.isArray(vr.data) ? vr.data : [];
+      if (variants.length < 2) return ok({ checks: [] });   // no test to pre-flight yet
+
+      const checks = [];
+      const sendable = variants.filter((v) => v.template_id);  // holdout arms render nothing
+
+      // Batch-fetch every referenced template in ONE call. ⚠️ id=in.() is a malformed
+      // PostgREST filter — guard the empty-list case.
+      const tplIds = [...new Set(sendable.map((v) => v.template_id))];
+      let templatesReadOk = true;
+      let tplById = new Map();
+      if (tplIds.length) {
+        const tr = await A.sbComms(
+          `/rest/v1/templates?id=in.(${tplIds.map(A.enc).join(',')})`
+          + `&select=id,name,channel,approval_status,variables`, env);
+        if (!tr.ok) templatesReadOk = false;
+        else tplById = new Map((tr.data || []).map((t) => [t.id, t]));
+      }
+      const missingTpl = sendable.filter((v) => !tplById.has(v.template_id));
+
+      // ── variables_match — the one that actually matters ──────────────────────────
+      // ⚠️ Deliberately NOT a `{{token}}` scan of `content`. Verified against render.js:
+      // renderEmail/renderWhatsapp both resolve merge fields off the TOP-LEVEL `variables`
+      // column (resolveVar/resolveDeclared) — `content` itself never carries a "{{token}}"
+      // string. Email and WA-TEXT bodies use SINGLE-brace {token} (render.js applyTokens);
+      // a WA-TEMPLATE body embeds Meta's own numeric {{1}},{{2}} placeholders, and the named
+      // token feeding each one lives only in content.mapping[].token, never spelled out as
+      // "{{tokenName}}" anywhere. A regex over JSON.stringify(content) for {{name}} would
+      // silently return an EMPTY set for every real template here — i.e. always "pass"
+      // because nothing was found, the exact failing-open outcome this check exists to
+      // prevent. Precedent: the S265 OFD-redirect incident (systems/relay.md) found this
+      // the hard way — a bad clone differed only in its `variables` column (a dropped
+      // fallback + a changed `source`), invisible from body/buttons/mapping, only caught by
+      // diffing `variables` directly. "Diff the variables column, not just body/mapping."
+      const varsOf = (tpl) => new Set(
+        (Array.isArray(tpl?.variables) ? tpl.variables : []).map((v) => `{{${v.token}}}`));
+
+      if (!templatesReadOk) {
+        checks.push({ key: 'variables_match', pass: false, blocking: true,
+          detail: 'Could not read arm templates — merge-variable comparability is unknown.' });
+      } else if (missingTpl.length) {
+        checks.push({ key: 'variables_match', pass: false, blocking: true,
+          detail: `Arm ${missingTpl.map((v) => v.label).join(', ')} references a template that `
+            + `no longer exists — cannot compare merge variables.` });
+      } else if (sendable.length < 2) {
+        checks.push({ key: 'variables_match', pass: true, blocking: true,
+          detail: 'Fewer than two arms send a template — nothing to compare.' });
+      } else {
+        const armSets = sendable.map((v) => ({ label: v.label, vars: varsOf(tplById.get(v.template_id)) }));
+        const union = new Set(); armSets.forEach((a) => a.vars.forEach((x) => union.add(x)));
+        const problems = [];
+        for (const token of union) {
+          const has = armSets.filter((a) => a.vars.has(token)).map((a) => a.label);
+          const lacks = armSets.filter((a) => !a.vars.has(token)).map((a) => a.label);
+          if (lacks.length) {
+            problems.push(`Arm ${has.join('/')} uses ${token} which arm ${lacks.join('/')} does `
+              + `not — it will fail to render for anyone missing that field.`);
+          }
+        }
+        checks.push({ key: 'variables_match', pass: problems.length === 0, blocking: true,
+          detail: problems.length
+            ? problems.join(' ') + ' The two versions would be measured over different, '
+              + 'non-random groups of people — a biased result, not just a smaller one.'
+            : 'All arms use the same merge variables.' });
+      }
+
+      // ── templates_approved — blocking, WhatsApp only ──────────────────────────────
+      // Same shape as the guard in campaigns.js startCampaign, including its "an all-holdout
+      // arm set can never send" refusal (ids.length === 0 there → no_sendable_arm here).
+      if (sendable.length === 0) {
+        checks.push({ key: 'templates_approved', pass: false, blocking: true,
+          detail: 'Every arm is a holdout (no template) — there is nothing to send. '
+            + 'startCampaign refuses this campaign (no_sendable_arm).' });
+      } else if (!templatesReadOk) {
+        checks.push({ key: 'templates_approved', pass: false, blocking: true,
+          detail: 'Could not read arm templates — approval status is unknown.' });
+      } else {
+        const fails = [];
+        for (const v of sendable) {
+          const t = tplById.get(v.template_id);
+          if (!t) { fails.push(`Arm ${v.label}'s template no longer exists.`); continue; }
+          if (camp.channel === 'whatsapp' && String(t.approval_status || '').toUpperCase() !== 'APPROVED') {
+            fails.push(`Arm ${v.label}'s template "${t.name}" is not APPROVED on WhatsApp `
+              + `(status: ${t.approval_status || 'none'}).`);
+          }
+        }
+        checks.push({ key: 'templates_approved', pass: fails.length === 0, blocking: true,
+          detail: fails.length ? fails.join(' ') : "Every arm's template exists and is send-ready." });
+      }
+
+      // ── same_channel_purpose — blocking ─────────────────────────────────────────
+      if (!templatesReadOk) {
+        checks.push({ key: 'same_channel_purpose', pass: false, blocking: true,
+          detail: 'Could not read arm templates — channel consistency is unknown.' });
+      } else {
+        const fails = [];
+        for (const v of sendable) {
+          const t = tplById.get(v.template_id);
+          if (!t) { fails.push(`Arm ${v.label}'s template no longer exists.`); continue; }
+          if (String(t.channel || '').toLowerCase() !== String(camp.channel || '').toLowerCase()) {
+            fails.push(`Arm ${v.label} uses a "${t.channel}" template but the campaign channel `
+              + `is "${camp.channel}" — it would fail to send.`);
+          }
+        }
+        checks.push({ key: 'same_channel_purpose', pass: fails.length === 0, blocking: true,
+          detail: fails.length ? fails.join(' ')
+            : (sendable.length ? "Every arm's template matches the campaign channel."
+                                : 'No arm sends a template — nothing to check.') });
+      }
+
+      // ── quiet_hours_risk — WARNING, not blocking ────────────────────────────────
+      // Audience: campaigns.audience_snapshot when set (populated at approval/send time);
+      // before that it's null, so fall back to the current comms.segment_members row count
+      // for the campaign's segment — the SAME cheap, non-materializing read `getSegment`
+      // already uses. Deliberately NOT campaigns.js's reachableCount(), which calls
+      // materialize_segment — real work this screen (re-checked on every arm edit) cannot
+      // afford to pay on every keystroke.
+      let audience = null;
+      if (camp.audience_snapshot != null) {
+        audience = Number(camp.audience_snapshot);
+      } else if (camp.segment_id) {
+        const mc = await A.sbComms(
+          `/rest/v1/segment_members?segment_id=eq.${A.enc(camp.segment_id)}&select=profile_id`, env);
+        if (mc.ok && Array.isArray(mc.data)) audience = mc.data.length;
+      }
+
+      if (audience == null || !Number.isFinite(audience)) {
+        checks.push({ key: 'quiet_hours_risk', pass: false, blocking: false,
+          detail: 'Could not estimate audience size — quiet-hours risk is unknown.' });
+      } else {
+        // Reuse the SAME resolution the real send gate uses (gate.js resolveQuietWindow): a
+        // per-channel row wins when enabled, an explicitly disabled row means NO quiet hours
+        // for that channel (e.g. email today), and only an absent row falls back to the
+        // global comms.settings pair. Using the global pair unconditionally would be wrong
+        // for WhatsApp (live window is 22:00–08:00 IST, not the global default) and would
+        // falsely warn on a channel that has no quiet hours at all.
+        const cqh = await G.getChannelQuietHours(env);
+        if (!cqh.ok) {
+          checks.push({ key: 'quiet_hours_risk', pass: false, blocking: false,
+            detail: 'Could not read quiet-hours settings — risk is unknown.' });
+        } else {
+          const settings = await G.getSettings(env);
+          const window = G.resolveQuietWindow(cqh.rows, camp.channel, settings);
+          const fmt = (m) => { const mm = ((m % 1440) + 1440) % 1440;
+            return `${String(Math.floor(mm / 60)).padStart(2, '0')}:${String(mm % 60).padStart(2, '0')}`; };
+          if (!window) {
+            checks.push({ key: 'quiet_hours_risk', pass: true, blocking: false,
+              detail: `${camp.channel} has no quiet-hours window configured — no risk.` });
+          } else {
+            const hours = audience / 1200;             // ~1,200 sends/hour, serial fan-out
+            const nowMin = G.istMinutes();
+            const alreadyIn = G.inQuietWindow(window.startMin, window.endMin, nowMin);
+            const untilStart = alreadyIn ? 0
+              : (window.startMin > nowMin ? window.startMin - nowMin : window.startMin + 1440 - nowMin);
+            const risky = alreadyIn || (hours * 60) > untilStart;
+            checks.push({ key: 'quiet_hours_risk', pass: !risky, blocking: false,
+              detail: alreadyIn
+                ? `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; it is `
+                  + `already inside the quiet-hours window (${fmt(window.startMin)}–${fmt(window.endMin)} `
+                  + `IST) — sending now risks the tail being cut.`
+                : risky
+                  ? `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; `
+                    + `starting now risks still sending after quiet hours begin at `
+                    + `${fmt(window.startMin)} IST — the tail would be cut.`
+                  : `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; `
+                    + `finishes before quiet hours begin at ${fmt(window.startMin)} IST.` });
+          }
+        }
+      }
+
+      return ok({ checks });
+    }
+    case 'listExperiments': {          // cross-campaign experiment log
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const er = await A.sbComms('/rest/v1/campaign_experiments?select=*&order=created_at.desc', env);
+      if (!er.ok) return err('db_error', 500);
+      const rows = Array.isArray(er.data) ? er.data : [];
+      const ids = [...new Set(rows.map((r) => r.campaign_id).filter(Boolean))];
+      // Batch via IN, never a per-row lookup loop.
+      const cr = ids.length
+        ? await A.sbComms(`/rest/v1/campaigns?id=in.(${ids.map(A.enc).join(',')})`
+            + `&select=id,name,channel,purpose,status`, env)
+        : { ok: true, data: [] };
+      const campById = {}; (cr.ok ? cr.data : []).forEach((c) => { campById[c.id] = c; });
+      const enriched = rows.map((r) => ({ ...r, campaign: campById[r.campaign_id] || null }));
+      return ok(enriched);
+    }
+
     default:
       return err(`unknown_action:${action}`, 404);
   }
@@ -921,6 +1155,18 @@ async function handlePost(body, auth, env) {
           && stableJson(prevRow.utm ?? null) === stableJson(utm !== undefined ? J.sanitizeUtm(utm) : (prevRow.utm ?? null))) {
           return ok({ ...prevRow, noop: true });
         }
+        // Freezing the variant ROWS while leaving template CONTENT editable is a half-measure:
+        // messages.template_version is stamped per send, so editing an arm's template mid-fan-out
+        // splits that arm across two versions and the "arm" stops being one thing.
+        const boundDirect = await A.sbComms(
+          `/rest/v1/campaigns?template_id=eq.${A.enc(id)}`
+          + `&status=in.(approved,scheduled,sending)&select=id,name&limit=1`, env);
+        const boundVariant = await A.sbComms(
+          `/rest/v1/campaign_variants?template_id=eq.${A.enc(id)}`
+          + `&select=campaign_id,campaigns!inner(id,name,status)`
+          + `&campaigns.status=in.(approved,scheduled,sending)&limit=1`, env);
+        if ((boundDirect.ok && boundDirect.data?.[0]) || (boundVariant.ok && boundVariant.data?.[0]))
+          return err('template_bound_to_live_campaign', 422);
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({
             channel, name, purpose, language: language || 'en', content: mergedContent,
@@ -1387,7 +1633,7 @@ async function handlePost(body, auth, env) {
     // suppression, consent, quiet hours, freq cap) so the rehearsal is honest.
     case 'sendCampaignTest': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to, draft: body.draft });
+      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to, draft: body.draft, variantId: body.variantId });
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'submitCampaign': {           // draft → approved (auto) or pending_approval (threshold)
@@ -1512,6 +1758,120 @@ async function handlePost(body, auth, env) {
         notifySms: !!body.notifySms, notifyEmail: !!body.notifyEmail,
       });
       return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+
+    // ── S272: A/B testing ──
+    case 'saveCampaignVariant': {      // upsert one arm {campaignId, id?, label, templateId, weight}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, id, label, templateId, weight } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      if (!label) return err('label_required', 400);
+      const camp = await CAMP.getCampaign(env, campaignId);
+      if (!camp) return err('not_found', 404);
+
+      // Variants freeze at APPROVED, not at sending. Between approved and sending an arm could
+      // otherwise be added that nobody approved — the approval was granted against arm A alone,
+      // so without this the A/B feature is a way around the approval gate.
+      // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
+      // been sent to and some have not — so editing its arms now would mean the two halves of
+      // the same send used different definitions, which is exactly what the freeze prevents.
+      // (Reachable: wa-webhooks pauses a campaign when Meta blocks a template bound to it —
+      // either as campaigns.template_id or via any campaign_variants arm.)
+      if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
+      if (camp.status === 'approved' || camp.status === 'scheduled') {
+        await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
+      }
+
+      let sortOrder = 0;
+      if (!id) {
+        const existing = await A.sbComms(
+          `/rest/v1/campaign_variants?campaign_id=eq.${A.enc(campaignId)}`
+          + `&select=id,sort_order&order=sort_order.desc&limit=1`, env);
+        const rows = (existing.ok && Array.isArray(existing.data)) ? existing.data : [];
+        if (rows.length === 0) {
+          // First arm B added with no arm A yet: arm A always mirrors campaigns.template_id by
+          // construction, and the experiment row is created at the same moment.
+          await A.sbComms('/rest/v1/campaign_variants', env, { method: 'POST',
+            body: JSON.stringify({ campaign_id: campaignId, label: 'A', template_id: camp.template_id,
+              weight: 50, sort_order: 0, created_by: auth.userId }) });
+          await A.sbComms('/rest/v1/campaign_experiments', env, { method: 'POST',
+            body: JSON.stringify({ campaign_id: campaignId }) });
+          sortOrder = 1;
+        } else {
+          sortOrder = Number(rows[0].sort_order || 0) + 1;
+        }
+      }
+
+      const row = { campaign_id: campaignId, label, template_id: templateId || null,
+        weight: Number(weight) || 50, updated_at: nowIso() };
+      const r = id
+        ? await A.sbComms(`/rest/v1/campaign_variants?id=eq.${A.enc(id)}&campaign_id=eq.${A.enc(campaignId)}`, env,
+            { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
+        : await A.sbComms('/rest/v1/campaign_variants', env, { method: 'POST',
+            headers: { Prefer: 'return=representation' },
+            body: JSON.stringify({ ...row, sort_order: sortOrder, created_by: auth.userId }) });
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+    case 'deleteCampaignVariant': {    // {campaignId, id}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, id } = body;
+      if (!campaignId || !id) return err('campaignId_and_id_required', 400);
+      const camp = await CAMP.getCampaign(env, campaignId);
+      if (!camp) return err('not_found', 404);
+
+      // Variants freeze at APPROVED, not at sending — same reasoning as saveCampaignVariant.
+      // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
+      // been sent to and some have not — so editing its arms now would mean the two halves of
+      // the same send used different definitions, which is exactly what the freeze prevents.
+      // (Reachable: wa-webhooks pauses a campaign when Meta blocks a template bound to it —
+      // either as campaigns.template_id or via any campaign_variants arm.)
+      if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
+      if (camp.status === 'approved' || camp.status === 'scheduled') {
+        await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
+      }
+
+      const r = await A.sbComms(
+        `/rest/v1/campaign_variants?id=eq.${A.enc(id)}&campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'DELETE' });
+      return r.ok ? ok({ deleted: true }) : err('db_error', 500);
+    }
+    case 'recordExperimentLearning': {  // {campaignId, learning}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, learning } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      // The snapshot is the point. The live verdict is otherwise recomputed on every page view
+      // forever, so late-arriving reads (5% land after 39h) can flip it AFTER someone wrote down
+      // "B won" and acted on it — leaving the log and the live screen permanently contradicting
+      // each other with no way to tell which was ever true.
+      const snap = await computeVariantStats(env, campaignId);
+      if (!snap) return err('db_error', 500);
+      const r = await A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'PATCH', headers: { Prefer: 'return=representation' },
+          body: JSON.stringify({ learning: learning || null, decided_at: nowIso(),
+            decided_by: auth.userId, verdict_snapshot: snap, updated_at: nowIso() }) });
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      if (Array.isArray(r.data) && r.data.length === 0) return err('experiment_not_found', 404);
+      return ok(r.data?.[0]);
+    }
+    case 'saveExperimentMeta': {        // {campaignId, hypothesis?, plannedReadAt?} — setup screen
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, hypothesis, plannedReadAt } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      const patch = { updated_at: nowIso() };
+      if (hypothesis !== undefined) patch.hypothesis = hypothesis || null;
+      if (plannedReadAt !== undefined) patch.planned_read_at = plannedReadAt || null;
+      let r = await A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch) });
+      if (r.ok && Array.isArray(r.data) && r.data.length === 0) {
+        // Setup screen may be used before any arm B exists (saveCampaignVariant's auto-create
+        // hasn't fired yet) — upsert so the hypothesis/read-time isn't lost waiting on that.
+        r = await A.sbComms('/rest/v1/campaign_experiments', env, { method: 'POST',
+          headers: { Prefer: 'return=representation' },
+          body: JSON.stringify({ campaign_id: campaignId, ...patch }) });
+      }
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
     }
 
     default:

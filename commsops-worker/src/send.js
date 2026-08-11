@@ -414,6 +414,9 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
     profile_id: opts.profileId || null, channel, purpose,
     sender_identity_id: sender?.id || null,
     template_id: template?.id || null, template_version: template?.version || null,
+    // A/B arm (S272). Stamped for EVERY outcome — a skipped or failed message still belongs to
+    // an arm, and the per-arm failure-asymmetry check in ab-stats.js depends on those rows.
+    variant_id: opts.variantId || null,
     source: opts.source || null, provider: sender?.provider || 'resend',
     provider_message_id: res.provider_message_id || null,
     status: res.status, provider_status: res.status, reason: res.reason || null,

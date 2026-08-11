@@ -406,6 +406,41 @@ async function handleMeta(env, payload) {
         }
         if (v.event && /REJECTED|DISABLED|PAUSED/i.test(v.event))
           await AL.alert(env, `⚠️ *Relay WA template ${v.event}* — \`${v.message_template_name || '?'}\` (reason: ${v.reason || 'n/a'})`);
+        // An arm Meta disabled halfway produces exactly the asymmetric, biased sample the refusal
+        // states exist to reject — and it keeps burning sends that can never be compared.
+        if (v.event && /REJECTED|DISABLED|PAUSED/i.test(v.event) && v.message_template_name) {
+          const tpl = await A.sbComms(
+            `/rest/v1/templates?channel=eq.whatsapp&content->>meta_name=eq.${A.enc(v.message_template_name)}`
+            + `&select=id&limit=1`, env);
+          const tid = tpl.ok && tpl.data?.[0]?.id;
+          if (tid) {
+            // ⚠️ MATCHING ONLY campaigns.template_id COVERS ARM A AND NOTHING ELSE.
+            // By construction (migration 0050) campaigns.template_id IS arm A's template, so a
+            // filter on it alone silently never fires for arm B — the campaign would keep fanning
+            // out, assigning fresh recipients to a template Meta has already killed, until a human
+            // read the Slack alert. Exactly half of every 2-arm test, and the half you cannot see.
+            const vr = await A.sbComms(
+              `/rest/v1/campaign_variants?template_id=eq.${A.enc(tid)}&select=campaign_id`, env);
+            const viaVariant = (vr.ok && Array.isArray(vr.data) ? vr.data : [])
+              .map((r) => r.campaign_id).filter(Boolean);
+            const ids = [...new Set(viaVariant)];
+
+            A.checkWrite('campaign_pause_on_template_status_failed',
+              await A.sbComms(`/rest/v1/campaigns?status=eq.sending&template_id=eq.${A.enc(tid)}`, env,
+                { method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }),
+              { template: v.message_template_name, event: v.event, via: 'primary' });
+
+            // Second pass for arms. Kept as its own request rather than an `or=` filter: PostgREST
+            // cannot subselect, and an empty id list makes `id=in.()` a malformed filter.
+            if (ids.length) {
+              A.checkWrite('campaign_pause_on_template_status_failed',
+                await A.sbComms(
+                  `/rest/v1/campaigns?status=eq.sending&id=in.(${ids.map(A.enc).join(',')})`, env,
+                  { method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }),
+                { template: v.message_template_name, event: v.event, via: 'variant', arms: ids.length });
+            }
+          }
+        }
       } else if (f === 'phone_number_quality_update') {
         touched++;
         // PERSIST, don't just alert. Meta's quality rating + messaging limit gate throughput
