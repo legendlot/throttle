@@ -25,6 +25,7 @@ export default function EngagementDetailPage() {
   const [advOpen, setAdvOpen] = useState(false);
   const [note, setNote] = useState('');
   const [delOpen, setDelOpen] = useState(false);
+  const [approving, setApproving] = useState(false);
   const canManage = !!perms?.ignition_manage;
 
   function reload() {
@@ -61,6 +62,16 @@ export default function EngagementDetailPage() {
       }
       setDelOpen(false);
     }
+  }
+
+  async function doApprove() {
+    setApproving(true);
+    try {
+      await ignitionopsPost('approveEngagement', { engagement_id: data.engagement.id }, session);
+      toast('Approved — this deal can now move on', 'success');
+      reload();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setApproving(false); }
   }
 
   async function addNote() {
@@ -129,6 +140,27 @@ export default function EngagementDetailPage() {
 
       <Card title="Pipeline">
         <StageStepper stage={e.stage} />
+        {/* Reann #5 — hard approval gate. A proposed deal cannot move on until someone with
+            ignition_manage approves it; rejecting (drop/ghost) stays available without approval. */}
+        {e.stage === 'proposed' && !e.approved_at && (
+          <div style={{ marginTop: 12, padding: 12, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 240, fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+              <strong>Waiting for approval.</strong> This deal cannot move past Proposed until it is
+              approved. It can still be dropped or ghosted if you are turning it down.
+            </div>
+            {canManage && (
+              <button onClick={doApprove} disabled={approving}
+                style={{ padding: '6px 14px', background: '#27c93f', color: '#04140a', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: approving ? 'not-allowed' : 'pointer', opacity: approving ? 0.6 : 1 }}>
+                {approving ? 'Approving…' : 'Approve'}
+              </button>
+            )}
+          </div>
+        )}
+        {e.approved_at && (
+          <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            Approved {new Date(e.approved_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+          </div>
+        )}
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>

@@ -263,6 +263,9 @@ function requirePerm(perm, auth) {
 // (video posted = deal done); mandatory colour rating + post_date now enforced at live.
 // ('completed' stays legal in the DB CHECK as an unused legacy value; app never emits it.)
 const STAGES = [
+  // 'proposed' is the mandatory first stage (Reann #5, Afshaan 2026-08-11). Leaving it requires an
+  // explicit approval — see the gate in advanceStage. Every OTHER transition stays free (S138).
+  'proposed',
   'planning','agreed','shipped','delivered','scheduled','posting','live',
   'delayed','on_hold','ghosted','dropped',
 ];
@@ -275,7 +278,10 @@ const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC 
 
 // UGC pipeline stage set (Reann Batch C1, S177). Reuses engagements with
 // engagement_type='ugc'; vault/paused are non-terminal holds (vault reopenable to live).
-const UGC_STAGES = ['outreach','agreed','shipped','delivered','draft','live','paused','vault','retired','dropped'];
+// 'proposed' leads the UGC set too: getUgcPipeline buckets by_stage with NO stage filter, so a
+// proposed UGC deal that was not in this list would be fetched but render in no column — i.e.
+// silently invisible on the board.
+const UGC_STAGES = ['proposed','outreach','agreed','shipped','delivered','draft','live','paused','vault','retired','dropped'];
 
 // Free model: from any stage you may move to any other (terminals reopenable).
 function allowedTransitions(stage) {
@@ -1479,7 +1485,8 @@ async function createEngagement(body, auth, env) {
   const eno = await mintEngagementNo(env);
   if (!eno) return err('failed_to_mint_engagement_no', 500);
 
-  const startStage = STAGES.includes(body.stage) ? body.stage : 'planning';
+  // Reann #5 — all new deals start at 'proposed' and need approval to move on.
+  const startStage = STAGES.includes(body.stage) ? body.stage : 'proposed';
   const row = {
     engagement_no: eno,
     influencer_id: body.influencer_id,
@@ -1601,13 +1608,38 @@ async function getQualityFlags(url, auth, env) {
   });
 }
 
+// ── Reann #5 — approve a proposed deal (ignition_manage) ──────────────────────────────────────
+// Deliberately its own action rather than a field on updateEngagement: approval is an event with
+// an actor and a time, it belongs in engagement_history, and keeping approved_at out of
+// ENGAGEMENT_FIELDS means no ordinary patch can forge it.
+async function approveEngagement(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const cur = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,approved_at&limit=1`, env);
+  if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
+  // Idempotent — re-approving is a no-op rather than an error, so a double-click cannot
+  // overwrite who actually approved it or when.
+  if (cur.data[0].approved_at) {
+    return ok({ already_approved: true, approved_at: cur.data[0].approved_at });
+  }
+  const at = nowIso();
+  const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ approved_at: at, approved_by: auth.userId, updated_at: at }),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await writeHistory(env, body.engagement_id, 'approve', cur.data[0].stage, cur.data[0].stage,
+    (body.note && String(body.note).trim()) || null, auth.userId);
+  return ok({ approved_at: at, approved_by: auth.userId });
+}
+
 async function advanceStage(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
@@ -1615,6 +1647,16 @@ async function advanceStage(body, auth, env) {
   const allowed = allowedTransitions(from);
   if (!allowed.includes(body.to_stage)) {
     return err(`illegal_transition: ${from} → ${body.to_stage}`, 422);
+  }
+
+  // ── Reann #5: the approval gate ────────────────────────────────────────────────────────────
+  // A deal cannot LEAVE 'proposed' until it has been approved. Rejecting is deliberately still
+  // allowed: you must be able to drop or ghost a proposal you are declining without first
+  // approving it, which would be nonsense and would also pollute the approved-deal count.
+  // NB advanceStage already requires ignition_manage, so this is not a second permission — it is
+  // an explicit, recorded decision point, which is what "cannot be skipped" actually asks for.
+  if (from === 'proposed' && !TERMINAL_FAIL.has(body.to_stage) && !cur.data[0].approved_at) {
+    return err('approval_required: approve this deal before moving it out of Proposed', 422);
   }
 
   // Going live requires a video link (Reann #4) — accepted inline or already set.
@@ -2876,6 +2918,7 @@ const POST_ACTIONS = {
   deleteEngagement,
   generateUgcBrief,
   refreshUgcMetrics,
+  approveEngagement,
   advanceStage,
   closeEngagement,
   setRating,

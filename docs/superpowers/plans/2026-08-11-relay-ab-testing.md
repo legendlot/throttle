@@ -296,9 +296,14 @@ const t = (name, fn) => {
   catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
 };
 
-// arm helper: n sent, r read, d delivered, f failed+skipped
-const arm = (label, sent, read, delivered = null, failed = 0) =>
-  ({ label, sent, read, delivered: delivered === null ? Math.round(sent * 0.7) : delivered, failed });
+// arm helper. preSendFailed = failed BEFORE the send (render/gate) — never entered `sent`.
+// providerFailed = failed AFTER the send (wa_131049 etc) — inside `sent`, contributes 0 reads.
+const arm = (label, sent, read, delivered = null, preSendFailed = 0, providerFailed = 0) => ({
+  label, sent, read,
+  delivered: delivered === null ? Math.round(sent * 0.7) : delivered,
+  preSendFailed, providerFailed,
+  assigned: sent + preSendFailed,
+});
 
 const MATURE = { hoursSinceSent: 24 };
 
@@ -442,19 +447,34 @@ const num = (v) => Number(v || 0);
 
 function verdict(rawArms, ctx = {}) {
   const arms = (rawArms || []).map((a) => {
-    const sent = num(a.sent), delivered = num(a.delivered), read = num(a.read), failed = num(a.failed);
+    const assigned = num(a.assigned), sent = num(a.sent), delivered = num(a.delivered);
+    const read = num(a.read ?? a.read_count);
+    const preSendFailed = num(a.preSendFailed ?? a.pre_send_failed);
+    const providerFailed = num(a.providerFailed ?? a.provider_failed);
     return {
-      label: a.label, sent, delivered, read, failed,
+      label: a.label, assigned, sent, delivered, read, preSendFailed, providerFailed,
       readRate: sent > 0 ? read / sent : null,                       // PRIMARY (ITT)
       readRateOfDelivered: delivered > 0 ? read / delivered : null,  // diagnostic only
-      failRate: sent + failed > 0 ? failed / (sent + failed) : null,
+      // Denominator is ASSIGNED, not sent+failed. A pre-send failure never entered `sent`, so
+      // `sent + failed` double-counts nothing but describes a different population per arm.
+      preSendFailRate: assigned > 0 ? preSendFailed / assigned : null,
     };
   });
 
-  const base = { arms, winner: null, z: null, mde: null, deliveryDiffers: false };
+  const base = { arms, winner: null, z: null, mde: null,
+                 deliveryDiffers: false, providerFailuresDiffer: false };
   if (arms.length < 2) {
     return { ...base, state: 'not_a_test',
       reason: 'This campaign sent a single version, so there is nothing to compare.' };
+  }
+  // ⚠️ The model takes N arms (spec §2) but this compares exactly two. Say so loudly rather than
+  // silently comparing the first two and presenting it as the answer — a 3-arm test created
+  // through the API would otherwise get a confident verdict about two-thirds of itself.
+  if (arms.length > 2) {
+    return { ...base, state: 'too_many_arms',
+      reason: `This campaign has ${arms.length} versions. The result readout compares two at a `
+        + 'time and cannot yet call a winner across more — compare them in the experiment log, or '
+        + 'rerun with two versions.' };
   }
 
   const [a, b] = arms;
@@ -466,19 +486,38 @@ function verdict(rawArms, ctx = {}) {
   const out = { ...base, z, mde: detectable };
 
   // Is the DELIVERY rate itself different between arms? If so read÷delivered is confounded.
-  // Reported whatever the verdict, because it is evidence about whether content moves delivery.
+  // REPORTED, NEVER A REFUSAL — under ITT a delivery difference is part of the effect, and this
+  // is also the clean evidence about whether content moves wa_131049 (spec §6).
   const zDeliv = zTest(a.delivered, a.sent, b.delivered, b.sent);
   out.deliveryDiffers = zDeliv !== null && Math.abs(zDeliv) > Z_CRIT;
 
+  // Same for post-send provider failures (131049 and friends): they live INSIDE `sent` and
+  // contribute zero reads, so ITT already counts them correctly. Surfacing them explains WHY an
+  // arm lost; refusing on them would refuse exactly when the answer is real.
+  const zProv = zTest(a.providerFailed, a.sent, b.providerFailed, b.sent);
+  out.providerFailuresDiffer = zProv !== null && Math.abs(zProv) > Z_CRIT;
+
+  // ⚠️ ONLY PRE-SEND failures trigger a refusal, and the distinction is the whole point.
+  // A render failure (unresolved_variables) happens BEFORE the send, so those people never enter
+  // `sent` — and they are not a random subset, they are precisely the profiles missing the field
+  // that arm's template referenced. That silently changes who each arm was measured over.
+  // Measured 2026-08-11: render failures 57 rows / 0 with sent_at; wa_131049 1,905 rows / all
+  // with sent_at. Refusing on the latter would have been wrong.
   // Order matters: a biased sample must be caught BEFORE a significance test is quoted off it.
-  const zFail = zTest(a.failed, a.sent + a.failed, b.failed, b.sent + b.failed);
+  const zFail = zTest(a.preSendFailed, a.assigned, b.preSendFailed, b.assigned);
   if (zFail !== null && Math.abs(zFail) > Z_CRIT) {
     return { ...out, state: 'asymmetric_failures',
-      reason: 'The two versions failed or were skipped at different rates, so the people who '
-        + 'actually received them are not comparable. This is a biased result, not just a small '
-        + 'one — do not act on it. Check the per-version failure reasons below.' };
+      reason: 'The two versions failed BEFORE sending at different rates — usually one template '
+        + 'referencing a variable the other does not, so it failed for everyone missing that '
+        + 'field. The people each version actually reached are therefore different groups. This '
+        + 'is a biased result, not merely a small one — do not act on it. The per-version failure '
+        + 'reasons below will name the variable.' };
   }
 
+  // hoursSinceSent is derived from the RPC's last_sent_at (the last ACTUAL send), never from
+  // campaigns.updated_at — that column is bumped by the fan-out heartbeat and by any later edit,
+  // so using it would reset a mature result to "still maturing" every time someone touched the
+  // campaign.
   if (num(ctx.hoursSinceSent) < MATURITY_HOURS) {
     return { ...out, state: 'immature',
       reason: `Still arriving. Half of all reads land within about 30 minutes but 20% take more `
@@ -550,28 +589,55 @@ RETURNS TABLE (
   assigned        bigint,
   sent            bigint,
   delivered       bigint,
-  read            bigint,
-  failed          bigint,
+  read_count      bigint,
+  pre_send_failed bigint,
+  provider_failed bigint,
+  skipped         bigint,
   cost            numeric,
-  skip_reasons    jsonb
+  last_sent_at    timestamptz,
+  fail_reasons    jsonb
 )
 LANGUAGE sql
 STABLE
 AS $$
   SELECT v.id, v.label, v.template_id, v.weight,
-         count(m.id)                                                   AS assigned,
-         count(m.id) FILTER (WHERE m.sent_at IS NOT NULL)              AS sent,
-         count(m.id) FILTER (WHERE m.delivered_at IS NOT NULL)         AS delivered,
-         count(m.id) FILTER (WHERE m.read_at IS NOT NULL)              AS read,
-         count(m.id) FILTER (WHERE m.status IN ('failed','skipped','suppressed')) AS failed,
-         coalesce(sum(m.cost), 0)                                      AS cost,
-         coalesce(jsonb_object_agg(x.reason, x.n) FILTER (WHERE x.reason IS NOT NULL), '{}'::jsonb)
+         count(m.id)                                            AS assigned,
+         count(m.id) FILTER (WHERE m.sent_at IS NOT NULL)        AS sent,
+         count(m.id) FILTER (WHERE m.delivered_at IS NOT NULL)   AS delivered,
+         count(m.id) FILTER (WHERE m.read_at IS NOT NULL)        AS read_count,
+         -- ⚠️ THE SPLIT THAT DECIDES WHETHER A RESULT IS BIASED OR MERELY SMALL.
+         -- Measured 2026-08-11 across every failed/skipped message in comms.messages:
+         --   render failures (unresolved_variables) — 57 rows, 0 with sent_at
+         --   gate skips                             — 11,563 rows, 0 with sent_at
+         --   wa_131049 pacing blocks                — 1,905 rows, ALL 1,905 with sent_at
+         -- PRE-SEND failures never entered `sent`, so they remove people from the ITT
+         -- denominator NON-RANDOMLY (everyone missing a first_name) → that biases.
+         -- POST-SEND failures are inside `sent` and contribute zero reads → under ITT they
+         -- are part of the treatment effect, NOT a confound. Do not conflate the two.
+         count(m.id) FILTER (WHERE m.status IN ('failed','skipped','suppressed')
+                               AND m.sent_at IS NULL)            AS pre_send_failed,
+         count(m.id) FILTER (WHERE m.status = 'failed'
+                               AND m.sent_at IS NOT NULL)        AS provider_failed,
+         count(m.id) FILTER (WHERE m.status IN ('skipped','suppressed')) AS skipped,
+         coalesce(sum(m.cost), 0)                                AS cost,
+         -- Maturity must be measured from the last ACTUAL send, never campaigns.updated_at:
+         -- that column is bumped by the page heartbeat and by any later edit, so an edit
+         -- would make a mature result look immature again.
+         max(m.sent_at)                                          AS last_sent_at,
+         -- ⚠️ Counts per reason via a GROUPED subquery. `jsonb_object_agg(reason, 1)` over raw
+         -- rows silently collapses duplicate keys and reports 1 for EVERY reason — verified
+         -- against live data 2026-08-11 (it returned quiet_hours:1 where the truth was 235).
+         coalesce((
+           SELECT jsonb_object_agg(r.reason, r.n)
+             FROM (SELECT m2.reason, count(*) AS n
+                     FROM comms.messages m2
+                    WHERE m2.variant_id = v.id
+                      AND m2.status IN ('failed','skipped','suppressed')
+                      AND m2.reason IS NOT NULL
+                    GROUP BY m2.reason) r
+         ), '{}'::jsonb)                                         AS fail_reasons
     FROM comms.campaign_variants v
     LEFT JOIN comms.messages m ON m.variant_id = v.id
-    LEFT JOIN LATERAL (
-      SELECT m.reason AS reason, 1 AS n
-       WHERE m.status IN ('failed','skipped','suppressed') AND m.reason IS NOT NULL
-    ) x ON true
    WHERE v.campaign_id = p_campaign_id
    GROUP BY v.id, v.label, v.template_id, v.weight, v.sort_order
    ORDER BY v.sort_order, v.label;

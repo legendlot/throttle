@@ -5,6 +5,9 @@
  */
 
 export const UGC_STAGE_VALUES = [
+  // 'proposed' leads here too — the UGC board buckets by stage with no filter, so a proposed UGC
+  // deal missing from this list would be fetched but render in no column (silently invisible).
+  'proposed',
   'outreach', 'agreed', 'shipped', 'delivered', 'draft', 'live',
   'paused', 'vault', 'retired', 'dropped',
 ];
@@ -13,6 +16,7 @@ export const UGC_STAGE_VALUES = [
 export const UGC_TERMINAL = new Set(['retired', 'dropped']);
 
 export const UGC_STAGE_LABELS = {
+  proposed:  'Proposed',
   outreach:  'Outreach',
   agreed:    'Agreed',
   shipped:   'Shipped',
@@ -26,6 +30,7 @@ export const UGC_STAGE_LABELS = {
 };
 
 export const UGC_STAGE_PALETTE = {
+  proposed:  { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
   outreach:  { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
   agreed:    { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
   shipped:   { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },

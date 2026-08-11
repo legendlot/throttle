@@ -6,6 +6,9 @@
  */
 
 export const STAGE_VALUES = [
+  // 'proposed' — mandatory first stage with a HARD approval gate (Reann #5, Afshaan 2026-08-11).
+  // Must mirror ignitionops STAGES; PATTERN-076 three-layer encoding.
+  'proposed',
   'planning','agreed','shipped','delivered','scheduled','posting','live',
   'delayed','on_hold','ghosted','dropped',
 ];
@@ -13,6 +16,7 @@ export const STAGE_VALUES = [
 export const TERMINAL_FAIL = new Set(['ghosted','dropped']);
 
 export const STAGE_LABELS = {
+  proposed:  'Proposed',
   planning:  'Planning',
   agreed:    'Agreed',
   shipped:   'Shipped',
@@ -27,6 +31,7 @@ export const STAGE_LABELS = {
 };
 
 export const STAGE_PALETTE = {
+  proposed:  { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
   planning:  { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
   agreed:    { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
   shipped:   { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
@@ -49,5 +54,5 @@ export function allowedTransitions(stage) {
  *  sits before "Scheduled": influencer sends the draft → it's scheduled → goes Live
  *  (the terminal success stage). */
 export const HAPPY_PATH = [
-  'planning','agreed','shipped','delivered','posting','scheduled','live',
+  'proposed','planning','agreed','shipped','delivered','posting','scheduled','live',
 ];
