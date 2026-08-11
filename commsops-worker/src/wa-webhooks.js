@@ -102,8 +102,10 @@ async function handleStatuses(env, payload) {
         patch.pricing_category = u.pricing.category || null;
         patch.billable = typeof u.pricing.billable === 'boolean' ? u.pricing.billable : null;
       }
-      await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
-        { method: 'PATCH', body: JSON.stringify(patch) });
+      A.checkWrite('wa_status_patch_failed',
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
+          { method: 'PATCH', body: JSON.stringify(patch) }),
+        { message_id: msg.id, to: u.canonical_status });
       // A MEDIA error is the one failure that can be caused by our own cached media id going
       // bad (Meta expires uploaded media after ~30 days, and an id is only valid for the phone
       // number that uploaded it). Drop that number's cache so the next send re-uploads instead
@@ -151,7 +153,7 @@ async function handleStatuses(env, payload) {
     }
 
     if (msg?.profile_id && u.engagement_event) {
-      await A.sbComms('/rest/v1/events', env, {
+      A.checkWrite('wa_engagement_event_failed', await A.sbComms('/rest/v1/events', env, {
         method: 'POST',
         headers: { Prefer: 'resolution=ignore-duplicates' },
         body: JSON.stringify({
@@ -160,7 +162,7 @@ async function handleStatuses(env, payload) {
           properties: { provider_message_id: u.provider_message_id, message_id: msg.id, channel: 'whatsapp' },
           idempotency_key: `wa:${u.canonical_status}:${u.provider_message_id}`,
         }),
-      });
+      }), { message_id: msg.id, event: u.engagement_event });
     }
   }
   return updates.length;
@@ -173,12 +175,17 @@ async function handleInbound(env, payload) {
     // 1. open the 24h window — per (customer, RECEIVING business number): Meta's service
     // window is per WABA number, not per customer (review H5 part 3). m.phone_number_id is
     // the business number this inbound landed on.
-    await A.sbComms('/rest/v1/wa_windows?on_conflict=identifier_value,phone_number_id', env, {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates' },
-      body: JSON.stringify({ identifier_value: m.from, phone_number_id: m.phone_number_id || '',
-                             last_inbound_at: m.ts, updated_at: new Date().toISOString() }),
-    });
+    // ⚠️ The most consequential write in this file. A lost upsert loses the 24h service
+    // window, so the next agent reply is refused as out-of-window and has to burn a template
+    // — a customer-visible degradation that would otherwise leave no trace at all.
+    A.checkWrite('wa_window_upsert_failed',
+      await A.sbComms('/rest/v1/wa_windows?on_conflict=identifier_value,phone_number_id', env, {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({ identifier_value: m.from, phone_number_id: m.phone_number_id || '',
+                               last_inbound_at: m.ts, updated_at: new Date().toISOString() }),
+      }),
+      { from: m.from, phone_number_id: m.phone_number_id || null });
     // 2. substrate — resolve/create profile + append the inbound event
     const res = await ingest(env, {
       identifiers: [{ type: 'phone', value: `+${wa.toWaId(m.from)}` }],
@@ -372,8 +379,10 @@ async function persistQuality(env, v) {
     messaging_limit: v.current_limit || null,
     quality_updated_at: new Date().toISOString(),
   };
-  await A.sbComms(`/rest/v1/sender_identities?id=eq.${A.enc(row.id)}`, env,
-    { method: 'PATCH', body: JSON.stringify({ metadata }) });
+  A.checkWrite('wa_quality_persist_failed',
+    await A.sbComms(`/rest/v1/sender_identities?id=eq.${A.enc(row.id)}`, env,
+      { method: 'PATCH', body: JSON.stringify({ metadata }) }),
+    { sender_id: row.id, quality: metadata.quality_rating || null });
 }
 
 // template-status + phone-quality updates → write sender metadata + alert on a drop.
@@ -386,10 +395,14 @@ async function handleMeta(env, payload) {
         touched++;
         // reflect approval status onto the local template mirror if we can key it
         if (v.message_template_name) {
-          await A.sbComms(
+          // NB the `.catch()` below only ever caught a THROWN error, and sbComms does not
+          // throw — so a 4xx/5xx here was silent, and the local template mirror could sit on
+          // a stale approval_status while Meta had rejected it.
+          A.checkWrite('wa_template_status_patch_failed', await A.sbComms(
             `/rest/v1/templates?channel=eq.whatsapp&content->>meta_name=eq.${A.enc(v.message_template_name)}`, env,
             { method: 'PATCH', body: JSON.stringify({ approval_status: v.event || v.new_template_status || null,
-              updated_at: new Date().toISOString() }) }).catch(() => {});
+              updated_at: new Date().toISOString() }) }).catch((e) => ({ ok: false, status: null, data: String(e?.message || e) })),
+            { meta_name: v.message_template_name, event: v.event || v.new_template_status || null });
         }
         if (v.event && /REJECTED|DISABLED|PAUSED/i.test(v.event))
           await AL.alert(env, `⚠️ *Relay WA template ${v.event}* — \`${v.message_template_name || '?'}\` (reason: ${v.reason || 'n/a'})`);

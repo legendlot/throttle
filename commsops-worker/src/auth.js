@@ -23,6 +23,30 @@ const sbComms = sbProfile('comms');
 const sbStore = sbProfile('store');
 const enc = encodeURIComponent;
 
+// Make a fire-and-forget write OBSERVABLE without changing control flow.
+//
+// sbProfile never throws on an HTTP error — it returns `{ok:false}` — so a bare
+// `await A.sbComms(...)` discards a failed write in complete silence. In the webhook paths
+// that is not cosmetic: a dropped status PATCH leaves a message reading `sent` forever, a
+// dropped engagement insert loses delivered/read/clicked analytics, and a dropped
+// `wa_windows` upsert loses the 24h service window, which decides whether the next reply is
+// even allowed to be free-text.
+//
+// It LOGS rather than throws on purpose: webhooks must return 200 or Meta/Resend redeliver,
+// and one unwritable row must not turn into a redelivery storm. `wrangler tail | grep _failed`
+// is the intended way to see these. Same shape as the pre-existing `suppression_write_failed`
+// (S261), generalised so the whole class is covered rather than one site.
+function checkWrite(marker, res, context) {
+  if (!res || res.ok !== true) {
+    try {
+      console.log(marker, JSON.stringify({
+        status: res?.status ?? null, detail: res?.data ?? null, ...(context || {}),
+      }));
+    } catch { console.log(marker, 'unserialisable context'); }
+  }
+  return res;
+}
+
 async function verifyJWT(authHeader, env) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
@@ -71,7 +95,7 @@ const canAdmin        = p => can(p, 'relay_admin');
 const canSuperAdmin   = p => can(p, 'relay_super_admin');
 
 module.exports = {
-  sbProfile, sbComms, sbStore, enc, verifyJWT,
+  sbProfile, sbComms, sbStore, enc, verifyJWT, checkWrite,
   canView, canSegment, canTemplate, canBuild, canActivate, canApprove,
   canConsentAdmin, canConnector, canAdmin, canSuperAdmin,
 };

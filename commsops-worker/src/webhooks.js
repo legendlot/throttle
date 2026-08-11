@@ -55,8 +55,10 @@ async function handleResendWebhook(env, request) {
       if (!isUpgrade(msg.status, u.canonical_status)) delete patch.status;   // late 'delivered' after 'read' keeps opened (review M6)
       if (u.canonical_status === 'delivered') patch.delivered_at = u.at;
       if (u.canonical_status === 'opened') patch.read_at = u.at;
-      await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
-        { method: 'PATCH', body: JSON.stringify(patch) });
+      A.checkWrite('resend_status_patch_failed',
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
+          { method: 'PATCH', body: JSON.stringify(patch) }),
+        { message_id: msg.id, to: u.canonical_status });
     }
     // emit engagement event onto the profile's stream
     // link_clicked carries the clicked URL + channel; its idempotency key includes the
@@ -69,7 +71,7 @@ async function handleResendWebhook(env, request) {
       const idem = isClick
         ? `resend:clicked:${u.provider_message_id}:${u.clicked_url}:${u.at}`
         : `resend:${payload.type}:${u.provider_message_id}`;
-      await A.sbComms('/rest/v1/events', env, {
+      A.checkWrite('resend_engagement_event_failed', await A.sbComms('/rest/v1/events', env, {
         method: 'POST',
         body: JSON.stringify({
           profile_id: msg.profile_id, name: u.engagement_event,
@@ -77,7 +79,7 @@ async function handleResendWebhook(env, request) {
           properties: props, idempotency_key: idem,
         }),
         headers: { Prefer: 'resolution=ignore-duplicates' },
-      });
+      }), { message_id: msg.id, event: u.engagement_event });
     }
     // hard bounce / complaint → suppress forever
     if (u.reason === 'hard_bounce' || u.reason === 'complaint') {
@@ -161,14 +163,16 @@ async function handleTrustsignalSms(env, body) {
     if (!row) continue;                       // unknown id — log-only, never create a row
     if (TERMINAL.has(row.status)) continue;   // forward-only
     if (ev.canonical_status) {
-      await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: ev.canonical_status,
-          ...(ev.reason ? { reason: ev.reason } : {}),
-          ...(ev.canonical_status === 'delivered' && ev.at ? { delivered_at: ev.at } : {}),
+      A.checkWrite('sms_dlr_patch_failed',
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: ev.canonical_status,
+            ...(ev.reason ? { reason: ev.reason } : {}),
+            ...(ev.canonical_status === 'delivered' && ev.at ? { delivered_at: ev.at } : {}),
+          }),
         }),
-      });
+        { message_id: row.id, to: ev.canonical_status });
     }
     if (ev.suppress) {
       // ⚠️ THE ADDRESS COMES FROM OUR OWN messages ROW, NOT FROM THE CALLBACK.
