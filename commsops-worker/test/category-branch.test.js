@@ -18,6 +18,7 @@ const TAX = [
   { product: 'colosseum', category: 'L.O.T Build' },
   { product: 'taj mahal', category: 'L.O.T Build' },
   { product: 'diy drone', category: 'L.O.T Build' },
+  { product: 'bracey', category: 'L.O.T DIY' },        // 3rd category, added 2026-08-04 (S260)
 ];
 
 t('RC title → L.O.T Cars', () =>
@@ -40,6 +41,63 @@ t('array input + case-insensitive', () =>
 
 t('empty taxonomy → null (never throws)', () =>
   assert.equal(classifyTitles('L.O.T Cars Shadow', []), null));
+
+// ── the 3rd category (S272) ──────────────────────────────────────────────────
+// The original classifier was hard-coded BINARY: Build, else anything-that-matched → Cars.
+// So `L.O.T DIY` — a real category since 2026-08-04 — was silently coerced to Cars. These
+// pin the general shape, not just Bracey: a new category must survive the classifier.
+
+t('DIY title → L.O.T DIY, not coerced to Cars', () =>
+  assert.equal(classifyTitles('Bracey — DIY Necklace Kit (Alpha)', TAX), 'L.O.T DIY'));
+
+t('mixed DIY + Cars → DIY wins (Cars is the default voice, so the rarer one leads)', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, Bracey Kit', TAX), 'L.O.T DIY'));
+
+t('mixed Build + DIY → Build still wins (preserves the S232 decision)', () =>
+  assert.equal(classifyTitles('Bracey Kit, The Colosseum', TAX), 'L.O.T Build'));
+
+t('mixed all three → Build wins', () =>
+  assert.equal(classifyTitles(['Shadow', 'Bracey', 'Taj Mahal'], TAX), 'L.O.T Build'));
+
+t('an UNLISTED future category is returned as-is, never coerced to Cars', () => {
+  const tax = [...TAX, { product: 'someday', category: 'L.O.T Whatever' }];
+  assert.equal(classifyTitles('Someday Thing', tax), 'L.O.T Whatever');
+});
+
+t('unlisted category loses to a listed one (deterministic, not first-seen)', () => {
+  const tax = [...TAX, { product: 'someday', category: 'L.O.T Whatever' }];
+  assert.equal(classifyTitles('Someday Thing, The Colosseum', tax), 'L.O.T Build');
+});
+
+t('a mixed cart of two unlisted categories does not depend on taxonomy order', () => {
+  const a = [{ product: 'aaa', category: 'Zeta' }, { product: 'bbb', category: 'Alpha' }];
+  const b = [{ product: 'bbb', category: 'Alpha' }, { product: 'aaa', category: 'Zeta' }];
+  // Two CART LINES → both categories are seen, so the sort decides. Order-independent.
+  assert.equal(classifyTitles(['aaa thing', 'bbb thing'], a), 'Alpha');
+  assert.equal(classifyTitles(['aaa thing', 'bbb thing'], b), 'Alpha');
+});
+
+t('KNOWN LIMIT (pre-existing, unreachable in practice): ONE title matching two products takes the first taxonomy hit', () => {
+  // The inner `break` classifies a title on its FIRST product match, so only one category
+  // is ever collected per title — precedence cannot rescue a single ambiguous title, and
+  // the result follows taxonomy row order. This is unchanged by S272: the old classifier
+  // broke in exactly the same place, so `shadow colosseum` read as Cars before too.
+  //
+  // Deliberately NOT fixed (removing the break would scan the whole taxonomy per title and
+  // could newly match a second category on titles that today stop at the right one). It is
+  // unreachable with real data: a cart line is ONE product, and no product name is a
+  // substring of another product's name across categories — verified 2026-08-11 by
+  // self-joining product_master on `b.product LIKE '%'||a.product||'%'` where the
+  // categories differ, which returned 0 rows. Re-run that if a product is ever renamed.
+  const a = [{ product: 'aaa', category: 'Zeta' }, { product: 'bbb', category: 'Alpha' }];
+  const b = [{ product: 'bbb', category: 'Alpha' }, { product: 'aaa', category: 'Zeta' }];
+  assert.equal(classifyTitles('aaa and bbb', a), 'Zeta');
+  assert.equal(classifyTitles('aaa and bbb', b), 'Alpha');
+  assert.equal(classifyTitles('shadow colosseum', TAX), 'L.O.T Cars');   // first hit, not Build
+  // A MULTI-LINE cart is the real case and it is order-independent — that is what matters:
+  assert.equal(classifyTitles(['shadow', 'colosseum'], TAX), 'L.O.T Build');
+  assert.equal(classifyTitles(['colosseum', 'shadow'], TAX), 'L.O.T Build');
+});
 
 // ── evalEventProperty ──
 const P = { primary_category: 'L.O.T Build', total: '2199', financial_status: 'pending' };

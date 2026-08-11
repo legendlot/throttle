@@ -29,22 +29,39 @@ async function loadTaxonomy(env) {
   return _tax;
 }
 
+// Mixed-cart precedence, most-specific first. `L.O.T Build` winning is the S232 decision
+// (the rarer, more deliberate purchase reads better in the Build voice); `L.O.T DIY` sits
+// above `L.O.T Cars` for the same reason — Cars is the default, dominant voice, so in a
+// mixed cart the rarer category leads.
+//
+// ⚠️ This list is a PREFERENCE ORDER, not an allow-list. A category missing from it is
+// still returned (see below). That distinction is the whole bug this replaced: the original
+// classifier was hard-coded binary — Build, else anything-that-matched → Cars — so when
+// `L.O.T DIY` was added to product_master on 2026-08-04 (RULE-TAXONOMY-001, S260) every DIY
+// product was silently stamped `L.O.T Cars`. Adding a 4th category to product_master must
+// stay a no-op here; add it to this list only to give it a mixed-cart rank.
+const CATEGORY_PRECEDENCE = ['L.O.T Build', 'L.O.T DIY', 'L.O.T Cars'];
+
 // Pure classifier — titles: string (comma-list) or array. Returns a category or null.
 function classifyTitles(titles, taxonomy) {
   const list = (Array.isArray(titles) ? titles : String(titles || '').split(','))
     .map((t) => String(t || '').toLowerCase().trim()).filter(Boolean);
   if (!list.length || !Array.isArray(taxonomy) || !taxonomy.length) return null;
-  let sawCars = false;
+  const matched = new Set();
   for (const title of list) {
     for (const { product, category } of taxonomy) {
       if (product.length >= 3 && title.includes(product)) {
-        if (category === 'L.O.T Build') return 'L.O.T Build';   // any Build item wins
-        sawCars = true;
+        matched.add(category);
         break;   // this title is classified; next title
       }
     }
   }
-  return sawCars ? 'L.O.T Cars' : null;
+  if (!matched.size) return null;                                  // unmatched → null, never a guess
+  for (const c of CATEGORY_PRECEDENCE) if (matched.has(c)) return c;
+  // Only unranked categories matched. Return one rather than coercing to a default — a
+  // wrong-but-plausible category is worse than an unfamiliar one, because it looks correct.
+  // Sorted so the answer never depends on taxonomy row order.
+  return [...matched].sort()[0];
 }
 
 // Best-effort enrichment — a category miss must never fail the webhook/event.
