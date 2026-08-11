@@ -15,7 +15,10 @@ import { useVariantStats, mergeVariantArms } from './useVariantStats.js';
 // Mirrors verdict.state → { label, tone } from ab-stats.js's verdict(). 'winner' is the only
 // green state and 'asymmetric_failures' is the only red one — every other state is a REFUSAL to
 // call a winner, which is a correct outcome, not a failure, so it is never colored red.
-const STATE_META = {
+// Exported: the cross-campaign experiment log (experiments/page.js) renders the SAME snapshotted
+// verdict states and must use the identical label/tone map — a second copy would drift the moment
+// either screen's wording changed without the other.
+export const STATE_META = {
   winner:               { label: 'Winner', tone: 'green' },
   asymmetric_failures:  { label: 'Result is biased — do not act on it', tone: 'red' },
   immature:             { label: 'Still maturing', tone: 'yellow' },

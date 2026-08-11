@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
-  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2,
+  Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2, FlaskConical,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -15,6 +15,10 @@ export const NAV_GROUPS = [
     id: 'send', label: 'Send',
     items: [
       { id: 'campaigns', label: 'Campaigns', route: '/campaigns', icon: Send,      requires: 'relay_view' },
+      // Beside Campaigns, not under Build & measure — it is a log OF campaigns (cross-campaign,
+      // read-only), not a thing you build. Same view permission as Campaigns; only campaign_build
+      // gates recording a learning, and that stays where it already lives (VariantResults.js).
+      { id: 'experiments', label: 'Experiment log', route: '/experiments', icon: FlaskConical, requires: 'relay_view' },
       { id: 'journeys',  label: 'Journeys',  route: '/journeys',  icon: GitBranch, requires: 'relay_view' },
     ],
   },

@@ -11,7 +11,7 @@ import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import VariantSetup from './VariantSetup.js';
 import VariantProgress from './VariantProgress.js';
-import VariantResults from './VariantResults.js';
+import VariantResults, { STATE_META } from './VariantResults.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -54,22 +54,39 @@ function csvCell(v) {
 // Export exactly what is on screen (same rows, same filter) so a shared CSV and a shared
 // screenshot can never disagree. Rates go out as raw fractions AND counts so the numbers are
 // re-derivable in a sheet; 'unpriced' rides along because a cost figure without it misleads.
-function downloadCampaignsCsv(rows, overview, tab) {
+//
+// `experiments` is the SAME campaign_id-keyed map built for the A/B chip (one listExperiments
+// call, not a per-row fetch — see load()). Per-arm numbers come from that row's verdict_snapshot,
+// i.e. exactly what was decided and when — the same frozen data the experiment log renders, never
+// a live recompute. A campaign whose test hasn't been decided yet exports as "in progress"; its
+// live per-arm numbers are on its own detail page (VariantResults.js), which this bulk export is
+// not trying to replace.
+function downloadCampaignsCsv(rows, overview, tab, experiments = {}) {
   const header = ['Broadcast', 'Channel', 'Purpose', 'Status', 'Sent/scheduled at',
     'Revenue (INR)', 'Cost (INR)', 'Unpriced msgs', 'ROI',
     'Targeted', 'Sent', 'Delivered', 'Opened', 'Clicked', 'Orders',
     'Unsubscribes', 'Failed', 'Skipped',
     'Read rate', 'Click rate', 'Order rate', 'Unsub rate', 'Fail rate', 'Skip rate',
-    'Attribution window (days)'];
+    'Attribution window (days)',
+    'A/B test', 'A/B verdict', 'A/B winner',
+    'Arm A', 'Arm A sent', 'Arm A read', 'Arm A read rate',
+    'Arm B', 'Arm B sent', 'Arm B read', 'Arm B read rate'];
   const body = rows.map((r) => {
     const o = overview[r.id] || {};
     const st = campaignStatus(r);
+    const exp = experiments[r.id] || null;
+    const snap = exp?.verdict_snapshot?.verdict || null;
+    const armA = snap?.arms?.[0] || null, armB = snap?.arms?.[1] || null;
+    const verdictLabel = !exp ? '' : snap ? (STATE_META[snap.state]?.label || snap.state) : 'In progress — not yet decided';
     return [r.name, r.channel, r.purpose, st.label, o.at || '',
       o.attributed_revenue ?? '', o.cost_inr ?? '', o.unpriced ?? '', o.roi ?? '',
       o.total ?? '', o.sent ?? '', o.delivered ?? '', o.opened ?? '', o.clicked ?? '',
       o.attributed_orders ?? '', o.unsubscribes ?? '', o.failed ?? '', o.skipped ?? '',
       o.read_rate ?? '', o.click_rate ?? '', o.order_rate ?? '', o.unsub_rate ?? '',
-      o.fail_rate ?? '', o.skip_rate ?? '', o.window_days ?? ''];
+      o.fail_rate ?? '', o.skip_rate ?? '', o.window_days ?? '',
+      exp ? 'Yes' : '', verdictLabel, snap?.winner || '',
+      armA?.label ?? '', armA?.sent ?? '', armA?.read ?? '', armA?.readRate ?? '',
+      armB?.label ?? '', armB?.sent ?? '', armB?.read ?? '', armB?.readRate ?? ''];
   });
   const csv = [header, ...body].map((r) => r.map(csvCell).join(',')).join('\r\n');
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -124,6 +141,14 @@ export default function CampaignsPage() {
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});
+  // A/B chip + CSV per-arm export both key off this — ONE listExperiments call for the whole
+  // list (already built for the experiment log, S272), never a per-row fetch. campaign_id →
+  // experiment row (hypothesis/verdict_snapshot/learning). Presence of a row is the chip's
+  // signal: an experiment row is created in the SAME write as arm B (saveCampaignVariant), so
+  // "has an experiment" tracks "was ever a 2+-arm test" — it does not un-flag a campaign whose
+  // arm B was later deleted back down to one, which is an accepted, rare edge case absent a
+  // bulk variant-count endpoint (adding one means touching the worker, out of scope here).
+  const [experiments, setExperiments] = useState({});
   const [tab, setTab] = useState('all');
   const [segments, setSegments] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -156,7 +181,7 @@ export default function CampaignsPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [cs, sg, tp, ov, st] = await Promise.all([
+      const [cs, sg, tp, ov, st, ex] = await Promise.all([
         garageFetch('getCampaigns', {}, session),
         garageFetch('getSegments', {}, session),
         // Archived templates are excluded from the picker (S252): archiving means
@@ -171,12 +196,16 @@ export default function CampaignsPage() {
         // Non-fatal (review M12): a failed/denied fetch leaves settings null, which the banner
         // and sendNow() confirm both read as "test mode unknown" and default to the SAFE copy.
         garageFetch('getRelaySettings', {}, session).catch(() => null),
+        // A/B chip (S272) — ONE bulk call, not one per row. Non-fatal: the list still renders,
+        // just without the chip / per-arm CSV columns, if this fails.
+        garageFetch('listExperiments', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(cs) ? cs : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
       setSettings(st || null);
+      setExperiments(Array.isArray(ex) ? Object.fromEntries(ex.map((e) => [e.campaign_id, e])) : {});
     } catch (e) { showToast(e.message || 'Failed to load campaigns', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -194,9 +223,24 @@ export default function CampaignsPage() {
   function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
   // ⌘K "New campaign" — cross-screen ?new=1 + same-screen relay:new event.
   useNewParam(canBuild, startNew);
-  // Per-campaign performance (M8) — only meaningful once the campaign has sent.
+  // Deep-link from the experiment log ("open this campaign") — ?open=<id> opens straight into
+  // the detail view. Same one-shot-consume-then-clean-the-URL shape as useNewParam.js's ?new=1,
+  // kept inline here rather than a second hook since it fires `open(row)` with an id, not a
+  // no-arg callback. `open` is a hoisted function declaration, so referencing it before its own
+  // line below is safe.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !session) return;
+    const id = new URLSearchParams(window.location.search).get('open');
+    if (!id) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    open({ id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+  // Per-campaign performance (M8) — only meaningful once the campaign has actually sent
+  // (incl. 'paused': Meta blocking a bound template mid-send does not undo the messages that
+  // already went out before the block — hiding stats then hides an incident, not nothing).
   const loadStats = useCallback(async (id, status) => {
-    if (!id || !['sending', 'sent'].includes(status)) { setStats(null); setAttr(null); return; }
+    if (!id || !['sending', 'sent', 'paused'].includes(status)) { setStats(null); setAttr(null); return; }
     try {
       const [st, at] = await Promise.all([
         garageFetch('getCampaignStats', { id }, session),
@@ -222,6 +266,9 @@ export default function CampaignsPage() {
   }
   // While a broadcast is fanning out, poll so the detail auto-flips draft→sending→sent
   // without the operator hitting refresh (the Queue drains over a minute or two).
+  // ⚠️ Verified for 'paused' (review gap b): the effect keys on c.status, so the moment a
+  // mid-flight campaign flips to 'paused' this condition goes true and the interval is never
+  // (re-)armed — it does NOT spin forever polling a campaign that stopped progressing.
   useEffect(() => {
     if (view !== 'form' || c.status !== 'sending' || !c.id) return undefined;
     const t = setInterval(async () => {
@@ -660,7 +707,7 @@ export default function CampaignsPage() {
           <>
             <Btn onClick={() => {
               const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
-              downloadCampaignsCsv(shown, overview, tab);
+              downloadCampaignsCsv(shown, overview, tab, experiments);
             }} disabled={!shownCount}><Download size={13} /> CSV</Btn>
             {canBuild && <Btn kind="primary" onClick={startNew}><Plus size={14} /> New campaign</Btn>}
           </>
@@ -703,7 +750,13 @@ export default function CampaignsPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                           <ChannelChip channel={r.channel} />
                           <div>
-                            <div style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</div>
+                            <div style={{ fontWeight: 600, color: 'var(--t1)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {r.name}
+                              {/* A test is identifiable without opening it (Afshaan). Presence of an
+                                  experiment row, not a live variant count — see the `experiments`
+                                  state comment above for why. */}
+                              {experiments[r.id] && <Badge label="A/B" tone="blue" />}
+                            </div>
                             <div className="mono dim" style={{ fontSize: 10.5, marginTop: 2 }}>{cap(r.purpose)} · {cap(r.channel)}</div>
                           </div>
                         </div>
