@@ -716,35 +716,77 @@ git commit -m "relay: campaign_variant_stats RPC (aggregation only)"
 
 - [ ] **Step 1: Write the failing test**
 
+⚠️ **Do NOT write this as a source-text grep.** `send.js` IS behaviourally testable — the established
+pattern is in `test/send-dedup.test.js`: monkey-patch `A.sbComms`, call the real `send()`, and assert
+on what it wrote. Read that file first and copy its harness (async `t()` helper, `ENV` stub, restore
+`A.sbComms` at the end). Asserting on source text would pass against code that never runs.
+
+Facts you need, already verified against `src/send.js`:
+- With **no** `dedupKey` there is no `opts._reservedId`, so `finalize` calls `logMessage`, which
+  **POSTs to `/rest/v1/messages`** with the whole row as the body (`send.js:178`).
+- With a `dedupKey` it **PATCHes `/rest/v1/messages?id=eq.<reserved>`** instead.
+- A template lookup returning `{ok:true, data:[]}` drives `template_not_found` → `finalize` with a
+  **non-sent** status, which is the cheapest way to exercise the failure path.
+
 ```js
-// variant_id must be stamped on the messages row for EVERY outcome, not just successful sends —
-// skipped/suppressed/failed rows are what make the per-arm failure asymmetry check possible.
+// test/send-variant.test.js — variant_id must land on the messages row for EVERY outcome, not just
+// successful sends. The per-arm failure-asymmetry check in ab-stats.js reads exactly those
+// non-sent rows, so if the stamp were only applied on success that check would silently compare
+// nothing. Harness copied from test/send-dedup.test.js.
 const assert = require('assert');
-const fs = require('fs');
-const src = fs.readFileSync(require.resolve('../src/send.js'), 'utf8');
+const A = require('../src/auth.js');
+const { send } = require('../src/send.js');
 
 let pass = 0, fail = 0;
-const t = (name, fn) => {
-  try { fn(); pass++; console.log('  ok  ', name); }
-  catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
-};
+const t = (name, fn) => Promise.resolve().then(fn).then(
+  () => { pass++; console.log('  ok  ', name); },
+  (e) => { fail++; console.log('  FAIL', name, '\n        ', e.message); });
+const origSb = A.sbComms;
+const ENV = { SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' };
 
-t('finalize builds variant_id onto the messages row', () => {
-  assert.ok(/variant_id:\s*opts\.variantId\s*\|\|\s*null/.test(src),
-    'expected `variant_id: opts.variantId || null` in the finalize row builder');
-});
+(async () => {
+  await t('variant_id is persisted on a NON-SENT outcome', async () => {
+    let posted = null;
+    A.sbComms = async (path, env, opts = {}) => {
+      if (path.includes('/templates?id=eq.')) return { ok: true, data: [] };   // → template_not_found
+      if (path.startsWith('/rest/v1/messages') && (opts.method || 'GET') === 'POST') {
+        posted = JSON.parse(opts.body);
+        return { ok: true, data: [{ id: 'M-VAR' }] };
+      }
+      return { ok: true, data: [] };
+    };
+    const r = await send(ENV, { channel: 'email', purpose: 'utility', to: 'a@b.com',
+                                templateId: 'T', variantId: 'VAR-B' });
+    assert.ok(posted, 'finalize must have written a messages row');
+    assert.equal(posted.variant_id, 'VAR-B', 'variant_id missing from the persisted row');
+    assert.notEqual(r.status, 'sent');
+  });
 
-t('variant_id sits in the SHARED row builder, so skips and failures carry it too', () => {
-  const rowStart = src.indexOf('const row = {');
-  assert.ok(rowStart > -1, 'finalize row builder not found');
-  const rowBlock = src.slice(rowStart, rowStart + 1200);
-  assert.ok(rowBlock.includes('variant_id'),
-    'variant_id must be in the single row object finalize builds for every status');
-});
+  await t('variant_id is null when no arm was assigned (every existing caller)', async () => {
+    let posted = null;
+    A.sbComms = async (path, env, opts = {}) => {
+      if (path.includes('/templates?id=eq.')) return { ok: true, data: [] };
+      if (path.startsWith('/rest/v1/messages') && (opts.method || 'GET') === 'POST') {
+        posted = JSON.parse(opts.body);
+        return { ok: true, data: [{ id: 'M-NOVAR' }] };
+      }
+      return { ok: true, data: [] };
+    };
+    await send(ENV, { channel: 'email', purpose: 'utility', to: 'a@b.com', templateId: 'T' });
+    assert.ok(posted, 'finalize must have written a messages row');
+    assert.strictEqual(posted.variant_id, null, 'must be null, not undefined — undefined is dropped by JSON.stringify and the column would never be written');
+  });
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+  A.sbComms = origSb;
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
 ```
+
+⚠️ The second test is the one that matters more than it looks: `opts.variantId || null` yields
+`null`, but a bare `opts.variantId` would yield `undefined`, which `JSON.stringify` **drops from the
+body entirely** — so the column would silently never be written and every existing caller would look
+fine. Assert `strictEqual(..., null)`, not falsiness.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
