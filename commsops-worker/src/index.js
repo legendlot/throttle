@@ -26,6 +26,7 @@ const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
+const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -165,6 +166,22 @@ async function archiveTemplateVersion(env, row, userId) {
     });
     return !!r.ok;
   } catch { return false; }
+}
+
+// Per-arm stats + verdict for one campaign. Shared by getVariantStats (recomputed on every
+// view) and recordExperimentLearning (frozen into verdict_snapshot at the moment of decision —
+// see the comment there for why the snapshot has to exist at all). Returns null on RPC failure.
+async function computeVariantStats(env, campaignId) {
+  const rpc = await A.sbComms('/rest/v1/rpc/campaign_variant_stats', env,
+    { method: 'POST', body: JSON.stringify({ p_campaign_id: campaignId }) });
+  if (!rpc.ok) return null;
+  const rows = Array.isArray(rpc.data) ? rpc.data : [];
+  // ⚠️ PostgREST returns numerics as STRINGS. ab-stats coerces internally, but hoursSinceSent
+  // is computed here, outside that coercion, so it must be explicit.
+  const last = rows.map((r) => r.last_sent_at).filter(Boolean).sort().pop() || null;
+  const hoursSinceSent = last ? (Date.now() - new Date(last).getTime()) / 3600000 : 0;
+  const v = AB.verdict(rows, { hoursSinceSent });
+  return { arms: rows, verdict: v };
 }
 
 // ── GET actions ──────────────────────────────────────────────────────────────
@@ -602,6 +619,42 @@ async function handleGet(url, auth, env) {
         { method: 'POST', body: JSON.stringify({ p_journey_id: id, p_version: v ? Number(v) : null }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
+
+    // ── S272: A/B testing ──
+    case 'getCampaignVariants': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const [vr, er] = await Promise.all([
+        A.sbComms(`/rest/v1/campaign_variants?campaign_id=eq.${A.enc(id)}`
+          + `&select=*&order=sort_order.asc,label.asc`, env),
+        A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(id)}&select=*&limit=1`, env),
+      ]);
+      if (!vr.ok) return err('db_error', 500);
+      return ok({ variants: vr.data || [], experiment: (er.ok && er.data?.[0]) || null });
+    }
+    case 'getVariantStats': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const stats = await computeVariantStats(env, id);
+      if (!stats) return err('db_error', 500);
+      return ok(stats);
+    }
+    case 'listExperiments': {          // cross-campaign experiment log
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const er = await A.sbComms('/rest/v1/campaign_experiments?select=*&order=created_at.desc', env);
+      if (!er.ok) return err('db_error', 500);
+      const rows = Array.isArray(er.data) ? er.data : [];
+      const ids = [...new Set(rows.map((r) => r.campaign_id).filter(Boolean))];
+      // Batch via IN, never a per-row lookup loop.
+      const cr = ids.length
+        ? await A.sbComms(`/rest/v1/campaigns?id=in.(${ids.map(A.enc).join(',')})`
+            + `&select=id,name,channel,purpose,status`, env)
+        : { ok: true, data: [] };
+      const campById = {}; (cr.ok ? cr.data : []).forEach((c) => { campById[c.id] = c; });
+      const enriched = rows.map((r) => ({ ...r, campaign: campById[r.campaign_id] || null }));
+      return ok(enriched);
+    }
+
     default:
       return err(`unknown_action:${action}`, 404);
   }
@@ -1387,7 +1440,7 @@ async function handlePost(body, auth, env) {
     // suppression, consent, quiet hours, freq cap) so the rehearsal is honest.
     case 'sendCampaignTest': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to, draft: body.draft });
+      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to, draft: body.draft, variantId: body.variantId });
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'submitCampaign': {           // draft → approved (auto) or pending_approval (threshold)
@@ -1512,6 +1565,110 @@ async function handlePost(body, auth, env) {
         notifySms: !!body.notifySms, notifyEmail: !!body.notifyEmail,
       });
       return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+
+    // ── S272: A/B testing ──
+    case 'saveCampaignVariant': {      // upsert one arm {campaignId, id?, label, templateId, weight}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, id, label, templateId, weight } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      if (!label) return err('label_required', 400);
+      const camp = await CAMP.getCampaign(env, campaignId);
+      if (!camp) return err('not_found', 404);
+
+      // Variants freeze at APPROVED, not at sending. Between approved and sending an arm could
+      // otherwise be added that nobody approved — the approval was granted against arm A alone,
+      // so without this the A/B feature is a way around the approval gate.
+      if (camp.status === 'sending' || camp.status === 'sent') return err('campaign_already_sending', 422);
+      if (camp.status === 'approved' || camp.status === 'scheduled') {
+        await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
+      }
+
+      let sortOrder = 0;
+      if (!id) {
+        const existing = await A.sbComms(
+          `/rest/v1/campaign_variants?campaign_id=eq.${A.enc(campaignId)}`
+          + `&select=id,sort_order&order=sort_order.desc&limit=1`, env);
+        const rows = (existing.ok && Array.isArray(existing.data)) ? existing.data : [];
+        if (rows.length === 0) {
+          // First arm B added with no arm A yet: arm A always mirrors campaigns.template_id by
+          // construction, and the experiment row is created at the same moment.
+          await A.sbComms('/rest/v1/campaign_variants', env, { method: 'POST',
+            body: JSON.stringify({ campaign_id: campaignId, label: 'A', template_id: camp.template_id,
+              weight: 50, sort_order: 0, created_by: auth.userId }) });
+          await A.sbComms('/rest/v1/campaign_experiments', env, { method: 'POST',
+            body: JSON.stringify({ campaign_id: campaignId }) });
+          sortOrder = 1;
+        } else {
+          sortOrder = Number(rows[0].sort_order || 0) + 1;
+        }
+      }
+
+      const row = { campaign_id: campaignId, label, template_id: templateId || null,
+        weight: Number(weight) || 50, updated_at: nowIso() };
+      const r = id
+        ? await A.sbComms(`/rest/v1/campaign_variants?id=eq.${A.enc(id)}&campaign_id=eq.${A.enc(campaignId)}`, env,
+            { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
+        : await A.sbComms('/rest/v1/campaign_variants', env, { method: 'POST',
+            headers: { Prefer: 'return=representation' },
+            body: JSON.stringify({ ...row, sort_order: sortOrder, created_by: auth.userId }) });
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+    case 'deleteCampaignVariant': {    // {campaignId, id}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, id } = body;
+      if (!campaignId || !id) return err('campaignId_and_id_required', 400);
+      const camp = await CAMP.getCampaign(env, campaignId);
+      if (!camp) return err('not_found', 404);
+
+      // Variants freeze at APPROVED, not at sending — same reasoning as saveCampaignVariant.
+      if (camp.status === 'sending' || camp.status === 'sent') return err('campaign_already_sending', 422);
+      if (camp.status === 'approved' || camp.status === 'scheduled') {
+        await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
+      }
+
+      const r = await A.sbComms(
+        `/rest/v1/campaign_variants?id=eq.${A.enc(id)}&campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'DELETE' });
+      return r.ok ? ok({ deleted: true }) : err('db_error', 500);
+    }
+    case 'recordExperimentLearning': {  // {campaignId, learning}
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, learning } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      // The snapshot is the point. The live verdict is otherwise recomputed on every page view
+      // forever, so late-arriving reads (5% land after 39h) can flip it AFTER someone wrote down
+      // "B won" and acted on it — leaving the log and the live screen permanently contradicting
+      // each other with no way to tell which was ever true.
+      const snap = await computeVariantStats(env, campaignId);
+      if (!snap) return err('db_error', 500);
+      const r = await A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'PATCH', headers: { Prefer: 'return=representation' },
+          body: JSON.stringify({ learning: learning || null, decided_at: nowIso(),
+            decided_by: auth.userId, verdict_snapshot: snap, updated_at: nowIso() }) });
+      if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);
+      if (Array.isArray(r.data) && r.data.length === 0) return err('experiment_not_found', 404);
+      return ok(r.data?.[0]);
+    }
+    case 'saveExperimentMeta': {        // {campaignId, hypothesis?, plannedReadAt?} — setup screen
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { campaignId, hypothesis, plannedReadAt } = body;
+      if (!campaignId) return err('campaignId_required', 400);
+      const patch = { updated_at: nowIso() };
+      if (hypothesis !== undefined) patch.hypothesis = hypothesis || null;
+      if (plannedReadAt !== undefined) patch.planned_read_at = plannedReadAt || null;
+      let r = await A.sbComms(`/rest/v1/campaign_experiments?campaign_id=eq.${A.enc(campaignId)}`, env,
+        { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch) });
+      if (r.ok && Array.isArray(r.data) && r.data.length === 0) {
+        // Setup screen may be used before any arm B exists (saveCampaignVariant's auto-create
+        // hasn't fired yet) — upsert so the hypothesis/read-time isn't lost waiting on that.
+        r = await A.sbComms('/rest/v1/campaign_experiments', env, { method: 'POST',
+          headers: { Prefer: 'return=representation' },
+          body: JSON.stringify({ campaign_id: campaignId, ...patch }) });
+      }
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
     }
 
     default:
