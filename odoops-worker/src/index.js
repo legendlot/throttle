@@ -3125,6 +3125,11 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
 }
 async function mapAndUpsert(channelId, dates, runId, stgTable, userId) {
   const r = await resolveSkus(channelId, dates, stgTable, userId);
+  // QC feeds quote a tax-INCLUSIVE consumer price (ASP x units) with no tax column, so stg_qc.tax_value
+  // stayed 0 and Odo's ex-GST net never stripped GST from quick-commerce (~Rs 41L overstated, 2026-08-11).
+  // Derive it per product from the HSN rate — NOT a flat 18%: L.O.T Build puzzles are 5% (HSN 95036010).
+  // Must run after resolveSkus (it needs sku_map) and before recompute_facts (which sums tax_value).
+  if (stgTable === 'stg_qc') await rpcSales('fill_qc_tax', { p_channel: channelId, p_dates: dates });
   const f = await rpcSales('recompute_facts', { p_channel: channelId, p_dates: dates, p_run_id: runId });
   return { ...r, factsUpserted: (f.ok ? Number(f.data) : 0) };
 }
