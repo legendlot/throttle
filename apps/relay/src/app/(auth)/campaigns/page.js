@@ -9,6 +9,7 @@ import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
+import VariantSetup from './VariantSetup.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -464,6 +465,8 @@ export default function CampaignsPage() {
             </div>
           )}
         </Panel>
+
+        <VariantSetup campaign={c} session={session} perms={perms} reach={reach} onChanged={refresh} />
 
         {/* Fill the template's variables as labelled fields and watch the message render, instead
             of hand-writing JSON against token names you have to already know. The raw JSON stays
