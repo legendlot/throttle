@@ -974,6 +974,18 @@ async function handlePost(body, auth, env) {
           && stableJson(prevRow.utm ?? null) === stableJson(utm !== undefined ? J.sanitizeUtm(utm) : (prevRow.utm ?? null))) {
           return ok({ ...prevRow, noop: true });
         }
+        // Freezing the variant ROWS while leaving template CONTENT editable is a half-measure:
+        // messages.template_version is stamped per send, so editing an arm's template mid-fan-out
+        // splits that arm across two versions and the "arm" stops being one thing.
+        const boundDirect = await A.sbComms(
+          `/rest/v1/campaigns?template_id=eq.${A.enc(id)}`
+          + `&status=in.(approved,scheduled,sending)&select=id,name&limit=1`, env);
+        const boundVariant = await A.sbComms(
+          `/rest/v1/campaign_variants?template_id=eq.${A.enc(id)}`
+          + `&select=campaign_id,campaigns!inner(id,name,status)`
+          + `&campaigns.status=in.(approved,scheduled,sending)&limit=1`, env);
+        if ((boundDirect.ok && boundDirect.data?.[0]) || (boundVariant.ok && boundVariant.data?.[0]))
+          return err('template_bound_to_live_campaign', 422);
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({
             channel, name, purpose, language: language || 'en', content: mergedContent,

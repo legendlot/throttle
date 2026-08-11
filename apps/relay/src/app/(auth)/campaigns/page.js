@@ -33,7 +33,7 @@ function tabOf(r) {
   const s = r?.status || 'draft';
   const future = r?.scheduled_at && new Date(r.scheduled_at) > new Date();
   if ((s === 'approved' || s === 'scheduled') && future) return 'scheduled';
-  if (s === 'sent' || s === 'sending') return 'sent';
+  if (s === 'sent' || s === 'sending' || s === 'paused') return 'sent';
   if (s === 'draft' || s === 'pending_approval') return 'drafts';
   return 'other';
 }
@@ -107,6 +107,7 @@ function campaignStatus(r) {
     case 'scheduled':        return { label: 'Approved', tone: 'blue' };
     case 'sending':          return { label: 'In progress', tone: 'orange', dot: true };
     case 'sent':             return { label: 'Sent', tone: 'green', dot: true };
+    case 'paused':           return { label: 'Paused — template blocked by Meta', tone: 'red', dot: true };
     default:                 return { label: s.replace(/_/g, ' '), tone: STATUS_TONE[s] || 'gray' };
   }
 }

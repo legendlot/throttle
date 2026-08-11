@@ -406,6 +406,20 @@ async function handleMeta(env, payload) {
         }
         if (v.event && /REJECTED|DISABLED|PAUSED/i.test(v.event))
           await AL.alert(env, `⚠️ *Relay WA template ${v.event}* — \`${v.message_template_name || '?'}\` (reason: ${v.reason || 'n/a'})`);
+        // An arm Meta disabled halfway produces exactly the asymmetric, biased sample the refusal
+        // states exist to reject — and it keeps burning sends that can never be compared.
+        if (v.event && /REJECTED|DISABLED|PAUSED/i.test(v.event) && v.message_template_name) {
+          const tpl = await A.sbComms(
+            `/rest/v1/templates?channel=eq.whatsapp&content->>meta_name=eq.${A.enc(v.message_template_name)}`
+            + `&select=id&limit=1`, env);
+          const tid = tpl.ok && tpl.data?.[0]?.id;
+          if (tid) {
+            A.checkWrite('campaign_pause_on_template_status_failed',
+              await A.sbComms(`/rest/v1/campaigns?status=eq.sending&template_id=eq.${A.enc(tid)}`, env,
+                { method: 'PATCH', body: JSON.stringify({ status: 'paused' }) }),
+              { template: v.message_template_name, event: v.event });
+          }
+        }
       } else if (f === 'phone_number_quality_update') {
         touched++;
         // PERSIST, don't just alert. Meta's quality rating + messaging limit gate throughput
