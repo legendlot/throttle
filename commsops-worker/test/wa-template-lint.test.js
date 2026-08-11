@@ -98,11 +98,24 @@ t('a URL button whose {{1}} is NOT trailing is caught (passes review, dead link)
 });
 
 t('a URL button with {{1}} but no example is caught', () => {
+  // ⚠️ The mapping slot must carry NO `example` — this fixture was copy-pasted from the
+  // button_var_not_trailing test above and kept its `example: 'abc'`, which satisfies
+  // `hasExample`, so the rule correctly did not fire and this test failed from the day it
+  // was written. The RULE was always right; the test was asserting the wrong scenario.
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Pay now', url: 'https://x.com/pay/{{1}}' }],
+    mapping: [...good().mapping, { component: 'button', index: 0, token: 'link' }],
+  }));
+  assert.ok(codes(r).includes('button_no_example'));
+});
+
+t('...and is NOT raised when the example rides on the mapping slot', () => {
+  // the other half of the pair, which is what the broken fixture was accidentally testing
   const r = lintWaTemplate(good({
     buttons: [{ type: 'URL', text: 'Pay now', url: 'https://x.com/pay/{{1}}' }],
     mapping: [...good().mapping, { component: 'button', index: 0, token: 'link', example: 'abc' }],
   }));
-  assert.ok(codes(r).includes('button_no_example'));
+  assert.ok(!codes(r).includes('button_no_example'));
 });
 
 t('a mapping slot against a STATIC url button is caught (S241 send failure)', () => {
