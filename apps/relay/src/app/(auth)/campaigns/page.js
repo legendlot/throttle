@@ -10,6 +10,8 @@ import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import VariantSetup from './VariantSetup.js';
+import VariantProgress from './VariantProgress.js';
+import VariantResults from './VariantResults.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -574,6 +576,9 @@ export default function CampaignsPage() {
             Marketing sends above the approval threshold need an approver; below it (or non-marketing) auto-approve on submit. The send gate (suppression → consent → frequency cap → quiet hours) still applies per recipient.
           </div>
         </Panel>
+
+        <VariantProgress campaign={c} />
+        <VariantResults campaign={c} perms={perms} onChanged={refresh} />
 
         {stats && (
           <Panel title="Performance" pad>

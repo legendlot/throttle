@@ -128,8 +128,15 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   }));
 
   const canEditArms = canBuild && !['sending', 'sent', 'paused'].includes(campaign.status);
+  // The worker deliberately reverts an approved/scheduled campaign to draft the moment an arm is
+  // edited, added, or deleted — an arm changed after approval was approved by nobody. That revert
+  // is silent from the caller's side (saveCampaignVariant/deleteCampaignVariant just do it), so
+  // the ONLY place to warn is here, before the mutation fires.
+  const needsApprovalWarning = campaign.status === 'approved' || campaign.status === 'scheduled';
+  const APPROVAL_WARNING = 'This campaign is approved. Changing a version sends it back for approval.';
 
   async function updateVariant(v, patch) {
+    if (needsApprovalWarning && !window.confirm(`${APPROVAL_WARNING}\n\nContinue?`)) return;
     setBusy(true);
     try {
       await workerFetch('saveCampaignVariant', {
@@ -146,6 +153,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   }
 
   async function addArmB() {
+    if (needsApprovalWarning && !window.confirm(`${APPROVAL_WARNING}\n\nContinue?`)) return;
     setBusy(true);
     try {
       await workerFetch('saveCampaignVariant', { campaignId, label: 'B', templateId: null, weight: 50 }, session);
@@ -156,7 +164,10 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   }
 
   async function deleteArm(v) {
-    if (!window.confirm(`Delete arm "${v.label}"? This cannot be undone.`)) return;
+    const msg = needsApprovalWarning
+      ? `${APPROVAL_WARNING}\n\nDelete arm "${v.label}"? This cannot be undone.`
+      : `Delete arm "${v.label}"? This cannot be undone.`;
+    if (!window.confirm(msg)) return;
     setBusy(true);
     try {
       await workerFetch('deleteCampaignVariant', { campaignId, id: v.id }, session);
@@ -271,6 +282,13 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
               <div className="dim" style={{ fontSize: 13 }}>No arms yet — this campaign sends its single template as-is.</div>
             )}
           </div>
+
+          {canEditArms && needsApprovalWarning && (
+            <div className="info-bar" style={{ background: 'rgba(242,205,26,.07)', borderColor: 'var(--accent-bd)', marginTop: 10, marginBottom: 0 }}>
+              <AlertTriangle size={16} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1 }} />
+              <span><strong>{APPROVAL_WARNING}</strong> Editing, adding, or deleting an arm below will ask you to confirm this first.</span>
+            </div>
+          )}
 
           {variants.length < 2 && canEditArms && (
             <div style={{ marginTop: 10 }}>
