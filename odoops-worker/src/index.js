@@ -336,17 +336,27 @@ async function stageOrders(orderRows, runId, channelId) {
 // ── GT/MT (reads Snorkel confirmed sales orders) ───────────────
 const snorkelAdapter = {
   kind: 'snorkel_internal', stgTable: 'stg_snorkel', sourceKind: 'snorkel',
-  async fetch({ channelId, channelName: cname, cursor }) {
+  async fetch({ channelId, channelName: cname, cursor, config }) {
     const sinceDate = (cursor || BACKFILL_START).slice(0, 10);
+    // The Snorkel key is NOT always the dispatch-channel name. GT and MT work by coincidence —
+    // their dispatch_channels.name happens to equal their sales_channels.channel_key. Flipkart is
+    // "Flipkart Managed" vs FLIPKART_MGD (Blinkit/Zepto differ by case too), so matching on cname
+    // silently returns zero rows: the gate below reads no channel, the orders query finds nothing,
+    // and the run reports ok/0 — indistinguishable from a genuinely quiet channel. Config wins,
+    // same shape as the uniware adapter's `uniware_channel`. (2026-08-11, Flipkart first-party.)
+    const skey = (config && config.snorkel_channel_key) || cname;
     // Sell-out guard (spec §10 / RULE-SALES-001): the snorkel adapter ingests ONLY channels
     // flagged feeds_odo_sellout (GT/MT) — where the Snorkel order is our sell-out signal.
     // QC/marketplace Snorkel orders are PRIMARY/sell-in (the platform's PO) and must NOT feed
     // Odo, else they double-count with the QC seller-report (secondary-sale) path.
-    const cfgR = await sbStore(`/rest/v1/sales_channels?channel_key=eq.${encodeURIComponent(cname)}&select=feeds_odo_sellout&limit=1`);
+    // NB the flag means "the Snorkel order IS the revenue event Odo counts", not literally
+    // consumer sell-through: a first-party buyer (Flipkart from 2026-07) has no consumer feed at
+    // all, so its PO is the number — flag true is correct there despite the name.
+    const cfgR = await sbStore(`/rest/v1/sales_channels?channel_key=eq.${encodeURIComponent(skey)}&select=feeds_odo_sellout&limit=1`);
     if (!(cfgR.ok && cfgR.data?.[0]?.feeds_odo_sellout)) return { rows: [], cursorAfter: sinceDate, subreqs: 1, partial: false };
-    // confirmed + cancelled (cancelled nets out on recompute). channel_key = GT|MT.
+    // confirmed + cancelled (cancelled nets out on recompute). channel_key = GT|MT|FLIPKART_MGD.
     const sel = 'id,order_no,order_date,channel_key,status,confirmed_at,sales_order_lines(id,product,model,color,sku,qty,rate,discount_pct,gst_pct,taxable_value,gst_amount,line_total)';
-    const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(cname)}&order_date=gte.${sinceDate}&select=${sel}&order=order_date.asc`);
+    const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(skey)}&order_date=gte.${sinceDate}&select=${sel}&order=order_date.asc`);
     if (!r.ok) throw new Error('Snorkel read failed: ' + JSON.stringify(r.data));
     const rows = [], orderRows = []; let maxDate = sinceDate;
     for (const o of (r.data || [])) {
