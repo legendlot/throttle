@@ -23,6 +23,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const [form, setForm] = useState({
     engagement_type: 'video_tracking', deal_type: 'paid',
     expected_post_date: '',
+    campaign_tag: '',
     payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
     poc_user_id: null, poc_name: null,
   });
@@ -45,6 +46,8 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
     try {
       const payload = { influencer_id: selected.id, ...form };
       if (!payload.expected_post_date) delete payload.expected_post_date;
+      if (!payload.campaign_tag || !payload.campaign_tag.trim()) delete payload.campaign_tag;
+      else payload.campaign_tag = payload.campaign_tag.trim();
       // Compensation only applies to paid deals; affiliate % only to affiliate deals.
       if (isPaid && payload.payment_amount !== '') payload.payment_amount = Number(payload.payment_amount);
       else { delete payload.payment_amount; delete payload.payment_terms; }
@@ -137,6 +140,11 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
         </Field>
         <Field label="Expected post date">
           <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inp} />
+        </Field>
+        {/* Reann #7 — campaign tag, matching the full new-deal page. */}
+        <Field label="Campaign">
+          <input value={form.campaign_tag} onChange={e => setField('campaign_tag', e.target.value)}
+            placeholder="e.g. Roxie Launch" style={inp} />
         </Field>
       </div>
 

@@ -1251,7 +1251,17 @@ async function getCatalogs(url, auth, env) {
     category_options: {
       format: catOpts.filter(o => o.axis === 'format').map(o => o.label),
       niche:  catOpts.filter(o => o.axis === 'niche').map(o => o.label),
+      // Reann #7 — marketing campaigns. Kept on the same managed picklist so Reann can add one
+      // without a deploy; see the matching axis guard in addCategoryOption.
+      campaign: catOpts.filter(o => o.axis === 'campaign').map(o => o.label),
     },
+    // Reann #2 — the reason vocabulary behind metric_gaps. Served from here (not hardcoded in the
+    // app) so the list stays one definition; the column deliberately has no CHECK (PATTERN-218).
+    metric_gap_reasons: [
+      { value: 'internal_gap',  label: 'Internal gap — we never captured it' },
+      { value: 'gated_data',    label: 'Gated — platform will not expose it' },
+      { value: 'system_timing', label: 'System / timing — too early or a sync issue' },
+    ],
     age_ranges: AGE_RANGES,
     gender_majorities: GENDER_MAJORITIES,
   });
@@ -1325,6 +1335,13 @@ const ENGAGEMENT_FIELDS = [
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
   'utm_source','utm_medium','utm_campaign',
   'views','likes','comments','shares','impressions','sessions','orders',
+  // Reann 2026-08-10 #1 — the four capture fields the ratio framework needs.
+  // follower_count_at_post is point-in-time and NOT backfillable (see the column comment).
+  'saves','reposts','followers_gained','follower_count_at_post',
+  // Reann #2 — per-metric "why is this blank" reasons; distinguishes a real 0 from unknown.
+  'metric_gaps',
+  // Reann #7 — marketing campaign tag (category_options axis='campaign'). NOT campaign_id.
+  'campaign_tag',
   'conversions_value','roas_on_ad_spend','actual_roas','orders_cc',
   'shipping_order_id','tracking_id','shipping_month','shipping_date','directed_to',
   'poc_user_id','poc_name',
@@ -1384,7 +1401,10 @@ async function addCategoryOption(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   const axis = String(body.axis || '').trim();
   const label = String(body.label || '').trim();
-  if (axis !== 'format' && axis !== 'niche') return err('invalid_axis', 400);
+  // 'campaign' added 2026-08-11 (Reann #7). ⚠️ This guard is the second enforcement point for a new
+  // axis — getCatalogs below is the first. Adding an axis in only one of them is the PATTERN-218
+  // shape: the picklist renders but nothing can be added to it, or vice versa.
+  if (!['format', 'niche', 'campaign'].includes(axis)) return err('invalid_axis', 400);
   if (!label) return err('label_required', 400);
 
   const existing = await sb(
@@ -2241,6 +2261,115 @@ async function assignEngagementToCampaign(body, auth, env) {
 // ── Monthly targets & budgets (Slice B) ──────────────────────────────────────
 // Reann sets a per-month views target + ₹ budget; we track actuals against them.
 // Actuals match the Reports by_month logic: month = post_date||created_at, spend=spendOf.
+// ── Reann #8 — month drill-down: the itemised rows BEHIND a month's totals ───────────────────
+// getMonthlyTargets returns aggregates only; this returns the individual spends and the individual
+// posts that compose them, so a month tile can expand into "which influencer, which deal, how much".
+// Deliberately reuses getMonthlyTargets' EXACT attribution rules so the drill-down always sums to
+// the tile above it: views attribute to post_date's month, spend to post_date falling back to
+// created_at. Diverging here would produce a breakdown that silently disagrees with the total.
+async function getMonthlyBreakdown(url, auth, env) {
+  const month = String(url.searchParams.get('month') || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM', 400);
+  const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost)
+    : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+
+  const sel = 'id,engagement_no,post_date,created_at,views,orders,conversions_value,campaign_tag,'
+    + 'total_cost,payment_amount,ad_spend,commission_amount,engagement_type,stage,'
+    + 'influencer:influencers(id,influencer_code,channel_name,person_name,channel_link,channel_platform)';
+  const r = await sb(`/rest/v1/engagements?select=${encodeURIComponent(sel)}&limit=5000`, env);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+
+  const spend = [], views = [], conversions = [];
+  for (const e of (r.data || [])) {
+    const postMonth  = (e.post_date || '').slice(0, 7);
+    const spendMonth = (e.post_date || e.created_at || '').slice(0, 7);
+    const who = e.influencer || {};
+    const base = {
+      engagement_id: e.id, engagement_no: e.engagement_no, stage: e.stage,
+      engagement_type: e.engagement_type, campaign_tag: e.campaign_tag || null,
+      influencer_id: who.id || null, influencer_code: who.influencer_code || null,
+      influencer_name: who.channel_name || who.person_name || null,
+      channel_link: who.channel_link || null, platform: who.channel_platform || null,
+      post_date: e.post_date || null,
+    };
+    if (spendMonth === month) {
+      const amt = spendOf(e);
+      if (amt > 0) spend.push({ ...base, amount: Math.round(amt), dated_by: e.post_date ? 'post_date' : 'created_at' });
+    }
+    if (postMonth === month) {
+      if (num(e.views) > 0) views.push({ ...base, views: num(e.views) });
+      // Reann #9 — conversions itemised. Counted on the POST month so it lines up with views.
+      if (num(e.orders) > 0 || num(e.conversions_value) > 0) {
+        conversions.push({ ...base, orders: num(e.orders), order_value: num(e.conversions_value) });
+      }
+    }
+  }
+  const sum = (a, k) => a.reduce((t, x) => t + num(x[k]), 0);
+  spend.sort((a, b) => b.amount - a.amount);
+  views.sort((a, b) => b.views - a.views);
+  conversions.sort((a, b) => (b.order_value - a.order_value) || (b.orders - a.orders));
+  return ok({
+    month,
+    spend, views, conversions,
+    totals: {
+      spend: sum(spend, 'amount'), spend_lines: spend.length,
+      views: sum(views, 'views'), view_lines: views.length,
+      orders: sum(conversions, 'orders'),
+      order_value: Math.round(sum(conversions, 'order_value')),
+      conversion_lines: conversions.length,
+    },
+  });
+}
+
+// ── Reann #7 — campaign-level performance, grouped by the campaign_tag on each deal ──────────
+// Untagged deals are returned as their own bucket rather than dropped: a summary that silently
+// omits half the spend is worse than one that shows an "Untagged" row you can act on.
+async function getCampaignSummary(url, auth, env) {
+  const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost)
+    : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+  const from = String(url.searchParams.get('from') || '').trim();
+  const to   = String(url.searchParams.get('to') || '').trim();
+  const sel = 'id,campaign_tag,post_date,created_at,views,likes,comments,shares,saves,reposts,'
+    + 'orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount,'
+    + 'follower_count_at_post,stage,influencer_id';
+  const r = await sb(`/rest/v1/engagements?select=${sel}&limit=5000`, env);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+
+  const g = {};
+  for (const e of (r.data || [])) {
+    const d = e.post_date || (e.created_at || '').slice(0, 10);
+    if (from && d && d < from) continue;
+    if (to && d && d > to) continue;
+    const key = e.campaign_tag || '';
+    const b = g[key] || (g[key] = {
+      campaign_tag: e.campaign_tag || null, deals: 0, live_deals: 0, influencers: new Set(),
+      views: 0, likes: 0, comments: 0, shares: 0, saves: 0, reposts: 0,
+      orders: 0, order_value: 0, spend: 0, reach_at_post: 0,
+    });
+    b.deals++; if (e.stage === 'live') b.live_deals++;
+    if (e.influencer_id) b.influencers.add(e.influencer_id);
+    for (const k of ['views','likes','comments','shares','saves','reposts','orders']) b[k] += num(e[k]);
+    b.order_value += num(e.conversions_value);
+    b.spend += spendOf(e);
+    b.reach_at_post += num(e.follower_count_at_post);
+  }
+  const rows = Object.values(g).map(b => ({
+    ...b,
+    influencers: b.influencers.size,
+    spend: Math.round(b.spend), order_value: Math.round(b.order_value),
+    // CPM and cost-per-view only mean anything with views; null beats a divide-by-zero Infinity.
+    cpm: b.views > 0 ? Math.round(b.spend / b.views * 1000 * 100) / 100 : null,
+    roas: b.spend > 0 ? Math.round(b.order_value / b.spend * 100) / 100 : null,
+    // Engagement rate over the summed at-post follower base — only where it was captured.
+    engagement_rate: b.reach_at_post > 0
+      ? Math.round((b.likes + b.comments + b.shares + b.saves + b.reposts) / b.reach_at_post * 10000) / 100
+      : null,
+  })).sort((a, b) => b.spend - a.spend);
+  return ok({ campaigns: rows, untagged_deals: (g[''] ? g[''].deals : 0) });
+}
+
 async function getMonthlyTargets(url, auth, env) {
   const tr = await sb(`/rest/v1/monthly_targets?select=*&order=month.desc`, env);
   if (!tr.ok) return err(`db_error: ${JSON.stringify(tr.data)}`, 500);
@@ -2717,6 +2846,8 @@ const GET_ACTIONS = {
   getKpis,
   getReports,
   getMonthlyTargets,
+  getMonthlyBreakdown,
+  getCampaignSummary,
   getCatalogs,
   getLocations,
   getPaymentProofUrl,

@@ -10,6 +10,7 @@ import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
+import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS } from '../../../../lib/metrics.js';
 
 export default function EngagementDetailPage() {
   const sp = useSearchParams();
@@ -19,6 +20,7 @@ export default function EngagementDetailPage() {
   const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
   const [data, setData] = useState(null);
+  const [catalogs, setCatalogs] = useState(null);
   const [err, setErr] = useState(null);
   const [advOpen, setAdvOpen] = useState(false);
   const [note, setNote] = useState('');
@@ -31,6 +33,12 @@ export default function EngagementDetailPage() {
     ignitionopsGet('getEngagement', params, session).then(setData).catch(e => setErr(e.message));
   }
   useEffect(reload, [id, eno, session]);
+  // Catalogs drive the metric-gap reason picklist. Served by the worker so the reason vocabulary
+  // has one definition; a failure here must not blank the page, so it degrades to no picker.
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getCatalogs', {}, session).then(setCatalogs).catch(() => setCatalogs(null));
+  }, [session]);
 
   async function doAdvance({ to_stage, note, ...extra }) {
     // Forward all extra fields (video_link / rating / shipping_order_id /
@@ -75,6 +83,20 @@ export default function EngagementDetailPage() {
         <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           {inf.channel_name || inf.influencer_code || '—'}
         </h1>
+        {/* Reann #4 — handle link, so the deal view can reach the channel in one click. */}
+        {inf.channel_link ? (
+          <a href={inf.channel_link} target="_blank" rel="noopener noreferrer"
+            title={inf.channel_link}
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#FF6B00', textDecoration: 'none', borderBottom: '1px dotted #FF6B00' }}>
+            {inf.channel_platform ? `${inf.channel_platform} ↗` : 'channel ↗'}
+          </a>
+        ) : null}
+        {inf.influencer_code && (
+          <a href={`/influencers/detail?id=${inf.id}`}
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)', textDecoration: 'none' }}>
+            {inf.influencer_code}
+          </a>
+        )}
         <StageBadge stage={e.stage} size="lg" />
         <DealTypeBadge dealType={e.deal_type} />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -161,6 +183,8 @@ export default function EngagementDetailPage() {
           canEdit={!!perms?.ignition_manage && e.stage === 'live'}
           session={session}
           onSaved={reload}
+          platform={inf?.channel_platform}
+          gapReasons={catalogs?.metric_gap_reasons}
         />
 
         <ComplianceCard e={e} canManage={canManage} session={session} onSaved={reload} />
@@ -459,28 +483,42 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
 }
 
 // #13 — editable performance stats once the deal is live/completed.
+// Reann 2026-08-10 #1 added saves / reposts / followers_gained / follower_count_at_post.
 const METRIC_FIELDS = [
   ['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
+  ['reposts', 'Reposts'], ['saves', 'Saves'], ['followers_gained', 'Followers gained'],
+  ['follower_count_at_post', 'Followers at post date'],
   ['impressions', 'Impressions'], ['sessions', 'Sessions'], ['orders', 'Orders'],
   ['conversions_value', 'Conversions ₹'],
 ];
 
-function PerformanceCard({ e, canEdit, session, onSaved }) {
+function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
+  const [gaps, setGaps] = useState({});
   const [busy, setBusy] = useState(false);
+
+  const applicable = ([k]) => isMetricApplicable(k, platform);
+  const shown = METRIC_FIELDS.filter(applicable);
+  const derived = deriveMetrics(e, platform);
+  const unexplained = unexplainedGaps(e, platform);
 
   function startEdit() {
     const f = {};
-    for (const [k] of METRIC_FIELDS) f[k] = e[k] ?? '';
-    setForm(f); setEditing(true);
+    for (const [k] of shown) f[k] = e[k] ?? '';
+    setForm(f); setGaps({ ...(e.metric_gaps || {}) }); setEditing(true);
   }
   async function save() {
     setBusy(true);
     try {
       const patch = { engagement_id: e.id };
-      for (const [k] of METRIC_FIELDS) patch[k] = form[k] === '' ? null : Number(form[k]);
+      for (const [k] of shown) patch[k] = form[k] === '' ? null : Number(form[k]);
+      // Only keep a reason where the value is actually blank — a reason sitting behind a real
+      // number is stale the moment someone fills it in, and would keep reading as "unknown".
+      const cleaned = {};
+      for (const [k] of shown) if (patch[k] == null && gaps[k]) cleaned[k] = gaps[k];
+      patch.metric_gaps = cleaned;
       await ignitionopsPost('updateEngagement', patch, session);
       toast('Performance updated', 'success');
       setEditing(false);
@@ -499,11 +537,19 @@ function PerformanceCard({ e, canEdit, session, onSaved }) {
       </div>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {METRIC_FIELDS.map(([k, label]) => (
+          {shown.map(([k, label]) => (
             <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
               <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
                 style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+              {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown. */}
+              {(form[k] === '' || form[k] == null) && (
+                <select value={gaps[k] || ''} onChange={ev => setGaps(g => ({ ...g, [k]: ev.target.value }))}
+                  style={{ width: 150, background: 'var(--surface-2)', color: gaps[k] ? 'var(--text-1)' : 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                  <option value="">why blank?</option>
+                  {(gapReasons || []).map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              )}
             </div>
           ))}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
@@ -513,15 +559,56 @@ function PerformanceCard({ e, canEdit, session, onSaved }) {
         </div>
       ) : (
         <>
-          <KV label="Views" value={(e.views || 0).toLocaleString()} />
-          <KV label="Likes" value={(e.likes || 0).toLocaleString()} />
-          <KV label="Comments" value={(e.comments || 0).toLocaleString()} />
-          <KV label="Shares" value={(e.shares || 0).toLocaleString()} />
-          <KV label="Impressions" value={(e.impressions || 0).toLocaleString()} />
-          <KV label="Sessions" value={(e.sessions || 0).toLocaleString()} />
-          <KV label="Orders" value={(e.orders || 0).toLocaleString()} />
-          <KV label="Conversions ₹" value={`₹${Number(e.conversions_value || 0).toLocaleString()}`} />
+          {shown.map(([k, label]) => {
+            const raw = e[k];
+            const reason = (e.metric_gaps || {})[k];
+            const isMoney = k === 'conversions_value';
+            const val = (raw == null || raw === '')
+              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
+              : (isMoney ? `₹${Number(raw).toLocaleString()}` : Number(raw).toLocaleString());
+            return <KV key={k} label={label} value={val} />;
+          })}
           {e.actual_roas != null && <KV label="Actual ROAS" value={Number(e.actual_roas).toFixed(2)} />}
+
+          {/* Engagement ratios — every one divides by followers at post date. */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Engagement ratios
+            </div>
+            {derived.missingDenominator ? (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                Needs <strong style={{ color: 'var(--text-2)' }}>followers at post date</strong> before any
+                ratio can be worked out. It is the follower count on the day this posted, not today&apos;s —
+                using today&apos;s would understate a creator who has grown since. Add it above.
+              </div>
+            ) : (
+              derived.ratios.map(r => (
+                <KV key={r.key} label={r.label}
+                  value={r.value == null
+                    ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
+                    : (r.unit === 'x' ? `${r.value}x` : `${r.value}%`)} />
+              ))
+            )}
+          </div>
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Business
+            </div>
+            {derived.business.map(b => (
+              <KV key={b.key} label={b.label}
+                value={b.value == null
+                  ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
+                  : `₹${Number(b.value).toLocaleString()}`} />
+            ))}
+          </div>
+
+          {unexplained.length > 0 && (
+            <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+              {unexplained.length} metric{unexplained.length > 1 ? 's' : ''} blank with no reason recorded.
+              Edit and pick why, so a gap can be told apart from a genuine zero.
+            </div>
+          )}
         </>
       )}
     </section>

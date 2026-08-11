@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast } from '@throttle/ui';
 import { Target } from 'lucide-react';
@@ -43,6 +43,20 @@ export default function TargetsPage() {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const { showToast: toast } = useToast();
+  // Reann #8/#9 — the itemised rows behind a month. Fetched lazily on expand and cached, so
+  // opening one month does not pull the whole year.
+  const [open, setOpen] = useState(null);
+  const [detail, setDetail] = useState({});
+  function toggle(month) {
+    const next = open === month ? null : month;
+    setOpen(next);
+    if (next && detail[next] === undefined) {
+      setDetail(d => ({ ...d, [next]: null }));   // null = loading
+      ignitionopsGet('getMonthlyBreakdown', { month: next }, session)
+        .then(r => setDetail(d => ({ ...d, [next]: r })))
+        .catch(() => setDetail(d => ({ ...d, [next]: { error: true } })));
+    }
+  }
 
   const [month, setMonth] = useState(curMonth());
   const [targetViews, setTargetViews] = useState('');
@@ -109,29 +123,119 @@ export default function TargetsPage() {
           <table style={tableStyle}>
             <thead>
               <tr>
-                {['Month', 'Target views', 'Actual views', 'Views %', 'Budget', 'Spent', 'Spend %', 'Note'].map((h, i) => (
-                  <th key={h} style={{ ...thr, textAlign: i === 0 || i === 7 ? 'left' : (i === 3 || i === 6 ? 'left' : 'right') }}>{h}</th>
+                {['', 'Month', 'Target views', 'Actual views', 'Views %', 'Budget', 'Spent', 'Spend %', 'Note'].map((h, i) => (
+                  <th key={h || 'exp'} style={{ ...thr, width: i === 0 ? 28 : undefined, textAlign: i === 0 || i === 1 || i === 8 ? 'left' : (i === 4 || i === 7 ? 'left' : 'right') }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.month} onClick={() => canManage && editRow(r)} style={{ borderTop: '1px solid var(--border)', cursor: canManage ? 'pointer' : 'default' }}>
-                  <td style={{ ...tdl, fontWeight: 600, color: r.month === curMonth() ? ORANGE : 'var(--text-1)' }}>{monthLabel(r.month)}{r.month === curMonth() ? ' ·' : ''}</td>
-                  <td style={tdr}>{num(r.target_views)}</td>
-                  <td style={tdr}>{num(r.actual_views)}</td>
-                  <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.views_pct} kind="views" /></td>
-                  <td style={{ ...tdr, color: ORANGE }}>{inr(r.budget_amount)}</td>
-                  <td style={tdr}>{inr(r.actual_spend)}</td>
-                  <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.spend_pct} kind="spend" /></td>
-                  <td style={tdl}>{r.note || '—'}</td>
-                </tr>
+                <Fragment key={r.month}>
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ ...tdl, width: 28 }}>
+                      <button onClick={() => toggle(r.month)} title="Show the individual spends and posts behind this month"
+                        style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 12, padding: 0 }}>
+                        {open === r.month ? '▾' : '▸'}
+                      </button>
+                    </td>
+                    <td onClick={() => canManage && editRow(r)} style={{ ...tdl, fontWeight: 600, cursor: canManage ? 'pointer' : 'default', color: r.month === curMonth() ? ORANGE : 'var(--text-1)' }}>{monthLabel(r.month)}{r.month === curMonth() ? ' ·' : ''}</td>
+                    <td style={tdr}>{num(r.target_views)}</td>
+                    <td style={tdr}>{num(r.actual_views)}</td>
+                    <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.views_pct} kind="views" /></td>
+                    <td style={{ ...tdr, color: ORANGE }}>{inr(r.budget_amount)}</td>
+                    <td style={tdr}>{inr(r.actual_spend)}</td>
+                    <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.spend_pct} kind="spend" /></td>
+                    <td style={tdl}>{r.note || '—'}</td>
+                  </tr>
+                  {open === r.month && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: 0, background: 'var(--surface-2)' }}>
+                        <MonthBreakdown month={r.month} data={detail[r.month]} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         )}
-        {canManage && rows && rows.length > 0 && <p style={{ color: 'var(--text-3)', fontSize: 11, marginTop: 8 }}>Tip: click a row to edit that month above.</p>}
+        {canManage && rows && rows.length > 0 && <p style={{ color: 'var(--text-3)', fontSize: 11, marginTop: 8 }}>Tip: click a month name to edit it above, or the arrow to see what makes up the numbers.</p>}
       </Panel>
+    </div>
+  );
+}
+
+// Reann #8 (spend + views drill-down) and #9 (conversions), the itemised rows behind one month.
+function MonthBreakdown({ month, data }) {
+  if (data === null || data === undefined) return <div style={{ padding: 14 }}><Spinner /></div>;
+  if (data.error) return <div style={{ padding: 14, color: 'var(--state-error-fg)', fontSize: 12 }}>Could not load the breakdown for {month}.</div>;
+
+  const t = data.totals || {};
+  const cell = { padding: '5px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' };
+  const head = { ...cell, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, borderBottom: '1px solid var(--border)' };
+  const who = (r) => (
+    <>
+      <span style={{ color: 'var(--text-1)' }}>{r.influencer_name || r.influencer_code || '—'}</span>
+      {r.campaign_tag && <span style={{ marginLeft: 6, padding: '1px 5px', background: 'var(--surface-3)', borderRadius: 3, fontSize: 9 }}>{r.campaign_tag}</span>}
+    </>
+  );
+
+  const Section = ({ title, empty, rows, cols, render }) => (
+    <div style={{ minWidth: 300, flex: 1 }}>
+      <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>{title}</div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontStyle: 'italic', padding: '4px 8px' }}>{empty}</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>{cols.map((c, i) => <th key={c} style={{ ...head, textAlign: i === 0 ? 'left' : 'right' }}>{c}</th>)}</tr></thead>
+          <tbody>{rows.map(render)}</tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: 14, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+      <Section
+        title={`Spend — ₹${(t.spend || 0).toLocaleString()} across ${t.spend_lines || 0}`}
+        empty="No spend recorded this month." rows={data.spend || []}
+        cols={['Influencer', 'Deal', 'Amount']}
+        render={r => (
+          <tr key={`s-${r.engagement_id}`}>
+            <td style={cell}>{who(r)}</td>
+            <td style={{ ...cell, textAlign: 'right' }}>
+              <a href={`/engagements/detail?id=${r.engagement_id}`} style={{ color: 'var(--text-3)', textDecoration: 'none' }}>{r.engagement_no}</a>
+              {/* A spend dated by created_at has not posted yet — say so rather than imply a post date. */}
+              {r.dated_by === 'created_at' && <span title="Not posted yet — dated by when the deal was created" style={{ marginLeft: 4, color: 'var(--text-3)' }}>*</span>}
+            </td>
+            <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>₹{Number(r.amount).toLocaleString()}</td>
+          </tr>
+        )}
+      />
+      <Section
+        title={`Views — ${(t.views || 0).toLocaleString()} across ${t.view_lines || 0}`}
+        empty="No posts with views this month." rows={data.views || []}
+        cols={['Influencer', 'Posted', 'Views']}
+        render={r => (
+          <tr key={`v-${r.engagement_id}`}>
+            <td style={cell}>{who(r)}{r.platform && <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 9 }}>{r.platform}</span>}</td>
+            <td style={{ ...cell, textAlign: 'right' }}>{r.post_date || '—'}</td>
+            <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>{Number(r.views).toLocaleString()}</td>
+          </tr>
+        )}
+      />
+      <Section
+        title={`Conversions — ${t.orders || 0} orders · ₹${(t.order_value || 0).toLocaleString()}`}
+        empty="No conversions recorded this month." rows={data.conversions || []}
+        cols={['Influencer', 'Orders', 'Value']}
+        render={r => (
+          <tr key={`c-${r.engagement_id}`}>
+            <td style={cell}>{who(r)}</td>
+            <td style={{ ...cell, textAlign: 'right' }}>{Number(r.orders).toLocaleString()}</td>
+            <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>₹{Number(r.order_value).toLocaleString()}</td>
+          </tr>
+        )}
+      />
     </div>
   );
 }

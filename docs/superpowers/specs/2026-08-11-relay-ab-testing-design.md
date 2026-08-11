@@ -99,6 +99,23 @@ be deleted"* — rather than leaking a 23503 to the UI.
 for skipped/suppressed/failed, so the variant rides along. That is what makes §7's asymmetry checks
 and §8's assigned-vs-delivered funnel possible at all.
 
+### `comms.campaign_experiments` (new)
+
+> ⚠️ **Added while planning — §8 described this data with nowhere to put it.** The hypothesis, the
+> pre-committed read time, the recorded learning and the verdict snapshot are all referenced by the
+> UI sections and none of them had a home in the data model.
+
+| column | type | notes |
+|---|---|---|
+| `campaign_id` | uuid PK | → `campaigns(id)` ON DELETE CASCADE. One experiment per campaign. |
+| `hypothesis` | text NULL | "what is the one thing that differs between A and B?" (§8.1) |
+| `planned_read_at` | timestamptz NULL | the pre-committed read time; drives the peeking guard |
+| `learning` | text NULL | free-text conclusion (§8.3) |
+| `verdict_snapshot` | jsonb NULL | the full stats payload **as it stood when the learning was recorded** |
+| `decided_at` / `decided_by` | timestamptz / uuid NULL | who called it and when |
+
+RLS on, `service_role` only. A row is created when the second variant is added.
+
 ### `campaigns` — unchanged
 
 `campaigns.template_id` stays required and **is arm A's template**. Adding a B auto-creates the A
@@ -206,10 +223,18 @@ content and audience vary together. Inside an A/B the audience is randomised, so
 per-arm delivery difference is clean evidence. Log those results in the experiment log (§8.4).
 
 **RPC `comms.campaign_variant_stats(p_campaign_id)`** returns, per arm: assigned / sent / delivered
-/ read / read-rate / failure count / skip count by reason / cost — plus the verdict and the reason
-for it. The statistics live in SQL, matching `campaign_stats_list` and the `f_*` family, so the UI
-cannot compute a second, different answer. `campaign_stats_list` itself is untouched: no regression
-risk to existing campaign analytics.
+/ read / failure count / skip count by reason / cost. **Aggregation only — no statistics.**
+`campaign_stats_list` itself is untouched: no regression risk to existing campaign analytics.
+
+**The statistics live in a pure worker module (`src/ab-stats.js`), not in SQL.**
+
+> ⚠️ **Revised while planning — the first draft put the maths in SQL** "so the UI cannot compute a
+> second, different answer". That property is worth keeping, but SQL was the wrong place to get it:
+> this repo has **no SQL test harness** (all 55 test files are `node test/*.test.js`), so a z-test
+> in PL/pgSQL would be the single most correctness-critical code in the feature and the only part
+> with no tests. The single-source property is preserved anyway, because **the apps never query the
+> DB directly** — they go through the worker (`workerFetch`), so one module computing the verdict
+> is one answer. The UI renders; it never does arithmetic.
 
 **Verdict — two-proportion z-test**, pooled, two-sided 95%:
 

@@ -23,10 +23,20 @@ export default function NewEngagementPage() {
     payment_terms: 'on_release',
     payment_amount: 0,
     directed_to: 'website',
+    campaign_tag: '',
     expected_post_date: '',
     poc_user_id: null,
     poc_name: null,
   });
+
+  // Reann #7 — campaign picklist, admin-extendable via category_options axis='campaign'.
+  const [campaignOpts, setCampaignOpts] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getCatalogs', {}, session)
+      .then(c => setCampaignOpts(c?.category_options?.campaign || []))
+      .catch(() => setCampaignOpts([]));
+  }, [session]);
 
   useEffect(() => {
     if (!session || influencerSearch.length < 2) { setSearchResults([]); return; }
@@ -49,6 +59,8 @@ export default function NewEngagementPage() {
         ...(products.length ? { products } : {}),
       };
       if (!payload.expected_post_date) delete payload.expected_post_date;
+      if (!payload.campaign_tag || !payload.campaign_tag.trim()) delete payload.campaign_tag;
+      else payload.campaign_tag = payload.campaign_tag.trim();
       const res = await ignitionopsPost('createEngagement', payload, session);
       toast(`Created ${res.engagement_no}`, 'success');
       router.push(`/engagements/detail/?id=${res.id}`);
@@ -125,6 +137,16 @@ export default function NewEngagementPage() {
               <option value="amazon">Amazon</option>
               <option value="flipkart">Flipkart</option>
             </select>
+          </Field>
+          <Field label="Campaign">
+            {/* Free-text with suggestions, deliberately: a new campaign gets named at deal time and
+                waiting on an admin to add it first would just push people to leave it blank. */}
+            <input list="ign-campaign-opts" value={form.campaign_tag}
+              onChange={e => setField('campaign_tag', e.target.value)}
+              placeholder="e.g. Roxie Launch" style={inputStyle('100%')} />
+            <datalist id="ign-campaign-opts">
+              {campaignOpts.map(c => <option key={c} value={c} />)}
+            </datalist>
           </Field>
           <Field label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inputStyle('100%')} />
