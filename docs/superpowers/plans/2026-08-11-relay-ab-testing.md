@@ -199,6 +199,14 @@ t('campaign salt re-shuffles: ~50% overlap between two campaigns, not ~100% and 
   assert.ok(same > 4500 && same < 5500, `${same}/10000 landed in the same arm; expected ~5000`);
 });
 
+// ⚠️ Assignment must be a function of the SET of arms, not of the array order they arrive in.
+t('assignment is independent of the order the arms are passed in', () => {
+  for (let i = 0; i < 200; i++) {
+    assert.equal(pickVariant(CAMP1, uuid(i), [A, B]).id, pickVariant(CAMP1, uuid(i), [B, A]).id,
+      `profile ${i} flipped arm when the array order changed`);
+  }
+});
+
 t('fnv1a is stable and unsigned', () => {
   assert.equal(fnv1a('abc'), fnv1a('abc'));
   assert.notEqual(fnv1a('abc'), fnv1a('abd'));
@@ -244,7 +252,15 @@ function fnv1a(str) {
 // low buckets are favoured by ~4 parts in 43 million. Do not "fix" it with rejection sampling.
 function pickVariant(campaignId, profileId, variants) {
   if (!Array.isArray(variants) || variants.length === 0) return null;
-  const arms = variants.filter((v) => v && Number(v.weight) > 0);
+  const arms = variants
+    .filter((v) => v && Number(v.weight) > 0)
+    // ⚠️ SORT BY id, DO NOT TRUST THE CALLER'S ORDER. The cumulative walk below is
+    // order-sensitive, so if arms arrived in a different sequence — a changed `sort_order`, a
+    // reordered UI list, a query without an ORDER BY — every recipient's arm would flip while
+    // still looking perfectly deterministic. Sorting on the immutable id makes assignment a
+    // function of (campaign, profile, set-of-arms) rather than of array order.
+    .slice()
+    .sort((x, y) => String(x.id).localeCompare(String(y.id)));
   if (arms.length === 0) return null;
   if (arms.length === 1) return arms[0];
 
@@ -263,7 +279,7 @@ module.exports = { fnv1a, pickVariant };
 - [ ] **Step 4: Run the tests**
 
 Run: `node test/variants.test.js`
-Expected: `7 passed, 0 failed`
+Expected: `8 passed, 0 failed`
 
 - [ ] **Step 5: Commit**
 
@@ -356,12 +372,37 @@ t('immature result refuses regardless of the gap', () => {
   assert.equal(v.winner, null);
 });
 
-t('asymmetric failure rates refuse — a biased sample, not a small one', () => {
-  const a = arm('A', 2000, 700, 1400, 50);
-  const b = arm('B', 2000, 900, 1400, 600);      // B failed far more often
-  const v = verdict([a, b], MATURE);
+t('asymmetric PRE-SEND failures refuse — a biased sample, not a small one', () => {
+  // B's template referenced a variable A's did not, so B failed to render for a non-random group.
+  const v = verdict([arm('A', 2000, 700, 1400, 50), arm('B', 2000, 900, 1400, 600)], MATURE);
   assert.equal(v.state, 'asymmetric_failures');
   assert.equal(v.winner, null);
+});
+
+// ⚠️ THE MIRROR TEST, and the one that pins the correction. Post-send provider failures
+// (wa_131049) live INSIDE `sent` and contribute zero reads, so ITT already prices them in. An
+// earlier draft refused here — which would have refused in exactly the case the answer is real.
+t('asymmetric POST-SEND provider failures do NOT refuse — they are the treatment effect', () => {
+  const v = verdict([arm('A', 2000, 900, 1400, 0, 40), arm('B', 2000, 700, 1400, 0, 500)], MATURE);
+  assert.equal(v.state, 'winner');
+  assert.equal(v.winner, 'A');
+  assert.equal(v.providerFailuresDiffer, true, 'must still be FLAGGED, just not refused');
+});
+
+t('more than two arms refuses rather than silently comparing the first two', () => {
+  const v = verdict([arm('A', 2000, 800), arm('B', 2000, 900), arm('C', 2000, 700)], MATURE);
+  assert.equal(v.state, 'too_many_arms');
+  assert.equal(v.winner, null);
+});
+
+t('accepts snake_case straight from the RPC as well as camelCase', () => {
+  const rpc = [
+    { label: 'A', assigned: 2000, sent: 2000, delivered: 1400, read_count: 700, pre_send_failed: 0, provider_failed: 0 },
+    { label: 'B', assigned: 2000, sent: 2000, delivered: 1400, read_count: 900, pre_send_failed: 0, provider_failed: 0 },
+  ];
+  const v = verdict(rpc, MATURE);
+  assert.equal(v.state, 'winner');
+  assert.equal(v.winner, 'B');
 });
 
 t('fewer than two arms is not a test', () => {
@@ -557,7 +598,7 @@ module.exports = { mde, zTest, verdict, MATURITY_HOURS, Z_CRIT, Z_POWER };
 - [ ] **Step 4: Run the tests**
 
 Run: `node test/ab-stats.test.js`
-Expected: `15 passed, 0 failed`
+Expected: `18 passed, 0 failed`
 
 - [ ] **Step 5: Commit**
 
@@ -797,9 +838,17 @@ In `startCampaign`, after the existing `segment_and_template_required` check:
 ```js
   // Every arm must be sendable BEFORE a single message goes out. Discovering an unapproved
   // template mid-fan-out leaves a half-run experiment that can never be completed or compared.
-  const variants = await loadVariants(env, id);
+  //
+  // ⚠️ loadVariants THROWS by design (it must, in the fan-out). Here that would surface as an
+  // unhandled 500 on a button press, so catch it and return a normal error result.
+  let variants;
+  try { variants = await loadVariants(env, id); }
+  catch { return { ok: false, error: 'variants_unreadable' }; }
+
   if (variants.length >= 2) {
     const ids = variants.map((v) => v.template_id).filter(Boolean);
+    // ⚠️ An all-holdout set leaves ids empty, and `id=in.()` is a malformed PostgREST filter.
+    if (ids.length === 0) return { ok: false, error: 'no_sendable_arm' };
     const tr = await A.sbComms(
       `/rest/v1/templates?id=in.(${ids.map(A.enc).join(',')})&select=id,name,approval_status`, env);
     if (!tr.ok) return { ok: false, error: 'variant_templates_unreadable' };
@@ -1009,7 +1058,13 @@ In `handleMeta`, inside the `message_template_status_update` branch, after the e
       }
 ```
 
-⚠️ Confirm `'paused'` is an accepted value of the `campaigns.status` CHECK before using it; if it is not, widen the constraint in a migration first — adding an enum value without teaching every gate is PATTERN-218, the most repeated defect class in this codebase.
+⚠️ **Checked 2026-08-11: `comms.campaigns` has NO CHECK constraint on `status` at all** — its only constraints are the PK and two FKs, so the database will accept `'paused'` silently. That makes this *more* dangerous, not less: the real gate is the **code and UI status ladder**, and nothing will error if you miss one.
+
+Before using `'paused'`, grep every reader and teach each one — this is PATTERN-218, the most repeated defect class in this codebase, and a free-text column is exactly how it hides:
+```bash
+grep -rn "'sending'\|'approved'\|'scheduled'\|status ===" 05_Throttle/commsops-worker/src 05_Throttle/apps/relay/src | grep -v node_modules
+```
+At minimum: `campaigns.js` `startCampaign`/`processQueueMessage` status guards, the M9 scheduler sweep, the stall sweep in `index.js` `runScheduled`, and `tabOf`/`campaignStatus` in the campaigns page (a status no tab matches makes the campaign **vanish from the list**). If teaching every reader is too wide for this task, use the existing `'cancelled'` terminal state plus an alert instead — a paused-but-invisible campaign is worse than a cancelled one.
 
 - [ ] **Step 3: Verify and commit**
 
@@ -1035,7 +1090,7 @@ Spec §8.1. Every number shown here comes from the worker; **this component does
 
 It renders:
 1. **Arms list** — label, template picker (`Combobox` with `portal` — PATTERN-160 makes this mandatory inside a card), weight. "Add B version" when there is one arm.
-2. **Power line** with colour from sent-per-arm (`reachable / arms`):
+2. **Power line** with colour from sent-per-arm. ⚠️ **`reachable × (smallestWeight ÷ totalWeight)`, NOT `reachable / arms`** — weights are editable, and on an 80/20 split the small arm has 20% of the audience, so dividing by arm count would overstate its power by 2.5× and tell the marketer a test is well-powered when its deciding arm is not. Statistical power is set by the *smaller* arm:
    - `>= 800` green — *"~N per arm — you can detect a difference of about X points."*
    - `400–800` amber — *"…only a large difference will show up."*
    - `< 400` red — *"this audience cannot answer the question — send it as a normal campaign."*
