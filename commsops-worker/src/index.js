@@ -1591,7 +1591,11 @@ async function handlePost(body, auth, env) {
       // Variants freeze at APPROVED, not at sending. Between approved and sending an arm could
       // otherwise be added that nobody approved — the approval was granted against arm A alone,
       // so without this the A/B feature is a way around the approval gate.
-      if (camp.status === 'sending' || camp.status === 'sent') return err('campaign_already_sending', 422);
+      // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
+      // been sent to and some have not — so editing its arms now would mean the two halves of
+      // the same send used different definitions, which is exactly what the freeze prevents.
+      // (It is reachable: wa-webhooks pauses a campaign when Meta blocks a bound template.)
+      if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
       if (camp.status === 'approved' || camp.status === 'scheduled') {
         await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
           { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
@@ -1635,7 +1639,11 @@ async function handlePost(body, auth, env) {
       if (!camp) return err('not_found', 404);
 
       // Variants freeze at APPROVED, not at sending — same reasoning as saveCampaignVariant.
-      if (camp.status === 'sending' || camp.status === 'sent') return err('campaign_already_sending', 422);
+      // ⚠️ 'paused' belongs here too. A paused campaign is MID-FLIGHT — some recipients have
+      // been sent to and some have not — so editing its arms now would mean the two halves of
+      // the same send used different definitions, which is exactly what the freeze prevents.
+      // (It is reachable: wa-webhooks pauses a campaign when Meta blocks a bound template.)
+      if (['sending', 'sent', 'paused'].includes(camp.status)) return err('campaign_already_sending', 422);
       if (camp.status === 'approved' || camp.status === 'scheduled') {
         await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
           { method: 'PATCH', body: JSON.stringify({ status: 'draft', approved_by: null }) });
