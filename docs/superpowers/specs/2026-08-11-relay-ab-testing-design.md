@@ -316,6 +316,17 @@ Two defences:
 - **Pre-send:** a variables diff between arms, blocking. Both templates must resolve against the
   same variable set. There is precedent — the `order_placed_wa_r_01` bind ran exactly this diff
   before going live (S265).
+  ⚠️ **DIFF `comms.templates.variables`, NOT the `content` blob — this was got wrong once already
+  and it fails OPEN.** Templates do not store `{{named_token}}` anywhere in `content`: email and
+  WA free-text bodies use SINGLE braces `{token}` (`render.js` `applyTokens`, regex
+  `\{([a-zA-Z0-9_]+)\}`), and a WA *template* body carries Meta's numeric `{{1}}`/`{{2}}`
+  placeholders, with the named token living only in `content.mapping[].token`. So a regex for
+  `{{token}}` over `JSON.stringify(content)` returns an EMPTY SET for every real template —
+  measured 2026-08-11 on five live WhatsApp templates that each declare **5** variables and each
+  yield **0** matches. Every arm would then compare empty-to-empty and the blocking check would
+  pass unconditionally, which is the one failure mode a blocking safety check must never have.
+  The authoritative source is the top-level `variables` column. Same lesson as the S265
+  OFD-redirect incident: *diff the `variables` column, not the body/buttons/mapping.*
 - **Post-send:** the verdict refuses when per-arm failure rates diverge, and the results screen
   shows the per-arm failure and skip breakdown by reason rather than only the totals.
 
