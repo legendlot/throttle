@@ -639,6 +639,187 @@ async function handleGet(url, auth, env) {
       if (!stats) return err('db_error', 500);
       return ok(stats);
     }
+    case 'getVariantPreflight': {      // blocking comparability checks before an A/B send
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const camp = await CAMP.getCampaign(env, id);
+      if (!camp) return err('not_found', 404);
+
+      const vr = await A.sbComms(`/rest/v1/campaign_variants?campaign_id=eq.${A.enc(id)}`
+        + `&select=*&order=sort_order.asc,label.asc`, env);
+      if (!vr.ok) return err('db_error', 500);
+      const variants = Array.isArray(vr.data) ? vr.data : [];
+      if (variants.length < 2) return ok({ checks: [] });   // no test to pre-flight yet
+
+      const checks = [];
+      const sendable = variants.filter((v) => v.template_id);  // holdout arms render nothing
+
+      // Batch-fetch every referenced template in ONE call. ⚠️ id=in.() is a malformed
+      // PostgREST filter — guard the empty-list case.
+      const tplIds = [...new Set(sendable.map((v) => v.template_id))];
+      let templatesReadOk = true;
+      let tplById = new Map();
+      if (tplIds.length) {
+        const tr = await A.sbComms(
+          `/rest/v1/templates?id=in.(${tplIds.map(A.enc).join(',')})`
+          + `&select=id,name,channel,approval_status,variables`, env);
+        if (!tr.ok) templatesReadOk = false;
+        else tplById = new Map((tr.data || []).map((t) => [t.id, t]));
+      }
+      const missingTpl = sendable.filter((v) => !tplById.has(v.template_id));
+
+      // ── variables_match — the one that actually matters ──────────────────────────
+      // ⚠️ Deliberately NOT a `{{token}}` scan of `content`. Verified against render.js:
+      // renderEmail/renderWhatsapp both resolve merge fields off the TOP-LEVEL `variables`
+      // column (resolveVar/resolveDeclared) — `content` itself never carries a "{{token}}"
+      // string. Email and WA-TEXT bodies use SINGLE-brace {token} (render.js applyTokens);
+      // a WA-TEMPLATE body embeds Meta's own numeric {{1}},{{2}} placeholders, and the named
+      // token feeding each one lives only in content.mapping[].token, never spelled out as
+      // "{{tokenName}}" anywhere. A regex over JSON.stringify(content) for {{name}} would
+      // silently return an EMPTY set for every real template here — i.e. always "pass"
+      // because nothing was found, the exact failing-open outcome this check exists to
+      // prevent. Precedent: the S265 OFD-redirect incident (systems/relay.md) found this
+      // the hard way — a bad clone differed only in its `variables` column (a dropped
+      // fallback + a changed `source`), invisible from body/buttons/mapping, only caught by
+      // diffing `variables` directly. "Diff the variables column, not just body/mapping."
+      const varsOf = (tpl) => new Set(
+        (Array.isArray(tpl?.variables) ? tpl.variables : []).map((v) => `{{${v.token}}}`));
+
+      if (!templatesReadOk) {
+        checks.push({ key: 'variables_match', pass: false, blocking: true,
+          detail: 'Could not read arm templates — merge-variable comparability is unknown.' });
+      } else if (missingTpl.length) {
+        checks.push({ key: 'variables_match', pass: false, blocking: true,
+          detail: `Arm ${missingTpl.map((v) => v.label).join(', ')} references a template that `
+            + `no longer exists — cannot compare merge variables.` });
+      } else if (sendable.length < 2) {
+        checks.push({ key: 'variables_match', pass: true, blocking: true,
+          detail: 'Fewer than two arms send a template — nothing to compare.' });
+      } else {
+        const armSets = sendable.map((v) => ({ label: v.label, vars: varsOf(tplById.get(v.template_id)) }));
+        const union = new Set(); armSets.forEach((a) => a.vars.forEach((x) => union.add(x)));
+        const problems = [];
+        for (const token of union) {
+          const has = armSets.filter((a) => a.vars.has(token)).map((a) => a.label);
+          const lacks = armSets.filter((a) => !a.vars.has(token)).map((a) => a.label);
+          if (lacks.length) {
+            problems.push(`Arm ${has.join('/')} uses ${token} which arm ${lacks.join('/')} does `
+              + `not — it will fail to render for anyone missing that field.`);
+          }
+        }
+        checks.push({ key: 'variables_match', pass: problems.length === 0, blocking: true,
+          detail: problems.length
+            ? problems.join(' ') + ' The two versions would be measured over different, '
+              + 'non-random groups of people — a biased result, not just a smaller one.'
+            : 'All arms use the same merge variables.' });
+      }
+
+      // ── templates_approved — blocking, WhatsApp only ──────────────────────────────
+      // Same shape as the guard in campaigns.js startCampaign, including its "an all-holdout
+      // arm set can never send" refusal (ids.length === 0 there → no_sendable_arm here).
+      if (sendable.length === 0) {
+        checks.push({ key: 'templates_approved', pass: false, blocking: true,
+          detail: 'Every arm is a holdout (no template) — there is nothing to send. '
+            + 'startCampaign refuses this campaign (no_sendable_arm).' });
+      } else if (!templatesReadOk) {
+        checks.push({ key: 'templates_approved', pass: false, blocking: true,
+          detail: 'Could not read arm templates — approval status is unknown.' });
+      } else {
+        const fails = [];
+        for (const v of sendable) {
+          const t = tplById.get(v.template_id);
+          if (!t) { fails.push(`Arm ${v.label}'s template no longer exists.`); continue; }
+          if (camp.channel === 'whatsapp' && String(t.approval_status || '').toUpperCase() !== 'APPROVED') {
+            fails.push(`Arm ${v.label}'s template "${t.name}" is not APPROVED on WhatsApp `
+              + `(status: ${t.approval_status || 'none'}).`);
+          }
+        }
+        checks.push({ key: 'templates_approved', pass: fails.length === 0, blocking: true,
+          detail: fails.length ? fails.join(' ') : "Every arm's template exists and is send-ready." });
+      }
+
+      // ── same_channel_purpose — blocking ─────────────────────────────────────────
+      if (!templatesReadOk) {
+        checks.push({ key: 'same_channel_purpose', pass: false, blocking: true,
+          detail: 'Could not read arm templates — channel consistency is unknown.' });
+      } else {
+        const fails = [];
+        for (const v of sendable) {
+          const t = tplById.get(v.template_id);
+          if (!t) { fails.push(`Arm ${v.label}'s template no longer exists.`); continue; }
+          if (String(t.channel || '').toLowerCase() !== String(camp.channel || '').toLowerCase()) {
+            fails.push(`Arm ${v.label} uses a "${t.channel}" template but the campaign channel `
+              + `is "${camp.channel}" — it would fail to send.`);
+          }
+        }
+        checks.push({ key: 'same_channel_purpose', pass: fails.length === 0, blocking: true,
+          detail: fails.length ? fails.join(' ')
+            : (sendable.length ? "Every arm's template matches the campaign channel."
+                                : 'No arm sends a template — nothing to check.') });
+      }
+
+      // ── quiet_hours_risk — WARNING, not blocking ────────────────────────────────
+      // Audience: campaigns.audience_snapshot when set (populated at approval/send time);
+      // before that it's null, so fall back to the current comms.segment_members row count
+      // for the campaign's segment — the SAME cheap, non-materializing read `getSegment`
+      // already uses. Deliberately NOT campaigns.js's reachableCount(), which calls
+      // materialize_segment — real work this screen (re-checked on every arm edit) cannot
+      // afford to pay on every keystroke.
+      let audience = null;
+      if (camp.audience_snapshot != null) {
+        audience = Number(camp.audience_snapshot);
+      } else if (camp.segment_id) {
+        const mc = await A.sbComms(
+          `/rest/v1/segment_members?segment_id=eq.${A.enc(camp.segment_id)}&select=profile_id`, env);
+        if (mc.ok && Array.isArray(mc.data)) audience = mc.data.length;
+      }
+
+      if (audience == null || !Number.isFinite(audience)) {
+        checks.push({ key: 'quiet_hours_risk', pass: false, blocking: false,
+          detail: 'Could not estimate audience size — quiet-hours risk is unknown.' });
+      } else {
+        // Reuse the SAME resolution the real send gate uses (gate.js resolveQuietWindow): a
+        // per-channel row wins when enabled, an explicitly disabled row means NO quiet hours
+        // for that channel (e.g. email today), and only an absent row falls back to the
+        // global comms.settings pair. Using the global pair unconditionally would be wrong
+        // for WhatsApp (live window is 22:00–08:00 IST, not the global default) and would
+        // falsely warn on a channel that has no quiet hours at all.
+        const cqh = await G.getChannelQuietHours(env);
+        if (!cqh.ok) {
+          checks.push({ key: 'quiet_hours_risk', pass: false, blocking: false,
+            detail: 'Could not read quiet-hours settings — risk is unknown.' });
+        } else {
+          const settings = await G.getSettings(env);
+          const window = G.resolveQuietWindow(cqh.rows, camp.channel, settings);
+          const fmt = (m) => { const mm = ((m % 1440) + 1440) % 1440;
+            return `${String(Math.floor(mm / 60)).padStart(2, '0')}:${String(mm % 60).padStart(2, '0')}`; };
+          if (!window) {
+            checks.push({ key: 'quiet_hours_risk', pass: true, blocking: false,
+              detail: `${camp.channel} has no quiet-hours window configured — no risk.` });
+          } else {
+            const hours = audience / 1200;             // ~1,200 sends/hour, serial fan-out
+            const nowMin = G.istMinutes();
+            const alreadyIn = G.inQuietWindow(window.startMin, window.endMin, nowMin);
+            const untilStart = alreadyIn ? 0
+              : (window.startMin > nowMin ? window.startMin - nowMin : window.startMin + 1440 - nowMin);
+            const risky = alreadyIn || (hours * 60) > untilStart;
+            checks.push({ key: 'quiet_hours_risk', pass: !risky, blocking: false,
+              detail: alreadyIn
+                ? `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; it is `
+                  + `already inside the quiet-hours window (${fmt(window.startMin)}–${fmt(window.endMin)} `
+                  + `IST) — sending now risks the tail being cut.`
+                : risky
+                  ? `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; `
+                    + `starting now risks still sending after quiet hours begin at `
+                    + `${fmt(window.startMin)} IST — the tail would be cut.`
+                  : `~${hours.toFixed(1)}h at ~1,200 sends/hour for ${audience} recipients; `
+                    + `finishes before quiet hours begin at ${fmt(window.startMin)} IST.` });
+          }
+        }
+      }
+
+      return ok({ checks });
+    }
     case 'listExperiments': {          // cross-campaign experiment log
       if (!A.canView(auth.permissions)) return err('forbidden', 403);
       const er = await A.sbComms('/rest/v1/campaign_experiments?select=*&order=created_at.desc', env);
