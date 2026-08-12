@@ -15,7 +15,7 @@ import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 // Each line: { product_code, product_variant, quantity, goodies_cost, shipping_cost }.
 
 export function emptyLine() {
-  return { product_code: '', product_variant: '', quantity: 1, goodies_cost: '', shipping_cost: '' };
+  return { product_code: '', product_ref: null, cogs_inr: null, product_variant: '', quantity: 1, goodies_cost: '', shipping_cost: '' };
 }
 
 export default function ProductLinesEditor({ value, onChange, session }) {
@@ -38,20 +38,29 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     onChange(next);
   }
 
-  // When a product is picked from the catalogue, auto-fill goodies cost from the
-  // cached Shopify variant price (A#8/B#9 — the order is ₹0 on a 100%-off code, so
-  // cost must come from list price). Overwrites only the goodies field; silent on miss.
+  // Picking from the catalogue records the REAL product reference alongside the typed name and
+  // auto-fills goodies cost from COGS (Reann #2, S273 — replaces list price as the cost basis).
+  //
+  // ⚠️ The list-price path it replaces had NEVER actually worked: ignition.product_prices is
+  // empty (its Shopify sync is gated behind the read_products scope), so getProductPrice always
+  // missed and every goodies cost on record was typed by hand. Nothing is being "converted from
+  // ASP" — there was no ASP. Historic rows therefore keep their manual values untouched, which
+  // satisfies "retain the old method for previous months" without a backfill.
+  //
+  // A typed product that is not in the catalogue stays free text with no product_ref: the field
+  // is deliberately free-text (S214) and must not discard what someone typed.
   async function onProductPick(i, name) {
-    setRow(i, { product_code: name });
     const match = catalog.find(p => p.name === name);
-    if (!match?.sku || !session) return;
+    setRow(i, { product_code: name, product_ref: match?.product_code || null, cogs_inr: null });
+    if (!match?.product_code || !session) return;
     try {
-      const r = await ignitionopsGet('getProductPrice', { sku: match.sku }, session);
-      const price = r?.price?.price;
-      if (price == null) return;
-      onChangeRef.current(linesRef.current.map((l, idx) => (idx === i ? { ...l, goodies_cost: price } : l)));
+      const r = await ignitionopsGet('getProductCogs', { product_code: match.product_code }, session);
+      const cogs = r?.cogs_inr;
+      if (cogs == null) return;   // uncosted SKU — leave the field manual rather than write 0
+      onChangeRef.current(linesRef.current.map((l, idx) => (idx === i ? { ...l, goodies_cost: cogs, cogs_inr: cogs } : l)));
     } catch { /* leave goodies as manual */ }
   }
+
   function addRow() { onChange([...lines, emptyLine()]); }
   function removeRow(i) {
     const next = lines.filter((_, idx) => idx !== i);
@@ -116,6 +125,8 @@ export function linesToPayload(lines) {
     .filter(l => (l.product_code || '').trim())
     .map((l, idx) => ({
       product_code: l.product_code.trim(),
+      product_ref: l.product_ref || null,
+      cogs_inr: l.cogs_inr === '' || l.cogs_inr == null ? null : Number(l.cogs_inr),
       product_variant: (l.product_variant || '').trim() || null,
       quantity: Number(l.quantity) || 1,
       goodies_cost: l.goodies_cost === '' || l.goodies_cost == null ? null : Number(l.goodies_cost),

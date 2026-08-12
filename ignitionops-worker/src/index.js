@@ -1242,7 +1242,10 @@ async function getLocations(url, auth, env) {
 async function getCatalogs(url, auth, env) {
   // Static enums + product list from store schema.
   const productsRes = await sbStore(
-    `/rest/v1/product_master?select=name:product,sku&order=product`,
+    // product_code added S273 (Reann #2) — without it the picker cannot record a real product
+    // reference, which is what made COGS unlookupable. Inactive rows excluded: a discontinued
+    // variant should not be pickable on a new deal.
+    `/rest/v1/product_master?select=name:product,sku,product_code,model,color&is_active=eq.true&order=product`,
     env,
   ).catch(() => ({ data: [] }));
   // Managed category options (both axes) — admin-extendable via addCategoryOption.
@@ -1380,6 +1383,8 @@ async function insertEngagementProducts(env, engagement_id, products) {
       product_code: p.product_code,
       product_variant: p.product_variant || null,
       quantity: Math.round(Number(p.quantity) || 1),
+      product_ref: (p.product_ref && String(p.product_ref).trim()) || null,
+      cogs_inr: (p.cogs_inr != null && p.cogs_inr !== '') ? Number(p.cogs_inr) : null,
       goodies_cost: (p.goodies_cost != null && p.goodies_cost !== '') ? Number(p.goodies_cost) : null,
       shipping_cost: (p.shipping_cost != null && p.shipping_cost !== '') ? Number(p.shipping_cost) : null,
       sort_order: i,
@@ -2110,6 +2115,27 @@ async function syncCouponRedemptions(body, auth, env) {
   }
   for (const eid of touched) await recomputeEngagementAttribution(env, eid);
   return ok({ coupons: coupons.length, synced });
+}
+
+// ── COGS lookup (Reann #2, S273) ─────────────────────────────────────────────────────────────
+// sales.product_cost is effective-dated: many rows per product_code, one per effective_from.
+// Take the latest row NOT IN THE FUTURE — a cost dated next month must not price today's deal.
+// ⚠️ Cross-schema: sb() pins Accept-Profile to 'ignition', so the profile headers are overridden
+// per call. This is a READ ONLY — ignitionops must never write outside its own schema.
+async function getProductCogs(url, auth, env) {
+  const code = String(url.searchParams.get('product_code') || '').trim();
+  if (!code) return err('product_code required', 400);
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await sb(
+    `/rest/v1/product_cost?product_code=eq.${encodeURIComponent(code)}&effective_from=lte.${today}`
+    + `&select=product_code,cogs_inr,effective_from&order=effective_from.desc&limit=1`,
+    env,
+    { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const row = r.data?.[0] || null;
+  // A miss is a legitimate answer (uncosted SKU), not an error — the UI leaves the field manual.
+  return ok({ product_code: code, cogs_inr: row ? Number(row.cogs_inr) : null, effective_from: row?.effective_from || null });
 }
 
 // Cache Shopify variant prices into ignition.product_prices (goodies auto-fill, Half B).
@@ -2931,6 +2957,7 @@ const GET_ACTIONS = {
   getPayments,
   getKpis,
   getReports,
+  getProductCogs,
   getMonthlyTargets,
   getMonthlyBreakdown,
   getCampaignSummary,
