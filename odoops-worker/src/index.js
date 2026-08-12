@@ -1002,6 +1002,10 @@ const amazonAdapter = {
         const o = (byOrder[oid] = byOrder[oid] || { source_order_id: oid, refund_id: '', row_kind: 'order', sale_date: r.sale_date, order_name: oid, gross: 0, discount: 0, tax: 0, currency: 'INR', is_cancelled: false, returned_value: 0, tags: [] });
         o.gross += num(r.gross_value); o.discount += num(r.discount_value); o.tax += num(r.tax_value);
         if (r.is_cancelled) o.is_cancelled = true;
+        // S273 — carry replacement through as a TAG so the existing order_type_rules →
+        // f_order_rollup(replacement_orders) → aggOrders(repl) chain counts it with no RPC change.
+        // Amazon's flag is order-level but the report is item-grain, so one flagged line marks the order.
+        if (r.is_replacement && !o.tags.includes('amz_replacement')) o.tags.push('amz_replacement');
         if (r.sale_date && r.sale_date < o.sale_date) o.sale_date = r.sale_date;
       }
       await stageOrders(Object.values(byOrder), runId, channelId);
@@ -3063,7 +3067,11 @@ function gridToQcRows(grid, cm, fallbackDate) {
   const header = grid[hr].map(h => String(h).trim());
   const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
   // status/order_id/discount/tax are optional (Amazon flat-file carries them; QC sheets don't).
-  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id), discount: idx(cm.discount), tax: idx(cm.tax), ship_state: idx('ship-state'), ship_city: idx('ship-city') };
+  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id), discount: idx(cm.discount), tax: idx(cm.tax), ship_state: idx('ship-state'), ship_city: idx('ship-city'),
+    // S273 — free-replacement orders. Present in the all-orders report all along and never read,
+    // which is why the Replacement tile said "no feed exists". By HEADER NAME, never by position:
+    // the column sits at index 38 today and that is not a contract. Absent (-1) on QC sheets.
+    is_repl: idx('is-replacement-order'), orig_order: idx('original-order-id') };
   if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Found header row: [${header.join(', ')}]`);
   const rows = [];
   for (let r = hr + 1; r < grid.length; r++) {
@@ -3084,6 +3092,8 @@ function gridToQcRows(grid, cm, fallbackDate) {
       order_status: statusCell || null, is_cancelled: /cancel/i.test(statusCell),
       ship_state: ci.ship_state >= 0 ? (String(line[ci.ship_state] ?? '').trim() || null) : null,
       ship_city:  ci.ship_city  >= 0 ? (String(line[ci.ship_city]  ?? '').trim() || null) : null,
+      is_replacement: ci.is_repl >= 0 && String(line[ci.is_repl] ?? '').trim().toLowerCase() === 'true',
+      original_order_id: ci.orig_order >= 0 ? (String(line[ci.orig_order] ?? '').trim() || null) : null,
       raw: { line },
     });
   }

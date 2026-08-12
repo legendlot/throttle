@@ -2,8 +2,12 @@
 // Amazon — the merged channel page (lives under Channels, replaces the generic family page for
 // Amazon). Combines the rich Amazon cockpit (orders/sales value + Organic/RTO/RTV, ad metrics,
 // returns split, sales-by-state, Model/SKU sellers) with the family page's daily trend. Built on
-// the shared S169 kit. Order-type tiles (Replacements/Influencer/Repairs) are intentionally NOT
-// shown — they're Shopify-tag-driven and always 0 for Amazon.
+// the shared S169 kit. Influencer/Repairs order-type tiles are intentionally NOT shown — those are
+// Shopify-tag-driven and always 0 for Amazon. ⭐ REPLACEMENTS ARE THE EXCEPTION (S273): Amazon's
+// all-orders report carries `is-replacement-order`, the adapter now tags those rows
+// 'amz_replacement', and the existing order_type_rules → f_order_rollup → aggOrders chain counts
+// them — so `seg.repl` is real here. The long-standing "no Amazon feed exists for replacements"
+// note was simply wrong; the column had been in every stored line all along.
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
@@ -318,7 +322,13 @@ export default function AmazonPage() {
             <Kpi hue={HUE.returns} lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="RTV" val={fmtInt(ret.rtvReported.units || ret.rtv.units)} sub={ret.rtvReported.units ? `units returned · ${inr(ret.rtv.value)} refunded so far` : `${inr(ret.rtv.value)} · customer returns`} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
-            <Kpi hue={HUE.neutral} lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
+            {/* S273 — real now. Free replacements Amazon ships against an earlier order; every one is
+                ₹0, so they never move revenue. They ARE counted in Total Orders and AOV above, on
+                purpose: our AOV was tuned to Akshay's definition in S164 (June ₹1,958 vs his ₹1,953)
+                and excluding ~8% of orders would break that reconciliation for no gain. */}
+            <Kpi hue={HUE.neutral} lbl="Replacement" val={fmtInt(seg.repl)}
+                 sub={seg.orders ? `${(seg.repl / seg.orders * 100).toFixed(1)}% of orders · ₹0 each` : 'free replacement orders'}
+                 now={seg.repl} prev={segP.repl} tone="neutral" />
           </div>
           <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: -2 }}>
             Returns / RTO / RTV come from Amazon&apos;s Finances refund feed, which posts <b>weeks after</b> the sale — so a current-month figure understates and fills in as refunds settle. Older periods are the accurate read.
