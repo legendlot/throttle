@@ -22,15 +22,32 @@
 //
 // CJS exports (same as journey-canvas/graph.js): required by the node test, imported by JSX.
 
-// Trigger-property filter rows ⇄ the stored `trigger.filter` object. The worker
-// (ingest.js) ANDs simple equality over the EVENT's properties and string-compares, so the
-// UI deliberately offers equality only — anything richer belongs on a condition node.
+// Trigger-property filter rows ⇄ the stored `trigger.filter` object. The worker (ingest.js)
+// ANDs over the EVENT's properties and string-compares case-insensitively. Two operators:
+//   eq (default) → stored as a SCALAR   {is_cod: 'true'}
+//   ne (S273)    → stored as {not: …}   {primary_category: {not: 'L.O.T Build'}}
+//
+// The scalar form is kept byte-identical for equality so every pre-S273 row round-trips
+// unchanged — this module's whole reason for existing is that a shape it fails to represent
+// gets DELETED on the next Save, not left alone (see the S241/S242 history above).
+//
+// ⚠️ Anything richer than eq/ne still belongs on a condition node. `ne` earned its place
+// because it is the only way to exclude a value WITHOUT dropping events that lack the
+// property entirely — see the 42%-vs-0.49% note in ingest.js.
 const filterRowsToObj = (rows) => (rows || [])
   .filter((r) => r && String(r.prop || '').trim())
-  .reduce((o, r) => { o[String(r.prop).trim()] = String(r.value ?? '').trim(); return o; }, {});
+  .reduce((o, r) => {
+    const v = String(r.value ?? '').trim();
+    o[String(r.prop).trim()] = r.op === 'ne' ? { not: v } : v;
+    return o;
+  }, {});
+
+const isNot = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && 'not' in v;
 
 const objToFilterRows = (f) => (f && typeof f === 'object' && !Array.isArray(f))
-  ? Object.entries(f).map(([prop, value]) => ({ prop, value: String(value ?? '') }))
+  ? Object.entries(f).map(([prop, value]) => (isNot(value)
+      ? { prop, value: String(value.not ?? ''), op: 'ne' }
+      : { prop, value: String(value ?? ''), op: 'eq' }))
   : [];
 
 // `requires_identifier` accepts a STRING (one type) or an ARRAY (any-of) in the worker. The
@@ -93,7 +110,10 @@ function triggerSummary(t, segments) {
   if (!t || !t.type) return '—';
   if (t.type === 'event') {
     const f = t.filter && typeof t.filter === 'object' ? Object.entries(t.filter) : [];
-    const suffix = f.length ? ` where ${f.map(([k, v]) => `${k}=${v}`).join(' & ')}` : '';
+    // ≠ must be visible in the LIST. An exclusion that renders as "=" reads as its own
+    // opposite, which is worse than showing nothing at all.
+    const suffix = f.length
+      ? ` where ${f.map(([k, v]) => (isNot(v) ? `${k}≠${v.not}` : `${k}=${v}`)).join(' & ')}` : '';
     // Surfaced so the journey LIST shows gated-vs-ungated without opening each one — the
     // absence of any such signal is how two journeys went live enrolling unreachable profiles.
     const ri = requiresIdentifierToForm(t.requires_identifier).replace(',', '/');
@@ -108,6 +128,6 @@ function triggerSummary(t, segments) {
 
 module.exports = {
   buildTrigger, triggerToForm, roundTrips, triggerSummary,
-  filterRowsToObj, objToFilterRows,
+  filterRowsToObj, objToFilterRows, isNot,
   requiresIdentifierToForm, requiresIdentifierFromForm,
 };

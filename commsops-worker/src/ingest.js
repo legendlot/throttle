@@ -150,9 +150,29 @@ async function ingest(env, payload) {
         // A filter that matches nothing is indistinguishable from a feed that is not arriving,
         // which is the expensive kind of bug. Trim too: a trailing space is the same trap.
         const norm = (x) => String(x ?? '').trim().toLowerCase();
+        // A filter value is EITHER a scalar (equality — the original and still the common form)
+        // OR `{not: scalar}` (negation, S273).
+        //
+        // WHY NEGATION EXISTS. Without it, "everything except X" had to be inverted into an
+        // equality on the other value — and that silently drops every event where the property
+        // is ABSENT. Measured 2026-08-12: `primary_category` is absent on 42% of `product_viewed`
+        // (100% of Shopflo-sourced ones, which never get category enrichment), while the category
+        // we actually wanted to exclude, `L.O.T Build`, is 0.49%. So filtering the general browse
+        // journey to `L.O.T Cars` to dodge 0.49% would have stopped enrolling 42% of its traffic —
+        // a far bigger self-inflicted wound than the double-enrol it was meant to fix.
+        //
+        // ⚠️ ABSENT SATISFIES A NEGATION, DELIBERATELY. `{not:'X'}` means "not X", NOT "present
+        // and not X" — an unclassified event passes. That fail-OPEN choice is the entire point:
+        // it is what makes it safe to exclude a rare category from a journey whose feed is only
+        // partly classified. If you ever need "present AND not X", that is two leaves, not a
+        // tweak to this one — changing this comparison would silently re-introduce the 42% drop.
+        const matches = (v, actual) =>
+          (v && typeof v === 'object' && !Array.isArray(v) && 'not' in v)
+            ? norm(actual) !== norm(v.not)
+            : norm(actual) === norm(v);
         const f = t.filter;
         if (f && typeof f === 'object' &&
-            !Object.entries(f).every(([k, v]) => norm((properties || {})[k]) === norm(v))) continue;
+            !Object.entries(f).every(([k, v]) => matches(v, (properties || {})[k]))) continue;
         if (t.requires_identifier && !(await isReachable(t.requires_identifier))) continue;
         await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId, eventId });
       }

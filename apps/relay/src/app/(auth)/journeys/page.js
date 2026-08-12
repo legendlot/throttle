@@ -467,8 +467,8 @@ export default function JourneysPage() {
                 {/* Trigger-property filter (S241). Narrows WHO enrols, at the trigger — the
                     only place that stops an enrolment before it happens. Built for staged
                     rollouts: point a money-moving journey at one test product first, prove it
-                    with a real order, then remove the row. Equality only, ANDed, string-compared
-                    — matching ingest.js exactly. */}
+                    with a real order, then remove the row. `=` or `≠` (S273), ANDed,
+                    string-compared — matching ingest.js exactly. */}
                 <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
                   <div className="kv-k" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     Only enrol when…
@@ -478,6 +478,10 @@ export default function JourneysPage() {
                     <InfoDot label="About enrolment filters">
                       <p>Enrols only when <b>every</b> filter matches the event. Values are compared
                       as text, ignoring case — <code>true</code> and <code>True</code> both work.</p>
+                      <p><b>=</b> requires the property to equal the value. <b>≠</b> requires it not to —
+                      and an event <i>missing</i> that property <b>passes</b> a <b>≠</b> filter. That is
+                      deliberate: it lets you exclude one category without also dropping every event
+                      that was never classified.</p>
                       <p>Anything that does not match is skipped <b>silently</b>: it never enters the
                       journey, so it will not show up as a skip anywhere.</p>
                       <p>Built for staged rollouts — point a money-moving journey at one test product
@@ -498,7 +502,17 @@ export default function JourneysPage() {
                         disabled={busy || !editable}
                         onChange={(e) => set('triggerFilter', (j.triggerFilter || []).map((r, k) =>
                           k === i ? { ...r, prop: e.target.value } : r))} />
-                      <span className="dim" style={{ fontSize: 12 }}>=</span>
+                      {/* S273 — the operator. `≠` exists because excluding a value via an
+                          equality on the OTHER value silently drops every event where the
+                          property is absent (42% of product_viewed carry no primary_category).
+                          Rendering it as a plain "=" would state the opposite of what it does. */}
+                      <select className="f-inp" style={{ flex: '0 0 62px', textAlign: 'center' }}
+                        value={row.op || 'eq'} disabled={busy || !editable}
+                        onChange={(e) => set('triggerFilter', (j.triggerFilter || []).map((r, k) =>
+                          k === i ? { ...r, op: e.target.value } : r))}>
+                        <option value="eq">=</option>
+                        <option value="ne">≠</option>
+                      </select>
                       <input className="f-inp" style={{ flex: '1 1 160px' }}
                         value={row.value} placeholder="value (e.g. true)"
                         disabled={busy || !editable}
@@ -515,7 +529,7 @@ export default function JourneysPage() {
                     {TRIGGER_PROP_SUGGEST.map((p) => <option key={p} value={p} />)}
                   </datalist>
                   <Btn kind="ghost" disabled={busy || !editable} style={{ marginTop: 6 }}
-                    onClick={() => set('triggerFilter', [...(j.triggerFilter || []), { prop: '', value: '' }])}>
+                    onClick={() => set('triggerFilter', [...(j.triggerFilter || []), { prop: '', value: '', op: 'eq' }])}>
                     {/* "filter", NOT "condition" — the canvas has its own "+ Condition" NODE, and
                         the collision already sent Afshaan looking in the wrong place. These are
                         enrolment filters on the trigger; a Condition node is a branch mid-journey. */}

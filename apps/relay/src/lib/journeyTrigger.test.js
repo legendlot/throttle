@@ -27,6 +27,16 @@ const TRIGGER_FIXTURES = [
     { type: 'event', name: 'add_to_cart', requires_identifier: ['phone', 'email'] }],
   ['event + filter + requires_identifier together',
     { type: 'event', name: 'order_placed', filter: { is_cod: 'true' }, requires_identifier: 'phone' }],
+  // S273 — negated filter. The double-enrol fix stores exactly this shape on the general
+  // browse journey, and it is out-of-band-fragile in precisely the way S241/S242 were.
+  ['event + NEGATED filter (S273 exclusion)',
+    { type: 'event', name: 'product_viewed', filter: { primary_category: { not: 'L.O.T Build' } } }],
+  ['event + negated AND equality filters mixed',
+    { type: 'event', name: 'product_viewed',
+      filter: { primary_category: { not: 'L.O.T Build' }, is_cod: 'true' } }],
+  ['event + negated filter + requires_identifier (the live shape)',
+    { type: 'event', name: 'product_viewed',
+      filter: { primary_category: { not: 'L.O.T Build' } }, requires_identifier: 'phone' }],
   ['segment entry', { type: 'segment_entry', segment_id: 'seg-123' }],
 ];
 
@@ -113,6 +123,47 @@ t('summary resolves a segment name, falling back to the id', () => {
     'enters: Winback');
   assert.strictEqual(T.triggerSummary({ type: 'segment_entry', segment_id: 's9' }, []), 'enters: s9');
   assert.strictEqual(T.triggerSummary(null), '—');
+});
+
+// ── S273: negation semantics. These pin the DECISION, not just the plumbing. ──
+t('S273: an equality filter still stores a bare scalar (pre-S273 rows unchanged)', () => {
+  const out = T.buildTrigger({ triggerType: 'event', triggerEvent: 'x',
+    triggerFilter: [{ prop: 'is_cod', value: 'true', op: 'eq' }] });
+  assert.deepStrictEqual(out.filter, { is_cod: 'true' }, 'equality must NOT become {not:…} or an object');
+});
+
+t('S273: a row with NO op defaults to equality (rows built before the op existed)', () => {
+  const out = T.buildTrigger({ triggerType: 'event', triggerEvent: 'x',
+    triggerFilter: [{ prop: 'is_cod', value: 'true' }] });
+  assert.deepStrictEqual(out.filter, { is_cod: 'true' });
+});
+
+t('S273: an ne row stores {not: value}', () => {
+  const out = T.buildTrigger({ triggerType: 'event', triggerEvent: 'x',
+    triggerFilter: [{ prop: 'primary_category', value: 'L.O.T Build', op: 'ne' }] });
+  assert.deepStrictEqual(out.filter, { primary_category: { not: 'L.O.T Build' } });
+});
+
+t('S273: the summary renders ≠ for a negation, never = (it would read as its own opposite)', () => {
+  assert.strictEqual(
+    T.triggerSummary({ type: 'event', name: 'product_viewed', filter: { primary_category: { not: 'L.O.T Build' } } }),
+    'event: product_viewed where primary_category≠L.O.T Build');
+});
+
+// The worker-side rule, asserted here too because it is the SEMANTIC decision the whole fix
+// rests on: an ABSENT property satisfies a negation. If this ever flips, the general browse
+// journey silently stops enrolling the 42% of product_viewed events that carry no category.
+t('S273 SEMANTICS: absent property SATISFIES a negation (fail-open, the 42% guard)', () => {
+  const norm = (x) => String(x ?? '').trim().toLowerCase();
+  const matches = (v, actual) => (v && typeof v === 'object' && !Array.isArray(v) && 'not' in v)
+    ? norm(actual) !== norm(v.not)
+    : norm(actual) === norm(v);
+  const rule = { not: 'L.O.T Build' };
+  assert.strictEqual(matches(rule, undefined), true,  'ABSENT must pass — this is the whole point');
+  assert.strictEqual(matches(rule, ''), true,         'empty must pass');
+  assert.strictEqual(matches(rule, 'L.O.T Cars'), true);
+  assert.strictEqual(matches(rule, 'L.O.T Build'), false, 'the excluded value must NOT pass');
+  assert.strictEqual(matches(rule, '  l.o.t build  '), false, 'case + whitespace insensitive, like equality');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
