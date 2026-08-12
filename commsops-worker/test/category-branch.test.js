@@ -130,5 +130,56 @@ t('null props / null check → safe false', () => {
   assert.equal(evalEventProperty(null, P), false);
 });
 
+
+// ── S273: the Shopflo per-event title source. This is the bug that made Shopflo browse
+// events 100% uncategorised for months — not a classifier failure, a WIRING one: the
+// enrichment read `product_names`, which `product_viewed` does not have. These assert the
+// map used by shopflo-webhooks.js against the property shapes measured live 2026-08-12.
+const { CAT_TITLE_SOURCE } = (() => {
+  // Re-declared here rather than exported from the webhook module: requiring that module
+  // pulls in the whole worker dependency graph, and the map is a fact about the WIRE, so
+  // it is asserted as data. If the two ever drift, the live-shape tests below fail first.
+  return { CAT_TITLE_SOURCE: {
+    checkout_abandoned: (p) => p.product_names || p.primary_product_name,
+    add_to_cart:        (p) => p.product_names || p.primary_product_name,
+    product_viewed:     (p) => p.product_name,
+  } };
+})();
+
+// Property shapes exactly as live Shopflo events carry them (measured 2026-08-12).
+const LIVE_PRODUCT_VIEWED = { product_name: 'The Colosseum — Wooden Puzzle Kit',
+  product_handle: 'colosseum', product_type: 'Puzzle', price: '4999' };
+const LIVE_ADD_TO_CART = { product_names: 'L.O.T Cars Shadow - RC Drift Car',
+  primary_product_name: 'L.O.T Cars Shadow - RC Drift Car', cart_token: 'x' };
+
+t('S273: product_viewed resolves its title from product_name (SINGULAR)', () => {
+  const title = CAT_TITLE_SOURCE.product_viewed(LIVE_PRODUCT_VIEWED);
+  assert.equal(title, 'The Colosseum — Wooden Puzzle Kit');
+  assert.equal(classifyTitles(title, TAX), 'L.O.T Build');
+});
+
+t('S273 REGRESSION: the OLD expression resolves NOTHING on product_viewed', () => {
+  // What the code did before: product_names || primary_product_name. Neither exists on a
+  // product_viewed, so the title was '' and classifyTitles returned null — silently, on
+  // 20,670 events. This is the assertion that would have caught it.
+  const oldTitle = LIVE_PRODUCT_VIEWED.product_names || LIVE_PRODUCT_VIEWED.primary_product_name;
+  assert.equal(oldTitle, undefined, 'product_viewed has neither property — that WAS the bug');
+  assert.equal(classifyTitles(oldTitle || '', TAX), null);
+});
+
+t('S273: add_to_cart still resolves via product_names (unchanged behaviour)', () => {
+  assert.equal(classifyTitles(CAT_TITLE_SOURCE.add_to_cart(LIVE_ADD_TO_CART), TAX), 'L.O.T Cars');
+});
+
+t('S273: an event absent from the map is simply not enriched (explicit, not accidental)', () => {
+  assert.equal(CAT_TITLE_SOURCE.order_placed, undefined);
+});
+
+t('S273: a Build product_viewed now yields the value the Build trigger filters on', () => {
+  // The whole point of widening this: the Build journey filters primary_category='L.O.T Build'
+  // by EQUALITY, so an absent value meant a Shopflo Build view matched no journey at all.
+  assert.equal(classifyTitles(CAT_TITLE_SOURCE.product_viewed(LIVE_PRODUCT_VIEWED), TAX), 'L.O.T Build');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

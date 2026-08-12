@@ -21,6 +21,20 @@ const { recordConsent } = require('./consent.js');
 const FLO = require('./shopflo.js');
 const CAT = require('./product-category.js');
 
+// Which property carries the product title(s), PER EVENT — they genuinely differ on the wire
+// and that difference is why this enrichment was `checkout_abandoned`-only for so long.
+// Measured on live Shopflo events 2026-08-12:
+//   checkout_abandoned / add_to_cart → `product_names` (comma list) + `primary_product_name`
+//   product_viewed                   → `product_name` (SINGULAR — neither of the above exists)
+// A single shared expression would therefore have silently resolved nothing on product_viewed,
+// which is the same silent-miss this map exists to end. Add an event here to enrich it; an
+// event absent from the map is simply not enriched (the prior behaviour, kept explicit).
+const CAT_TITLE_SOURCE = {
+  checkout_abandoned: (p) => p.product_names || p.primary_product_name,
+  add_to_cart:        (p) => p.product_names || p.primary_product_name,
+  product_viewed:     (p) => p.product_name,
+};
+
 // Bearer (Authorization) or custom X-Shopflo-Token header must equal the shared secret.
 function tokenOk(env, request) {
   const want = env.SHOPFLO_WEBHOOK_TOKEN;
@@ -123,10 +137,24 @@ async function handleShopfloWebhook(env, request) {
       envlp.properties.product_image_url = await resolveVariantImage(
         env, envlp.properties.cart_variant_ids, envlp.properties.primary_product_name);
     }
-    // Category enrichment (S232) — primary_category ("L.O.T Cars"|"L.O.T Build") from the
-    // cart's titles, so journeys can branch template voice by product line. Best-effort.
-    if (spec.event === 'checkout_abandoned' && envlp.properties && !envlp.properties.primary_category) {
-      const cat = await CAT.resolveCategory(env, envlp.properties.product_names || envlp.properties.primary_product_name || '');
+    // Category enrichment (S232, WIDENED S273) — primary_category from the event's title(s),
+    // so journeys can branch template voice AND so a category-filtered TRIGGER can match.
+    // Best-effort: a miss leaves the property absent and never fails the webhook.
+    //
+    // ⚠️ This covered `checkout_abandoned` ONLY until 2026-08-12, while the Shopify pixel side
+    // (shopify-webhooks.js) had always covered `add_to_cart` + `product_viewed`. The two feeds
+    // therefore disagreed silently — measured over 30 days: Shopflo `product_viewed` 20,670
+    // events **100% uncategorised** and `add_to_cart` 5,051 **100% uncategorised**, against the
+    // pixel's 1.8%. Nothing errored; the property was simply never there, so a category-filtered
+    // journey trigger could not match a Shopflo-sourced view at all. PATTERN-218 shape: the rule
+    // was fully specified and coded, and one of its two enforcement points never learned the
+    // new events.
+    //
+    // Cost is not per-event: `loadTaxonomy` caches ~160 rows per isolate on a 1h TTL, so this is
+    // one DB read per isolate per hour, not one per browse event.
+    const catTitleOf = CAT_TITLE_SOURCE[spec.event];
+    if (catTitleOf && envlp.properties && !envlp.properties.primary_category) {
+      const cat = await CAT.resolveCategory(env, catTitleOf(envlp.properties) || '');
       if (cat) envlp.properties.primary_category = cat;
     }
 
