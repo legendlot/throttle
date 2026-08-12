@@ -23,20 +23,40 @@ export default function NewEngagementPage() {
     payment_terms: 'on_release',
     payment_amount: 0,
     directed_to: 'website',
-    campaign_tag: '',
+    campaign_id: '',
     expected_post_date: '',
     poc_user_id: null,
     poc_name: null,
   });
 
-  // Reann #7 — campaign picklist, admin-extendable via category_options axis='campaign'.
+  // Reann #3 (S273) — real campaigns replace the free-text tag AND the category_options
+  // 'campaign' axis that backed its suggestions (that axis is retired; it never had any rows).
   const [campaignOpts, setCampaignOpts] = useState([]);
-  useEffect(() => {
+  const [newCampaign, setNewCampaign] = useState('');
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
+  function loadCampaigns() {
     if (!session) return;
-    ignitionopsGet('getCatalogs', {}, session)
-      .then(c => setCampaignOpts(c?.category_options?.campaign || []))
+    ignitionopsGet('getCampaigns', { status: 'active' }, session)
+      .then(r => setCampaignOpts(r.campaigns || []))
       .catch(() => setCampaignOpts([]));
-  }, [session]);
+  }
+  useEffect(loadCampaigns, [session]);
+
+  // Deal-time creation is kept on purpose: the field this replaced was free text precisely so a
+  // campaign could be named as the deal is struck. Forcing a trip to /campaigns first is what
+  // makes people leave it blank.
+  async function createCampaignInline() {
+    const nm = newCampaign.trim();
+    if (!nm) return;
+    setCreatingCampaign(true);
+    try {
+      const c = await ignitionopsPost('createCampaign', { name: nm }, session);
+      setNewCampaign('');
+      loadCampaigns();
+      if (c?.id) setField('campaign_id', c.id);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setCreatingCampaign(false); }
+  }
 
   useEffect(() => {
     if (!session || influencerSearch.length < 2) { setSearchResults([]); return; }
@@ -59,8 +79,7 @@ export default function NewEngagementPage() {
         ...(products.length ? { products } : {}),
       };
       if (!payload.expected_post_date) delete payload.expected_post_date;
-      if (!payload.campaign_tag || !payload.campaign_tag.trim()) delete payload.campaign_tag;
-      else payload.campaign_tag = payload.campaign_tag.trim();
+      if (!payload.campaign_id) delete payload.campaign_id;
       const res = await ignitionopsPost('createEngagement', payload, session);
       toast(`Created ${res.engagement_no}`, 'success');
       router.push(`/engagements/detail/?id=${res.id}`);
@@ -139,14 +158,21 @@ export default function NewEngagementPage() {
             </select>
           </Field>
           <Field label="Campaign">
-            {/* Free-text with suggestions, deliberately: a new campaign gets named at deal time and
-                waiting on an admin to add it first would just push people to leave it blank. */}
-            <input list="ign-campaign-opts" value={form.campaign_tag}
-              onChange={e => setField('campaign_tag', e.target.value)}
-              placeholder="e.g. Roxie Launch" style={inputStyle('100%')} />
-            <datalist id="ign-campaign-opts">
-              {campaignOpts.map(c => <option key={c} value={c} />)}
-            </datalist>
+            <select value={form.campaign_id} onChange={e => setField('campaign_id', e.target.value)} style={inputStyle('100%')}>
+              <option value="">— none —</option>
+              {campaignOpts.map(c => <option key={c.id} value={c.id}>{c.name || c.campaign_no}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <input value={newCampaign} onChange={e => setNewCampaign(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); createCampaignInline(); } }}
+                placeholder="or start a new campaign…" style={{ ...inputStyle('100%'), fontSize: 12 }} />
+              <button type="button" onClick={createCampaignInline} disabled={!newCampaign.trim() || creatingCampaign}
+                style={{ padding: '0 10px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+                         background: 'transparent', color: 'var(--text-2)', cursor: newCampaign.trim() ? 'pointer' : 'default',
+                         opacity: newCampaign.trim() && !creatingCampaign ? 1 : 0.5, whiteSpace: 'nowrap' }}>
+                {creatingCampaign ? 'Adding…' : 'Add'}
+              </button>
+            </div>
           </Field>
           <Field label="Expected post date">
             <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inputStyle('100%')} />

@@ -652,10 +652,18 @@ function campaignRollup(c) {
   const num = v => Number(v) || 0;
   const POSTED = new Set(['posting', 'live']);
   const spend = engs.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
+  // Reann #3 — budget consumed / remaining. "Consumed" is the deal's agreed cost the moment it is
+  // linked, NOT amounts actually paid: a campaign's budget is committed when the deal is struck,
+  // and a manager needs to see the commitment before the money moves. Remaining is null (not 0)
+  // when no budget is set, so "no budget" never renders as "fully spent".
+  const budget = c.budget_amount != null ? num(c.budget_amount) : null;
   return {
     linked_count: engs.length,
     posted_count: engs.filter(e => POSTED.has(e.stage)).length,
     spend,
+    budget,
+    budget_remaining: budget != null ? budget - spend : null,
+    budget_pct: budget ? Math.round(spend / budget * 100) : null,
     views: engs.reduce((s, e) => s + num(e.views), 0),
     orders: engs.reduce((s, e) => s + num(e.orders), 0),
   };
@@ -1346,8 +1354,9 @@ const ENGAGEMENT_FIELDS = [
   'saves','reposts','followers_gained','follower_count_at_post',
   // Reann #2 — per-metric "why is this blank" reasons; distinguishes a real 0 from unknown.
   'metric_gaps',
-  // Reann #7 — marketing campaign tag (category_options axis='campaign'). NOT campaign_id.
-  'campaign_tag',
+  // 'campaign_tag' was here (Reann #7, S272) and is DELIBERATELY REMOVED (S273): campaigns are
+  // now real rows via campaign_id. The column survives read-only so the old tags stay auditable —
+  // leaving it writable would rebuild the second campaign list we just collapsed.
   'conversions_value','roas_on_ad_spend','actual_roas','orders_cc',
   'shipping_order_id','tracking_id','shipping_month','shipping_date','directed_to',
   'poc_user_id','poc_name',
@@ -2213,19 +2222,28 @@ async function openPitstopTicket(body, auth, env) {
   return ok({ ticket_no, engagement_no: eng.engagement_no });
 }
 
+// A campaign is now a MARKETING campaign (Reann #3, S273) — it spans influencers and carries a
+// budget. `influencer_id` and `video_count` are legacy columns from the dormant per-influencer
+// construct: both are nullable and left NULL, video count being DERIVED from linked deals.
 async function createCampaign(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
-  if (!body.influencer_id) return err('influencer_id required', 400);
-  if (!body.video_count || body.video_count < 1) return err('video_count required', 400);
-  // Mint a campaign_no using the same year sequence approach
+  const name = String(body.name || '').trim();
+  if (!name) return err('name required', 400);
+  const budget = (body.budget_amount != null && body.budget_amount !== '') ? Number(body.budget_amount) : null;
+  if (budget != null && (isNaN(budget) || budget < 0)) return err('budget_amount must be a non-negative number', 400);
+  // Case-insensitive dedupe, matching campaigns_name_ci_key — a friendly 409 beats a raw 23505.
+  const dupe = await sb(`/rest/v1/campaigns?name=ilike.${encodeURIComponent(name)}&select=id,name&limit=1`, env);
+  if (dupe.ok && dupe.data?.[0]) return err(`a campaign named "${dupe.data[0].name}" already exists`, 409);
   const yyyy = String(new Date().getUTCFullYear());
   const code = `CMP-${yyyy}-${String(Date.now()).slice(-6)}`;
   const r = await sb(`/rest/v1/campaigns`, env, {
     method: 'POST',
     body: JSON.stringify([{
       campaign_no: code,
-      influencer_id: body.influencer_id,
-      video_count: body.video_count,
+      name,
+      budget_amount: budget,
+      influencer_id: body.influencer_id || null,
+      video_count: null,
       agreed_total: body.agreed_total || null,
       status: 'active',
     }]),
@@ -2234,7 +2252,7 @@ async function createCampaign(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
-const CAMPAIGN_FIELDS = ['video_count', 'agreed_total', 'status'];
+const CAMPAIGN_FIELDS = ['name', 'budget_amount', 'video_count', 'agreed_total', 'status'];
 
 async function updateCampaign(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;

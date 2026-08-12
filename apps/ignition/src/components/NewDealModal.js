@@ -23,7 +23,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const [form, setForm] = useState({
     engagement_type: 'video_tracking', deal_type: 'paid',
     expected_post_date: '',
-    campaign_tag: '',
+    campaign_id: '',
     payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
     poc_user_id: null, poc_name: null,
   });
@@ -32,6 +32,16 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const isAffiliate = form.deal_type === 'affiliate' || form.deal_type === 'paid_plus_affiliate';
 
   useEffect(() => { setSelected(presetInfluencer || null); }, [presetInfluencer, open]);
+
+  // Campaign list for the picker (Reann #3). Loaded once the modal opens rather than on mount,
+  // so a page that never opens it pays nothing.
+  const [campaigns, setCampaigns] = useState([]);
+  useEffect(() => {
+    if (!session || !open) return;
+    ignitionopsGet('getCampaigns', { status: 'active' }, session)
+      .then(r => setCampaigns(r.campaigns || []))
+      .catch(() => setCampaigns([]));
+  }, [session, open]);
 
   useEffect(() => {
     if (!session || search.length < 2) { setResults([]); return; }
@@ -46,8 +56,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
     try {
       const payload = { influencer_id: selected.id, ...form };
       if (!payload.expected_post_date) delete payload.expected_post_date;
-      if (!payload.campaign_tag || !payload.campaign_tag.trim()) delete payload.campaign_tag;
-      else payload.campaign_tag = payload.campaign_tag.trim();
+      if (!payload.campaign_id) delete payload.campaign_id;
       // Compensation only applies to paid deals; affiliate % only to affiliate deals.
       if (isPaid && payload.payment_amount !== '') payload.payment_amount = Number(payload.payment_amount);
       else { delete payload.payment_amount; delete payload.payment_terms; }
@@ -141,10 +150,13 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
         <Field label="Expected post date">
           <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inp} />
         </Field>
-        {/* Reann #7 — campaign tag, matching the full new-deal page. */}
+        {/* Reann #3 (S273) — a real campaign, not a typed tag. The free-text campaign_tag it
+            replaced produced 4 spellings of 3 campaigns; picking from the list keeps one truth. */}
         <Field label="Campaign">
-          <input value={form.campaign_tag} onChange={e => setField('campaign_tag', e.target.value)}
-            placeholder="e.g. Roxie Launch" style={inp} />
+          <select value={form.campaign_id} onChange={e => setField('campaign_id', e.target.value)} style={inp}>
+            <option value="">— none —</option>
+            {campaigns.map(c => <option key={c.id} value={c.id}>{c.name || c.campaign_no}</option>)}
+          </select>
         </Field>
       </div>
 
