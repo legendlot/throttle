@@ -1,15 +1,20 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { Combobox } from '@throttle/ui';
 import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 
-// Multi-row product picker (#4). Each row = product (free-text input + datalist
-// suggestions from getCatalogs) → variant (free text) + quantity + goodies cost
-// + shipping cost (⑥, S214). Product is deliberately FREE TEXT (not a Combobox):
-// influencer deals reference arbitrary products/variants that aren't always in the
-// Shopify catalog, so the catalog is only a suggestion list — a typed name that
-// isn't a catalog entry must still save. (A Combobox was tried S214 but it discards
-// non-matching typed text on blur → products vanished; reverted, Himani #bugs
-// 2026-07-15.) Catalog carries no variant taxonomy, so variant stays free text.
+// Multi-row product picker (#4). Each row = product (Combobox over the real product list)
+// → variant (free text) + quantity + goodies cost + shipping cost (⑥, S214).
+//
+// ⭐ NOW A COMBOBOX AGAIN (S273, Reann #2) — and the S214 objection no longer applies.
+// S214 reverted an earlier Combobox because it DISCARDED non-matching typed text on blur, so a
+// product outside the catalog vanished (Himani, 2026-07-15). Combobox has since gained
+// **creatable mode** (`onCreateOption`), which keeps a typed product as free text instead of
+// dropping it — so arbitrary products still save, and picking a real one now records the actual
+// product_code, which is what makes COGS lookup possible at all.
+// ⚠️ Options are per VARIANT, not per product name: sales.product_cost is keyed on product_code
+// and a bare name is ambiguous (Bumble = 5 variants at different costs). Variant itself stays
+// free text — the catalog carries no variant taxonomy.
 //
 // `value` is an array of line objects; `onChange(nextLines)` reports edits up.
 // Each line: { product_code, product_variant, quantity, goodies_cost, shipping_cost }.
@@ -33,6 +38,18 @@ export default function ProductLinesEditor({ value, onChange, session }) {
       .catch(() => setCatalog([]));
   }, [session]);
 
+  // One option PER VARIANT, because sales.product_cost is keyed on product_code and a product
+  // name alone is ambiguous (Bumble has 5 variants at different costs). Legacy rows hold a bare
+  // typed name that matches no option — creatable mode keeps them as free text rather than
+  // discarding them on blur, which is exactly why S214 reverted the old Combobox attempt.
+  const productOptions = (catalog || [])
+    .filter(p => p.product_code)
+    .map(p => {
+      const label = [p.name, p.model, p.color].filter(Boolean).join(' · ');
+      return { value: label, label, product_code: p.product_code };
+    })
+    .filter((o, i, a) => a.findIndex(x => x.value === o.value) === i);
+
   function setRow(i, patch) {
     const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
     onChange(next);
@@ -49,14 +66,15 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   //
   // A typed product that is not in the catalogue stays free text with no product_ref: the field
   // is deliberately free-text (S214) and must not discard what someone typed.
-  async function onProductPick(i, name) {
-    const match = catalog.find(p => p.name === name);
-    setRow(i, { product_code: name, product_ref: match?.product_code || null, cogs_inr: null });
-    if (!match?.product_code || !session) return;
+  // `opt` is the picked option (carrying the real product_code) or null for a typed-in product.
+  async function onProductPicked(i, label, opt) {
+    const code = opt?.product_code || null;
+    setRow(i, { product_code: label, product_ref: code, cogs_inr: null });
+    if (!code || !session) return;
     try {
-      const r = await ignitionopsGet('getProductCogs', { product_code: match.product_code }, session);
+      const r = await ignitionopsGet('getProductCogs', { product_code: code }, session);
       const cogs = r?.cogs_inr;
-      if (cogs == null) return;   // uncosted SKU — leave the field manual rather than write 0
+      if (cogs == null) return;   // uncosted variant — leave the field manual rather than write 0
       onChangeRef.current(linesRef.current.map((l, idx) => (idx === i ? { ...l, goodies_cost: cogs, cogs_inr: cogs } : l)));
     } catch { /* leave goodies as manual */ }
   }
@@ -73,11 +91,14 @@ export default function ProductLinesEditor({ value, onChange, session }) {
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
             {i === 0 && <div style={lbl}>Product</div>}
-            <input
-              list="ign-product-list"
+            <Combobox
               value={l.product_code || ''}
-              onChange={e => onProductPick(i, e.target.value)}
-              placeholder="e.g. Brutus"
+              options={productOptions}
+              onChange={(val, opt) => onProductPicked(i, val, opt)}
+              onCreateOption={(typed) => onProductPicked(i, typed, null)}
+              createLabel="Use"
+              placeholder="Search a product…"
+              portal
               style={inp}
             />
           </div>
@@ -108,9 +129,6 @@ export default function ProductLinesEditor({ value, onChange, session }) {
           <button type="button" onClick={() => removeRow(i)} title="Remove" style={removeBtn}>×</button>
         </div>
       ))}
-      <datalist id="ign-product-list">
-        {catalog.map(p => <option key={p.sku || p.name} value={p.name} />)}
-      </datalist>
       <div>
         <button type="button" onClick={addRow} style={addBtn}>+ Add product</button>
       </div>
