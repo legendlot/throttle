@@ -2311,7 +2311,11 @@ async function assignEngagementToCampaign(body, auth, env) {
 // created_at. Diverging here would produce a breakdown that silently disagrees with the total.
 async function getMonthlyBreakdown(url, auth, env) {
   const month = String(url.searchParams.get('month') || '').trim();
-  if (!/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM', 400);
+  // 'unallocated' (Reann #1) is a first-class bucket, not a month: deals whose video has not
+  // posted, so their spend belongs to no month yet. Same rule as getMonthlyTargets — if you
+  // change one, change the other, or the drill-down stops summing to the tile above it.
+  const isUnalloc = month === 'unallocated';
+  if (!isUnalloc && !/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM or "unallocated"', 400);
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const spendOf = e => (e.total_cost != null ? num(e.total_cost)
     : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
@@ -2325,7 +2329,7 @@ async function getMonthlyBreakdown(url, auth, env) {
   const spend = [], views = [], conversions = [];
   for (const e of (r.data || [])) {
     const postMonth  = (e.post_date || '').slice(0, 7);
-    const spendMonth = (e.post_date || e.created_at || '').slice(0, 7);
+    const spendMonth = (e.post_date || '').slice(0, 7);   // no created_at fallback — see the unallocated bucket
     const who = e.influencer || {};
     const base = {
       engagement_id: e.id, engagement_no: e.engagement_no, stage: e.stage,
@@ -2335,9 +2339,17 @@ async function getMonthlyBreakdown(url, auth, env) {
       channel_link: who.channel_link || null, platform: who.channel_platform || null,
       post_date: e.post_date || null,
     };
-    if (spendMonth === month) {
+    if (isUnalloc) {
+      // Unposted only. Everything else in this loop is month-scoped and stays skipped.
+      if (!e.post_date) {
+        const amt = spendOf(e);
+        if (amt > 0) spend.push({ ...base, amount: Math.round(amt), dated_by: 'unallocated' });
+      }
+      continue;
+    }
+    if (e.post_date && spendMonth === month) {
       const amt = spendOf(e);
-      if (amt > 0) spend.push({ ...base, amount: Math.round(amt), dated_by: e.post_date ? 'post_date' : 'created_at' });
+      if (amt > 0) spend.push({ ...base, amount: Math.round(amt), dated_by: 'post_date' });
     }
     if (postMonth === month) {
       if (num(e.views) > 0) views.push({ ...base, views: num(e.views) });
@@ -2421,6 +2433,7 @@ async function getMonthlyTargets(url, auth, env) {
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
   const er = await sb(`/rest/v1/engagements?select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
   const actMap = {};
+  let unallocSpend = 0, unallocDeals = 0;
   const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_spend: 0 }));
   if (er.ok) {
     for (const e of (er.data || [])) {
@@ -2429,10 +2442,21 @@ async function getMonthlyTargets(url, auth, env) {
       // (which should be 0) don't count toward any month's target.
       const postMonth = (e.post_date || '').slice(0, 7);
       if (/^\d{4}-\d{2}$/.test(postMonth)) bucket(postMonth).actual_views += num(e.views);
-      // Spend still buckets by post_date, falling back to created_at (an "unallocated
-      // funds" pre-post spend column was deferred — Afshaan S214).
-      const spendMonth = (e.post_date || e.created_at || '').slice(0, 7);
-      if (/^\d{4}-\d{2}$/.test(spendMonth)) bucket(spendMonth).actual_spend += spendOf(e);
+      // ⭐ UNALLOCATED SPEND (Reann #1, S273 — the column deferred in S214 is now built).
+      // Spend on a deal whose video has NOT posted cannot honestly belong to any month: the
+      // product shipped, the money is committed, but the month it will land in is unknown.
+      // It used to fall back to created_at, which quietly charged it to the month the deal was
+      // RAISED — inflating that month and then never correcting when the video posted later.
+      // ⚠️ This LOWERS actual_spend for months carrying not-yet-posted deals. That is the fix,
+      // not a regression: the money moves to the unallocated bucket, it is not lost. Views were
+      // already post_date-only, so only spend changes.
+      if (e.post_date) {
+        const spendMonth = e.post_date.slice(0, 7);
+        if (/^\d{4}-\d{2}$/.test(spendMonth)) bucket(spendMonth).actual_spend += spendOf(e);
+      } else {
+        const amt = spendOf(e);
+        if (amt > 0) { unallocSpend += amt; unallocDeals++; }
+      }
     }
   }
 
@@ -2449,7 +2473,9 @@ async function getMonthlyTargets(url, auth, env) {
       spend_pct: budget_amount ? Math.round(a.actual_spend / budget_amount * 100) : null,
     };
   });
-  return ok({ months: rows });
+  // Reann #1 — surfaced as its own bucket, never folded into a month. Drill down with
+  // getMonthlyBreakdown?month=unallocated, which applies the identical no-post_date rule.
+  return ok({ months: rows, unallocated: { spend: Math.round(unallocSpend), deals: unallocDeals } });
 }
 
 async function upsertMonthlyTarget(body, auth, env) {

@@ -40,6 +40,8 @@ export default function TargetsPage() {
   const canManage = !!perms?.ignition_manage;
 
   const [rows, setRows] = useState(null);
+  // Reann #1 — spend on deals whose video has not posted, so it belongs to no month yet.
+  const [unalloc, setUnalloc] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const { showToast: toast } = useToast();
@@ -66,7 +68,7 @@ export default function TargetsPage() {
   function load() {
     if (!session || !canView) return;
     ignitionopsGet('getMonthlyTargets', {}, session)
-      .then(d => { setRows(d.months || []); setError(null); })
+      .then(d => { setRows(d.months || []); setUnalloc(d.unallocated || null); setError(null); })
       .catch(e => setError(e.message));
   }
   useEffect(load, [session, canView]);
@@ -129,6 +131,38 @@ export default function TargetsPage() {
               </tr>
             </thead>
             <tbody>
+              {unalloc && unalloc.deals > 0 && (
+                <Fragment key="unallocated">
+                  <tr style={{ borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+                    <td style={{ ...tdl, width: 28 }}>
+                      <button onClick={() => toggle('unallocated')} title="Show each unallocated spend"
+                        style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 12, padding: 0 }}>
+                        {open === 'unallocated' ? '▾' : '▸'}
+                      </button>
+                    </td>
+                    <td style={{ ...tdl, fontWeight: 600 }}>
+                      Unallocated
+                      <span style={{ color: 'var(--text-3)', fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
+                        {unalloc.deals} deal{unalloc.deals === 1 ? '' : 's'} · not yet posted
+                      </span>
+                    </td>
+                    <td style={tdr}>—</td>
+                    <td style={tdr}>—</td>
+                    <td style={tdl} />
+                    <td style={tdr}>—</td>
+                    <td style={{ ...tdr, fontWeight: 600 }}>{inr(unalloc.spend)}</td>
+                    <td style={tdl} />
+                    <td style={{ ...tdl, color: 'var(--text-3)', fontSize: 11 }}>Shipped, awaiting post</td>
+                  </tr>
+                  {open === 'unallocated' && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: 0, background: 'var(--surface-2)' }}>
+                        <MonthBreakdown month="unallocated" data={detail['unallocated']} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )}
               {rows.map(r => (
                 <Fragment key={r.month}>
                   <tr style={{ borderTop: '1px solid var(--border)' }}>
@@ -168,9 +202,10 @@ export default function TargetsPage() {
 // Reann #8 (spend + views drill-down) and #9 (conversions), the itemised rows behind one month.
 function MonthBreakdown({ month, data }) {
   if (data === null || data === undefined) return <div style={{ padding: 14 }}><Spinner /></div>;
-  if (data.error) return <div style={{ padding: 14, color: 'var(--state-error-fg)', fontSize: 12 }}>Could not load the breakdown for {month}.</div>;
+  if (data.error) return <div style={{ padding: 14, color: 'var(--state-error-fg)', fontSize: 12 }}>Could not load the breakdown for {month === 'unallocated' ? 'unallocated spend' : month}.</div>;
 
   const t = data.totals || {};
+  const isUnalloc = month === 'unallocated';
   const cell = { padding: '5px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' };
   const head = { ...cell, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, borderBottom: '1px solid var(--border)' };
   const who = (r) => (
@@ -198,21 +233,19 @@ function MonthBreakdown({ month, data }) {
     <div style={{ padding: 14, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
       <Section
         title={`Spend — ₹${(t.spend || 0).toLocaleString()} across ${t.spend_lines || 0}`}
-        empty="No spend recorded this month." rows={data.spend || []}
+        empty={isUnalloc ? 'Nothing unallocated — every deal with spend has posted.' : 'No spend recorded this month.'} rows={data.spend || []}
         cols={['Influencer', 'Deal', 'Amount']}
         render={r => (
           <tr key={`s-${r.engagement_id}`}>
             <td style={cell}>{who(r)}</td>
             <td style={{ ...cell, textAlign: 'right' }}>
               <a href={`/engagements/detail?id=${r.engagement_id}`} style={{ color: 'var(--text-3)', textDecoration: 'none' }}>{r.engagement_no}</a>
-              {/* A spend dated by created_at has not posted yet — say so rather than imply a post date. */}
-              {r.dated_by === 'created_at' && <span title="Not posted yet — dated by when the deal was created" style={{ marginLeft: 4, color: 'var(--text-3)' }}>*</span>}
             </td>
             <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>₹{Number(r.amount).toLocaleString()}</td>
           </tr>
         )}
       />
-      <Section
+      {!isUnalloc && <Section
         title={`Views — ${(t.views || 0).toLocaleString()} across ${t.view_lines || 0}`}
         empty="No posts with views this month." rows={data.views || []}
         cols={['Influencer', 'Posted', 'Views']}
@@ -223,8 +256,8 @@ function MonthBreakdown({ month, data }) {
             <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>{Number(r.views).toLocaleString()}</td>
           </tr>
         )}
-      />
-      <Section
+      />}
+      {!isUnalloc && <Section
         title={`Conversions — ${t.orders || 0} orders · ₹${(t.order_value || 0).toLocaleString()}`}
         empty="No conversions recorded this month." rows={data.conversions || []}
         cols={['Influencer', 'Orders', 'Value']}
@@ -235,7 +268,7 @@ function MonthBreakdown({ month, data }) {
             <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>₹{Number(r.order_value).toLocaleString()}</td>
           </tr>
         )}
-      />
+      />}
     </div>
   );
 }
