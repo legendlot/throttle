@@ -748,7 +748,7 @@ function gridToReturnRows(grid) {
   if (!grid || grid.length < 2) return [];
   const header = grid[0].map(h => String(h).trim());
   const idx = n => header.findIndex(h => h.toLowerCase() === n.toLowerCase());
-  const ci = { date: idx('return-date'), order: idx('order-id'), sku: idx('sku'), asin: idx('asin'), qty: idx('quantity'), disp: idx('detailed-disposition'), reason: idx('reason'), status: idx('status') };
+  const ci = { date: idx('return-date'), order: idx('order-id'), sku: idx('sku'), asin: idx('asin'), qty: idx('quantity'), disp: idx('detailed-disposition'), reason: idx('reason'), status: idx('status'), lpn: idx('license-plate-number') };
   if (ci.order < 0 || ci.sku < 0) return [];               // unexpected shape → skip safely
   const rows = [];
   for (let r = 1; r < grid.length; r++) {
@@ -763,6 +763,12 @@ function gridToReturnRows(grid) {
       disposition: ci.disp >= 0 ? (String(line[ci.disp] ?? '').trim() || null) : null,
       reason: ci.reason >= 0 ? (String(line[ci.reason] ?? '').trim() || null) : null,
       status: ci.status >= 0 ? (String(line[ci.status] ?? '').trim() || null) : null,
+      // Per-unit licence plate — the report's TRUE grain, and the upsert key. Two units of the same
+      // sku returned on the same order+day differ ONLY by this. Header-name first; fall back to
+      // scanning the line, because this report ships without a `status` column in our marketplace
+      // and column order is not guaranteed.
+      lpn: (ci.lpn >= 0 ? (String(line[ci.lpn] ?? '').trim() || null) : null)
+           || (line.map(c => String(c ?? '').trim()).find(c => /^LPN/.test(c)) || ''),
       raw: { line },
     });
   }
@@ -941,7 +947,9 @@ const amazonAdapter = {
     } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
     // Returns phase (FBA customer returns → RTV source). Auxiliary; never breaks the pipeline.
     let returns = { rows: [] }, retSub = 0;
-    try { const rw = await amazonReturnsPhase(host, H, mkt, configAfter, nowMs); retSub = rw.subreqs; returns = { rows: rw.rows }; configAfter = rw.configAfter; }
+    // NB `rw.error` was dropped here until 2026-08-12 (S273) — amazonReturnsPhase never throws by
+    // design, so a failing returns feed produced no signal anywhere and ran silently for 47 days.
+    try { const rw = await amazonReturnsPhase(host, H, mkt, configAfter, nowMs); retSub = rw.subreqs; returns = { rows: rw.rows, error: rw.error || null }; configAfter = rw.configAfter; }
     catch (e) { returns = { rows: [], error: String(e?.message || e) }; }
     // Settlement phase (true payout + fees → margin). Reconciliation-grade; never breaks the pipeline.
     let settlement = { settlements: [] }, setSub = 0;
@@ -1016,14 +1024,23 @@ const amazonAdapter = {
         await patchConnectorConfig(channelId, baseCfg, patch);
       }
     }
-    // FBA customer returns → stg_amazon_returns (supersede the window by actual return-date range,
-    // robust whether or not the report honours dataStart/EndTime), then (re)classify refund return_kind.
+    // FBA customer returns → stg_amazon_returns, then (re)classify refund return_kind.
+    //
+    // ⚠️ UPSERT, never supersede-by-date-range — corrected 2026-08-12 (S273). This block used to
+    // DELETE every row whose `return_date` fell inside the fetched rows' date span and reinsert
+    // only what the window returned. That is safe ONLY while a window spans whole days, which was
+    // true during the backfill. On **2026-06-26 the returns cursor caught up to real time** and each
+    // window shrank to a sliver of minutes — but `return_date` is DAY-granular, so a sliver holding
+    // one row deleted that entire day and put one row back. Returns collapsed ~44/day → ~1/day, and
+    // because `classify_amazon_returns` derives `rtv` from a matching returns row, every Amazon
+    // refund silently fell to `unknown`: RTO read ₹0 for six weeks (Akshay, 2026-08-12).
+    // This is EXACTLY the S192 bug described a few lines below for the orders feed, which was fixed
+    // by moving to UPSERT. The returns path was never given the same fix. Do not reintroduce a
+    // date-range DELETE here — the window is sub-day and the stored key is not.
     const retRows = (fetched && fetched.returns && fetched.returns.rows) || [];
     if (retRows.length) {
-      const rds = retRows.map(r => r.return_date).filter(Boolean).sort();
-      if (rds.length) await sbSales(`/rest/v1/stg_amazon_returns?channel_id=eq.${channelId}&return_date=gte.${rds[0]}&return_date=lte.${rds[rds.length - 1]}`, { method: 'DELETE', prefer: 'return=minimal' });
-      const rbody = retRows.map(r => ({ run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, channel_sku: r.channel_sku, asin: r.asin, return_date: r.return_date, qty: r.qty, disposition: r.disposition, reason: r.reason, status: r.status, raw: r.raw }));
-      await sbInsertChunked('/rest/v1/stg_amazon_returns', rbody, 'return=minimal');
+      const rbody = retRows.map(r => ({ run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, channel_sku: r.channel_sku, asin: r.asin, return_date: r.return_date, qty: r.qty, disposition: r.disposition, reason: r.reason, status: r.status, lpn: r.lpn || '', raw: r.raw }));
+      await sbInsertChunked('/rest/v1/stg_amazon_returns?on_conflict=channel_id,source_order_id,channel_sku,return_date,lpn', rbody, 'return=minimal,resolution=merge-duplicates');
     }
     // Reclassify refund return_kind across history (cheap + idempotent) whenever finance or returns moved.
     if (ev.length || retRows.length) await rpcSales('classify_amazon_returns', { p_channel: channelId, p_from: '2024-01-01', p_to: todayISO() });
