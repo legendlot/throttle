@@ -3282,6 +3282,59 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
     SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
     const { channelId, trigger = 'cron', cursorOverride = null } = event.payload || {};
+    // ── Report probe (diagnostic, S273) ────────────────────────────────────────────────────────
+    // Reachable ONLY by explicitly triggering the workflow with trigger='probe_report' — never from
+    // cron or the app. Creates one report of `probeReportType`, waits for it, and writes the header
+    // columns + an order-status histogram to sales.settings so a report's real shape can be checked
+    // WITHOUT building a feed against it. Exists because "statuses freeze, so re-window the report"
+    // was a plausible fix that the data disproved: Amazon stopped emitting granular order statuses
+    // ~2026-06-18, and a sibling report with the same columns cannot restore a value that is no
+    // longer sent. Probe first, build second.
+    if (trigger === 'probe_report') {
+      const out = await step.do('probe', { retries: { limit: 2, delay: '30 seconds' }, timeout: '10 minutes' }, async () => {
+        SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+        const cfg = await loadConnectorCfg(channelId);
+        const c = cfg?.config || {};
+        const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+        const mkt = c.marketplace_id;
+        const type = (event.payload || {}).probeReportType || 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL';
+        const days = Number((event.payload || {}).probeDays) || 7;
+        const endISO = new Date(Date.now() - 120000).toISOString();
+        const startISO = new Date(Date.now() - days * 86400000).toISOString();
+        const token = await getAmazonToken(this.env);
+        const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+        const rid = await createAmazonReport(host, H, mkt, startISO, endISO, type);
+        // poll inline — a report is usually ready inside a couple of minutes
+        let rep = null;
+        for (let a = 0; a < 20; a++) {
+          await new Promise(r => setTimeout(r, 15000));
+          const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+          rep = await pr.json().catch(() => ({}));
+          if (!['IN_QUEUE', 'IN_PROGRESS'].includes(rep.processingStatus)) break;
+        }
+        const result = { type, window: [startISO, endISO], reportId: rid, processingStatus: rep?.processingStatus || 'unknown' };
+        if (rep?.processingStatus === 'DONE' && rep.reportDocumentId) {
+          const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+          const text = await fetchAmazonDoc(await dr.json());
+          const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+          const header = (grid[0] || []).map(h => String(h).trim());
+          const si = header.findIndex(h => h.toLowerCase() === 'order-status');
+          const hist = {};
+          for (let r = 1; r < grid.length; r++) { const v = si >= 0 ? String(grid[r][si] ?? '').trim() : '(no order-status column)'; hist[v] = (hist[v] || 0) + 1; }
+          result.header = header;
+          result.rows = Math.max(grid.length - 1, 0);
+          result.order_status_histogram = hist;
+        } else {
+          result.errors = rep?.errors || null;
+        }
+        await sbSales('/rest/v1/settings?on_conflict=key', {
+          method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+          body: JSON.stringify({ key: 'probe_report_result', value: JSON.stringify(result).slice(0, 20000), updated_at: new Date().toISOString() }),
+        });
+        return result;
+      });
+      return { probe: out?.processingStatus || 'done' };
+    }
     // Per-connector window cap (default MAX_WINDOWS). A deep one-time backfill — e.g. the Uniware
     // aggregator walking ~70 daily windows — can set config.wf_max_windows higher so one instance
     // finishes in a single pass instead of resuming across many cron ticks. Read once (durable step).
