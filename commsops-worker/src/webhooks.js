@@ -55,6 +55,14 @@ async function handleResendWebhook(env, request) {
       if (!isUpgrade(msg.status, u.canonical_status)) delete patch.status;   // late 'delivered' after 'read' keeps opened (review M6)
       if (u.canonical_status === 'delivered') patch.delivered_at = u.at;
       if (u.canonical_status === 'opened') patch.read_at = u.at;
+      // Persist WHY it bounced. `reason` was NULL on every bounced row, so the 7 addresses
+      // suppressed on 10–11 Aug could not be classified from the DB at all — it took a payload
+      // pasted out of the Resend dashboard to discover one of them was merely a full mailbox.
+      if (u.reason) {
+        patch.reason = u.bounce_type
+          ? `${u.reason}:${u.bounce_type}${u.bounce_subtype ? '/' + u.bounce_subtype : ''}`
+          : u.reason;
+      }
       A.checkWrite('resend_status_patch_failed',
         await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
           { method: 'PATCH', body: JSON.stringify(patch) }),
@@ -81,7 +89,12 @@ async function handleResendWebhook(env, request) {
         headers: { Prefer: 'resolution=ignore-duplicates' },
       }), { message_id: msg.id, event: u.engagement_event });
     }
-    // hard bounce / complaint → suppress forever
+    // PERMANENT bounce / complaint → suppress forever.
+    // ⚠️ `soft_bounce` (SES `Transient` — full mailbox, throttled, deferred) and
+    // `undetermined_bounce` MUST NOT land here. Suppression is the one gate transactional and
+    // utility cannot bypass (gate.js:3), so suppressing on a recoverable bounce silently ends
+    // that customer's order confirmations and shipping updates — for a full inbox. The message
+    // is still marked failed and still carries its reason; only the permanent block is withheld.
     if (u.reason === 'hard_bounce' || u.reason === 'complaint') {
       const addr = msg?.to_address || u.to;
       if (addr) {

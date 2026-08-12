@@ -58,20 +58,49 @@ const EVENT_MAP = {
   'email.complained': 'opted_out',
 };
 
+// A bounce is NOT automatically permanent, and treating it as one is expensive.
+//
+// ⚠️ This read `reason: 'hard_bounce'` for EVERY `email.bounced` until 2026-08-12, discarding
+// Resend's own `data.bounce.type`. The handler suppresses on `hard_bounce`, and per gate.js
+// suppression is the ONE gate transactional/utility cannot bypass — so a customer whose inbox
+// was momentarily FULL was permanently cut off from order confirmations and shipping updates
+// on the strength of one marketing send. Observed live: `akshaabbasi2329@gmail.com` suppressed
+// 2026-08-11 on a bounce whose payload said `type: "Transient"`, `subType: "MailboxFull"`, with
+// Resend's own message reading "you might be able to send to the same recipient in the future".
+//
+// SES/Resend bounce types: Permanent (mailbox does not exist — genuinely dead) · Transient
+// (full/throttled/deferred — retryable) · Undetermined. **Only Permanent suppresses.**
+// Undetermined deliberately does NOT: one ambiguous bounce is far weaker evidence than the cost
+// of silently losing a real customer's transactional mail.
+const BOUNCE_REASON = { Permanent: 'hard_bounce', Transient: 'soft_bounce', Undetermined: 'undetermined_bounce' };
+
+function bounceReason(payload) {
+  const t = payload?.data?.bounce?.type;
+  // Unknown/absent → treat as undetermined, never as permanent. A shape change on the vendor
+  // side must fail toward keeping the customer reachable, not toward silently dropping them.
+  return BOUNCE_REASON[t] || 'undetermined_bounce';
+}
+
 function parseStatusWebhook(payload) {
   const type = payload?.type;
   const pmid = payload?.data?.email_id || payload?.data?.id || null;
   if (!type || !pmid) return [];
+  const b = payload?.data?.bounce || null;
   return [{
     provider_message_id: pmid,
     canonical_status: STATUS_MAP[type] || null,
     engagement_event: EVENT_MAP[type] || null,
     at: payload?.created_at || new Date().toISOString(),
-    reason: type === 'email.bounced' ? 'hard_bounce'
+    reason: type === 'email.bounced' ? bounceReason(payload)
           : type === 'email.complained' ? 'complaint' : null,
+    // Persisted onto messages.reason so a bounce is diagnosable from the DB alone. It was NULL
+    // on all 7 suppressed rows, so classifying them after the fact needed a payload pasted out
+    // of the Resend dashboard — which is not a process.
+    bounce_type: b?.type || null,
+    bounce_subtype: b?.subType || null,
     to: payload?.data?.to?.[0] || null,
     clicked_url: type === 'email.clicked' ? (payload?.data?.click?.link || null) : null,
   }];
 }
 
-module.exports = { send, parseStatusWebhook };
+module.exports = { send, parseStatusWebhook, bounceReason, BOUNCE_REASON };
