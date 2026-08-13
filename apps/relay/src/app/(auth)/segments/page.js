@@ -8,6 +8,7 @@ import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
+import { blankRow, toLeaf, parseDef, itemsToDef, normalizeWithin } from '@/lib/segmentAst.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -43,82 +44,165 @@ const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 
-// A row MUST carry every key its leaf type needs, from the moment it exists.
-// Switching the type dropdown used to be a merge patch (`setLeaf(i,{type})`), so an
-// attr row became {type:'consent', attr:'', op:'eq', value:''} — no channel/purpose/state.
-// Those three <select>s then rendered with value={undefined}, went UNCONTROLLED, and
-// displayed their first option while holding nothing; only a dropdown the author actually
-// changed got committed. `eval_segment_node` filters `c.purpose = node->>'purpose'`, and a
-// missing key makes that `= NULL` — never true — so the leaf silently matched ZERO profiles
-// and the enclosing AND wiped out the whole segment. The badge then read "0 MEMBERS", which
-// is indistinguishable from "no such customers". Cost: the "T-120 purchasers" segment read 0
-// when the real audience was 4,193 (2026-08-09). Always REPLACE the row on a type change.
-function blankRow(type) {
-  if (type === 'event') return { type: 'event', event: '', count: 1, count_op: 'gte', within: '', whereProp: '', whereValue: '' };
-  if (type === 'consent') return { type: 'consent', channel: 'email', purpose: 'marketing', state: 'opted_in' };
-  return { type: 'attr', attr: '', op: 'eq', value: '' };
+// ── One condition row ──────────────────────────────────────────────────────────
+// Extracted from the flat list so the SAME editor renders a condition whether it sits at the
+// top level or inside a nested group (2026-08-13). It takes callbacks rather than closing over
+// an index, because a nested row's index is meaningless to the parent list.
+function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDefs, propOpts }) {
+  return (
+  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7, padding: 10 }}>
+  <select className="f-inp" style={{ width: 110 }} value={r.type} onChange={(e) => onType(e.target.value)} disabled={disabled}>
+    {LEAF_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+  </select>
+
+  {r.type === 'attr' && <>
+    <input className="f-inp mono" style={{ width: 160 }} list="attr-suggest" value={r.attr || ''} onChange={(e) => onPatch({ attr: e.target.value })} placeholder="attribute" disabled={disabled} />
+    <select className="f-inp" style={{ width: 150 }} value={r.op} onChange={(e) => onPatch({ op: e.target.value })} disabled={disabled}>
+      {OPS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+    </select>
+    <input className="f-inp" style={{ flex: 1, minWidth: 140 }} value={r.value || ''} onChange={(e) => onPatch({ value: e.target.value })}
+      placeholder={r.op === 'in' ? 'comma, separated, values'
+        : (r.op === 'before_days' || r.op === 'within_days') ? 'number of days (e.g. 90)' : 'value'}
+      disabled={disabled} />
+  </>}
+
+  {r.type === 'event' && <>
+    {/* Combobox (not a datalist): a datalist filters against what is
+        ALREADY in the input, so a pre-filled field collapsed to one row
+        and read as empty/broken. Grouped by category — PATTERN-160. */}
+    <div style={{ width: 240 }}>
+      <Combobox
+        value={r.event || ''}
+        options={eventComboOptions(eventDefs)}
+        onChange={(v) => onPatch({ event: v || '' })}
+        placeholder="Search events…"
+        disabled={disabled}
+        allowClear={false}
+        emptyLabel="No matching event — check it is registered in comms.event_definitions"
+      />
+    </div>
+    {/* The count operator (2026-08-13). This was a STATIC `≥` glyph, so
+        "ordered exactly once" could not be said on an event at all — the
+        engine hardcoded `HAVING count(*) >= n` to match. `count_op` absent
+        still means `≥`, so every segment saved before today is unchanged.
+        NB min is 0, not 1: "= 0" and "≤ 0" are the useful "never did this"
+        forms, and the engine handles zero by counting over ALL profiles
+        rather than over event rows (a profile with no events has no row to
+        group). Under `≥` a 0 is meaningless but harmless — it resolves to
+        the legacy path, i.e. "has the event at all". */}
+    <select className="f-inp mono" style={{ width: 62, textAlign: 'center' }}
+      value={r.count_op || 'gte'} disabled={disabled}
+      onChange={(e) => onPatch({ count_op: e.target.value })}>
+      <option value="gte">≥</option>
+      <option value="eq">=</option>
+      <option value="lte">≤</option>
+    </select>
+    <input className="f-inp mono" style={{ width: 64 }} type="number" min="0" value={r.count} onChange={(e) => onPatch({ count: e.target.value })} disabled={disabled} />
+    <span className="dim" style={{ fontSize: 12 }}>within last</span>
+    <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => onPatch({ within: e.target.value })} placeholder="120 days (opt)" disabled={disabled} />
+    {/* Echo what a bare number will actually be saved as — the old field read
+        "within [120]" and silently meant 120 SECONDS. */}
+    {/^\d+$/.test(String(r.within || '').trim()) && <span className="dim" style={{ fontSize: 11.5 }}>= {normalizeWithin(r.within)}</span>}
+
+    {/* Narrow to a specific product (S268, Mishica). Both pickers are fed by
+        live event data — a typed-in property name would resolve to NULL and
+        match nobody, silently. Coverage is shown because it decides the answer:
+        `sku` sits on ~60% of product_viewed events, `product_handle` on 100%. */}
+    {r.event && <>
+      <span className="dim" style={{ fontSize: 12 }}>where</span>
+      <div style={{ width: 190 }}>
+        <Combobox
+          value={r.whereProp || ''}
+          options={(propOpts[r.event] || []).map((o) => ({
+            value: o.key,
+            label: `${o.key} · ${o.coverage_pct}% of events`,
+          }))}
+          onChange={(v) => onPatch({ whereProp: v || '', whereValue: v ? r.whereValue : '' })}
+          placeholder={propOpts[r.event] ? 'any (no filter)' : 'loading…'}
+          disabled={disabled}
+          emptyLabel="This event carries no filterable properties"
+        />
+      </div>
+      {r.whereProp && <>
+        <span className="dim" style={{ fontSize: 12 }}>is</span>
+        <div style={{ width: 250 }}>
+          <Combobox
+            value={r.whereValue || ''}
+            options={((propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.top_values || [])
+              .map((v) => ({ value: v, label: v }))}
+            onChange={(v) => onPatch({ whereValue: v || '' })}
+            placeholder="pick a value"
+            disabled={disabled}
+            allowClear={false}
+            emptyLabel="No values seen in the last 90 days"
+          />
+        </div>
+        {(() => {
+          const cov = (propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.coverage_pct;
+          return cov != null && cov < 100
+            ? <span className="dim" style={{ fontSize: 11.5 }}>⚠ only {cov}% of these events carry {r.whereProp}</span>
+            : null;
+        })()}
+      </>}
+    </>}
+  </>}
+
+  {r.type === 'consent' && <>
+    <select className="f-inp" style={{ width: 120 }} value={r.channel} onChange={(e) => onPatch({ channel: e.target.value })} disabled={disabled}>
+      {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+    <select className="f-inp" style={{ width: 130 }} value={r.purpose} onChange={(e) => onPatch({ purpose: e.target.value })} disabled={disabled}>
+      {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+    </select>
+    <select className="f-inp" style={{ width: 120 }} value={r.state} onChange={(e) => onPatch({ state: e.target.value })} disabled={disabled}>
+      {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+    </select>
+  </>}
+
+  <span style={{ flex: 1 }} />
+  {canEdit && <button className="dr-close" onClick={() => onRemove()} disabled={disabled} title="Remove"><Trash2 size={14} /></button>}
+  </div>
+  );
 }
 
-// The `within` value is cast straight to ::interval by eval_segment_node, and Postgres reads a
-// BARE NUMBER as seconds — '120'::interval is 00:02:00, not 120 days. The field sits behind a
-// label that reads "within [120]", so a bare number is the natural thing to type and it silently
-// asked for "ordered in the last two minutes". Normalise it to days (the only unit a segment
-// author means here); an explicit interval string like '6 hours' is passed through untouched.
-function normalizeWithin(v) {
-  const s = String(v || '').trim();
-  return /^\d+$/.test(s) ? `${s} days` : s;
+// ── A nested group of conditions ───────────────────────────────────────────────
+// Renders as an indented, accented block so the eye can see where the bracket opens and closes.
+// It reuses ConditionRow, so a condition behaves identically inside a group and outside one.
+function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, onPatch, onRemove }) {
+  const patchRow = (j, patch) => onPatch({ rows: g.rows.map((r, k) => (k === j ? { ...r, ...patch } : r)) });
+  // REPLACE on a type change, never merge — same reasoning as blankRow() above.
+  const typeRow = (j, tp) => onPatch({ rows: g.rows.map((r, k) => (k === j ? blankRow(tp) : r)) });
+  const dropRow = (j) => onPatch({ rows: g.rows.filter((_, k) => k !== j) });
+  return (
+    <div style={{ border: '1px solid var(--accent-bd)', background: 'var(--accent-soft)',
+      borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span className="dim mono" style={{ fontSize: 11 }}>GROUP</span>
+        <select className="f-inp" style={{ width: 'auto' }} value={g.group} disabled={disabled}
+          onChange={(e) => onPatch({ group: e.target.value })}>
+          {GROUPS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+        </select>
+        <span className="dim" style={{ fontSize: 12 }}>{GROUPS.find((x) => x.id === g.group)?.hint}</span>
+        <span style={{ flex: 1 }} />
+        {canEdit && <Btn kind="ghost" onClick={() => onPatch({ rows: [...g.rows, blankRow('attr')] })} disabled={disabled}>
+          <Plus size={13} /> Condition
+        </Btn>}
+        {canEdit && <button className="dr-close" onClick={onRemove} disabled={disabled} title="Remove group"><Trash2 size={14} /></button>}
+      </div>
+      {g.rows.length === 0
+        ? <div className="dim" style={{ fontSize: 12 }}>Empty group — add a condition, or remove it. An empty group is ignored when the rule is saved.</div>
+        : g.rows.map((r, j) => (
+            <ConditionRow key={j} r={r} disabled={disabled} canEdit={canEdit}
+              eventDefs={eventDefs} propOpts={propOpts}
+              onPatch={(patch) => patchRow(j, patch)}
+              onType={(tp) => typeRow(j, tp)}
+              onRemove={() => dropRow(j)} />
+          ))}
+    </div>
+  );
 }
 
-const csvToArr = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
-
-// stored leaf → editor row
-function toRow(leaf) {
-  if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1,
-    count_op: leaf.count_op || 'gte',   // absent === the legacy `>=`, matching eval_segment_node
-    within: leaf.within || '',
-    whereProp: leaf.where?.prop || '',
-    whereValue: Array.isArray(leaf.where?.value) ? leaf.where.value.join(', ') : (leaf.where?.value || '') };
-  if (leaf && 'consent' in leaf) return { type: 'consent', channel: leaf.channel || 'email', purpose: leaf.purpose || 'marketing', state: leaf.state || 'opted_in' };
-  const v = leaf?.value;
-  return { type: 'attr', attr: leaf?.attr || '', op: leaf?.op || 'eq', value: Array.isArray(v) ? v.join(', ') : (v ?? '') };
-}
-// editor row → stored leaf
-function toLeaf(row) {
-  if (row.type === 'event') {
-    // ⚠️ NOT `Number(row.count) || 1` — that turns a deliberate 0 into 1, which silently
-    // inverts "has never done this" into "has done this once". 0 is a legitimate count now
-    // that `=` and `≤` exist.
-    const n = Number(row.count);
-    const o = { event: row.event, count: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1 };
-    // Emit count_op ONLY when it is not the legacy default, so re-saving an untouched old
-    // segment leaves its stored JSON byte-identical and `absent === gte` stays the one truth.
-    if (row.count_op && row.count_op !== 'gte') o.count_op = row.count_op;
-    if (row.within && row.within.trim()) o.within = normalizeWithin(row.within);
-    // Emit `where` ONLY when both halves are filled. A half-written filter is rejected
-    // outright by eval_segment_node (deliberately loud — silently ignoring it would mail an
-    // unfiltered audience, silently zeroing it would hide a real one), so never send one.
-    const wp = (row.whereProp || '').trim(), wv = (row.whereValue || '').trim();
-    if (wp && wv) {
-      const list = csvToArr(wv);
-      o.where = { prop: wp, value: list.length > 1 ? list : wv };
-    }
-    return o;
-  }
-  // Defaults repeated here on purpose: blankRow() now guarantees these keys, but this is the
-  // last gate before the AST is persisted, and a consent leaf missing purpose/state is the one
-  // shape that fails SILENTLY (matches nobody) instead of erroring. Belt and braces.
-  if (row.type === 'consent') return { consent: true, channel: row.channel || 'email', purpose: row.purpose || 'marketing', state: row.state || 'opted_in' };
-  return { attr: row.attr, op: row.op, value: row.op === 'in' ? csvToArr(row.value) : String(row.value) };
-}
-function parseDef(def) {
-  if (def && typeof def === 'object') {
-    for (const g of ['all', 'any', 'none']) if (Array.isArray(def[g])) return { group: g, rows: def[g].map(toRow) };
-    if (def.attr || def.event != null || 'consent' in def) return { group: 'all', rows: [toRow(def)] };
-  }
-  return { group: 'all', rows: [] };
-}
-
-function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', rows: [], member_count: null, materialized_at: null }; }
+function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', items: [], tooDeep: false, member_count: null, materialized_at: null }; }
 
 // A dynamic segment's member_count is COUNT(segment_members) — so a segment nobody has ever
 // refreshed counts 0, which rendered as a bare "0" and read as "this audience is empty".
@@ -162,7 +246,9 @@ export default function SegmentsPage() {
   const [memBusy, setMemBusy] = useState(false);
   const [addResult, setAddResult] = useState(null);
 
-  const canEdit = !perms || perms.segment_manage;
+  // `tooDeep` hard-disables editing as well as showing the banner: a rule nested deeper than the
+  // builder renders must be read-only, or a save would silently drop the levels it cannot see.
+  const canEdit = (!perms || perms.segment_manage) && !seg.tooDeep;
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -187,7 +273,7 @@ export default function SegmentsPage() {
   useNewParam(canEdit, startNew);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
-    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, rows: parsed.rows, member_count: null, materialized_at: r.materialized_at ?? null });
+    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, items: parsed.items, tooDeep: parsed.tooDeep, member_count: null, materialized_at: r.materialized_at ?? null });
     setPv(null);
     setView('form');
     try {
@@ -199,7 +285,10 @@ export default function SegmentsPage() {
   // non-fatal — the pickers just stay empty rather than blocking the builder.
   useEffect(() => {
     if (view !== 'form') return;
-    const wanted = [...new Set(seg.rows.filter((r) => r.type === 'event' && r.event).map((r) => r.event))];
+    // Flatten one level: a nested group's event rows need their property options loaded too,
+    // otherwise the `where` picker inside a group comes up empty and reads as broken.
+    const flat = seg.items.flatMap((it) => (it.type === 'group' ? it.rows : [it]));
+    const wanted = [...new Set(flat.filter((r) => r.type === 'event' && r.event).map((r) => r.event))];
     const missing = wanted.filter((e) => !(e in propOpts));
     if (!missing.length) return;
     let cancelled = false;
@@ -212,19 +301,21 @@ export default function SegmentsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [view, seg.rows, propOpts, session]);
+  }, [view, seg.items, propOpts, session]);
 
   function set(k, v) { setSeg((s) => ({ ...s, [k]: v })); }
-  function addLeaf() { setSeg((s) => ({ ...s, rows: [...s.rows, blankRow('attr')] })); }
-  // REPLACE, never merge — see blankRow(). The old `setLeaf(i,{type})` left the new type's
-  // fields undefined, which is what made the selects uncontrolled and the leaf match nobody.
-  function setLeafType(i, type) { setSeg((s) => ({ ...s, rows: s.rows.map((r, j) => j === i ? blankRow(type) : r) })); }
-  function setLeaf(i, patch) { setSeg((s) => ({ ...s, rows: s.rows.map((r, j) => j === i ? { ...r, ...patch } : r) })); }
-  function removeLeaf(i) { setSeg((s) => ({ ...s, rows: s.rows.filter((_, j) => j !== i) })); }
+  function addItem() { setSeg((s) => ({ ...s, items: [...s.items, blankRow('attr')] })); }
+  // A nested group starts as OR, because the only reason to open a bracket inside the default
+  // top-level AND is to say "any of these" within it. Starting it as AND would be a no-op group.
+  function addGroup() { setSeg((s) => ({ ...s, items: [...s.items, { type: 'group', group: 'any', rows: [blankRow('attr')] }] })); }
+  // REPLACE, never merge — see blankRow(). A merge patch left the new type's required keys
+  // missing, the selects went uncontrolled, and the leaf silently matched zero profiles.
+  function setItemType(i, type) { setSeg((s) => ({ ...s, items: s.items.map((r, j) => j === i ? blankRow(type) : r) })); }
+  function patchItem(i, patch) { setSeg((s) => ({ ...s, items: s.items.map((r, j) => j === i ? { ...r, ...patch } : r) })); }
+  function removeItem(i) { setSeg((s) => ({ ...s, items: s.items.filter((_, j) => j !== i) })); }
 
   function buildDef() {
-    if (seg.rows.length === 0) return {};
-    return { [seg.group]: seg.rows.map(toLeaf) };
+    return itemsToDef(seg.group, seg.items);
   }
 
   async function preview() {
@@ -433,126 +524,39 @@ export default function SegmentsPage() {
               </select>
               <span className="dim" style={{ fontSize: 12 }}>{GROUPS.find((g) => g.id === seg.group)?.hint}</span>
               <span style={{ flex: 1 }} />
-              {canEdit && <Btn onClick={addLeaf}><Plus size={14} /> Add condition</Btn>}
+              {canEdit && <Btn onClick={addItem}><Plus size={14} /> Add condition</Btn>}
+              {/* A group is a bracket: everything inside it resolves first, then joins the list
+                  above under the top-level mode. That is the whole feature, and it is why the
+                  button sits beside "Add condition" rather than inside a menu. */}
+              {canEdit && <Btn onClick={addGroup}><Plus size={14} /> Add group</Btn>}
             </div>
 
-            {seg.rows.length === 0
+            {/* Refuse to edit a rule deeper than this builder renders. Parsing it, editing, and
+                saving would silently delete the levels the editor cannot show. */}
+            {seg.tooDeep && (
+              <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 7,
+                border: '1px solid var(--red-bd, #7a2b2b)', background: 'var(--red-soft, rgba(220,80,80,.12))', fontSize: 12.5 }}>
+                <strong>This rule has groups inside groups, which this builder cannot show.</strong> It is
+                displayed read-only so editing cannot flatten it. It still evaluates correctly, and it can
+                be changed by someone who can edit the rule directly.
+              </div>
+            )}
+
+            {seg.items.length === 0
               ? <div style={{ padding: '6px 2px', color: 'var(--text-4)', fontSize: 12.5 }}>No conditions — this matches <strong>everyone</strong>. Add a condition to narrow the audience.</div>
               : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {seg.rows.map((r, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7, padding: 10 }}>
-                      <select className="f-inp" style={{ width: 110 }} value={r.type} onChange={(e) => setLeafType(i, e.target.value)} disabled={saving || !canEdit}>
-                        {LEAF_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
-                      </select>
-
-                      {r.type === 'attr' && <>
-                        <input className="f-inp mono" style={{ width: 160 }} list="attr-suggest" value={r.attr || ''} onChange={(e) => setLeaf(i, { attr: e.target.value })} placeholder="attribute" disabled={saving || !canEdit} />
-                        <select className="f-inp" style={{ width: 150 }} value={r.op} onChange={(e) => setLeaf(i, { op: e.target.value })} disabled={saving || !canEdit}>
-                          {OPS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                        </select>
-                        <input className="f-inp" style={{ flex: 1, minWidth: 140 }} value={r.value || ''} onChange={(e) => setLeaf(i, { value: e.target.value })}
-                          placeholder={r.op === 'in' ? 'comma, separated, values'
-                            : (r.op === 'before_days' || r.op === 'within_days') ? 'number of days (e.g. 90)' : 'value'}
-                          disabled={saving || !canEdit} />
-                      </>}
-
-                      {r.type === 'event' && <>
-                        {/* Combobox (not a datalist): a datalist filters against what is
-                            ALREADY in the input, so a pre-filled field collapsed to one row
-                            and read as empty/broken. Grouped by category — PATTERN-160. */}
-                        <div style={{ width: 240 }}>
-                          <Combobox
-                            value={r.event || ''}
-                            options={eventComboOptions(eventDefs)}
-                            onChange={(v) => setLeaf(i, { event: v || '' })}
-                            placeholder="Search events…"
-                            disabled={saving || !canEdit}
-                            allowClear={false}
-                            emptyLabel="No matching event — check it is registered in comms.event_definitions"
-                          />
-                        </div>
-                        {/* The count operator (2026-08-13). This was a STATIC `≥` glyph, so
-                            "ordered exactly once" could not be said on an event at all — the
-                            engine hardcoded `HAVING count(*) >= n` to match. `count_op` absent
-                            still means `≥`, so every segment saved before today is unchanged.
-                            NB min is 0, not 1: "= 0" and "≤ 0" are the useful "never did this"
-                            forms, and the engine handles zero by counting over ALL profiles
-                            rather than over event rows (a profile with no events has no row to
-                            group). Under `≥` a 0 is meaningless but harmless — it resolves to
-                            the legacy path, i.e. "has the event at all". */}
-                        <select className="f-inp mono" style={{ width: 62, textAlign: 'center' }}
-                          value={r.count_op || 'gte'} disabled={saving || !canEdit}
-                          onChange={(e) => setLeaf(i, { count_op: e.target.value })}>
-                          <option value="gte">≥</option>
-                          <option value="eq">=</option>
-                          <option value="lte">≤</option>
-                        </select>
-                        <input className="f-inp mono" style={{ width: 64 }} type="number" min="0" value={r.count} onChange={(e) => setLeaf(i, { count: e.target.value })} disabled={saving || !canEdit} />
-                        <span className="dim" style={{ fontSize: 12 }}>within last</span>
-                        <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => setLeaf(i, { within: e.target.value })} placeholder="120 days (opt)" disabled={saving || !canEdit} />
-                        {/* Echo what a bare number will actually be saved as — the old field read
-                            "within [120]" and silently meant 120 SECONDS. */}
-                        {/^\d+$/.test(String(r.within || '').trim()) && <span className="dim" style={{ fontSize: 11.5 }}>= {normalizeWithin(r.within)}</span>}
-
-                        {/* Narrow to a specific product (S268, Mishica). Both pickers are fed by
-                            live event data — a typed-in property name would resolve to NULL and
-                            match nobody, silently. Coverage is shown because it decides the answer:
-                            `sku` sits on ~60% of product_viewed events, `product_handle` on 100%. */}
-                        {r.event && <>
-                          <span className="dim" style={{ fontSize: 12 }}>where</span>
-                          <div style={{ width: 190 }}>
-                            <Combobox
-                              value={r.whereProp || ''}
-                              options={(propOpts[r.event] || []).map((o) => ({
-                                value: o.key,
-                                label: `${o.key} · ${o.coverage_pct}% of events`,
-                              }))}
-                              onChange={(v) => setLeaf(i, { whereProp: v || '', whereValue: v ? r.whereValue : '' })}
-                              placeholder={propOpts[r.event] ? 'any (no filter)' : 'loading…'}
-                              disabled={saving || !canEdit}
-                              emptyLabel="This event carries no filterable properties"
-                            />
-                          </div>
-                          {r.whereProp && <>
-                            <span className="dim" style={{ fontSize: 12 }}>is</span>
-                            <div style={{ width: 250 }}>
-                              <Combobox
-                                value={r.whereValue || ''}
-                                options={((propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.top_values || [])
-                                  .map((v) => ({ value: v, label: v }))}
-                                onChange={(v) => setLeaf(i, { whereValue: v || '' })}
-                                placeholder="pick a value"
-                                disabled={saving || !canEdit}
-                                allowClear={false}
-                                emptyLabel="No values seen in the last 90 days"
-                              />
-                            </div>
-                            {(() => {
-                              const cov = (propOpts[r.event] || []).find((o) => o.key === r.whereProp)?.coverage_pct;
-                              return cov != null && cov < 100
-                                ? <span className="dim" style={{ fontSize: 11.5 }}>⚠ only {cov}% of these events carry {r.whereProp}</span>
-                                : null;
-                            })()}
-                          </>}
-                        </>}
-                      </>}
-
-                      {r.type === 'consent' && <>
-                        <select className="f-inp" style={{ width: 120 }} value={r.channel} onChange={(e) => setLeaf(i, { channel: e.target.value })} disabled={saving || !canEdit}>
-                          {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                        <select className="f-inp" style={{ width: 130 }} value={r.purpose} onChange={(e) => setLeaf(i, { purpose: e.target.value })} disabled={saving || !canEdit}>
-                          {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
-                        </select>
-                        <select className="f-inp" style={{ width: 120 }} value={r.state} onChange={(e) => setLeaf(i, { state: e.target.value })} disabled={saving || !canEdit}>
-                          {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      </>}
-
-                      <span style={{ flex: 1 }} />
-                      {canEdit && <button className="dr-close" onClick={() => removeLeaf(i)} disabled={saving} title="Remove"><Trash2 size={14} /></button>}
-                    </div>
+                  {seg.items.map((it, i) => it.type === 'group' ? (
+                    <GroupRow key={i} g={it} idx={i} disabled={saving || !canEdit} canEdit={canEdit}
+                      eventDefs={eventDefs} propOpts={propOpts}
+                      onPatch={(patch) => patchItem(i, patch)}
+                      onRemove={() => removeItem(i)} />
+                  ) : (
+                    <ConditionRow key={i} r={it} disabled={saving || !canEdit} canEdit={canEdit}
+                      eventDefs={eventDefs} propOpts={propOpts}
+                      onPatch={(patch) => patchItem(i, patch)}
+                      onType={(tp) => setItemType(i, tp)}
+                      onRemove={() => removeItem(i)} />
                   ))}
                 </div>
               )}

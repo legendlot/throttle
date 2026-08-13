@@ -1,5 +1,9 @@
 # Relay Operations Manual — Changelog
 
+## 1.1.0 — 2026-08-13
+- **Segments**: new "Grouping conditions" section for nested condition groups, including the
+  one-level limit and what the read-only banner on an over-nested rule means.
+
 ## 1.0.0 — 2026-08-13
 First complete edition. 22 chapters across 6 parts, covering every screen in Relay.
 

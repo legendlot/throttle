@@ -44,6 +44,14 @@
 
 <div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Counting orders from the <code>order_placed</code> event is not the same as the customer&rsquo;s real order history. Events only exist from the day that feed was switched on, so an event count reaches back weeks, not years, and will badly undercount long-standing customers. For anything about lifetime buying behaviour use the <code>lifetime_orders</code> attribute instead.</p></div>
 
+<h2 class="sec">Grouping conditions</h2>
+<p><strong>Add group</strong> puts a bracket inside your rule. Everything in the group is worked out first, then the result joins the rest of the list under the mode at the top. That is how you say something like <em>bought at least once, and (lives in Pune or lives in Mumbai)</em>: set the top to Match ALL, add the purchase condition, then add a group set to Match ANY holding the two cities.</p>
+<p>A group can hold conditions but not another group. One level covers what people actually need, and deeper nesting gets hard to read at a glance.</p>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>A new group starts as Match ANY, because that is almost always why you are opening a bracket. A group set to the same mode as the level above it does nothing.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>An empty group is ignored when you save, so an unfinished one cannot quietly change your audience. If you see a rule shown read-only with a note about groups inside groups, it was written with more nesting than this screen can display: it still works, and it is locked so that editing cannot flatten it.</p></div>
+
 <h2 class="sec">Members, and why the count can read zero</h2>
 <p>A segment&rsquo;s member list is rebuilt when you press <strong>Refresh members</strong>, and again automatically whenever it is used to send. A segment nobody has ever refreshed shows <strong>Not counted</strong> rather than a number, because zero and unknown are very different things.</p>
 
