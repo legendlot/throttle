@@ -123,14 +123,20 @@ being more conservative than required, not less. But the choice has a measured c
 | Relay `purpose` | Effect |
 |---|---|
 | `utility` | 601 customers/month are messaged between 21:00 and 01:00 IST |
-| `marketing` | Those 601 are **skipped, not deferred** — the gate drops rather than queues (the S269 `budget_exhausted` finding). ~14.5% of CSATs are silently lost, and non-randomly: evening closes are excluded as a class, biasing the score |
-| **New `service` purpose** | Bypasses consent + frequency cap + budget, but **respects quiet hours and suppression**. Requires a small, well-bounded `gate.js` change |
+| `marketing` | Requires **opted_in marketing consent**, so support customers who never opted in are never surveyed — biasing the score to the marketing-consenting subset. Also burns M9 send budget meant for campaigns and competes under the 3/day cap |
+| **`service`** ✅ | Bypasses consent + frequency cap + budget, **respects quiet hours and suppression** |
 
-**Recommendation: the `service` purpose**, plus a journey step that defers a quiet-hour close to the
-next morning so the 601 are delayed rather than dropped. Neither of the two zero-code options is
-correct — one messages people at midnight, the other quietly discards a seventh of the sample.
+⚠️ **CORRECTION to an earlier draft of this table.** It claimed `marketing` would cause those 601
+quiet-hour closes to be **dropped**. That is wrong for journeys: `journey-workflow.js:321` is explicit
+— *"Quiet-hours DEFER, not drop"* — so a journey send parks to the boundary and retries in the
+morning. The hard-skip applies to non-journey sends. **The real argument against `marketing` is
+consent, not quiet hours**, and that is what the decision now rests on.
 
-**This is Afshaan's call and is not yet made.**
+**DECIDED (Afshaan, 2026-08-13) — `service`. SHIPPED + DEPLOYED** (commsops `78bc70b0`): bypasses
+consent + frequency cap + send budget, respects quiet hours + suppression. 4 tests pin both halves,
+asserting which *branches* are entered rather than what a given hour yields, since `runGate` has no
+injectable clock. Exposed in the journey NodeDrawer purpose dropdown so it is UI-editable, not a
+hand-written JSON field.
 
 ---
 
