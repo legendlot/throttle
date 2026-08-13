@@ -8,6 +8,9 @@
 // 'amz_replacement', and the existing order_type_rules → f_order_rollup → aggOrders chain counts
 // them — so `seg.repl` is real here. The long-standing "no Amazon feed exists for replacements"
 // note was simply wrong; the column had been in every stored line all along.
+// ⭐ S274 (Afshaan): those ₹0 replacements are now EXCLUDED from Total Orders and AOV — they are a
+// fulfilment event, not a sale. The exclusion lives once, in aggOrders (segregation.js), so every
+// surface moves together; `seg.ordersAll` is the un-excluded count kept for reconciliation.
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
@@ -304,7 +307,7 @@ export default function AmazonPage() {
           {/* ── Orders & sales value ── */}
           <div className="so-eyebrow" style={{ marginTop: 4 }}>Orders &amp; sales value</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-            <Kpi hue={HUE.count} lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled" now={seg.totalOrders} prev={segP.totalOrders} />
+            <Kpi hue={HUE.count} lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled · excl. ₹0 replacements" now={seg.totalOrders} prev={segP.totalOrders} />
             {/* Both bases, deliberately. The e-commerce team works off the tax-INCLUSIVE figure
                 (Akshay, 2026-07-31) while Odo reports ex-GST everywhere, and the two sitting ~15%
                 apart with only one shown is what kept producing the "are we 17% out?" question.
@@ -316,18 +319,24 @@ export default function AmazonPage() {
             <Kpi hue={HUE.gross} lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
             <Kpi hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
             <Kpi hue={HUE.gross} lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
-            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order · excl. cancelled" now={seg.aov} prev={segP.aov} />
+            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order · excl. cancelled + replacements" now={seg.aov} prev={segP.aov} />
             <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · orders, not units`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="RTV" val={fmtInt(ret.rtvReported.units || ret.rtv.units)} sub={ret.rtvReported.units ? `units returned · ${inr(ret.rtv.value)} refunded so far` : `${inr(ret.rtv.value)} · customer returns`} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
-            {/* S273 — real now. Free replacements Amazon ships against an earlier order; every one is
-                ₹0, so they never move revenue. They ARE counted in Total Orders and AOV above, on
-                purpose: our AOV was tuned to Akshay's definition in S164 (June ₹1,958 vs his ₹1,953)
-                and excluding ~8% of orders would break that reconciliation for no gain. */}
+            {/* S274 — REVERSED from S273 on Afshaan's call. Free replacements Amazon ships against an
+                earlier order; every one is ₹0. They are now EXCLUDED from Total Orders and AOV above,
+                and counted only here — a free replacement is a fulfilment event, not a sale, so it was
+                dragging AOV purely by occupying a slot in the denominator.
+                ⚠️ THIS MOVES A NUMBER AKSHAY RECONCILES AGAINST, deliberately. Measured 2026-08-13:
+                June Amazon AOV goes ₹1,959 → ₹2,139 (+9.2%, 511 of 6,081 orders removed) — so the S164
+                tuning to his ₹1,953 no longer holds, and the S273 comment here (which argued for
+                including them to preserve exactly that reconciliation) is superseded, not forgotten.
+                `seg.ordersAll` keeps the un-excluded count for anyone reconciling to Amazon's raw total.
+                The % below is of ALL orders, so it stays comparable to what Amazon reports. */}
             <Kpi hue={HUE.neutral} lbl="Replacement" val={fmtInt(seg.repl)}
-                 sub={seg.orders ? `${(seg.repl / seg.orders * 100).toFixed(1)}% of orders · ₹0 each` : 'free replacement orders'}
+                 sub={seg.ordersAll ? `${(seg.repl / seg.ordersAll * 100).toFixed(1)}% of all orders · ₹0 each · excl. from AOV` : 'free replacement orders'}
                  now={seg.repl} prev={segP.repl} tone="neutral" />
           </div>
           <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: -2 }}>

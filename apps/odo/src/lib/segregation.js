@@ -40,12 +40,27 @@ export function aggOrders(rows) {
   // (exact gstSettled) vs the live 18% estimate (a.tax). ~100% = fully reconciled (older periods,
   // real-time channels like Shopify); low = recent marketplace sales whose settlement hasn't posted.
   a.settledPct = a.tax > 0 ? Math.min(100, Math.round(a.gstSettled / a.tax * 100)) : null;
+  // ₹0 REPLACEMENTS ARE NOT ORDERS (Afshaan, S274). A free replacement is a fulfilment event, not a
+  // sale: it carries no revenue but did occupy a slot in the count, so it dragged AOV = gross ÷ orders
+  // purely by existing. Measured 2026-08-13 over 60 days: 1,070 of Amazon's 11,460 non-cancelled
+  // orders are `amz_replacement` — 9.3%, and ALL 1,070 are exactly ₹0 (the tag and the zero agree
+  // perfectly, 1070/1070). No other channel has any. So they are excluded from the headline order
+  // count and from AOV; the Replacements tile still counts them, so nothing is hidden.
+  //   ⚠️ `replacement_orders` is a STRICT SUBSET of `orders` — sales.f_order_rollup filters both on
+  //   `row_kind='order' AND NOT is_cancelled` — so this subtraction cannot go negative or double-count.
+  //   Verified against the function definition, not assumed.
+  //   `ordersAll`/`totalOrdersAll` keep the un-excluded counts, because reconciling against Amazon's
+  //   own order count needs the literal number.
+  a.ordersAll = a.orders;
+  a.orders = Math.max(0, a.orders - a.repl);
+  a.totalOrdersAll = a.ordersAll + a.cancelledOrders;
   a.totalOrders = a.orders + a.cancelledOrders;
   // AOV excludes cancellations on BOTH sides — the e-commerce team's definition (gross sales
   // excl. cancellations ÷ orders excl. cancellations), and the only one that reads as a basket
   // size. Dividing all-in gross by all-in orders understated Amazon's June AOV as ₹1,532 against
   // Amazon's own ₹1,953, purely because ~22% of Amazon orders cancel and carry ~no value.
   a.aov = a.orders ? a.gross / a.orders : 0;
+  // Cancel rate uses the same replacement-free basis as the count above it, so the two tiles agree.
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
   return a;
 }

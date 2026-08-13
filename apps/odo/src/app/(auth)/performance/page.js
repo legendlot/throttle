@@ -100,11 +100,11 @@ export default function PerformancePage() {
         <>
           {/* Headline ladder — dense 8-up, two rows of four, one hue per metric */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-            <Kpi dense hue={HUE.count} lbl="Total Orders" val={fmtInt(a.totalOrders)} sub="placed (incl. cancelled)" now={a.totalOrders} prev={p.totalOrders} />
+            <Kpi dense hue={HUE.count} lbl="Total Orders" val={fmtInt(a.totalOrders)} sub="incl. cancelled · excl. ₹0 replacements" now={a.totalOrders} prev={p.totalOrders} />
             <Kpi dense hue={HUE.primary} lbl="Total Sales" val={inr(a.grossAll)} sub="gross revenue" now={a.grossAll} prev={p.grossAll} />
             <Kpi dense hue={HUE.gross} lbl="Net Sales" val={inr(a.netCancel)} sub="excl. cancellations" now={a.netCancel} prev={p.netCancel} />
             <Kpi dense hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(a.netExGst)} sub="after disc · returns · GST" now={a.netExGst} prev={p.netExGst} badge={<SettledBadge pct={a.settledPct} />} />
-            <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(a.aov)} sub="gross / order" now={a.aov} prev={p.aov} />
+            <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(a.aov)} sub="gross / order · excl. replacements" now={a.aov} prev={p.aov} />
             <Kpi dense hue={HUE.cancel} lbl="Cancellations" val={`${fmtInt(a.cancelledOrders)} · ${a.cancelRate.toFixed(1)}%`} sub={inr(a.cancelledValue)} now={a.cancelledOrders} prev={p.cancelledOrders} tone="neutral" />
             <Kpi dense hue={HUE.returns} lbl="Returns" val={`${fmtInt(a.returnsCount)} · ${inr(a.returnsValue)}`} sub="refund value" now={a.returnsValue} prev={p.returnsValue} tone="neutral" />
             <Kpi dense hue={HUE.neutral} lbl="Total Discounts" val={inr(a.discount)} sub="discount given" now={a.discount} prev={p.discount} tone="neutral" />
