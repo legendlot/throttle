@@ -17,6 +17,15 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
+  /* ⚠️ Load-bearing, not cosmetic. Without it the browser renders every NATIVE control
+     in light mode — and a <select> popup is drawn by the OS, not by our CSS, so the
+     option text came out dark-on-dark and the selected row was invisible. Reported by
+     Mishica 2026-08-13 on the campaign form AND on segment conditions; it affected every
+     dropdown in the app, because `select.f-inp` sets appearance:none on a dark ground and
+     nothing ever styled <option>. Odo + Manifest already declare this — same fix, same
+     line. Also fixes native scrollbars, date pickers and autofill chrome. */
+  color-scheme: dark;
+
   /* ── Surface ramp (Snorkel Redesign — cooler/darker, 4 steps) ─────────
      Adopted from the redesign source-of-truth (snorkel-redesign.css :root).
      Slightly cooler + darker than the old Garage-mirror ramp. ────────── */
@@ -196,4 +205,11 @@ button { font-family: inherit; }
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Native <select> dropdown popup — see the color-scheme note in :root. Explicit because
+   `appearance:none` on select.f-inp makes some engines drop the inherited option colours. */
+select.f-inp option, select.f-inp optgroup {
+  background-color: var(--surface);
+  color: var(--t1);
 }
