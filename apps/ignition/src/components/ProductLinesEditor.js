@@ -96,7 +96,7 @@ export default function ProductLinesEditor({ value, onChange, session }) {
               options={productOptions}
               onChange={(val, opt) => onProductPicked(i, val, opt)}
               onCreateOption={(typed) => onProductPicked(i, typed, null)}
-              createLabel="Use"
+              createLabel={(q) => <>Use “{q}”</>}
               placeholder="Search a product…"
               portal
               style={inp}

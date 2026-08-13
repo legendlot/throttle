@@ -473,7 +473,17 @@ export function Combobox({
               }}
             >
               <span style={{ flex: 1 }}>
-                {createLabel ? createLabel(trimmedQuery) : <>+ Create “{trimmedQuery}”</>}
+                {/* `createLabel` may be a RENDER FUNCTION or a plain STRING. It was
+                    function-only, and a caller passing the string "Use" crashed the whole
+                    page with `createLabel is not a function` the moment this row rendered —
+                    i.e. on the first keystroke (Ignition product field, S273→S274). The prop
+                    name reads like a string, so accept both rather than wait for the next
+                    caller to make the same reasonable assumption. */}
+                {typeof createLabel === 'function'
+                  ? createLabel(trimmedQuery)
+                  : createLabel
+                    ? <>{createLabel} “{trimmedQuery}”</>
+                    : <>+ Create “{trimmedQuery}”</>}
               </span>
               <span style={{ color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)' }}>new</span>
             </div>
