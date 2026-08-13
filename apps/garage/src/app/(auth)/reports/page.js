@@ -7,7 +7,7 @@ import {
   Package, AlertCircle, Inbox, Ship, ClipboardList,
   Factory, Send, FileText, Repeat, Ban, Store, RotateCw,
   BarChart3, Scale, PackageX, Wrench, Undo2, PackageOpen,
-  ShieldAlert, AlertOctagon, ListChecks,
+  ShieldAlert, AlertOctagon, ListChecks, Hourglass,
 } from 'lucide-react';
 import { todayStr } from '@throttle/domain';
 
@@ -20,6 +20,7 @@ const REPORT_DOWNLOADS = {
     { type: 'reorder',           Icon: AlertCircle,   title: 'Reorder Flags',     desc: 'Parts at or below reorder level' },
     { type: 'cycle_counts',      Icon: BarChart3,     title: 'Cycle Counts',      desc: 'All count rounds with status and variance, filterable by date' },
     { type: 'stock_adjustments', Icon: Scale,         title: 'Stock Adjustments', desc: 'Every adjustment with reason, approver and delta. Audit trail' },
+    { type: 'stalled_units',     Icon: Hourglass,     title: 'Stalled Units',     desc: 'Units sitting past the max age for their state — the daily exception list' },
   ],
   inward: [
     { type: 'grn',               Icon: Inbox,         title: 'GRN Register',          desc: 'All goods received notes, filterable by date' },
@@ -193,6 +194,8 @@ export default function ReportsPage() {
   const [procRpt, setProcRpt] = useState(null);
   const [retData, setRetData] = useState(null);
 
+  const [agingData, setAgingData] = useState(null);   // state-age exceptions (S275)
+
   const [analyticsFlow,       setAnalyticsFlow]       = useState(null);
   const [analyticsRunway,     setAnalyticsRunway]      = useState(null);
   const [analyticsEfficiency, setAnalyticsEfficiency]  = useState(null);
@@ -203,7 +206,7 @@ export default function ReportsPage() {
   const setTabLoading = (tab, val) => setLoading((l) => ({ ...l, [tab]: val }));
 
   function refreshCurrent() {
-    if (activeTab === 'inventory')   setInvData(null);
+    if (activeTab === 'inventory')   { setInvData(null); setAgingData(null); }
     if (activeTab === 'inward')      setGrnData(null);
     if (activeTab === 'production')  setProdData(null);
     if (activeTab === 'lineflush')   setFlushRpt(null);
@@ -214,6 +217,21 @@ export default function ReportsPage() {
       setAnalyticsRunway(null);
       setAnalyticsEfficiency(null);
       setAnalyticsGap(null);
+    }
+  }
+
+  async function loadAging() {
+    setTabLoading('aging', true);
+    try {
+      // Summary only — the per-unit list is the CSV. A 23k-row table on screen
+      // would be unreadable and is not what an exception summary is for.
+      const data = await garageFetch('getStateAging', { limit: 1 }, session);
+      setAgingData(data?.summary || []);
+    } catch (e) {
+      showToast(e.message || 'Failed to load stalled units', 'error');
+      setAgingData([]);
+    } finally {
+      setTabLoading('aging', false);
     }
   }
 
@@ -481,6 +499,7 @@ export default function ReportsPage() {
 
       {/* Tab summary */}
       {activeTab === 'inventory'   && <InventorySummary data={invData}   loading={loading.inventory}   load={loadInventory} />}
+      {activeTab === 'inventory'   && <StalledSummary   data={agingData} loading={loading.aging}       load={loadAging} />}
       {activeTab === 'inward'      && <InwardSummary    data={grnData}   loading={loading.inward}      load={loadInward} />}
       {activeTab === 'production'  && <ProductionSummary data={prodData} loading={loading.production}  load={loadProduction} />}
       {activeTab === 'lineflush'   && <LineFlushSummary data={flushRpt}  loading={loading.lineflush}   load={loadLineFlush} />}
@@ -539,6 +558,57 @@ function SummaryShell({ title, data, loading, load, children, empty }) {
         ) : children}
       </div>
     </div>
+  );
+}
+
+// Stalled units by state (S275). Thresholds live in store.unit_state_thresholds and
+// are ADVISORY — nothing blocks on them. The "of total" column is deliberate: a state
+// where nearly everything is stalled means the THRESHOLD is wrong, not that the floor
+// has 5,000 problems, and without the denominator you cannot tell those apart.
+function StalledSummary({ data, loading, load }) {
+  const totalStalled = (data || []).reduce((n, r) => n + (Number(r.stalled_units) || 0), 0);
+  return (
+    <SummaryShell title="Stalled Units by State" data={data} loading={loading} load={load}
+      empty="Nothing past its state threshold">
+      <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 10 }}>
+        {totalStalled.toLocaleString('en-IN')} units past the max age for their state.
+        Thresholds are advisory and tunable in <span style={{ fontFamily: 'var(--mono)' }}>store.unit_state_thresholds</span>;
+        download <strong>Stalled Units</strong> above for the per-unit list.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          <th style={tableThStyle}>State</th>
+          <th style={tableThStyle}>Max Days</th>
+          <th style={tableThStyle}>Stalled</th>
+          <th style={tableThStyle}>of Total</th>
+          <th style={tableThStyle}>Cars</th>
+          <th style={tableThStyle}>Remotes</th>
+          <th style={tableThStyle}>Oldest (days)</th>
+        </tr></thead>
+        <tbody>
+          {(data || []).map((r) => {
+            const stalled = Number(r.stalled_units) || 0;
+            const total   = Number(r.total_in_state) || 0;
+            const pct     = total ? Math.round((stalled / total) * 100) : 0;
+            return (
+              <tr key={r.state}>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.state}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{r.threshold_days}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700,
+                             color: stalled > 0 ? '#ff7070' : '#4ade80' }}>{stalled.toLocaleString('en-IN')}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: pct >= 80 ? '#fbbf24' : 'var(--t3)' }}
+                    title={pct >= 80 ? 'Nearly everything in this state is flagged — the threshold is probably too tight' : undefined}>
+                  {pct}% of {total.toLocaleString('en-IN')}
+                </td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{Number(r.stalled_cars).toLocaleString('en-IN')}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{Number(r.stalled_remotes).toLocaleString('en-IN')}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{r.oldest_days}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </SummaryShell>
   );
 }
 
