@@ -10,8 +10,12 @@
 > that exists only as prose has no `comms.templates` row — so the CSAT journey would have had no
 > `templateId` to reference and could never have compiled, even after Meta approved it.
 >
-> `status` stays `draft` deliberately: `journeys.js` `compile()` rejects any send step whose template
-> is not `active`, so the journey physically cannot go live on an unapproved template.
+> ✅ **META APPROVED IT 2026-08-13**, during the same session — `approval_status='APPROVED'`,
+> `provider_template_id` `1358848345840474`.
+> ⚠️ **But `status` is STILL `draft`, and that is what gates the journey.** `journeys.js` `compile()`
+> checks `status='active'`, **not** `approval_status`, so approval alone does not unblock anything.
+> **Next step: activate it via Relay's Sync/Activate path** (not a raw `UPDATE` — same reasoning that
+> kept the journey out of the DB by hand). Then the CSAT journey compiles.
 > Created 2026-08-13 (S274) for the Pitstop CSAT rebuild.
 
 ---
