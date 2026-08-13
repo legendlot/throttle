@@ -1,0 +1,28 @@
+<p class="lead">The safety limits that apply to every send in Relay, regardless of who made it. The highest-consequence screen in the app.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Test mode, approval threshold, frequency cap, quiet hours, send budget.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen, system-wide.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sadm">Super-admin</span> only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Applies</div><div class="g-val">Within a minute, to everything.</div></div>
+</div>
+
+<h2 class="sec">Test mode: the global send lock</h2>
+<p>While test mode is on, no message reaches anyone outside the internal test list. Campaigns still run and still report, but nothing lands on a customer. It is the master safety switch and the thing to check first whenever a send appears to have gone nowhere.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Switching test mode off arms the entire system at once, including every active journey. Do it deliberately, tell the team, and check the Overview screen afterwards to confirm the state you intended.</p></div>
+
+<h2 class="sec">Send governance</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Approval threshold</div><div class="a-val"><p>Marketing campaigns above this audience size need an Approver. Below it, they approve themselves. Judged on the number that will actually receive, after exclusions.</p></div></div>
+  <div class="a-row"><div class="a-key">Frequency cap</div><div class="a-val"><p>The maximum marketing messages one person can get in a rolling window. It is a rolling window, not a calendar day.</p></div></div>
+  <div class="a-row"><div class="a-key">Daily send budget</div><div class="a-val"><p>A ceiling on marketing sends per day, for warming up a sending number.</p></div></div>
+</div>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>If the budget is lower than the audience, the campaign will still report as sent while quietly skipping everyone past the limit, with the reason <code>budget_exhausted</code>. Those people are not queued and will not be retried. Set the budget above the audience before a large broadcast.</p></div>
+
+<h2 class="sec">Quiet hours, per channel</h2>
+<p>Set separately for each channel because the constraints genuinely differ: promotional SMS in India is legally restricted, WhatsApp is not, and email is exempt. A channel can be switched off from quiet hours entirely. Marketing and survey messages respect quiet hours; order updates do not.</p>
+
+<h2 class="sec">Link tracking defaults</h2>
+<p>Account-wide UTM defaults. A template or campaign can override any field, and a blank field inherits rather than sending an empty value.</p>

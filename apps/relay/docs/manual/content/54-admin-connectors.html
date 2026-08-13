@@ -1,0 +1,21 @@
+<p class="lead">The feeds that bring outside data into Relay. When something stops arriving, this is where you look.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Watching the integrations Relay depends on.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly read.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> <span class="role sadm">Super-admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Credentials</div><div class="g-val">Not here. They are held securely outside the app.</div></div>
+</div>
+
+<h2 class="sec">The connectors</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Shopify</div><div class="a-val"><p>Customer data: who exists, what they bought, what they are worth. This is what fills the attributes segments filter on.</p></div></div>
+  <div class="a-row"><div class="a-key">Cashfree</div><div class="a-val"><p>Payment links, used where a message asks a customer to pay.</p></div></div>
+</div>
+
+<h2 class="sec">When a feed stops</h2>
+<p>A stalled feed is quiet rather than loud. Segments keep returning their last answer and journeys simply stop firing, with no error on any screen. The reliable early warning is the Activity screen: if a familiar event has gone to zero today, come here.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Not everything arrives from a connector. Some data is pushed to Relay by other Legend of Toys systems as it happens. A connector looking healthy therefore does not prove every feed is healthy, and Activity remains the better overall check.</p></div>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Marketing consent is one field Shopify does not currently pass through. A customer&rsquo;s consent in Relay comes from their interactions with us, not from their Shopify record, so do not treat a Shopify opt-in as the truth here.</p></div>

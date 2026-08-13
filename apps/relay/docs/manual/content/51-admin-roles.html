@@ -1,0 +1,29 @@
+<p class="lead">The permission builder. Defines what each role can do, for everyone in Relay.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Editing the roles themselves.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen, with system-wide effect.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sadm">Super-admin</span> only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Applies</div><div class="g-val">Immediately, to everyone holding that role.</div></div>
+</div>
+
+<h2 class="sec">The permission keys</h2>
+<table class="tbl">
+  <thead><tr><th>Key</th><th>Allows</th></tr></thead>
+  <tbody>
+    <tr><td><code>relay_view</code></td><td>Opening Relay and reading screens. Without this, nothing.</td></tr>
+    <tr><td><code>segment_manage</code></td><td>Creating and editing segments.</td></tr>
+    <tr><td><code>template_manage</code></td><td>Creating and editing templates.</td></tr>
+    <tr><td><code>campaign_build</code></td><td>Preparing campaigns and journeys, but not releasing them.</td></tr>
+    <tr><td><code>send_activate</code></td><td>Pressing send, scheduling, and activating a journey.</td></tr>
+    <tr><td><code>approve</code></td><td>Approving a campaign over the threshold.</td></tr>
+    <tr><td><code>data_consent_admin</code></td><td>Editing consent and delivery blocks on a contact.</td></tr>
+    <tr><td><code>connector_channel_manage</code></td><td>Managing sender identities and connectors.</td></tr>
+    <tr><td><code>relay_admin</code></td><td>Granting access to others.</td></tr>
+    <tr><td><code>relay_super_admin</code></td><td>This screen, and Approval &amp; Caps.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Keep <code>campaign_build</code> and <code>send_activate</code> apart in any role meant for someone learning the system. Granting both is what turns &ldquo;I was just trying it out&rdquo; into a live send to twenty thousand people.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Roles marked <code>system</code> are read-only and cannot be edited or deleted. They are the safe baseline. Build a new role rather than trying to bend one of those.</p></div>

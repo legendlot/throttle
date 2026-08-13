@@ -1,0 +1,35 @@
+<p class="lead">What happened after you sent. Delivery, engagement, cost and revenue, for a date range you choose.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Measuring sends, honestly.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val">Anyone with Relay access.</div></div>
+  <div class="g-cell"><div class="g-lbl">Range</div><div class="g-val">Presets, or a custom window. Defaults to today.</div></div>
+</div>
+
+<h2 class="sec">The headline numbers</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Delivery rate</div><div class="a-val"><p>Of what we sent, how much arrived.</p></div></div>
+  <div class="a-row"><div class="a-key">Read rate</div><div class="a-val"><p>Of what arrived, how much was opened or read.</p></div></div>
+  <div class="a-row"><div class="a-key">Our defects</div><div class="a-val"><p>Failures caused by us: a bad address, a variable that would not fill, a broken template. This is the number you can actually fix.</p></div></div>
+  <div class="a-row"><div class="a-key">Throttled by Meta</div><div class="a-val"><p>Failures caused by WhatsApp rate limits rather than anything we did wrong. Kept separate on purpose so it is not read as a defect.</p></div></div>
+  <div class="a-row"><div class="a-key">Skipped</div><div class="a-val"><p>Stopped by the send gate before going out, broken down by reason. These people received nothing.</p></div></div>
+  <div class="a-row"><div class="a-key">Attributed revenue</div><div class="a-val"><p>Orders traced back to a send.</p></div></div>
+  <div class="a-row"><div class="a-key">Marketing ROI</div><div class="a-val"><p>Attributed revenue against send cost. Transactional messages are excluded from this, because an order confirmation does not cause the order.</p></div></div>
+</div>
+
+<h2 class="sec">Sent, delivered, skipped, failed</h2>
+<p>These are four different things and mixing them up is the most common misreading on this screen.</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><code>sent</code></td><td>Handed to the provider.</td></tr>
+    <tr><td><code>delivered</code></td><td>Confirmed as arrived on the customer&rsquo;s device.</td></tr>
+    <tr><td><code>skipped</code></td><td>The gate stopped it. Nothing was sent and nothing was charged.</td></tr>
+    <tr><td><code>failed</code></td><td>We tried and it did not work.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A large <code>skipped</code> count is not a system fault. It usually means the audience was right but the gate did its job: no consent, cap already hit, or outside quiet hours. Read the breakdown by reason before treating it as a bug, and remember those people were not contacted at all.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Email open tracking depends on the customer&rsquo;s mail app loading images, which many block, so email read rates are systematically understated. WhatsApp read receipts are reliable. Compare email to email and WhatsApp to WhatsApp, never one against the other.</p></div>

@@ -1,0 +1,25 @@
+<p class="lead">One customer at a time: everything Relay knows about them, everything it has sent them, and why they might not be receiving anything.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Answering &ldquo;why did this person get this?&rdquo; or &ldquo;why did they get nothing?&rdquo;</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly read. Consent edits need <span class="role adm">Admin</span>.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val">Anyone with Relay access can read.</div></div>
+  <div class="g-cell"><div class="g-lbl">Search by</div><div class="g-val">Name, email or phone, including partial.</div></div>
+</div>
+
+<h2 class="sec">The contact detail panels</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Profile</div><div class="a-val"><p>Name, city, and the stored facts a segment can filter on, such as lifetime orders and last order date.</p></div></div>
+  <div class="a-row"><div class="a-key">Identifiers</div><div class="a-val"><p>Every email and phone number we have linked to this person. One profile can carry several.</p></div></div>
+  <div class="a-row"><div class="a-key">Consent</div><div class="a-val"><p>Their opt-in state per channel, with the history of how it changed and where each change came from.</p></div></div>
+  <div class="a-row"><div class="a-key">Delivery blocks</div><div class="a-val"><p>Hard blocks. This is the panel that explains total silence: a permanent bounce or an SMS opt-out lands here and stops everything.</p></div></div>
+  <div class="a-row"><div class="a-key">Recent events</div><div class="a-val"><p>What they have done lately.</p></div></div>
+</div>
+
+<h2 class="sec">Consent and opt-out</h2>
+<p>Consent is a running log, not a switch. Every change is appended with its source, so you can always see when someone opted in and where that came from. <strong>Opt out everywhere</strong> records a withdrawal across all channels.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>An opt-out and a delivery block are different things. Opting someone out of marketing still lets their order updates through, which is correct. A delivery block stops <em>everything</em>, including order updates, so only lift one if you know the address is genuinely working again.</p></div>
+
+<h2 class="sec">Anonymous profiles</h2>
+<p>Many profiles are anonymous browsers we have not yet matched to an email or phone. They are real records and they do count in totals, but they cannot be messaged. If a segment&rsquo;s total looks much larger than the number that will actually receive a campaign, unmatched anonymous profiles are usually the reason.</p>

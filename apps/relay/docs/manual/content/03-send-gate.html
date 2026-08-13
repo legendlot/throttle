@@ -1,0 +1,48 @@
+<p class="lead">Every message Relay sends is checked one last time immediately before it goes out. This chapter explains those checks in order, because they are the reason a send sometimes reaches fewer people than the screen predicted.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Applies to</div><div class="g-val">Every message, every channel, every screen.</div></div>
+  <div class="g-cell"><div class="g-lbl">Runs</div><div class="g-val">Per recipient, at the moment of sending.</div></div>
+  <div class="g-cell"><div class="g-lbl">Result if blocked</div><div class="g-val">The message is logged as <code>skipped</code>, with a reason.</div></div>
+  <div class="g-cell"><div class="g-lbl">Set by</div><div class="g-val"><span class="role sadm">Super-admin</span> on Approval &amp; Caps.</div></div>
+</div>
+
+<h2 class="sec">The checks, in order</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">0. Test mode</div><div class="a-val"><p>A global lock. While it is on, nothing reaches anyone outside the internal test list, no matter what you do. It is the master safety switch.</p></div></div>
+  <div class="a-row"><div class="a-key">1. Suppression</div><div class="a-val"><p>A hard block on an address or number, for example after a permanent email bounce or an SMS opt-out. This one outranks everything, including order confirmations.</p></div></div>
+  <div class="a-row"><div class="a-key">2. Consent</div><div class="a-val"><p>Marketing needs an explicit opt-in on that channel. No opt-in, no marketing message. Order updates are not affected.</p></div></div>
+  <div class="a-row"><div class="a-key">3. Frequency cap</div><div class="a-val"><p>A limit on how many marketing messages one person can receive in a rolling window. Currently three in twenty-four hours.</p></div></div>
+  <div class="a-row"><div class="a-key">4. Quiet hours</div><div class="a-val"><p>No marketing during the quiet window. Set per channel, because the rules differ: promotional SMS in India is legally restricted to 10:00 to 21:00, WhatsApp is not, and email is exempt entirely.</p></div></div>
+  <div class="a-row"><div class="a-key">5. Channel rules</div><div class="a-val"><p>Basic sanity: a valid email address, a plausible phone number, and for WhatsApp, an approved template if the 24 hour reply window has closed.</p></div></div>
+  <div class="a-row"><div class="a-key">6. Send budget</div><div class="a-val"><p>A daily ceiling on marketing sends, used to warm up a new sending number gently. Checked last, so a slot is never wasted on a message another check would have stopped.</p></div></div>
+</div>
+
+<h2 class="sec">What bypasses what</h2>
+<table class="tbl">
+  <thead><tr><th>Purpose</th><th>Consent, cap, quiet hours, budget</th><th>Suppression</th></tr></thead>
+  <tbody>
+    <tr><td><code>marketing</code></td><td>All apply</td><td>Applies</td></tr>
+    <tr><td><code>service</code> (a survey after the customer contacted us)</td><td>Quiet hours apply, the rest do not</td><td>Applies</td></tr>
+    <tr><td><code>transactional</code> / <code>utility</code> (order confirmed, out for delivery)</td><td>None apply</td><td>Applies</td></tr>
+  </tbody>
+</table>
+<p>The logic is simple: a customer who asked us to stop marketing at them still needs to know their parcel is arriving. But a customer whose email address hard-bounced cannot receive anything at all, because there is nowhere to send it.</p>
+
+<h2 class="sec">Reading a skipped message</h2>
+<p>When the gate stops something, it is recorded rather than silently dropped, and the reason is shown in Analytics and on the contact. The common ones:</p>
+<table class="tbl">
+  <thead><tr><th>Reason</th><th>What happened</th></tr></thead>
+  <tbody>
+    <tr><td><code>no_consent</code></td><td>Never opted in to marketing on that channel.</td></tr>
+    <tr><td><code>freq_cap</code></td><td>Already had the maximum number of marketing messages today.</td></tr>
+    <tr><td><code>quiet_hours</code></td><td>It was outside the sending window for that channel.</td></tr>
+    <tr><td><code>suppressed</code></td><td>Hard block on the address or number.</td></tr>
+    <tr><td><code>budget_exhausted</code></td><td>The daily marketing send ceiling was reached.</td></tr>
+    <tr><td><code>test_mode_blocked</code></td><td>Test mode is on and this person is not on the test list.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A skipped message means the person got <strong>nothing</strong>. It is not a delivery failure and it is not a retry queue. If a campaign reports a lot of <code>budget_exhausted</code>, those people were never contacted and will not be contacted later unless you send again.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The audience number on the campaign screen accounts for suppression, consent and your own exclusion rules. It cannot account for the frequency cap or quiet hours, because those depend on the exact moment each message is sent. Expect the delivered count to be a little lower than the predicted audience.</p></div>

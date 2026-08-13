@@ -1,6 +1,7 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
   Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2, FlaskConical,
+  BookOpen,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -45,6 +46,13 @@ export const NAV_GROUPS = [
       { id: 'links',     label: 'Links',     route: '/links',     icon: Link2,     requires: 'relay_view' },
       { id: 'analytics', label: 'Analytics', route: '/analytics', icon: BarChart3, requires: 'relay_view' },
     ],
+  },
+  // The System Manual, a flat entry before the Admin group (the house pattern across every
+  // LOT app). No `requires` beyond being signed in: the manual is role-FILTERABLE inside the
+  // viewer, so gating the nav item as well would hide the docs from exactly the people most
+  // likely to need them.
+  {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
   },
   {
     id: 'admin', label: 'Admin',

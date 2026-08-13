@@ -1,0 +1,28 @@
+<p class="lead">A template is the message itself. Campaigns and journeys both point at one rather than carrying their own copy, so a template is shared and editing it changes everything using it.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Writing the message, once, per channel.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> <span class="role mgr">Manager</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Versioned</div><div class="g-val">Yes. Every save keeps the previous version.</div></div>
+</div>
+
+<h2 class="sec">Channels behave differently</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Email</div><div class="a-val"><p>A subject line and a body, built in the visual canvas. No outside approval needed: write it and use it.</p></div></div>
+  <div class="a-row"><div class="a-key">WhatsApp</div><div class="a-val"><p>Must be submitted to Meta and approved before it can be used for a broadcast. Approval takes time and can be refused. Plan for it.</p></div></div>
+  <div class="a-row"><div class="a-key">SMS</div><div class="a-val"><p>Must be registered with the Indian DLT registry, and what you send has to match the registered wording.</p></div></div>
+</div>
+
+<h2 class="sec">Variables</h2>
+<p>A variable is a placeholder filled in per recipient, like a first name or an order number. Every variable must resolve for that person, or the send is skipped rather than going out with a gap in it. Use the preview to confirm each one fills.</p>
+
+<h2 class="sec">Duplicating instead of editing</h2>
+<p><strong>Duplicate</strong> makes an independent copy. Reach for it constantly. Editing a template that a live journey or an approved campaign depends on changes what is already going out, with no review and no announcement.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Never edit a template a live journey depends on. This has reached real customers before. Duplicate it, edit the copy, then repoint the journey deliberately.</p></div>
+
+<h2 class="sec">Archiving</h2>
+<p>Archiving retires a template from the pickers so nobody wires it up again. Anything already using it keeps working, on purpose: silently breaking a live flow would be worse than letting an old template continue.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Deleting a WhatsApp template on Meta&rsquo;s side is not reversible from here and removes every language version at once. Archive in Relay instead unless you are certain.</p></div>

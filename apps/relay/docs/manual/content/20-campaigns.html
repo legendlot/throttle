@@ -1,0 +1,51 @@
+<p class="lead">A campaign is a one-off broadcast: you pick an audience, pick a message, and send it. This is the busiest screen in Relay and the one where mistakes are most expensive, so it has the most guard rails.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Sending one message to one segment, once.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen. Sends real messages.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> builds, <span class="role mgr">Manager</span> sends, <span class="role appr">Approver</span> signs off.</div></div>
+  <div class="g-cell"><div class="g-lbl">Undo?</div><div class="g-val">No. A started broadcast can be cancelled, not recalled.</div></div>
+</div>
+
+<h2 class="sec">The lifecycle</h2>
+<p>A campaign moves through fixed states, and what you can change depends on where it is.</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning</th><th>Editable?</th></tr></thead>
+  <tbody>
+    <tr><td><code>draft</code></td><td>Being built.</td><td>Yes, fully.</td></tr>
+    <tr><td><code>pending_approval</code></td><td>Submitted, waiting for an Approver.</td><td>No.</td></tr>
+    <tr><td><code>approved</code></td><td>Cleared to send.</td><td>No.</td></tr>
+    <tr><td><code>scheduled</code></td><td>Will send by itself at a set time.</td><td>No, but the schedule can be cancelled.</td></tr>
+    <tr><td><code>sending</code></td><td>Fanning out now.</td><td>No.</td></tr>
+    <tr><td><code>sent</code></td><td>Finished.</td><td>No.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A campaign becomes read-only the moment you submit it. That is deliberate: an approver must sign off the thing that actually sends, not a version that changed afterwards. If you need a change, have it rejected back to draft.</p></div>
+
+<h2 class="sec">Building one</h2>
+<ol class="steps">
+  <li><span class="s-title">Name it.</span> Use something you will recognise in Analytics in three months. &ldquo;Diwali 2026 catalogue&rdquo;, not &ldquo;test 4&rdquo;.</li>
+  <li><span class="s-title">Pick the channel and purpose.</span> Purpose matters: <code>marketing</code> is gated on consent and quiet hours, <code>transactional</code> is not. Do not label a promotion as transactional to dodge the gate.</li>
+  <li><span class="s-title">Pick the audience.</span> Choose a segment. The line underneath immediately tells you how many people will actually receive it.</li>
+  <li><span class="s-title">Set exclusions if you need them.</span> See the Audience Exclusions chapter.</li>
+  <li><span class="s-title">Pick the template.</span> Only templates for the chosen channel appear. On WhatsApp, only templates approved by Meta can be used.</li>
+  <li><span class="s-title">Send a test.</span> The <strong>Send test</strong> button delivers the real message to a few named addresses, through the real gate, without touching the segment. Do this every time.</li>
+  <li><span class="s-title">Submit.</span> Below the approval threshold it approves itself. Above it, it goes to an Approver.</li>
+  <li><span class="s-title">Send now, or schedule.</span> Both need <span class="role mgr">Manager</span>. A confirmation dialog states exactly who is about to be messaged and which exclusions are in force.</li>
+</ol>
+
+<h2 class="sec">Reading the audience line</h2>
+<p>Under the segment picker you will see something like:</p>
+<p><code>24,929 will receive &middot; 25,100 in segment &middot; 33 suppressed/opted-out &middot; 138 excluded by your rules</code></p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">in segment</div><div class="a-val"><p>Everyone the segment rule matches, before any filtering.</p></div></div>
+  <div class="a-row"><div class="a-key">suppressed/opted-out</div><div class="a-val"><p>Dropped because they have a hard block, or have not opted in to marketing on this channel.</p></div></div>
+  <div class="a-row"><div class="a-key">excluded by your rules</div><div class="a-val"><p>Dropped by the exclusions you set on this campaign.</p></div></div>
+  <div class="a-row"><div class="a-key">will receive</div><div class="a-val"><p>The number that matters. This is what the approval threshold is judged on, and what the confirmation dialog repeats back to you.</p></div></div>
+</div>
+
+<h2 class="sec">Send test</h2>
+<p>A test send uses the campaign&rsquo;s real template and goes through the real send gate, so what lands on your phone is what a customer would get. It is recorded separately and never appears in the campaign&rsquo;s own numbers. You can run it as many times as you like.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>When test mode is off, <strong>Send now</strong> reaches real customers immediately. The confirmation dialog will say so in as many words. Read it rather than clicking through it: it names the audience and lists the exclusions, and it is the last point at which stopping is free.</p></div>

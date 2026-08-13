@@ -1,0 +1,26 @@
+<p class="lead">Split a campaign into arms, send each to a slice of the audience, and let the numbers say which message worked. Set up on the campaign itself, read afterwards in the Experiment log.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Proving which message performs better.</div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">The Variants panel on a draft campaign.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> <span class="role mgr">Manager</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Locks at</div><div class="g-val">Approval. Arms cannot change once approved.</div></div>
+</div>
+
+<h2 class="sec">Setting up a test</h2>
+<ol class="steps">
+  <li><span class="s-title">Open a draft campaign.</span> Variants can only be added while it is a draft.</li>
+  <li><span class="s-title">Add an arm.</span> Each arm gets a label (A, B and so on), a template, and a weight that decides what share of the audience it gets.</li>
+  <li><span class="s-title">Check every arm is sendable.</span> On WhatsApp, every arm&rsquo;s template must be approved by Meta. The campaign refuses to start otherwise, rather than sending half a test.</li>
+  <li><span class="s-title">Send as normal.</span> Assignment happens per person as the broadcast runs.</li>
+</ol>
+
+<h2 class="sec">Holdout arms</h2>
+<p>An arm with no template attached is a <strong>holdout</strong>: those people are deliberately sent nothing. It is how you measure whether the message did anything at all, rather than which of two messages did more. If the holdout converts as well as the treatment, the campaign was not the reason.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A holdout arm is people who receive <strong>nothing</strong>, on purpose. Do not add one to a campaign carrying information customers need, like a delivery change or a price correction.</p></div>
+
+<h2 class="sec">How people are assigned</h2>
+<p>Each recipient is assigned to an arm as they are reached, not in blocks. This matters more than it sounds: if all of arm A went out first and all of arm B hours later, the test would be measuring time of day rather than the message. Assignment is also stable, so the same person always lands in the same arm for a given campaign.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Results live in the Experiment log, not here. This screen is for setting the test up; that one is for reading it and writing down what you learned.</p></div>

@@ -1,0 +1,29 @@
+<p class="lead">A journey is an automation. Something happens (a cart is abandoned, an order ships), and Relay reacts, on its own, for that one customer. Journeys run continuously, which makes them the highest-leverage and highest-risk thing in Relay.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Reacting to customer behaviour without anyone pressing send.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen. An active journey sends by itself.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> builds, <span class="role mgr">Manager</span> activates.</div></div>
+  <div class="g-cell"><div class="g-lbl">Runs</div><div class="g-val">Continuously, one enrolment per customer.</div></div>
+</div>
+
+<h2 class="sec">The parts of a journey</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Trigger</div><div class="a-val"><p>The event that starts it, for example <code>checkout_abandoned</code>. Optionally narrowed by a filter, so it only fires for certain values.</p></div></div>
+  <div class="a-row"><div class="a-key">Steps</div><div class="a-val"><p>The graph the customer walks through: send a message, wait, branch on what they did, send again.</p></div></div>
+  <div class="a-row"><div class="a-key">Enrolment</div><div class="a-val"><p>One customer&rsquo;s trip through the journey. Each has its own position and its own timers.</p></div></div>
+  <div class="a-row"><div class="a-key">Version</div><div class="a-val"><p>A frozen copy of the steps. An enrolment stays on the version it started on, so editing a journey never rewrites the path someone is already walking.</p></div></div>
+</div>
+
+<h2 class="sec">Trigger filters</h2>
+<p>A filter narrows the trigger to certain property values, with <code>=</code> or <code>&ne;</code>. The <code>&ne;</code> option exists for a reason worth understanding: excluding a category by saying &ldquo;equals everything else&rdquo; silently drops every event where the property is missing altogether, and on some events that is a large share. If you mean &ldquo;not this one&rdquo;, say <code>&ne;</code>.</p>
+
+<h2 class="sec">Re-enrolment</h2>
+<p>Each journey decides what happens when a customer triggers it again while already inside it. The common setting is one active enrolment at a time, so a customer who abandons two carts in an hour is not messaged twice. Some journeys instead re-enrol every time, when each trigger genuinely deserves its own message.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Deactivating a journey stops new enrolments <em>and</em> stops customers already inside it. It is a real stop, not a &ldquo;let the current ones finish&rdquo;. That is usually what you want in an emergency, but be aware that half-finished journeys will not resume if you switch it back on.</p></div>
+
+<h2 class="sec">Quiet hours inside a journey</h2>
+<p>When a journey step lands in quiet hours, the message is held and retried at the boundary rather than dropped. A customer whose order ships at 23:00 gets the message in the morning, not never.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Never edit a template that a live journey depends on. The journey is pinned to the template, and changing the wording changes what is already going out, with no review step and no announcement. Duplicate the template, edit the copy, and point the journey at it deliberately.</p></div>

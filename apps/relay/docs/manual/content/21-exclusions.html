@@ -1,0 +1,26 @@
+<p class="lead">Exclusions let you say &ldquo;send to this group, but not to these people&rdquo;. They are the answer to the most common broadcast problem: the same customer getting two things from us in one day.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">On the campaign form, under the segment picker.</div></div>
+  <div class="g-cell"><div class="g-lbl">Three rules</div><div class="g-val">All optional. Anyone matching <em>any</em> of them is skipped.</div></div>
+  <div class="g-cell"><div class="g-lbl">When checked</div><div class="g-val">Continuously, while the campaign sends.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> <span class="role mgr">Manager</span></div></div>
+</div>
+
+<h2 class="sec">The three rules</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Don&rsquo;t send to these segments</div><div class="a-val"><p>Tick any number of other segments. Anyone in them is skipped. Use it to hold back staff, existing buyers, or a group you messaged separately.</p></div></div>
+  <div class="a-row"><div class="a-key">Already reached by these campaigns</div><div class="a-val"><p>Tick previous campaigns. Anyone who received one is skipped. This counts across every channel, because a campaign only has one channel: excluding a WhatsApp blast will correctly hold those people back from a follow-up email.</p></div></div>
+  <div class="a-row"><div class="a-key">Recently contacted on this channel</div><div class="a-val"><p>Skip anyone we have messaged on this channel within a chosen window, from 6 hours up to 30 days. Unlike the rule above, this one is <strong>same channel only</strong>: an email this morning will not stop a WhatsApp tonight.</p></div></div>
+</div>
+
+<h2 class="sec">Why the timing matters</h2>
+<p>A large broadcast takes hours to work through its audience. Exclusions are re-checked continuously as it goes, not fixed at the moment you pressed send. So if a colleague sends something else while your campaign is still running, the people who received theirs are dropped from the rest of yours automatically.</p>
+<p>Two campaigns running at the same time will also hold each other back, so you can start both without co-ordinating them by hand.</p>
+
+<h2 class="sec">What counts as &ldquo;contacted&rdquo;</h2>
+<p>Only messages that genuinely went out. A message the send gate stopped, for example because the person had hit the frequency cap, does <strong>not</strong> count: they received nothing, so excluding them would be wrong. Journey messages do count, because from the customer&rsquo;s side a journey message is just as real as a campaign one.</p>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>Set the rule, then read the audience line. It updates as you tick, and tells you exactly how many people each rule removed before you commit to anything.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Exclusions lock when you submit the campaign, along with everything else. The confirmation dialog on <strong>Send now</strong> lists every rule in force, so a rule you set days ago and forgot cannot silently shrink your send.</p></div>

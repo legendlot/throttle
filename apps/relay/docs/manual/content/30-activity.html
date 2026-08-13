@@ -1,0 +1,20 @@
+<p class="lead">A live feed of what customers are doing: pages viewed, carts abandoned, orders placed. It is the raw material every segment and journey is built on.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing the events arriving, and confirming they arrive at all.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val">Anyone with Relay access.</div></div>
+  <div class="g-cell"><div class="g-lbl">Range</div><div class="g-val">Pick a window. Defaults to today.</div></div>
+</div>
+
+<h2 class="sec">The three counters</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Identified</div><div class="a-val"><p>Events we could attach to a known person. An event from an anonymous browser counts only once we learn who they are.</p></div></div>
+  <div class="a-row"><div class="a-key">Messaged</div><div class="a-val"><p>Of those, how many we then sent something to.</p></div></div>
+  <div class="a-row"><div class="a-key">Recovered</div><div class="a-val"><p>Of those, how many went on to buy.</p></div></div>
+</div>
+
+<h2 class="sec">Why this screen is worth checking</h2>
+<p>Events are the input to everything else. If a feed quietly stops, segments keep returning their last answer and journeys simply stop firing, with no error anywhere. A glance at Activity is the cheapest way to catch that: if a familiar event has gone to zero today, something upstream has broken.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Not every event reaches back to the beginning of time. Website and order events only exist from the day their feed was switched on. Counting a customer&rsquo;s lifetime orders from events will undercount badly; use the customer&rsquo;s stored order count instead. The Segments chapter covers this.</p></div>

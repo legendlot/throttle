@@ -1,0 +1,79 @@
+{
+  "title": "Relay",
+  "title_accent": "Operations Manual",
+  "subtitle": "The self-serve guide to every screen in Relay, the system that talks to customers.",
+  "version": "1.0.0",
+  "date": "2026-08-13",
+  "app_url": "relay.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "accent": "#F2CD1A",
+  "accent_soft": "#F2CD1A",
+  "roles": {
+    "view": { "label": "Viewer",     "name": "Viewer",     "desc": "Can open every screen and read it. Changes nothing." },
+    "auth": { "label": "Author",     "name": "Author",     "desc": "Builds segments, templates and campaigns. Cannot send." },
+    "mgr":  { "label": "Manager",    "name": "Manager",    "desc": "Everything an Author can do, plus pressing send and activating journeys." },
+    "appr": { "label": "Approver",   "name": "Approver",   "desc": "Signs off campaigns that are over the approval threshold." },
+    "adm":  { "label": "Admin",      "name": "Admin",      "desc": "Adds people, manages senders and connectors, edits consent." },
+    "sadm": { "label": "Super-admin","name": "Super-admin","desc": "Owns roles, approval thresholds, caps and quiet hours." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Relay is, how to sign in and get around, and what your role lets you do.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Relay",             "file": "00-introduction.html", "roles": ["view","auth","mgr","appr","adm","sadm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around",  "file": "01-navigation.html",   "roles": ["view","auth","mgr","appr","adm","sadm"] },
+        { "id": "roles",      "title": "Roles & What You Can Do",      "file": "02-roles.html",        "roles": ["view","auth","mgr","appr","adm","sadm"] },
+        { "id": "gate",       "title": "The Send Gate",                "file": "03-send-gate.html",    "roles": ["view","auth","mgr","appr","adm","sadm"] }
+      ]
+    },
+    {
+      "part": "Overview",
+      "subtitle": "The screen you land on, and what its numbers mean.",
+      "chapters": [
+        { "id": "overview", "title": "Overview", "route": "/", "file": "10-overview.html", "roles": ["view","auth","mgr","appr","adm","sadm"] }
+      ]
+    },
+    {
+      "part": "Send",
+      "subtitle": "The three ways a message leaves Relay: a one-off broadcast, an automated journey, and the log that tells you which worked.",
+      "chapters": [
+        { "id": "campaigns",   "title": "Campaigns",          "route": "/campaigns",   "file": "20-campaigns.html",   "roles": ["view","auth","mgr","appr"] },
+        { "id": "exclusions",  "title": "Audience Exclusions", "route": "/campaigns",  "file": "21-exclusions.html",  "roles": ["auth","mgr","appr"] },
+        { "id": "abtests",     "title": "A/B Testing",        "route": "/campaigns",   "file": "22-ab-testing.html",  "roles": ["auth","mgr"] },
+        { "id": "experiments", "title": "Experiment Log",     "route": "/experiments", "file": "23-experiments.html", "roles": ["view","auth","mgr"] },
+        { "id": "journeys",    "title": "Journeys",           "route": "/journeys",    "file": "24-journeys.html",    "roles": ["view","auth","mgr"] }
+      ]
+    },
+    {
+      "part": "Audience",
+      "subtitle": "Who Relay knows about, what they have done, and how to carve them into groups.",
+      "chapters": [
+        { "id": "activity", "title": "Activity", "route": "/activity", "file": "30-activity.html", "roles": ["view","auth","mgr","adm"] },
+        { "id": "segments", "title": "Segments", "route": "/segments", "file": "31-segments.html", "roles": ["view","auth","mgr"] },
+        { "id": "contacts", "title": "Contacts", "route": "/contacts", "file": "32-contacts.html", "roles": ["view","auth","mgr","adm"] }
+      ]
+    },
+    {
+      "part": "Build & Measure",
+      "subtitle": "The things a send draws from, and the numbers that tell you how it went.",
+      "chapters": [
+        { "id": "templates", "title": "Templates", "route": "/templates", "file": "40-templates.html", "roles": ["view","auth","mgr"] },
+        { "id": "library",   "title": "Library",   "route": "/library",   "file": "41-library.html",   "roles": ["view","auth","mgr"] },
+        { "id": "links",     "title": "Links",     "route": "/links",     "file": "42-links.html",     "roles": ["view","auth","mgr"] },
+        { "id": "analytics", "title": "Analytics", "route": "/analytics", "file": "43-analytics.html", "roles": ["view","auth","mgr","appr","adm","sadm"] }
+      ]
+    },
+    {
+      "part": "Admin",
+      "subtitle": "Access, sending identities, and the safety limits that apply to everyone.",
+      "chapters": [
+        { "id": "adm-users",      "title": "Users",              "route": "/admin/users",      "file": "50-admin-users.html",      "roles": ["adm","sadm"] },
+        { "id": "adm-roles",      "title": "Roles",              "route": "/admin/roles",      "file": "51-admin-roles.html",      "roles": ["sadm"] },
+        { "id": "adm-settings",   "title": "Approval & Caps",    "route": "/admin/settings",   "file": "52-admin-settings.html",   "roles": ["sadm"] },
+        { "id": "adm-senders",    "title": "Sender Identities",  "route": "/admin/senders",    "file": "53-admin-senders.html",    "roles": ["adm","sadm"] },
+        { "id": "adm-connectors", "title": "Connectors",         "route": "/admin/connectors", "file": "54-admin-connectors.html", "roles": ["adm","sadm"] }
+      ]
+    }
+  ]
+}
