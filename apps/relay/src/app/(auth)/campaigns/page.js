@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
@@ -133,7 +133,42 @@ function campaignStatus(r) {
 }
 
 function emptyCampaign() {
-  return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null };
+  return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null,
+    // Audience exclusions (S276) — all three optional, all evaluated live during the fan-out.
+    exclude_segment_ids: [], exclude_campaign_ids: [], exclude_contacted_hours: '' };
+}
+
+// Presets for "don't contact anyone messaged in the last N hours". Free entry is still allowed;
+// these just cover what people actually ask for ("not again today", "not this week").
+const CONTACTED_WINDOWS = [
+  { v: '', label: 'Off — no time-based exclusion' },
+  { v: '6', label: '6 hours' },
+  { v: '24', label: '24 hours (a day)' },
+  { v: '48', label: '48 hours' },
+  { v: '72', label: '72 hours (3 days)' },
+  { v: '168', label: '7 days' },
+  { v: '336', label: '14 days' },
+  { v: '720', label: '30 days' },
+];
+
+// Compact multi-select: a scrollable checkbox list. Deliberately not a <select multiple> —
+// ctrl-clicking to keep a selection is the single most misused control on the web, and losing
+// an exclusion by mis-clicking means a customer gets a message they were meant to be spared.
+function ExcludePicker({ options, selected, onToggle, disabled, empty, renderLabel }) {
+  if (!options.length) return <div className="dim" style={{ fontSize: 12 }}>{empty}</div>;
+  return (
+    <div style={{ maxHeight: 132, overflowY: 'auto', border: '1px solid var(--border)',
+      borderRadius: 6, padding: '4px 6px', background: 'var(--surface-2, transparent)' }}>
+      {options.map((o) => (
+        <label key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '3px 2px',
+          fontSize: 12.5, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1 }}>
+          <input type="checkbox" checked={selected.includes(o.id)} disabled={disabled}
+            onChange={() => onToggle(o.id)} style={{ cursor: disabled ? 'default' : 'pointer' }} />
+          <span>{renderLabel(o)}</span>
+        </label>
+      ))}
+    </div>
+  );
 }
 
 export default function CampaignsPage() {
@@ -218,6 +253,9 @@ export default function CampaignsPage() {
       vars: JSON.stringify(r.vars || {}, null, 0), scheduled_at: r.scheduled_at ? String(r.scheduled_at).slice(0, 16) : '',
       status: r.status || 'draft', audience_snapshot: r.audience_snapshot ?? null, reject_reason: r.reject_reason || null,
       utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
+      exclude_segment_ids: Array.isArray(r.exclude_segment_ids) ? r.exclude_segment_ids : [],
+      exclude_campaign_ids: Array.isArray(r.exclude_campaign_ids) ? r.exclude_campaign_ids : [],
+      exclude_contacted_hours: r.exclude_contacted_hours == null ? '' : String(r.exclude_contacted_hours),
     };
   }
   function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
@@ -285,20 +323,40 @@ export default function CampaignsPage() {
   // segment/channel/purpose doesn't spam. reachable = segment total − channel suppressions
   // − (marketing) not-opted-in consent — the STABLE gate subset; the per-send freq-cap +
   // quiet-hours gates are time-dependent and deliberately NOT counted here.
+  // S276: this now calls campaignReach, not previewSegment, so the number shown INCLUDES the
+  // campaign's exclusion rules and matches what the fan-out will actually send (both sides run
+  // comms.campaign_excluded — one predicate, no drift). `excludeKey` is a stable string so the
+  // effect re-fires when an exclusion changes without making the array identity a dependency.
+  const excludeKey = `${(c.exclude_segment_ids || []).join(',')}|${(c.exclude_campaign_ids || []).join(',')}|${c.exclude_contacted_hours}`;
   useEffect(() => {
     if (view !== 'form' || !c.segment_id) { setReach(null); return undefined; }
-    const seg = segments.find((s) => s.id === c.segment_id);
-    if (!seg?.definition) { setReach(null); return undefined; }
     let cancelled = false;
     setReach({ loading: true });
     const t = setTimeout(async () => {
       try {
-        const r = await workerFetch('previewSegment', { definition: seg.definition, channel: c.channel, purpose: c.purpose }, session);
-        if (!cancelled) setReach(r?.data ? { total: Number(r.data.total || 0), reachable: Number(r.data.reachable || 0) } : null);
+        const r = await workerFetch('campaignReach', {
+          segment_id: c.segment_id, channel: c.channel, purpose: c.purpose,
+          exclude_segment_ids: c.exclude_segment_ids || [],
+          exclude_campaign_ids: c.exclude_campaign_ids || [],
+          exclude_contacted_hours: c.exclude_contacted_hours === '' ? null : Number(c.exclude_contacted_hours),
+        }, session);
+        if (!cancelled) setReach(r?.data ? {
+          total: Number(r.data.total || 0), reachable: Number(r.data.reachable || 0),
+          excluded: Number(r.data.excluded || 0), sendable: Number(r.data.sendable || 0),
+        } : null);
       } catch { if (!cancelled) setReach(null); }
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [view, c.segment_id, c.channel, c.purpose, segments, session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, c.segment_id, c.channel, c.purpose, excludeKey, session]);
+
+  // Only DRAFT campaigns may be excluded-against meaningfully? No — any campaign that has sent
+  // is a valid exclusion source, and one still sending is the most valuable (that is the
+  // "don't double-hit while both are running" case). Excluded: this campaign itself (the worker
+  // also strips it — self-exclusion would stall the fan-out on its own in-flight rows).
+  const excludableCampaigns = useMemo(
+    () => rows.filter((r) => r.id !== c.id && r.status !== 'draft'),
+    [rows, c.id]);
 
   function set(k, v) { setC((p) => ({ ...p, [k]: v })); }
 
@@ -315,6 +373,10 @@ export default function CampaignsPage() {
         segment_id: c.segment_id || null, template_id: c.template_id || null,
         vars, scheduled_at: c.scheduled_at ? new Date(c.scheduled_at).toISOString() : null,
         utm: c.utm || null,
+        exclude_segment_ids: c.exclude_segment_ids || [],
+        exclude_campaign_ids: c.exclude_campaign_ids || [],
+        // '' → null server-side ("rule off"); the worker re-validates rather than trusting this.
+        exclude_contacted_hours: c.exclude_contacted_hours === '' ? null : Number(c.exclude_contacted_hours),
       };
       if (c.id) payload.id = c.id;
       const r = await workerFetch('saveCampaign', payload, session);
@@ -399,7 +461,14 @@ export default function CampaignsPage() {
     const gateLine = settings?.test_mode === false
       ? '⚠️ TEST MODE IS OFF — this WILL send to real customers.'
       : 'INTERNAL TEST GATE — sends off the allowlist are blocked.';
-    if (!window.confirm(`${gateLine}\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real emails to everyone reachable in the segment.`)) return;
+    // Spell the exclusions out in the confirm. A rule you set days ago and forgot is exactly
+    // the thing that makes a send look mysteriously small afterwards — say it before, not after.
+    const exclusionLines = [];
+    if ((c.exclude_segment_ids || []).length) exclusionLines.push(`· not in segment: ${c.exclude_segment_ids.map((id) => segments.find((s) => s.id === id)?.name || id).join(', ')}`);
+    if ((c.exclude_campaign_ids || []).length) exclusionLines.push(`· not already reached by: ${c.exclude_campaign_ids.map((id) => rows.find((r) => r.id === id)?.name || id).join(', ')}`);
+    if (c.exclude_contacted_hours) exclusionLines.push(`· not contacted on ${c.channel} in the last ${c.exclude_contacted_hours}h`);
+    const exclusionBlock = exclusionLines.length ? `\n\nExclusions in force:\n${exclusionLines.join('\n')}` : '';
+    if (!window.confirm(`${gateLine}\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real messages to everyone reachable in the segment.${exclusionBlock}`)) return;
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
@@ -483,13 +552,81 @@ export default function CampaignsPage() {
               {c.segment_id && reach && (
                 <div className="dim" style={{ fontSize: 12, marginTop: 5 }}>
                   {reach.loading ? 'Checking reachable audience…'
-                    : <span title="After channel suppression + marketing consent. The per-send frequency cap and quiet-hours gates are applied per recipient at send time and are not counted here.">
-                        <strong style={{ color: 'var(--text-1)' }}>{reach.reachable.toLocaleString('en-IN')}</strong> reachable
+                    : <span title="After channel suppression + marketing consent, then minus your exclusion rules. The per-send frequency cap and quiet-hours gates are applied per recipient at send time and are not counted here.">
+                        <strong style={{ color: 'var(--text-1)' }}>{(reach.sendable ?? reach.reachable).toLocaleString('en-IN')}</strong> will receive
                         {' · '}{reach.total.toLocaleString('en-IN')} in segment
                         {reach.total > reach.reachable ? ` · ${(reach.total - reach.reachable).toLocaleString('en-IN')} suppressed/opted-out` : ''}
+                        {reach.excluded > 0 ? ` · ${reach.excluded.toLocaleString('en-IN')} excluded by your rules` : ''}
                       </span>}
                 </div>
               )}
+            </div>
+
+            {/* ── Audience exclusions (S276) ────────────────────────────────────────────
+                Three independent rules, ORed together: a profile matching ANY of them is
+                dropped. Re-checked on every page of the fan-out, so someone contacted while
+                this broadcast is still running is skipped for the rest of the run. */}
+            <div className="ff" style={{ gridColumn: '1 / -1' }}>
+              <div className="kv-k">Exclusions (optional)</div>
+              <div className="dim" style={{ fontSize: 11.5, margin: '2px 0 8px' }}>
+                Anyone matching a rule below is skipped. Checked continuously while the campaign
+                sends — not just at the start.
+              </div>
+              <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))' }}>
+                <div>
+                  <div className="kv-k" style={{ fontSize: 12 }}>Don&apos;t send to these segments</div>
+                  {isDraft && canBuild
+                    ? <ExcludePicker
+                        options={segments.filter((s) => s.id !== c.segment_id)}
+                        selected={c.exclude_segment_ids || []}
+                        onToggle={(id) => set('exclude_segment_ids',
+                          (c.exclude_segment_ids || []).includes(id)
+                            ? c.exclude_segment_ids.filter((x) => x !== id)
+                            : [...(c.exclude_segment_ids || []), id])}
+                        disabled={busy}
+                        empty="No other segments yet."
+                        renderLabel={(s) => `${s.name} (${s.kind})`} />
+                    : <div className="kv-v">{(c.exclude_segment_ids || []).length
+                        ? c.exclude_segment_ids.map((id) => segments.find((s) => s.id === id)?.name || id).join(', ')
+                        : <span className="dim">—</span>}</div>}
+                </div>
+
+                <div>
+                  <div className="kv-k" style={{ fontSize: 12 }}>Already reached by these campaigns</div>
+                  {isDraft && canBuild
+                    ? <ExcludePicker
+                        options={excludableCampaigns}
+                        selected={c.exclude_campaign_ids || []}
+                        onToggle={(id) => set('exclude_campaign_ids',
+                          (c.exclude_campaign_ids || []).includes(id)
+                            ? c.exclude_campaign_ids.filter((x) => x !== id)
+                            : [...(c.exclude_campaign_ids || []), id])}
+                        disabled={busy}
+                        empty="No sent or sending campaigns to exclude yet."
+                        renderLabel={(r) => `${r.name} · ${r.channel} · ${r.status}`} />
+                    : <div className="kv-v">{(c.exclude_campaign_ids || []).length
+                        ? c.exclude_campaign_ids.map((id) => rows.find((r) => r.id === id)?.name || id).join(', ')
+                        : <span className="dim">—</span>}</div>}
+                  <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                    Counts any channel — a campaign has only one.
+                  </div>
+                </div>
+
+                <div>
+                  <div className="kv-k" style={{ fontSize: 12 }}>Recently contacted on {c.channel}</div>
+                  {isDraft && canBuild
+                    ? <select className="f-inp" value={c.exclude_contacted_hours} disabled={busy}
+                        onChange={(e) => set('exclude_contacted_hours', e.target.value)}>
+                        {CONTACTED_WINDOWS.map((w) => <option key={w.v} value={w.v}>{w.label}</option>)}
+                      </select>
+                    : <div className="kv-v">{c.exclude_contacted_hours
+                        ? `Contacted within ${c.exclude_contacted_hours}h` : <span className="dim">—</span>}</div>}
+                  <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                    Same channel only. Counts messages actually sent — journeys included, gate-skipped
+                    attempts excluded.
+                  </div>
+                </div>
+              </div>
             </div>
             <div className="ff"><div className="kv-k">Template</div>
               {isDraft && canBuild

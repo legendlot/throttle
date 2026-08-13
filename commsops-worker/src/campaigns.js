@@ -46,15 +46,52 @@ async function needsApproval(env, campaign, audienceCount) {
       && Number(audienceCount || 0) > Number(s.approval_audience_threshold ?? 500);
 }
 
-async function reachableCount(env, segmentId, channel, purpose) {
-  // materialize first so the count reflects the live segment, then preview the definition
+// The three audience-exclusion rules a campaign may carry (S276). Read straight off the row so
+// every caller (submit, send, fan-out, reach preview) uses the same values — a campaign that is
+// past draft is immutable, so these are frozen from submit onward exactly like segment/template.
+function exclusionArgs(camp) {
+  return {
+    p_exclude_segments: Array.isArray(camp.exclude_segment_ids) ? camp.exclude_segment_ids : [],
+    p_exclude_campaigns: Array.isArray(camp.exclude_campaign_ids) ? camp.exclude_campaign_ids : [],
+    p_exclude_contacted_hours: camp.exclude_contacted_hours ?? null,
+  };
+}
+
+// ⚠️ Exclusion segments are read from comms.segment_members, which is materialized DELETE+INSERT
+// (PATTERN-176) — a segment nobody has rebuilt lately holds a STALE member set. For the TARGET
+// segment that only mis-sizes the audience; for an EXCLUSION segment it silently lets through
+// people it was supposed to hold back. So materialize every one of them before we count or send.
+// Best-effort per segment: one unmaterializable exclusion must not block the whole campaign, and
+// the send-time predicate still applies against whatever members it does have.
+async function materializeExclusions(env, camp) {
+  const ids = Array.isArray(camp.exclude_segment_ids) ? camp.exclude_segment_ids.filter(Boolean) : [];
+  for (const id of ids) {
+    const r = await A.sbComms('/rest/v1/rpc/materialize_segment', env,
+      { method: 'POST', body: JSON.stringify({ p_segment_id: id }) });
+    if (!r.ok) console.log('exclusion_segment_materialize_failed', camp.id, id, r.status);
+  }
+}
+
+// total / reachable / excluded / sendable for a campaign's audience.
+// `sendable` (reachable MINUS the exclusion rules) is the number that will actually receive a
+// message, and is therefore what audience_snapshot and the approval threshold are judged on —
+// approving "25,067" for a send that reaches 2,571 is approving a number that does not exist.
+// The count and the fan-out share ONE predicate (comms.campaign_excluded) so they cannot drift.
+async function reachableCount(env, camp) {
+  const segmentId = camp.segment_id;
+  // materialize first so the counts reflect the live segments, target + exclusions
   await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: segmentId }) });
-  const seg = await A.sbComms(`/rest/v1/segments?id=eq.${A.enc(segmentId)}&select=definition&limit=1`, env);
-  const def = (seg.ok && seg.data?.[0]?.definition) || {};
-  const r = await A.sbComms('/rest/v1/rpc/preview_segment', env,
-    { method: 'POST', body: JSON.stringify({ p_def: def, p_channel: channel, p_purpose: purpose }) });
+  await materializeExclusions(env, camp);
+  const r = await A.sbComms('/rest/v1/rpc/campaign_reach', env, {
+    method: 'POST',
+    body: JSON.stringify({ p_segment_id: segmentId, p_channel: camp.channel, p_purpose: camp.purpose,
+      ...exclusionArgs(camp) }),
+  });
   const row = Array.isArray(r.data) ? r.data[0] : r.data;
-  return { total: Number(row?.total || 0), reachable: Number(row?.reachable || 0) };
+  const reachable = Number(row?.reachable || 0);
+  const excluded = Number(row?.excluded || 0);
+  return { total: Number(row?.total || 0), reachable, excluded,
+    sendable: Number(row?.sendable ?? Math.max(reachable - excluded, 0)) };
 }
 
 // Kick off a broadcast: snapshot, set sending, enqueue the first fan-out seed.
@@ -91,13 +128,13 @@ async function startCampaign(env, id, sentBy) {
     }
   }
 
-  const { reachable } = await reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
+  const { sendable } = await reachableCount(env, camp);
 
   // Approval was judged on the SUBMIT-time audience; a dynamic segment may have grown past the
   // threshold since. A human-approved campaign (approved_by set) stands; an auto-approved one
   // that outgrew the threshold goes back for eyes (review M2).
-  if (!camp.approved_by && await needsApproval(env, camp, reachable)) {
-    await setStatus(env, id, { status: 'pending_approval', audience_snapshot: reachable });
+  if (!camp.approved_by && await needsApproval(env, camp, sendable)) {
+    await setStatus(env, id, { status: 'pending_approval', audience_snapshot: sendable });
     return { ok: false, error: 'audience_grew_needs_approval' };
   }
 
@@ -108,11 +145,11 @@ async function startCampaign(env, id, sentBy) {
   const claim = await A.sbComms(
     `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled)`, env,
     { method: 'PATCH', body: JSON.stringify({
-        status: 'sending', audience_snapshot: reachable, sent_by: sentBy, updated_at: nowIso() }) });
+        status: 'sending', audience_snapshot: sendable, sent_by: sentBy, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
     return { ok: false, error: 'already_claimed' };
   await env.BROADCAST_QUEUE.send({ campaignId: id, after: null });
-  return { ok: true, audience: reachable };
+  return { ok: true, audience: sendable };
 }
 
 // Consumer: process one fan-out message (paginate → send → continue or finish).
@@ -122,10 +159,16 @@ async function processQueueMessage(env, body) {
   if (!camp || camp.status !== 'sending') return;     // cancelled/finished → stop
   const variants = await loadVariants(env, campaignId);
 
+  // Exclusions are re-evaluated on EVERY page, not snapshotted at start (S276). A fan-out runs
+  // for hours at ~1,200/hr, so a snapshot would happily message someone another campaign reached
+  // while this one was still going — which is the case the feature exists for. The predicate also
+  // counts a fresh 'queued' row as contacted, so two campaigns running CONCURRENTLY exclude each
+  // other rather than racing between reserve and send.
   const r = await A.sbComms('/rest/v1/rpc/campaign_recipients', env, {
     method: 'POST',
     body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
-      p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG }),
+      p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG,
+      ...exclusionArgs(camp) }),
   });
   // An RPC failure is NOT "fan-out complete" (review C2): throw → Queues redeliver this page →
   // after max retries it DLQs with an alert. Only a genuine short page may finish the campaign.
@@ -277,4 +320,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, startCampaign, processQueueMessage, sendCampaignTest };
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, startCampaign, processQueueMessage, sendCampaignTest,
+  // S276 exclusions — exported for unit tests
+  exclusionArgs, materializeExclusions };

@@ -64,7 +64,8 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
       if (path.includes('/campaigns?id=eq.C2') && (!opts.method || opts.method === 'GET')) return { ok: true, data: [APPROVED_CAMP] };
       if (path.includes('/rpc/materialize_segment')) return { ok: true, data: null };
       if (path.includes('/segments?id=eq.')) return { ok: true, data: [{ definition: {} }] };
-      if (path.includes('/rpc/preview_segment')) return { ok: true, data: [{ total: 40000, reachable: 40000 }] };
+      // S276: reachableCount now reads campaign_reach (exclusion-aware), not preview_segment.
+      if (path.includes('/rpc/campaign_reach')) return { ok: true, data: [{ total: 40000, reachable: 40000, excluded: 0, sendable: 40000 }] };
       if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{ approval_required_marketing: true, approval_audience_threshold: 500 }] };
       // The atomic sending-claim PATCH filters on status=in.(approved,scheduled) — that must never fire.
       if (path.includes('/campaigns?id=eq.C2') && path.includes('status=in.') && opts.method === 'PATCH') {

@@ -1568,6 +1568,32 @@ async function handlePost(body, auth, env) {
       }
       return ok({ ...(row || {}), sample });
     }
+    // Audience size for a campaign's segment WITH its exclusion rules applied (S276).
+    // Returns {total, reachable, excluded, sendable} from comms.campaign_reach — the same
+    // predicate the fan-out uses, so the builder's number and the send agree.
+    // ⚠️ Read-only by design: it does NOT materialize. This runs on every edit in the campaign
+    // form, and materialize_segment on a 25k segment is real work no keystroke should pay for
+    // (same reasoning as the pre-flight check's audience estimate). The authoritative counts
+    // are taken at submit/send, where reachableCount DOES materialize first.
+    case 'campaignReach': {
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);   // count-oracle, same gate as previewSegment
+      if (!body.segment_id) return err('segment_id_required', 400);
+      const hrs = Number(body.exclude_contacted_hours);
+      const r = await A.sbComms('/rest/v1/rpc/campaign_reach', env, {
+        method: 'POST',
+        body: JSON.stringify({
+          p_segment_id: body.segment_id,
+          p_channel: body.channel || 'email',
+          p_purpose: body.purpose || 'marketing',
+          p_exclude_segments: Array.isArray(body.exclude_segment_ids) ? body.exclude_segment_ids : [],
+          p_exclude_campaigns: Array.isArray(body.exclude_campaign_ids) ? body.exclude_campaign_ids : [],
+          p_exclude_contacted_hours: Number.isFinite(hrs) && hrs > 0 ? Math.round(hrs) : null,
+        }),
+      });
+      if (!r.ok) return err('reach_error:' + JSON.stringify(r.data), 500);
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return ok(row || { total: 0, reachable: 0, excluded: 0, sendable: 0 });
+    }
     case 'materializeSegment': {
       if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
       const r = await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: body.id }) });
@@ -1606,10 +1632,21 @@ async function handlePost(body, auth, env) {
     // ── M6: campaigns + approval lifecycle ──
     case 'saveCampaign': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at, utm } = body;
+      const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at, utm,
+        exclude_segment_ids, exclude_campaign_ids, exclude_contacted_hours } = body;
       if (!name) return err('name_required', 400);
+      // Audience exclusions (S276). Coerced server-side: a non-array becomes [], blanks are
+      // dropped, and the hours field is NULL unless it is a positive number — a 0 or a stray ''
+      // must read as "rule off", never as "exclude anyone contacted in the last 0 hours".
+      const uuidList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim()) : []);
+      const hrs = Number(exclude_contacted_hours);
       const row = { name, channel: channel || 'email', purpose: purpose || 'marketing',
         segment_id: segment_id || null, template_id: template_id || null, vars: vars || {},
+        exclude_segment_ids: uuidList(exclude_segment_ids),
+        // A campaign must never exclude ITSELF — self-exclusion would make its own in-flight
+        // 'queued' rows disqualify the rest of its audience and stall the fan-out at page 1.
+        exclude_campaign_ids: uuidList(exclude_campaign_ids).filter((c) => c !== id),
+        exclude_contacted_hours: Number.isFinite(hrs) && hrs > 0 ? Math.round(hrs) : null,
         // Normalized server-side by the same helper the send path uses: blanks dropped (blank
         // means inherit), non-utm_ keys discarded, all-blank collapsed to NULL.
         utm: J.sanitizeUtm(utm),
@@ -1641,10 +1678,13 @@ async function handlePost(body, auth, env) {
       const camp = await CAMP.getCampaign(env, body.id);
       if (!camp) return err('not_found', 404);
       if (!camp.segment_id || !camp.template_id) return err('segment_and_template_required', 400);
-      const { reachable } = await CAMP.reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
-      const mustApprove = await CAMP.needsApproval(env, camp, reachable);
-      await CAMP.setStatus(env, body.id, { status: mustApprove ? 'pending_approval' : 'approved', audience_snapshot: reachable });
-      return ok({ status: mustApprove ? 'pending_approval' : 'approved', reachable });
+      // `sendable` = reachable MINUS the campaign's exclusion rules (S276) — the number that
+      // will actually receive a message. The approval threshold and the snapshot are both
+      // judged on it, so an approver is never shown an audience the send cannot produce.
+      const { reachable, excluded, sendable } = await CAMP.reachableCount(env, camp);
+      const mustApprove = await CAMP.needsApproval(env, camp, sendable);
+      await CAMP.setStatus(env, body.id, { status: mustApprove ? 'pending_approval' : 'approved', audience_snapshot: sendable });
+      return ok({ status: mustApprove ? 'pending_approval' : 'approved', reachable, excluded, sendable });
     }
     case 'approveCampaign': {
       if (!A.canApprove(auth.permissions)) return err('forbidden', 403);
