@@ -1,8 +1,18 @@
 # WhatsApp template for submission to Meta — `support_csat_r_01`
 
-> Draft for Afshaan to submit in WhatsApp Manager. Created 2026-08-13 (S274) for the Pitstop CSAT
-> rebuild. **Not yet submitted.** The journey that uses it is created as a DRAFT and must not be
-> activated until this template is APPROVED and Afshaan gives the go-ahead.
+> ⭐ **THE TEMPLATE LIVES IN RELAY — this doc is the reasoning behind it, not the artefact.**
+> `comms.templates` id **`55795b42-ea6c-451e-a45d-88e746238048`**, `status='draft'`, on the SUPPORT
+> WABA `1350960337019398` (+919880212323), which is the number that will send it.
+>
+> **Submit it from Relay** (`/templates` → Submit, i.e. the `waSubmitTemplate` action), NOT by
+> hand-typing into WhatsApp Manager. ⚠️ **An earlier version of this doc framed it as a hand-submit,
+> which was wrong twice over:** Relay already owns authoring *and* Meta submission, and a template
+> that exists only as prose has no `comms.templates` row — so the CSAT journey would have had no
+> `templateId` to reference and could never have compiled, even after Meta approved it.
+>
+> `status` stays `draft` deliberately: `journeys.js` `compile()` rejects any send step whose template
+> is not `active`, so the journey physically cannot go live on an unapproved template.
+> Created 2026-08-13 (S274) for the Pitstop CSAT rebuild.
 
 ---
 
