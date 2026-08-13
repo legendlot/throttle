@@ -23,7 +23,7 @@ function downloadCsv(rows, filename, showCost, supplyMap = {}) {
     'Part Code', 'Product', 'Part Name', 'Category', 'Type',
     'Opening', 'Received', 'Issued', 'Returned', 'Closing',
     ...(showCost ? ['Unit Cost'] : []),
-    'Reorder Point', 'Location', 'Status', 'Supply',
+    'Reorder Point', 'Location', 'Status', 'BOM Status', 'Supply',
   ];
   const lines = [
     headers,
@@ -37,6 +37,9 @@ function downloadCsv(rows, filename, showCost, supplyMap = {}) {
         r.opening_stock ?? 0, r.total_received ?? 0, r.total_issued ?? 0, r.returned ?? 0, closing,
         ...(showCost ? [r.unit_cost ?? ''] : []),
         r.reorder_level ?? 0, r.location, isLow ? 'Reorder' : 'OK',
+        // Bare note, not 'Active (…)': the ledger CSV cannot see retirement, so it
+        // must not assert activeness the way the Stock Position report status does.
+        r.pick_note || '',
         sv ? sv.title : '',
       ];
     }),
@@ -528,7 +531,18 @@ export default function StockPage() {
                           {showCost && <td style={tdNum}>{r.unit_cost != null ? '₹' + Number(r.unit_cost).toLocaleString('en-IN') : '—'}</td>}
                           <td style={{ ...tdNum, color: 'var(--t3)' }}>{r.reorder_level ?? 0}</td>
                           <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.location || '—'}</span></td>
-                          <td style={td}>{isLow ? <StatusBadge variant="error">Reorder</StatusBadge> : <StatusBadge variant="success">OK</StatusBadge>}</td>
+                          <td style={td}>
+                            {isLow ? <StatusBadge variant="error">Reorder</StatusBadge> : <StatusBadge variant="success">OK</StatusBadge>}
+                            {r.pick_note && (
+                              <div
+                                className="num"
+                                style={{ fontSize: 10, color: 'var(--warn-fg)', marginTop: 3, whiteSpace: 'nowrap' }}
+                                title={r.pick_note === 'Not picked in BOM'
+                                  ? 'On no active BOM — no picklist ever includes this part'
+                                  : 'On a BOM, but only runs of that build format pick it'}
+                              >{r.pick_note}</div>
+                            )}
+                          </td>
                           <td style={td}><SupplyTag row={r} sup={supplyMap[r.part_code]} /></td>
                         </tr>
                       );

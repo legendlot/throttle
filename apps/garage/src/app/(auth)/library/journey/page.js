@@ -208,6 +208,14 @@ export default function PartJourneyPage() {
                       {journey.product ? <>Product: <strong style={{ color: 'var(--t2)' }}>{journey.product}</strong></> : <span>cross-product</span>}
                       {journey.category && <> · {journey.category}</>}
                     </div>
+                    {journey.pick_note && (
+                      <div
+                        style={{ fontSize: 11, color: '#fbbf24', marginTop: 4, fontFamily: 'var(--mono)' }}
+                        title={journey.pick_note === 'Not picked in BOM'
+                          ? 'On no active BOM — no picklist ever includes this part'
+                          : 'On a BOM, but only runs of that build format pick it'}
+                      >⚠ {journey.pick_note}</div>
+                    )}
                   </div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
                     {journey.event_count} event{journey.event_count === 1 ? '' : 's'}
