@@ -594,7 +594,7 @@ function BulkGrnPanel({ session, onSuccess }) {
 }
 
 // ── FBU GRN Panel — units only, multi-line ─────────────────────────────────────
-const emptyFbuLine = () => ({ product: '', variant: '', color: '', units: '' });
+const emptyFbuLine = () => ({ product: '', variant: '', color: '', units: '', rejected: '', rejectReason: '' });
 
 function FbuGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
@@ -623,7 +623,10 @@ function FbuGrnPanel({ session, onSuccess }) {
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
       if (!l.product) { showToast(`Line ${i + 1}: select a product`, 'error'); return; }
-      if (!(parseInt(l.units) > 0)) { showToast(`Line ${i + 1}: enter units received`, 'error'); return; }
+      if (!(parseInt(l.units) > 0)) { showToast(`Line ${i + 1}: enter units accepted`, 'error'); return; }
+      if ((parseInt(l.rejected) || 0) > 0 && !(l.rejectReason || '').trim()) {
+        showToast(`Line ${i + 1}: give a reason for the ${parseInt(l.rejected)} rejected units`, 'error'); return;
+      }
     }
     setSubmitting(true);
     try {
@@ -631,7 +634,10 @@ function FbuGrnPanel({ session, onSuccess }) {
       for (const l of lines) {
         const res = await workerFetch('postFbuGRN', {
           data: { product: l.product, variant: l.variant || null, color: l.color || null,
-                  qty_received: parseInt(l.units), grn_date: grnDate, supplier, po_ref: poRef }
+                  qty_received: parseInt(l.units),
+                  qty_rejected: parseInt(l.rejected) || 0,
+                  reject_reason: (l.rejectReason || '').trim() || null,
+                  grn_date: grnDate, supplier, po_ref: poRef }
         }, session);
         created.push(res.data.grn_no);
         if (res.data.warning) showToast(res.data.warning, 'warning');
@@ -649,7 +655,9 @@ function FbuGrnPanel({ session, onSuccess }) {
   return (
     <div>
       <p style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
-        Use for fully-built units received in retail-ready condition. Records unit count only — no part-level BOM tracking.
+        Use for fully-built units received in retail-ready condition. Records unit count only — no part-level BOM tracking.{' '}
+        <strong>Units</strong> is what you ACCEPTED into stock; anything failing inward QC goes in <strong>Rejected</strong>
+        with a reason, and is counted alongside rather than deducted — so delivered = accepted + rejected.
       </p>
 
       {/* Lines */}
@@ -657,7 +665,7 @@ function FbuGrnPanel({ session, onSuccess }) {
         const variants     = line.product ? (PRODUCT_VARIANTS[line.product] || []) : [];
         const colorOptions = (line.product && line.variant) ? (PRODUCT_COLORS[line.product]?.[line.variant] || []) : [];
         return (
-          <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'end', marginBottom: 8 }}>
+          <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.8fr 0.8fr 1.4fr auto', gap: 8, alignItems: 'end', marginBottom: 8 }}>
             <div>
               {idx === 0 && <span style={label}>Product *</span>}
               <Combobox
@@ -693,7 +701,7 @@ function FbuGrnPanel({ session, onSuccess }) {
               </select>
             </div>
             <div>
-              {idx === 0 && <span style={label}>Units *</span>}
+              {idx === 0 && <span style={label}>Accepted *</span>}
               <input
                 style={inp}
                 type="number"
@@ -701,6 +709,29 @@ function FbuGrnPanel({ session, onSuccess }) {
                 value={line.units}
                 onChange={(e) => updateLine(idx, { units: e.target.value })}
                 placeholder="Qty"
+              />
+            </div>
+            <div>
+              {idx === 0 && <span style={label}>Rejected</span>}
+              <input
+                style={inp}
+                type="number"
+                min="0"
+                value={line.rejected}
+                onChange={(e) => updateLine(idx, { rejected: e.target.value })}
+                placeholder="0"
+                title="Units delivered but failed inward QC. Counted alongside Accepted, not deducted from it."
+              />
+            </div>
+            <div>
+              {idx === 0 && <span style={label}>Reject reason</span>}
+              <input
+                style={{ ...inp, opacity: (parseInt(line.rejected) || 0) > 0 ? 1 : 0.5 }}
+                type="text"
+                value={line.rejectReason}
+                disabled={!((parseInt(line.rejected) || 0) > 0)}
+                onChange={(e) => updateLine(idx, { rejectReason: e.target.value })}
+                placeholder={(parseInt(line.rejected) || 0) > 0 ? 'Why? (required)' : '—'}
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 1 }}>
