@@ -18,9 +18,14 @@ const LEAF_TYPES = ['attr', 'event', 'consent'];
 // Operator ids are the engine's AST vocabulary (eval_segment_node); the LABELS are what a
 // marketer reads — "gte" invites mis-picks, "at least" doesn't. before/within_days are the
 // migration-0022 relative-date ops (numeric days against a date attribute, e.g. last_order_at).
+// ⚠️ "is exactly" / "is not exactly", NOT "is" / "is not" (2026-08-13). S232 renamed these from
+// the raw ids to plain language, which was right, but "is" sitting in a list next to "at least"
+// and "more than" does not READ as equality — it was understood as "no equality operator exists"
+// and a request came in to add one that had been there since day one. The word "exactly" is the
+// whole point: it is the only label in the list that cannot be misread as a range.
 const OPS = [
-  { id: 'eq', label: 'is' },
-  { id: 'neq', label: 'is not' },
+  { id: 'eq', label: 'is exactly' },
+  { id: 'neq', label: 'is not exactly' },
   { id: 'in', label: 'is any of' },
   { id: 'gt', label: 'more than' },
   { id: 'gte', label: 'at least' },
@@ -49,7 +54,7 @@ const STATES = ['opted_in', 'opted_out', 'unknown'];
 // is indistinguishable from "no such customers". Cost: the "T-120 purchasers" segment read 0
 // when the real audience was 4,193 (2026-08-09). Always REPLACE the row on a type change.
 function blankRow(type) {
-  if (type === 'event') return { type: 'event', event: '', count: 1, within: '', whereProp: '', whereValue: '' };
+  if (type === 'event') return { type: 'event', event: '', count: 1, count_op: 'gte', within: '', whereProp: '', whereValue: '' };
   if (type === 'consent') return { type: 'consent', channel: 'email', purpose: 'marketing', state: 'opted_in' };
   return { type: 'attr', attr: '', op: 'eq', value: '' };
 }
@@ -68,7 +73,9 @@ const csvToArr = (s) => String(s || '').split(',').map((x) => x.trim()).filter(B
 
 // stored leaf → editor row
 function toRow(leaf) {
-  if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1, within: leaf.within || '',
+  if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1,
+    count_op: leaf.count_op || 'gte',   // absent === the legacy `>=`, matching eval_segment_node
+    within: leaf.within || '',
     whereProp: leaf.where?.prop || '',
     whereValue: Array.isArray(leaf.where?.value) ? leaf.where.value.join(', ') : (leaf.where?.value || '') };
   if (leaf && 'consent' in leaf) return { type: 'consent', channel: leaf.channel || 'email', purpose: leaf.purpose || 'marketing', state: leaf.state || 'opted_in' };
@@ -78,7 +85,14 @@ function toRow(leaf) {
 // editor row → stored leaf
 function toLeaf(row) {
   if (row.type === 'event') {
-    const o = { event: row.event, count: Number(row.count) || 1 };
+    // ⚠️ NOT `Number(row.count) || 1` — that turns a deliberate 0 into 1, which silently
+    // inverts "has never done this" into "has done this once". 0 is a legitimate count now
+    // that `=` and `≤` exist.
+    const n = Number(row.count);
+    const o = { event: row.event, count: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 1 };
+    // Emit count_op ONLY when it is not the legacy default, so re-saving an untouched old
+    // segment leaves its stored JSON byte-identical and `absent === gte` stays the one truth.
+    if (row.count_op && row.count_op !== 'gte') o.count_op = row.count_op;
     if (row.within && row.within.trim()) o.within = normalizeWithin(row.within);
     // Emit `where` ONLY when both halves are filled. A half-written filter is rejected
     // outright by eval_segment_node (deliberately loud — silently ignoring it would mail an
@@ -458,8 +472,23 @@ export default function SegmentsPage() {
                             emptyLabel="No matching event — check it is registered in comms.event_definitions"
                           />
                         </div>
-                        <span className="dim" style={{ fontSize: 12 }}>≥</span>
-                        <input className="f-inp mono" style={{ width: 64 }} type="number" min="1" value={r.count} onChange={(e) => setLeaf(i, { count: e.target.value })} disabled={saving || !canEdit} />
+                        {/* The count operator (2026-08-13). This was a STATIC `≥` glyph, so
+                            "ordered exactly once" could not be said on an event at all — the
+                            engine hardcoded `HAVING count(*) >= n` to match. `count_op` absent
+                            still means `≥`, so every segment saved before today is unchanged.
+                            NB min is 0, not 1: "= 0" and "≤ 0" are the useful "never did this"
+                            forms, and the engine handles zero by counting over ALL profiles
+                            rather than over event rows (a profile with no events has no row to
+                            group). Under `≥` a 0 is meaningless but harmless — it resolves to
+                            the legacy path, i.e. "has the event at all". */}
+                        <select className="f-inp mono" style={{ width: 62, textAlign: 'center' }}
+                          value={r.count_op || 'gte'} disabled={saving || !canEdit}
+                          onChange={(e) => setLeaf(i, { count_op: e.target.value })}>
+                          <option value="gte">≥</option>
+                          <option value="eq">=</option>
+                          <option value="lte">≤</option>
+                        </select>
+                        <input className="f-inp mono" style={{ width: 64 }} type="number" min="0" value={r.count} onChange={(e) => setLeaf(i, { count: e.target.value })} disabled={saving || !canEdit} />
                         <span className="dim" style={{ fontSize: 12 }}>within last</span>
                         <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => setLeaf(i, { within: e.target.value })} placeholder="120 days (opt)" disabled={saving || !canEdit} />
                         {/* Echo what a bare number will actually be saved as — the old field read
