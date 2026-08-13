@@ -103,6 +103,44 @@ function mockDb({ cqhOk = true, cqhRows = Object.values(ROWS), settings = {} } =
     assert.notStrictEqual(g.reason, 'quiet_hours');
   });
 
+  // ── S274 'service' purpose (CSAT) ─────────────────────────────────────────────
+  // 'service' sits BETWEEN marketing and utility; getting either half wrong is a real
+  // customer-facing defect, so both halves are pinned. NB these assert which BRANCHES are
+  // entered, not what a given wall-clock hour yields — runGate has no injectable clock, so
+  // a direct 'quiet_hours' assertion would pass or fail depending on when it is run.
+  // Forcing the quiet-hours read to fail is a clock-independent probe: the distinctive
+  // 'gate_error:quiet_hours' can only appear if the branch actually ran.
+  await t('service ENTERS the quiet-hours branch — it must not behave like utility', async () => {
+    mockDb({ cqhOk: false });
+    const g = await runGate({}, { profileId: 'P', channel: 'sms', purpose: 'service', to: '+919000000000' });
+    assert.strictEqual(g.reason, 'gate_error:quiet_hours');
+  });
+  await t('utility still SKIPS the quiet-hours branch (control for the test above)', async () => {
+    mockDb({ cqhOk: false });
+    const g = await runGate({}, { profileId: 'P', channel: 'sms', purpose: 'utility', to: '+919000000000' });
+    assert.notStrictEqual(g.reason, 'gate_error:quiet_hours');
+  });
+  await t('service does NOT require marketing consent — it must not behave like marketing', async () => {
+    mockDb({});
+    // Consent is consulted only on the marketing path. If a service send could come back
+    // 'no_consent', support customers who never opted into marketing would silently never
+    // be surveyed and the CSAT score would be biased to the opted-in subset.
+    const g = await runGate({}, { profileId: 'P', channel: 'email', purpose: 'service', to: 'c@gmail.com' });
+    assert.notStrictEqual(g.reason, 'no_consent');
+  });
+  await t('service does NOT consume the M9 send budget', async () => {
+    const base = A.sbComms;
+    mockDb({});
+    const inner = A.sbComms;
+    A.sbComms = async (path, ...rest) =>
+      path.includes('consume_send_budget') ? { ok: true, data: false } : inner(path, ...rest);
+    const svc = await runGate({}, { profileId: 'P', channel: 'email', purpose: 'service', to: 'c@gmail.com' });
+    const mkt = await runGate({}, { profileId: 'P', channel: 'email', purpose: 'marketing', to: 'c@gmail.com' });
+    A.sbComms = base;
+    assert.notStrictEqual(svc.reason, 'budget_exhausted');   // service is exempt
+    assert.strictEqual(mkt.reason, 'budget_exhausted');      // marketing still consumes it
+  });
+
   // ── park boundary parity ──────────────────────────────────────────────────────
   await t('the minute helper matches the hour helper on an exact hour', async () => {
     const now = Date.UTC(2026, 7, 9, 15, 30, 0);   // 21:00 IST

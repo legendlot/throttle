@@ -164,6 +164,21 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   // budget: a test must verify rendering + delivery on demand, and it is already locked
   // to internal/test recipients by 0a — there is no customer to protect from it.
   const isMarketing = purpose === 'marketing' && !isTest;
+  // S274 — 'service': a message the CUSTOMER'S OWN action triggered, sent to the person who
+  // just interacted with us (the CSAT survey after an agent closes their conversation). It is
+  // deliberately its own purpose rather than reusing either neighbour:
+  //   · NOT 'marketing' — marketing demands opted_in consent, so a support customer who never
+  //     opted into marketing would silently never be surveyed, which biases the score toward
+  //     the marketing-consenting subset. It would also burn M9 send budget meant for campaigns
+  //     and compete with them under the 3/day frequency cap.
+  //   · NOT 'utility'/'transactional' — those bypass quiet hours outright, and 14.5% of WhatsApp
+  //     conversation closes land between 21:00 and 01:00 IST (measured 2026-08-13, 601 of 4,140).
+  //     Surveying someone at midnight is worse than not surveying them.
+  // So: bypasses consent + frequency cap + send budget, RESPECTS quiet hours and (like every
+  // purpose, without exception) suppression. Journey sends defer-and-retry at the quiet-hours
+  // boundary rather than dropping, so those 601 are delayed to the morning, not lost.
+  const isService = purpose === 'service' && !isTest;
+  const quietHoursApply = isMarketing || isService;
   if (isMarketing) {
     // 2. consent — marketing requires opted_in
     const state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
@@ -180,6 +195,9 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
       if (cnt.data.length >= Number(s.frequency_cap_per_day || 3))
         return { pass: false, reason: 'freq_cap' };
     }
+  }
+
+  if (quietHoursApply) {
     // 4. quiet hours. Journey sends defer-and-retry at the boundary (journey-workflow);
     //    everything else surfaces the skip. ALLOWLISTED recipients (test_mode_allow —
     //    internal staff + test numbers, super-admin-managed) BYPASS quiet hours entirely,
@@ -189,11 +207,13 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
     //    S268: the window is now PER CHANNEL (a null window means the channel is exempt —
     //    email, by decision). The allowlist bypass and the skip reason are unchanged, so
     //    journey defer-and-retry keys off exactly the same signal as before.
+    // NB read `settings` directly, not the `s` alias — that alias is scoped to the
+    // marketing block above, and quiet hours now also serves 'service' sends (S274).
     const cqh = await getChannelQuietHours(env);
     if (!cqh.ok) return { pass: false, reason: 'gate_error:quiet_hours' };
-    const win = resolveQuietWindow(cqh.rows, channel, s);
+    const win = resolveQuietWindow(cqh.rows, channel, settings);
     if (win && inQuietWindow(win.startMin, win.endMin, istMinutes())
-        && !testModeAllows(to, s.test_mode_allow))
+        && !testModeAllows(to, settings.test_mode_allow))
       return { pass: false, reason: 'quiet_hours' };
   }
 

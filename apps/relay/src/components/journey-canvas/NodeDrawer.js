@@ -135,6 +135,7 @@ export default function NodeDrawer({ nodeId, config, templates, senders, onChang
           <select className="f-inp" value={config.purpose || 'marketing'} disabled={disabled}
             onChange={(e) => set({ purpose: e.target.value })}>
             <option value="marketing">marketing</option>
+            <option value="service">service — respects quiet hours, no consent needed</option>
             <option value="transactional">transactional</option>
             <option value="utility">utility</option>
           </select>
