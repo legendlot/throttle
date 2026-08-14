@@ -97,25 +97,65 @@ t('a URL button whose {{1}} is NOT trailing is caught (passes review, dead link)
   assert.ok(codes(r).includes('button_var_not_trailing'));
 });
 
-t('a URL button with {{1}} but no example is caught', () => {
-  // ⚠️ The mapping slot must carry NO `example` — this fixture was copy-pasted from the
-  // button_var_not_trailing test above and kept its `example: 'abc'`, which satisfies
-  // `hasExample`, so the rule correctly did not fire and this test failed from the day it
-  // was written. The RULE was always right; the test was asserting the wrong scenario.
+t('a URL button with {{1}} and no example anywhere is NOT blocked', () => {
+  // Was `button_no_example`. buildComponents() now falls back to DEFAULT_URL_EXAMPLE_SUFFIX for
+  // every {{n}} URL button, so an absent example cannot reach Meta and blocking on it would only
+  // stop templates that serialise fine — the Pruthvi 2026-08-05 failure mode.
   const r = lintWaTemplate(good({
     buttons: [{ type: 'URL', text: 'Pay now', url: 'https://x.com/pay/{{1}}' }],
     mapping: [...good().mapping, { component: 'button', index: 0, token: 'link' }],
   }));
-  assert.ok(codes(r).includes('button_no_example'));
+  assert.ok(!codes(r).includes('button_no_example'));
+  assert.ok(!codes(r).includes('button_example_is_url'));
 });
 
-t('...and is NOT raised when the example rides on the mapping slot', () => {
-  // the other half of the pair, which is what the broken fixture was accidentally testing
+t('an example holding the DESTINATION url is caught', () => {
+  // `Freedom to Play Sale_15Aug`, 2026-08-14: "example" reads like "where the link goes", so the
+  // collections url went in the slot. The suffix is appended to https://<host>/r/, so that
+  // serialises to https://lottoys.in/r/https://www.legendoftoys.com/collections/all.
   const r = lintWaTemplate(good({
-    buttons: [{ type: 'URL', text: 'Pay now', url: 'https://x.com/pay/{{1}}' }],
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
+    mapping: [...good().mapping, {
+      component: 'button', index: 0, token: 'link',
+      example: 'https://www.legendoftoys.com/collections/all',
+    }],
+  }));
+  assert.ok(codes(r).includes('button_example_is_url'));
+});
+
+t('a mapping token with no matching variable is caught', () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
+    mapping: [...good().mapping, { component: 'button', index: 0, token: 'link', example: 'abc' }],
+  }), [{ token: 'something_else', source: 'constant', value: 'x' }]);
+  assert.ok(codes(r).includes('mapping_token_undeclared'));
+});
+
+t("a source:'system' variable naming a field the send context never sets is caught", () => {
+  // The real one: token `first` declared source:'system'. renderWhatsapp always passes system:{},
+  // so it resolves for nobody and EVERY send throws unresolved_variables — silent until send,
+  // and on a broadcast that is the whole campaign at once.
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
+    mapping: [...good().mapping, { component: 'button', index: 0, token: 'first', example: 'abc' }],
+  }), [{ token: 'first', field: 'first', source: 'system' }]);
+  assert.ok(codes(r).includes('variable_system_unknown'));
+});
+
+t("...but a source:'system' variable WITH a fallback is fine", () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
+    mapping: [...good().mapping, { component: 'button', index: 0, token: 'first', example: 'abc' }],
+  }), [{ token: 'first', field: 'first', source: 'system', fallback: 'there' }]);
+  assert.ok(!codes(r).includes('variable_system_unknown'));
+});
+
+t('omitting variables entirely skips the cross-check (back-compat)', () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
     mapping: [...good().mapping, { component: 'button', index: 0, token: 'link', example: 'abc' }],
   }));
-  assert.ok(!codes(r).includes('button_no_example'));
+  assert.ok(!codes(r).includes('mapping_token_undeclared'));
 });
 
 t('a mapping slot against a STATIC url button is caught (S241 send failure)', () => {

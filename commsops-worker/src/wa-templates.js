@@ -463,7 +463,7 @@ async function waSubmitTemplate(env, body) {
   // author iterates blind. Every rule in the linter is one we have already paid for or a
   // published limit, so failing here is strictly cheaper than failing at Meta.
   // `force: true` is the deliberate escape hatch for a rule we believe has gone stale — logged.
-  const lint = LINT.lintWaTemplate(content);
+  const lint = LINT.lintWaTemplate(content, Array.isArray(tpl.variables) ? tpl.variables : undefined);
   if (!lint.ok && body.force !== true) {
     // The linter's whole value is its `detail` text — "meta_name must be lowercase a-z…" tells
     // the author exactly what to change. It was being dropped: the app surfaces `error` and

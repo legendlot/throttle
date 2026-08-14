@@ -27,7 +27,14 @@ const LIMIT = { body: 1024, headerText: 60, footer: 60, buttonText: 25, name: 51
 
 const placeholders = (s) => [...String(s || '').matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
 
-function lintWaTemplate(content = {}) {
+// The ONLY keys send.js ever puts in the `system` render context (src/send.js — `sys`), and it is
+// empty entirely on the WhatsApp path. A `source:'system'` variable naming anything else can never
+// resolve, on any recipient, so it is a guaranteed send failure rather than a risk.
+const SYSTEM_FIELDS = new Set(['unsubscribe_url']);
+
+// `variables` is OPTIONAL: pass the template row's variables to enable the mapping↔variable
+// cross-check, omit it to lint `content` alone (what most callers and every older test do).
+function lintWaTemplate(content = {}, variables) {
   const errors = [];
   const warnings = [];
   const err = (code, detail) => errors.push({ code, detail });
@@ -184,12 +191,24 @@ function lintWaTemplate(content = {}) {
       // button 0 — harmless for the single-URL-button templates we author, and a real
       // multi-button mapping must carry an explicit `index` for either path to address it.
       const btnSlots = mapping.filter((m) => (m.component || 'body') === 'button');
-      const hasExample = b.example != null
-        || b.example_suffix != null
-        || btnSlots.find((s) => Number(s.index ?? 0) === i)?.example != null;
-      if (vars.length === 1 && !hasExample) {
-        err('button_no_example', `URL button ${i + 1} carries {{1}} but has no example. Meta requires `
-          + 'a fully-substituted sample url — set the button example, or give its mapping slot one.');
+      // NB there is no longer a "no example" error to raise: buildComponents() falls back to
+      // DEFAULT_URL_EXAMPLE_SUFFIX for every {{n}} URL button, so an absent example is now
+      // impossible by construction. Keeping the old check would block templates that serialise
+      // perfectly well — the exact failure this block was rewritten to end (Pruthvi 2026-08-05).
+      //
+      // What IS still worth catching is the opposite mistake, because "example" reads like
+      // "where the link goes": putting the DESTINATION url in the slot. The suffix is appended
+      // to `https://<host>/r/`, so a full url yields the nested
+      // `https://lottoys.in/r/https://www.legendoftoys.com/collections/all` — malformed, and a
+      // needless rejection risk on a template that is otherwise correct. Found on
+      // `Freedom to Play Sale_15Aug` (2026-08-14), authored the evening before the sale.
+      const effSuffix = b.example_suffix
+        ?? btnSlots.find((s) => Number(s.index ?? 0) === i)?.example
+        ?? b.example;
+      if (vars.length === 1 && effSuffix != null && String(effSuffix).includes('://')) {
+        err('button_example_is_url', `URL button ${i + 1}'s example is a full url `
+          + `("${String(effSuffix).slice(0, 60)}"). It is only the part that goes AFTER the static `
+          + 'base, so a url here produces a nested, malformed sample. Use the code suffix alone.');
       }
       const mappedBtn = mapping.some((m) => m.component === 'button');
       // A mapping slot against a STATIC button is rejected at SEND time (the S241 finding).
@@ -203,6 +222,32 @@ function lintWaTemplate(content = {}) {
       }
     }
   });
+
+  // ── mapping ↔ variables (only when the caller supplied variables) ───────────────────
+  // render.js throws `unresolved_variables:<token>` and FAILS THE SEND for any mapping slot whose
+  // token has no resolved value. That is invisible until the first send, and on a broadcast it is
+  // invisible for every recipient at once — `Freedom to Play Sale_15Aug` would have failed 100% of
+  // its sends on a button slot bound to token `first` declared `source:'system'`, which the
+  // WhatsApp path always renders with an empty system context. Both checks below can only fire
+  // where the send is already certain to throw.
+  if (Array.isArray(variables)) {
+    const byToken = new Map(variables.map((v) => [v.token, v]));
+    for (const m of mapping) {
+      if (!m.token) continue;
+      const v = byToken.get(m.token);
+      if (!v) {
+        err('mapping_token_undeclared', `Mapping slot "${m.token}" has no matching variable, so it `
+          + 'can never resolve — every send fails with unresolved_variables.');
+        continue;
+      }
+      const hasFallback = v.fallback !== undefined && v.fallback !== null;
+      if (v.source === 'system' && !SYSTEM_FIELDS.has(v.field || v.token) && !hasFallback) {
+        err('variable_system_unknown', `Variable "${m.token}" is source:'system' with field `
+          + `"${v.field || v.token}", which the send context never provides (only `
+          + `${[...SYSTEM_FIELDS].join(', ')}). It can never resolve — every send fails.`);
+      }
+    }
+  }
 
   // ── advisory ────────────────────────────────────────────────────────────────────────
   if (category === 'MARKETING' && !/stop|unsubscribe|opt.?out/i.test(footer + body)) {
