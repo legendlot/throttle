@@ -30,11 +30,15 @@ export function ChannelChip({ channel }) {
 }
 
 /* ---- Badge ----------------------------------------------------------- */
-export function Badge({ label, tone = 'gray', dot = false, soft = true }) {
+// `title` is the hover explanation. Added 2026-08-14 for the "out of date" member badge: a
+// badge that says a count is wrong is only half the message — the reader needs to know why and
+// what to do, and there is no room for that in a pill.
+export function Badge({ label, tone = 'gray', dot = false, soft = true, title }) {
   const t = TONES[tone] || TONES.gray;
   return (
-    <span className="badge" style={{
+    <span className="badge" title={title} style={{
       background: soft ? t.bg : 'transparent', color: t.fg, border: `1px solid ${t.bd}`,
+      cursor: title ? 'help' : undefined,
     }}>
       {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.solid, flexShrink: 0 }} />}
       {label}

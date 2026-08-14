@@ -517,11 +517,19 @@ async function handleGet(url, auth, env) {
     }
     case 'getSegment': {
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
-      const [s, mc] = await Promise.all([
+      // ⚠️ member_count comes from segments_list (count(*) SQL-side), NOT from reading the rows
+      // and taking .length. That is what this did until 2026-08-14, and PostgREST caps EVERY
+      // response at db-max-rows = 5,000 with no error and no header (CORE.md S275) — so any
+      // segment over 5,000 reported exactly 5,000 and looked plausible. "T-90 purchasers" hit
+      // 6,091 members the same day, which would have shown as 5,000 on the detail page while the
+      // LIST showed the true figure, since the list already used this RPC. Two screens, two
+      // numbers, neither flagged. segments_list returns ONE aggregated jsonb row, so no cap.
+      const [s, list] = await Promise.all([
         A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}&select=*&limit=1`, env),
-        A.sbComms(`/rest/v1/segment_members?segment_id=eq.${A.enc(id)}&select=profile_id`, env),
+        A.sbComms('/rest/v1/rpc/segments_list', env, { method: 'POST', body: JSON.stringify({}) }),
       ]);
-      return ok({ segment: s.data?.[0] || null, member_count: Array.isArray(mc.data) ? mc.data.length : 0 });
+      const row = Array.isArray(list.data) ? list.data.find((x) => String(x.id) === String(id)) : null;
+      return ok({ segment: s.data?.[0] || null, member_count: Number(row?.member_count ?? 0) });
     }
     case 'getSegmentMembers': {        // S263 — who is actually in this segment
       // Same segment_manage gate as previewSegment: this returns addresses, so relay_view

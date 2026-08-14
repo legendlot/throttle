@@ -202,20 +202,38 @@ function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, onPatch, onRemove
   );
 }
 
-function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', items: [], tooDeep: false, member_count: null, materialized_at: null }; }
+function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', items: [], tooDeep: false, member_count: null, materialized_at: null, updated_at: null }; }
 
 // A dynamic segment's member_count is COUNT(segment_members) — so a segment nobody has ever
 // refreshed counts 0, which rendered as a bare "0" and read as "this audience is empty".
 // "Winback 90 — Email" showed 0 against a live rule matching 25,084. `materialized_at`
 // (migration comms_segment_materialized_at_v1, NULL = never) is what separates the two.
 // Static segments are the opposite case: membership is an explicit list, so 0 IS the answer.
-function memberState(kind, memberCount, materializedAt) {
+// THREE states, not two. The third was added 2026-08-14 after it was reported as a data
+// mismatch: a count that was correct when it ran, but whose RULE has been edited since.
+//
+// Mishica refreshed "T-90 purchasers" at 05:15:19 (1,820 members), edited the rule 75 seconds
+// later at 05:16:34, and then read a badge saying 1,820 next to a Preview saying 6,086. Both
+// numbers were right — Preview evaluates the CURRENT rule live, the badge reports the last
+// materialize — but nothing on screen said the badge predated the edit, so the only available
+// reading was "the two disagree". Comparing it against another segment then made it look worse
+// still: T-90 appeared SMALLER than T-30, which for a 90-day-vs-30-day superset is impossible.
+//
+// ⚠️ Do not "fix" this by hiding the count or by auto-materializing on edit. Materializing a
+// 25k segment is real work and must stay an explicit action (see the getSegments comment).
+// Naming the staleness is the fix.
+function memberState(kind, memberCount, materializedAt, updatedAt) {
   if (kind !== 'dynamic') return { text: memberCount != null ? Number(memberCount).toLocaleString('en-IN') : '—', stale: false };
   if (!materializedAt) {
     return { text: 'Not counted', stale: true,
       title: 'This rule has never been counted. The number of people it matches is unknown — it is NOT zero. Open the segment and press "Refresh members".' };
   }
-  return { text: Number(memberCount || 0).toLocaleString('en-IN'), stale: false,
+  const n = Number(memberCount || 0).toLocaleString('en-IN');
+  if (updatedAt && new Date(updatedAt) > new Date(materializedAt)) {
+    return { text: `${n} (out of date)`, stale: true,
+      title: `The rule was edited on ${fmtDateTime(updatedAt)}, AFTER this count was taken on ${fmtDateTime(materializedAt)} — so ${n} describes the OLD rule, not the one shown. Press "Refresh members" to recount. Sending is unaffected: a campaign re-counts the segment before it sends.` };
+  }
+  return { text: n, stale: false,
     title: `As of ${fmtDateTime(materializedAt)}. A dynamic rule is re-evaluated on every send, so the live audience may differ — press "Refresh members" to recount.` };
 }
 
@@ -273,12 +291,12 @@ export default function SegmentsPage() {
   useNewParam(canEdit, startNew);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
-    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, items: parsed.items, tooDeep: parsed.tooDeep, member_count: null, materialized_at: r.materialized_at ?? null });
+    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, items: parsed.items, tooDeep: parsed.tooDeep, member_count: null, materialized_at: r.materialized_at ?? null, updated_at: r.updated_at ?? null });
     setPv(null);
     setView('form');
     try {
       const d = await garageFetch('getSegment', { id: r.id }, session);
-      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null }));
+      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null, updated_at: d.segment.updated_at ?? s.updated_at }));
     } catch { /* non-fatal */ }
   }
   // Fetch property options for every event named in the rule, once each. Failure is
@@ -336,6 +354,10 @@ export default function SegmentsPage() {
       const r = await workerFetch('saveSegment', payload, session);
       const saved = r?.data;
       if (saved?.id && !seg.id) set('id', saved.id);
+      // Stamp the edit locally so the member badge flips to "out of date" the instant the rule
+      // is saved. That is precisely the moment the old count stops describing the rule on
+      // screen, and waiting for a reload to say so is what made this read as a data mismatch.
+      setSeg((s) => ({ ...s, updated_at: saved?.updated_at || new Date().toISOString() }));
       showToast(seg.id ? 'Segment saved' : 'Segment created', 'success');
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
@@ -414,10 +436,17 @@ export default function SegmentsPage() {
           <div className="po-head-l">
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to segments</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{seg.id ? (seg.name || 'Segment') : 'New Segment'}</span>
-            {/* Never show a bare "0 members" for a rule nobody has counted — see memberState(). */}
+            {/* Never show a bare "0 members" for a rule nobody has counted — see memberState().
+                And never show a bare count for a rule edited SINCE that count: this is the badge
+                that was read as a data mismatch on 2026-08-14, because it sat next to a live
+                Preview of the new rule with nothing to say it described the old one. */}
             {seg.kind === 'dynamic' && seg.id && !seg.materialized_at
               ? <Badge label="Not counted" tone="gray" dot />
-              : (seg.member_count != null && <Badge label={`${seg.member_count} members`} tone="blue" dot />)}
+              : (seg.member_count != null && (() => {
+                  const ms = memberState(seg.kind, seg.member_count, seg.materialized_at, seg.updated_at);
+                  return <Badge label={ms.stale ? `${seg.member_count} members — out of date` : `${seg.member_count} members`}
+                                tone={ms.stale ? 'orange' : 'blue'} dot title={ms.title} />;
+                })())}
           </div>
           <div className="po-head-r">
             {seg.id && seg.kind === 'dynamic' && canEdit && <Btn onClick={refreshMembers} disabled={materializing}><RefreshCw size={14} /> {materializing ? 'Refreshing…' : 'Refresh members'}</Btn>}
@@ -649,7 +678,7 @@ export default function SegmentsPage() {
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
                         <td className="dim">{r.kind === 'static' ? '—' : (nConds === 0 ? 'everyone' : `${nConds} · match ${p.group}`)}</td>
                         {(() => {
-                          const ms = memberState(r.kind, r.member_count, r.materialized_at);
+                          const ms = memberState(r.kind, r.member_count, r.materialized_at, r.updated_at);
                           return (
                             <td className={ms.stale ? 'num dim' : 'num mono'} title={ms.title}>
                               {ms.text}
