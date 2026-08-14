@@ -105,7 +105,14 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
   const rmMap = (i) => setWa({ ...c, mapping: mapping.filter((_, j) => j !== i) });
 
   const buttons = Array.isArray(c.buttons) ? c.buttons : [];
-  const setBtn = (i, k, v) => set('buttons', buttons.map((b, j) => (j === i ? { ...b, [k]: v } : b)));
+  // `undefined` DELETES the key rather than storing it. JSON.stringify would drop an undefined
+  // value on the way to the worker anyway, but relying on that means the in-memory object and the
+  // saved one disagree — and `target_base` is read as a plain truthiness check in three places.
+  const setBtn = (i, k, v) => set('buttons', buttons.map((b, j) => {
+    if (j !== i) return b;
+    if (v === undefined) { const { [k]: _drop, ...rest } = b; return rest; }
+    return { ...b, [k]: v };
+  }));
   const addBtn = () => set('buttons', [...buttons, { type: 'QUICK_REPLY', text: '' }]);
   const rmBtn = (i) => set('buttons', buttons.filter((_, j) => j !== i));
 
@@ -242,6 +249,58 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
                   {!disabled
                     ? <button className="dr-close" onClick={() => rmBtn(i)} title="Remove"><Trash2 size={14} /></button>
                     : <span />}
+                  {/* ── Link tracking (S279) ────────────────────────────────────────────────
+                      `target_base` is the ONLY way a url button can be tracked, and until now it
+                      was settable nowhere in this app — not a field, not a toggle, not mentioned.
+                      So a campaign could be built with the UTM panel filled in and every link
+                      still went out untagged, which is exactly what happened to
+                      "Freedom to Play Sale_14 Aug": 3,528 sent, 0 clicks, 0 attributed revenue.
+                      It is authoring-side only and is NEVER sent to Meta — the send path swaps the
+                      button parameter for a freshly minted /r/<code> per recipient. */}
+                  {b.type === 'URL' && (
+                    <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 6,
+                                  padding: '10px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                        <input type="checkbox" disabled={disabled}
+                          checked={!!b.target_base}
+                          onChange={(e) => setBtn(i, 'target_base', e.target.checked ? (b.url || '') : undefined)} />
+                        <span>Track clicks on this button</span>
+                      </label>
+                      {b.target_base ? (
+                        <>
+                          <div className="kv-k">Where it should actually send people</div>
+                          <input className="f-inp mono" value={b.target_base || ''}
+                            onChange={(e) => setBtn(i, 'target_base', e.target.value)}
+                            disabled={disabled} placeholder="https://www.legendoftoys.com/collections/all" />
+                          <div className="dim" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                            Put <span className="mono">https://lottoys.in/r/{'{{1}}'}</span> in the button address above
+                            when you submit this template to Meta, and the real destination here. Each person then gets
+                            their own link, so clicks and revenue can be counted.
+                            {' '}Keep <span className="mono">{'{{1}}'}</span> in this field only if the destination
+                            changes per person (a product page, a cart) — otherwise leave it out.
+                          </div>
+                          {!/^https?:\/\//i.test(String(b.target_base || '')) && (
+                            <div style={{ fontSize: 11.5, color: 'var(--red)' }}>
+                              Needs to be a full address starting http:// or https:// — anything else is dropped and the
+                              button will not be tracked.
+                            </div>
+                          )}
+                          {/^https?:\/\//i.test(String(b.url || '')) && !/\/r\/\{\{1\}\}/.test(String(b.url || '')) && (
+                            <div style={{ fontSize: 11.5, color: 'var(--accent)' }}>
+                              Heads up: the button address above is still
+                              {' '}<span className="mono">{b.url}</span>. Tracking only works once Meta has approved this
+                              template with <span className="mono">https://lottoys.in/r/{'{{1}}'}</span> as the address.
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="dim" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                          Off means this button&rsquo;s clicks cannot be counted and nothing it drives can be
+                          attributed &mdash; UTM settings on the campaign will have no effect on it.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

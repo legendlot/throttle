@@ -325,7 +325,13 @@ async function send(env, opts) {
       // what is minted is the link, what is tagged is the attribution.
       //
       // Zero cost until a template opts in: the settings read only happens when a button on THIS
-      // template actually carries `target_base`, so today it never fires at all.
+      // template actually carries `target_base`.
+      // ⚠️ The line that used to end this comment — "so today it never fires at all" — was TRUE
+      // when written and is long stale (corrected 2026-08-14). It fires constantly: 9 templates
+      // are opted in, 9,124 recipient links minted and 2,070 clicks recorded all time, and every
+      // live journey carrying a url button is on a tracked template. The gap is CAMPAIGNS, which
+      // were never migrated — "Freedom to Play Sale_14 Aug" went out on a raw
+      // legendoftoys.com/collections/all button and recorded 0 clicks and 0 attributed revenue.
       if (body.mode === 'template' && body.template?.components
           && (template.content?.buttons || []).some((b) => b?.target_base)) {
         const linkBase = await LINKS.getLinkBaseUrl(env);
