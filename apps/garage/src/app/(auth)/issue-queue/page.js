@@ -387,13 +387,28 @@ export default function IssueQueuePage() {
             ensureMaterialCache(),
             ensureStockCache(),
           ]);
-          const lines = (woParts || []).map((p) => ({
-            part_code: p.part_code,
-            part_name: p.part_name,
-            product:   wo.product,
-            required:  p.qty_requested,
-            available: stock[p.part_code] || 0,
-          }));
+          // A request can list the same part on more than one line (12 existing
+          // work orders do). They are summed into one row here for two reasons:
+          // the store wants one figure to issue against a part, and the scanner's
+          // pick line is already the sum (store.start_wo_pick groups by
+          // part_code), so leaving them split would show two rows both pre-filled
+          // with the whole scanned quantity — issuing double.
+          const byPart = new Map();
+          (woParts || []).forEach((p) => {
+            const existing = byPart.get(p.part_code);
+            if (existing) {
+              existing.required += Number(p.qty_requested) || 0;
+            } else {
+              byPart.set(p.part_code, {
+                part_code: p.part_code,
+                part_name: p.part_name,
+                product:   wo.product,
+                required:  Number(p.qty_requested) || 0,
+                available: stock[p.part_code] || 0,
+              });
+            }
+          });
+          const lines = [...byPart.values()];
           setSelectedItem({ ...row, wo, lines });
           // FEAT-021 — an ad-hoc request may have been picked by bag scan on the
           // Store Issue station. Pull what was scanned so the quantities below
