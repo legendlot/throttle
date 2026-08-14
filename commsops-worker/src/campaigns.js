@@ -9,24 +9,27 @@ const { pickVariant } = require('./variants.js');
 
 // Recipients handled per consumer invocation (~8 subrequests each).
 //
-// ⚠️ THIS IS THE CAMPAIGN THROUGHPUT DIAL, and it is latency-bound, not limit-bound. Each queue
-// hop costs ~18s of round-trip regardless of page size, so the send rate is very nearly
-// SENDS_PER_MSG × 200/hour. It sat at 4 (≈800/hour) because it was sized against the
-// **Cloudflare FREE-plan 50-subrequest ceiling** — 4 × 8 = 32, "safely under 50". LOT is on
-// Paid, where the ceiling is 10,000 (CORE.md), so that reasoning had been obsolete for months
-// and cost ~20× of unused throughput. The old comment said "→ safe" without naming the number
-// it was safe against, which is why it survived so long.
+// ⚠️ THIS IS NOT THE THROUGHPUT DIAL. Raising it 4 → 12 on 2026-08-14, mid-flight on a live
+// broadcast, moved the rate from 796/hour to 858 — i.e. not at all. Do not reach for it again
+// expecting more sends; it was believed to carry "~20× headroom" for months and it does not.
 //
-// Raised 4 → 12 on 2026-08-14 mid-flight, on the Independence Day broadcast: at 4 it would have
-// reached ~3,810 of 7,971 before WhatsApp quiet hours at 22:00 and written the other ~4,160 off
-// as skipped, while the campaign read `sent`. 12 ≈ 2,400/hour finishes inside the window.
+// It sat at 4 because it was sized against the **Cloudflare FREE-plan 50-subrequest ceiling**
+// (4 × 8 = 32, "safely under 50"). LOT is on Paid, where the ceiling is 10,000, so that
+// reasoning was obsolete — but removing a false limit is not the same as finding the real one,
+// and that is the mistake this comment exists to stop the next person repeating. The old
+// comment said "→ safe" without naming what it was safe against, which is how it survived.
 //
-// Ceilings that actually bind, for whoever raises this next:
-//   · subrequests — 12 × 8 = ~96 against 10,000. Not close.
-//   · Meta tier   — 100k/24h ≈ 4,166/hour sustained, i.e. SENDS_PER_MSG ≈ 20 is the real roof.
-//   · Workers CPU — awaited fetches are not CPU time, so the 30s budget is not the constraint.
-// The page is sent SERIALLY (`for … await send`), so a bigger page is a longer invocation, not
-// more concurrency. Step it, measure the delivered rate, and do not jump straight to 20.
+// WHAT ACTUALLY BINDS, measured off per-send timestamps: sends are spaced a near-constant
+// ~4.02s, with a ~5.4s gap every SENDS_PER_MSG sends (the page boundary). So the queue hop
+// costs ~5s ONCE PER PAGE against 12 × 4.02 ≈ 48s of work — it is noise. The constraint is
+// ~4 SECONDS OF SERIAL WORK PER RECIPIENT: the loop below is `for … await send`, one recipient
+// fully completing before the next starts, each ~8 sequential subrequests (render → gate →
+// dedup reserve → provider → status write) at roughly 500ms apiece. The arithmetic closes both
+// ways: 4 × 4.02 + hop ≈ 17s per 4 = 14/min; 12 × 4.02 + hop ≈ 53s per 12 = 14/min.
+//
+// The real lever is CONCURRENCY INSIDE THE PAGE (parallel batches), which scales near-linearly.
+// ⚠️ Cap it at 4–6 concurrent, NOT at the page size: Meta's tier (100k/24h ≈ 4,166/hour) binds
+// there, and overshooting hammers a provider on live customer sends. Not built — BACKLOG [relay].
 const SENDS_PER_MSG = 12;
 const nowIso = () => new Date().toISOString();
 
