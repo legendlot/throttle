@@ -43,17 +43,56 @@ async function loadTaxonomy(env) {
 const CATEGORY_PRECEDENCE = ['L.O.T Build', 'L.O.T DIY', 'L.O.T Cars'];
 
 // Pure classifier — titles: string (comma-list) or array. Returns a category or null.
+//
+// TWO stages, in this order — the second only runs for a title the first could not place:
+//
+//  ① PRODUCT NAME in the title. The primary bridge, and exact when it hits.
+//  ② CATEGORY NAME in the title (2026-08-14). The storefront states the category in the title
+//     itself — "L.O.T Build - Garage" — so when the ERP product name is absent we can still read
+//     the category the shop already declared, from product_master's own category strings.
+//
+// ⚠️ Why ② had to exist: stage ① assumes the storefront title CONTAINS the ERP product name, and
+// for the whole L.O.T Build catalogue it does not. The shop sells "L.O.T Build - Garage"; the ERP
+// product is "Wooden Garage". Colosseum worked only because the two names happen to coincide. So
+// five Build products classified as null — and null routes to the journey's DEFAULT branch, which
+// is the Cars voice: Pruthvi got the Cars Browse-Abandonment template for a wooden garage
+// (#bugs 1786646144.038279). Measured 2026-08-14 over 30 days: Garage 330 events, Harry Potter 48,
+// Albus Dumbledore 18, Hermione Granger 12, Rubeus Hagrid 10 — every one 100% unclassified, and
+// every one L.O.T Build. Renaming the ERP product to match the shop was the alternative and is far
+// worse: a product rename has to sweep material_master, bom_register, stock_ledger and three line
+// tables (RULE-TAXONOMY-001, the S231 HP-rename miss), and "Garage" is too generic a name to match on.
+//
+// ⚠️ This is NOT the title-prefix hack the header rejects, for two reasons that must both hold if
+// anyone extends this: it runs ONLY as a fallback (a title stage ① placed is never re-examined, so
+// no currently-correct answer can change), and the tokens come from product_master.category, not
+// from a hardcoded list. Verified against all 30 days of distinct titles: it newly resolves exactly
+// the five Build products above and changes nothing else. "Gift Wrapping" and "House Crest Edition"
+// stay null, which is correct — the first is an add-on, the second is genuinely unregistered.
 function classifyTitles(titles, taxonomy) {
   const list = (Array.isArray(titles) ? titles : String(titles || '').split(','))
     .map((t) => String(t || '').toLowerCase().trim()).filter(Boolean);
   if (!list.length || !Array.isArray(taxonomy) || !taxonomy.length) return null;
+  // Distinct categories, longest first: "L.O.T Build" must be tested before a hypothetical
+  // "L.O.T B", or the shorter token would claim the title. Derived from the taxonomy already
+  // loaded — no second read, and a new category value is picked up for free.
+  const catTokens = [...new Set(taxonomy.map((t) => t.category))]
+    .map((category) => ({ category, token: String(category).toLowerCase() }))
+    .filter((c) => c.token.length >= 3)
+    .sort((a, b) => b.token.length - a.token.length);
   const matched = new Set();
   for (const title of list) {
+    let hit = false;
     for (const { product, category } of taxonomy) {
       if (product.length >= 3 && title.includes(product)) {
         matched.add(category);
+        hit = true;
         break;   // this title is classified; next title
       }
+    }
+    if (hit) continue;
+    // ② fallback — the shop named the category even though it did not name our product.
+    for (const { category, token } of catTokens) {
+      if (title.includes(token)) { matched.add(category); break; }
     }
   }
   if (!matched.size) return null;                                  // unmatched → null, never a guess

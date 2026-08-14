@@ -181,5 +181,40 @@ t('S273: a Build product_viewed now yields the value the Build trigger filters o
   assert.equal(classifyTitles(CAT_TITLE_SOURCE.product_viewed(LIVE_PRODUCT_VIEWED), TAX), 'L.O.T Build');
 });
 
+// ── stage ②: the category token in the title (2026-08-14) ──────────────────────────────────
+// The shop's title states the category ("L.O.T Build - Garage") even when it does not contain
+// the ERP product name ("Wooden Garage"). Five Build products classified as null because of
+// that gap and were sent the CARS voice; these pin the fallback and its limits.
+// TAX above has no 'wooden garage' row on purpose — that is exactly the live situation.
+
+t('2026-08-14: a Build title whose ERP product name is absent still resolves via the category', () =>
+  assert.equal(classifyTitles('L.O.T Build - Garage', TAX), 'L.O.T Build'));
+
+t('2026-08-14: the rest of the affected class resolves too', () => {
+  for (const title of ['L.O.T Build - Harry Potter', 'L.O.T Build - Hermione Granger',
+                       'L.O.T Build - Albus Dumbledore', 'L.O.T Build - Rubeus Hagrid']) {
+    assert.equal(classifyTitles(title, TAX), 'L.O.T Build', title);
+  }
+});
+
+t('2026-08-14: the fallback NEVER overrides a product-name match', () => {
+  // "L.O.T Cars Shadow" contains the Cars token AND the product 'shadow' — same answer either
+  // way, so the sharp case is a product whose name disagrees with the token in its title.
+  const tax = [...TAX, { product: 'garage', category: 'L.O.T DIY' }];
+  // stage ① finds 'garage' → DIY and must win; the 'l.o.t build' token must not be consulted.
+  assert.equal(classifyTitles('L.O.T Build - Garage', tax), 'L.O.T DIY');
+});
+
+t('2026-08-14: an unregistered product with no category token stays null, not a guess', () => {
+  assert.equal(classifyTitles('House Crest Edition', TAX), null);
+  assert.equal(classifyTitles('Gift Wrapping', TAX), null);
+});
+
+t('2026-08-14: mixed cart still lets Build win when only the fallback placed it', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, L.O.T Build - Garage', TAX), 'L.O.T Build'));
+
+t('2026-08-14: a spare-parts title naming a car resolves by product name, unchanged', () =>
+  assert.equal(classifyTitles('L.O.T Spare Parts - Set of 4 Tyres for L.O.T Cars Shadow RC Drift Car', TAX), 'L.O.T Cars'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
