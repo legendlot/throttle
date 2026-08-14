@@ -198,13 +198,37 @@ async function processQueueMessage(env, body) {
   if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
   const recs = Array.isArray(r.data) ? r.data : [];
 
+  // ── Bounded-concurrency send pool (S279) ──────────────────────────────────────────────────
+  // The page used to run `for … await send`, one recipient fully completing before the next
+  // began, which measured a near-constant 4.02s per recipient = 796–858/hour whatever
+  // SENDS_PER_MSG was set to. THIS is the throughput lever; the page size is not (see the
+  // SENDS_PER_MSG comment). A pool rather than chunked Promise.all so one slow send does not
+  // hold up four finished ones.
+  //
+  // ⚠️ CAPPED AT 5 BY META, NOT BY US. The tier is 100k/24h ≈ 4,166/hour sustained; 5 concurrent
+  // at ~4s/send lands near 3,000/hour, safely under. Do NOT raise this to "go faster" without
+  // re-reading that tier — the failure mode is hammering a provider on live customer sends, and
+  // a quality-rating drop throttles every LOT number, not just this campaign.
+  //
+  // ⚠️ `recs` MUST NOT BE REORDERED. The continuation cursor below is recs[recs.length-1] and
+  // the completion test is recs.length === SENDS_PER_MSG — both are positional, so the pool
+  // indexes into a filtered COPY and leaves `recs` untouched. Completion order is irrelevant.
+  //
+  // Safe to parallelise, checked rather than assumed: recipients within a page are distinct
+  // profiles (campaign_recipients is keyset-paginated by profile_id), so no two concurrent sends
+  // touch the same profile's frequency cap; the send budget is an atomic consume_send_budget()
+  // RPC per send, so the cap still holds exactly; gate.js's two module-level caches are
+  // read-mostly with a TTL, so the worst case is a few duplicate settings fetches on a cold
+  // cache; and send() keeps all per-send state on its own opts object.
+  const SEND_CONCURRENCY = 5;
   let pageErrors = 0;
-  for (const rec of recs) {
-    if (!rec.address) continue;
+  const queue = recs.filter((r) => r.address);
+  let nextIdx = 0;
+  const runOne = async (rec) => {
     try {
-      // Per-recipient assignment INSIDE the page — never "all of A then all of B". The fan-out is
-      // serial at ~1,200/hr, so batching by arm would push B hours later in the day and the test
-      // would measure time-of-day rather than copy.
+      // Per-recipient assignment INSIDE the page — never "all of A then all of B". The fan-out
+      // runs for hours, so batching by arm would push B later in the day and the test would
+      // measure time-of-day rather than copy.
       const arm = pickVariant(campaignId, rec.profile_id, variants);
       // ⚠️ THREE states here, not two, and collapsing them sends real messages to people who
       // were meant to receive nothing:
@@ -212,7 +236,7 @@ async function processQueueMessage(env, body) {
       //   arm.template_id == null → a HOLDOUT arm      → send NOTHING, deliberately
       //   otherwise               → a real arm         → use its template
       // `arm?.template_id || camp.template_id` collapsed the middle case into the first.
-      if (arm && !arm.template_id) continue;   // holdout — no message, by design
+      if (arm && !arm.template_id) return;     // holdout — no message, by design
       await send(env, {
         channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
         templateId: arm?.template_id || camp.template_id,
@@ -227,7 +251,15 @@ async function processQueueMessage(env, body) {
       pageErrors++;
       console.log('campaign_recipient_error', campaignId, rec.profile_id, e?.message || String(e));
     }
-  }
+  };
+  // Pull-from-shared-index pool. `nextIdx++` needs no lock — JS is single-threaded, and the
+  // increment cannot be interleaved because there is no await between read and write.
+  const worker = async () => {
+    for (let i = nextIdx++; i < queue.length; i = nextIdx++) await runOne(queue[i]);
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SEND_CONCURRENCY, queue.length) }, worker));
+
   if (pageErrors) console.log('campaign_page_errors', campaignId, pageErrors);
 
   // Page-progress heartbeat for the stall sweep (index.js runScheduled '1b' alerts on
