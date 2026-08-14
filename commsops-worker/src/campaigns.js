@@ -1,13 +1,33 @@
 // Broadcast campaigns — approval lifecycle + Queue-throttled fan-out.
 // Fan-out uses a seed/continuation pattern: each queue message paginates a small
 // recipient chunk (SENDS_PER_MSG) and self-enqueues the next cursor, so a single
-// consumer invocation stays well under the 50-subrequest limit at any audience size.
+// consumer invocation stays well under the subrequest limit at any audience size.
 const A = require('./auth.js');
 const { send } = require('./send.js');
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 
-const SENDS_PER_MSG = 4;   // recipients handled per consumer invocation (~8 subreq each → safe)
+// Recipients handled per consumer invocation (~8 subrequests each).
+//
+// ⚠️ THIS IS THE CAMPAIGN THROUGHPUT DIAL, and it is latency-bound, not limit-bound. Each queue
+// hop costs ~18s of round-trip regardless of page size, so the send rate is very nearly
+// SENDS_PER_MSG × 200/hour. It sat at 4 (≈800/hour) because it was sized against the
+// **Cloudflare FREE-plan 50-subrequest ceiling** — 4 × 8 = 32, "safely under 50". LOT is on
+// Paid, where the ceiling is 10,000 (CORE.md), so that reasoning had been obsolete for months
+// and cost ~20× of unused throughput. The old comment said "→ safe" without naming the number
+// it was safe against, which is why it survived so long.
+//
+// Raised 4 → 12 on 2026-08-14 mid-flight, on the Independence Day broadcast: at 4 it would have
+// reached ~3,810 of 7,971 before WhatsApp quiet hours at 22:00 and written the other ~4,160 off
+// as skipped, while the campaign read `sent`. 12 ≈ 2,400/hour finishes inside the window.
+//
+// Ceilings that actually bind, for whoever raises this next:
+//   · subrequests — 12 × 8 = ~96 against 10,000. Not close.
+//   · Meta tier   — 100k/24h ≈ 4,166/hour sustained, i.e. SENDS_PER_MSG ≈ 20 is the real roof.
+//   · Workers CPU — awaited fetches are not CPU time, so the 30s budget is not the constraint.
+// The page is sent SERIALLY (`for … await send`), so a bigger page is a longer invocation, not
+// more concurrency. Step it, measure the delivered rate, and do not jump straight to 20.
+const SENDS_PER_MSG = 12;
 const nowIso = () => new Date().toISOString();
 
 async function getCampaign(env, id) {
