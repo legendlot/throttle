@@ -216,7 +216,10 @@ async function handlePixel(env, request) {
   // product line (L.O.T Cars vs Build — RULE-TAXONOMY-001). Best-effort; null on no match
   // (add-ons like "Gift Wrapping" deliberately classify to nothing).
   if ((name === 'add_to_cart' || name === 'product_viewed') && !props.primary_category) {
-    const cat = await CAT.resolveCategory(env, props.product_title || props.product_name || '');
+    // Handle passed as stage ③ (2026-08-14): exact, and the only signal that survives a
+    // storefront rename. Falls through to the title stages when the handle is unmapped.
+    const cat = await CAT.resolveCategory(env, props.product_title || props.product_name || '',
+                                          props.product_handle || '');
     if (cat) props.primary_category = cat;
   }
   // dedup a pixel checkout_started against the webhook's (same checkout token)

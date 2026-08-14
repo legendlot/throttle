@@ -154,7 +154,10 @@ async function handleShopfloWebhook(env, request) {
     // one DB read per isolate per hour, not one per browse event.
     const catTitleOf = CAT_TITLE_SOURCE[spec.event];
     if (catTitleOf && envlp.properties && !envlp.properties.primary_category) {
-      const cat = await CAT.resolveCategory(env, catTitleOf(envlp.properties) || '');
+      // Handle passed as stage ③ (2026-08-14) — see product-category.js. Shopflo supplies
+      // product_handle derived from the product URL, so this feed gets the same exactness.
+      const cat = await CAT.resolveCategory(env, catTitleOf(envlp.properties) || '',
+                                            envlp.properties.product_handle || '');
       if (cat) envlp.properties.primary_category = cat;
     }
 

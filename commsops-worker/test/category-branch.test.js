@@ -216,5 +216,53 @@ t('2026-08-14: mixed cart still lets Build win when only the fallback placed it'
 t('2026-08-14: a spare-parts title naming a car resolves by product name, unchanged', () =>
   assert.equal(classifyTitles('L.O.T Spare Parts - Set of 4 Tyres for L.O.T Cars Shadow RC Drift Car', TAX), 'L.O.T Cars'));
 
+
+// ── Stage ③: handle-based resolution (2026-08-14) ────────────────────────────
+// The crest is the product that broke: its storefront title contains neither the ERP
+// product name ("HP desk standee") nor the category string ("L.O.T Build"), so stages
+// ① and ② both miss and it fell to the Cars voice. Reported twice by Pruthvi.
+const HANDLES = {
+  'house-crest-edition': 'L.O.T Build',
+  'l-o-t-build-garage': 'L.O.T Build',
+  'shadow-rc-drift-car': 'L.O.T Cars',
+};
+
+t('③ handle resolves what BOTH title stages miss — the reported bug', () => {
+  // Proof the title alone still fails, so the handle is doing the work:
+  assert.equal(classifyTitles('Hogwarts House Crest 3D Wooden Puzzle', TAX), null);
+  assert.equal(
+    classifyTitles('Hogwarts House Crest 3D Wooden Puzzle', TAX,
+      { handles: 'house-crest-edition', handleCategories: HANDLES }),
+    'L.O.T Build');
+});
+
+t('③ a handle alone classifies, with no usable title at all', () =>
+  assert.equal(
+    classifyTitles('', TAX, { handles: 'house-crest-edition', handleCategories: HANDLES }),
+    'L.O.T Build'));
+
+t('③ an UNMAPPED handle changes nothing — title stages still decide', () => {
+  assert.equal(
+    classifyTitles('L.O.T Cars Shadow - RC Drift Car', TAX,
+      { handles: 'some-handle-we-never-mapped', handleCategories: HANDLES }),
+    'L.O.T Cars');
+  assert.equal(
+    classifyTitles('Gift Wrapping', TAX,
+      { handles: 'gift-wrapping', handleCategories: HANDLES }),
+    null);                                    // add-on stays null, as it must
+});
+
+t('③ is purely additive — every existing answer is unchanged without opts', () => {
+  assert.equal(classifyTitles('L.O.T Build - Garage', TAX), 'L.O.T Build');
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car', TAX), 'L.O.T Cars');
+  assert.equal(classifyTitles('Gift Wrapping', TAX), null);
+});
+
+t('③ mixed set: handle and title disagree → precedence still picks Build', () =>
+  assert.equal(
+    classifyTitles('L.O.T Cars Shadow - RC Drift Car', TAX,
+      { handles: 'house-crest-edition', handleCategories: HANDLES }),
+    'L.O.T Build'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

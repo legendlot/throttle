@@ -68,10 +68,39 @@ const CATEGORY_PRECEDENCE = ['L.O.T Build', 'L.O.T DIY', 'L.O.T Cars'];
 // from a hardcoded list. Verified against all 30 days of distinct titles: it newly resolves exactly
 // the five Build products above and changes nothing else. "Gift Wrapping" and "House Crest Edition"
 // stay null, which is correct — the first is an add-on, the second is genuinely unregistered.
-function classifyTitles(titles, taxonomy) {
+// ③ HANDLE (2026-08-14). The storefront handle, mapped explicitly in public.product_handle_map.
+//
+// ⚠️ Why a third stage was needed: ① and ② both read the TITLE. ① needs the ERP product name in
+// it, ② needs the category string in it. `house-crest-edition` has NEITHER — its title is
+// "Hogwarts House Crest 3D Wooden Puzzle" — so it resolved null, and null routes to the journey's
+// DEFAULT branch, which is the Cars voice. A customer browsing a wooden puzzle received "Stalled
+// mid-race… 🏎️💨". Reported twice by Pruthvi (#bugs 1786646144.038279, 13:56 and 14:56) after ②
+// had already been shipped and described as fixing the problem — it fixed four of six products.
+//
+// This stage runs FIRST and is the only one that cannot be broken by a storefront rename. It is
+// purely additive: a handle that is not mapped contributes nothing and the title stages run
+// exactly as before, so no answer that is correct today can change.
+function classifyTitles(titles, taxonomy, opts) {
+  const matched = new Set();
+
+  const handles = (Array.isArray(opts && opts.handles)
+    ? opts.handles
+    : String((opts && opts.handles) || '').split(','))
+    .map((h) => String(h || '').toLowerCase().trim()).filter(Boolean);
+  const handleCategories = (opts && opts.handleCategories) || null;
+  if (handleCategories && handles.length) {
+    for (const h of handles) {
+      const c = handleCategories[h];
+      if (c) matched.add(c);
+    }
+  }
+
   const list = (Array.isArray(titles) ? titles : String(titles || '').split(','))
     .map((t) => String(t || '').toLowerCase().trim()).filter(Boolean);
-  if (!list.length || !Array.isArray(taxonomy) || !taxonomy.length) return null;
+  // A handle alone is enough — an event with a mapped handle but no usable title still classifies.
+  if (!list.length || !Array.isArray(taxonomy) || !taxonomy.length) {
+    return matched.size ? pickCategory(matched) : null;
+  }
   // Distinct categories, longest first: "L.O.T Build" must be tested before a hypothetical
   // "L.O.T B", or the shorter token would claim the title. Derived from the taxonomy already
   // loaded — no second read, and a new category value is picked up for free.
@@ -79,7 +108,6 @@ function classifyTitles(titles, taxonomy) {
     .map((category) => ({ category, token: String(category).toLowerCase() }))
     .filter((c) => c.token.length >= 3)
     .sort((a, b) => b.token.length - a.token.length);
-  const matched = new Set();
   for (const title of list) {
     let hit = false;
     for (const { product, category } of taxonomy) {
@@ -96,17 +124,51 @@ function classifyTitles(titles, taxonomy) {
     }
   }
   if (!matched.size) return null;                                  // unmatched → null, never a guess
+  return pickCategory(matched);
+}
+
+// Mixed-set resolution, shared by every stage: ranked precedence first, then a stable
+// alphabetical pick so the answer never depends on taxonomy row order.
+function pickCategory(matched) {
   for (const c of CATEGORY_PRECEDENCE) if (matched.has(c)) return c;
   // Only unranked categories matched. Return one rather than coercing to a default — a
   // wrong-but-plausible category is worse than an unfamiliar one, because it looks correct.
-  // Sorted so the answer never depends on taxonomy row order.
   return [...matched].sort()[0];
 }
 
-// Best-effort enrichment — a category miss must never fail the webhook/event.
-async function resolveCategory(env, titles) {
-  try { return classifyTitles(titles, await loadTaxonomy(env)); }
-  catch { return null; }
+// handle → category, joined in JS because public.product_master has no unique constraint on
+// product_code, so there is no FK for PostgREST to embed on. Two small reads, same 1h TTL as
+// the taxonomy: one DB round per isolate per hour, not one per event.
+let _hmap = null, _hmapExp = 0;
+async function loadHandleCategories(env) {
+  const now = Date.now();
+  if (_hmap && now < _hmapExp) return _hmap;
+  const [mapR, pmR] = await Promise.all([
+    sbPublic('/rest/v1/product_handle_map?select=handle,product_code', env),
+    sbPublic('/rest/v1/product_master?category=not.is.null&select=product_code,category', env),
+  ]);
+  if (!mapR.ok || !Array.isArray(mapR.data) || !pmR.ok || !Array.isArray(pmR.data)) {
+    return _hmap || {};                                            // stale-if-error, same as taxonomy
+  }
+  const byCode = new Map();
+  for (const r of pmR.data) if (r.product_code && r.category) byCode.set(String(r.product_code), r.category);
+  const out = {};
+  for (const r of mapR.data) {
+    const cat = byCode.get(String(r.product_code));
+    if (r.handle && cat) out[String(r.handle).toLowerCase()] = cat;
+  }
+  _hmap = out; _hmapExp = now + TAX_TTL_MS;
+  return out;
 }
 
-module.exports = { classifyTitles, resolveCategory, loadTaxonomy };
+// Best-effort enrichment — a category miss must never fail the webhook/event.
+async function resolveCategory(env, titles, handles) {
+  try {
+    const [taxonomy, handleCategories] = await Promise.all([
+      loadTaxonomy(env), loadHandleCategories(env),
+    ]);
+    return classifyTitles(titles, taxonomy, { handles, handleCategories });
+  } catch { return null; }
+}
+
+module.exports = { classifyTitles, resolveCategory, loadTaxonomy, loadHandleCategories };
