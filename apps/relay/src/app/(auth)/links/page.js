@@ -17,7 +17,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Link2, Plus, Search, QrCode, Pencil, ExternalLink, Copy, History, BarChart3, X, Check,
 } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel, InfoDot } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel, InfoDot, Modal } from '@/components/ui.js';
 import { UtmFields } from '@/components/utm.js';
 import { fmtDateTime, fmtDateShort } from '@/components/format.js';
 
@@ -496,30 +496,3 @@ function Breakdowns({ stats }) {
   );
 }
 
-function Modal({ title, children, onClose }) {
-  useEffect(() => {
-    const h = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
-  return (
-    <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 60,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-    }}>
-      <div onClick={(e) => e.stopPropagation()} style={{
-        background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12,
-        padding: 18, width: '100%', maxWidth: 520, maxHeight: '85vh', overflowY: 'auto',
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <h3 style={{ margin: 0, fontSize: 15, color: 'var(--t1)' }}>{title}</h3>
-          <button onClick={onClose} aria-label="Close"
-                  style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--t3)' }}>
-            <X size={16} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}

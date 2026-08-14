@@ -3,6 +3,7 @@
 // Ported from the handoff prototype (ui.jsx). Dependency-free React + the CSS
 // classes in redesign.css. Reuses formatters/tones from ./format.
 import { useState, useEffect, useRef } from 'react';
+import { X } from 'lucide-react';   // Modal close affordance (S279) — this module had no icon import before.
 import { Icon } from './Icon.js';
 import { TONES } from './format.js';
 
@@ -329,6 +330,40 @@ export function FieldLabel({ children, hint, info, infoWidth }) {
       <span>{children}</span>
       {hint && <span className="dim" style={{ fontWeight: 400, fontSize: 11 }}>{hint}</span>}
       {info && <InfoDot label={`About: ${typeof children === 'string' ? children : 'this field'}`} width={infoWidth}>{info}</InfoDot>}
+    </div>
+  );
+}
+
+/* ---- modal ----------------------------------------------------------
+   Promoted out of the Links page (S279) so the campaign tracking gate can reuse it. Relay
+   deliberately does NOT use @throttle/ui's Modal here — that one is a confirm-shaped component
+   (confirmLabel/onConfirm/footer) with the shared design language, and the relay surfaces built
+   around this one expect a plain content shell. `maxWidth` is the only addition: the tracking
+   gate carries two options and a form, and 520px forces that into a scroll tunnel. */
+export function Modal({ title, children, onClose, maxWidth = 520 }) {
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 60,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12,
+        padding: 18, width: '100%', maxWidth, maxHeight: '85vh', overflowY: 'auto',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <h3 style={{ margin: 0, fontSize: 15, color: 'var(--t1)' }}>{title}</h3>
+          <button onClick={onClose} aria-label="Close"
+                  style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--t3)' }}>
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }

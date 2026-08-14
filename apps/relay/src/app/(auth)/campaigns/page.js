@@ -1,10 +1,10 @@
 'use client';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download, OctagonX } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip, Modal, FieldLabel } from '@/components/ui.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
@@ -152,6 +152,162 @@ function untrackableButtons(tpl) {
   return btns.filter((b) => String(b?.type || '').toUpperCase() === 'URL' && b?.url && !b?.target_base);
 }
 
+// Three tracking states for a WhatsApp url button, and collapsing them loses the useful middle:
+//   per_recipient — approved as /r/{{1}} AND opted in via target_base. Best: one code per person,
+//                   so clicks and revenue attribute to an individual.
+//   shared_slug   — approved with a fixed /r/<slug>. Aggregate clicks only, but real. This is what
+//                   campaign_slug_clicks() finds by regex, so it needs no wiring beyond the URL.
+//   untracked     — a raw destination URL. Nothing downstream can tag or count it.
+function templateTracking(tpl) {
+  const btns = tpl?.content?.buttons;
+  if (!Array.isArray(btns)) return { state: 'none', buttons: [] };
+  const urlBtns = btns.filter((b) => String(b?.type || '').toUpperCase() === 'URL' && b?.url);
+  if (!urlBtns.length) return { state: 'none', buttons: [] };
+  if (urlBtns.some((b) => b.target_base)) return { state: 'per_recipient', buttons: urlBtns };
+  // ⚠️ Approved as /r/{{1}} but NOT opted in is its own state, and it is the DANGEROUS one: the
+  // Meta side is already right, so telling this person to go and re-approve is both wrong and
+  // wasteful — they need one checkbox. It is also worse than plain untracked, because without
+  // target_base nothing mints a code and the raw suffix goes out as the code, i.e. a dead link
+  // (send.js says exactly this about utility templates).
+  if (urlBtns.some((b) => /\/r\/\{\{1\}\}/.test(String(b.url || ''))))
+    return { state: 'needs_optin', buttons: urlBtns };
+  const slugged = urlBtns.map((b) => /\/r\/([A-Za-z0-9_-]+)/.exec(String(b.url || ''))).filter(Boolean);
+  if (slugged.length) return { state: 'shared_slug', buttons: urlBtns, slug: slugged[0][1] };
+  return { state: 'untracked', buttons: urlBtns };
+}
+
+const slugify = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '').slice(0, 31);
+
+
+// ── Tracking gate ────────────────────────────────────────────────────────────────────────────
+// Un-missable by design: this opens BY ITSELF the moment an untrackable template is chosen, and
+// again at send. "Freedom to Play Sale_14 Aug" is why — it went out with the UTM panel filled in
+// and recorded 3,528 sent / 0 clicks / 0 attributed revenue, and nothing on screen had said the
+// link could not be tagged.
+//
+// ⚠️ THE ORDERING IS THE WHOLE POINT AND CANNOT BE ENGINEERED AWAY. A WhatsApp button's address is
+// frozen when Meta approves the template, so a link minted here can only help a template that has
+// not been submitted yet. There is no version of this flow that retro-fits tracking onto an
+// already-approved button — which is exactly why the modal leads with the Meta step instead of
+// burying it under a form that would imply the problem is solved by filling it in.
+function TrackingModal({ tpl, base, session, campaign, onClose, onCreated, showToast }) {
+  const [slug, setSlug] = useState(slugify(campaign?.name));
+  const [target, setTarget] = useState(tpl?.content?.buttons?.find((b) => b?.url)?.url || '');
+  const [title, setTitle] = useState(campaign?.name || '');
+  const [utm, setUtm] = useState(campaign?.utm || null);
+  const [busy, setBusy] = useState(false);
+  const [made, setMade] = useState(null);
+
+  const needsOptin = templateTracking(tpl).state === 'needs_optin';
+  const linkUrl = made ? `${base || 'https://lottoys.in'}/r/${made.code}` : null;
+  const metaUrl = `${base || 'https://lottoys.in'}/r/{{1}}`;
+
+  async function create() {
+    if (!slug.trim() || !target.trim()) { showToast('Short name and destination are both needed', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await workerFetch('createLink',
+        { slug: slug.trim(), target_url: target.trim(), title: title.trim() || campaign?.name || null, utm }, session);
+      setMade(r?.data || null);
+      showToast('Tracked link created', 'success');
+      onCreated?.();
+    } catch (e) {
+      showToast(String(e.message) === 'slug_taken' ? 'That short name is already used — pick another' : (e.message || 'Could not create the link'), 'error');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal onClose={onClose} title="This campaign's links cannot be tracked" maxWidth={620}>
+      <div className="info-bar" style={{ background: 'rgba(248,113,113,.07)', borderColor: 'var(--red)', marginTop: 0 }}>
+        <AlertTriangle size={16} style={{ color: 'var(--red)', flexShrink: 0 }} />
+        {needsOptin ? (
+          <span>
+            “{tpl?.name}” is <strong>already approved by Meta the right way</strong> — you do not need
+            to submit anything again. It just has not been switched on: open it under Templates and
+            tick <strong>Track clicks on this button</strong>. ⚠️ Until you do, the button may send
+            people to a dead link, so please do this before sending.
+          </span>
+        ) : (
+          <span>
+            “{tpl?.name}” sends its link as a fixed button. If you send it as it is, this campaign will
+            record <strong>no clicks and no attributed revenue</strong> — permanently, not just until
+            something catches up. Any UTM values on the campaign will have no effect on it.
+          </span>
+        )}
+      </div>
+
+      {!needsOptin && (
+        <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--t2)' }}>
+          A WhatsApp button&rsquo;s address is locked in when Meta approves the template, and nothing can
+          be added to it when the message is sent. <strong>So tracking has to be arranged before the
+          template goes to Meta</strong> — it cannot be switched on afterwards.
+        </p>
+      )}
+
+      {!needsOptin && <Panel title="Option 1 — track every person separately (best)" pad>
+        <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0, color: 'var(--t2)' }}>
+          Submit the template to Meta with <span className="mono">{metaUrl}</span> as the button
+          address, then open it in Templates and tick <strong>Track clicks on this button</strong>.
+          Everyone gets their own link, so you can see who clicked and what they bought. Do it once
+          per template and every future campaign on it is tracked.
+        </p>
+      </Panel>}
+
+      {!needsOptin && <Panel title="Option 2 — one shared tracked link (quicker)" pad>
+        <p style={{ fontSize: 13, lineHeight: 1.6, marginTop: 0, color: 'var(--t2)' }}>
+          Make the link here, then paste it into the button address when you submit the template to
+          Meta. You get total clicks for the campaign, but not who clicked. It also shows up under
+          Links, where you can change where it points later.
+        </p>
+        {made ? (
+          <div className="info-bar" style={{ background: 'rgba(74,222,128,.07)', borderColor: 'var(--green)' }}>
+            <Check size={16} style={{ color: 'var(--green)', flexShrink: 0 }} />
+            <span>
+              Created. Use this as the button address in your Meta submission:<br />
+              <span className="mono" style={{ fontSize: 13 }}>{linkUrl}</span>
+              <button className="badge-btn" style={{ marginLeft: 8 }}
+                onClick={() => { navigator.clipboard?.writeText(linkUrl); showToast('Copied', 'success'); }}>copy</button>
+              <br />
+              <span className="dim" style={{ fontSize: 11.5 }}>
+                Once the approved template carries this address, its clicks appear on this campaign
+                automatically — nothing else to connect up.
+              </span>
+            </span>
+          </div>
+        ) : (
+          <>
+            <FieldLabel info="Lower-case letters, numbers and hyphens. Permanent once created — it may end up printed.">Short name</FieldLabel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+              <span style={{ color: 'var(--t3)', fontSize: 13 }}>{(base || 'https://lottoys.in')}/r/</span>
+              <input className="f-inp" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())}
+                     placeholder="independence-2026" />
+            </div>
+            <FieldLabel info="Where people end up. Changeable later, which is the point of a short link.">Destination</FieldLabel>
+            <input className="f-inp" style={{ marginBottom: 12 }} value={target}
+                   onChange={(e) => setTarget(e.target.value)}
+                   placeholder="https://www.legendoftoys.com/collections/all" />
+            <FieldLabel info="For your own reference under Links — never shown to a customer.">Name</FieldLabel>
+            <input className="f-inp" style={{ marginBottom: 12 }} value={title}
+                   onChange={(e) => setTitle(e.target.value)} placeholder="Independence Day sale" />
+            <UtmFields scope="link" value={utm} onChange={setUtm}
+                       auto={{ utm_source: 'relay', utm_medium: 'whatsapp', utm_campaign: campaign?.name || 'the campaign name' }} />
+            <div style={{ marginTop: 12 }}>
+              <Btn kind="primary" onClick={create} disabled={busy}>
+                {busy ? 'Creating…' : 'Create tracked link'}
+              </Btn>
+            </div>
+          </>
+        )}
+      </Panel>}
+
+      <p className="dim" style={{ fontSize: 11.5, marginBottom: 0 }}>
+        You can close this and send anyway — nothing here blocks the campaign. It just will not be measurable.
+      </p>
+    </Modal>
+  );
+}
+
 function emptyCampaign() {
   return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null,
     // Audience exclusions (S276) — all three optional, all evaluated live during the fan-out.
@@ -227,6 +383,10 @@ export default function CampaignsPage() {
   // Live test-mode flag (review M12) — undefined while unloaded/unreachable, which the banner
   // and confirm text below both treat as "unknown → assume test mode is still ON" (fail safe).
   const [settings, setSettings] = useState(null);
+  // Auto-opens when an untrackable template is picked. Keyed by template id so it fires once per
+  // choice rather than on every keystroke elsewhere in the form.
+  const [trackingModal, setTrackingModal] = useState(null);
+  const trackingSeen = useRef(new Set());
 
   const canBuild = !perms || perms.campaign_build;
   const canApprove = !perms || perms.approve;
@@ -540,6 +700,18 @@ export default function CampaignsPage() {
     finally { setBusy(false); }
   }
 
+  // Fire the gate the moment an untrackable template is selected — not at submit, when the copy
+  // is written and the send is imminent and nobody wants to hear it. Marketing only: a utility
+  // template's button is an order link, not an attribution surface.
+  useEffect(() => {
+    if (view !== 'form' || c.purpose !== 'marketing' || !c.template_id) return;
+    const tpl = templates.find((t) => t.id === c.template_id);
+    if (!tpl || !['untracked', 'needs_optin'].includes(templateTracking(tpl).state)) return;
+    if (trackingSeen.current.has(c.template_id)) return;
+    trackingSeen.current.add(c.template_id);
+    setTrackingModal(tpl);
+  }, [view, c.purpose, c.template_id, templates]);
+
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
   // Read live (review M12): render ONLY while test mode is on or unknown (settings still
@@ -710,6 +882,21 @@ export default function CampaignsPage() {
                 auto={{ utm_source: 'relay', utm_medium: c.channel, utm_campaign: c.name || 'the campaign name', utm_content: 'the template name' }}
               />
               <UtmMarketingNote />
+              {templateTracking(selTpl).state === 'shared_slug' && (
+                <div className="info-bar" style={{ marginTop: 10 }}>
+                  <Check size={16} style={{ color: 'var(--green)', flexShrink: 0 }} />
+                  <span>
+                    Tracked through the shared link <span className="mono">/r/{templateTracking(selTpl).slug}</span>.
+                    Total clicks for this campaign will be counted; individual people will not.
+                  </span>
+                </div>
+              )}
+              {templateTracking(selTpl).state === 'per_recipient' && (
+                <div className="info-bar" style={{ marginTop: 10 }}>
+                  <Check size={16} style={{ color: 'var(--green)', flexShrink: 0 }} />
+                  <span>Tracked per person — clicks and attributed revenue will both be available.</span>
+                </div>
+              )}
               {untrackableButtons(selTpl).length > 0 && (
                 <div className="info-bar" style={{ marginTop: 10, background: 'rgba(248,113,113,.07)', borderColor: 'var(--red)' }}>
                   <AlertTriangle size={16} style={{ color: 'var(--red)', flexShrink: 0 }} />
@@ -719,13 +906,26 @@ export default function CampaignsPage() {
                     button’s address is locked when Meta approves the template, so nothing can be added to it
                     when the message is sent. This campaign will record <strong>no clicks and no attributed
                     revenue</strong>, whatever is set above. To track it, the template has to be re-approved at
-                    Meta with a redirect link — ask Afshaan before you schedule the send.
+                    Meta with a redirect link.
+                    {' '}<button className="badge-btn accent" onClick={() => setTrackingModal(selTpl)}>show me how</button>
                   </span>
                 </div>
               )}
             </div>
           )}
         </Panel>
+
+        {trackingModal && (
+          <TrackingModal
+            tpl={trackingModal}
+            base={settings?.link_base_url || null}
+            session={session}
+            campaign={c}
+            showToast={showToast}
+            onCreated={refresh}
+            onClose={() => setTrackingModal(null)}
+          />
+        )}
 
         <VariantSetup campaign={c} session={session} perms={perms} reach={reach} onChanged={refresh} />
 

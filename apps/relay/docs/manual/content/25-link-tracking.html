@@ -1,0 +1,51 @@
+<p class="lead">Whether a campaign can be measured is decided <em>before</em> it is sent &mdash; in fact before the template is even submitted to Meta. This chapter explains why, and what to do so a send is never wasted.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Making clicks and revenue countable.</div></div>
+  <div class="g-cell"><div class="g-lbl">Decided when</div><div class="g-val">Before Meta approves the template.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> <span class="role mgr">Manager</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Templates &rarr; Buttons, and Links.</div></div>
+</div>
+
+<div class="callout danger"><div class="c-title">&#9940; The one thing to remember</div><p>A WhatsApp button&rsquo;s web address is <strong>frozen when Meta approves the template</strong>. Nothing can be added to it when the message is sent. So filling in UTM values on a campaign does <em>nothing</em> if the button is a plain link &mdash; and there is no way to fix it afterwards. It has to be arranged first.</p></div>
+
+<h2 class="sec">What happened once, so it does not happen again</h2>
+<p>An Independence Day campaign went out to several thousand people with UTM values filled in on both the campaign and the template. It recorded <strong>zero clicks and zero attributed revenue</strong>, and always would have. The button was a plain link, so nothing in the system could tag it. Nobody had done anything wrong &mdash; the screen simply never said so. It says so now, and it will stop you.</p>
+
+<h2 class="sec">The three states a button can be in</h2>
+<table class="tbl">
+  <thead><tr><th>State</th><th>What you get</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Tracked per person</strong></td><td>Who clicked, and what they bought</td><td>Nothing &mdash; this is the goal</td></tr>
+    <tr><td><strong>Tracked, shared link</strong></td><td>Total clicks for the campaign</td><td>Fine. You will not know <em>who</em> clicked</td></tr>
+    <tr><td><strong>Not tracked</strong></td><td>Nothing at all</td><td>Fix before sending &mdash; see below</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Option 1 &mdash; track every person separately (best)</h2>
+<p>Do this once per template and every future campaign using it is tracked.</p>
+<ol class="steps">
+  <li>When you submit the template to Meta, set the button address to <code>https://lottoys.in/r/{{1}}</code> instead of the real destination.</li>
+  <li>Once Meta approves it, open the template in <strong>Templates</strong>, find the button, and tick <strong>Track clicks on this button</strong>.</li>
+  <li>Put the real destination &mdash; where people should actually land &mdash; in the field that appears.</li>
+</ol>
+<p>Everyone then receives their own link, so clicks and orders can be traced back to individual people.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Do not skip step 2</div><p>A template approved as <code>/r/{{1}}</code> but never ticked is <em>worse</em> than an untracked one &mdash; the button can send people to a dead link. Relay will warn you if it spots this, but do not rely on the warning.</p></div>
+
+<h2 class="sec">Option 2 &mdash; one shared tracked link (quicker)</h2>
+<p>Useful when you want the campaign out and only need total clicks.</p>
+<ol class="steps">
+  <li>In the campaign, when Relay warns the links cannot be tracked, choose <strong>Create tracked link</strong>. You can also make one directly under <strong>Links</strong>.</li>
+  <li>Give it a short name, the destination, and any UTM values.</li>
+  <li>Copy the address it gives you and use <em>that</em> as the button address in your Meta submission.</li>
+</ol>
+<p>Once the approved template carries that address, its clicks appear on the campaign automatically. There is nothing else to connect up. The link also appears under <strong>Links</strong>, where the destination can be changed later.</p>
+
+<h2 class="sec">What Relay does to stop you</h2>
+<p>Picking a template whose links cannot be tracked opens a warning straight away &mdash; not at the end, when the copy is written and the send is imminent. The same warning is repeated in the confirmation box when you press send. Neither one blocks the campaign: you can send an untracked campaign deliberately. You just cannot do it by accident.</p>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>Whatever the link situation, a discount code unique to the campaign is worth adding. It survives every tracking gap and lets Finance attribute revenue even when the click data is missing.</p></div>
+
+<h2 class="sec">Email is different</h2>
+<p>Email bodies are written here rather than approved elsewhere, so Relay tags links in an email automatically. UTM values on an email campaign work exactly as they appear. This whole chapter is about WhatsApp, where the button belongs to Meta.</p>
