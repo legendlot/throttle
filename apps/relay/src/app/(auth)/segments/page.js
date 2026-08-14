@@ -202,7 +202,7 @@ function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, onPatch, onRemove
   );
 }
 
-function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', items: [], tooDeep: false, member_count: null, materialized_at: null, updated_at: null }; }
+function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all', items: [], tooDeep: false, member_count: null, materialized_at: null, updated_at: null, is_stale: false, savedDef: null }; }
 
 // A dynamic segment's member_count is COUNT(segment_members) — so a segment nobody has ever
 // refreshed counts 0, which rendered as a bare "0" and read as "this audience is empty".
@@ -222,16 +222,25 @@ function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all'
 // ⚠️ Do not "fix" this by hiding the count or by auto-materializing on edit. Materializing a
 // 25k segment is real work and must stay an explicit action (see the getSegments comment).
 // Naming the staleness is the fix.
-function memberState(kind, memberCount, materializedAt, updatedAt) {
+//
+// ⚠️ S279 — `isStale` is the SERVER's verdict (segments_list), computed as
+// `materialized_def IS DISTINCT FROM definition`: does the stored count describe the rule as it
+// now stands? Do NOT reintroduce the timestamp comparison this replaced
+// (`updated_at > materialized_at`). It was wrong in two ways a user reached within the hour:
+// saveSegment stamps `updated_at` unconditionally, so re-saving an UNCHANGED rule turned a
+// current count amber; and pressing "Refresh members" then "Save segment" — the obvious order,
+// since Save is the primary button — always ended amber too. Both told Mishica her count was
+// wrong when it was exactly right, which reads as "the sync is broken".
+function memberState(kind, memberCount, materializedAt, isStale) {
   if (kind !== 'dynamic') return { text: memberCount != null ? Number(memberCount).toLocaleString('en-IN') : '—', stale: false };
   if (!materializedAt) {
     return { text: 'Not counted', stale: true,
       title: 'This rule has never been counted. The number of people it matches is unknown — it is NOT zero. Open the segment and press "Refresh members".' };
   }
   const n = Number(memberCount || 0).toLocaleString('en-IN');
-  if (updatedAt && new Date(updatedAt) > new Date(materializedAt)) {
+  if (isStale) {
     return { text: `${n} (out of date)`, stale: true,
-      title: `The rule was edited on ${fmtDateTime(updatedAt)}, AFTER this count was taken on ${fmtDateTime(materializedAt)} — so ${n} describes the OLD rule, not the one shown. Press "Refresh members" to recount. Sending is unaffected: a campaign re-counts the segment before it sends.` };
+      title: `The rule has changed since this count was taken on ${fmtDateTime(materializedAt)} — so ${n} describes the OLD rule, not the one shown. Press "Refresh members" to recount. Sending is unaffected: a campaign re-counts the segment before it sends.` };
   }
   return { text: n, stale: false,
     title: `As of ${fmtDateTime(materializedAt)}. A dynamic rule is re-evaluated on every send, so the live audience may differ — press "Refresh members" to recount.` };
@@ -291,12 +300,14 @@ export default function SegmentsPage() {
   useNewParam(canEdit, startNew);
   async function startEdit(r) {
     const parsed = parseDef(r.definition);
-    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, items: parsed.items, tooDeep: parsed.tooDeep, member_count: null, materialized_at: r.materialized_at ?? null, updated_at: r.updated_at ?? null });
+    // `savedDef` is the rule AS PERSISTED, kept so refreshMembers() can tell whether what is on
+    // screen has drifted from what the server would count. Stored serialised for cheap compare.
+    setSeg({ id: r.id, name: r.name || '', kind: r.kind || 'dynamic', group: parsed.group, items: parsed.items, tooDeep: parsed.tooDeep, member_count: null, materialized_at: r.materialized_at ?? null, updated_at: r.updated_at ?? null, is_stale: !!r.is_stale, savedDef: JSON.stringify(itemsToDef(parsed.group, parsed.items)) });
     setPv(null);
     setView('form');
     try {
       const d = await garageFetch('getSegment', { id: r.id }, session);
-      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null, updated_at: d.segment.updated_at ?? s.updated_at }));
+      if (d?.segment) setSeg((s) => ({ ...s, member_count: d.member_count ?? null, materialized_at: d.segment.materialized_at ?? null, updated_at: d.segment.updated_at ?? s.updated_at, is_stale: !!d.is_stale }));
     } catch { /* non-fatal */ }
   }
   // Fetch property options for every event named in the rule, once each. Failure is
@@ -345,22 +356,30 @@ export default function SegmentsPage() {
     finally { setPvLoading(false); }
   }
 
-  async function save() {
-    if (!seg.name.trim()) { showToast('Name required', 'error'); return; }
+  // Returns the segment id on success, null on failure — refreshMembers() chains on it.
+  async function save({ silent = false } = {}) {
+    if (!seg.name.trim()) { showToast('Name required', 'error'); return null; }
     setSaving(true);
     try {
-      const payload = { name: seg.name.trim(), kind: seg.kind, definition: buildDef() };
+      const def = buildDef();
+      const payload = { name: seg.name.trim(), kind: seg.kind, definition: def };
       if (seg.id) payload.id = seg.id;
       const r = await workerFetch('saveSegment', payload, session);
       const saved = r?.data;
+      const id = saved?.id || seg.id;
       if (saved?.id && !seg.id) set('id', saved.id);
-      // Stamp the edit locally so the member badge flips to "out of date" the instant the rule
-      // is saved. That is precisely the moment the old count stops describing the rule on
-      // screen, and waiting for a reload to say so is what made this read as a data mismatch.
-      setSeg((s) => ({ ...s, updated_at: saved?.updated_at || new Date().toISOString() }));
-      showToast(seg.id ? 'Segment saved' : 'Segment created', 'success');
+      setSeg((s) => ({ ...s, updated_at: saved?.updated_at || s.updated_at, savedDef: JSON.stringify(def) }));
+      // Whether the stored count still describes this rule is the SERVER's call (it compares
+      // materialized_def to definition), so ask it rather than assuming a save invalidates the
+      // count. Assuming it did is exactly what turned a re-save of an UNCHANGED rule amber.
+      try {
+        const d = await garageFetch('getSegment', { id }, session);
+        if (d?.segment) setSeg((s) => ({ ...s, is_stale: !!d.is_stale, member_count: d.member_count ?? s.member_count, materialized_at: d.segment.materialized_at ?? s.materialized_at }));
+      } catch { /* non-fatal — the badge just keeps its last known state */ }
+      if (!silent) showToast(seg.id ? 'Segment saved' : 'Segment created', 'success');
       load();
-    } catch (e) { showToast(e.message || 'Save failed', 'error'); }
+      return id;
+    } catch (e) { showToast(e.message || 'Save failed', 'error'); return null; }
     finally { setSaving(false); }
   }
 
@@ -415,14 +434,25 @@ export default function SegmentsPage() {
 
   async function refreshMembers() {
     if (!seg.id) { showToast('Save the segment first', 'error'); return; }
+    // ⚠️ materialize_segment reads the definition FROM THE DB — it is passed an id, never a
+    // rule. So refreshing a form with unsaved edits counts the PREVIOUSLY SAVED rule and then
+    // reports "Members refreshed — N" as though N described what is on screen. That is a
+    // confidently wrong number, and it is the natural thing to do: build the rule, press
+    // Refresh to see how many it catches. Persist first when the two differ.
+    // Exploring without committing is what Preview is for — it evaluates the on-screen rule live.
+    const dirty = JSON.stringify(buildDef()) !== seg.savedDef;
+    let id = seg.id;
+    if (dirty) { id = await save({ silent: true }); if (!id) return; }
     setMaterializing(true);
     try {
-      const r = await workerFetch('materializeSegment', { id: seg.id }, session);
+      const r = await workerFetch('materializeSegment', { id }, session);
       const n = r?.data?.members;
-      // Stamp locally too, so the "Not counted" badge flips immediately. The RPC is the
-      // authority (it sets materialized_at server-side); this just avoids a reload.
-      setSeg((s) => ({ ...s, member_count: typeof n === 'number' ? n : s.member_count, materialized_at: new Date().toISOString() }));
-      showToast(`Members refreshed${typeof n === 'number' ? ` — ${n}` : ''}`, 'success');
+      // Stamp locally too, so the badge flips immediately. The RPC is the authority (it sets
+      // materialized_at + materialized_def server-side); this just avoids a reload. is_stale is
+      // false by construction here: the count was just taken against the stored definition.
+      setSeg((s) => ({ ...s, member_count: typeof n === 'number' ? n : s.member_count, materialized_at: new Date().toISOString(), is_stale: false }));
+      showToast(`${dirty ? 'Saved and refreshed' : 'Members refreshed'}${typeof n === 'number' ? ` — ${n}` : ''}`, 'success');
+      load();
     } catch (e) { showToast(e.message || 'Refresh failed', 'error'); }
     finally { setMaterializing(false); }
   }
@@ -443,7 +473,7 @@ export default function SegmentsPage() {
             {seg.kind === 'dynamic' && seg.id && !seg.materialized_at
               ? <Badge label="Not counted" tone="gray" dot />
               : (seg.member_count != null && (() => {
-                  const ms = memberState(seg.kind, seg.member_count, seg.materialized_at, seg.updated_at);
+                  const ms = memberState(seg.kind, seg.member_count, seg.materialized_at, seg.is_stale);
                   return <Badge label={ms.stale ? `${seg.member_count} members — out of date` : `${seg.member_count} members`}
                                 tone={ms.stale ? 'orange' : 'blue'} dot title={ms.title} />;
                 })())}
@@ -678,7 +708,7 @@ export default function SegmentsPage() {
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
                         <td className="dim">{r.kind === 'static' ? '—' : (nConds === 0 ? 'everyone' : `${nConds} · match ${p.group}`)}</td>
                         {(() => {
-                          const ms = memberState(r.kind, r.member_count, r.materialized_at, r.updated_at);
+                          const ms = memberState(r.kind, r.member_count, r.materialized_at, r.is_stale);
                           return (
                             <td className={ms.stale ? 'num dim' : 'num mono'} title={ms.title}>
                               {ms.text}

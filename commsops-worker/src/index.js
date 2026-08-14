@@ -524,12 +524,14 @@ async function handleGet(url, auth, env) {
       // 6,091 members the same day, which would have shown as 5,000 on the detail page while the
       // LIST showed the true figure, since the list already used this RPC. Two screens, two
       // numbers, neither flagged. segments_list returns ONE aggregated jsonb row, so no cap.
+      // ⚠️ Explicit column list, NOT select=* — `materialized_def` (S279) is a full copy of the
+      // rule and no caller needs it, only the `is_stale` verdict computed from it.
       const [s, list] = await Promise.all([
-        A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}&select=*&limit=1`, env),
+        A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}&select=id,name,kind,definition,created_by,created_at,updated_at,entry_tracking_since,materialized_at&limit=1`, env),
         A.sbComms('/rest/v1/rpc/segments_list', env, { method: 'POST', body: JSON.stringify({}) }),
       ]);
       const row = Array.isArray(list.data) ? list.data.find((x) => String(x.id) === String(id)) : null;
-      return ok({ segment: s.data?.[0] || null, member_count: Number(row?.member_count ?? 0) });
+      return ok({ segment: s.data?.[0] || null, member_count: Number(row?.member_count ?? 0), is_stale: !!row?.is_stale });
     }
     case 'getSegmentMembers': {        // S263 — who is actually in this segment
       // Same segment_manage gate as previewSegment: this returns addresses, so relay_view
