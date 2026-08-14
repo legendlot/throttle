@@ -114,7 +114,17 @@ export default function OverviewPage() {
   const liveSends = campaigns.filter((c) => c.status === 'sending').map((c) => {
     const o = campOv[c.id] || {};
     const sent = Number(o.sent || 0);
-    const total = Number(o.total || c.audience_snapshot || 0);
+    // ⚠️ audience_snapshot FIRST, o.total only as a fallback. This read `o.total || audience_snapshot`
+    // and was catastrophically wrong for exactly the campaign this panel exists to show.
+    // `campaign_stats_list.total` is the count of comms.messages rows that EXIST, and the fan-out
+    // creates rows only just ahead of sending — so for an in-flight campaign the denominator grows
+    // in lockstep with the numerator and the bar is pinned near 100% for the entire send.
+    // Measured 2026-08-14: "Freedom to Play Sale_14 Aug" displayed 881/886 = 99% while it was
+    // 886 of 7,971 = 11% through its audience, i.e. it read "done" with ~7,000 people unreached
+    // and ~4 hours to the quiet-hours cutoff. audience_snapshot is the reachable count the send was
+    // claimed against (startCampaign), which is the only honest denominator for progress.
+    // Same defect, same fix, in the ON AIR rail — layout.js.
+    const total = Number(c.audience_snapshot || o.total || 0);
     return { id: c.id, name: c.name, channel: c.channel, sent, total,
       pct: total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0 };
   });

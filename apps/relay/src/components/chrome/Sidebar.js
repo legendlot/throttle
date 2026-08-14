@@ -32,7 +32,12 @@ export function Sidebar({
   };
 
   const onairPct = onair && onair.total > 0 ? Math.min(100, Math.round((onair.sent / onair.total) * 100)) : 0;
-  const onairProg = onair ? `${Number(onair.sent || 0).toLocaleString('en-IN')} / ${Number(onair.total || 0).toLocaleString('en-IN')} sent` : '';
+  // "attempted", not "sent" — the numerator counts every settled message including FAILURES, and
+  // on WhatsApp ~40% fail at Meta's engagement-quality block (wa_131049). Calling that "sent"
+  // overstated real delivery by a third on the 2026-08-14 broadcast. Attempted is the right
+  // numerator for a PROGRESS bar (it must reach 100% when the fan-out ends); it just needs the
+  // honest word. True delivery lives on the campaign's own stats.
+  const onairProg = onair ? `${Number(onair.sent || 0).toLocaleString('en-IN')} / ${Number(onair.total || 0).toLocaleString('en-IN')} attempted` : '';
 
   return (
     <aside className={`sb ${collapsed ? 'sb-col' : ''}`}>

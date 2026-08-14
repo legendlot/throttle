@@ -71,7 +71,13 @@ function AuthLayoutInner({ children }) {
         try {
           const ov = await garageFetch('getCampaignsOverview', {}, session);
           const o = (Array.isArray(ov) ? ov : []).find((x) => x.id === c.id);
-          if (o) { sent = Number(o.sent || 0); total = Number(o.total || total); }
+          // ⚠️ Take `sent` from the overview but KEEP audience_snapshot as the denominator.
+          // This was `total = Number(o.total || total)`, which threw away the correct value it had
+          // just computed: `campaign_stats_list.total` counts comms.messages rows that EXIST, and
+          // the fan-out creates them just ahead of sending, so the rail sat at ~99% for an entire
+          // send. Measured 2026-08-14 at 881/886 while 7,000 of 7,971 were still unreached.
+          // Same defect + fix in the Control Tower "Sending now" panel — (auth)/page.js.
+          if (o) { sent = Number(o.sent || 0); total = Number(total || o.total || 0); }
         } catch { /* progress optional */ }
         if (!dead) setOnair({ id: c.id, name: c.name, sent, total });
       } catch { /* transient failure — keep the last known rail rather than
