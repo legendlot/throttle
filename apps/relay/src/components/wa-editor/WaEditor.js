@@ -45,7 +45,8 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
   const c = wa || {};
   const mapping = Array.isArray(c.mapping) ? c.mapping : [];
   const tokens = (variables || []).map((v) => v.token).filter(Boolean);
-  const errs = validateWaTemplate(c, tokens);
+  // Pass the ROWS, not the tokens: the source checks need to know where each token resolves.
+  const errs = validateWaTemplate(c, variables || []);
   const { showToast } = useToast();
   const [uploading, setUploading] = useState(false);
   const [libOpen, setLibOpen] = useState(false);
@@ -100,7 +101,11 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
   const setMap = (i, k, v) => setWa({ ...c, mapping: mapping.map((m, j) => (j === i ? { ...m, [k]: v } : m)) });
   const addMap = () => {
     const body = mapping.filter((m) => (m.component || 'body') === 'body');
-    setWa({ ...c, mapping: [...mapping, { component: 'body', pos: body.length + 1, token: tokens[0] || '', example: '' }] });
+    // `token: ''` forces a deliberate pick. It used to seed `tokens[0]` — the first declared
+    // variable, whatever it happened to be — and a row left at that default binds silently to
+    // the wrong thing: validation only ever checked the token was DECLARED, never that it suited
+    // the slot. That is how `first` ended up driving a URL button (Mishica, 2026-08-14).
+    setWa({ ...c, mapping: [...mapping, { component: 'body', pos: body.length + 1, token: '', example: '' }] });
   };
   const rmMap = (i) => setWa({ ...c, mapping: mapping.filter((_, j) => j !== i) });
 
@@ -311,6 +316,7 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
         action={!disabled ? <Btn onClick={addMap}><Plus size={14} /> Add slot</Btn> : null}>
         <div className="tw-note" style={{ margin: '12px 14px 0' }}>
           Binds each <code>{'{{n}}'}</code> to a declared variable. Meta needs an example value per slot to review the template.
+          {' '}For a <b>button</b> slot the example is only the part that comes <i>after</i> the url base — the suffix on its own, never the whole destination link.
         </div>
         {mapping.length === 0
           ? <div style={{ padding: 18, color: 'var(--text-4)', fontSize: 12.5 }}>No slots. Add one per <code>{'{{n}}'}</code> used above.</div>
@@ -331,7 +337,11 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
                     {tokens.map((x) => <option key={x} value={x}>{`{${x}}`}</option>)}
                   </select>
                   <input className="f-inp" value={m.example || ''} onChange={(e) => setMap(i, 'example', e.target.value)}
-                    disabled={disabled} placeholder="Afshaan" />
+                    disabled={disabled}
+                    placeholder={(m.component || 'body') === 'button' ? 'kQ7mZ2xW9pLd4RtV6nBh8s' : 'Afshaan'}
+                    title={(m.component || 'body') === 'button'
+                      ? 'Only the part AFTER the url base — not the whole destination link.'
+                      : 'A realistic sample value; Meta reviews the template with it filled in.'} />
                   {!disabled
                     ? <button className="dr-close" onClick={() => rmMap(i)} title="Remove"><Trash2 size={14} /></button>
                     : <span />}
@@ -351,14 +361,15 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
 // drifting between the editor and the preview is the bug this avoids).
 export function waPreviewProps(wa, variables) {
   const c = wa || {};
-  // validateWaTemplate takes TOKEN STRINGS, not variable rows — passing the rows makes every
-  // placeholder read as unbound and the preview would cry "fix before submitting" on a valid
-  // template. Mirrors the derivation above exactly.
-  const tokens = (variables || []).map((v) => v.token).filter(Boolean);
+  // validateWaTemplate now accepts EITHER token strings or full rows (it reads `v.token` off an
+  // object), so the rows go straight through. Passing rows to the old string-only signature was
+  // the bug this comment used to warn about: every placeholder read as unbound and the preview
+  // cried "fix before submitting" on a valid template. Rows are required now — the source checks
+  // cannot be done from a token alone.
   return {
     wa: c,
     mapping: Array.isArray(c.mapping) ? c.mapping : [],
     buttons: Array.isArray(c.buttons) ? c.buttons : [],
-    errs: validateWaTemplate(c, tokens),
+    errs: validateWaTemplate(c, variables || []),
   };
 }

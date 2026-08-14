@@ -701,7 +701,8 @@ export default function TemplatesPage() {
     // edit) would lint clean here yet submit whatever is actually in the DB (e.g. headerless,
     // or the previous version). Block on any unsaved change instead of letting the two diverge.
     if (waDirty) { showToast('Save the template before submitting to Meta', 'error'); return; }
-    const errs = validateWaTemplate(buildPayload().content, t.variables.map((v) => v.token));
+    // Full rows, not tokens — the source checks need to know where each token resolves.
+    const errs = validateWaTemplate(buildPayload().content, t.variables);
     if (errs.length) { showToast(`Fix ${errs.length} issue${errs.length === 1 ? '' : 's'} before submitting`, 'error'); return; }
     if (!window.confirm(
       `Submit "${t.wa.meta_name}" to Meta for approval?\n\n`

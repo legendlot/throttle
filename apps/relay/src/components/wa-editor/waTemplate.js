@@ -52,12 +52,25 @@ function sequenceError(comp, nums) {
   return null;
 }
 
-// validateWaTemplate(content, declaredTokens[]) → string[] of blocking problems.
+// The ONLY key send.js ever puts in the `system` render context — and on the WhatsApp path it
+// passes `system: {}`, so NOTHING resolves there. Kept as a set to mirror the worker's own
+// SYSTEM_FIELDS (wa-template-lint.js) rather than hard-coding the string twice.
+const SYSTEM_FIELDS = new Set(['unsubscribe_url']);
+
+// validateWaTemplate(content, variables[]) → string[] of blocking problems.
 // Mirrors what Meta will reject, plus the local binding rules renderWhatsapp needs at send.
-export function validateWaTemplate(content, declaredTokens = []) {
+//
+// `variables` accepts EITHER token strings or full variable rows. It used to take strings only,
+// and passing rows made every placeholder read as unbound — the preview then cried "fix before
+// submitting" on a valid template. Both shapes are handled here so that can't come back, and the
+// row shape is what enables the source checks below (a token alone cannot say where it resolves).
+export function validateWaTemplate(content, variables = []) {
   const errs = [];
   const c = content || {};
-  const known = new Set((declaredTokens || []).filter(Boolean));
+  const rows = (variables || []).filter(Boolean);
+  const asRow = (v) => (typeof v === 'string' ? { token: v } : v);
+  const known = new Set(rows.map((v) => asRow(v).token).filter(Boolean));
+  const varByToken = new Map(rows.map((v) => [asRow(v).token, asRow(v)]));
   const mapping = Array.isArray(c.mapping) ? c.mapping : [];
 
   if (!c.meta_name) errs.push('Meta template name is required.');
@@ -112,10 +125,42 @@ export function validateWaTemplate(content, declaredTokens = []) {
     for (const n of slotPos) if (!nums.includes(n)) errs.push(`${comp} mapping has slot ${n} but the text has no {{${n}}}.`);
   }
 
+  // A BUTTON slot is skipped by the loop above (it has no text to cross-check against), so
+  // until 2026-08-14 it got only the generic checks below and nothing button-specific at all.
+  // Both rules here are ones a real template already broke.
+  const btnSlots = mapping.filter((m) => (m.component || 'body') === 'button');
+  const urlButtons = (Array.isArray(c.buttons) ? c.buttons : [])
+    .filter((b) => String(b.type || '').toUpperCase() === 'URL');
+  for (const m of btnSlots) {
+    const ex = String(m.example || '');
+    // "Example" reads like "where the link goes", so the destination url gets typed in. But the
+    // value is APPENDED to the static base, so a url yields the nested
+    // https://lottoys.in/r/https://www.legendoftoys.com/collections/all (Mishica, 2026-08-14).
+    if (ex.includes('://')) {
+      errs.push('A button example is only the part that comes AFTER the url base, not the whole '
+        + 'destination. Putting a full url here builds a broken sample link — use the suffix alone.');
+    }
+  }
+  if (btnSlots.length && !urlButtons.some((b) => /\{\{\d+\}\}/.test(String(b.url || '')))) {
+    errs.push('A button mapping slot exists but no URL button carries a {{1}} — the parameter would '
+      + 'be rejected at send. Add {{1}} to the button url, or remove the slot.');
+  }
+
   for (const m of mapping) {
     if (!m.token) errs.push('Every mapping slot needs a variable token.');
     else if (!known.has(m.token)) errs.push(`Mapping slot {{${m.pos}}} uses {${m.token}}, which isn't declared under Variables.`);
     if (!m.example || !String(m.example).trim()) errs.push(`Mapping slot {{${m.pos}}} needs an example value (Meta requires one to approve).`);
+    // The one that silently kills a whole broadcast: renderWhatsapp is always handed an EMPTY
+    // system context, so a source:'system' variable resolves for nobody and render.js throws
+    // unresolved_variables on EVERY recipient — after a clean Meta approval. `Freedom to Play
+    // Sale_15Aug` was one submit away from this on a button bound to `first` (2026-08-14).
+    const v = m.token ? varByToken.get(m.token) : null;
+    if (v && v.source === 'system'
+        && !SYSTEM_FIELDS.has(v.field || v.token)
+        && (v.fallback === undefined || v.fallback === null || v.fallback === '')) {
+      errs.push(`{${m.token}} is set to source "system", which supplies nothing on WhatsApp — it `
+        + 'would fail on every send. Use profile, event, recipient or constant, or give it a fallback.');
+    }
   }
   return errs;
 }
