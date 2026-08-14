@@ -98,6 +98,10 @@ export default function ProductLinesEditor({ value, onChange, session }) {
               onCreateOption={(typed) => onProductPicked(i, typed, null)}
               createLabel={(q) => <>Use “{q}”</>}
               placeholder="Search a product…"
+              // This field's value IS the typed text (S214 free text), so a product that
+              // isn't in the catalogue must display and must survive tabbing to Variant.
+              // Without it the name vanished on the way to the next field.
+              freeTextValue
               portal
               style={inp}
             />

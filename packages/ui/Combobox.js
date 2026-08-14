@@ -72,6 +72,24 @@ export function Combobox({
   // option (the pre-existing contract) — arrow down to the create row to create instead.
   onCreateOption,
   createLabel,
+  // Free-text mode (2026-08-14). Declares that `value` may legitimately be text the user
+  // typed rather than an option's `value`. Two effects, both scoped to this flag:
+  //   · a `value` matching no option DISPLAYS ITSELF instead of rendering blank
+  //   · blurring with unmatched typed text COMMITS it via onCreateOption
+  //
+  // ⚠️ Opt-in precisely because "create" means different things to different callers. For
+  // Docket's program picker, create PERSISTS a record and `value` is then a UUID — showing
+  // the raw value would print a UUID in the box, and committing on blur would create a
+  // program because someone clicked away. That is what the note above guards. Ignition's
+  // product field is the opposite: the field is free text by design (S214), `value` IS the
+  // label, and "create" only means "keep what I typed". Only such fields may set this.
+  //
+  // Without it a creatable field is quietly lossy, which is how it was found: typing a
+  // product and tabbing to the next field erased it, and even clicking "Use …" stored the
+  // value while leaving the box LOOKING empty — doCreate closed the dropdown, and the
+  // reset-on-close effect could not resolve a value that is absent from `options`.
+  // (Nandeswari, #bugs 1786606775.600109.)
+  freeTextValue = false,
   // When true, the dropdown renders position:fixed (anchored to the input's
   // viewport rect) instead of position:absolute. Use inside scroll/overflow
   // containers (e.g. a horizontally-scrollable table) where an absolute
@@ -109,13 +127,19 @@ export function Combobox({
     [options, value]
   );
 
+  // The text to show when the dropdown is closed: the selected option's label, or — in
+  // free-text mode — the raw value, which IS the label for such a field. Anything else
+  // shows an empty box for a field that holds a value, which reads as data loss.
+  const closedLabel = selectedOption ? selectedOption.label
+    : (freeTextValue && value != null && value !== '' ? String(value) : '');
+
   // Snap query back to the selected label whenever value changes externally.
   // The user's in-progress search is preserved as long as the dropdown is open.
   useEffect(() => {
     if (!open) {
-      setQuery(selectedOption ? selectedOption.label : '');
+      setQuery(closedLabel);
     }
-  }, [selectedOption, open]);
+  }, [closedLabel, open]);
 
   // Filter options against the query. When the query exactly matches the
   // selected label, show all options (user just opened the dropdown).
@@ -183,6 +207,10 @@ export function Combobox({
     onCreateOption?.(trimmedQuery);
     setOpen(false);
     setHighlight(-1);
+    // Hold the created text in the box. Without this the close triggers the reset effect,
+    // which for a value absent from `options` resolved to '' — so "Use …" appeared to do
+    // nothing even though the parent had stored the value.
+    setQuery(trimmedQuery);
     if (inputRef.current) inputRef.current.blur();
   }
 
@@ -228,7 +256,7 @@ export function Combobox({
     } else if (e.key === 'Escape') {
       setOpen(false);
       setHighlight(-1);
-      setQuery(selectedOption ? selectedOption.label : '');
+      setQuery(closedLabel);
     } else if (e.key === 'Backspace' && allowClear && value && query === '') {
       // Backspace on an empty input after clearing the label clears selection.
       onChange?.('', null);
@@ -277,6 +305,13 @@ export function Combobox({
           (o) => (o.label || '').toLowerCase() === query.trim().toLowerCase()
         );
         if (exact) selectOption(exact);
+        // Free-text mode only: keep what was typed. For these fields the text IS the
+        // value, so discarding it on blur is data loss, not caution — and tabbing to the
+        // next field is the normal way to leave an input, not an unusual one. Still never
+        // fires for a plain creatable picker, where blur must not create a record.
+        else if (freeTextValue && onCreateOption && trimmedQuery && trimmedQuery !== String(value ?? '')) {
+          onCreateOption(trimmedQuery);
+        }
       }
       onBlurExternal?.();
     }, 150);
