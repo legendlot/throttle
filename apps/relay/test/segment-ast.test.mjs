@@ -3,7 +3,13 @@
 // THE test here is the round-trip: parseDef -> itemsToDef must return a saved definition
 // UNCHANGED. Opening a segment in the builder and pressing save is a thing people do casually,
 // and a bug in this pair silently rewrites a live audience with no error and no diff to look at.
-// The 11 fixtures below are the REAL definitions from comms.segments on 2026-08-13.
+// The fixtures below are REAL definitions from comms.segments.
+//
+// ⚠️ Count corrected 2026-08-14: this said "the 11 fixtures below", and the commit that added it
+// claimed every one of the 11 live definitions round-trips. There are FIVE here, and there are 12
+// segments live. So the round-trip is pinned for 5 of 12, not all of them — a real gap in the
+// safety net, since this pair silently rewrites a live audience when it is wrong. Logged in
+// BACKLOG [relay] rather than fixed here. Do not restate the "all live definitions" claim.
 import assert from 'node:assert';
 import { parseDef, itemsToDef, toLeaf, toRow, countConditions } from '../src/lib/segmentAst.js';
 
