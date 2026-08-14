@@ -121,7 +121,15 @@ async function reachableCount(env, camp) {
 async function startCampaign(env, id, sentBy) {
   const camp = await getCampaign(env, id);
   if (!camp) return { ok: false, error: 'not_found' };
-  if (!['approved', 'scheduled'].includes(camp.status))
+  // 'stopped' is RESUMABLE (S279) — a stopped broadcast restarts through this same path rather
+  // than needing separate resume machinery, because send.js's dedup already gives exactly the
+  // right semantics: a prior sent-like row dedups (nobody is messaged twice) while a prior
+  // skipped/failed row is ADOPTED (the tail actually gets retried). Without this, Stop would be
+  // terminal and would recreate, one step earlier, the very gap it was built to close — a
+  // part-sent campaign nobody can finish.
+  // ⚠️ Resume re-fans from the START of the recipient list (after: null), so an audience that is
+  // half done pays a fast dedup no-op for everyone already reached. Correct, just not free.
+  if (!['approved', 'scheduled', 'stopped'].includes(camp.status))
     return { ok: false, error: `not_sendable_from_${camp.status}` };
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
 
@@ -161,12 +169,14 @@ async function startCampaign(env, id, sentBy) {
     return { ok: false, error: 'audience_grew_needs_approval' };
   }
 
-  // Atomic claim (M9): flip approved/scheduled → sending ONLY if still approved/scheduled,
+  // Atomic claim (M9): flip approved/scheduled/stopped → sending ONLY if still in one of those,
   // so the M9 scheduler sweep and a concurrent manual "Send now" can't both fan out the same
   // campaign. sbComms defaults to Prefer: return=representation → an empty array means another
   // actor already claimed it.
+  // ⚠️ Keep this list in step with the guard above — they are the same gate written twice, and a
+  // status accepted there but missing here fails as the misleading 'already_claimed'.
   const claim = await A.sbComms(
-    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled)`, env,
+    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped)`, env,
     { method: 'PATCH', body: JSON.stringify({
         status: 'sending', audience_snapshot: sendable, sent_by: sentBy, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)

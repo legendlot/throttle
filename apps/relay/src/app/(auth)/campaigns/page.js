@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download, OctagonX } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip } from '@/components/ui.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
@@ -36,7 +36,7 @@ function tabOf(r) {
   const s = r?.status || 'draft';
   const future = r?.scheduled_at && new Date(r.scheduled_at) > new Date();
   if ((s === 'approved' || s === 'scheduled') && future) return 'scheduled';
-  if (s === 'sent' || s === 'sending' || s === 'paused') return 'sent';
+  if (s === 'sent' || s === 'sending' || s === 'paused' || s === 'stopped') return 'sent';
   if (s === 'draft' || s === 'pending_approval') return 'drafts';
   return 'other';
 }
@@ -107,7 +107,7 @@ const CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUS_TONE = {
   draft: 'gray', pending_approval: 'yellow', approved: 'blue', scheduled: 'yellow',
-  sending: 'orange', sent: 'green',
+  sending: 'orange', sent: 'green', stopped: 'red',
 };
 
 // Friendly, at-a-glance campaign state derived from the raw lifecycle status.
@@ -127,6 +127,9 @@ function campaignStatus(r) {
     case 'scheduled':        return { label: 'Approved', tone: 'blue' };
     case 'sending':          return { label: 'In progress', tone: 'orange', dot: true };
     case 'sent':             return { label: 'Sent', tone: 'green', dot: true };
+    // Stopped is a PAUSE, not a failure — "Send now" resumes it and already-sent people are
+    // deduped. Say so in the label, or it reads as a dead campaign nobody dares touch.
+    case 'stopped':          return { label: 'Stopped — resumable', tone: 'red', dot: true };
     case 'paused':           return { label: 'Paused — template blocked by Meta', tone: 'red', dot: true };
     default:                 return { label: s.replace(/_/g, ' '), tone: STATUS_TONE[s] || 'gray' };
   }
@@ -478,6 +481,30 @@ export default function CampaignsPage() {
     finally { setBusy(false); }
   }
 
+  // EMERGENCY STOP (S279). Halts a fan-out already in flight. The worker flips status
+  // sending → stopped; processQueueMessage re-reads the campaign at the top of every page and
+  // returns early, so nothing further is queued.
+  //
+  // ⚠️ The confirm must NOT read like an undo. Messages already delivered cannot be recalled —
+  // the honest promise is "no NEW messages", and saying anything softer invites someone to press
+  // this expecting the send to disappear.
+  async function stopNow() {
+    const done = stats ? Number(stats.sent || 0) : null;
+    const of = Number(c.audience_snapshot || 0);
+    const progress = done != null && of > 0 ? `\n\nAbout ${done.toLocaleString('en-IN')} of ${of.toLocaleString('en-IN')} have been attempted so far.` : '';
+    if (!window.confirm(
+      `Stop "${c.name}" now?${progress}\n\nMessages already sent CANNOT be recalled — this only stops new ones. `
+      + `The batch in flight finishes first, so a few more may still go out.\n\n`
+      + `You can resume later with "Send now": anyone already messaged is skipped automatically.`)) return;
+    setBusy(true);
+    try {
+      await workerFetch('stopCampaign', { id: c.id }, session);
+      showToast('Stopped — no further messages will be queued', 'success');
+      refresh();
+    } catch (e) { showToast(e.message || 'Stop failed', 'error'); }
+    finally { setBusy(false); }
+  }
+
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
   // Read live (review M12): render ONLY while test mode is on or unknown (settings still
@@ -753,7 +780,18 @@ export default function CampaignsPage() {
                 {canSend && <Btn kind="primary" onClick={sendNow} disabled={busy}><Send size={14} /> Send now</Btn>}
               </>
             )}
-            {c.status === 'sending' && <span className="dim" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Clock size={14} /> Fan-out in progress — <button className="badge-btn accent" onClick={refresh}>refresh</button></span>}
+            {c.status === 'sending' && (
+              <>
+                <span className="dim" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Clock size={14} /> Fan-out in progress — <button className="badge-btn accent" onClick={refresh}>refresh</button></span>
+                {canSend && <Btn kind="danger" onClick={stopNow} disabled={busy}><OctagonX size={14} /> Stop sending</Btn>}
+              </>
+            )}
+            {c.status === 'stopped' && (
+              <>
+                <Badge label="stopped mid-send" tone="red" dot />
+                {canSend && <Btn kind="primary" onClick={sendNow} disabled={busy}><Send size={14} /> Resume sending</Btn>}
+              </>
+            )}
             {c.status === 'sent' && <Badge label={`sent · ${c.audience_snapshot ?? ''} recipients`} tone="green" dot />}
           </div>
           <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>

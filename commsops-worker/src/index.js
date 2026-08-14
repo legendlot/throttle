@@ -1720,6 +1720,33 @@ async function handlePost(body, auth, env) {
       const r = await CAMP.startCampaign(env, body.id, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    // EMERGENCY STOP for a broadcast already fanning out (S279). The mechanism always existed —
+    // processQueueMessage re-reads the campaign at the top of EVERY page and returns early on any
+    // status other than 'sending' — but nothing could set that status, so halting a live send
+    // meant a hand-written DB PATCH. On 2026-08-14 a real campaign needed intervention and there
+    // was no door; this is that door.
+    //
+    // Takes effect within ONE page (~15s at 5-concurrent), not instantly: the page in flight
+    // finishes its recipients. That is deliberate — killing mid-page would strand messages
+    // between the dedup reserve and the provider call, which is the one state send.js cannot
+    // reason about later.
+    //
+    // Gated on canActivate, the same permission as starting a send: whoever can fire a broadcast
+    // can stop one. Do NOT loosen this to canBuild on "emergencies should be open" grounds
+    // without also handling resume — see the note in campaigns.js startCampaign.
+    case 'stopCampaign': {
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      if (!body.id) return err('id_required', 400);
+      // Conditional on status=eq.sending, so this is atomic against the fan-out and against a
+      // second person pressing Stop: an empty representation means it was not sending.
+      const r = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(body.id)}&status=eq.sending`, env,
+        { method: 'PATCH', body: JSON.stringify({ status: 'stopped', updated_at: nowIso() }) });
+      if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return err('not_stoppable', 400);
+      // Stopping a live customer send is exactly the class of event the alert channel exists for.
+      await AL.alert(env, `🛑 *Relay — broadcast STOPPED*\n"${r.data[0]?.name || body.id}" was stopped mid-fan-out. The page in flight finishes; nothing further is queued. Press "Send now" to resume — already-sent recipients are deduped.`)
+        .catch(() => { /* never let a failed alert turn a successful stop into an error */ });
+      return ok({ status: 'stopped' });
+    }
     case 'cancelSchedule': {           // clear a pending schedule (M9); leaves the campaign approved
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       if (!body.id) return err('id_required', 400);
