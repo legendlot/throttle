@@ -281,7 +281,7 @@ export default function CampaignsPage() {
   // (incl. 'paused': Meta blocking a bound template mid-send does not undo the messages that
   // already went out before the block — hiding stats then hides an incident, not nothing).
   const loadStats = useCallback(async (id, status) => {
-    if (!id || !['sending', 'sent', 'paused'].includes(status)) { setStats(null); setAttr(null); return; }
+    if (!id || !['sending', 'sent', 'paused', 'stopped'].includes(status)) { setStats(null); setAttr(null); return; }
     try {
       const [st, at] = await Promise.all([
         garageFetch('getCampaignStats', { id }, session),
@@ -456,7 +456,11 @@ export default function CampaignsPage() {
     catch (e) { showToast(e.message || 'Cancel failed', 'error'); }
     finally { setBusy(false); }
   }
-  async function sendNow() {
+  // `resume` is the same worker action (startCampaign now accepts 'stopped'), but the confirm
+  // must NOT say "fans out real messages to everyone reachable" — on a resume most of that
+  // audience has already been messaged and will be deduped. Overstating it invites someone to
+  // cancel a safe resume for fear of double-sending.
+  async function sendNow({ resume = false } = {}) {
     const seg = segments.find((s) => s.id === c.segment_id);
     // Read the live flag, not a hardcoded assumption (review M12) — the day test_mode goes OFF,
     // a stale "internal test gate" confirm would lie in the dangerous direction. Unknown/unloaded
@@ -471,11 +475,17 @@ export default function CampaignsPage() {
     if ((c.exclude_campaign_ids || []).length) exclusionLines.push(`· not already reached by: ${c.exclude_campaign_ids.map((id) => rows.find((r) => r.id === id)?.name || id).join(', ')}`);
     if (c.exclude_contacted_hours) exclusionLines.push(`· not contacted on ${c.channel} in the last ${c.exclude_contacted_hours}h`);
     const exclusionBlock = exclusionLines.length ? `\n\nExclusions in force:\n${exclusionLines.join('\n')}` : '';
-    if (!window.confirm(`${gateLine}\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real messages to everyone reachable in the segment.${exclusionBlock}`)) return;
+    const done = stats ? Number(stats.sent || 0) : 0;
+    const body = resume
+      ? `Resume "${c.name}"?\n\n`
+        + (done ? `About ${done.toLocaleString('en-IN')} people have already been messaged — they are skipped automatically, nobody hears from this twice.\n\n` : '')
+        + `Sending picks up where it stopped, plus anyone it previously failed to reach.`
+      : `Send "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real messages to everyone reachable in the segment.`;
+    if (!window.confirm(`${gateLine}\n\n${body}${exclusionBlock}`)) return;
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
-      showToast(`Sending started — ${r?.data?.audience ?? '?'} recipients`, 'success');
+      showToast(`${resume ? 'Resumed' : 'Sending started'} — ${r?.data?.audience ?? '?'} recipients`, 'success');
       refresh();
     } catch (e) { showToast(e.message || 'Send failed', 'error'); }
     finally { setBusy(false); }
@@ -777,7 +787,7 @@ export default function CampaignsPage() {
                     {canBuild && <button className="badge-btn" onClick={cancelSchedule} disabled={busy} style={{ marginLeft: 8 }}>cancel schedule</button>}
                   </span>
                 )}
-                {canSend && <Btn kind="primary" onClick={sendNow} disabled={busy}><Send size={14} /> Send now</Btn>}
+                {canSend && <Btn kind="primary" onClick={() => sendNow()} disabled={busy}><Send size={14} /> Send now</Btn>}
               </>
             )}
             {c.status === 'sending' && (
@@ -789,7 +799,7 @@ export default function CampaignsPage() {
             {c.status === 'stopped' && (
               <>
                 <Badge label="stopped mid-send" tone="red" dot />
-                {canSend && <Btn kind="primary" onClick={sendNow} disabled={busy}><Send size={14} /> Resume sending</Btn>}
+                {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> Resume sending</Btn>}
               </>
             )}
             {c.status === 'sent' && <Badge label={`sent · ${c.audience_snapshot ?? ''} recipients`} tone="green" dot />}
@@ -805,7 +815,21 @@ export default function CampaignsPage() {
         {stats && (
           <Panel title="Performance" pad>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-              <Kpi label="Sent" value={stats.sent ?? 0} tone="gray" sub={`${stats.total ?? 0} targeted`} />
+              {/* PLANNED, from audience_snapshot — the reachable count startCampaign claimed the
+                  send against. `stats.total` (which "Sent" used to be measured against) counts
+                  comms.messages ROWS, and the fan-out creates those just ahead of sending, so it
+                  reported ~100% for a campaign that had barely started. Same defect as the Control
+                  Tower bar, fixed 2026-08-14. */}
+              <Kpi label="Planned" value={c.audience_snapshot ?? '—'} tone="gray"
+                   sub={c.audience_snapshot ? 'reachable when the send began' : 'not yet sent'} />
+              <Kpi label="Sent" value={stats.sent ?? 0} tone="gray"
+                   sub={c.audience_snapshot ? `${pct(stats.sent, c.audience_snapshot)}% of planned` : `${stats.total ?? 0} queued so far`} />
+              {/* FAILED was returned by campaign_stats_list all along and rendered NOWHERE, while
+                  Bounced/Complaints/Skipped each had a tile. A WhatsApp broadcast can fail ~40% at
+                  Meta's engagement-quality block (wa_131049) with nothing on this page saying so —
+                  the operator saw "Delivered" and no reason for the gap. */}
+              <Kpi label="Failed" value={stats.failed ?? 0} tone={stats.failed ? 'red' : 'gray'}
+                   sub={stats.sent ? `${pct(stats.failed, stats.sent)}% of sent · rejected by the provider` : 'rejected by the provider'} />
               <Kpi label="Delivered" value={stats.delivered ?? 0} tone="green" sub={`${pct(stats.delivered, stats.sent)}% of sent`} />
               <Kpi label="Opened" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
               {/* Click-through. A campaign-kind (slug) link is ONE shared code sent to everyone, so

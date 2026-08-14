@@ -194,6 +194,15 @@ export default function JourneysPage() {
     // customer nearly got a send three minutes after a test journey was switched off (S230),
     // recoverable then only via wrangler. Ask, because both answers are legitimate: draining
     // is right for a copy tweak, stopping is right for pulling a journey.
+    // ⚠️ Turning OFF needs its own gate. Until 2026-08-14 the switch acted the moment it was
+    // clicked and only THEN asked about draining — so a stray click silently stopped a live
+    // journey enrolling, and the dialog that appeared was about something else entirely. The
+    // "off is the safe direction" reasoning holds for customers, not for the business: a paused
+    // journey sends nothing to anyone, which is its own kind of harm and nobody gets an alert.
+    // Two steps on purpose — this one is the stray-click guard, the next is a real decision with
+    // two legitimate answers.
+    if (!next && !window.confirm(
+      `Turn OFF "${r.name}"?\n\nIt will stop enrolling new customers straight away.`)) return;
     let stopInFlight = false;
     if (!next) {
       stopInFlight = window.confirm(
