@@ -395,6 +395,20 @@ export default function IssueQueuePage() {
             available: stock[p.part_code] || 0,
           }));
           setSelectedItem({ ...row, wo, lines });
+          // FEAT-021 — an ad-hoc request may have been picked by bag scan on the
+          // Store Issue station. Pull what was scanned so the quantities below
+          // are pre-filled from the floor rather than retyped. Unlike runs there
+          // is no status to gate on: the worker returns pick_started:false when
+          // nothing was scanned, and the panel simply doesn't render.
+          setPickStatusLoading(true);
+          try {
+            const pickData = await garageFetch('getWorkOrderPickStatus', { wo_no: row.ref }, session);
+            if (pickData?.pick_started) setPickStatus(pickData);
+          } catch {
+            // Soft fail — the request is still issuable by hand, exactly as before.
+          } finally {
+            setPickStatusLoading(false);
+          }
         } else if (Array.isArray(wo.lines) && wo.lines.length) {
           // Rework — the WO carries its own PART lines, from a flush "Rework Queue"
           // disposition. Render those. Do NOT fall through to calcKit: that computes a
@@ -489,8 +503,10 @@ export default function IssueQueuePage() {
     }
     setSubmitting(true);
     try {
-      // FEAT-020 — warn (but don't block) when issuing a Picking run before all bags are scanned
-      if (selectedItem.type === 'run' && pickStatus && !pickStatus.pick_complete) {
+      // FEAT-020/021 — warn (but don't block) when issuing before all bags are
+      // scanned. pickStatus is only set for a run in Picking or an ad-hoc
+      // request that was actually picked, so this covers both without a type test.
+      if (pickStatus && !pickStatus.pick_complete) {
         showToast(
           `Pick incomplete (${pickStatus.lines_complete}/${pickStatus.lines_total} parts). Issuing with current quantities.`,
           'info'
@@ -1131,11 +1147,13 @@ export default function IssueQueuePage() {
           </div>
           <div style={panelBodyStyle} ref={detailFormRef}>
             {/* FEAT-020 — Pick Status panel for runs in Picking state */}
-            {selectedItem.type === 'run' && (pickStatus || pickStatusLoading) && (
+            {(pickStatus || pickStatusLoading) && (
               <PickStatusPanel
                 pickStatus={pickStatus}
                 loading={pickStatusLoading}
-                onVoid={(line) => { setVoidModal(line); setVoidReason(''); }}
+                onVoid={selectedItem.type === 'run'
+                  ? (line) => { setVoidModal(line); setVoidReason(''); }
+                  : null}
               />
             )}
             {detailLoading ? (
@@ -1396,7 +1414,7 @@ function DetailBody({ item, materialCache, pickedMap }) {
         )}
       </div>
 
-      <SimplePartTable lines={lines} showProduct={item.type !== 'wo' || wo.wo_type === 'Parts Request'} materialCache={materialCache} />
+      <SimplePartTable lines={lines} showProduct={item.type !== 'wo' || wo.wo_type === 'Parts Request'} materialCache={materialCache} pickedMap={pickedMap} />
     </>
   );
 }
@@ -1410,7 +1428,7 @@ function Chip({ label, value }) {
   );
 }
 
-function SimplePartTable({ lines, showProduct, materialCache }) {
+function SimplePartTable({ lines, showProduct, materialCache, pickedMap }) {
   if (!lines.length) {
     return <div style={{ padding: 16, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No parts to issue</div>;
   }
@@ -1435,6 +1453,14 @@ function SimplePartTable({ lines, showProduct, materialCache }) {
           {sorted.map((l) => {
             const planned = l.required || 0;
             const short = (l.available || 0) < planned;
+            // FEAT-021 — pre-fill from what was scanned on the Store Issue
+            // station, same rule as the run path: a scanned figure wins over the
+            // requested one, and is tinted amber when the two disagree so the
+            // difference is visible rather than silently accepted.
+            const scanned = pickedMap && Object.prototype.hasOwnProperty.call(pickedMap, l.part_code)
+              ? pickedMap[l.part_code]
+              : null;
+            const defaultQty = scanned != null ? scanned : planned;
             return (
               <tr key={l.part_code}>
                 <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.part_code}</td>
@@ -1448,12 +1474,18 @@ function SimplePartTable({ lines, showProduct, materialCache }) {
                     type="number"
                     min="0"
                     step="0.01"
-                    defaultValue={planned}
+                    defaultValue={defaultQty}
                     data-part-code={l.part_code}
                     data-part-name={l.part_name || ''}
                     data-planned={planned}
                     data-bom-qty={l.bom_qty || 1}
-                    style={{ ...inputStyle, width: 110, fontFamily: 'var(--mono)' }}
+                    style={{
+                      ...inputStyle, width: 110, fontFamily: 'var(--mono)',
+                      ...(scanned != null && scanned !== planned
+                        ? { borderColor: '#fbbf24', color: '#fbbf24' }
+                        : {}),
+                    }}
+                    title={scanned != null ? `Pre-filled from scanned qty (requested: ${planned})` : undefined}
                   />
                 </td>
               </tr>
@@ -1678,7 +1710,10 @@ function PickStatusPanel({ pickStatus, loading, onVoid }) {
                   <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.scanned_qty || 0}</td>
                   <td style={tableTdStyle}><StatusBadge label={label} tone={tone} /></td>
                   <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                    {!l.is_void && l.pick_status !== 'complete' && (
+                    {/* onVoid is null for ad-hoc picks (FEAT-021): voidRunPickLine
+                        keys on run_id, which an ad-hoc request has not got. The
+                        request itself is still fully editable in Redline. */}
+                    {onVoid && !l.is_void && l.pick_status !== 'complete' && (
                       <button
                         onClick={() => onVoid(l)}
                         style={{ ...btnSecondary, padding: '4px 10px', fontSize: 10 }}
