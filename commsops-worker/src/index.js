@@ -768,18 +768,25 @@ async function handleGet(url, auth, env) {
 
       // ── quiet_hours_risk — WARNING, not blocking ────────────────────────────────
       // Audience: campaigns.audience_snapshot when set (populated at approval/send time);
-      // before that it's null, so fall back to the current comms.segment_members row count
-      // for the campaign's segment — the SAME cheap, non-materializing read `getSegment`
-      // already uses. Deliberately NOT campaigns.js's reachableCount(), which calls
-      // materialize_segment — real work this screen (re-checked on every arm edit) cannot
-      // afford to pay on every keystroke.
+      // before that it's null, so fall back to the segment's CURRENT member count via
+      // segments_list, the same SQL-side count `getSegment` uses. Deliberately NOT
+      // campaigns.js's reachableCount(), which calls materialize_segment — real work this
+      // screen (re-checked on every arm edit) cannot afford to pay on every keystroke.
+      //
+      // ⚠️ This used to read the member ROWS and take .length, which PostgREST caps at
+      // db-max-rows = 5,000 with no error and no header (CORE.md S275). "Winback 90 — Email"
+      // has 25,100 members (re-verified 2026-08-14), so the quiet-hours warning understated
+      // its risk 5×. Warning-only, so it misinformed rather than mis-sent — but it is the
+      // same defect fixed in getSegment the same day, and the fix is the same one call.
       let audience = null;
       if (camp.audience_snapshot != null) {
         audience = Number(camp.audience_snapshot);
       } else if (camp.segment_id) {
-        const mc = await A.sbComms(
-          `/rest/v1/segment_members?segment_id=eq.${A.enc(camp.segment_id)}&select=profile_id`, env);
-        if (mc.ok && Array.isArray(mc.data)) audience = mc.data.length;
+        const list = await A.sbComms('/rest/v1/rpc/segments_list', env,
+          { method: 'POST', body: JSON.stringify({}) });
+        const row = Array.isArray(list.data)
+          ? list.data.find((x) => String(x.id) === String(camp.segment_id)) : null;
+        if (row) audience = Number(row.member_count ?? 0);
       }
 
       if (audience == null || !Number.isFinite(audience)) {
