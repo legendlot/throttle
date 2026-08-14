@@ -135,6 +135,23 @@ function campaignStatus(r) {
   }
 }
 
+// A WhatsApp url-button's address is frozen when Meta approves the template, and the send path
+// deliberately never rewrites a button parameter (appending utm_* to what is only a SUFFIX would
+// corrupt the resolved link). So a url button WITHOUT `target_base` — i.e. one not re-approved in
+// the `https://host/r/{{1}}` redirect form — cannot carry UTMs and cannot be click-tracked, no
+// matter how completely the UTM fields are filled in.
+//
+// This warning exists because the UI otherwise promises the opposite. "Freedom to Play Sale_14 Aug"
+// went out on 2026-08-14 with a full UTM set on BOTH the campaign and the template, and recorded
+// 3,528 sent / 1,958 delivered / 0 clicks / 0 attributed orders — permanently. Nothing on screen
+// had said the link was untaggable, and `target_base` is not settable anywhere in this app, so the
+// only signal available to whoever built it was a UTM panel that looked correctly configured.
+function untrackableButtons(tpl) {
+  const btns = tpl?.content?.buttons;
+  if (!Array.isArray(btns)) return [];
+  return btns.filter((b) => String(b?.type || '').toUpperCase() === 'URL' && b?.url && !b?.target_base);
+}
+
 function emptyCampaign() {
   return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null,
     // Audience exclusions (S276) — all three optional, all evaluated live during the fan-out.
@@ -481,7 +498,15 @@ export default function CampaignsPage() {
         + (done ? `About ${done.toLocaleString('en-IN')} people have already been messaged — they are skipped automatically, nobody hears from this twice.\n\n` : '')
         + `Sending picks up where it stopped, plus anyone it previously failed to reach.`
       : `Send "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real messages to everyone reachable in the segment.`;
-    if (!window.confirm(`${gateLine}\n\n${body}${exclusionBlock}`)) return;
+    // Repeat it in the confirm: the inline banner sits in a panel that is easy to scroll past,
+    // and this is the last moment anyone can act on it.
+    const tpl = templates.find((t) => t.id === c.template_id) || null;
+    const untrackable = c.purpose === 'marketing' ? untrackableButtons(tpl) : [];
+    const trackingWarn = untrackable.length
+      ? `\n\n⚠️ NO LINK TRACKING — this send will record no clicks and no attributed revenue. `
+        + `Its button address is fixed at Meta and cannot be tagged.`
+      : '';
+    if (!window.confirm(`${gateLine}\n\n${body}${exclusionBlock}${trackingWarn}`)) return;
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
@@ -685,6 +710,19 @@ export default function CampaignsPage() {
                 auto={{ utm_source: 'relay', utm_medium: c.channel, utm_campaign: c.name || 'the campaign name', utm_content: 'the template name' }}
               />
               <UtmMarketingNote />
+              {untrackableButtons(selTpl).length > 0 && (
+                <div className="info-bar" style={{ marginTop: 10, background: 'rgba(248,113,113,.07)', borderColor: 'var(--red)' }}>
+                  <AlertTriangle size={16} style={{ color: 'var(--red)', flexShrink: 0 }} />
+                  <span>
+                    <strong>These UTMs will not reach anyone.</strong> “{selTpl?.name}” sends its link as a
+                    fixed button (<span className="mono">{untrackableButtons(selTpl)[0].url}</span>). A WhatsApp
+                    button’s address is locked when Meta approves the template, so nothing can be added to it
+                    when the message is sent. This campaign will record <strong>no clicks and no attributed
+                    revenue</strong>, whatever is set above. To track it, the template has to be re-approved at
+                    Meta with a redirect link — ask Afshaan before you schedule the send.
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </Panel>
