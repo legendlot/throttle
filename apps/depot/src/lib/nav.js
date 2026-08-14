@@ -1,7 +1,7 @@
 import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
-  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox, Barcode,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox, Barcode, Package,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -54,7 +54,8 @@ export const NAV_PRIMARY = [
 ];
 
 export const NAV_SETUP = [
-  { id: 'channels', label: 'Channels', route: '/dispatch-channels', icon: Tag },
+  { id: 'channels',  label: 'Channels',  route: '/dispatch-channels',  icon: Tag },
+  { id: 'box-types', label: 'Box Types', route: '/dispatch-box-types', icon: Package },
 ];
 
 /* Help — the in-app System Manual (also downloadable as PDF). */

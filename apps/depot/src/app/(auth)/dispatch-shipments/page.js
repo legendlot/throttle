@@ -149,7 +149,12 @@ export default function DispatchShipmentsPage() {
   const [expandedBoxes,  setExpandedBoxes]  = useState(new Set());
   const [boxUnitsCache,  setBoxUnitsCache]  = useState({});
   const [addBoxCount,    setAddBoxCount]    = useState(1);
-  const [addBoxCapacity, setAddBoxCapacity] = useState(''); // max units/carton; '' = unlimited
+  const [addBoxCapacity, setAddBoxCapacity] = useState(''); // max units/carton; '' = unlim
+  // Carton library (dispatch_box_types_v1). The shipment's usual carton is what
+  // the scanner pre-selects at box close, so the floor confirms rather than chooses.
+  const [boxTypes,     setBoxTypes]     = useState([]);
+  const [addBoxType,   setAddBoxType]   = useState('');
+  const [stampingBox,  setStampingBox]  = useState({});   // { [box_id]: true }ited
 
   // Tracking & delivery editor (Snorkel↔Depot fulfilment). Seeded per shipment;
   // committed together via updateShipmentTracking.
@@ -250,6 +255,8 @@ export default function DispatchShipmentsPage() {
     setExpandedBoxes(new Set());
     setBoxUnitsCache({});
     setDetailLoading(true);
+    setAddBoxType(shipment.default_box_type_id || '');
+    loadBoxTypes();
     try {
       const [boxes, lines, rem] = await Promise.all([
         garageFetch('getShipmentBoxes', { shipment_id: shipment.id }, session),
@@ -376,11 +383,14 @@ export default function DispatchShipmentsPage() {
     });
   }
 
-  async function addBoxes(shipmentId, count, capacity) {
+  async function addBoxes(shipmentId, count, capacity, boxTypeId) {
     const n = Math.max(1, parseInt(count, 10) || 1);
     const cap = (capacity != null && parseInt(capacity, 10) > 0) ? parseInt(capacity, 10) : null;
     try {
-      const res = await workerFetch('createBoxes', { shipment_id: shipmentId, count: n, capacity: cap }, session);
+      const res = await workerFetch('createBoxes', {
+        shipment_id: shipmentId, count: n, capacity: cap,
+        default_box_type_id: boxTypeId || null,
+      }, session);
       const r = res?.data || res;
       const created = r?.created ?? n;
       showToast(`${created} box${created !== 1 ? 'es' : ''} added${cap ? ` · max ${cap}/box` : ''}`, 'success');
@@ -389,6 +399,32 @@ export default function DispatchShipmentsPage() {
       await refreshDetail();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
+    }
+  }
+
+  // Carton library — read once for the picker and the desk backstop.
+  async function loadBoxTypes() {
+    try {
+      const data = await garageFetch('getBoxTypes', {}, session);
+      setBoxTypes((Array.isArray(data) ? data : []).filter(t => t.is_active !== false));
+    } catch (_) { setBoxTypes([]); }
+  }
+
+  // The backstop. The scanner prompt is skippable by design (Padmajit), so a box
+  // can close without dimensions on a busy line; this is where that gets finished
+  // at the desk before the consignment goes to the courier.
+  async function stampBoxDimensions(boxId, boxTypeId) {
+    if (!boxTypeId) return;
+    setStampingBox(prev => ({ ...prev, [boxId]: true }));
+    try {
+      const res = await workerFetch('setBoxDimensions', { box_id: boxId, box_type_id: boxTypeId }, session);
+      const r = res?.data || res;
+      showToast(`${r?.box_type_name || 'Box size'} recorded`, 'success');
+      await refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Failed to record the box size', 'error');
+    } finally {
+      setStampingBox(prev => ({ ...prev, [boxId]: false }));
     }
   }
 
@@ -1274,6 +1310,19 @@ export default function DispatchShipmentsPage() {
                 {/* Boxes */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                   <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Boxes · {detailBoxes.length}</span>
+                  {(() => {
+                    const missing = detailBoxes.filter(b =>
+                      b.fulfillment_model === 'bulk' &&
+                      (b.status === 'packed' || b.status === 'closed' || b.status === 'shipped') &&
+                      !b.box_type_id).length;
+                    return missing > 0 ? (
+                      <span className="num" title="Packed boxes with no carton size recorded — the courier will ask for these"
+                        style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                          color: 'var(--warn-fg)', background: 'var(--surface-2)', borderRadius: 3, padding: '2px 6px' }}>
+                        {missing} without size
+                      </span>
+                    ) : null;
+                  })()}
                   <div style={{ flex: 1 }} />
                   {!['shipped', 'cancelled'].includes(detailShipment.status) && (
                     <>
@@ -1291,7 +1340,18 @@ export default function DispatchShipmentsPage() {
                         className="num" placeholder="cap" title="Max units per box (blank = unlimited)"
                         style={{ ...inputStyle, width: 64, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
                       />
-                      <button onClick={() => addBoxes(detailShipment.id, addBoxCount, addBoxCapacity)}
+                      <select
+                        value={addBoxType}
+                        onChange={e => setAddBoxType(e.target.value)}
+                        title="Usual carton for this shipment — the scanner pre-selects it at box close"
+                        style={{ ...inputStyle, width: 132, padding: '5px 8px', fontSize: 12.5, cursor: 'pointer' }}
+                      >
+                        <option value="">Carton…</option>
+                        {boxTypes.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                      <button onClick={() => addBoxes(detailShipment.id, addBoxCount, addBoxCapacity, addBoxType)}
                         style={{ ...btnGhost, padding: '6px 11px', fontSize: 12 }}>
                         <Icon name="plus" size={13} /> Add Boxes
                       </button>
@@ -1320,6 +1380,34 @@ export default function DispatchShipmentsPage() {
                             <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{fmt(box.unit_count)}{box.capacity ? ` / ${box.capacity}` : ''} units</span>
                             <BoxStatusBadge status={box.status} />
                             <div style={{ flex: 1 }} />
+                            {/* Dimensions — recorded on the floor at box close, or filled here.
+                                The floor prompt is skippable by design, so this is the backstop
+                                that stops a consignment reaching the courier without sizes. */}
+                            {isPacked && box.fulfillment_model === 'bulk' && (
+                              box.box_type_id ? (
+                                <span className="num" title={`${box.box_type_name} · recorded`}
+                                  style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}>
+                                  {box.box_type_name} · {box.box_length_cm}×{box.box_width_cm}×{box.box_height_cm}
+                                </span>
+                              ) : (
+                                <select
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => { e.stopPropagation(); stampBoxDimensions(box.id, e.target.value); }}
+                                  value=""
+                                  disabled={!!stampingBox[box.id] || boxTypes.length === 0}
+                                  title={boxTypes.length === 0
+                                    ? 'No box types set up — add them under Setup › Box Types'
+                                    : 'No dimensions recorded — pick the carton this box was packed in'}
+                                  style={{ ...inputStyle, width: 124, padding: '3px 7px', fontSize: 11,
+                                    cursor: 'pointer', borderColor: 'var(--warn-fg)', color: 'var(--warn-fg)' }}
+                                >
+                                  <option value="">No size ▾</option>
+                                  {boxTypes.map(t => (
+                                    <option key={t.id} value={t.id}>{t.name} · {t.length_cm}×{t.width_cm}×{t.height_cm}</option>
+                                  ))}
+                                </select>
+                              )
+                            )}
                             {isPacked && (
                               <>
                                 <button onClick={(e) => { e.stopPropagation(); reprintBox(box.id); }} style={actionBtn('var(--blue-bright)')}>Reprint</button>
