@@ -8,7 +8,7 @@ import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
-import { blankRow, toLeaf, parseDef, itemsToDef, normalizeWithin } from '@/lib/segmentAst.js';
+import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin } from '@/lib/segmentAst.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -635,6 +635,9 @@ export default function SegmentsPage() {
                 <tbody>
                   {rows.map((r) => {
                     const p = parseDef(r.definition);
+                    // Leaf count, flattening groups — see countConditions(). This line read
+                    // `p.rows.length` until 2026-08-14 and threw on every dynamic segment.
+                    const nConds = countConditions(p.items);
                     return (
                       <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
                         <td>
@@ -644,7 +647,7 @@ export default function SegmentsPage() {
                           </span>
                         </td>
                         <td><Badge label={r.kind} tone={r.kind === 'dynamic' ? 'blue' : 'gray'} /></td>
-                        <td className="dim">{r.kind === 'static' ? '—' : (p.rows.length === 0 ? 'everyone' : `${p.rows.length} · match ${p.group}`)}</td>
+                        <td className="dim">{r.kind === 'static' ? '—' : (nConds === 0 ? 'everyone' : `${nConds} · match ${p.group}`)}</td>
                         {(() => {
                           const ms = memberState(r.kind, r.member_count, r.materialized_at);
                           return (

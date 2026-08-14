@@ -114,4 +114,19 @@ function itemsToDef(group, items) {
   return nodes.length ? { [group]: nodes } : {};
 }
 
-export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, groupKeyOf, GROUP_KEYS };
+// How many LEAF conditions a parsed definition holds, flattening one level of groups.
+//
+// ⚠️ Lives here, not inline in the list page, because that is exactly where it broke. The
+// nesting commit (2026-08-13) changed parseDef's return from `{group, rows}` to
+// `{group, items, tooDeep}` and updated every reader but one: the segments LIST still did
+// `p.rows.length`, which is `undefined.length` — so the page threw on the first DYNAMIC
+// segment and white-screened before rendering anything. Reported by two people within the
+// hour; the list is the section's front door, so the whole of Segments was unreachable.
+// A count that lives in the tested module cannot be missed by the next rename.
+//
+// NB it counts leaves, not items: "(A and B) or C" is 3 conditions, not 2.
+function countConditions(items) {
+  return (items || []).reduce((n, it) => n + (it && it.type === 'group' ? (it.rows || []).length : 1), 0);
+}
+
+export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS };

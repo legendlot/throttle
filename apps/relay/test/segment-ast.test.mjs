@@ -5,7 +5,7 @@
 // and a bug in this pair silently rewrites a live audience with no error and no diff to look at.
 // The 11 fixtures below are the REAL definitions from comms.segments on 2026-08-13.
 import assert from 'node:assert';
-import { parseDef, itemsToDef, toLeaf, toRow } from '../src/lib/segmentAst.js';
+import { parseDef, itemsToDef, toLeaf, toRow, countConditions } from '../src/lib/segmentAst.js';
 
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); pass++; console.log('  ok  ', n); }
@@ -77,6 +77,34 @@ t('count_op is omitted when it is the legacy default, so old segments stay byte-
 t('a deliberate count of 0 survives (it means "never did this")', () => {
   assert.equal(toLeaf({ type: 'event', event: 'order_placed', count: 0, count_op: 'eq' }).count, 0);
   assert.equal(toRow({ event: 'order_placed', count: 0, count_op: 'eq' }).count, 0);
+});
+
+// ── the shape contract the list page depends on (added 2026-08-14, after the outage) ────────
+//
+// The nesting commit renamed parseDef's `rows` to `items` and missed ONE reader — the segments
+// LIST did `p.rows.length`, i.e. `undefined.length`, so the page threw on the first dynamic
+// segment and Segments was unreachable for everyone until it was reported. These two tests pin
+// the contract so the next rename fails here instead of in front of the team.
+t('parseDef returns `items` and NEVER `rows` — the list page reads the parsed shape directly', () => {
+  for (const [name, def] of Object.entries(LIVE)) {
+    const p = parseDef(def);
+    assert.ok(Array.isArray(p.items), `${name}: items must be an array`);
+    assert.equal('rows' in p, false, `${name}: parseDef must not return a \`rows\` key`);
+  }
+});
+
+t('countConditions counts LEAVES over every live definition, and never throws', () => {
+  for (const [name, def] of Object.entries(LIVE)) {
+    const n = countConditions(parseDef(def).items);
+    assert.ok(Number.isInteger(n) && n >= 0, `${name}: got ${n}`);
+  }
+  // the empty rule is "everyone", not one blank condition
+  assert.equal(countConditions(parseDef({}).items), 0);
+  // "(A and B) or C" is 3 conditions, not 2 items
+  const nested = { any: [{ all: [{ attr: 'city', op: 'eq', value: 'Pune' }, { attr: 'lifetime_orders', op: 'gte', value: '1' }] }, { attr: 'locale', op: 'eq', value: 'en' }] };
+  assert.equal(countConditions(parseDef(nested).items), 3);
+  // defensive: a group mid-edit with no rows contributes nothing rather than throwing
+  assert.equal(countConditions([{ type: 'group', group: 'any' }]), 0);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
