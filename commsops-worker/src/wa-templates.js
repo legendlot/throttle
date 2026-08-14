@@ -20,6 +20,19 @@ const A = require('./auth.js');
 const LINT = require('./wa-template-lint.js');   // pre-submit gate — see waSubmitTemplate
 const MEDIA_HEADERS = new Set(['IMAGE', 'VIDEO', 'DOCUMENT']);
 
+// Sample suffix for a `/r/{{1}}` URL button, used ONLY in the Meta approval payload — a reviewer
+// sees it, no customer ever does. At send time `{{1}}` is a freshly minted per-recipient code
+// (links.js `newLinkCode`), so this value is arbitrary; what matters is that it is SHAPED like a
+// real code (22 chars base62) rather than a word, because that is what Meta is being asked to
+// approve the look of. This exact string is already APPROVED on eight live templates.
+//
+// It is a constant, not a per-template field, because it genuinely does not vary by template —
+// it was being copy-pasted into each new one, and the one time it was not (Freedom to Play
+// Sale_15Aug, 2026-08-14) the old fallback below would have submitted `/r/sample`. A default the
+// authoring path never has to think about is the fix; `example_suffix` on a button still wins if
+// a template ever needs its own.
+const DEFAULT_URL_EXAMPLE_SUFFIX = 'kQ7mZ2xW9pLd4RtV6nBh8s';
+
 function graphBase(env) {
   return `https://graph.facebook.com/${env.WA_GRAPH_VERSION || 'v21.0'}`;
 }
@@ -91,7 +104,7 @@ function buildComponents(content) {
       if (btn.type === 'URL' && /\{\{\d+\}\}/.test(btn.url || '')) {
         const suffix = b.example_suffix
           ?? btnSlots.find((s) => Number(s.index ?? 0) === i)?.example
-          ?? 'sample';
+          ?? DEFAULT_URL_EXAMPLE_SUFFIX;
         btn.example = [String(btn.url).replace(/\{\{\d+\}\}/, String(suffix))];
       }
       return btn;
