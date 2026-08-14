@@ -249,7 +249,7 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked, sessi
                   {!disabled
                     ? <button className="dr-close" onClick={() => rmBtn(i)} title="Remove"><Trash2 size={14} /></button>
                     : <span />}
-                  {/* ── Link tracking (S279) ────────────────────────────────────────────────
+                  {/* ── Link tracking (S282) ────────────────────────────────────────────────
                       `target_base` is the ONLY way a url button can be tracked, and until now it
                       was settable nowhere in this app — not a field, not a toggle, not mentioned.
                       So a campaign could be built with the UTM panel filled in and every link

@@ -3,7 +3,7 @@
 // Ported from the handoff prototype (ui.jsx). Dependency-free React + the CSS
 // classes in redesign.css. Reuses formatters/tones from ./format.
 import { useState, useEffect, useRef } from 'react';
-import { X } from 'lucide-react';   // Modal close affordance (S279) — this module had no icon import before.
+import { X } from 'lucide-react';   // Modal close affordance (S282) — this module had no icon import before.
 import { Icon } from './Icon.js';
 import { TONES } from './format.js';
 
@@ -335,7 +335,7 @@ export function FieldLabel({ children, hint, info, infoWidth }) {
 }
 
 /* ---- modal ----------------------------------------------------------
-   Promoted out of the Links page (S279) so the campaign tracking gate can reuse it. Relay
+   Promoted out of the Links page (S282) so the campaign tracking gate can reuse it. Relay
    deliberately does NOT use @throttle/ui's Modal here — that one is a confirm-shaped component
    (confirmLabel/onConfirm/footer) with the shared design language, and the relay surfaces built
    around this one expect a plain content shell. `maxWidth` is the only addition: the tracking

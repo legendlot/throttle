@@ -524,7 +524,7 @@ async function handleGet(url, auth, env) {
       // 6,091 members the same day, which would have shown as 5,000 on the detail page while the
       // LIST showed the true figure, since the list already used this RPC. Two screens, two
       // numbers, neither flagged. segments_list returns ONE aggregated jsonb row, so no cap.
-      // ⚠️ Explicit column list, NOT select=* — `materialized_def` (S279) is a full copy of the
+      // ⚠️ Explicit column list, NOT select=* — `materialized_def` (S282) is a full copy of the
       // rule and no caller needs it, only the `is_stale` verdict computed from it.
       const [s, list] = await Promise.all([
         A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}&select=id,name,kind,definition,created_by,created_at,updated_at,entry_tracking_since,materialized_at&limit=1`, env),
@@ -1720,7 +1720,7 @@ async function handlePost(body, auth, env) {
       const r = await CAMP.startCampaign(env, body.id, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
-    // EMERGENCY STOP for a broadcast already fanning out (S279). The mechanism always existed —
+    // EMERGENCY STOP for a broadcast already fanning out (S282). The mechanism always existed —
     // processQueueMessage re-reads the campaign at the top of EVERY page and returns early on any
     // status other than 'sending' — but nothing could set that status, so halting a live send
     // meant a hand-written DB PATCH. On 2026-08-14 a real campaign needed intervention and there

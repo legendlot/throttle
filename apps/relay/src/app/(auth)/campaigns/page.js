@@ -676,7 +676,7 @@ export default function CampaignsPage() {
     finally { setBusy(false); }
   }
 
-  // EMERGENCY STOP (S279). Halts a fan-out already in flight. The worker flips status
+  // EMERGENCY STOP (S282). Halts a fan-out already in flight. The worker flips status
   // sending → stopped; processQueueMessage re-reads the campaign at the top of every page and
   // returns early, so nothing further is queued.
   //

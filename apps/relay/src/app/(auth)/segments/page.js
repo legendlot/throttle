@@ -223,7 +223,7 @@ function emptySeg() { return { id: null, name: '', kind: 'dynamic', group: 'all'
 // 25k segment is real work and must stay an explicit action (see the getSegments comment).
 // Naming the staleness is the fix.
 //
-// ⚠️ S279 — `isStale` is the SERVER's verdict (segments_list), computed as
+// ⚠️ S282 — `isStale` is the SERVER's verdict (segments_list), computed as
 // `materialized_def IS DISTINCT FROM definition`: does the stored count describe the rule as it
 // now stands? Do NOT reintroduce the timestamp comparison this replaced
 // (`updated_at > materialized_at`). It was wrong in two ways a user reached within the hour:

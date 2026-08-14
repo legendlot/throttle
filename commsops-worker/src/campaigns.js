@@ -121,7 +121,7 @@ async function reachableCount(env, camp) {
 async function startCampaign(env, id, sentBy) {
   const camp = await getCampaign(env, id);
   if (!camp) return { ok: false, error: 'not_found' };
-  // 'stopped' is RESUMABLE (S279) — a stopped broadcast restarts through this same path rather
+  // 'stopped' is RESUMABLE (S282) — a stopped broadcast restarts through this same path rather
   // than needing separate resume machinery, because send.js's dedup already gives exactly the
   // right semantics: a prior sent-like row dedups (nobody is messaged twice) while a prior
   // skipped/failed row is ADOPTED (the tail actually gets retried). Without this, Stop would be
@@ -208,7 +208,7 @@ async function processQueueMessage(env, body) {
   if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
   const recs = Array.isArray(r.data) ? r.data : [];
 
-  // ── Bounded-concurrency send pool (S279) ──────────────────────────────────────────────────
+  // ── Bounded-concurrency send pool (S282) ──────────────────────────────────────────────────
   // The page used to run `for … await send`, one recipient fully completing before the next
   // began, which measured a near-constant 4.02s per recipient = 796–858/hour whatever
   // SENDS_PER_MSG was set to. THIS is the throughput lever; the page size is not (see the
