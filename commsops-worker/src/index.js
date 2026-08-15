@@ -36,7 +36,10 @@ const CORS = {
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 const ok  = (data) => json({ ok: true, data });
-const err = (msg, status = 400) => json({ ok: false, error: msg }, status);
+// `extra` merges alongside the error string for the cases where a refusal is only actionable with
+// its numbers (e.g. audience_exceeds_budget carries sendable/remaining). Optional and additive —
+// every existing two-arg caller serialises byte-identically.
+const err = (msg, status = 400, extra) => json({ ok: false, error: msg, ...(extra || {}) }, status);
 const nowIso = () => new Date().toISOString();
 
 // ── Segment-definition guards (S268) ────────────────────────────────────────────
@@ -1717,8 +1720,15 @@ async function handlePost(body, auth, env) {
     }
     case 'sendCampaign': {             // approved → sending (queued fan-out)
       if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
-      const r = await CAMP.startCampaign(env, body.id, auth.userId);
-      return r.ok ? ok(r) : err(r.error, 400);
+      // `allowPartial` is the deliberate override for an audience larger than today's remaining
+      // budget. The refusal below carries the numbers so the app can state them and offer it —
+      // an error the user cannot act on is one they will route around.
+      const r = await CAMP.startCampaign(env, body.id, auth.userId, { allowPartial: body.allowPartial === true });
+      if (r.ok) return ok(r);
+      if (r.error === 'audience_exceeds_budget')
+        return err('audience_exceeds_budget', 400,
+          { sendable: r.sendable, remaining: r.remaining, budget: r.budget, used: r.used });
+      return err(r.error, 400);
     }
     // EMERGENCY STOP for a broadcast already fanning out (S282). The mechanism always existed —
     // processQueueMessage re-reads the campaign at the top of EVERY page and returns early on any
@@ -2004,6 +2014,14 @@ async function runScheduled(env) {
     for (const c of (due.ok && Array.isArray(due.data) ? due.data : [])) {
       const r = await CAMP.startCampaign(env, c.id, 'scheduler');
       if (r.ok) await AL.alert(env, `📣 *Relay — scheduled campaign fired*\n"${c.name}" → ${r.audience} recipients.`);
+      // ⚠️ A budget refusal must ALERT, not just log. On this path there is no human at a button
+      // to read the error, so the campaign simply stays scheduled and re-refuses on every sweep —
+      // trading a silent partial send for a silently absent one, which is no better. This is the
+      // only start error that is both expected and actionable, so it gets a voice.
+      else if (r.error === 'audience_exceeds_budget')
+        await AL.alert(env, `⛔ *Relay — scheduled campaign HELD*\n"${c.name}" needs ${r.sendable} sends, `
+          + `only ${r.remaining} left of today's ${r.budget}. Nothing was sent. Raise the budget, `
+          + `narrow the audience, or send it manually with the partial-send override.`);
       else if (r.error !== 'already_claimed') console.log('scheduler_start_error', c.id, r.error);
     }
   } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }

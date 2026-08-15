@@ -672,7 +672,36 @@ export default function CampaignsPage() {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
       showToast(`${resume ? 'Resumed' : 'Sending started'} — ${r?.data?.audience ?? '?'} recipients`, 'success');
       refresh();
-    } catch (e) { showToast(e.message || 'Send failed', 'error'); }
+    } catch (e) {
+      // The audience does not fit in today's remaining budget. The worker refused BEFORE sending
+      // anything, so this is a decision to make, not a failure to report — say the numbers plainly
+      // and offer the partial send explicitly. Sending anyway is legitimate; the thing that is not
+      // legitimate is it happening without anyone choosing it, which is what used to occur (S269:
+      // 4,228 recipients stranded across two campaigns, both still reading "sent").
+      if (e?.detail?.error === 'audience_exceeds_budget') {
+        const d = e.detail;
+        const n = (x) => Number(x || 0).toLocaleString('en-IN');
+        const shortfall = Math.max(Number(d.sendable || 0) - Number(d.remaining || 0), 0);
+        const proceed = window.confirm(
+          `NOTHING HAS BEEN SENT.\n\n`
+          + `"${c.name}" needs ${n(d.sendable)} sends. Only ${n(d.remaining)} are left of today's `
+          + `budget of ${n(d.budget)} (${n(d.used)} already used).\n\n`
+          + `If you send anyway, about ${n(d.remaining)} people are messaged and the other `
+          + `${n(shortfall)} are skipped. They are NOT retried tomorrow, and the campaign will `
+          + `still show as sent.\n\n`
+          + `Send the first ${n(d.remaining)} anyway?`);
+        if (proceed) {
+          try {
+            const r2 = await workerFetch('sendCampaign', { id: c.id, allowPartial: true }, session);
+            showToast(`Partial send started — ${r2?.data?.audience ?? '?'} in audience, `
+              + `~${n(d.remaining)} will go today`, 'success');
+            refresh();
+          } catch (e2) { showToast(e2.message || 'Send failed', 'error'); }
+        } else {
+          showToast('Not sent — nothing went out', 'info');
+        }
+      } else showToast(e.message || 'Send failed', 'error');
+    }
     finally { setBusy(false); }
   }
 

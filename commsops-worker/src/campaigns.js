@@ -117,8 +117,24 @@ async function reachableCount(env, camp) {
     sendable: Number(row?.sendable ?? Math.max(reachable - excluded, 0)) };
 }
 
+// Today's marketing send budget, WITHOUT consuming a unit. `remaining: null` = no cap configured.
+// Never let a read failure block a send — a 500 here must not become a phantom "budget hit", the
+// same reasoning as the `gate_error:budget` branch in gate.js.
+async function sendBudget(env) {
+  const r = await A.sbComms('/rest/v1/rpc/send_budget_status', env, { method: 'POST', body: '{}' });
+  if (!r.ok) return { unreadable: true, remaining: null };
+  const row = Array.isArray(r.data) ? r.data[0] : r.data;
+  if (!row) return { unreadable: true, remaining: null };
+  const remaining = row.remaining == null ? null : Number(row.remaining);
+  return { unreadable: false, budget: Number(row.budget), used: Number(row.used), remaining };
+}
+
 // Kick off a broadcast: snapshot, set sending, enqueue the first fan-out seed.
-async function startCampaign(env, id, sentBy) {
+//
+// `allowPartial` deliberately sends a campaign KNOWN to be larger than today's remaining budget.
+// It exists because the block below would otherwise be a dead end on a legitimately huge audience,
+// and a guard nobody can get past gets removed rather than respected.
+async function startCampaign(env, id, sentBy, opts = {}) {
   const camp = await getCampaign(env, id);
   if (!camp) return { ok: false, error: 'not_found' };
   // 'stopped' is RESUMABLE (S282) — a stopped broadcast restarts through this same path rather
@@ -167,6 +183,31 @@ async function startCampaign(env, id, sentBy) {
   if (!camp.approved_by && await needsApproval(env, camp, sendable)) {
     await setStatus(env, id, { status: 'pending_approval', audience_snapshot: sendable });
     return { ok: false, error: 'audience_grew_needs_approval' };
+  }
+
+  // ⚠️ REFUSE a send that cannot finish today, rather than half-completing it silently.
+  //
+  // The budget is enforced per-message in gate.js, which is the right place to enforce it and the
+  // wrong place to DISCOVER it: by then the campaign is already fanning out, and every recipient
+  // past the cap is stamped `budget_exhausted` and never retried while the campaign still reads
+  // `sent`. That is what stranded 4,228 recipients across both Roxie campaigns on 2026-08-10
+  // (S269) with nothing visible in the app. Checking here converts a silent partial send into a
+  // decision made before anything goes out.
+  //
+  // Marketing only — transactional/utility bypass the budget entirely in gate.js, so blocking them
+  // here would invent a limit that does not exist. Kept in step with `isMarketing` there.
+  //
+  // ⚠️ Advisory numbers, not a reservation. Journeys and other campaigns draw on the same counter
+  // while this one runs, so `remaining` is a snapshot — this catches the "94k audience, 15k
+  // budget" case it is built for, not a race down to the last few units. Do NOT harden it into a
+  // reservation: holding budget across a fan-out that can be stopped or resumed would leak units
+  // and starve transactional traffic on a failure.
+  if (String(camp.purpose || 'marketing') === 'marketing' && !opts.allowPartial) {
+    const b = await sendBudget(env);
+    if (b.remaining != null && sendable > b.remaining) {
+      return { ok: false, error: 'audience_exceeds_budget',
+        sendable, remaining: b.remaining, budget: b.budget, used: b.used };
+    }
   }
 
   // Atomic claim (M9): flip approved/scheduled/stopped → sending ONLY if still in one of those,
@@ -385,6 +426,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, startCampaign, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, startCampaign, processQueueMessage, sendCampaignTest,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };
