@@ -60,7 +60,16 @@ gets early-returned and **acked**, i.e. silently destroyed.
 - **Tests**: excluded ids get skip rows and are not sent · RPC failure throws · empty exclusion
   args skip the RPC call entirely (no subrequest tax on the common case).
 
-### Task 3 — Roster table + `p_before` (§4, §9.12)
+### Task 3 — Roster table + `p_before` (§4, §9.12) · ✅ SHIPPED 2026-08-15 (migration `comms_campaign_roster_v1`)
+
+> DB-only — no worker code touched, no deploy (`p_before` has no JS caller until Task 4). Proven
+> against a PRE-migration snapshot table, then the scratch dropped: exactly 1 overload remains
+> (DROP-then-CREATE, not the afternoon's CREATE OR REPLACE mistake) · new full output and shard
+> output both 0-diff vs snapshot · median slice ∪ complement = 48,478 = full, overlap 0, `p_before`
+> boundary inclusive · worker-shaped page (limit 75, shard 2/5, real exclusion args) returns 75.
+> Roster table: 4 cols, RLS on, 2 indexes; campaigns gained roster_built_at/roster_size/build_cursor.
+> ⚠️ First PostgREST exercise of the NEW signature is the next fan-out page — loud-failure contract
+> applies (throw → retry → DLQ + alert) if the schema cache somehow missed the NOTIFY.
 
 - Migration `comms_campaign_roster_v1`: table exactly per spec §4 (PK `(campaign_id, profile_id)`,
   covering index `(campaign_id, shard, profile_id)`, RLS, grant, NOTIFY) + campaign columns
