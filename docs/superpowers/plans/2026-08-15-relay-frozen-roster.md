@@ -39,7 +39,14 @@ gets early-returned and **acked**, i.e. silently destroyed.
   `processQueueMessage` · `{kind:'build_roster'}` on a consumer without the handler **throws**
   rather than acks · `{kind:'garbage'}` throws.
 
-### Task 2 — `campaign_excluded_batch` + per-page visible exclusion (§9.21)
+### Task 2 — `campaign_excluded_batch` + per-page visible exclusion (§9.21) · ✅ SHIPPED 2026-08-15 (commsops `ac767185`)
+
+> Batch proven ≡ scalar on 400 live profiles (0 disagreements) before wiring. Post-deploy: queue
+> healthy (16 enrolments / 14 messages in 8 min, 0 DLQ). ⚠️ The RPC's PostgREST exposure has not
+> been exercised through the worker yet — it only fires mid-fan-out with exclusions active. That
+> is acceptable because its failure mode is LOUD by construction: bx.ok false → page throws →
+> 3 retries → DLQ + alert (Task 1's contract). An invisible RPC self-announces; it cannot
+> silently pass. First real exercise = the next campaign carrying exclusion rules.
 
 - Migration `comms_campaign_excluded_batch_v1`: `campaign_excluded_batch(p_profile_ids uuid[],
   p_channel text, p_exclude_segments uuid[], p_exclude_campaigns uuid[],
