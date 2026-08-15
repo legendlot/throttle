@@ -446,17 +446,31 @@ async function processQueueMessage(env, body) {
   // while this one was still going — which is the case the feature exists for. The predicate also
   // counts a fresh 'queued' row as contacted, so two campaigns running CONCURRENTLY exclude each
   // other rather than racing between reserve and send.
-  const r = await A.sbComms('/rest/v1/rpc/campaign_recipients', env, {
-    method: 'POST',
-    body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
-      p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG,
-      p_shard: shard, p_shard_count: shardCount,
-      ...exclusionArgs(camp) }),
-  });
-  // An RPC failure is NOT "fan-out complete" (review C2): throw → Queues redeliver this page →
-  // after max retries it DLQs with an alert. Only a genuine short page may finish the campaign.
-  if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
-  const recs = Array.isArray(r.data) ? r.data : [];
+  // ── Page source (roster Task 6): the FROZEN roster when one exists, else the live query. ──
+  // The roster is the audience decided at build time; eligibility stays LIVE — the gate per
+  // message, the exclusion batch per page. The fallback keeps any campaign that was already
+  // in flight when the roster deploy landed walking its original path (§7: never strand a
+  // broadcast across a deploy). A page read failure THROWS either way — "no page" must never be
+  // read as "campaign finished" (review C2); Queues redelivers, then DLQ → stalled (Task 5).
+  let recs;
+  if (camp.roster_built_at) {
+    const q = `/rest/v1/campaign_roster?campaign_id=eq.${A.enc(campaignId)}&shard=eq.${Number(shard) || 0}`
+      + (after ? `&profile_id=gt.${A.enc(after)}` : '')
+      + `&order=profile_id.asc&limit=${SENDS_PER_MSG}&select=profile_id,address`;
+    const r = await A.sbComms(q, env);
+    if (!r.ok) throw new Error(`campaign_roster_page_failed:${campaignId}:${r.status}`);
+    recs = Array.isArray(r.data) ? r.data : [];
+  } else {
+    const r = await A.sbComms('/rest/v1/rpc/campaign_recipients', env, {
+      method: 'POST',
+      body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
+        p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG,
+        p_shard: shard, p_shard_count: shardCount,
+        ...exclusionArgs(camp) }),
+    });
+    if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
+    recs = Array.isArray(r.data) ? r.data : [];
+  }
 
   // ── Per-page exclusion re-check, VISIBLE (§9.21, roster Task 2) ───────────────────────────
   // Today campaign_recipients already filters exclusions out of the page, so this batch usually
@@ -501,6 +515,31 @@ async function processQueueMessage(env, body) {
         { method: 'POST', body: JSON.stringify(rows) });
       if (!ins.ok) throw new Error(`exclusion_skip_write_failed:${campaignId}:${ins.status}`);
     }
+  }
+
+  // ── Holdout arms leave EVIDENCE (roster §9.17) ──────────────────────────────────────────
+  // A holdout must receive NOTHING (S272) — but writing nothing at all made every holdout
+  // recipient indistinguishable from a missed one: roster-minus-messages would report the whole
+  // holdout group as never-attempted and bury the real misses. One array insert of
+  // skipped/holdout rows per page. ✅ Verified safe for A/B stats before building (2026-08-15):
+  // campaign_variant_stats counts `sent` from sent_at and ab-stats' primary metric is read÷sent
+  // with zTest nulling on a zero denominator — these rows inflate only `assigned` and the
+  // labelled diagnostics. Excluded-and-holdout resolves to excluded (already evidenced above).
+  // Arm assignment is computed ONCE here (pure hash) and reused by the pool below.
+  const armOf = new Map();
+  for (const x of recs) armOf.set(x.profile_id, pickVariant(campaignId, x.profile_id, variants));
+  const isHoldout = (pid) => { const a = armOf.get(pid); return !!(a && !a.template_id); };
+  const holdouts = recs.filter((x) => x.address && isHoldout(x.profile_id) && !excluded.has(x.profile_id));
+  if (holdouts.length) {
+    const rows = holdouts.map((x) => ({
+      profile_id: x.profile_id, channel: camp.channel, purpose: camp.purpose,
+      status: 'skipped', reason: 'holdout',
+      source: `campaign:${campaignId}`, to_address: x.address,
+      variant_id: armOf.get(x.profile_id).id,
+    }));
+    const ins = await A.sbComms('/rest/v1/messages', env,
+      { method: 'POST', body: JSON.stringify(rows) });
+    if (!ins.ok) throw new Error(`holdout_skip_write_failed:${campaignId}:${ins.status}`);
   }
 
   // ── Bounded-concurrency send pool (S282) ──────────────────────────────────────────────────
@@ -572,14 +611,14 @@ async function processQueueMessage(env, body) {
   // cursor below is recs[recs.length-1] and the completion test is recs.length === SENDS_PER_MSG,
   // both positional. Excluding here (not from recs) also means a page consisting ENTIRELY of
   // excluded profiles still advances the cursor and continues the chain.
-  const queue = recs.filter((r) => r.address && !excluded.has(r.profile_id));
+  const queue = recs.filter((r) => r.address && !excluded.has(r.profile_id) && !isHoldout(r.profile_id));
   let nextIdx = 0;
   const runOne = async (rec) => {
     try {
       // Per-recipient assignment INSIDE the page — never "all of A then all of B". The fan-out
       // runs for hours, so batching by arm would push B later in the day and the test would
       // measure time-of-day rather than copy.
-      const arm = pickVariant(campaignId, rec.profile_id, variants);
+      const arm = armOf.get(rec.profile_id) ?? null;   // precomputed once per page (§9.17)
       // ⚠️ THREE states here, not two, and collapsing them sends real messages to people who
       // were meant to receive nothing:
       //   arm === null            → no variants at all → normal campaign, use camp.template_id
