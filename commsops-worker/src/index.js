@@ -2116,14 +2116,23 @@ async function runScheduled(env) {
     }
   } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }
 
-  // 1b. stalled broadcasts — a campaign stuck 'sending' for >30 min means its continuation
-  // chain died (DLQ'd page / worker eviction). Alert-only: resuming needs a human decision.
+  // 1b. stuck broadcasts — 30 min without a heartbeat while in flight means every chain (or the
+  // roster build) is dead: fan-out pages PATCH updated_at every ~30s, build chunks every few
+  // seconds. Widened to building_roster (roster Task 8 verification pass — the watchdog predated
+  // the build phase and would have let a lost build message sit invisible forever), and upgraded
+  // from alert-EVERY-sweep to STALL-once: the DLQ path (Task 5) catches chains that die loudly;
+  // this catches the ones that vanish without a DLQ row. stallCampaign is conditional on the
+  // in-flight statuses, so this cannot touch a campaign that finished in the race window — and
+  // once stalled, the campaign no longer matches the filter, so the alert fires exactly once.
   try {
     const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const stuck = await A.sbComms(
-      `/rest/v1/campaigns?status=eq.sending&updated_at=lt.${A.enc(cutoff)}&select=id,name,updated_at`, env);
+      `/rest/v1/campaigns?status=in.(sending,building_roster)&updated_at=lt.${A.enc(cutoff)}&select=id,name,status,updated_at`, env);
     for (const c of (stuck.ok && Array.isArray(stuck.data) ? stuck.data : [])) {
-      await AL.alert(env, `⚠️ *Relay — broadcast stalled*\n"${c.name}" has been 'sending' since ${c.updated_at}. Fan-out chain likely died — check comms.queue_failures.`);
+      const stalled = await CAMP.stallCampaign(env, c.id);
+      if (stalled) await AL.alert(env, `⚠️ *Relay — broadcast STALLED by the watchdog*\n"${c.name}" had no `
+        + `heartbeat for 30 min while '${c.status}' — its ${c.status === 'building_roster' ? 'roster build' : 'fan-out chains'} `
+        + `died without dead-lettering. Press Resume on it to continue; nothing further sends until then.`);
     }
   } catch (e) { console.log('stall_sweep_error', e?.message || String(e)); }
 

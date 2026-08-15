@@ -261,6 +261,33 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     assert.equal(sent.length, 5, 'chains seeded from the STORED count');
   });
 
+  await t('a roster-RESUME is guarded on the REMAINING work, not the live audience', async () => {
+    // Found on the final verification pass: resuming a 48k campaign with 297 never-attempted was
+    // judged as a 48k send — budget/clock/approval all read the wrong number and could refuse a
+    // resume that would actually send a few hundred. The guards now read recon.never_attempted
+    // when a roster exists (an undercount by design — freed failed/skipped rows also retry; the
+    // per-message gate stays authoritative).
+    const sent = [];
+    A.sbComms = async (path, env, opts = {}) => {
+      if (path.includes('/campaigns?id=eq.C') && (!opts.method || opts.method === 'GET'))
+        return { ok: true, data: [CAMPROW({ status: 'sent', shard_count: 5, allow_partial: false,
+          roster_built_at: '2026-08-15T20:00:00Z', roster_size: 48167 })] };
+      if (path.includes('campaign_variants')) return { ok: true, data: [] };
+      if (path.includes('channel_quiet_hours')) return { ok: true, data: EXEMPT };
+      if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{}] };
+      if (path.includes('materialize_segment')) return { ok: true, data: null };
+      if (path.includes('campaign_reach')) return { ok: true, data: [{ total: 48481, reachable: 48481, excluded: 0, sendable: 48481 }] };
+      if (path.includes('campaign_recon')) return { ok: true, data: [{ roster_size: 48167, attempted: 47870, never_attempted: 297 }] };
+      if (path.includes('send_budget_status')) return { ok: true, data: [{ budget: 65000, used: 64500, remaining: 500 }] };
+      if (path.includes('/campaigns?id=eq.C') && opts.method === 'PATCH') return { ok: true, data: [CAMPROW()] };
+      return { ok: true, data: [] };
+    };
+    G._clearSettingsCache();
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async (m) => sent.push(m) } }, 'C', 'u1');
+    assert.equal(r.ok, true, `297 remaining must fit a 500 budget that 48,481 would fail: ${JSON.stringify(r)}`);
+    assert.equal(sent.length, 5, 'chains seeded');
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

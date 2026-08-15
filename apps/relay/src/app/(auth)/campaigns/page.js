@@ -112,8 +112,8 @@ const STATUS_TONE = {
 
 // Friendly, at-a-glance campaign state derived from the raw lifecycle status.
 // "Scheduled" is NOT a stored status — it's approved with a future scheduled_at.
-// Failed/Paused are intentionally omitted: the engine has no such states (a dead
-// fan-out surfaces via comms.queue_failures, not a campaign status) — BACKLOG [relay].
+// `stalled` (2026-08-16, roster Task 5) closed the old gap where a dead fan-out
+// surfaced only in comms.queue_failures with no campaign status at all.
 function campaignStatus(r) {
   const s = r?.status || 'draft';
   const future = r?.scheduled_at && new Date(r.scheduled_at) > new Date();
@@ -130,6 +130,10 @@ function campaignStatus(r) {
     // Stopped is a PAUSE, not a failure — "Send now" resumes it and already-sent people are
     // deduped. Say so in the label, or it reads as a dead campaign nobody dares touch.
     case 'stopped':          return { label: 'Stopped — resumable', tone: 'red', dot: true };
+    // The send-time audience snapshot in progress (roster Task 4) — transient, minutes at most.
+    case 'building_roster':  return { label: 'Preparing audience', tone: 'orange', dot: true };
+    // A build chunk or fan-out chain died after all retries (roster Task 5). Resumable.
+    case 'stalled':          return { label: 'Stalled — resumable', tone: 'red', dot: true };
     case 'paused':           return { label: 'Paused — template blocked by Meta', tone: 'red', dot: true };
     default:                 return { label: s.replace(/_/g, ' '), tone: STATUS_TONE[s] || 'gray' };
   }

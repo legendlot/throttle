@@ -263,6 +263,22 @@ async function startCampaign(env, id, sentBy, opts = {}) {
 
   const { sendable } = await reachableCount(env, camp);
 
+  // What the guards below should be judged on. For a FRESH send it is the live estimate. For a
+  // roster-RESUME it is the REMAINING work — recon.never_attempted — because `sendable` describes
+  // the whole live audience (found on this verification pass: resuming a 48k campaign with 297
+  // left was judged as a 48k send, so budget/clock/approval could refuse a resume that would
+  // actually send a few hundred). ⚠️ An UNDERCOUNT by design: freed failed/skipped rows also
+  // retry on resume. These guards are advisory pre-checks; the per-message gate stays
+  // authoritative, so under-guarding slightly is the correct direction (fail-open, like the
+  // guards' own unreadable-state branches). Recon unreadable → keep the conservative estimate.
+  let guardCount = sendable;
+  if (camp.roster_built_at) {
+    const rc = await A.sbComms('/rest/v1/rpc/campaign_recon', env,
+      { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
+    const row = rc.ok ? (Array.isArray(rc.data) ? rc.data[0] : rc.data) : null;
+    if (row) guardCount = Number(row.never_attempted || 0);
+  }
+
   // Caller's answer OR the campaign's own persisted decision. Either is a human saying "I accept
   // a partial send"; the row is simply the one that survives until an unattended scheduler run.
   const allowPartial = opts.allowPartial === true || camp.allow_partial === true;
@@ -270,8 +286,8 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // Approval was judged on the SUBMIT-time audience; a dynamic segment may have grown past the
   // threshold since. A human-approved campaign (approved_by set) stands; an auto-approved one
   // that outgrew the threshold goes back for eyes (review M2).
-  if (!camp.approved_by && await needsApproval(env, camp, sendable)) {
-    await setStatus(env, id, { status: 'pending_approval', audience_snapshot: sendable });
+  if (!camp.approved_by && await needsApproval(env, camp, guardCount)) {
+    await setStatus(env, id, { status: 'pending_approval', audience_snapshot: guardCount });
     return { ok: false, error: 'audience_grew_needs_approval' };
   }
 
@@ -294,9 +310,9 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // and starve transactional traffic on a failure.
   if (String(camp.purpose || 'marketing') === 'marketing' && !allowPartial) {
     const b = await sendBudget(env);
-    if (b.remaining != null && sendable > b.remaining) {
+    if (b.remaining != null && guardCount > b.remaining) {
       return { ok: false, error: 'audience_exceeds_budget',
-        sendable, remaining: b.remaining, budget: b.budget, used: b.used };
+        sendable: guardCount, remaining: b.remaining, budget: b.budget, used: b.used };
     }
   }
 
@@ -307,10 +323,10 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   if (!allowPartial) {
     const mins = await minutesUntilQuiet(env, camp.channel);
     if (mins != null) {
-      const needMins = Math.ceil((sendable / THROUGHPUT_PER_HOUR) * 60);
+      const needMins = Math.ceil((guardCount / THROUGHPUT_PER_HOUR) * 60);
       if (needMins > Math.max(mins - QUIET_MARGIN_MINUTES, 0)) {
         return { ok: false, error: 'wont_finish_before_quiet_hours',
-          sendable, needMinutes: needMins, minutesUntilQuiet: mins,
+          sendable: guardCount, needMinutes: needMins, minutesUntilQuiet: mins,
           reachableBeforeQuiet: Math.max(Math.floor((mins / 60) * THROUGHPUT_PER_HOUR), 0),
           throughputPerHour: THROUGHPUT_PER_HOUR };
       }
