@@ -1773,7 +1773,9 @@ async function handlePost(body, auth, env) {
       if (!body.id) return err('id_required', 400);
       // Conditional on status=eq.sending, so this is atomic against the fan-out and against a
       // second person pressing Stop: an empty representation means it was not sending.
-      const r = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(body.id)}&status=eq.sending`, env,
+      // Widened to building_roster (roster §9.16): a stop mid-build leaves build_cursor set and
+      // roster_built_at NULL, so a later Send resumes the BUILD from the cursor, not the send.
+      const r = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(body.id)}&status=in.(sending,building_roster)`, env,
         { method: 'PATCH', body: JSON.stringify({ status: 'stopped', updated_at: nowIso() }) });
       if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return err('not_stoppable', 400);
       // Stopping a live customer send is exactly the class of event the alert channel exists for.
@@ -2037,7 +2039,9 @@ async function runScheduled(env) {
       `/rest/v1/campaigns?status=in.(approved,scheduled)&scheduled_at=lte.${A.enc(nowIso())}&select=id,name`, env);
     for (const c of (due.ok && Array.isArray(due.data) ? due.data : [])) {
       const r = await CAMP.startCampaign(env, c.id, 'scheduler');
-      if (r.ok) await AL.alert(env, `📣 *Relay — scheduled campaign fired*\n"${c.name}" → ${r.audience} recipients.`);
+      if (r.ok) await AL.alert(env, r.building
+        ? `📣 *Relay — scheduled campaign fired*\n"${c.name}" → building its roster (~${r.estimated} estimated); sends start when the build completes.`
+        : `📣 *Relay — scheduled campaign fired*\n"${c.name}" → ${r.audience} recipients.`);
       // ⚠️ A budget refusal must ALERT, not just log. On this path there is no human at a button
       // to read the error, so the campaign simply stays scheduled and re-refuses on every sweep —
       // trading a silent partial send for a silently absent one, which is no better. This is the
@@ -2680,6 +2684,8 @@ export default {
             console.log('shopify_backfill', JSON.stringify(r));
             if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
           } catch (e) { console.log('shopify_backfill_error', e?.message || String(e)); throw e; }
+        } else if (route === 'build_roster') {
+          await CAMP.processBuildChunk(env, b);   // roster Task 4 — scan-bounded chunk, self-enqueues
         } else if (route === 'last_order_backfill') {
           try {
             const r = await SHOP.backfillLastOrderPage(env, b.after || null);   // patches last_order_at only

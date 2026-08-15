@@ -205,27 +205,26 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     }
   });
 
-  // ── fan-out sharding ────────────────────────────────────────────────────────
-  await t('a big audience seeds ONE CHAIN PER SHARD, and records the count', async () => {
+  // ── fan-out sharding (Task 4 reshaped: a FRESH send builds its roster first; the per-shard
+  //     chain seeding now happens at build completion and is pinned in campaign-roster-build) ──
+  await t('a big audience fixes its shard count at claim and enqueues the BUILD, not chains', async () => {
     const sent = [];
     stub({ reachable: 48481, budget: { budget: 999999, used: 0, remaining: 999999 } });
     const ENV2 = { BROADCAST_QUEUE: { send: async (m) => sent.push(m) } };
     const r = await CAMP.startCampaign(ENV2, 'C', 'u1', { allowPartial: true });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.equal(r.shards, 5, '48,481 → ceil(48481/10000) = 5 chains');
-    assert.equal(sent.length, 5, 'one seed message per shard');
-    assert.deepEqual(sent.map((m) => m.shard).sort(), [0, 1, 2, 3, 4]);
-    assert.ok(sent.every((m) => m.shardCount === 5 && m.after === null));
+    assert.equal(r.building, true);
+    assert.equal(r.shards, 5, '48,481 → ceil(48481/10000) = 5, fixed at claim time (§9.9)');
+    assert.deepEqual(sent, [{ kind: 'build_roster', campaignId: 'C', after: null }]);
   });
 
-  await t('a small audience stays on ONE chain — the byte-identical old path', async () => {
+  await t('a small audience gets shard_count 1 and the same single build seed', async () => {
     const sent = [];
     stub({ reachable: 400, budget: { budget: 999999, used: 0, remaining: 999999 } });
     const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async (m) => sent.push(m) } }, 'C', 'u1');
     assert.equal(r.shards, 1);
     assert.equal(sent.length, 1);
-    assert.equal(sent[0].shard, 0);
-    assert.equal(sent[0].shardCount, 1);
+    assert.equal(sent[0].kind, 'build_roster');
   });
 
   await t('shard count is CAPPED — a huge audience does not spawn unbounded chains', async () => {
@@ -234,13 +233,15 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     assert.equal(r.shards, 6, 'capped at MAX_SHARDS, not audience/10000');
   });
 
-  await t('a resume RESETS shards_done — a stale count would end the campaign early', async () => {
+  await t('a roster-resume RESETS shards_done and keeps the STORED shard_count', async () => {
     // Without the reset, a re-seeded campaign inherits the previous run's counter and the FIRST
-    // chain to drain flips the whole thing to 'sent' while five others are still sending.
-    let patched = null;
+    // chain to drain flips the whole thing to 'sent' while others are still sending. And the
+    // resume must NEVER rewrite shard_count — roster rows are hashed with the stored value (§9.9).
+    let patched = null; const sent = [];
     A.sbComms = async (path, env, opts = {}) => {
       if (path.includes('/campaigns?id=eq.C') && (!opts.method || opts.method === 'GET'))
-        return { ok: true, data: [CAMPROW({ status: 'sent', shards_done: 5, allow_partial: true })] };
+        return { ok: true, data: [CAMPROW({ status: 'sent', shards_done: 5, shard_count: 5, allow_partial: true,
+          roster_built_at: '2026-08-15T20:00:00Z', roster_size: 48167 })] };
       if (path.includes('campaign_variants')) return { ok: true, data: [] };
       if (path.includes('channel_quiet_hours')) return { ok: true, data: EXEMPT };
       if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{}] };
@@ -253,9 +254,11 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
       return { ok: true, data: [] };
     };
     G._clearSettingsCache();
-    await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async () => {} } }, 'C', 'u1');
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async (m) => sent.push(m) } }, 'C', 'u1');
     assert.equal(patched.shards_done, 0, 'must reset');
-    assert.equal(patched.shard_count, 5);
+    assert.ok(!('shard_count' in patched), 'stored shard_count untouched on resume');
+    assert.equal(r.audience, 48167, 'audience from the frozen roster');
+    assert.equal(sent.length, 5, 'chains seeded from the STORED count');
   });
 
   A.sbComms = orig;

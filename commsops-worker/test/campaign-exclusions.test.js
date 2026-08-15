@@ -131,11 +131,16 @@ const SENDING = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
       }
       return { ok: true, data: [] };
     };
-    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async () => { queued = true; } } }, 'C3', 'me');
-    assert.equal(r.ok, true, 'sendable 300 is under the 500 threshold → sends without re-approval');
-    assert.equal(r.audience, 300, 'the reported audience is the number that will actually receive');
-    assert.ok(queued, 'fan-out enqueued');
-    assert.equal(claimBody.audience_snapshot, 300, 'snapshot records sendable, not reachable');
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async (m) => { queued = m; } } }, 'C3', 'me');
+    // Task 4 reshaped the tail: judged on sendable=300 (under the 500 threshold) it PROCEEDS —
+    // reaching the building_roster claim IS the proof approval was judged on sendable, since
+    // judging on reachable=40,000 would have parked it. The audience_snapshot now comes from the
+    // completed roster (pinned in campaign-roster-build), not the claim.
+    assert.equal(r.ok, true, 'sendable 300 is under the 500 threshold → proceeds without re-approval');
+    assert.equal(r.building, true);
+    assert.equal(r.estimated, 300, 'the estimate reported is sendable, not reachable');
+    assert.equal(claimBody.status, 'building_roster');
+    assert.equal(queued.kind, 'build_roster');
   });
 
   A.sbComms = orig;

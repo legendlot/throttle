@@ -22,7 +22,7 @@
 // commit, and deploy the consumer BEFORE any producer starts enqueueing the new kind — the whole
 // point of the throw is that the old consumer retries the new kind instead of eating it, but that
 // only converges if the new consumer ships first.
-const KNOWN_KINDS = ['enrol', 'shopify_backfill', 'last_order_backfill'];
+const KNOWN_KINDS = ['enrol', 'shopify_backfill', 'last_order_backfill', 'build_roster'];
 
 // → 'enrol' | 'shopify_backfill' | 'last_order_backfill' | 'campaign', or THROWS.
 // A campaign fan-out message has no `kind` (back-compat with every message shape since M6) and is

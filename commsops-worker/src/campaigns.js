@@ -6,6 +6,7 @@ const A = require('./auth.js');
 const { send } = require('./send.js');
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
+const AL = require('./alerts.js');   // build-completion park alert (§9.14) — nobody is at a button there
 
 // Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 → 75 on 2026-08-15,
 // alongside SEND_CONCURRENCY 5 → 12 (see the long note at the pool below for why that moved).
@@ -322,20 +323,99 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // actor already claimed it.
   // ⚠️ Keep this list in step with the guard above — they are the same gate written twice, and a
   // status accepted there but missing here fails as the misleading 'already_claimed'.
-  // `shards_done` MUST be reset here, not only set at creation — a resume re-seeds every chain,
-  // and a leftover count from the previous run would let the first chain to finish flip the whole
-  // campaign to 'sent' while the others are still sending.
-  const shardCount = shardsFor(sendable);
+  // ── Build vs resume (roster Task 4) ─────────────────────────────────────────────────────
+  if (!camp.roster_built_at) {
+    // Fresh send, OR a build-resume — a stop/stall mid-build leaves build_cursor set and
+    // roster_built_at NULL, and the build continues from the cursor rather than rescanning.
+    //
+    // ⚠️ shard_count is FIXED HERE, at claim time, from the press-time estimate — NOT at build
+    // completion from roster_size (the plan's original wording). Roster rows are hashed with this
+    // N as they are inserted, so assignment-N and walk-N must be the same N; a "more accurate"
+    // recompute at the end would orphan rows into shards nobody walks (§9.9). Estimate-vs-final
+    // drift only moves parallelism granularity — hash % N partitions completely for ANY N.
+    // A build-RESUME must therefore keep the STORED value: earlier chunks already used it.
+    const shardCount = camp.build_cursor
+      ? Math.max(1, Number(camp.shard_count || 1))
+      : shardsFor(sendable);
+    const claim = await A.sbComms(
+      `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
+      { method: 'PATCH', body: JSON.stringify({
+          status: 'building_roster', sent_by: sentBy, shard_count: shardCount,
+          updated_at: nowIso() }) });
+    if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
+      return { ok: false, error: 'already_claimed' };
+    await env.BROADCAST_QUEUE.send({ kind: 'build_roster', campaignId: id, after: camp.build_cursor || null });
+    // The HTTP response returns before the roster exists (§9.14) — guards + dialogs already ran
+    // above against the estimate; the post-build approval re-check parks + alerts if it outgrew.
+    return { ok: true, building: true, estimated: sendable, shards: shardCount };
+  }
+
+  // Roster resume (stopped / sent-with-tail): walk the FROZEN roster with the STORED shard_count
+  // (§9.9 — never shardsFor(), whose input has drifted since the build). `shards_done` MUST be
+  // reset — a leftover count would let the first chain to finish flip the whole campaign to
+  // 'sent' while the others are still sending. Dedup makes the re-walk self-limiting.
+  const shardCount = Math.max(1, Number(camp.shard_count || 1));
   const claim = await A.sbComms(
     `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
     { method: 'PATCH', body: JSON.stringify({
-        status: 'sending', audience_snapshot: sendable, sent_by: sentBy,
-        shard_count: shardCount, shards_done: 0, updated_at: nowIso() }) });
+        status: 'sending', audience_snapshot: camp.roster_size ?? sendable, sent_by: sentBy,
+        shards_done: 0, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
     return { ok: false, error: 'already_claimed' };
   for (let i = 0; i < shardCount; i++)
     await env.BROADCAST_QUEUE.send({ campaignId: id, after: null, shard: i, shardCount });
-  return { ok: true, audience: sendable, shards: shardCount };
+  return { ok: true, audience: camp.roster_size ?? sendable, shards: shardCount };
+}
+
+// Consumer: one roster-build chunk (scan-bounded — §9.12/§9.13). Walks the member slice via the
+// build_roster_chunk RPC, persists the cursor, self-enqueues the next slice; the FINAL chunk
+// stamps roster_built_at, re-checks approval against the real roster size, and seeds the chains.
+async function processBuildChunk(env, body) {
+  const { campaignId, after } = body;
+  const camp = await getCampaign(env, campaignId);
+  // Stop mid-build is honoured HERE: stopCampaign flips the status, and the in-flight chunk
+  // message finds it changed and acks silently. build_cursor stays, so resume continues the walk.
+  if (!camp || camp.status !== 'building_roster') return;
+  const r = await A.sbComms('/rest/v1/rpc/build_roster_chunk', env,
+    { method: 'POST', body: JSON.stringify({ p_campaign_id: campaignId, p_after: after ?? null }) });
+  // A failed chunk THROWS: Queues redelivers, and after max_retries the DLQ records it (and, from
+  // Task 5, stalls the campaign visibly). Soft-continuing would finish a TRUNCATED roster that
+  // reports itself complete — the §9.1 failure this whole build shape exists to prevent.
+  if (!r.ok) throw new Error(`build_roster_chunk_failed:${campaignId}:${r.status}`);
+  const row = Array.isArray(r.data) ? r.data[0] : r.data;
+  if (!row) throw new Error(`build_roster_chunk_empty:${campaignId}`);
+
+  if (!row.done) {
+    await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}`, env,
+      { method: 'PATCH', body: JSON.stringify({ build_cursor: row.next_cursor, updated_at: nowIso() }) });
+    await env.BROADCAST_QUEUE.send({ kind: 'build_roster', campaignId, after: row.next_cursor });
+    return;
+  }
+
+  const total = Number(row.roster_total || 0);
+  // Approval re-check against the REAL roster, with nobody at a button (§9.14): a human-approved
+  // campaign stands; an auto-approved one that outgrew the threshold parks LOUDLY. The park stamps
+  // roster_built_at — the roster is complete and reusable; only the send needs eyes.
+  if (!camp.approved_by && await needsApproval(env, camp, total)) {
+    await setStatus(env, campaignId, { status: 'pending_approval', audience_snapshot: total,
+      roster_built_at: nowIso(), roster_size: total, build_cursor: null });
+    await AL.alert(env, `⏸️ *Relay — campaign parked for approval after roster build*\n"${camp.name}" `
+      + `built a roster of ${total}, above the approval threshold. Nothing was sent. `
+      + `Approve it and press Send — the roster is kept.`);
+    return;
+  }
+
+  // Atomic finalize, conditional on still-building — a Stop pressed in the same instant wins and
+  // the empty representation tells us not to seed. shard_count is read back from the PATCHed row.
+  const fin = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}&status=eq.building_roster`, env,
+    { method: 'PATCH', body: JSON.stringify({ status: 'sending', roster_built_at: nowIso(),
+        roster_size: total, audience_snapshot: total, shards_done: 0, build_cursor: null,
+        updated_at: nowIso() }) });
+  if (!fin.ok) throw new Error(`build_finalize_failed:${campaignId}:${fin.status}`);
+  if (!Array.isArray(fin.data) || fin.data.length === 0) return;   // stopped concurrently
+  const shardCount = Math.max(1, Number(fin.data[0].shard_count || 1));
+  for (let i = 0; i < shardCount; i++)
+    await env.BROADCAST_QUEUE.send({ campaignId, after: null, shard: i, shardCount });
 }
 
 // Consumer: process one fan-out message (paginate → send → continue or finish).
@@ -638,6 +718,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, processQueueMessage, sendCampaignTest,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };

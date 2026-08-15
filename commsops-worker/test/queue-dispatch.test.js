@@ -23,10 +23,10 @@ t('a bare campaign body routes to campaign — both the old and the sharded shap
 });
 
 t('the deploy-race case: a FUTURE kind on this consumer THROWS, never acks', () => {
-  // This is the §9.11 scenario verbatim: new producer enqueues build_roster, stale isolate
-  // consumes it. The throw → retry is what makes the race converge on a current isolate.
-  assert.throws(() => queueRoute({ kind: 'build_roster', campaignId: 'C', after: null }),
-    /unknown_queue_kind:build_roster/);
+  // The §9.11 scenario: a new producer enqueues a kind this consumer predates. build_roster WAS
+  // the example until Task 4 registered it (it now routes); any future kind takes its place here.
+  assert.throws(() => queueRoute({ kind: 'roster_topup', campaignId: 'C', after: null }),
+    /unknown_queue_kind:roster_topup/);
 });
 
 t('garbage kinds throw, naming the kind for the DLQ row', () => {
@@ -49,7 +49,7 @@ t('KNOWN_KINDS canary — adding a kind is a CONSCIOUS act in both files', () =>
   // When a new kind (e.g. build_roster, Task 4) is added, update this list in the same commit as
   // its consumer branch in index.js — the spec's §9.11 note explains the deploy-order rule.
   assert.deepEqual([...KNOWN_KINDS].sort(),
-    ['enrol', 'last_order_backfill', 'shopify_backfill']);
+    ['build_roster', 'enrol', 'last_order_backfill', 'shopify_backfill']);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
