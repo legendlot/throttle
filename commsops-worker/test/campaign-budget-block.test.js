@@ -205,6 +205,59 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     }
   });
 
+  // ── fan-out sharding ────────────────────────────────────────────────────────
+  await t('a big audience seeds ONE CHAIN PER SHARD, and records the count', async () => {
+    const sent = [];
+    stub({ reachable: 48481, budget: { budget: 999999, used: 0, remaining: 999999 } });
+    const ENV2 = { BROADCAST_QUEUE: { send: async (m) => sent.push(m) } };
+    const r = await CAMP.startCampaign(ENV2, 'C', 'u1', { allowPartial: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.shards, 5, '48,481 → ceil(48481/10000) = 5 chains');
+    assert.equal(sent.length, 5, 'one seed message per shard');
+    assert.deepEqual(sent.map((m) => m.shard).sort(), [0, 1, 2, 3, 4]);
+    assert.ok(sent.every((m) => m.shardCount === 5 && m.after === null));
+  });
+
+  await t('a small audience stays on ONE chain — the byte-identical old path', async () => {
+    const sent = [];
+    stub({ reachable: 400, budget: { budget: 999999, used: 0, remaining: 999999 } });
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async (m) => sent.push(m) } }, 'C', 'u1');
+    assert.equal(r.shards, 1);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].shard, 0);
+    assert.equal(sent[0].shardCount, 1);
+  });
+
+  await t('shard count is CAPPED — a huge audience does not spawn unbounded chains', async () => {
+    stub({ reachable: 5000000, budget: { budget: 9999999, used: 0, remaining: 9999999 } });
+    const r = await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async () => {} } }, 'C', 'u1', { allowPartial: true });
+    assert.equal(r.shards, 6, 'capped at MAX_SHARDS, not audience/10000');
+  });
+
+  await t('a resume RESETS shards_done — a stale count would end the campaign early', async () => {
+    // Without the reset, a re-seeded campaign inherits the previous run's counter and the FIRST
+    // chain to drain flips the whole thing to 'sent' while five others are still sending.
+    let patched = null;
+    A.sbComms = async (path, env, opts = {}) => {
+      if (path.includes('/campaigns?id=eq.C') && (!opts.method || opts.method === 'GET'))
+        return { ok: true, data: [CAMPROW({ status: 'sent', shards_done: 5, allow_partial: true })] };
+      if (path.includes('campaign_variants')) return { ok: true, data: [] };
+      if (path.includes('channel_quiet_hours')) return { ok: true, data: EXEMPT };
+      if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{}] };
+      if (path.includes('materialize_segment')) return { ok: true, data: null };
+      if (path.includes('campaign_reach')) return { ok: true, data: [{ total: 48481, reachable: 48481, excluded: 0, sendable: 48481 }] };
+      if (path.includes('send_budget_status')) return { ok: true, data: [{ budget: 999999, used: 0, remaining: 999999 }] };
+      if (path.includes('/campaigns?id=eq.C') && opts.method === 'PATCH') {
+        patched = JSON.parse(opts.body); return { ok: true, data: [CAMPROW()] };
+      }
+      return { ok: true, data: [] };
+    };
+    G._clearSettingsCache();
+    await CAMP.startCampaign({ BROADCAST_QUEUE: { send: async () => {} } }, 'C', 'u1');
+    assert.equal(patched.shards_done, 0, 'must reset');
+    assert.equal(patched.shard_count, 5);
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

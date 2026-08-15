@@ -33,6 +33,19 @@ const { pickVariant } = require('./variants.js');
 // Peak sustained was 3,211/hour ≈ 1.12s/send. Re-measure across a COMPLETE run, never a live
 // sample, or you will describe the ramp and call it the ceiling.
 const SENDS_PER_MSG = 75;
+
+// How many INDEPENDENT fan-out chains a broadcast runs. This is the throughput dial; in-page
+// concurrency is not (measured 2026-08-15: 5 → 25 concurrent moved per-message latency 3.57s →
+// 16.06s and throughput by 1.1×, because the ceiling is per-INVOCATION and the database was idle
+// throughout). Each shard is its own cursor over a hash-partitioned slice, so N chains ≈ N× the
+// sends per hour.
+//
+// ⚠️ Capped at 6. This is not timidity about our own infrastructure — it is Meta's 100k/24h tier,
+// which at 6 chains is already within reach of being spent in a few hours, and a live customer
+// send is the wrong place to discover the next ceiling. Raise it only with a measurement.
+// ⚠️ A single-shard campaign takes the byte-identical path it always did (shard 0 of 1).
+const MAX_SHARDS = 6;
+const shardsFor = (n) => Math.min(MAX_SHARDS, Math.max(1, Math.ceil(Number(n || 0) / 10000)));
 const nowIso = () => new Date().toISOString();
 
 async function getCampaign(env, id) {
@@ -309,19 +322,27 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // actor already claimed it.
   // ⚠️ Keep this list in step with the guard above — they are the same gate written twice, and a
   // status accepted there but missing here fails as the misleading 'already_claimed'.
+  // `shards_done` MUST be reset here, not only set at creation — a resume re-seeds every chain,
+  // and a leftover count from the previous run would let the first chain to finish flip the whole
+  // campaign to 'sent' while the others are still sending.
+  const shardCount = shardsFor(sendable);
   const claim = await A.sbComms(
     `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
     { method: 'PATCH', body: JSON.stringify({
-        status: 'sending', audience_snapshot: sendable, sent_by: sentBy, updated_at: nowIso() }) });
+        status: 'sending', audience_snapshot: sendable, sent_by: sentBy,
+        shard_count: shardCount, shards_done: 0, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
     return { ok: false, error: 'already_claimed' };
-  await env.BROADCAST_QUEUE.send({ campaignId: id, after: null });
-  return { ok: true, audience: sendable };
+  for (let i = 0; i < shardCount; i++)
+    await env.BROADCAST_QUEUE.send({ campaignId: id, after: null, shard: i, shardCount });
+  return { ok: true, audience: sendable, shards: shardCount };
 }
 
 // Consumer: process one fan-out message (paginate → send → continue or finish).
 async function processQueueMessage(env, body) {
-  const { campaignId, after } = body;
+  // shard/shardCount absent === the old single-chain shape, so an in-flight message enqueued
+  // before this deploy keeps working exactly as it did.
+  const { campaignId, after, shard = 0, shardCount = 1 } = body;
   const camp = await getCampaign(env, campaignId);
   if (!camp || camp.status !== 'sending') return;     // cancelled/finished → stop
   const variants = await loadVariants(env, campaignId);
@@ -335,6 +356,7 @@ async function processQueueMessage(env, body) {
     method: 'POST',
     body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
       p_purpose: camp.purpose, p_after: after, p_limit: SENDS_PER_MSG,
+      p_shard: shard, p_shard_count: shardCount,
       ...exclusionArgs(camp) }),
   });
   // An RPC failure is NOT "fan-out complete" (review C2): throw → Queues redeliver this page →
@@ -405,7 +427,7 @@ async function processQueueMessage(env, body) {
   // RPC per send, so the cap still holds exactly; gate.js's two module-level caches are
   // read-mostly with a TTL, so the worst case is a few duplicate settings fetches on a cold
   // cache; and send() keeps all per-send state on its own opts object.
-  const SEND_CONCURRENCY = 25;
+  const SEND_CONCURRENCY = 8;
   let pageErrors = 0;
   const queue = recs.filter((r) => r.address);
   let nextIdx = 0;
@@ -462,10 +484,17 @@ async function processQueueMessage(env, body) {
     });
 
   if (recs.length === SENDS_PER_MSG) {
-    // more remain → continue from the last profile_id
-    await env.BROADCAST_QUEUE.send({ campaignId, after: recs[recs.length - 1].profile_id });
+    // more remain in THIS shard → continue from the last profile_id, staying on the same chain
+    await env.BROADCAST_QUEUE.send({ campaignId, after: recs[recs.length - 1].profile_id, shard, shardCount });
   } else {
-    await setStatus(env, campaignId, { status: 'sent' });   // fan-out complete
+    // This chain has drained its shard. The campaign is only finished when EVERY chain has —
+    // flipping it here would strand the other shards mid-flight while the UI reported success.
+    // The increment is atomic in the RPC and returns true for exactly one caller, so a read-then-
+    // write race (two chains finishing together, both seeing n-1, neither completing) cannot happen.
+    const done = await A.sbComms('/rest/v1/rpc/finish_campaign_shard', env,
+      { method: 'POST', body: JSON.stringify({ p_campaign_id: campaignId }) });
+    if (!done.ok) throw new Error(`finish_shard_failed:${campaignId}:${done.status}`);
+    if (done.data === true) await setStatus(env, campaignId, { status: 'sent' });
   }
 }
 
