@@ -167,6 +167,27 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     assert.equal((await CAMP.startCampaign(ENV, 'C', 'u1')).error, 'audience_exceeds_budget');
   });
 
+  // ── resume after a quiet-hours tail ─────────────────────────────────────────
+  await t('a SENT campaign is resumable — that is the only recovery for a quiet-hours tail', async () => {
+    // send.js dedups on SUCCESS: a skipped row frees its dedup key and is retried on a later pass.
+    // So the recipients a cutoff skipped are perfectly recoverable — but the fan-out flips the
+    // campaign to `sent` on its final page, and until 2026-08-15 `sent` was not resumable, so the
+    // only door to that retry was a hand-written DB PATCH.
+    const seen = stub({ camp: CAMPROW({ status: 'sent' }), reachable: 12069 });
+    const r = await CAMP.startCampaign(ENV, 'C', 'u1');
+    assert.equal(r.ok, true, `a sent campaign must be resumable: ${JSON.stringify(r)}`);
+    assert.equal(seen.claimed, true, 'and the atomic claim must accept `sent` too, or it fails as already_claimed');
+  });
+
+  await t('genuinely terminal statuses stay unsendable', async () => {
+    for (const status of ['draft', 'pending_approval', 'sending']) {
+      stub({ camp: CAMPROW({ status }), reachable: 100 });
+      const r = await CAMP.startCampaign(ENV, 'C', 'u1');
+      assert.equal(r.ok, false, `${status} must not be sendable`);
+      assert.match(r.error, /not_sendable_from_/, `${status}: ${JSON.stringify(r)}`);
+    }
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

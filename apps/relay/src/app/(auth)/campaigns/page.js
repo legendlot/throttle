@@ -1092,7 +1092,29 @@ export default function CampaignsPage() {
                 {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> Resume sending</Btn>}
               </>
             )}
-            {c.status === 'sent' && <Badge label={`sent · ${c.audience_snapshot ?? ''} recipients`} tone="green" dot />}
+            {c.status === 'sent' && (() => {
+              // A completed campaign can still have an UNREACHED tail — most often a fan-out that
+              // ran into quiet hours, where every remaining recipient is skipped in minutes and the
+              // campaign then flips to `sent` looking perfectly finished. Those people are
+              // recoverable: send.js frees the dedup key on any non-sent outcome, so a resume
+              // retries exactly them and silently skips everyone already messaged.
+              // Surfaced only when there IS a tail — a "resume" button on a campaign that reached
+              // everyone is noise that trains people to ignore it.
+              const planned = Number(c.audience_snapshot || 0);
+              const done = stats ? Number(stats.sent || 0) : null;
+              const tail = planned && done != null ? planned - done : 0;
+              return (
+                <>
+                  <Badge label={`sent · ${c.audience_snapshot ?? ''} recipients`} tone="green" dot />
+                  {tail > 0 && <Badge label={`${tail.toLocaleString('en-IN')} never reached`} tone="amber" dot />}
+                  {tail > 0 && canSend && (
+                    <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}>
+                      <Send size={14} /> Send to the {tail.toLocaleString('en-IN')} missed
+                    </Btn>
+                  )}
+                </>
+              );
+            })()}
           </div>
           <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
             Marketing sends above the approval threshold need an approver; below it (or non-marketing) auto-approve on submit. The send gate (suppression → consent → frequency cap → quiet hours) still applies per recipient.

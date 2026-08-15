@@ -193,7 +193,24 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // part-sent campaign nobody can finish.
   // ⚠️ Resume re-fans from the START of the recipient list (after: null), so an audience that is
   // half done pays a fast dedup no-op for everyone already reached. Correct, just not free.
-  if (!['approved', 'scheduled', 'stopped'].includes(camp.status))
+  // ⚠️ `sent` IS RESUMABLE (2026-08-15), and without it a quiet-hours tail was unrecoverable.
+  //
+  // The pieces to recover one already existed and did not meet. send.js dedups ON SUCCESS, not on
+  // attempt — a `sent`-like row dedups, while a skipped/failed row FREES its dedup key and is
+  // adopted on a later pass (send.js §dedup reserve, and the `dedup_key: res.status === 'sent' ?
+  // … : null` write). So a campaign that ran into quiet hours leaves every skipped recipient
+  // perfectly retryable. But the fan-out then flips the campaign to `sent` on its final page, and
+  // `sent` was not in this list, so the only door to that retry was a hand-written DB PATCH.
+  //
+  // That is the exact shape S282 fixed for `stopped` ("the mechanism always existed but nothing
+  // could set that status"), reappearing one status along. A 57k send that cannot finish before
+  // 22:00 does not trickle — after the cutoff every remaining recipient skips fast with no
+  // provider call, so it burns through the rest in minutes and locks itself as `sent`.
+  //
+  // Safe because dedup makes it self-limiting: resuming a campaign that genuinely reached everyone
+  // is a no-op that re-walks the audience and sends nothing. The cost of allowing it is one wasted
+  // pass; the cost of forbidding it was tens of thousands of customers nobody could reach again.
+  if (!['approved', 'scheduled', 'stopped', 'sent'].includes(camp.status))
     return { ok: false, error: `not_sendable_from_${camp.status}` };
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
 
@@ -282,7 +299,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // ⚠️ Keep this list in step with the guard above — they are the same gate written twice, and a
   // status accepted there but missing here fails as the misleading 'already_claimed'.
   const claim = await A.sbComms(
-    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped)`, env,
+    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
     { method: 'PATCH', body: JSON.stringify({
         status: 'sending', audience_snapshot: sendable, sent_by: sentBy, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
