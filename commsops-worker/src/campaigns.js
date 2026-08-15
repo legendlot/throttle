@@ -7,41 +7,32 @@ const { send } = require('./send.js');
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 
-// Recipients handled per consumer invocation (~8 subrequests each).
+// Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 on 2026-08-15,
+// alongside SEND_CONCURRENCY 5 → 12 (see the long note at the pool below for why that moved).
 //
-// ⚠️ THIS IS NOT THE THROUGHPUT DIAL. Raising it 4 → 12 on 2026-08-14, mid-flight on a live
-// broadcast, moved the rate from 796/hour to 858 — i.e. not at all. Do not reach for it again
-// expecting more sends; it was believed to carry "~20× headroom" for months and it does not.
+// ⚠️ PAGE SIZE ALONE IS NOT THE DIAL, AND THAT PART OF THE HISTORY STILL STANDS. Raising it 4 → 12
+// on 2026-08-14 mid-flight moved the rate 796 → 858/hour, i.e. not at all. It was believed to hold
+// "~20× headroom" for months and it does not. It sat at 4 because it was sized against the
+// **Cloudflare FREE-plan 50-subrequest ceiling** (4 × 8 = 32, "safely under 50"); LOT is on Paid
+// where the ceiling is 10,000, so that reasoning was obsolete — but removing a false limit is not
+// the same as finding the real one, which is the mistake this comment exists to prevent.
 //
-// It sat at 4 because it was sized against the **Cloudflare FREE-plan 50-subrequest ceiling**
-// (4 × 8 = 32, "safely under 50"). LOT is on Paid, where the ceiling is 10,000, so that
-// reasoning was obsolete — but removing a false limit is not the same as finding the real one,
-// and that is the mistake this comment exists to stop the next person repeating. The old
-// comment said "→ safe" without naming what it was safe against, which is how it survived.
+// ⚠️ WHAT IT DOES DO, now that a concurrency pool exists: amortise the QUEUE HOP. Each page costs
+// one ~5s hop. With page size == concurrency the pool runs a single round and the hop dominates the
+// invocation; at 36 with 12 concurrent it runs three rounds per hop, so the fixed cost is spread
+// over 3× the work. Page size is a multiplier on concurrency, never a substitute for it — that is
+// why both moved together, and why raising this one alone will disappoint again.
 //
-// WHAT ACTUALLY BINDS, measured off per-send timestamps: sends are spaced a near-constant
-// ~4.02s, with a ~5.4s gap every SENDS_PER_MSG sends (the page boundary). So the queue hop
-// costs ~5s ONCE PER PAGE against 12 × 4.02 ≈ 48s of work — it is noise. The constraint is
-// ~4 SECONDS OF SERIAL WORK PER RECIPIENT: the loop below is `for … await send`, one recipient
-// fully completing before the next starts, each ~8 sequential subrequests (render → gate →
-// dedup reserve → provider → status write) at roughly 500ms apiece. The arithmetic closes both
-// ways: 4 × 4.02 + hop ≈ 17s per 4 = 14/min; 12 × 4.02 + hop ≈ 53s per 12 = 14/min.
-//
-// The real lever is CONCURRENCY INSIDE THE PAGE (parallel batches), which scales near-linearly.
-// ⚠️ Cap it at 4–6 concurrent, NOT at the page size: Meta's tier (100k/24h ≈ 4,166/hour) binds
-// there, and overshooting hammers a provider on live customer sends. Not built — BACKLOG [relay].
-//
-// ⚠️⚠️ CORRECTED 2026-08-15. The "~4.02s per recipient / 796–858 per hour" figures above were read
-// MID-FLIGHT, during that broadcast's first hour, while the queue was still spinning up. Across
-// the complete run the same campaign did 642 → 2,795 → 3,211 → 1,323 attempts per hour: the peak
-// sustained rate is 3,211/hour ≈ 1.12s per send, roughly 4× what this comment claims, and only
-// ~23% under the 4,166/hour the tier allows. Queues was evidently ALREADY running several
-// consumers concurrently, so "the constraint is ~4s of SERIAL work per recipient" describes the
-// ramp, not the steady state. The per-page-concurrency build may therefore be chasing headroom
-// that mostly is not there — the remaining gap to the tier is ~30%, not ~4×.
-// **Re-measure across a COMPLETE run before building it.** Keep the reasoning above (page size is
-// not the dial — that part still holds); distrust the rate.
-const SENDS_PER_MSG = 12;
+// ⚠️ TWO OLDER MEASUREMENTS IN THIS FILE'S HISTORY WERE WRONG; do not resurrect either.
+//   · "~4.02s serial per recipient / 796–858 per hour" was read MID-FLIGHT during that broadcast's
+//     first hour, while Cloudflare Queues was still autoscaling its consumer count. Across the
+//     complete run the same campaign did 642 → 2,795 → 3,211 → 1,323 attempts/hour.
+//   · "sends are serial" is contradicted by the timestamps: median inter-send gap 0.133s, minimum
+//     0.000s, 2,106 consecutive pairs under 0.05s apart. They were already parallel. The mean gap
+//     of 1.439s against that median is the real story — the pipeline was BURSTY AND IDLE, not slow.
+// Peak sustained was 3,211/hour ≈ 1.12s/send. Re-measure across a COMPLETE run, never a live
+// sample, or you will describe the ramp and call it the ceiling.
+const SENDS_PER_MSG = 36;
 const nowIso = () => new Date().toISOString();
 
 async function getCampaign(env, id) {
@@ -155,7 +146,13 @@ async function sendBudget(env) {
 // refused, so an over-cautious number blocks legitimate campaigns, which is the failure that gets
 // a guard deleted. The first hour of that run read ~640/hr while the queue spun up, so a real send
 // will trail this estimate early and catch up — the ramp is why the margin below exists.
-// Re-measure after any fan-out concurrency change; a stale figure here silently mis-sizes sends.
+// ⚠️ DELIBERATELY LEFT AT THE PRE-2026-08-15 RATE, even though SEND_CONCURRENCY went 5 → 12 and
+// SENDS_PER_MSG 12 → 36 the same day and the real rate is expected to be materially higher. The
+// two errors are NOT symmetric: too LOW over-refuses, which costs one extra confirm click on the
+// partial-send override; too HIGH under-refuses, which strands customers who are never retried.
+// Raising this on an expectation rather than a measurement would trade the cheap error for the
+// expensive one. **Re-measure from the first full run at the new settings and update it then** —
+// per-hour attempt counts across a COMPLETE broadcast, never a mid-flight sample.
 const THROUGHPUT_PER_HOUR = 3211;
 
 // Refuse rather than cut it fine. A send predicted to land within this margin of the cutoff is
@@ -324,10 +321,34 @@ async function processQueueMessage(env, body) {
   // SENDS_PER_MSG comment). A pool rather than chunked Promise.all so one slow send does not
   // hold up four finished ones.
   //
-  // ⚠️ CAPPED AT 5 BY META, NOT BY US. The tier is 100k/24h ≈ 4,166/hour sustained; 5 concurrent
-  // at ~4s/send lands near 3,000/hour, safely under. Do NOT raise this to "go faster" without
-  // re-reading that tier — the failure mode is hammering a provider on live customer sends, and
-  // a quality-rating drop throttles every LOT number, not just this campaign.
+  // ⚠️ RAISED 5 → 12 ON 2026-08-15, because the reason it was 5 does not hold up.
+  //
+  // The old note read "CAPPED AT 5 BY META… the tier is 100k/24h ≈ 4,166/hour sustained". That
+  // division is a PLANNING convenience, not a constraint. **Meta's messaging limit is a VOLUME cap
+  // on business-initiated conversations in a rolling 24h — it is not an hourly rate limit.** It
+  // stops you at 100,000 conversations in a day; it does not throttle you at 4,166 in an hour.
+  // What actually caps the rate is the per-number THROUGHPUT level, and ours reads STANDARD on all
+  // five senders.
+  //
+  // Measured before changing it: **we have never once been rate-limited.** Zero `131048`
+  // (spam-rate) and zero `130429` (throughput) in the entire message history — every failure we
+  // have ever had is per-recipient (131049), undeliverable (131026), media, or opt-out. And the
+  // 14 Aug run already burst to ~7.5 sends/second (median inter-send gap 0.133s, 2,106 pairs under
+  // 0.05s apart) with no rejection of any kind. We were running at ~0.89/s on average against
+  // that, i.e. the pipeline sat idle between bursts rather than pushing anything to its limit.
+  //
+  // ⚠️ The genuine risks are NOT throughput, and they do not scale with this number the way the
+  // old comment implied: a quality-rating drop comes from recipient BLOCKS AND REPORTS, which are
+  // a function of who you message and how often, not how fast. Sending the same audience the same
+  // message over 3 hours instead of 9 does not make them likelier to block you.
+  //
+  // ⚠️ Still bounded on purpose. 12 concurrent × 36 per page ≈ 288 subrequests per invocation
+  // (ceiling 10,000) and finishes a page FASTER, so the 30s CPU budget gets easier, not harder.
+  // Do not take this as licence to remove the bound — an unbounded pool would put the whole page
+  // in flight at once and the first thing to break would be a live customer send.
+  //
+  // ⚠️ If a rate rejection EVER appears (131048/130429), drop this back to 5 and redeploy — that
+  // is a ~30 second revert, and those two codes are the only signal that this number is too high.
   //
   // ⚠️ `recs` MUST NOT BE REORDERED. The continuation cursor below is recs[recs.length-1] and
   // the completion test is recs.length === SENDS_PER_MSG — both are positional, so the pool
@@ -339,7 +360,7 @@ async function processQueueMessage(env, body) {
   // RPC per send, so the cap still holds exactly; gate.js's two module-level caches are
   // read-mostly with a TTL, so the worst case is a few duplicate settings fetches on a cold
   // cache; and send() keeps all per-send state on its own opts object.
-  const SEND_CONCURRENCY = 5;
+  const SEND_CONCURRENCY = 12;
   let pageErrors = 0;
   const queue = recs.filter((r) => r.address);
   let nextIdx = 0;
