@@ -8,7 +8,8 @@ import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
-import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin } from '@/lib/segmentAst.js';
+import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin,
+  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings } from '@/lib/segmentAst.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -35,7 +36,27 @@ const OPS = [
   { id: 'before_days', label: 'older than (days)' },
   { id: 'within_days', label: 'within last (days)' },
 ];
-const ATTR_SUGGEST = ['lifetime_orders', 'lifetime_value', 'last_order_at', 'city', 'locale', 'display_name', 'first'];
+// Measured against live comms.profiles 2026-08-15 — profile counts in the labels, because
+// "which attribute do I use" is really "which one is actually populated". The previous list was
+// 7 names of which TWO matched nobody (`first` was never an attribute; `locale` is empty on all
+// 180,713 rows) while omitting the four most-populated attributes in the system, `total_spent`
+// and `shopify_created_at` among them at 87k each. Same failure as the `email_clicked` event
+// suggestion recorded above: a picker is a promise that what it offers can match something.
+const ATTR_SUGGEST = [
+  ['lifetime_orders', 'number · 87,055'],
+  ['total_spent', 'number · 87,052'],
+  ['lifetime_value', 'number · 6,326'],
+  ['last_order_at', 'date · 40,318'],
+  ['shopify_created_at', 'date · 87,052'],
+  ['last_delivery_at', 'date · 1,687'],
+  ['accepts_email_marketing', 'true/false · 87,052'],
+  ['accepts_sms_marketing', 'true/false · 87,052'],
+  ['display_name', 'text · 70,601'],
+  ['full_name', 'text · 55,356'],
+  ['city', 'text · 49,552'],
+  ['tags', 'text · 8,402'],
+  ['audience', 'text · 55'],
+];
 // Event names come from the LIVE comms.event_definitions registry (see @/lib/eventDefs.js).
 // The hardcoded EVENT_SUGGEST that used to live here listed 10 of 34 registered events and
 // offered `email_clicked`, which S189 renamed to `link_clicked` — a condition that could
@@ -56,14 +77,29 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
   </select>
 
   {r.type === 'attr' && <>
-    <input className="f-inp mono" style={{ width: 160 }} list="attr-suggest" value={r.attr || ''} onChange={(e) => onPatch({ attr: e.target.value })} placeholder="attribute" disabled={disabled} />
+    {/* Changing the attribute also moves the OPERATOR when the old one cannot apply to the new
+        type. Leaving it put is what produced the inert rule this guard exists for: the row was
+        already on "within last (days)" from a date attribute, the attribute changed to a number,
+        and the stale date operator silently matched nobody. */}
+    <input className="f-inp mono" style={{ width: 160 }} list="attr-suggest" value={r.attr || ''}
+      onChange={(e) => { const attr = e.target.value; onPatch({ attr, op: defaultOpFor(attr, r.op) }); }}
+      placeholder="attribute" disabled={disabled} />
+    {/* Only operators that can actually match this attribute's type. An unknown attribute keeps
+        the full list — new attributes arrive from Shopify without a code change here, so an
+        unrecognised name is flagged, never blocked. */}
     <select className="f-inp" style={{ width: 150 }} value={r.op} onChange={(e) => onPatch({ op: e.target.value })} disabled={disabled}>
-      {OPS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      {opsForAttr(r.attr, OPS).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
     </select>
     <input className="f-inp" style={{ flex: 1, minWidth: 140 }} value={r.value || ''} onChange={(e) => onPatch({ value: e.target.value })}
       placeholder={r.op === 'in' ? 'comma, separated, values'
         : (r.op === 'before_days' || r.op === 'within_days') ? 'number of days (e.g. 90)' : 'value'}
       disabled={disabled} />
+    {/* Same idiom as the event-property coverage warning below — an inline ⚠ on the row that is
+        wrong, rather than a modal on save. A saved segment is read back through this editor, so
+        an older rule carrying an inert condition surfaces the moment anyone opens it. */}
+    {(() => { const w = conditionWarning(r); return w
+      ? <span style={{ fontSize: 11.5, color: 'var(--warn, #e0a33e)', flexBasis: '100%' }}>⚠ {w}</span>
+      : null; })()}
   </>}
 
   {r.type === 'event' && <>
@@ -601,6 +637,31 @@ export default function SegmentsPage() {
               </div>
             )}
 
+            {/* An inert condition under `Match NONE of` excludes nobody, so the audience silently
+                becomes EVERYONE — and unlike the narrowing failures, a too-big count has no tell
+                on screen. That is the case worth a banner rather than only the row-level ⚠.
+                See the ATTR_TYPES header in lib/segmentAst.js for the incident. */}
+            {(() => {
+              const warns = ruleWarnings(seg.group, seg.items);
+              if (!warns.length) return null;
+              const widening = warns.some((w) => w.widening);
+              return (
+                <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 7,
+                  border: `1px solid ${widening ? 'var(--red-bd, #7a2b2b)' : 'var(--warn-bd, #6b5320)'}`,
+                  background: widening ? 'var(--red-soft, rgba(220,80,80,.12))' : 'var(--warn-soft, rgba(224,163,62,.10))',
+                  fontSize: 12.5 }}>
+                  <strong>
+                    {widening
+                      ? 'This rule excludes nobody — the audience is currently everyone.'
+                      : 'One condition in this rule matches nobody.'}
+                  </strong>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {warns.map((w, i) => <li key={i}>{w.text}</li>)}
+                  </ul>
+                </div>
+              );
+            })()}
+
             {seg.items.length === 0
               ? <div style={{ padding: '6px 2px', color: 'var(--text-4)', fontSize: 12.5 }}>No conditions — this matches <strong>everyone</strong>. Add a condition to narrow the audience.</div>
               : (
@@ -619,7 +680,7 @@ export default function SegmentsPage() {
                   ))}
                 </div>
               )}
-            <datalist id="attr-suggest">{ATTR_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+            <datalist id="attr-suggest">{ATTR_SUGGEST.map(([a, hint]) => <option key={a} value={a} label={hint} />)}</datalist>
           </Panel>
         )}
 

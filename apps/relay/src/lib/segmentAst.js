@@ -32,6 +32,112 @@ function normalizeWithin(v) {
 
 const csvToArr = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
 
+// ── Attribute types, and which operators can possibly work on them ─────────────
+//
+// ⚠️ WHY THIS EXISTS. `eval_segment_node`'s date operators carry a shape guard:
+//     WHEN op='within_days' THEN comms._attr(p,k) ~ '^\d{4}-\d{2}-\d{2}' AND (...)::timestamptz >= ...
+// That guard is CORRECT — without it a numeric attribute would blow up the cast. But its
+// consequence is that a date operator on a non-date attribute matches ZERO profiles, silently.
+//
+// On 2026-08-15 Mishica built `Match NONE of [ lifetime_orders within last (days) 30 ]` and
+// reported that the exclusion changed nothing. It didn't: `lifetime_orders` is a number, so the
+// condition matched nobody, and "exclude nobody" is everyone. Measured through the live
+// evaluator that morning — her rule and an EMPTY rule both returned 180,713 / 94,585 reachable,
+// identical to the digit. She was one click from sending an Independence Day campaign to the
+// entire list believing recent purchasers had been taken out.
+//
+// ⚠️ This is the FOURTH silent-zero in this builder (consent leaf S268, the event `where` filter,
+// the dead `email_clicked` suggestion) but the FIRST that widens rather than narrows. The other
+// three collapsed a segment to 0, which is loud — you see "0 MEMBERS" and stop. Inside a
+// `Match NONE of`, the same fault inflates the audience to everyone and looks completely normal.
+// A count that is too BIG has no tell. That asymmetry is the reason this is guarded at the form.
+//
+// ⚠️ The guard belongs HERE, not in the engine. `eval_segment_node` is re-run at send time by
+// every live campaign, and it is explicitly fenced off in reference/decisions.md (2026-08-14).
+// Raising there would turn a mis-picked operator into a mid-send failure. Fixing the input at
+// the form is also the standing house rule.
+//
+// Types are MEASURED, not assumed — 2026-08-15, over all 180,713 comms.profiles rows:
+//   key                     profiles  date-shaped  numeric-shaped
+//   lifetime_orders           87,055        0         87,055
+//   total_spent               87,052        0         87,052
+//   lifetime_value             6,326        0          6,326
+//   shopify_created_at        87,052   87,052              0
+//   last_order_at             40,318   40,318              0
+//   last_delivery_at           1,687    1,687              0
+// Re-measure with the query in archive/ before editing this map; a wrong entry here bans a
+// legitimate operator, which is a worse failure than the one it prevents.
+const ATTR_TYPES = {
+  lifetime_orders: 'number',
+  total_spent: 'number',
+  lifetime_value: 'number',
+  last_order_at: 'date',
+  shopify_created_at: 'date',
+  last_delivery_at: 'date',
+  accepts_email_marketing: 'bool',
+  accepts_sms_marketing: 'bool',
+  city: 'text',
+  display_name: 'text',
+  full_name: 'text',
+  audience: 'text',
+  employee_code: 'text',
+  tags: 'text',
+};
+
+// Operators that can actually match on each type. An operator absent from this list is not
+// "discouraged", it is INERT — it provably matches nobody, so offering it is offering a trap.
+// `unknown` keeps every operator: attributes are free text and new ones arrive from Shopify
+// without a code change, so an unrecognised name must never be blocked — only flagged.
+const OPS_BY_TYPE = {
+  number: ['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte'],
+  date: ['before_days', 'within_days'],
+  bool: ['eq', 'neq'],
+  text: ['eq', 'neq', 'in'],
+};
+const DATE_OPS = ['before_days', 'within_days'];
+
+// Attributes that exist in the picker but resolve to NULL on every profile — measured
+// 2026-08-15. `first` was never a real attribute at all, and `locale` is a real column that
+// is empty on all 180,713 rows. Both match nobody in any operator, exactly like the
+// `email_clicked` event the header comment above records. Kept as a NAMED list rather than
+// silently dropped, so the warning can say WHY instead of the row just looking fine.
+const EMPTY_ATTRS = { first: 'is not a real attribute', locale: 'is empty on every profile' };
+
+const attrType = (attr) => ATTR_TYPES[String(attr || '').trim()] || 'unknown';
+
+// Which operators to offer for an attribute. Unknown attribute → everything.
+function opsForAttr(attr, allOps) {
+  const allowed = OPS_BY_TYPE[attrType(attr)];
+  return allowed ? allOps.filter((o) => allowed.includes(o.id)) : allOps;
+}
+
+// Human explanation of why a condition can never match, or null when it is fine.
+// Returned as prose because it is rendered straight to a marketer, not to a developer.
+function conditionWarning(row) {
+  if (!row || row.type !== 'attr') return null;
+  const attr = String(row.attr || '').trim();
+  if (!attr) return null;
+  if (EMPTY_ATTRS[attr]) return `"${attr}" ${EMPTY_ATTRS[attr]} — this condition matches nobody.`;
+  const t = attrType(attr);
+  if (t === 'unknown') return null;
+  const allowed = OPS_BY_TYPE[t] || [];
+  if (allowed.includes(row.op)) return null;
+  if (DATE_OPS.includes(row.op)) {
+    return `"${attr}" holds a ${t === 'number' ? 'number' : t === 'bool' ? 'true/false' : 'word'}, not a date — a day-based operator matches nobody here. For "ordered in the last N days" use last_order_at.`;
+  }
+  if (t === 'date') return `"${attr}" is a date — use "within last (days)" or "older than (days)".`;
+  return `"${attr}" is a ${t}, so this operator matches nobody.`;
+}
+
+// A default operator that is valid for the attribute, used when the attribute changes under an
+// operator that no longer applies. Silently leaving the stale operator is what produced the
+// inert rule in the first place.
+function defaultOpFor(attr, currentOp) {
+  const allowed = OPS_BY_TYPE[attrType(attr)];
+  if (!allowed || allowed.includes(currentOp)) return currentOp;
+  return allowed[0];
+}
+
 // stored leaf → editor row
 function toRow(leaf) {
   if (leaf && leaf.event != null) return { type: 'event', event: leaf.event || '', count: leaf.count ?? 1,
@@ -129,4 +235,29 @@ function countConditions(items) {
   return (items || []).reduce((n, it) => n + (it && it.type === 'group' ? (it.rows || []).length : 1), 0);
 }
 
-export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS };
+// Every leaf in a parsed definition, flattening one level of groups, tagged with the group it
+// sits in. The group matters: an inert condition inside `none` WIDENS the audience, which is the
+// case that has no visible tell (see the ATTR_TYPES header).
+function flattenItems(group, items) {
+  const out = [];
+  (items || []).forEach((it) => {
+    if (it && it.type === 'group') (it.rows || []).forEach((r) => out.push({ row: r, group: it.group }));
+    else if (it) out.push({ row: it, group });
+  });
+  return out;
+}
+
+// Every warning in the rule, worst first. `widening` marks the dangerous ones — an inert
+// condition under `Match NONE of`, where the audience silently becomes everyone.
+function ruleWarnings(group, items) {
+  return flattenItems(group, items)
+    .map(({ row, group: g }) => {
+      const text = conditionWarning(row);
+      return text ? { text, widening: g === 'none' } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.widening) - Number(a.widening));
+}
+
+export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS,
+  ATTR_TYPES, OPS_BY_TYPE, EMPTY_ATTRS, attrType, opsForAttr, conditionWarning, defaultOpFor, flattenItems, ruleWarnings };

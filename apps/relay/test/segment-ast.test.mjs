@@ -11,7 +11,15 @@
 // safety net, since this pair silently rewrites a live audience when it is wrong. Logged in
 // BACKLOG [relay] rather than fixed here. Do not restate the "all live definitions" claim.
 import assert from 'node:assert';
-import { parseDef, itemsToDef, toLeaf, toRow, countConditions } from '../src/lib/segmentAst.js';
+import { parseDef, itemsToDef, toLeaf, toRow, countConditions,
+  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings } from '../src/lib/segmentAst.js';
+
+// Mirrors the OPS list in the segments page. Kept as a fixture rather than imported because the
+// page is a React client component and this suite runs under bare node.
+const OPS_FIXTURE = [
+  { id: 'eq' }, { id: 'neq' }, { id: 'in' }, { id: 'gt' }, { id: 'gte' },
+  { id: 'lt' }, { id: 'lte' }, { id: 'before_days' }, { id: 'within_days' },
+];
 
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); pass++; console.log('  ok  ', n); }
@@ -111,6 +119,77 @@ t('countConditions counts LEAVES over every live definition, and never throws', 
   assert.equal(countConditions(parseDef(nested).items), 3);
   // defensive: a group mid-edit with no rows contributes nothing rather than throwing
   assert.equal(countConditions([{ type: 'group', group: 'any' }]), 0);
+});
+
+// ── Inert-condition guard (2026-08-15) ────────────────────────────────────────
+// Pinned against the LIVE evaluator's behaviour, not against a reading of it: on 2026-08-15
+// `{"none":[{"op":"within_days","attr":"lifetime_orders","value":30}]}` and `{"none":[]}` both
+// returned 180,713 matched / 94,585 reachable through comms.preview_segment — identical, i.e.
+// the exclusion did nothing. These tests exist so the form can never offer that pairing again.
+
+t('a date operator on a numeric attribute is flagged, not silently accepted', () => {
+  const w = conditionWarning({ type: 'attr', attr: 'lifetime_orders', op: 'within_days', value: '30' });
+  assert.ok(w, 'lifetime_orders + within_days must warn');
+  assert.match(w, /not a date/i);
+  assert.match(w, /last_order_at/, 'the warning must name the attribute that DOES work');
+  // the same operator on a real date attribute is correct and must stay silent
+  assert.equal(conditionWarning({ type: 'attr', attr: 'last_order_at', op: 'within_days', value: '30' }), null);
+});
+
+t('operators offered are restricted to what the attribute type can match', () => {
+  const ids = (attr) => opsForAttr(attr, OPS_FIXTURE).map((o) => o.id);
+  assert.deepEqual(ids('lifetime_orders').includes('within_days'), false);
+  assert.deepEqual(ids('last_order_at'), ['before_days', 'within_days']);
+  assert.ok(ids('city').includes('eq') && !ids('city').includes('gte'));
+  // an attribute we do not know must keep EVERY operator — new ones arrive from Shopify
+  // without a code change here, and blocking an unknown is worse than flagging it.
+  assert.equal(ids('some_new_shopify_field').length, OPS_FIXTURE.length);
+});
+
+t('changing the attribute moves a now-invalid operator instead of leaving it inert', () => {
+  // the exact sequence that produced the live fault: a date operator left behind on a number
+  assert.equal(defaultOpFor('lifetime_orders', 'within_days'), 'eq');
+  // a still-valid operator is never disturbed
+  assert.equal(defaultOpFor('lifetime_orders', 'gte'), 'gte');
+  assert.equal(defaultOpFor('last_order_at', 'within_days'), 'within_days');
+  // unknown attribute: leave the author's choice alone
+  assert.equal(defaultOpFor('mystery_field', 'within_days'), 'within_days');
+});
+
+t('attributes that match nobody are called out by name', () => {
+  for (const dead of ['first', 'locale']) {
+    const w = conditionWarning({ type: 'attr', attr: dead, op: 'eq', value: 'x' });
+    assert.ok(w && /matches nobody/i.test(w), `${dead} must warn`);
+  }
+});
+
+t('an inert condition under Match NONE of is marked as WIDENING', () => {
+  const bad = { type: 'attr', attr: 'lifetime_orders', op: 'within_days', value: '30' };
+  const none = ruleWarnings('none', [bad]);
+  assert.equal(none.length, 1);
+  assert.equal(none[0].widening, true, 'under `none` an inert condition excludes nobody → everyone');
+  // the same condition under `all` is still wrong, but it collapses to 0 and is self-announcing
+  assert.equal(ruleWarnings('all', [bad])[0].widening, false);
+  // and it must be found inside a nested group too, not just at the top level
+  const nested = ruleWarnings('all', [{ type: 'group', group: 'none', rows: [bad] }]);
+  assert.equal(nested.length, 1);
+  assert.equal(nested[0].widening, true);
+});
+
+t('a correct rule produces no warnings at all', () => {
+  const clean = [
+    { type: 'attr', attr: 'last_order_at', op: 'within_days', value: '90' },
+    { type: 'attr', attr: 'lifetime_orders', op: 'gte', value: '1' },
+    { type: 'consent', channel: 'whatsapp', purpose: 'marketing', state: 'opted_in' },
+    { type: 'event', event: 'product_viewed', count: 1 },
+  ];
+  assert.deepEqual(ruleWarnings('all', clean), []);
+  // every live saved definition must be warning-free — none of them carried this fault when
+  // measured 2026-08-15, and a regression here would mean we broke a real audience.
+  for (const [name, def] of Object.entries(LIVE)) {
+    const p = parseDef(def);
+    assert.deepEqual(ruleWarnings(p.group, p.items), [], `${name} should have no warnings`);
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
