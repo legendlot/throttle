@@ -81,7 +81,11 @@ gets early-returned and **acked**, i.e. silently destroyed.
 - **Tests**: SQL-level — `p_before NULL` ≡ old behaviour byte-identical · a `[after, before]`
   slice unions with its complement to the full set.
 
-### Task 4 — Scan-bounded chunked build (§9.12/§9.13/§9.14) + `building_roster`
+### Task 4 — Scan-bounded chunked build · ✅ SHIPPED 2026-08-16 (commsops `910cb3be`, migrations `comms_build_roster_chunk_v1/v2`)
+
+> ⚠️ Design correction vs the wording below: `shard_count` is fixed at CLAIM time, never at
+> completion — rows are hashed as they insert (§9.9). ⚠️ Postgres has NO `max(uuid)` — cursors
+> come from `array_agg(ORDER BY DESC)[1]`. SQL proven live on a scratch campaign first.
 
 - Migration `comms_build_roster_chunk_v1`: `build_roster_chunk(p_campaign_id uuid, p_after uuid,
   p_scan_limit int DEFAULT 15000) RETURNS TABLE(scanned int, inserted int, cursor uuid, done bool)`
@@ -102,7 +106,7 @@ gets early-returned and **acked**, i.e. silently destroyed.
   after a mid-build stop · partial build never stamps `roster_built_at` · approval re-check parks
   and does NOT seed chains · a double-delivered build message is a no-op (idempotent insert).
 
-### Task 5 — `stalled` via the DLQ consumer (§9.15) · closes the dead-chain P1
+### Task 5 — `stalled` via the DLQ consumer · ✅ SHIPPED 2026-08-16 (commsops `cae5d1db`) — dead-chain P1 CLOSED
 
 - DLQ consumer: for dead-lettered `build_roster` or campaign-fan-out messages, PATCH the campaign
   `status='stalled'` where `status=in.(building_roster,sending)`, and say so in the existing alert.
@@ -115,7 +119,7 @@ gets early-returned and **acked**, i.e. silently destroyed.
 - ✅ On ship: close BACKLOG P1 "dead fan-out chain silently stalls a campaign" (its pass condition
   — visible within a minute without reading the DLQ — is met by the status + alert).
 
-### Task 6 — Fan-out reads the roster (§7) + holdout rows (§9.17)
+### Task 6 — Fan-out reads the roster + holdout rows · ✅ SHIPPED 2026-08-16 (commsops `618843e2`)
 
 - `processQueueMessage`: when the campaign has `roster_built_at`, page from `campaign_roster`
   (`campaign_id, shard, profile_id > after` on the covering index) instead of
@@ -129,7 +133,7 @@ gets early-returned and **acked**, i.e. silently destroyed.
   `roster_built_at` NULL · holdout recipients produce skip rows and no send · roster path still
   applies the Task-2 per-page exclusion.
 
-### Task 7 — Reconciliation + top-up (§5, §9.18)
+### Task 7 — Reconciliation + top-up · ✅ SHIPPED 2026-08-16 (commsops `b7c13675`, migration `comms_campaign_recon_topup_v1`)
 
 - `getCampaignRecon` (GET): roster LEFT JOIN messages on `(source, profile_id)`
   (`messages_source_idx` verified) → `{roster_size, attempted, never_attempted}`. App shows
@@ -144,7 +148,12 @@ gets early-returned and **acked**, i.e. silently destroyed.
   refused while `sending` · top-up rows land in valid shards under the STORED shard_count ·
   resume after top-up visits the new rows (cursor `after:null` re-walk).
 
-### Task 8 — App + manual + close-out
+### Task 8 — App + manual + close-out · ✅ SHIPPED 2026-08-16
+
+> END-TO-END SMOKE PASSED on a real scheduled campaign (LOT Internal Staff, WA marketing at
+> 00:09 IST): scheduler fired → roster built (17) → chain ran → 15 gate-skipped quiet_hours +
+> the 2 test-allowlist numbers took the REAL delivery path (1 sent to +91819…, 1 blocked
+> wa_131049) → `sent`, shards 1/1 → **recon 17 / 17 / 0**. Scratch fully deleted after.
 
 - Campaigns page: `building_roster` badge ("Preparing audience — N of M built", poll) · `stalled`
   badge + resume · recon line · top-up button. `sendNow` copy for `{building:true}` response.
