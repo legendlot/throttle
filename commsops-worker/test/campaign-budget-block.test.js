@@ -34,7 +34,8 @@ const EXEMPT = [{ channel: 'whatsapp', enabled: false, start_time: '22:00', end_
 // `quiet` defaults to EXEMPT so the BUDGET tests are unaffected by the clock — each guard is
 // tested in isolation, and a budget assertion must never fail because of the time of day.
 function stub({ camp = CAMPROW(), reachable = 20000, quiet = EXEMPT,
-  budget = { budget: 15000, used: 374, remaining: 14626 }, budgetOk = true, quietOk = true } = {}) {
+  budget = { budget: 15000, used: 374, remaining: 14626 }, budgetOk = true, quietOk = true,
+  recon = null } = {}) {
   const seen = { claimed: false };
   // ⚠️ REQUIRED. getChannelQuietHours memoizes for SETTINGS_TTL_MS, so without this every test
   // after the first reads the first test's window and the guard appears not to fire — which is
@@ -48,6 +49,7 @@ function stub({ camp = CAMPROW(), reachable = 20000, quiet = EXEMPT,
     if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{ quiet_hours_start: 22, quiet_hours_end: 8 }] };
     if (path.includes('materialize_segment')) return { ok: true, data: null };
     if (path.includes('campaign_reach')) return { ok: true, data: [{ total: reachable, reachable, excluded: 0, sendable: reachable }] };
+    if (path.includes('campaign_recon')) return { ok: true, data: recon ? [recon] : [] };
     if (path.includes('send_budget_status')) return budgetOk ? { ok: true, data: [budget] } : { ok: false, status: 500, data: null };
     if (path.includes('/campaigns?id=eq.C') && opts.method === 'PATCH') { seen.claimed = true; return { ok: true, data: [camp] }; }
     return { ok: true, data: [] };
@@ -55,7 +57,10 @@ function stub({ camp = CAMPROW(), reachable = 20000, quiet = EXEMPT,
   return seen;
 }
 const ENV = { BROADCAST_QUEUE: { send: async () => {} } };
-const RATE = CAMP.THROUGHPUT_PER_HOUR;
+// PER-CHAIN since S287 — the guard multiplies by shard count (shardsFor(sendable), or the stored
+// shard_count on a resume). Expected values below are hand-derived, not recomputed with the same
+// formula, so a shard-math regression fails the suite instead of passing tautologically.
+const RATE = CAMP.THROUGHPUT_PER_HOUR_PER_CHAIN;
 
 (async () => {
   // ── budget guard ────────────────────────────────────────────────────────────
@@ -105,16 +110,40 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
 
   // ── quiet-hours clock guard ─────────────────────────────────────────────────
   await t('a send that cannot finish before quiet hours is REFUSED, with the numbers', async () => {
-    // 1 hour of runway, an audience needing ~6 hours
+    // 1 hour of runway. Audience = RATE*6 = 25,800 → shardsFor = 3 chains → 3×RATE = 12,900/hr
+    // effective → needs exactly 120 minutes.
     const seen = stub({ reachable: RATE * 6, quiet: winStartingIn(60),
       budget: { budget: 999999, used: 0, remaining: 999999 } });
     const r = await CAMP.startCampaign(ENV, 'C', 'u1');
     assert.equal(r.error, 'wont_finish_before_quiet_hours', JSON.stringify(r));
-    assert.equal(r.needMinutes, 360);
+    assert.equal(r.needMinutes, 120);
+    assert.equal(r.throughputPerHour, RATE * 3, 'the refusal must carry the EFFECTIVE sharded rate');
     assert.ok(r.minutesUntilQuiet >= 59 && r.minutesUntilQuiet <= 61, `got ${r.minutesUntilQuiet}`);
     // it must say how many WOULD be reached, or the sender cannot resize the audience
     assert.ok(r.reachableBeforeQuiet > 0 && r.reachableBeforeQuiet < RATE * 6);
     assert.equal(seen.claimed, false);
+  });
+
+  await t('the S287 pass condition — a 48k WhatsApp send with 5h of runway is ALLOWED', async () => {
+    // 48,000 → 5 shards → 21,500/hr → needs 134 min against 300−45 = 255 available. Under the old
+    // single-chain 3,211 figure this exact send needed 897 min and was refused — the over-refusal
+    // that forced the re-measure. 17:00 IST against a 22:00 window ≡ winStartingIn(300).
+    const seen = stub({ reachable: 48000, quiet: winStartingIn(300),
+      budget: { budget: 999999, used: 0, remaining: 999999 } });
+    const r = await CAMP.startCampaign(ENV, 'C', 'u1');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(seen.claimed, true);
+  });
+
+  await t('a roster-resume is judged at the STORED shard count, not shardsFor(remaining)', async () => {
+    // 5,000 left of a 5-shard roster, one hour of runway: at the stored 5 chains that is 14 min
+    // (≤ 60−45). shardsFor(5,000) would read 1 chain → 70 min → wrongly refused. The stored value
+    // is what the walk actually uses (§9.9), so the guard must mirror it.
+    stub({ camp: CAMPROW({ roster_built_at: '2026-08-16T10:00:00Z', shard_count: 5 }),
+      reachable: 48000, recon: { never_attempted: 5000 },
+      quiet: winStartingIn(60), budget: { budget: 999999, used: 0, remaining: 999999 } });
+    const r = await CAMP.startCampaign(ENV, 'C', 'u1');
+    assert.equal(r.ok, true, JSON.stringify(r));
   });
 
   await t('a send with ample runway is allowed', async () => {

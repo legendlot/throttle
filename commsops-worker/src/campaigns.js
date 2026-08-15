@@ -154,20 +154,21 @@ async function sendBudget(env) {
 // stranding of S269, on the clock instead of the counter, and the budget check cannot see it —
 // that one compares volume against a counter, this one against the hours left.
 //
-// ⚠️ MEASURED, not assumed. 3,211 attempts/hour is the peak SUSTAINED rate of the
-// `Freedom to Play Sale_14 Aug` broadcast (2026-08-14, per-hour attempts 642 → 2,795 → 3,211 →
-// 1,323). Deliberately the PEAK rather than the mean: this figure decides whether a send is
-// refused, so an over-cautious number blocks legitimate campaigns, which is the failure that gets
-// a guard deleted. The first hour of that run read ~640/hr while the queue spun up, so a real send
-// will trail this estimate early and catch up — the ramp is why the margin below exists.
-// ⚠️ DELIBERATELY LEFT AT THE PRE-2026-08-15 RATE, even though SEND_CONCURRENCY went 5 → 12 and
-// SENDS_PER_MSG 12 → 36 the same day and the real rate is expected to be materially higher. The
-// two errors are NOT symmetric: too LOW over-refuses, which costs one extra confirm click on the
-// partial-send override; too HIGH under-refuses, which strands customers who are never retried.
-// Raising this on an expectation rather than a measurement would trade the cheap error for the
-// expensive one. **Re-measure from the first full run at the new settings and update it then** —
-// per-hour attempt counts across a COMPLETE broadcast, never a mid-flight sample.
-const THROUGHPUT_PER_HOUR = 3211;
+// ⚠️ MEASURED, not assumed — and PER CHAIN, because sharding made whole-campaign throughput a
+// function of shard count. Re-measured 2026-08-16 (S287) from the COMPLETE `Freedom to Play
+// Sale_15Aug` broadcast (48,189 attempts), which ran both shapes in one day at the current
+// SEND_CONCURRENCY=25 / SENDS_PER_MSG=75:
+//   · single chain (pre-restart, 15:00–15:40 IST): 10-min windows at 4,350–4,500/hr
+//   · 5 shards (16:20 restart onward): 12 consecutive 10-min windows at 21,018–22,740/hr —
+//     sustained mean 21,577/hr across two full hours, i.e. ~4,315/hr per chain. Linear in N,
+//     exactly as the MAX_SHARDS comment above predicts.
+// 4,300 is the floor of both readings — sustained, not peak, because the per-chain figure gets
+// MULTIPLIED now and a peak×N estimate compounds optimism. The two errors are still asymmetric:
+// too LOW over-refuses (one extra confirm click on the partial-send override); too HIGH
+// under-refuses (strands customers who are never retried). The old 3,211 was the same guard's
+// single-chain peak at the OLD concurrency (5/12). Re-measure from per-hour attempt counts across
+// a COMPLETE broadcast, never a mid-flight sample — this figure's own first cut died that way.
+const THROUGHPUT_PER_HOUR_PER_CHAIN = 4300;
 
 // Refuse rather than cut it fine. A send predicted to land within this margin of the cutoff is
 // treated as not finishing: the estimate carries ramp-up error, and being wrong costs real
@@ -323,12 +324,21 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   if (!allowPartial) {
     const mins = await minutesUntilQuiet(env, camp.channel);
     if (mins != null) {
-      const needMins = Math.ceil((guardCount / THROUGHPUT_PER_HOUR) * 60);
+      // The rate is per CHAIN; the campaign's real rate is chains × that. Mirror the claim
+      // below EXACTLY: a fresh send gets shardsFor(sendable), while a build-resume or
+      // roster-resume keeps the STORED shard_count its existing rows were hashed with (§9.9) —
+      // judging a stored-5-shard resume by shardsFor(a few hundred remaining) would divide the
+      // rate by 5 and refuse a resume that finishes in minutes.
+      const shards = (camp.build_cursor || camp.roster_built_at)
+        ? Math.max(1, Number(camp.shard_count || 1))
+        : shardsFor(sendable);
+      const ratePerHour = THROUGHPUT_PER_HOUR_PER_CHAIN * shards;
+      const needMins = Math.ceil((guardCount / ratePerHour) * 60);
       if (needMins > Math.max(mins - QUIET_MARGIN_MINUTES, 0)) {
         return { ok: false, error: 'wont_finish_before_quiet_hours',
           sendable: guardCount, needMinutes: needMins, minutesUntilQuiet: mins,
-          reachableBeforeQuiet: Math.max(Math.floor((mins / 60) * THROUGHPUT_PER_HOUR), 0),
-          throughputPerHour: THROUGHPUT_PER_HOUR };
+          reachableBeforeQuiet: Math.max(Math.floor((mins / 60) * ratePerHour), 0),
+          throughputPerHour: ratePerHour };
       }
     }
   }
@@ -787,6 +797,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR_PER_CHAIN, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };
