@@ -311,7 +311,9 @@ function TrackingModal({ tpl, base, session, campaign, onClose, onCreated, showT
 function emptyCampaign() {
   return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null,
     // Audience exclusions (S276) — all three optional, all evaluated live during the fan-out.
-    exclude_segment_ids: [], exclude_campaign_ids: [], exclude_contacted_hours: '' };
+    exclude_segment_ids: [], exclude_campaign_ids: [], exclude_contacted_hours: '',
+    // Operator accepted a send that may not reach everyone — see the Schedule field.
+    allow_partial: false };
 }
 
 // Presets for "don't contact anyone messaged in the last N hours". Free entry is still allowed;
@@ -433,6 +435,7 @@ export default function CampaignsPage() {
       vars: JSON.stringify(r.vars || {}, null, 0), scheduled_at: r.scheduled_at ? String(r.scheduled_at).slice(0, 16) : '',
       status: r.status || 'draft', audience_snapshot: r.audience_snapshot ?? null, reject_reason: r.reject_reason || null,
       utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
+      allow_partial: r.allow_partial === true,
       exclude_segment_ids: Array.isArray(r.exclude_segment_ids) ? r.exclude_segment_ids : [],
       exclude_campaign_ids: Array.isArray(r.exclude_campaign_ids) ? r.exclude_campaign_ids : [],
       exclude_contacted_hours: r.exclude_contacted_hours == null ? '' : String(r.exclude_contacted_hours),
@@ -553,6 +556,7 @@ export default function CampaignsPage() {
         segment_id: c.segment_id || null, template_id: c.template_id || null,
         vars, scheduled_at: c.scheduled_at ? new Date(c.scheduled_at).toISOString() : null,
         utm: c.utm || null,
+        allow_partial: !!c.allow_partial,
         exclude_segment_ids: c.exclude_segment_ids || [],
         exclude_campaign_ids: c.exclude_campaign_ids || [],
         // '' → null server-side ("rule off"); the worker re-validates rather than trusting this.
@@ -827,6 +831,24 @@ export default function CampaignsPage() {
             </div>
             <div className="ff"><div className="kv-k">Schedule (optional)</div>
               <input className="f-inp mono" type="datetime-local" value={c.scheduled_at} onChange={(e) => set('scheduled_at', e.target.value)} disabled={busy || !isDraft || !canBuild} />
+              {/* A scheduled send has nobody at a button. Both pre-send guards (budget, and
+                  won't-finish-before-quiet-hours) are overridable with a dialog when a human
+                  presses Send — but the scheduler cannot be asked, so without this a large
+                  scheduled broadcast is refused, alerts, and re-refuses every five minutes
+                  while appearing perfectly scheduled. This is where that decision gets made. */}
+              {c.scheduled_at && (
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 8, fontSize: 12.5 }}>
+                  <input type="checkbox" checked={!!c.allow_partial} disabled={busy || !isDraft || !canBuild}
+                    onChange={(e) => set('allow_partial', e.target.checked)} style={{ marginTop: 2 }} />
+                  <span>
+                    <strong>Send even if it cannot finish.</strong>
+                    <span className="dim"> Without this, a send too large for the day&apos;s remaining
+                    budget — or one that would run past quiet hours — is held and nothing goes out.
+                    With it, the send starts and whoever is not reached is skipped; you can send to
+                    them afterwards from this page.</span>
+                  </span>
+                </label>
+              )}
             </div>
             <div className="ff"><div className="kv-k">Audience (segment)</div>
               {isDraft && canBuild

@@ -167,6 +167,23 @@ const RATE = CAMP.THROUGHPUT_PER_HOUR;
     assert.equal((await CAMP.startCampaign(ENV, 'C', 'u1')).error, 'audience_exceeds_budget');
   });
 
+  // ── the persisted override (for scheduled sends) ────────────────────────────
+  await t('campaign.allow_partial overrides BOTH guards — the scheduler has nobody to ask', async () => {
+    // Without this a large SCHEDULED broadcast is refused, alerts, stays scheduled and re-refuses
+    // every five minutes: the guards reproducing the exact silent-non-send they exist to prevent.
+    stub({ camp: CAMPROW({ allow_partial: true }), reachable: 94588, quiet: winStartingIn(60) });
+    const r = await CAMP.startCampaign(ENV, 'C', 'scheduler');   // note: NO opts, like the cron
+    assert.equal(r.ok, true, `persisted override must work without opts: ${JSON.stringify(r)}`);
+  });
+
+  await t('allow_partial must be strictly true — junk is never consent to a partial send', async () => {
+    for (const v of ['true', 1, {}, 'yes']) {
+      stub({ camp: CAMPROW({ allow_partial: v }), reachable: 94588 });
+      const r = await CAMP.startCampaign(ENV, 'C', 'scheduler');
+      assert.equal(r.error, 'audience_exceeds_budget', `${JSON.stringify(v)} must not override`);
+    }
+  });
+
   // ── resume after a quiet-hours tail ─────────────────────────────────────────
   await t('a SENT campaign is resumable — that is the only recovery for a quiet-hours tail', async () => {
     // send.js dedups on SUCCESS: a skipped row frees its dedup key and is retried on a later pass.

@@ -1668,7 +1668,7 @@ async function handlePost(body, auth, env) {
     case 'saveCampaign': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at, utm,
-        exclude_segment_ids, exclude_campaign_ids, exclude_contacted_hours } = body;
+        exclude_segment_ids, exclude_campaign_ids, exclude_contacted_hours, allow_partial } = body;
       if (!name) return err('name_required', 400);
       // Audience exclusions (S276). Coerced server-side: a non-array becomes [], blanks are
       // dropped, and the hours field is NULL unless it is a positive number — a 0 or a stray ''
@@ -1685,6 +1685,10 @@ async function handlePost(body, auth, env) {
         // Normalized server-side by the same helper the send path uses: blanks dropped (blank
         // means inherit), non-utm_ keys discarded, all-blank collapsed to NULL.
         utm: J.sanitizeUtm(utm),
+        // The operator's "send even if it cannot finish" decision, made at schedule time because
+        // the cron cannot be asked one. Strict === true so an absent or junk value is never read
+        // as consent to a partial send — the guards must keep their teeth by default.
+        allow_partial: allow_partial === true,
         scheduled_at: scheduled_at || null, updated_at: nowIso() };
       // Setting a schedule ARMS the cron to send with no further human action — that is
       // activation, and requires send_activate (review H7: build → schedule → auto-approve →

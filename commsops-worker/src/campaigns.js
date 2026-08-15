@@ -179,9 +179,16 @@ async function minutesUntilQuiet(env, channel) {
 
 // Kick off a broadcast: snapshot, set sending, enqueue the first fan-out seed.
 //
-// `allowPartial` deliberately sends a campaign KNOWN to be larger than today's remaining budget.
-// It exists because the block below would otherwise be a dead end on a legitimately huge audience,
-// and a guard nobody can get past gets removed rather than respected.
+// `allowPartial` deliberately sends a campaign KNOWN not to fit — larger than today's remaining
+// budget, or unable to finish before quiet hours. It exists because the blocks below would
+// otherwise be a dead end on a legitimately huge audience, and a guard nobody can get past gets
+// removed rather than respected.
+//
+// ⚠️ It comes from EITHER the caller (a human pressing Send, who just answered a dialog) OR the
+// campaign row (`allow_partial`, set at schedule time). The row matters because the SCHEDULER has
+// nobody to ask: it calls this with no options, so without a persisted decision a large scheduled
+// broadcast is refused, alerts, stays scheduled and re-refuses every five minutes — silently never
+// sending. That is the guards reproducing the very failure they exist to prevent.
 async function startCampaign(env, id, sentBy, opts = {}) {
   const camp = await getCampaign(env, id);
   if (!camp) return { ok: false, error: 'not_found' };
@@ -242,6 +249,10 @@ async function startCampaign(env, id, sentBy, opts = {}) {
 
   const { sendable } = await reachableCount(env, camp);
 
+  // Caller's answer OR the campaign's own persisted decision. Either is a human saying "I accept
+  // a partial send"; the row is simply the one that survives until an unattended scheduler run.
+  const allowPartial = opts.allowPartial === true || camp.allow_partial === true;
+
   // Approval was judged on the SUBMIT-time audience; a dynamic segment may have grown past the
   // threshold since. A human-approved campaign (approved_by set) stands; an auto-approved one
   // that outgrew the threshold goes back for eyes (review M2).
@@ -267,7 +278,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // budget" case it is built for, not a race down to the last few units. Do NOT harden it into a
   // reservation: holding budget across a fan-out that can be stopped or resumed would leak units
   // and starve transactional traffic on a failure.
-  if (String(camp.purpose || 'marketing') === 'marketing' && !opts.allowPartial) {
+  if (String(camp.purpose || 'marketing') === 'marketing' && !allowPartial) {
     const b = await sendBudget(env);
     if (b.remaining != null && sendable > b.remaining) {
       return { ok: false, error: 'audience_exceeds_budget',
@@ -279,7 +290,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // a tail that quiet hours kills is never retried and is invisible in the campaign's own status.
   // Applies to every purpose, not just marketing — quiet hours are a channel rule, not a budget
   // one, so a utility broadcast strands its tail exactly the same way.
-  if (!opts.allowPartial) {
+  if (!allowPartial) {
     const mins = await minutesUntilQuiet(env, camp.channel);
     if (mins != null) {
       const needMins = Math.ceil((sendable / THROUGHPUT_PER_HOUR) * 60);
