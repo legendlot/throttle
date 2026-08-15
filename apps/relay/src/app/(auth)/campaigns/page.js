@@ -370,6 +370,7 @@ export default function CampaignsPage() {
   const [c, setC] = useState(emptyCampaign());
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState(null);
+  const [recon, setRecon] = useState(null);   // frozen-roster reconciliation, null = no roster
   const [attr, setAttr] = useState(null);
   const [reach, setReach] = useState(null);   // {loading}|{total,reachable} for the picked segment × (channel,purpose)
   const [testTo, setTestTo] = useState('');
@@ -461,13 +462,17 @@ export default function CampaignsPage() {
   // (incl. 'paused': Meta blocking a bound template mid-send does not undo the messages that
   // already went out before the block — hiding stats then hides an incident, not nothing).
   const loadStats = useCallback(async (id, status) => {
-    if (!id || !['sending', 'sent', 'paused', 'stopped'].includes(status)) { setStats(null); setAttr(null); return; }
+    if (!id || !['sending', 'sent', 'paused', 'stopped', 'stalled'].includes(status)) { setStats(null); setAttr(null); setRecon(null); return; }
     try {
-      const [st, at] = await Promise.all([
+      const [st, at, rc] = await Promise.all([
         garageFetch('getCampaignStats', { id }, session),
         garageFetch('getCampaignAttribution', { id }, session),
+        // Roster reconciliation (Task 7): EXACT never-attempted against the frozen denominator.
+        // no_roster (legacy campaign) → null → the old estimate stays as the fallback.
+        garageFetch('getCampaignRecon', { id }, session).catch(() => null),
       ]);
       setStats(st || null); setAttr(at || null);
+      setRecon(rc && !rc.no_roster ? rc : null);
     } catch { /* non-fatal */ }
   }, [session]);
   async function open(r) {
@@ -674,7 +679,9 @@ export default function CampaignsPage() {
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
-      showToast(`${resume ? 'Resumed' : 'Sending started'} — ${r?.data?.audience ?? '?'} recipients`, 'success');
+      showToast(r?.data?.building
+        ? `Preparing the audience (~${Number(r?.data?.estimated || 0).toLocaleString('en-IN')} estimated) — sending starts automatically`
+        : `${resume ? 'Resumed' : 'Sending started'} — ${r?.data?.audience ?? '?'} recipients`, 'success');
       refresh();
     } catch (e) {
       // The audience does not fit in today's remaining budget. The worker refused BEFORE sending
@@ -730,6 +737,29 @@ export default function CampaignsPage() {
       } else showToast(e.message || 'Send failed', 'error');
     }
     finally { setBusy(false); }
+  }
+
+  // Top-up (roster §9.5/§9.18): append people who became ELIGIBLE after the roster froze, then
+  // resume. Only offered on finished/stopped/stalled campaigns — a row appended below a live
+  // shard cursor would silently never be visited, which is why the worker refuses it mid-send.
+  async function topUp() {
+    setBusy(true);
+    try {
+      const pv = await garageFetch('getTopupPreview', { id: c.id }, session);
+      const n = Number(pv?.addable || 0);
+      if (!n) { showToast('Nobody new — the roster already covers everyone eligible', 'info'); return; }
+      if (!window.confirm(`${n.toLocaleString('en-IN')} people have become eligible since this campaign's `
+        + `audience was frozen (new opt-ins, mostly).\n\nAdd them to the roster? They are messaged when `
+        + `you press "Send to the missed" / Resume — nothing sends yet.`)) return;
+      const r = await workerFetch('applyTopup', { id: c.id }, session);
+      showToast(`Added ${Number(r?.data?.added || 0).toLocaleString('en-IN')} — roster is now `
+        + `${Number(r?.data?.roster_size || 0).toLocaleString('en-IN')}. Press Resume to send to them.`, 'success');
+      refresh(); loadStats(c.id, c.status);
+    } catch (e) {
+      if (e?.detail?.error === 'topup_needs_approval')
+        showToast(`Adding ${e.detail.addable} would take this over the approval threshold — it needs an approver first`, 'error');
+      else showToast(e.message || 'Top-up failed', 'error');
+    } finally { setBusy(false); }
   }
 
   // EMERGENCY STOP (S282). Halts a fan-out already in flight. The worker flips status
@@ -1114,24 +1144,48 @@ export default function CampaignsPage() {
                 {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> Resume sending</Btn>}
               </>
             )}
+            {c.status === 'building_roster' && (
+              <>
+                {/* The send-time snapshot in progress (roster Task 4). Sends start on their own
+                    when it completes; Stop is honoured mid-build and Resume continues the walk. */}
+                <span className="dim" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Clock size={14} /> Preparing the audience — sending starts automatically. <button className="badge-btn accent" onClick={refresh}>refresh</button>
+                </span>
+                {canSend && <Btn kind="danger" onClick={stopNow} disabled={busy}><OctagonX size={14} /> Stop</Btn>}
+              </>
+            )}
+            {c.status === 'stalled' && (
+              <>
+                {/* A build chunk or fan-out chain died after all retries (roster Task 5). The
+                    campaign is parked visibly instead of reading `sending` forever; Resume
+                    continues exactly where it stopped — the build from its cursor, or the send
+                    with already-reached people deduped. */}
+                <Badge label="stalled — a step failed and was retried without success" tone="red" dot />
+                {canSend && <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}><Send size={14} /> Resume</Btn>}
+              </>
+            )}
             {c.status === 'sent' && (() => {
-              // A completed campaign can still have an UNREACHED tail — most often a fan-out that
-              // ran into quiet hours, where every remaining recipient is skipped in minutes and the
-              // campaign then flips to `sent` looking perfectly finished. Those people are
-              // recoverable: send.js frees the dedup key on any non-sent outcome, so a resume
-              // retries exactly them and silently skips everyone already messaged.
-              // Surfaced only when there IS a tail — a "resume" button on a campaign that reached
-              // everyone is noise that trains people to ignore it.
+              // A completed campaign can still have an UNREACHED tail. With a roster, the number
+              // is EXACT (recon.never_attempted vs the frozen denominator — Task 7); legacy
+              // campaigns fall back to the audience_snapshot − sent estimate. Recoverable either
+              // way: dedup frees the key on non-sent outcomes, so a resume retries exactly them.
               const planned = Number(c.audience_snapshot || 0);
               const done = stats ? Number(stats.sent || 0) : null;
-              const tail = planned && done != null ? planned - done : 0;
+              const tail = recon ? Number(recon.never_attempted || 0)
+                : (planned && done != null ? planned - done : 0);
+              const exact = !!recon;
               return (
                 <>
                   <Badge label={`sent · ${c.audience_snapshot ?? ''} recipients`} tone="green" dot />
-                  {tail > 0 && <Badge label={`${tail.toLocaleString('en-IN')} never reached`} tone="amber" dot />}
+                  {tail > 0 && <Badge label={`${tail.toLocaleString('en-IN')} never ${exact ? 'attempted' : 'reached (approx)'}`} tone="amber" dot />}
                   {tail > 0 && canSend && (
                     <Btn kind="primary" onClick={() => sendNow({ resume: true })} disabled={busy}>
                       <Send size={14} /> Send to the {tail.toLocaleString('en-IN')} missed
+                    </Btn>
+                  )}
+                  {exact && canSend && (
+                    <Btn kind="ghost" onClick={topUp} disabled={busy}>
+                      <Plus size={14} /> Add people who became eligible since
                     </Btn>
                   )}
                 </>

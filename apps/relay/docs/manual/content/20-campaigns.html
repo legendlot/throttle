@@ -49,3 +49,13 @@
 <p>A test send uses the campaign&rsquo;s real template and goes through the real send gate, so what lands on your phone is what a customer would get. It is recorded separately and never appears in the campaign&rsquo;s own numbers. You can run it as many times as you like.</p>
 
 <div class="callout danger"><div class="c-title">&#9940; Important</div><p>When test mode is off, <strong>Send now</strong> reaches real customers immediately. The confirmation dialog will say so in as many words. Read it rather than clicking through it: it names the audience and lists the exclusions, and it is the last point at which stopping is free.</p></div>
+
+<h2 class="sec">What happens after you press Send</h2>
+<p>Sending is no longer a single leap. The moment you press <strong>Send now</strong> (or the schedule fires), the campaign first takes a snapshot of exactly who it intends to message &mdash; the <em>roster</em> &mdash; and only then begins delivering, in several parallel lanes. Two consequences worth knowing:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Preparing the audience</div><div class="a-val"><p>For a short while the campaign shows this instead of sending. It is normal &mdash; a big audience takes a minute or two to snapshot &mdash; and sending starts by itself when it finishes. Stop works during this phase too.</p></div></div>
+  <div class="a-row"><div class="a-key">N never attempted</div><div class="a-val"><p>After the campaign finishes, this badge is an <em>exact</em> count of people who were on the roster and never got any attempt &mdash; not sent, not failed, not skipped. One press of <strong>Send to the missed</strong> reaches exactly them; everyone already handled is skipped automatically.</p></div></div>
+  <div class="a-row"><div class="a-key">Add people who became eligible since</div><div class="a-val"><p>New opt-ins keep arriving after the snapshot. This button tells you how many, and adds them to the roster &mdash; nothing sends until you press Resume.</p></div></div>
+  <div class="a-row"><div class="a-key">Stalled</div><div class="a-val"><p>If a delivery lane fails repeatedly, the campaign parks itself here and posts an alert, instead of silently looking busy forever. <strong>Resume</strong> continues exactly where it stopped.</p></div></div>
+</div>
+<div class="callout"><div class="c-title">&#8505; Why the numbers can differ from the audience line</div><p>The audience line is live and keeps moving as people opt in and out. The roster is frozen at the moment you sent. &ldquo;Who did we miss?&rdquo; is always answered against the roster, so the answer stays the same no matter when you ask.</p></div>
