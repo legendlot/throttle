@@ -231,7 +231,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // Safe because dedup makes it self-limiting: resuming a campaign that genuinely reached everyone
   // is a no-op that re-walks the audience and sends nothing. The cost of allowing it is one wasted
   // pass; the cost of forbidding it was tens of thousands of customers nobody could reach again.
-  if (!['approved', 'scheduled', 'stopped', 'sent'].includes(camp.status))
+  if (!['approved', 'scheduled', 'stopped', 'sent', 'stalled'].includes(camp.status))
     return { ok: false, error: `not_sendable_from_${camp.status}` };
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
 
@@ -338,7 +338,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
       ? Math.max(1, Number(camp.shard_count || 1))
       : shardsFor(sendable);
     const claim = await A.sbComms(
-      `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
+      `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent,stalled)`, env,
       { method: 'PATCH', body: JSON.stringify({
           status: 'building_roster', sent_by: sentBy, shard_count: shardCount,
           updated_at: nowIso() }) });
@@ -356,7 +356,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // 'sent' while the others are still sending. Dedup makes the re-walk self-limiting.
   const shardCount = Math.max(1, Number(camp.shard_count || 1));
   const claim = await A.sbComms(
-    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent)`, env,
+    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent,stalled)`, env,
     { method: 'PATCH', body: JSON.stringify({
         status: 'sending', audience_snapshot: camp.roster_size ?? sendable, sent_by: sentBy,
         shards_done: 0, updated_at: nowIso() }) });
@@ -365,6 +365,20 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   for (let i = 0; i < shardCount; i++)
     await env.BROADCAST_QUEUE.send({ campaignId: id, after: null, shard: i, shardCount });
   return { ok: true, audience: camp.roster_size ?? sendable, shards: shardCount };
+}
+
+// Mark a campaign STALLED — called by the DLQ consumer when a build chunk or a fan-out page
+// exhausts its retries (§9.15). This is what closes the dead-chain hole the 15 Aug send fell
+// into: the chain died at 15:38, the campaign read `sending` for 41 minutes, and nothing
+// anywhere said so. Conditional on the two in-flight statuses so a campaign that legitimately
+// finished (or was stopped) between the failure and the DLQ write is left alone.
+// Resume is startCampaign: stalled with no roster_built_at resumes the BUILD from build_cursor;
+// with a roster it re-walks the shards, dedup making the re-walk self-limiting.
+async function stallCampaign(env, campaignId) {
+  const r = await A.sbComms(
+    `/rest/v1/campaigns?id=eq.${A.enc(campaignId)}&status=in.(building_roster,sending)`, env,
+    { method: 'PATCH', body: JSON.stringify({ status: 'stalled', updated_at: nowIso() }) });
+  return r.ok && Array.isArray(r.data) && r.data.length > 0 ? r.data[0] : null;
 }
 
 // Consumer: one roster-build chunk (scan-bounded — §9.12/§9.13). Walks the member slice via the
@@ -718,6 +732,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };

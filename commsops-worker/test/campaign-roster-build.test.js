@@ -177,6 +177,35 @@ function stubChunk({ camp = CAMPROW({ status: 'building_roster', shard_count: 3 
       /build_roster_chunk_failed/);
   });
 
+  // ── stalled (Task 5) ────────────────────────────────────────────────────────
+  await t('stallCampaign patches ONLY an in-flight campaign, and reports which', async () => {
+    const patches = [];
+    A.sbComms = async (path, env, opts = {}) => {
+      patches.push(path);
+      // conditional PATCH: in-flight → row back; finished → empty representation
+      return { ok: true, data: path.includes('in.(building_roster,sending)') && !path.includes('MISS')
+        ? [{ id: CID, name: 'Big Send', status: 'stalled' }] : [] };
+    };
+    const hit = await CAMP.stallCampaign({}, CID);
+    assert.ok(hit && hit.status === 'stalled');
+    assert.ok(patches[0].includes('status=in.(building_roster,sending)'),
+      'a campaign that finished or was stopped between the failure and the DLQ write is left alone');
+  });
+
+  await t('a STALLED campaign resumes — into the BUILD without a roster, into the SEND with one', async () => {
+    // no roster → build path, from the persisted cursor, stored shard_count kept
+    let st = stubStart({ camp: CAMPROW({ status: 'stalled', build_cursor: 'CUR-3', shard_count: 4 }), reachable: 900 });
+    let r = await CAMP.startCampaign(st.ENV, CID, 'u1');
+    assert.equal(r.building, true, `stalled+no-roster must resume the build: ${JSON.stringify(r)}`);
+    assert.equal(st.seen.claim.shard_count, 4);
+    assert.equal(st.seen.queued[0].after, 'CUR-3');
+    // roster → send path, chains from the stored count
+    st = stubStart({ camp: CAMPROW({ status: 'stalled', roster_built_at: 'T', roster_size: 300, shard_count: 2 }) });
+    r = await CAMP.startCampaign(st.ENV, CID, 'u1');
+    assert.equal(r.building, undefined);
+    assert.equal(st.seen.queued.length, 2, 'send-resume seeds the stored chains');
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

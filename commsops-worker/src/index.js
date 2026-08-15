@@ -2661,7 +2661,19 @@ export default {
         try {
           await A.sbComms('/rest/v1/queue_failures', env, { method: 'POST',
             body: JSON.stringify({ kind: b.kind || 'campaign', body: b, error: 'max_retries_exhausted' }) });
-          await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\nRecorded in comms.queue_failures for review.`);
+          // A dead build chunk or fan-out page STALLS its campaign visibly (roster §9.15). This
+          // closes the hole the 15 Aug send fell into: the chain died and the campaign read
+          // `sending` for 41 minutes with no signal anywhere. Conditional inside stallCampaign on
+          // the in-flight statuses, so a campaign that finished or was stopped meanwhile is left
+          // alone. `stalled` is resumable from the app — build-resume or send-resume by roster state.
+          let stalledNote = '';
+          if (b.campaignId && (!b.kind || b.kind === 'build_roster')) {
+            const stalled = await CAMP.stallCampaign(env, b.campaignId);
+            if (stalled) stalledNote = `\n⛔ Campaign "${stalled.name || b.campaignId}" is now STALLED — `
+              + `a ${b.kind === 'build_roster' ? 'roster-build chunk' : 'fan-out chain'} died after all retries. `
+              + `Press "Resume" on it to continue; nothing further sends until then.`;
+          }
+          await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\nRecorded in comms.queue_failures for review.${stalledNote}`);
         } catch (e) { console.log('dlq_write_error', e?.message || String(e)); }
         msg.ack();   // DLQ is terminal — always ack so it can't loop
       }
