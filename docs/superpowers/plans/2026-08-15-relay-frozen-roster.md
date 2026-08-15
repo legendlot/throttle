@@ -21,7 +21,13 @@
 
 ---
 
-### Task 1 — Queue-dispatch hardening (§9.11) · ships alone, first
+### Task 1 — Queue-dispatch hardening (§9.11) · ✅ SHIPPED 2026-08-15 (commsops `2f004f5a`)
+
+> Live-verified: 29 enrolments + 24 messages routed through the new dispatcher in the 10 min
+> post-deploy, 0 DLQ rows. ⚠️ The sweep also caught my afternoon clock guard having made
+> campaign-exclusions.test.js time-of-day dependent (red at 23:12, green all afternoon) — fixed
+> by stubbing quiet hours exempt there. Check OTHER suites that call startCampaign for the same
+> bomb when touching them.
 
 A live latent bug independent of the roster: unknown `kind` falls through to the campaign branch,
 gets early-returned and **acked**, i.e. silently destroyed.
