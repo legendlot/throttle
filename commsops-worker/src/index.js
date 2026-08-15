@@ -661,6 +661,35 @@ async function handleGet(url, auth, env) {
       if (b.unreadable) return err('budget_unreadable', 500);
       return ok(b);
     }
+    // Roster reconciliation (roster Task 7): who did we INTEND to message and never attempt?
+    // Exact, against the frozen denominator — this replaces the audience_snapshot−stats.sent
+    // ESTIMATE the tail badge used, which conflated "not sent" with "never attempted".
+    case 'getCampaignRecon': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const camp = await CAMP.getCampaign(env, id);
+      if (!camp) return err('not_found', 404);
+      if (!camp.roster_built_at) return ok({ no_roster: true });   // legacy / pre-roster campaign
+      const r = await A.sbComms('/rest/v1/rpc/campaign_recon', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
+      if (!r.ok) return err('recon_failed', 500);
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return ok({ roster_size: Number(row?.roster_size || 0), attempted: Number(row?.attempted || 0),
+                  never_attempted: Number(row?.never_attempted || 0) });
+    }
+    // Top-up preview: how many people became eligible AFTER the roster froze (§9.5). Count only —
+    // rows never reach the worker (§9.2). Shares §9.1's scan cost; a timeout fails loudly here.
+    case 'getTopupPreview': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const camp = await CAMP.getCampaign(env, id);
+      if (!camp) return err('not_found', 404);
+      if (!camp.roster_built_at) return err('no_roster', 400);
+      const r = await A.sbComms('/rest/v1/rpc/campaign_topup_preview', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
+      if (!r.ok) return err('topup_preview_failed', 500);
+      return ok({ addable: Number(r.data || 0) });
+    }
     case 'getVariantStats': {
       if (!A.canView(auth.permissions)) return err('forbidden', 403);
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
@@ -1737,6 +1766,33 @@ async function handlePost(body, auth, env) {
       if (!A.canApprove(auth.permissions)) return err('forbidden', 403);
       await CAMP.setStatus(env, body.id, { status: 'draft', reject_reason: body.reason || null });
       return ok({ status: 'draft' });
+    }
+    // Append the newly-eligible to a frozen roster (§9.5/§9.18). Gated HARD to non-running
+    // statuses: chains walk each shard by ascending profile_id, so a row appended below a live
+    // cursor is behind the sweep and would silently never be visited. Flow is top-up → resume.
+    case 'applyTopup': {
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      if (!body.id) return err('id_required', 400);
+      const camp = await CAMP.getCampaign(env, body.id);
+      if (!camp) return err('not_found', 404);
+      if (!camp.roster_built_at) return err('no_roster', 400);
+      if (!['sent', 'stopped', 'stalled'].includes(camp.status))
+        return err('topup_only_when_not_running', 400);
+      // Approval re-check against the total the roster is about to become. A human-approved
+      // campaign stands (same semantic as everywhere else); an auto-approved one that a top-up
+      // would push over the threshold is refused rather than silently widened.
+      const pv = await A.sbComms('/rest/v1/rpc/campaign_topup_preview', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: body.id }) });
+      if (!pv.ok) return err('topup_preview_failed', 500);
+      const addable = Number(pv.data || 0);
+      if (addable === 0) return ok({ added: 0, roster_size: Number(camp.roster_size || 0) });
+      if (!camp.approved_by && await CAMP.needsApproval(env, camp, Number(camp.roster_size || 0) + addable))
+        return err('topup_needs_approval', 400, { addable, wouldTotal: Number(camp.roster_size || 0) + addable });
+      const r = await A.sbComms('/rest/v1/rpc/campaign_topup_apply', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: body.id }) });
+      if (!r.ok) return err('topup_apply_failed', 500);
+      const fresh = await CAMP.getCampaign(env, body.id);
+      return ok({ added: Number(r.data || 0), roster_size: Number(fresh?.roster_size || 0) });
     }
     case 'sendCampaign': {             // approved → sending (queued fan-out)
       if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
