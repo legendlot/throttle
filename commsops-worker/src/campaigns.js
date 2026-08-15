@@ -7,7 +7,7 @@ const { send } = require('./send.js');
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 
-// Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 on 2026-08-15,
+// Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 → 75 on 2026-08-15,
 // alongside SEND_CONCURRENCY 5 → 12 (see the long note at the pool below for why that moved).
 //
 // ⚠️ PAGE SIZE ALONE IS NOT THE DIAL, AND THAT PART OF THE HISTORY STILL STANDS. Raising it 4 → 12
@@ -32,7 +32,7 @@ const { pickVariant } = require('./variants.js');
 //     of 1.439s against that median is the real story — the pipeline was BURSTY AND IDLE, not slow.
 // Peak sustained was 3,211/hour ≈ 1.12s/send. Re-measure across a COMPLETE run, never a live
 // sample, or you will describe the ramp and call it the ceiling.
-const SENDS_PER_MSG = 36;
+const SENDS_PER_MSG = 75;
 const nowIso = () => new Date().toISOString();
 
 async function getCampaign(env, id) {
@@ -338,7 +338,7 @@ async function processQueueMessage(env, body) {
   // SENDS_PER_MSG comment). A pool rather than chunked Promise.all so one slow send does not
   // hold up four finished ones.
   //
-  // ⚠️ RAISED 5 → 12 ON 2026-08-15, because the reason it was 5 does not hold up.
+  // ⚠️ RAISED 5 → 12 → 25 ON 2026-08-15, because the reason it was 5 does not hold up.
   //
   // The old note read "CAPPED AT 5 BY META… the tier is 100k/24h ≈ 4,166/hour sustained". That
   // division is a PLANNING convenience, not a constraint. **Meta's messaging limit is a VOLUME cap
@@ -364,6 +364,23 @@ async function processQueueMessage(env, body) {
   // Do not take this as licence to remove the bound — an unbounded pool would put the whole page
   // in flight at once and the first thing to break would be a live customer send.
   //
+  // ⚠️ SUPABASE CAPACITY CHECKED BEFORE GOING TO 25 (2026-08-15) — the DB, not Meta, is the real
+  // exposure here, because this pressure is shared with Pitstop, journeys and the scanner.
+  // Measured: the 14 Aug broadcast peaked at **137,783 API requests/hour with ZERO 5xx**, and there
+  // were **zero Postgres ERROR/FATAL/WARNING rows across the whole 6-hour window**. `max_connections`
+  // is 120 with 21 in use and PostgREST holding 7. At ~7 Supabase calls per send, 25 concurrent
+  // projects to ~105k req/hour from the campaign plus a ~25k baseline — i.e. right at a peak the
+  // database has already carried cleanly.
+  //
+  // ⚠️ The likely failure mode of over-raising this is NOT an outage, it is DIMINISHING RETURNS:
+  // the worker's concurrent requests multiplex onto PostgREST's own pool, so past that pool size
+  // they queue rather than fail. If raising this stops making it faster, that is the ceiling —
+  // do not keep climbing, and do not read the flat line as a bug.
+  //
+  // ⚠️ Auth is pinned at 10 DB connections (advisor `auth_db_connections_absolute`), separately
+  // from this path. Heavy load here can therefore make team LOGINS sluggish without touching the
+  // send. Symptom to recognise, not a reason to hold back the send.
+  //
   // ⚠️ If a rate rejection EVER appears (131048/130429), drop this back to 5 and redeploy — that
   // is a ~30 second revert, and those two codes are the only signal that this number is too high.
   //
@@ -377,7 +394,7 @@ async function processQueueMessage(env, body) {
   // RPC per send, so the cap still holds exactly; gate.js's two module-level caches are
   // read-mostly with a TTL, so the worst case is a few duplicate settings fetches on a cold
   // cache; and send() keeps all per-send state on its own opts object.
-  const SEND_CONCURRENCY = 12;
+  const SEND_CONCURRENCY = 25;
   let pageErrors = 0;
   const queue = recs.filter((r) => r.address);
   let nextIdx = 0;
