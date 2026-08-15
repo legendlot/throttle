@@ -30,6 +30,17 @@ const { pickVariant } = require('./variants.js');
 // The real lever is CONCURRENCY INSIDE THE PAGE (parallel batches), which scales near-linearly.
 // ⚠️ Cap it at 4–6 concurrent, NOT at the page size: Meta's tier (100k/24h ≈ 4,166/hour) binds
 // there, and overshooting hammers a provider on live customer sends. Not built — BACKLOG [relay].
+//
+// ⚠️⚠️ CORRECTED 2026-08-15. The "~4.02s per recipient / 796–858 per hour" figures above were read
+// MID-FLIGHT, during that broadcast's first hour, while the queue was still spinning up. Across
+// the complete run the same campaign did 642 → 2,795 → 3,211 → 1,323 attempts per hour: the peak
+// sustained rate is 3,211/hour ≈ 1.12s per send, roughly 4× what this comment claims, and only
+// ~23% under the 4,166/hour the tier allows. Queues was evidently ALREADY running several
+// consumers concurrently, so "the constraint is ~4s of SERIAL work per recipient" describes the
+// ramp, not the steady state. The per-page-concurrency build may therefore be chasing headroom
+// that mostly is not there — the remaining gap to the tier is ~30%, not ~4×.
+// **Re-measure across a COMPLETE run before building it.** Keep the reasoning above (page size is
+// not the dial — that part still holds); distrust the rate.
 const SENDS_PER_MSG = 12;
 const nowIso = () => new Date().toISOString();
 
@@ -129,6 +140,46 @@ async function sendBudget(env) {
   return { unreadable: false, budget: Number(row.budget), used: Number(row.used), remaining };
 }
 
+// ── Will this campaign actually FINISH before the channel goes quiet? ──────────
+//
+// A quiet-hours skip on a campaign is TERMINAL. `gate.js` returns `quiet_hours` per message and
+// the campaign path records it as a skip — only JOURNEYS park and resume (journey-workflow.js).
+// So a broadcast queued too late messages whoever it reaches by the cutoff and permanently drops
+// the rest, while the campaign still reads `sent`. Identical in shape to the `budget_exhausted`
+// stranding of S269, on the clock instead of the counter, and the budget check cannot see it —
+// that one compares volume against a counter, this one against the hours left.
+//
+// ⚠️ MEASURED, not assumed. 3,211 attempts/hour is the peak SUSTAINED rate of the
+// `Freedom to Play Sale_14 Aug` broadcast (2026-08-14, per-hour attempts 642 → 2,795 → 3,211 →
+// 1,323). Deliberately the PEAK rather than the mean: this figure decides whether a send is
+// refused, so an over-cautious number blocks legitimate campaigns, which is the failure that gets
+// a guard deleted. The first hour of that run read ~640/hr while the queue spun up, so a real send
+// will trail this estimate early and catch up — the ramp is why the margin below exists.
+// Re-measure after any fan-out concurrency change; a stale figure here silently mis-sizes sends.
+const THROUGHPUT_PER_HOUR = 3211;
+
+// Refuse rather than cut it fine. A send predicted to land within this margin of the cutoff is
+// treated as not finishing: the estimate carries ramp-up error, and being wrong costs real
+// customers who are never retried.
+const QUIET_MARGIN_MINUTES = 45;
+
+// Minutes from now until `channel` goes quiet. null = never quiet (email), so no clock limit.
+async function minutesUntilQuiet(env, channel) {
+  const settings = await getSettings(env);
+  const cqh = await G.getChannelQuietHours(env);
+  // ⚠️ Unreadable table → NO estimate, not a fallback window. gate.js fails CLOSED there because a
+  // wrong window sends at 3am; here the same unknown must fail OPEN, because refusing every
+  // campaign on a transient read error is its own outage. The per-message gate still protects the
+  // customer either way, so this degrades to today's behaviour rather than to harm.
+  if (!cqh.ok) return null;
+  const win = G.resolveQuietWindow(cqh.rows, channel, settings || {});
+  if (!win) return null;                                    // channel exempt (email)
+  const now = G.istMinutes();
+  if (G.inQuietWindow(win.startMin, win.endMin, now)) return 0;   // already quiet
+  const until = win.startMin - now;
+  return until > 0 ? until : until + 1440;                  // wraps midnight
+}
+
 // Kick off a broadcast: snapshot, set sending, enqueue the first fan-out seed.
 //
 // `allowPartial` deliberately sends a campaign KNOWN to be larger than today's remaining budget.
@@ -207,6 +258,23 @@ async function startCampaign(env, id, sentBy, opts = {}) {
     if (b.remaining != null && sendable > b.remaining) {
       return { ok: false, error: 'audience_exceeds_budget',
         sendable, remaining: b.remaining, budget: b.budget, used: b.used };
+    }
+  }
+
+  // ⚠️ And the same question against the CLOCK. Sized on throughput, refused for the same reason:
+  // a tail that quiet hours kills is never retried and is invisible in the campaign's own status.
+  // Applies to every purpose, not just marketing — quiet hours are a channel rule, not a budget
+  // one, so a utility broadcast strands its tail exactly the same way.
+  if (!opts.allowPartial) {
+    const mins = await minutesUntilQuiet(env, camp.channel);
+    if (mins != null) {
+      const needMins = Math.ceil((sendable / THROUGHPUT_PER_HOUR) * 60);
+      if (needMins > Math.max(mins - QUIET_MARGIN_MINUTES, 0)) {
+        return { ok: false, error: 'wont_finish_before_quiet_hours',
+          sendable, needMinutes: needMins, minutesUntilQuiet: mins,
+          reachableBeforeQuiet: Math.max(Math.floor((mins / 60) * THROUGHPUT_PER_HOUR), 0),
+          throughputPerHour: THROUGHPUT_PER_HOUR };
+      }
     }
   }
 
@@ -426,6 +494,6 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
   return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, startCampaign, processQueueMessage, sendCampaignTest,
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR, QUIET_MARGIN_MINUTES, startCampaign, processQueueMessage, sendCampaignTest,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };

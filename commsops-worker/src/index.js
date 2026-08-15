@@ -1743,6 +1743,10 @@ async function handlePost(body, auth, env) {
       if (r.error === 'audience_exceeds_budget')
         return err('audience_exceeds_budget', 400,
           { sendable: r.sendable, remaining: r.remaining, budget: r.budget, used: r.used });
+      if (r.error === 'wont_finish_before_quiet_hours')
+        return err('wont_finish_before_quiet_hours', 400,
+          { sendable: r.sendable, needMinutes: r.needMinutes, minutesUntilQuiet: r.minutesUntilQuiet,
+            reachableBeforeQuiet: r.reachableBeforeQuiet, throughputPerHour: r.throughputPerHour });
       return err(r.error, 400);
     }
     // EMERGENCY STOP for a broadcast already fanning out (S282). The mechanism always existed —
@@ -2037,6 +2041,12 @@ async function runScheduled(env) {
         await AL.alert(env, `⛔ *Relay — scheduled campaign HELD*\n"${c.name}" needs ${r.sendable} sends, `
           + `only ${r.remaining} left of today's ${r.budget}. Nothing was sent. Raise the budget, `
           + `narrow the audience, or send it manually with the partial-send override.`);
+      else if (r.error === 'wont_finish_before_quiet_hours')
+        await AL.alert(env, `⛔ *Relay — scheduled campaign HELD*\n"${c.name}" needs about `
+          + `${Math.round(r.needMinutes / 60)}h to send ${r.sendable}, but the channel `
+          + `goes quiet in ${Math.round(r.minutesUntilQuiet / 60)}h. Only ~${r.reachableBeforeQuiet} would be `
+          + `reached and the rest would be dropped for good, so nothing was sent. Send it earlier `
+          + `tomorrow, narrow the audience, or use the partial-send override.`);
       else if (r.error !== 'already_claimed') console.log('scheduler_start_error', c.id, r.error);
     }
   } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }

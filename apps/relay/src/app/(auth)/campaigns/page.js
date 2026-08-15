@@ -700,6 +700,29 @@ export default function CampaignsPage() {
         } else {
           showToast('Not sent — nothing went out', 'info');
         }
+      } else if (e?.detail?.error === 'wont_finish_before_quiet_hours') {
+        // Same shape as the budget refusal, judged against the clock instead of the counter. The
+        // tail of a send that runs into quiet hours is skipped permanently, not deferred — only
+        // journeys park and resume — so this has to be a decision, not a warning after the fact.
+        const d = e.detail;
+        const n = (x) => Number(x || 0).toLocaleString('en-IN');
+        const hrs = (m) => (Number(m || 0) / 60).toFixed(1).replace(/\.0$/, '');
+        const proceed = window.confirm(
+          `NOTHING HAS BEEN SENT.\n\n`
+          + `"${c.name}" needs about ${hrs(d.needMinutes)}h to send ${n(d.sendable)} messages, but this `
+          + `channel goes quiet in ${hrs(d.minutesUntilQuiet)}h.\n\n`
+          + `Roughly ${n(d.reachableBeforeQuiet)} would be reached before the cutoff. The rest are `
+          + `NOT sent later — they are dropped for good, and the campaign will still show as sent.\n\n`
+          + `Best options are to send it earlier tomorrow, or narrow the audience to about `
+          + `${n(d.reachableBeforeQuiet)}.\n\n`
+          + `Send to the first ~${n(d.reachableBeforeQuiet)} anyway?`);
+        if (proceed) {
+          try {
+            const r2 = await workerFetch('sendCampaign', { id: c.id, allowPartial: true }, session);
+            showToast(`Partial send started — ~${n(d.reachableBeforeQuiet)} before quiet hours`, 'success');
+            refresh();
+          } catch (e2) { showToast(e2.message || 'Send failed', 'error'); }
+        } else showToast('Not sent — nothing went out', 'info');
       } else showToast(e.message || 'Send failed', 'error');
     }
     finally { setBusy(false); }
