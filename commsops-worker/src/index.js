@@ -645,6 +645,21 @@ async function handleGet(url, auth, env) {
       if (!vr.ok) return err('db_error', 500);
       return ok({ variants: vr.data || [], experiment: (er.ok && er.data?.[0]) || null });
     }
+    // Today's marketing send budget, read-only. Two jobs: it lets the app say how much room is
+    // left BEFORE anyone builds a campaign against a 90k audience, and it is the only way to
+    // observe the pre-send guard's own data path from outside.
+    //
+    // ⚠️ That second job matters more than it looks. `sendBudget()` FAILS OPEN by design — an
+    // unreadable status lets the send through rather than inventing a cap — so if this RPC were
+    // invisible to PostgREST (the S239 schema-cache trap: a new object returns not-found with no
+    // error anywhere) the budget block would silently never fire and nothing would say so. This
+    // endpoint makes that condition observable instead of latent.
+    case 'getSendBudget': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const b = await CAMP.sendBudget(env);
+      if (b.unreadable) return err('budget_unreadable', 500);
+      return ok(b);
+    }
     case 'getVariantStats': {
       if (!A.canView(auth.permissions)) return err('forbidden', 403);
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
