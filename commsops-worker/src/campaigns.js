@@ -364,6 +364,51 @@ async function processQueueMessage(env, body) {
   if (!r.ok) throw new Error(`campaign_recipients_failed:${campaignId}:${r.status}`);
   const recs = Array.isArray(r.data) ? r.data : [];
 
+  // ── Per-page exclusion re-check, VISIBLE (§9.21, roster Task 2) ───────────────────────────
+  // Today campaign_recipients already filters exclusions out of the page, so this batch usually
+  // returns empty and only catches the between-fetch-and-send race. It exists because Task 6
+  // switches pages to the frozen roster, at which point THIS becomes the sole send-time
+  // enforcement of the S276 concurrent-exclusion guarantee — same page-freshness as today, but an
+  // excluded profile now leaves a `skipped/excluded_recent_contact` row instead of silently
+  // vanishing from a query result. Wired ahead of Task 6 so that diff changes only where pages
+  // come from, never two behaviours at once.
+  //
+  // ⚠️ Both failure modes THROW (page retries), never soft-continue. Soft-continuing past a failed
+  // batch check sends to people the exclusion should have held back — inside the exact
+  // concurrency window S276 exists for. Soft-continuing past a failed skip-write reproduces the
+  // silent-absence shape this whole feature is built to kill. On a retried page the skip rows can
+  // duplicate (they carry no dedup key, deliberately — a resume may legitimately retry these
+  // people); reconciliation counts distinct profiles, so duplicates are rare-path stats noise,
+  // not a correctness problem.
+  const exArgs = exclusionArgs(camp);
+  const hasExclusions = exArgs.p_exclude_segments.length > 0 || exArgs.p_exclude_campaigns.length > 0
+    || (exArgs.p_exclude_contacted_hours != null && exArgs.p_exclude_contacted_hours > 0);
+  let excluded = new Set();
+  if (hasExclusions && recs.length) {
+    const bx = await A.sbComms('/rest/v1/rpc/campaign_excluded_batch', env, {
+      method: 'POST',
+      body: JSON.stringify({ p_profile_ids: recs.map((x) => x.profile_id), p_channel: camp.channel,
+        p_exclude_segments: exArgs.p_exclude_segments, p_exclude_campaigns: exArgs.p_exclude_campaigns,
+        p_exclude_contacted_hours: exArgs.p_exclude_contacted_hours }),
+    });
+    if (!bx.ok) throw new Error(`campaign_excluded_batch_failed:${campaignId}:${bx.status}`);
+    excluded = new Set(Array.isArray(bx.data) ? bx.data : []);
+    if (excluded.size) {
+      // One array insert for the whole page. variant_id is stamped for the same reason finalize
+      // stamps it on every outcome: a skipped message still belongs to an arm, and ab-stats'
+      // per-arm failure-asymmetry check reads those rows.
+      const rows = recs.filter((x) => excluded.has(x.profile_id)).map((x) => ({
+        profile_id: x.profile_id, channel: camp.channel, purpose: camp.purpose,
+        status: 'skipped', reason: 'excluded_recent_contact',
+        source: `campaign:${campaignId}`, to_address: x.address || null,
+        variant_id: pickVariant(campaignId, x.profile_id, variants)?.id || null,
+      }));
+      const ins = await A.sbComms('/rest/v1/messages', env,
+        { method: 'POST', body: JSON.stringify(rows) });
+      if (!ins.ok) throw new Error(`exclusion_skip_write_failed:${campaignId}:${ins.status}`);
+    }
+  }
+
   // ── Bounded-concurrency send pool (S282) ──────────────────────────────────────────────────
   // The page used to run `for … await send`, one recipient fully completing before the next
   // began, which measured a near-constant 4.02s per recipient = 796–858/hour whatever
@@ -429,7 +474,11 @@ async function processQueueMessage(env, body) {
   // cache; and send() keeps all per-send state on its own opts object.
   const SEND_CONCURRENCY = 8;
   let pageErrors = 0;
-  const queue = recs.filter((r) => r.address);
+  // ⚠️ The pool works a FILTERED COPY; `recs` itself must stay untouched — the continuation
+  // cursor below is recs[recs.length-1] and the completion test is recs.length === SENDS_PER_MSG,
+  // both positional. Excluding here (not from recs) also means a page consisting ENTIRELY of
+  // excluded profiles still advances the cursor and continues the chain.
+  const queue = recs.filter((r) => r.address && !excluded.has(r.profile_id));
   let nextIdx = 0;
   const runOne = async (rec) => {
     try {
