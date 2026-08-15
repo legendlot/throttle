@@ -8,6 +8,7 @@
 // approval threshold and the audience snapshot are judged on.
 const assert = require('assert');
 const A = require('../src/auth.js');
+const G = require('../src/gate.js');   // for _clearSettingsCache — the quiet-hours stub below
 const CAMP = require('../src/campaigns.js');
 let pass = 0, fail = 0;
 const t = (n, f) => Promise.resolve().then(f).then(() => { pass++; console.log('  ok  ', n); },
@@ -112,10 +113,18 @@ const SENDING = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
       channel: 'email', purpose: 'marketing', name: 'z', vars: {}, ...EXCL };
     let claimBody = null;
     let queued = false;
+    // ⚠️ Quiet hours must be stubbed EXEMPT and the gate cache cleared, or this test fails by
+    // TIME OF DAY: startCampaign's clock guard (2026-08-15) falls back to the global 21:00–09:00
+    // window when the channel_quiet_hours read returns nothing recognisable, so an evening run
+    // refused the send and this suite went red at 23:12 having passed all afternoon. This suite
+    // tests exclusions, not the clock — the clock has its own suite (campaign-budget-block).
+    G._clearSettingsCache();
     A.sbComms = async (path, env, opts = {}) => {
       if (path.includes('/campaigns?id=eq.C3') && (!opts.method || opts.method === 'GET')) return { ok: true, data: [APPROVED] };
       if (path.includes('/rpc/materialize_segment')) return { ok: true, data: 1 };
       if (path.includes('/rpc/campaign_reach')) return { ok: true, data: [{ total: 50000, reachable: 40000, excluded: 39700, sendable: 300 }] };
+      if (path.includes('channel_quiet_hours')) return { ok: true, data: [{ channel: 'email', enabled: false, start_time: '22:00', end_time: '08:00' }] };
+      if (path.includes('send_budget_status')) return { ok: true, data: [{ budget: null, used: 0, remaining: null }] };
       if (path.includes('/settings?id=eq.1')) return { ok: true, data: [{ approval_required_marketing: true, approval_audience_threshold: 500 }] };
       if (path.includes('/campaigns?id=eq.C3') && path.includes('status=in.') && opts.method === 'PATCH') {
         claimBody = JSON.parse(opts.body); return { ok: true, data: [APPROVED] };

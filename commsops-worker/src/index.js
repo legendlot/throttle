@@ -27,6 +27,7 @@ const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven 
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
 const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
+const QR = require('./queue-route.js');     // queue routing contract — unknown kinds THROW (§9.11)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -2665,22 +2666,28 @@ export default {
     for (const msg of batch.messages) {
       try {
         const b = msg.body || {};
-        if (b.kind === 'enrol') {
+        // Routing contract lives in queue-route.js (unit-tested). An unknown kind THROWS here —
+        // retry → redeliver (a mid-deploy retry lands on a current isolate) → DLQ with a
+        // queue_failures row + alert. The old else-is-campaign shape ACKED unknown kinds after
+        // processQueueMessage early-returned on them: silently destroyed, nothing recorded
+        // anywhere. Frozen-roster spec §9.11.
+        const route = QR.queueRoute(b);
+        if (route === 'enrol') {
           await J.enrol(env, { journeyId: b.journeyId, profileId: b.profileId, eventId: b.eventId });
-        } else if (b.kind === 'shopify_backfill') {
+        } else if (route === 'shopify_backfill') {
           try {
             const r = await SHOP.backfillPage(env, b.after || null);   // one page; continue while more
             console.log('shopify_backfill', JSON.stringify(r));
             if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
           } catch (e) { console.log('shopify_backfill_error', e?.message || String(e)); throw e; }
-        } else if (b.kind === 'last_order_backfill') {
+        } else if (route === 'last_order_backfill') {
           try {
             const r = await SHOP.backfillLastOrderPage(env, b.after || null);   // patches last_order_at only
             console.log('last_order_backfill', JSON.stringify(r));
             if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'last_order_backfill', after: r.cursor });
           } catch (e) { console.log('last_order_backfill_error', e?.message || String(e)); throw e; }
         } else {
-          await CAMP.processQueueMessage(env, b);   // campaign fan-out (default, back-compat)
+          await CAMP.processQueueMessage(env, b);   // route === 'campaign' — POSITIVELY matched on campaignId
         }
         msg.ack();
       } catch (e) {
