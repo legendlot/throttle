@@ -94,7 +94,12 @@ export default function Dashboard() {
       // order-grain (complete, sku-map-independent) — drives the hybrid headline totals only
       salesGet('getSegregation', { from, to, channel_id: chArg }, session),
       salesGet('getSegregation', { from: pp.from, to: pp.to, channel_id: chArg }, session),
-      salesGet('getAccessories', { from, to, channel_id: chArg }, session),
+      // ⚠️ The accessories MEMO must never be load-bearing. It shipped inside this Promise.all
+      // without a catch and took the WHOLE dashboard down when its RPC 502'd on an FY range:
+      // every KPI, the mix board and the drill table silently kept the previous range's numbers
+      // under the new range's labels — stale data reading as fresh, the worst failure shape here.
+      // A decorative panel gets its own catch so it can only ever fail to itself.
+      salesGet('getAccessories', { from, to, channel_id: chArg }, session).catch(() => null),
     ]).then(([cur, prev, seg, segPrev, accessories]) => {
       setRows(cur?.rows || []); setPrevRows(prev?.rows || []);
       setSegRows(seg?.rows || []); setSegPrevRows(segPrev?.rows || []);
