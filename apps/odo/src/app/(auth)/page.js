@@ -99,11 +99,16 @@ export default function Dashboard() {
       // every KPI, the mix board and the drill table silently kept the previous range's numbers
       // under the new range's labels — stale data reading as fresh, the worst failure shape here.
       // A decorative panel gets its own catch so it can only ever fail to itself.
-      salesGet('getAccessories', { from, to, channel_id: chArg }, session).catch(() => null),
+      salesGet('getAccessories', { from, to, channel_id: chArg }, session).catch(() => 'ERR'),
     ]).then(([cur, prev, seg, segPrev, accessories]) => {
       setRows(cur?.rows || []); setPrevRows(prev?.rows || []);
       setSegRows(seg?.rows || []); setSegPrevRows(segPrev?.rows || []);
-      setAcc({ rows: accessories?.rows || [], total: accessories?.total || { units: 0, gross: 0, skus: 0 } });
+      // Distinguish FAILED from GENUINELY EMPTY. Swallowing the error entirely would hide the strip,
+      // which reads as "no accessories sold this period" — and there is ~₹1.5L of them. A memo may
+      // fail quietly; it must not lie quietly.
+      setAcc(accessories === 'ERR'
+        ? { rows: [], total: { units: 0, gross: 0, skus: 0 }, failed: true }
+        : { rows: accessories?.rows || [], total: accessories?.total || { units: 0, gross: 0, skus: 0 }, failed: false });
     })
       .catch(e => setErr(e.message || 'Failed to load'))
       .finally(() => setLoading(false));
@@ -393,7 +398,13 @@ export default function Dashboard() {
                 purpose: these are real sales that have no product variant (gift wrap, spares,
                 paid repairs), so they can be seen without being attributed to a car. NOT in any
                 total above — mapping them to variants would inflate variant units. */}
-            {acc.total.gross > 0 && (
+            {acc.failed && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
+                            fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--t3)' }}>
+                Accessories &amp; others — <span style={{ color: STATUS.warn }}>couldn’t load</span>. The totals above are unaffected.
+              </div>
+            )}
+            {!acc.failed && acc.total.gross > 0 && (
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ ...NAME, color: 'var(--t2)' }}>Accessories &amp; others</span>
