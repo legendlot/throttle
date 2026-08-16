@@ -3345,6 +3345,50 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
       });
       return { probe: out?.processingStatus || 'done' };
     }
+    // ── FBA Inventory probe (S289) ─────────────────────────────────────────────────────────────
+    // Same discipline as probe_report: verify the endpoint, the app's role grant and the response
+    // shape BEFORE building the inventory feed on it. /fba/inventory/v1/summaries needs the
+    // "Amazon Fulfillment" role on the SP-API app — a missing grant returns 403 Unauthorized, which
+    // is exactly the failure that must be seen here rather than discovered by a silent empty feed.
+    // Writes the raw shape to sales.settings; reads nothing else and writes no inventory rows.
+    if (trigger === 'probe_fba_inventory') {
+      const out = await step.do('probe-fba-inv', { retries: { limit: 2, delay: '30 seconds' }, timeout: '5 minutes' }, async () => {
+        SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+        const cfg = await loadConnectorCfg(channelId);
+        const c = cfg?.config || {};
+        const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+        const mkt = c.marketplace_id;
+        const token = await getAmazonToken(this.env);
+        const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+        const url = `${host}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace`
+                  + `&granularityId=${encodeURIComponent(mkt)}&marketplaceIds=${encodeURIComponent(mkt)}`;
+        const res = await fetch(url, { headers: H });
+        const body = await res.json().catch(() => ({}));
+        const summaries = body?.payload?.inventorySummaries || [];
+        const sample = summaries.slice(0, 3).map(s => ({
+          sellerSku: s.sellerSku, asin: s.asin, condition: s.condition,
+          totalQuantity: s.totalQuantity,
+          fulfillable: s.inventoryDetails?.fulfillableQuantity,
+          inbound_working: s.inventoryDetails?.inboundWorkingQuantity,
+          inbound_shipped: s.inventoryDetails?.inboundShippedQuantity,
+          reserved: s.inventoryDetails?.reservedQuantity?.totalReservedQuantity,
+        }));
+        const result = {
+          probed_at: new Date().toISOString(), http: res.status,
+          ok: res.ok, errors: body?.errors || null,
+          summary_count: summaries.length,
+          has_next: Boolean(body?.pagination?.nextToken),
+          with_fulfillable: summaries.filter(s => s.inventoryDetails?.fulfillableQuantity != null).length,
+          sample,
+        };
+        await sbSales('/rest/v1/settings?on_conflict=key', {
+          method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+          body: JSON.stringify({ key: 'probe_fba_inventory_result', value: JSON.stringify(result).slice(0, 20000), updated_at: new Date().toISOString() }),
+        });
+        return result;
+      });
+      return { probe: 'fba_inventory', http: out?.http, count: out?.summary_count };
+    }
     // Per-connector window cap (default MAX_WINDOWS). A deep one-time backfill — e.g. the Uniware
     // aggregator walking ~70 daily windows — can set config.wf_max_windows higher so one instance
     // finishes in a single pass instead of resuming across many cron ticks. Read once (durable step).
