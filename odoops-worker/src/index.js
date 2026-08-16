@@ -4968,6 +4968,13 @@ export default {
             try { const res = await syncInventorySnapshot(env); return ok(res); }
             catch (e) { return err('Inventory snapshot failed: ' + String(e?.message || e), 502); }
           }
+          case 'runLedgerBackfillTickNow': {   // manual ONE-window history pull (super-admin) — S289
+            // Runs exactly one window, same as the hourly tick. Deliberately NOT a loop: SP-API
+            // createReport is ~1 req/60s and looping is what caused the 429 cascade.
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { const res = await fbaLedgerBackfillTick(env); return ok(res); }
+            catch (e) { return err('Ledger backfill tick failed: ' + String(e?.message || e), 502); }
+          }
           case 'syncAmazonInventoryNow': {   // manual FBA fulfillable-qty pull (super-admin) — S289
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { const res = await syncAmazonInventory(env); return ok(res); }
