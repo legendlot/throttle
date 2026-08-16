@@ -428,6 +428,10 @@ export default function SegmentsPage() {
   const eventKeys = eventLeaves(seg.group, seg.items).map((l) => l.key).join('|');
   useEffect(() => {
     if (seg.kind !== 'dynamic') return undefined;
+    // previewSegment is gated on segment_manage (it is a count-oracle over arbitrary definitions),
+    // so a view-only user would fire one 403 per event leaf on every segment they open. They
+    // cannot get an answer, so do not ask — the warning simply does not appear for them.
+    if (perms && !perms.segment_manage) return undefined;
     const leaves = eventLeaves(seg.group, seg.items).filter((l) => !(l.key in eventCountsRef.current));
     if (!leaves.length) return undefined;
     let cancelled = false;
@@ -462,7 +466,7 @@ export default function SegmentsPage() {
     // match count and only `reachable` varies by them, so re-running on a channel change would
     // buy an identical answer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventKeys, seg.kind]);
+  }, [eventKeys, seg.kind, perms]);
 
   // Returns the segment id on success, null on failure — refreshMembers() chains on it.
   async function save({ silent = false } = {}) {

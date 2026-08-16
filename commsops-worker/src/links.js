@@ -443,6 +443,16 @@ function buildButtonTarget(targetBase, suffix) {
  * `default_target` (optional, per button) is the always-resolves half of the same decision: a
  * variable base whose per-recipient suffix is missing resolves to it rather than to a bare base.
  * A static base never consults it — that base IS the destination.
+ *
+ * ⚠️ ONE CONSEQUENCE WORTH KNOWING BEFORE ANYONE FLIPS THE OFF SWITCH. `comms.settings.
+ * link_base_url` is documented as the link feature's off switch, and clearing it makes this
+ * function a no-op. For a MAPPING-BACKED redirect template that degrades: the component still
+ * carries the raw suffix, so the message sends and the link is dead. For a SYNTHESIZED one there
+ * is no component at all, so Meta rejects the send outright. Both are bad and the second is
+ * louder, which is the posture this file already takes for a failed mint — but it means the off
+ * switch is not safe to flip once redirect-cloned static templates are approved and live. That
+ * was already true (an approved `/r/{{1}}` url is frozen and needs the host), and it is now true
+ * more loudly.
  */
 async function applyButtonRedirects(components, { template, baseUrl, mint } = {}) {
   if (!baseUrl || !Array.isArray(components)) return components;
