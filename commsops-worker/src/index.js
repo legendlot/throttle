@@ -1185,7 +1185,11 @@ async function handlePost(body, auth, env) {
         // silent data loss rather than a bad customer message — which is exactly why it needs
         // a guard rather than a reader noticing. Remove these entries only when the editor can
         // genuinely author SMS.
-        for (const k of ['body', 'var_order', 'dlt_var_count', 'dlt_template_id', 'template_type', 'needs_variable_authoring', 'source', 'provider_status']) {
+        // + the RCS binding keys (S290 hostile review): same PATTERN-252 posture — a stale
+        // editor bundle that predates the rcs branch must not wipe a live binding on Save.
+        // Carry-when-absent is inert for rows that never had the key.
+        for (const k of ['body', 'var_order', 'dlt_var_count', 'dlt_template_id', 'template_type', 'needs_variable_authoring', 'source', 'provider_status',
+                         'rcs_type', 'var_params', 'sms_fallback_template_id', 'link_param', 'link_target_base', 'provider_error', 'draft', 'ttl']) {
           if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
         }
         // ...but "carry it over when absent" is NOT enough for `waba_id`, because WaEditor always
@@ -1966,11 +1970,12 @@ async function handlePost(body, auth, env) {
         if (!v) continue;
         const cur = row.content?.provider_status || '';
         if (cur === v.status && (row.content?.var_params || []).join(',') === v.var_params.join(',')) continue;
+        const merged = { ...(row.content || {}), provider_status: v.status,
+          var_params: v.var_params.length ? v.var_params : (row.content?.var_params || []) };
+        // Set OR CLEAR — a stale rejection reason surviving an approval reads as still-broken.
+        if (v.error) merged.provider_error = v.error; else delete merged.provider_error;
         await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
-          method: 'PATCH',
-          body: JSON.stringify({ content: { ...(row.content || {}), provider_status: v.status,
-            var_params: v.var_params.length ? v.var_params : (row.content?.var_params || []),
-            ...(v.error ? { provider_error: v.error } : {}) } }),
+          method: 'PATCH', body: JSON.stringify({ content: merged }),
         });
         updated.push({ id: row.id, status: v.status, error: v.error || null });
       }

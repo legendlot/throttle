@@ -203,9 +203,13 @@ async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmD
     if (!code) return;
     const url = `${String(linkBase).replace(/\/$/, '')}/r/${code}`;
     ctx.constants = { ...(ctx.constants || {}), [c.link_param]: url };
+    // Also under the event map keyed by the param name — an event-sourced variable (on this
+    // template OR on the SMS fallback leg rendered from the same ctx) whose field matches the
+    // param picks the minted url up. This is what lets both legs share one code.
+    ctx.event = { ...(ctx.event || {}), [c.link_param]: url };
     const decl = (template.variables || []).find((v) => v && v.token === c.link_param);
-    if (decl && decl.source === 'event') {
-      ctx.event = { ...(ctx.event || {}), [decl.field || decl.token]: url };
+    if (decl && decl.source === 'event' && (decl.field || decl.token) !== c.link_param) {
+      ctx.event[decl.field || decl.token] = url;
     }
   } catch (e) {
     // Best-effort by design — the fallback value still renders. Logged because a silent
@@ -423,9 +427,13 @@ async function send(env, opts) {
         profile, event: opts.eventContext, constants: opts.constants,
         recipient: opts.recipient, system: {},
       };
-      // Same per-recipient link minting as SMS (S290) — the RCS body and the SMS fallback leg
-      // render from this ONE ctx, so both legs carry the same minted code and a click is
-      // attributable whichever leg delivered.
+      // Same per-recipient link minting as SMS (S290). ⚠️ Scope honestly (hostile review):
+      // the minted url reaches a leg only through a variable that RESOLVES from it. The RCS
+      // body always does (its link param is the injection target). The SMS fallback leg does
+      // ONLY if its link variable reads the same key — ABC 2's checkout_url is event-sourced
+      // from `checkout_url`, so it carries the campaign's aggregate slug instead. Author
+      // future DLT fallback templates with their url token named to match the RCS link_param
+      // (constant- or event-sourced) and both legs share one minted code.
       await mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults);
       const body = renderRcs(template, ctx);
 

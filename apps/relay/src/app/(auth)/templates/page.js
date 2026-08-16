@@ -226,18 +226,30 @@ function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setPr
         </div>
       )}
       {providerTemplateId && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <Badge label={`Vendor: ${r.provider_status || 'unknown'}`}
-                 tone={(r.provider_status || '') === 'approved' ? 'green' : 'yellow'} />
-          <span className="dim" style={{ fontSize: 12 }}>Approval is the carrier hub&apos;s call — Sync pulls the latest.</span>
-          <Btn onClick={syncStatus} disabled={syncing} style={{ marginLeft: 'auto' }}>{syncing ? 'Syncing…' : 'Sync status'}</Btn>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Badge label={`Vendor: ${r.provider_status || 'unknown'}`}
+                   tone={(r.provider_status || '') === 'approved' ? 'green'
+                     : r.provider_error ? 'red' : 'yellow'} />
+            <span className="dim" style={{ fontSize: 12 }}>Approval is the carrier hub&apos;s call — Sync pulls the latest.</span>
+            <Btn onClick={syncStatus} disabled={syncing} style={{ marginLeft: 'auto' }}>{syncing ? 'Syncing…' : 'Sync status'}</Btn>
+          </div>
+          {r.provider_error && (
+            <div style={{ fontSize: 12, marginTop: 8, padding: '8px 12px', borderRadius: 8,
+                          border: '1px solid rgba(220,80,60,.45)', background: 'rgba(220,80,60,.08)' }}>
+              Vendor rejection: {r.provider_error}
+            </div>
+          )}
         </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 14 }}>
         <div className="ff">
           <div className="kv-k">Vendor template id</div>
-          <input className="f-inp mono" value={providerTemplateId || ''} disabled={disabled}
+          {/* Read-only once bound — a stray keystroke here would silently rebind the row to a
+              template that doesn't exist. Rebinding is deliberate: duplicate the row instead. */}
+          <input className="f-inp mono" value={providerTemplateId || ''}
+            disabled={disabled || !!providerTemplateId}
             onChange={(e) => setProviderTemplateId(e.target.value.trim())} placeholder="73he0n5x33x" />
         </div>
         <div className="ff">
@@ -633,6 +645,7 @@ export default function TemplatesPage() {
         link_target_base: c.link_target_base || '',
         ttl: typeof c.ttl === 'number' ? c.ttl : null,
         provider_status: c.provider_status || '',
+        provider_error: c.provider_error || '',
         draft: (c.draft && typeof c.draft === 'object') ? c.draft : {},
       },
       approval_status: r.approval_status || null,
@@ -700,6 +713,29 @@ export default function TemplatesPage() {
         body: c.body || '', footer: c.footer || '',
         buttons: Array.isArray(c.buttons) ? JSON.parse(JSON.stringify(c.buttons)) : [],
         mapping: Array.isArray(c.mapping) ? JSON.parse(JSON.stringify(c.mapping)) : [],
+      },
+      // SMS + RCS sub-objects (S290 hostile review — both were missing, so duplicating either
+      // channel silently produced an empty copy while WA carried everything).
+      sms: {
+        body: c.body || '',
+        var_order: Array.isArray(c.var_order) ? [...c.var_order] : [],
+        template_type: c.template_type || '',
+        // Deliberately NOT carried: dlt_template_id / dlt_var_count. A duplicate is a NEW
+        // registration-to-be — carrying the original's DLT id would let it activate while
+        // actually sending on the original's registration with different-looking intent.
+        dlt_template_id: '', dlt_var_count: null,
+        header: c.header || '',
+      },
+      rcs: {
+        rcs_type: c.rcs_type || 'text_message',
+        var_params: Array.isArray(c.var_params) ? [...c.var_params] : [],
+        sms_fallback_template_id: c.sms_fallback_template_id || '',
+        link_param: c.link_param || '',
+        link_target_base: c.link_target_base || '',
+        ttl: typeof c.ttl === 'number' ? c.ttl : null,
+        // Never carried: provider_status/provider_error (this copy was never submitted).
+        provider_status: '',
+        draft: (c.draft && typeof c.draft === 'object') ? JSON.parse(JSON.stringify(c.draft)) : {},
       },
       approval_status: null,
       provider_template_id: null,
@@ -815,6 +851,7 @@ export default function TemplatesPage() {
         link_param: (r.link_param || '').trim(),
         link_target_base: (r.link_target_base || '').trim(),
         provider_status: r.provider_status || '',
+        ...(r.provider_error ? { provider_error: r.provider_error } : {}),
         // Unsubmitted compose work rides with the draft so half-written copy survives a Save.
         ...(r.draft && Object.keys(r.draft).length ? { draft: r.draft } : {}),
       };

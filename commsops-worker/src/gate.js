@@ -201,7 +201,12 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
         rcsState = profileId ? await latestConsent(env, profileId, 'sms', 'marketing') : 'unknown';   // D3
       }
       const smsState = profileId ? await latestConsent(env, profileId, 'sms', 'marketing') : 'unknown'; // D2
-      state = (rcsState === 'opted_in' && smsState === 'opted_in') ? 'opted_in' : rcsState;
+      // BOTH must be opted_in; when they are not, report whichever is NOT opted_in so the skip
+      // reason points at the real gap. (An earlier version returned rcsState on the else branch,
+      // which let an explicit rcs opt-in through over an sms opt-OUT — the exact case D2 exists
+      // for, and the SQL twin comms.marketing_consented() already refused it. S290 hostile review.)
+      state = (rcsState === 'opted_in' && smsState === 'opted_in') ? 'opted_in'
+        : (rcsState !== 'opted_in' ? rcsState : smsState);
     } else {
       state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
     }
