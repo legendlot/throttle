@@ -247,17 +247,65 @@ function flattenItems(group, items) {
   return out;
 }
 
+// ── Event leaves: the same inert-condition class, but it cannot be answered statically ────────
+//
+// An `attr` leaf is inert for a TYPE reason, so the map above settles it with no database. An
+// EVENT leaf is different in kind: the event name can be perfectly real and correctly registered,
+// and the leaf still matches nobody because no rows exist inside the chosen window. That is a DATA
+// fact, and no amount of static analysis reaches it — the only honest answer is to count.
+//
+// ⚠️ Same asymmetry, same reason it matters. Under `all`/`any` an empty event leaf collapses the
+// segment toward 0, which is loud. Under `Match NONE of` it excludes nobody and the audience
+// becomes EVERYONE, with no tell on screen — a count that is too big looks exactly like success.
+//
+// The count is supplied by the caller (the page evaluates each leaf alone through previewSegment)
+// rather than fetched here, so this module stays pure and unit-testable.
+//
+// ⚠️ ONLY a confirmed zero warns. An unchecked leaf, an in-flight check and a failed check all
+// return no warning, deliberately: a banner that cries "matches nobody" while it is still counting
+// would be wrong most of the time it appeared, and a guard people learn to dismiss is worse than
+// no guard — this one exists precisely to be believed on the day it fires.
+const eventLeafKey = (row) => (row && row.type === 'event' && String(row.event || '').trim()
+  ? JSON.stringify(toLeaf(row)) : null);
+
+function eventWarning(row, count) {
+  if (!row || row.type !== 'event') return null;
+  const ev = String(row.event || '').trim();
+  if (!ev || count !== 0) return null;       // strict: undefined/null (unknown) never warns
+  const win = String(row.within || '').trim();
+  return `No profile matches "${ev}"${win ? ` within ${normalizeWithin(win)}` : ''}`
+    + ' — this condition matches nobody.'
+    + (win ? ' The event is registered but has no rows in that window; try a longer window.' : '');
+}
+
 // Every warning in the rule, worst first. `widening` marks the dangerous ones — an inert
 // condition under `Match NONE of`, where the audience silently becomes everyone.
-function ruleWarnings(group, items) {
+//
+// `eventCounts` is an optional { leafKey: number } of per-leaf match counts; absent means the
+// event checks simply contribute nothing, so every existing caller and test is unchanged.
+function ruleWarnings(group, items, eventCounts) {
   return flattenItems(group, items)
     .map(({ row, group: g }) => {
-      const text = conditionWarning(row);
+      const text = row && row.type === 'event'
+        ? eventWarning(row, eventCounts?.[eventLeafKey(row)])
+        : conditionWarning(row);
       return text ? { text, widening: g === 'none' } : null;
     })
     .filter(Boolean)
     .sort((a, b) => Number(b.widening) - Number(a.widening));
 }
 
+// Distinct event leaves in a rule, as [{ key, leaf }] — what the page needs to count. Distinct by
+// key, because the same condition written twice is one question, not two round trips.
+function eventLeaves(group, items) {
+  const seen = new Map();
+  flattenItems(group, items).forEach(({ row }) => {
+    const key = eventLeafKey(row);
+    if (key && !seen.has(key)) seen.set(key, { key, leaf: toLeaf(row) });
+  });
+  return [...seen.values()];
+}
+
 export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS,
-  ATTR_TYPES, OPS_BY_TYPE, EMPTY_ATTRS, attrType, opsForAttr, conditionWarning, defaultOpFor, flattenItems, ruleWarnings };
+  ATTR_TYPES, OPS_BY_TYPE, EMPTY_ATTRS, attrType, opsForAttr, conditionWarning, defaultOpFor, flattenItems, ruleWarnings,
+  eventLeafKey, eventWarning, eventLeaves };

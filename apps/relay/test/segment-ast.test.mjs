@@ -12,7 +12,8 @@
 // BACKLOG [relay] rather than fixed here. Do not restate the "all live definitions" claim.
 import assert from 'node:assert';
 import { parseDef, itemsToDef, toLeaf, toRow, countConditions,
-  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings } from '../src/lib/segmentAst.js';
+  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings,
+  eventLeafKey, eventWarning, eventLeaves } from '../src/lib/segmentAst.js';
 
 // Mirrors the OPS list in the segments page. Kept as a fixture rather than imported because the
 // page is a React client component and this suite runs under bare node.
@@ -190,6 +191,53 @@ t('a correct rule produces no warnings at all', () => {
     const p = parseDef(def);
     assert.deepEqual(ruleWarnings(p.group, p.items), [], `${name} should have no warnings`);
   }
+});
+
+// ── event leaves: the inert class that can only be answered by counting ──────────────────────
+t('an event leaf warns ONLY on a counted zero — never while unknown or in flight', () => {
+  const row = { type: 'event', event: 'product_viewed', count: 1, count_op: 'gte', within: '30' };
+  const key = eventLeafKey(row);
+  assert.ok(key, 'a named event leaf has a key');
+  // unknown (not yet counted) and a failed check both look like this — and must stay silent
+  assert.equal(eventWarning(row, undefined), null);
+  assert.equal(eventWarning(row, null), null);
+  // a real audience is fine
+  assert.equal(eventWarning(row, 4193), null);
+  // a counted zero speaks, and names the event and the window
+  const w = eventWarning(row, 0);
+  assert.ok(w && w.includes('product_viewed'), 'names the event');
+  assert.ok(w.includes('30 days'), 'names the normalised window, not the bare number');
+  // an unnamed event is a half-written row, not an inert one
+  assert.equal(eventLeafKey({ type: 'event', event: '' }), null);
+  assert.equal(eventWarning({ type: 'event', event: '' }, 0), null);
+});
+
+t('an empty event leaf under Match NONE of is WIDENING, exactly like the attr case', () => {
+  const row = { type: 'event', event: 'product_viewed', count: 1, count_op: 'gte', within: '30' };
+  const counts = { [eventLeafKey(row)]: 0 };
+  const none = ruleWarnings('none', [row], counts);
+  assert.equal(none.length, 1);
+  assert.equal(none[0].widening, true, 'excludes nobody → the audience is everyone');
+  assert.equal(ruleWarnings('all', [row], counts)[0].widening, false);
+  // nested one level down, same as the attr guard
+  const nested = ruleWarnings('all', [{ type: 'group', group: 'none', rows: [row] }], counts);
+  assert.equal(nested.length, 1);
+  assert.equal(nested[0].widening, true);
+  // and with NO counts supplied at all, nothing is claimed — every existing caller is unchanged
+  assert.deepEqual(ruleWarnings('none', [row]), []);
+});
+
+t('eventLeaves returns each DISTINCT event leaf once, as a storable leaf', () => {
+  const a = { type: 'event', event: 'product_viewed', count: 1, count_op: 'gte', within: '30' };
+  const b = { type: 'event', event: 'order_placed', count: 1, count_op: 'gte', within: '' };
+  const items = [a, { ...a }, b, { type: 'attr', attr: 'city', op: 'eq', value: 'Pune' }];
+  const leaves = eventLeaves('all', items);
+  assert.equal(leaves.length, 2, 'the duplicate is one question, not two round trips');
+  assert.deepEqual(leaves.map((l) => l.leaf.event).sort(), ['order_placed', 'product_viewed']);
+  // the leaf handed back is the STORED shape, so it can go straight into { all: [leaf] }
+  assert.equal(leaves.find((l) => l.leaf.event === 'product_viewed').leaf.within, '30 days');
+  // rows inside a nested group are found too
+  assert.equal(eventLeaves('all', [{ type: 'group', group: 'none', rows: [b] }]).length, 1);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

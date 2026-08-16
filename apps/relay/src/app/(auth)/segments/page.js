@@ -1,7 +1,7 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
+import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
@@ -9,7 +9,8 @@ import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
 import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin,
-  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings } from '@/lib/segmentAst.js';
+  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings,
+  eventLeafKey, eventWarning, eventLeaves } from '@/lib/segmentAst.js';
 
 const GROUPS = [
   { id: 'all', label: 'Match ALL of', hint: 'every condition (AND)' },
@@ -69,7 +70,7 @@ const STATES = ['opted_in', 'opted_out', 'unknown'];
 // Extracted from the flat list so the SAME editor renders a condition whether it sits at the
 // top level or inside a nested group (2026-08-13). It takes callbacks rather than closing over
 // an index, because a nested row's index is meaningless to the parent list.
-function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDefs, propOpts }) {
+function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDefs, propOpts, eventCounts }) {
   return (
   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7, padding: 10 }}>
   <select className="f-inp" style={{ width: 110 }} value={r.type} onChange={(e) => onType(e.target.value)} disabled={disabled}>
@@ -181,6 +182,12 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
         })()}
       </>}
     </>}
+    {/* Same row-level ⚠ the attr branch carries, from a COUNTED zero rather than a type check —
+        an event leaf can only be proved inert by evaluating it (see lib/segmentAst.js). Nothing
+        renders while the count is unknown or in flight; only a confirmed 0 speaks. */}
+    {(() => { const w = eventWarning(r, eventCounts?.[eventLeafKey(r)]); return w
+      ? <span style={{ fontSize: 11.5, color: 'var(--warn, #e0a33e)', flexBasis: '100%' }}>⚠ {w}</span>
+      : null; })()}
   </>}
 
   {r.type === 'consent' && <>
@@ -204,7 +211,7 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
 // ── A nested group of conditions ───────────────────────────────────────────────
 // Renders as an indented, accented block so the eye can see where the bracket opens and closes.
 // It reuses ConditionRow, so a condition behaves identically inside a group and outside one.
-function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, onPatch, onRemove }) {
+function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, eventCounts, onPatch, onRemove }) {
   const patchRow = (j, patch) => onPatch({ rows: g.rows.map((r, k) => (k === j ? { ...r, ...patch } : r)) });
   // REPLACE on a type change, never merge — same reasoning as blankRow() above.
   const typeRow = (j, tp) => onPatch({ rows: g.rows.map((r, k) => (k === j ? blankRow(tp) : r)) });
@@ -229,7 +236,7 @@ function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, onPatch, onRemove
         ? <div className="dim" style={{ fontSize: 12 }}>Empty group — add a condition, or remove it. An empty group is ignored when the rule is saved.</div>
         : g.rows.map((r, j) => (
             <ConditionRow key={j} r={r} disabled={disabled} canEdit={canEdit}
-              eventDefs={eventDefs} propOpts={propOpts}
+              eventDefs={eventDefs} propOpts={propOpts} eventCounts={eventCounts}
               onPatch={(patch) => patchRow(j, patch)}
               onType={(tp) => typeRow(j, tp)}
               onRemove={() => dropRow(j)} />
@@ -298,6 +305,11 @@ export default function SegmentsPage() {
   const [pvLoading, setPvLoading] = useState(false);
   const [materializing, setMaterializing] = useState(false);
   const [eventDefs, setEventDefs] = useState([]);
+  // Per-event-leaf match counts, keyed by the leaf's stored JSON. Persisted across edits by key
+  // (never cleared wholesale) so editing one row does not re-query the others. See the event
+  // section of lib/segmentAst.js for why this has to be counted rather than reasoned about.
+  const [eventCounts, setEventCounts] = useState({});
+  const eventCountsRef = useRef({});
   // S268 — per-event property options, cached by event name: { [event]: [{key,coverage_pct,top_values}] }.
   // Loaded on demand because it aggregates real event rows; only fetched for events actually used.
   const [propOpts, setPropOpts] = useState({});
@@ -391,6 +403,61 @@ export default function SegmentsPage() {
     } catch (e) { showToast(e.message || 'Preview failed', 'error'); }
     finally { setPvLoading(false); }
   }
+
+  // ── Count each EVENT leaf on its own, so an inert one can be named ────────────────────────
+  //
+  // The whole-rule Preview cannot do this job: it returns ONE number, and when that number is
+  // wrong the number itself is the only evidence — it cannot say WHICH condition emptied the
+  // rule, and under `Match NONE of` it does not even read as wrong (the audience just looks
+  // big). So each event leaf is evaluated alone, as `{all:[leaf]}`, and a confirmed zero is
+  // attributed to that exact row.
+  //
+  // ⚠️ Runs WITHOUT pressing Preview, on purpose. The attr guard warns the moment the row is
+  // wrong; an event guard that only fired on a button press would be a guard the 15 Aug send
+  // would have walked straight past, since the rule looked fine and Preview returned a large,
+  // plausible number.
+  //
+  // Debounced, and cached by leaf key across edits — editing row 2 must not re-ask row 1's
+  // question. Results are only ever ADDED to the map: a key that is already answered is never
+  // re-fetched, and a failed check writes nothing (unknown ≠ zero, and only zero warns).
+  const eventKeys = eventLeaves(seg.group, seg.items).map((l) => l.key).join('|');
+  useEffect(() => {
+    if (seg.kind !== 'dynamic') return undefined;
+    const leaves = eventLeaves(seg.group, seg.items).filter((l) => !(l.key in eventCountsRef.current));
+    if (!leaves.length) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const session = await getValidSession();
+      if (!session || cancelled) return;
+      // Sequential, not Promise.all: this is a background nicety running while someone types,
+      // and it shares the evaluator with live campaign sends. A rule with six event leaves
+      // must not fire six concurrent full-table evaluations to answer a hint.
+      for (const l of leaves) {
+        if (cancelled) return;
+        try {
+          // sample:false — previewSegment otherwise ALSO runs preview_segment_sample and returns
+          // real customer rows. This check needs one integer; pulling PII to answer a hint nobody
+          // asked for is both a second RPC per leaf and a surface with no reason to exist.
+          const r = await workerFetch('previewSegment',
+            { definition: { all: [l.leaf] }, channel: pvChannel, purpose: pvPurpose, sample: false }, session);
+          const total = Number(r?.data?.total);
+          if (cancelled || !Number.isFinite(total)) continue;
+          eventCountsRef.current = { ...eventCountsRef.current, [l.key]: total };
+          setEventCounts(eventCountsRef.current);
+        } catch {
+          // Swallowed by design — an unanswerable check must leave the leaf UNKNOWN, never 0.
+          // Writing a 0 here would invent the exact warning this feature exists to make credible.
+        }
+      }
+    }, 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // Keyed on the leaf signature, never on `session` — a token refresh lands ~hourly and would
+    // otherwise re-run this for no reason (CORE.md, the useAuth session-churn rule).
+    // channel/purpose are deliberately NOT dependencies: previewSegment's `total` is the raw
+    // match count and only `reachable` varies by them, so re-running on a channel change would
+    // buy an identical answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventKeys, seg.kind]);
 
   // Returns the segment id on success, null on failure — refreshMembers() chains on it.
   async function save({ silent = false } = {}) {
@@ -644,7 +711,7 @@ export default function SegmentsPage() {
                 on screen. That is the case worth a banner rather than only the row-level ⚠.
                 See the ATTR_TYPES header in lib/segmentAst.js for the incident. */}
             {(() => {
-              const warns = ruleWarnings(seg.group, seg.items);
+              const warns = ruleWarnings(seg.group, seg.items, eventCounts);
               if (!warns.length) return null;
               const widening = warns.some((w) => w.widening);
               return (
@@ -670,12 +737,12 @@ export default function SegmentsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {seg.items.map((it, i) => it.type === 'group' ? (
                     <GroupRow key={i} g={it} idx={i} disabled={saving || !canEdit} canEdit={canEdit}
-                      eventDefs={eventDefs} propOpts={propOpts}
+                      eventDefs={eventDefs} propOpts={propOpts} eventCounts={eventCounts}
                       onPatch={(patch) => patchItem(i, patch)}
                       onRemove={() => removeItem(i)} />
                   ) : (
                     <ConditionRow key={i} r={it} disabled={saving || !canEdit} canEdit={canEdit}
-                      eventDefs={eventDefs} propOpts={propOpts}
+                      eventDefs={eventDefs} propOpts={propOpts} eventCounts={eventCounts}
                       onPatch={(patch) => patchItem(i, patch)}
                       onType={(tp) => setItemType(i, tp)}
                       onRemove={() => removeItem(i)} />
