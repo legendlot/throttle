@@ -694,5 +694,29 @@ t('a normal add_to_cart is unaffected by the guard', () => {
   assert.equal(e.properties.cart_link_suffix, '55589142888521:1');
 });
 
+// ── product_handle: absent beats present-and-null (S289) ─────────────────────────────────────
+// Measured 2026-08-16 over 7 days: the key was on all 23,635 live Shopflo add_to_cart events and
+// non-null on ZERO of them. Shopflo sends no per-product identity on this event at all — it
+// reports the whole cart. Present-and-null is the dangerous shape: a template binding it renders
+// an empty string into /products/<handle> and ships a dead link silently.
+t('add_to_cart DROPS product_handle when it is null, rather than sending an empty one', () => {
+  const e = FLO.mapAddToCart(ADDED_TO_CART);
+  assert.ok(e, 'the event still maps');
+  assert.equal('product_handle' in e.properties, false,
+    'absent, so a binding template fails loudly with unresolved_variables instead of sending a dead link');
+  // the cart-level fields Shopflo DOES send are untouched — this is the shape a template should bind
+  assert.ok(e.properties.cart_link_suffix, 'cart_link_suffix still present');
+  assert.equal(e.properties.primary_product_name, 'Snowboard');
+});
+
+t('a real product_handle, if Shopflo ever sends one, still comes through', () => {
+  const e = FLO.mapAddToCart({
+    ...ADDED_TO_CART,
+    product_url: 'https://www.legendoftoys.com/products/ghost-rc-drift-car',
+  });
+  assert.equal(e.properties.product_handle, 'ghost-rc-drift-car',
+    'the opportunistic assignment is preserved — only the null case is dropped');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

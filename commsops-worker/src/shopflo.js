@@ -507,6 +507,23 @@ function mapAddToCart(body) {
       && !props.primary_product_name && !props.cart_token) {
     return null;
   }
+  // ⚠️ An always-null `product_handle` is worse than an ABSENT one, so drop the key when it is
+  // null. Measured 2026-08-16 over 7 days: the key was present on all 23,635 Shopflo
+  // `add_to_cart` events and non-null on **0** of them — Shopflo simply sends no per-product
+  // identity on this event (no product_url, no product_id, no product_name; it reports the whole
+  // CART: cart_product_names / cart_variant_ids / primary_product_name / product_image_url).
+  //
+  // The opportunistic assignment above stays, so the day Shopflo does send one it works with no
+  // further change. But while it is null, PRESENT-AND-NULL is the dangerous shape: a future ATC
+  // template binding `product_handle` renders an empty string into a `/products/<handle>` URL and
+  // ships a real customer a dead link, silently. Absent instead makes that send fail loudly with
+  // `unresolved_variables:product_handle` — the same posture this file already takes for
+  // `cart_link_suffix`, which it calls the one variable that cannot take a fallback, and for the
+  // same reason: a placeholder here is a broken link, not a degraded one.
+  //
+  // Nothing binds it today (0 templates), so this is inert now and load-bearing later.
+  if (props.product_handle == null) delete props.product_handle;
+
   const cartId = cartIdentifier(body);
   if (cartId) identifiers.push(cartId);
   return {
