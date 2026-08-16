@@ -131,10 +131,11 @@ function SupplyTag({ row, sup }) {
 //    closing_stock this classifies, so the two do not collide — but this must never
 //    become an auto-correct, or a deliberate count gets "fixed" into a bug.
 const INTEGRITY_BUCKETS = {
-  dead_ancestor:  { rank: 0, label: 'Stock on dead code', tone: 'warn' },
-  never_received: { rank: 1, label: 'Never received',     tone: 'bad'  },
-  over_issued:    { rank: 2, label: 'Over-issued',        tone: 'bad'  },
-  exhausted:      { rank: 3, label: 'Exhausted',          tone: 'ordered' },
+  no_ledger:      { rank: 0, label: 'No ledger row',      tone: 'bad'  },
+  dead_ancestor:  { rank: 1, label: 'Stock on dead code', tone: 'warn' },
+  never_received: { rank: 2, label: 'Never received',     tone: 'bad'  },
+  over_issued:    { rank: 3, label: 'Over-issued',        tone: 'bad'  },
+  exhausted:      { rank: 4, label: 'Exhausted',          tone: 'ordered' },
 };
 
 function classifyIntegrity(row, deadHolders, sup) {
@@ -142,6 +143,22 @@ function classifyIntegrity(row, deadHolders, sup) {
   const opening = Number(row.opening_stock)  || 0;
   const recv    = Number(row.total_received) || 0;
   const issued  = Number(row.total_issued)   || 0;
+
+  // Worst finding, and checked first: the part is picked by an active BOM but has NO
+  // stock_ledger row at all (synthesised by getStock — there is no real row to show).
+  // Deliberately NOT folded into "Exhausted": that is a real row sitting at 0, which a
+  // count can fix. This part cannot hold stock until the row exists, and since the
+  // below-zero block shipped it hard-refuses any issue against it (RULE-STOCK-002).
+  if (row.no_ledger_row) {
+    return {
+      bucket: 'no_ledger', shortfall: 0,
+      detail: 'picked by an active BOM, but has no stock ledger row',
+      action: 'This part cannot hold stock and any issue against it is refused outright. '
+            + 'Most of these are parts whose master was deprecated with no recorded replacement — '
+            + 'get the replacement code from the floor and re-point the BOM (RULE-004). '
+            + 'Creating a ledger row alone just lets it go negative again.',
+    };
+  }
 
   // A negative balance is physically impossible, so it is always a defect — it stays on
   // the list even if more is on order, because the incoming qty will land on top of a
