@@ -3982,6 +3982,20 @@ export default {
     // L142: full-staging unmapped-SKU sweep — keeps the /mapping queue complete for SKUs that
     // fell outside per-window resolveSkus. One set-based RPC; best-effort.
     try { await rpcSales('reconcile_unmapped_sku', {}); } catch (e) { console.error('odoops cron (reconcile unmapped) failed:', e?.message || e); }
+    // SELF-shipped parcels have no courier, so no scan can ever close them — auto-close at 25 days
+    // (migration 0017). Once a day (19:00 UTC = 00:30 IST) is ample for a day-grain rule.
+    //
+    // ⚠️ SILENT BY DESIGN — data-only, forward flow included (Afshaan, 2026-08-16). The RPC stamps
+    // `emitted_lifecycles` with 'delivered' in the same write, so commsops never sees these rows.
+    // 25 days elapsed is an ASSUMPTION, not a delivery scan: a parcel that never arrived must not
+    // be announced as delivered. Do not "restore" emission here without a fresh decision.
+    try {
+      if (new Date().getUTCHours() === 19) {
+        const sc = await sbPublic('/rest/v1/rpc/close_self_shipments', { method: 'POST', body: JSON.stringify({ p_age_days: 25 }) });
+        const n = sc.ok ? (sc.data?.[0]?.closed ?? sc.data?.closed) : null;
+        if (n) console.log('odoops cron: closed', n, 'SELF shipments (silent)');
+      }
+    } catch (e) { console.error('odoops cron (self autodeliver) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
