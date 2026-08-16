@@ -30,6 +30,18 @@ function ChannelIcon({ channel }) {
 // channel marker at all because this definition was local to this page. One copy only.
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
+// <input type="datetime-local"> speaks LOCAL wall-clock with no zone; scheduled_at is
+// timestamptz. save() converts local → UTC with toISOString(), so the load side MUST
+// convert UTC → local too. Slicing the raw ISO string here showed the UTC digits as if
+// they were IST, silently shifting the schedule −5h30m on every open/save cycle.
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 // Which tab a campaign belongs to. Mirrors campaignStatus() so the chip and the tab can
 // never disagree — a campaign filed under "Scheduled" must be the one showing a Scheduled chip.
 function tabOf(r) {
@@ -437,7 +449,7 @@ export default function CampaignsPage() {
     return {
       id: r.id, name: r.name || '', channel: r.channel || 'email', purpose: r.purpose || 'marketing',
       segment_id: r.segment_id || '', template_id: r.template_id || '',
-      vars: JSON.stringify(r.vars || {}, null, 0), scheduled_at: r.scheduled_at ? String(r.scheduled_at).slice(0, 16) : '',
+      vars: JSON.stringify(r.vars || {}, null, 0), scheduled_at: toLocalInput(r.scheduled_at),
       status: r.status || 'draft', audience_snapshot: r.audience_snapshot ?? null, reject_reason: r.reject_reason || null,
       utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
       allow_partial: r.allow_partial === true,

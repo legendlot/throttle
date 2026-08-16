@@ -32,11 +32,17 @@ const CHECK_LABELS = {
   quiet_hours_risk: 'Quiet-hours risk',
 };
 
-// campaign_experiments.planned_read_at travels as an ISO string. The rest of this
-// screen (and campaigns/page.js's own scheduled_at field) treats a sliced ISO string
-// as the datetime-local value rather than converting timezones — matching that
-// existing convention instead of inventing a second one.
-const toLocalInput = (iso) => (iso ? String(iso).slice(0, 16) : '');
+// <input type="datetime-local"> speaks LOCAL wall-clock with no zone; planned_read_at is
+// timestamptz and the save path converts local → UTC with toISOString(). The load side
+// must convert back — the old sliced-ISO "convention" (copied from campaigns/page.js,
+// since fixed there too) showed UTC digits as IST, shifting the time −5h30m per round trip.
+const toLocalInput = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 const fourHoursFromNowIso = () => new Date(Date.now() + 4 * 3600 * 1000).toISOString();
 
 export default function VariantSetup({ campaign, session, perms, reach, onChanged }) {
