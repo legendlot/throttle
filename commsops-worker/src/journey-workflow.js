@@ -103,6 +103,26 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return r.data?.[0]?.properties || {};
     });
 
+    // The pinned trigger event's OWN timestamp — the correct lower bound for the stale-context
+    // refresh below (see ctxForSend). Measured 2026-08-16 on 14 days of ATC-Cart: 5.96% of
+    // enrolments (243 of 4,078) could never be refreshed because the bound was `enrolledAt` and
+    // the enrolment row lands ~13s AFTER the trigger event — so an event arriving inside that gap
+    // is newer than the pinned one yet older than enrolledAt, and was invisible.
+    //
+    // ⚠️ A SEPARATE step, deliberately NOT a widened `load-trigger` select. Workflow step.do
+    // memoises by name, so widening an existing step hands every in-flight instance its cached
+    // old value and the fix silently never applies — the same trap `load-journey-utm` and
+    // `load-refresh-cfg` each carry a note about.
+    //
+    // Fail-soft to null: the bound then falls back to enrolledAt, i.e. exactly today's behaviour.
+    const triggerAt = await step.do('load-trigger-at', async () => {
+      if (!enr.triggerEventId) return null;
+      const r = await A.sbComms(
+        `/rest/v1/events?id=eq.${A.enc(enr.triggerEventId)}&select=occurred_at&limit=1`, env);
+      if (!r.ok) return null;
+      return r.data?.[0]?.occurred_at || null;
+    });
+
     // Journey name → utm_campaign on marketing sends (GA4/Odo attribution).
     const journeyName = await step.do('load-journey-name', async () => {
       const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=name&limit=1`, env);
@@ -205,14 +225,24 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     // `unresolved_variables` and loses the send. Measured 2026-08-07: 127 of 956 ATC cases are
     // non-superset, and those correctly keep the pinned event rather than degrade either way.
     const ctxForSend = async (stepKey) => {
-      // enrolledAt is the lower bound; without it "latest event" could reach back before the
-      // enrolment and message a cart the customer has already checked out. Rather than widen
-      // the window, fall back to the pinned event.
-      if (!refreshCfg.on || !refreshCfg.event || !enrolledAt) return runCtx;
+      // The lower bound is the PINNED EVENT'S OWN TIMESTAMP, falling back to enrolledAt.
+      //
+      // A bound is needed at all because "latest event" unbounded could reach back before the
+      // enrolment and message a cart the customer has already checked out. But enrolledAt was the
+      // wrong bound: it sits ~13s after the trigger event, so anything arriving in that gap was
+      // newer than the pinned event yet older than the bound, and was permanently unrefreshable
+      // (5.96% of ATC-Cart enrolments, measured 2026-08-16).
+      //
+      // `triggerAt` is strictly better AND no less safe: it is the floor the pinned event already
+      // sets, so nothing older than what we pinned can ever be picked up — it only closes the
+      // enrol-lag gap above it.
+      if (!refreshCfg.on || !refreshCfg.event) return runCtx;
+      const since = triggerAt || enrolledAt;
+      if (!since) return runCtx;
       const fresh = await step.do(`refresh:${stepKey}`, async () => {
         const r = await A.sbComms(
           `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(refreshCfg.event)}` +
-          `&occurred_at=gt.${A.enc(enrolledAt)}&select=properties&order=occurred_at.desc&limit=1`, env);
+          `&occurred_at=gt.${A.enc(since)}&select=properties&order=occurred_at.desc&limit=1`, env);
         if (!r.ok) return null;   // fail-soft: a read blip must not lose the send
         const p = r.data?.[0]?.properties || null;
         if (!p) return null;      // no newer event — the pinned one is still the truth
