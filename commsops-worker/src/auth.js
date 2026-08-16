@@ -1,5 +1,27 @@
 // commsops auth — mirrors docketops verifyJWT, reads store.relayops_* perm layer.
 
+// PostgREST silently truncates any read that would return more rows than `db-max-rows`.
+//
+// ⚠️ MEASURED, not inherited — 2026-08-16, against the live REST endpoint:
+//     GET /rest/v1/units?select=upc   with no limit
+//     → 5,000 rows, `content-range: 0-4999/159092`
+// So the cap is exactly 5,000, and PostgREST DOES tell the truth — in a `content-range` header
+// this helper throws away. That discard is the whole defect class: the caller gets a plain array
+// of 5,000 rows, no error, no status, nothing to notice. Three read sites have been bitten
+// (getSegment's member count, the pre-flight quiet_hours_risk estimate, the S275 export) and
+// every one was found by a user reporting a wrong number or by someone tripping over it — never
+// by looking, because from the outside a truncated read is indistinguishable from a correct one.
+//
+// So: detect it HERE, at the single shared helper, rather than paging 41 call sites that do not
+// currently overflow. Same reasoning as checkWrite below, and the same PATTERN-218 lesson the
+// serialiser's allow-list records — one enforcement point beats N sites that must each be
+// remembered. A site that starts overflowing next year now says so on the day it does.
+//
+// Logs rather than throws: these run inside live send paths and webhooks, and turning a
+// too-large read into a thrown error would convert a reporting bug into an outage.
+// `wrangler tail | grep db_max_rows` is the intended way to see them.
+const DB_MAX_ROWS = 5000;
+
 function sbProfile(profile) {
   return async function (path, env, opts = {}) {
     const res = await fetch(`${env.SUPABASE_URL}${path}`, {
@@ -16,6 +38,16 @@ function sbProfile(profile) {
     });
     const text = await res.text();
     let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    // Exactly db-max-rows back from a query that asked for no limit means PostgREST almost
+    // certainly had more to give. `limit=`/`Range` callers are excluded — they asked for a
+    // bounded page and getting it is not a truncation. A table holding exactly 5,000 rows logs a
+    // harmless false positive; that is the right side to err on for a fault this quiet.
+    if (Array.isArray(data) && data.length === DB_MAX_ROWS
+        && !/[?&]limit=/.test(path) && !(opts.headers || {}).Range) {
+      console.log('db_max_rows_truncated', JSON.stringify({
+        profile, rows: data.length, path: String(path).slice(0, 300),
+      }));
+    }
     return { ok: res.ok, status: res.status, data };
   };
 }
@@ -95,7 +127,7 @@ const canAdmin        = p => can(p, 'relay_admin');
 const canSuperAdmin   = p => can(p, 'relay_super_admin');
 
 module.exports = {
-  sbProfile, sbComms, sbStore, enc, verifyJWT, checkWrite,
+  sbProfile, sbComms, sbStore, enc, verifyJWT, checkWrite, DB_MAX_ROWS,
   canView, canSegment, canTemplate, canBuild, canActivate, canApprove,
   canConsentAdmin, canConnector, canAdmin, canSuperAdmin,
 };
