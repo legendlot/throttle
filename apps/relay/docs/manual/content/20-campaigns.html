@@ -29,7 +29,8 @@
   <li><span class="s-title">Pick the channel and purpose.</span> Purpose matters: <code>marketing</code> is gated on consent and quiet hours, <code>transactional</code> is not. Do not label a promotion as transactional to dodge the gate.</li>
   <li><span class="s-title">Pick the audience.</span> Choose a segment. The line underneath immediately tells you how many people will actually receive it.</li>
   <li><span class="s-title">Set exclusions if you need them.</span> See the Audience Exclusions chapter.</li>
-  <li><span class="s-title">Pick the template.</span> Only templates for the chosen channel appear. On WhatsApp, only templates approved by Meta can be used.</li>
+  <li><span class="s-title">Pick the template.</span> Only templates for the chosen channel appear. On WhatsApp, only templates approved by Meta can be used; on SMS and RCS, only vendor-approved ones will actually send.</li>
+  <li><span class="s-title">Fill the campaign variables if the template uses them.</span> A campaign has no order or browsing event behind it, so values like a sale name, discount or code come from the campaign&rsquo;s variables box &mdash; e.g. <code>{"sale_name":"Freedom to Play Sale","code":"FREEDOM5"}</code>. A missing value means that person&rsquo;s message is skipped, not sent with a hole.</li>
   <li><span class="s-title">Send a test.</span> The <strong>Send test</strong> button delivers the real message to a few named addresses, through the real gate, without touching the segment. Do this every time.</li>
   <li><span class="s-title">Submit.</span> Below the approval threshold it approves itself. Above it, it goes to an Approver.</li>
   <li><span class="s-title">Send now, or schedule.</span> Both need <span class="role mgr">Manager</span>. A confirmation dialog states exactly who is about to be messaged and which exclusions are in force.</li>

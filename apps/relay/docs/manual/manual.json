@@ -2,8 +2,8 @@
   "title": "Relay",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to every screen in Relay, the system that talks to customers.",
-  "version": "1.2.0",
-  "date": "2026-08-14",
+  "version": "1.3.0",
+  "date": "2026-08-17",
   "app_url": "relay.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#F2CD1A",
@@ -246,6 +246,17 @@
             "auth",
             "mgr"
           ]
+        },
+        {
+          "id": "sms-rcs",
+          "title": "SMS & RCS",
+          "file": "44-sms-rcs.html",
+          "roles": [
+            "view",
+            "auth",
+            "mgr"
+          ],
+          "route": "/templates"
         },
         {
           "id": "library",
