@@ -234,4 +234,38 @@ function renderSms(template, ctx) {
   };
 }
 
-module.exports = { renderEmail, renderWhatsapp, renderSms, resolveVar, applyTokens, resolveDeclared };
+// renderRcs — RCS templates live at TrustSignal (registered against the bot, vendor-approved),
+// so Relay's row carries only the binding: which vendor template, which [param] slots it takes,
+// and which SMS template is the mandatory fallback leg. Content shape (channel='rcs'):
+//   content = { rcs_type, var_params: ['name','link',…], sms_fallback_template_id, ttl? }
+// with provider_template_id holding the vendor's RCS template id (same column as SMS/WA).
+//
+// Variable convention: TrustSignal RCS templates use bracketed NAMED params ([name], [link]) —
+// unlike SMS's positional {#var#}. Declare each Relay variable with token === the registered
+// param name, and the resolved values map straight onto `rcs_variables` with no positional
+// bridge. `var_params` is the registered slot list; every slot must resolve or the send fails
+// closed here (unresolved_variables), exactly as SMS does — a template with no params (a fully
+// literal body, e.g. a sale blast) renders with an empty map, which is valid.
+function renderRcs(template, ctx) {
+  const content = template.content || {};
+  if (!template.provider_template_id) throw new Error('rcs_template_not_registered');
+  const params = Array.isArray(content.var_params) ? content.var_params.map((x) => String(x).trim()).filter(Boolean) : [];
+  const values = resolveDeclared(template, ctx);
+  const vars = {};
+  const missing = [];
+  for (const p of params) {
+    const v = values[p];
+    if (v === undefined || v === null || v === '') { missing.push(p); continue; }
+    vars[p] = String(v);
+  }
+  if (missing.length) throw new Error(`unresolved_variables:${missing.join(',')}`);
+  return {
+    provider_template_id: template.provider_template_id,
+    rcs_type: content.rcs_type || 'text_message',
+    vars,
+    ttl: content.ttl || null,
+    sms_fallback_template_id: content.sms_fallback_template_id || null,
+  };
+}
+
+module.exports = { renderEmail, renderWhatsapp, renderSms, renderRcs, resolveVar, applyTokens, resolveDeclared };

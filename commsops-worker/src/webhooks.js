@@ -222,4 +222,96 @@ async function handleTrustsignalSms(env, body) {
   }
 }
 
-module.exports = { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms };
+// TrustSignal RCS events → message status, the fallback channel flip, and link_clicked.
+// Same posture as the SMS handler: unknown transaction ids are ignored (never create a row),
+// unknown statuses are logged not thrown (the vendor's catalogue is partial by admission),
+// and status only ever moves FORWARD.
+const RCS_RANK = { queued: 0, sent: 1, delivered: 2, opened: 3, clicked: 4, bounced: 9, failed: 9, suppressed: 9, skipped: 9 };
+const rcsUpgrade = (from, to) => (RCS_RANK[to] ?? 0) >= (RCS_RANK[from] ?? 0) || (RCS_RANK[to] ?? 0) >= 9;
+
+async function handleTrustsignalRcs(env, body) {
+  const events = require('./adapters/rcs.js').parseStatusWebhook(body);
+  for (const ev of events) {
+    if (!ev.provider_message_id) continue;
+    const cur = await A.sbComms(
+      `/rest/v1/messages?provider_message_id=eq.${A.enc(ev.provider_message_id)}` +
+      `&select=id,status,to_address,profile_id,channel,fallback_from&limit=1`, env);
+    const row = cur.ok && cur.data?.[0];
+    if (!row) continue;
+
+    // F4 — the channel flip, rcs → sms, ONE-WAY and IDEMPOTENT. Both the `Fallback` event and
+    // a Delivery_status of `nonrcs` mean the same thing and can both arrive in either order,
+    // so idempotency lives in the PATCH predicate: `fallback_from IS NULL` makes the second
+    // flip a no-op (0 rows matched), and nothing anywhere sets channel back to 'rcs'. Cost is
+    // overwritten ONLY here, with the SMS leg's credit — the RCS leg's charge describes a leg
+    // that did not deliver.
+    if (ev.fallback_flip) {
+      const patch = { channel: 'sms', fallback_from: 'rcs' };
+      if (ev.cost != null) patch.pricing = { provider_credit: ev.cost, provider: 'trustsignal', leg: 'sms_fallback' };
+      A.checkWrite('rcs_fallback_flip_failed',
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}&fallback_from=is.null`, env,
+          { method: 'PATCH', body: JSON.stringify(patch) }),
+        { message_id: row.id });
+      continue;
+    }
+
+    // F4 last rule — an RCS-leg event (delivered/read carrying route 'rcs') that arrives AFTER
+    // the flip describes a leg that did not deliver: discard, never apply. Events off the SMS
+    // leg (route 'sms'/'nonrcs', or no route at all) still apply — that is how F8's terminal
+    // state lands when the fallback also fails.
+    if (row.fallback_from && ev.route === 'rcs') continue;
+
+    // F12 — clicks emit the EXISTING link_clicked event, channel-agnostic by design (S189).
+    // Idempotency includes url + timestamp so distinct clicks record while webhook retries
+    // dedupe — same key shape as the Resend click path above.
+    if (ev.click) {
+      if (row.profile_id && ev.clicked_url) {
+        A.checkWrite('rcs_click_event_failed', await A.sbComms('/rest/v1/events', env, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=ignore-duplicates' },
+          body: JSON.stringify({
+            profile_id: row.profile_id, name: 'link_clicked',
+            occurred_at: ev.at, source: 'trustsignal_webhook',
+            properties: { url: ev.clicked_url, channel: row.channel,
+                          provider_message_id: ev.provider_message_id, message_id: row.id },
+            idempotency_key: `trustsignal:rcs:clicked:${ev.provider_message_id}:${ev.clicked_url}:${ev.at}`,
+          }),
+        }), { message_id: row.id });
+      }
+      // clicked is also a status upgrade on the row itself
+      if (rcsUpgrade(row.status, 'clicked')) {
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'clicked' }) });
+      }
+      continue;
+    }
+
+    // User_response (suggested-reply postback) → journey branching is build step 10. Log the
+    // real payload shape until then — the field names in the parser are inferred, and these
+    // lines are how they get verified before any branching logic depends on them.
+    if (ev.user_response) {
+      console.log('rcs_user_response', JSON.stringify({ message_id: row.id, postback: ev.postback, at: ev.at }));
+      continue;
+    }
+
+    if (!ev.canonical_status) {
+      console.log('rcs_unknown_status', JSON.stringify({ raw: ev.raw_status, message_id: row.id }));
+      continue;
+    }
+    if (!rcsUpgrade(row.status, ev.canonical_status)) continue;   // forward-only
+    A.checkWrite('rcs_dlr_patch_failed',
+      await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: ev.canonical_status,
+          provider_status: ev.raw_status || ev.canonical_status,
+          ...(ev.reason ? { reason: ev.reason } : {}),
+          ...(ev.canonical_status === 'delivered' && ev.at ? { delivered_at: ev.at } : {}),
+          ...(ev.canonical_status === 'opened' && ev.at ? { read_at: ev.at } : {}),
+        }),
+      }),
+      { message_id: row.id, to: ev.canonical_status });
+  }
+}
+
+module.exports = { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs };

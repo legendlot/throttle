@@ -2,15 +2,16 @@
 // Idempotent via dedup_key. On gate-fail writes a skipped/suppressed messages row
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
-const { renderEmail, renderWhatsapp, renderSms } = require('./render.js');
+const { renderEmail, renderWhatsapp, renderSms, renderRcs } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');
 const LINKS = require('./links.js');   // Phase-B /r/<code> minting for redirect-backed buttons
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
 const whatsappAdapter = require('./adapters/whatsapp.js');
 const smsAdapter = require('./adapters/sms.js');
+const rcsAdapter = require('./adapters/rcs.js');
 
-const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter, sms: smsAdapter };
+const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter, sms: smsAdapter, rcs: rcsAdapter };
 
 // Is the WA customer-service window open for this recipient ON THIS SENDING NUMBER?
 // (review H5 part 3) — Meta's 24h window is per (business number ↔ customer): a window opened
@@ -370,6 +371,42 @@ async function send(env, opts) {
         recipient: opts.recipient, system: {},
       });
       rendered = { ...body, to, sender: sender.address, purpose };
+    } else if (channel === 'rcs') {
+      // D6 — RCS is marketing-only: the one provisioned bot is registered `promotional` with
+      // the vi hub, so a transactional RCS message cannot exist on this account. Refuse loudly
+      // rather than letting the vendor reject it with a less useful error.
+      if (purpose !== 'marketing') throw new Error('rcs_is_marketing_only');
+      const ctx = {
+        profile, event: opts.eventContext, constants: opts.constants,
+        recipient: opts.recipient, system: {},
+      };
+      const body = renderRcs(template, ctx);
+
+      // The mandatory SMS fallback leg (with_fallback is the ONLY vendor send path) is resolved
+      // BY REFERENCE from the RCS template's content — a comms.templates id, not inline copy —
+      // so the leg is always a real, DLT-registered SMS template rendered with the same context.
+      if (!body.sms_fallback_template_id) throw new Error('missing_sms_fallback_template');
+      const fbTemplate = await getTemplate(env, body.sms_fallback_template_id);
+      if (!fbTemplate || fbTemplate.channel !== 'sms') throw new Error('fallback_template_not_found');
+      // D7 — the fallback rides route='promotional' (pinned in the adapter), and the DLT
+      // category must agree: an `implicit` (service) template on the promotional route is
+      // exactly the mismatch assertBindable exists to stop on the SMS channel. Enforced here
+      // because the SMS adapter never sees this send.
+      if ((fbTemplate.content?.template_type || '') !== 'explicit')
+        throw new Error('fallback_template_not_explicit');
+      const fb = renderSms(fbTemplate, ctx);   // throws on unfilled {#var#} / arity — fail closed
+      const smsSender = await getActiveSender(env, 'sms', 'marketing');
+      if (!smsSender) throw new Error('no_sms_fallback_sender');
+
+      rendered = {
+        ...body, to, purpose,
+        sms_fallback: {
+          sender: smsSender.address,
+          message: fb.body,
+          template_id: fb.provider_template_id,
+          route: 'promotional',
+        },
+      };
     } else {
       const sys = {};
       if (purpose === 'marketing') {
@@ -456,7 +493,10 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
   // verdict written by wa-webhooks.js (with pricing_category + billable), so a generic send-time
   // write here would clobber the one trustworthy billing signal the moment a WA adapter started
   // returning a cost. Any new channel must make the same call deliberately.
-  if (channel === 'sms' && res.cost != null && Number.isFinite(Number(res.cost))) {
+  // RCS makes the same call deliberately (per the note above): its credit is the same vendor
+  // unit as SMS's, and the fallback flip (webhooks.js) overwrites it with the SMS leg's credit
+  // when the RCS leg does not deliver (F4).
+  if ((channel === 'sms' || channel === 'rcs') && res.cost != null && Number.isFinite(Number(res.cost))) {
     row.pricing = { provider_credit: Number(res.cost), provider: sender?.provider || null };
   }
   let msg;

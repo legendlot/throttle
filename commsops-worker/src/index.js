@@ -5,7 +5,7 @@ export { JourneyWorkflow } from './journey-workflow.js';
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
-const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms } = require('./webhooks.js');
+const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs } = require('./webhooks.js');
 const TSC = require('./trustsignal-client.js');
 const SMSTPL = require('./sms-templates.js');
 const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
@@ -2506,6 +2506,18 @@ export default {
       // Respond 200 immediately and process asynchronously — these retry and reorder.
       ctx.waitUntil(handleTrustsignalSms(env, body).catch((e) =>
         console.log('ts_sms_webhook_error', TSC.redact(String(e?.message || e)))));
+      return new Response('ok', { status: 200 });
+    }
+    // TrustSignal RCS events (Delivery_status · Fallback · Click · User_response). Same
+    // unsigned-callback posture as the SMS route above: bearer token from the Sigmo webhook
+    // record's "Header (JSON)" field, 200 immediately, process async (retries + reordering).
+    if (url.pathname === '/webhooks/trustsignal/rcs' && request.method === 'POST') {
+      const auth = request.headers.get('authorization') || '';
+      if (!env.TRUSTSIGNAL_WEBHOOK_TOKEN || auth !== `Bearer ${env.TRUSTSIGNAL_WEBHOOK_TOKEN}`)
+        return new Response('unauthorized', { status: 401 });
+      const body = await request.json().catch(() => null);
+      ctx.waitUntil(handleTrustsignalRcs(env, body).catch((e) =>
+        console.log('ts_rcs_webhook_error', TSC.redact(String(e?.message || e)))));
       return new Response('ok', { status: 200 });
     }
     // Cashfree payment-link webhook (J3 COD→prepaid). HMAC-verified (x-webhook-signature

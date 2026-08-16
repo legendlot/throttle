@@ -153,9 +153,13 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
 
   // 1. suppression — overrides everything. FAIL CLOSED: an unreadable suppression list is a
   //    blocked send, not a free pass (review 2026-07-21 H1 — the one gate that must never fail open).
+  //    RCS also checks the SMS list: with_fallback is the only vendor send path, so every RCS
+  //    send carries a live SMS leg to the same number — a DND-suppressed SMS number must not be
+  //    reachable through the RCS door.
   if (to) {
+    const supCh = channel === 'rcs' ? 'in.(rcs,sms)' : `eq.${A.enc(channel)}`;
     const sup = await A.sbComms(
-      `/rest/v1/suppressions?channel=eq.${A.enc(channel)}&value=eq.${A.enc(to)}&select=id&limit=1`, env);
+      `/rest/v1/suppressions?channel=${supCh}&value=eq.${A.enc(to)}&select=id&limit=1`, env);
     if (!sup.ok) return { pass: false, reason: 'gate_error:suppression' };
     if (sup.data?.[0]) return { pass: false, reason: 'suppressed' };
   }
@@ -181,7 +185,26 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   const quietHoursApply = isMarketing || isService;
   if (isMarketing) {
     // 2. consent — marketing requires opted_in
-    const state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
+    let state;
+    if (channel === 'rcs') {
+      // D2/D3 (spec 2026-08-03 §7, F7). An RCS send requires consent on BOTH `rcs` AND `sms`,
+      // and `rcs` RESOLVES THROUGH the SMS opt-in when no rcs-specific consent exists.
+      //
+      // ⚠️ These two checks COLLAPSE TO ONE today — with zero collected rcs consent, the rcs
+      // call resolves to the sms opt-in and "require both" evaluates the same row twice. That
+      // is deliberate, not redundancy to simplify away: D2 (require both) is the DURABLE rule
+      // and starts doing real work the day `rcs` gains its own consent axis; D3 (the resolver)
+      // is the CURRENT bridge, visible here rather than baked in as a 10,602-row backfill that
+      // would masquerade as collected consent. An explicit rcs opt-OUT wins over the resolver.
+      let rcsState = profileId ? await latestConsent(env, profileId, 'rcs', 'marketing') : 'unknown';
+      if (rcsState === 'unknown') {
+        rcsState = profileId ? await latestConsent(env, profileId, 'sms', 'marketing') : 'unknown';   // D3
+      }
+      const smsState = profileId ? await latestConsent(env, profileId, 'sms', 'marketing') : 'unknown'; // D2
+      state = (rcsState === 'opted_in' && smsState === 'opted_in') ? 'opted_in' : rcsState;
+    } else {
+      state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
+    }
     if (state !== 'opted_in') return { pass: false, reason: 'no_consent' };
 
     const s = settings;
@@ -219,6 +242,10 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
 
   // 5. channel rule
   if (channel === 'email' && (!to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)))
+    return { pass: false, reason: 'invalid_address' };
+  // RCS takes the stored E.164 unchanged (spec §6b rule 4) — a bare-10-digit or malformed
+  // recipient is refused here, before the adapter's own identical check can burn a send row.
+  if (channel === 'rcs' && !/^\+\d{8,14}$/.test(String(to || '')))
     return { pass: false, reason: 'invalid_address' };
   if (channel === 'whatsapp') {
     // recipient must look like an E.164 (8–15 digits after stripping '+'/spaces)
