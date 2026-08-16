@@ -289,7 +289,7 @@ function NetCr({ data }) {
             <span className="so-qual">· Shopify net orders ÷ {hasShop ? 'Shopify sessions' : 'GA4 sessions'}</span>
           </div>
           <p className="so-sub" style={{ fontSize: 12, marginTop: 7, lineHeight: 1.55 }}>
-            Net orders = paid Website orders, excluding cancelled, ₹0, and MO_Repair / MO_Replacement. Recent 3 days provisional (late orders + session revisions still settle).
+            Net orders = paid Website orders, excluding cancelled, ₹0, and MO_Repair / MO_Replacement. Recent 15 days provisional (late orders + session revisions still settle).
             {hasShop
               ? <> Denominator = <b style={{ color: 'var(--t1)' }}>Shopify sessions</b> — same source as the orders, so this matches your hand-calc{s.calibration != null && <> · Shopify ≈ <span style={{ fontFamily: 'var(--mono)' }}>{s.calibration}×</span> GA4</>}.</>
               : <> Denominator = <b style={{ color: 'var(--t1)' }}>GA4 sessions</b>. <span style={{ color: STATUS.warn }}>Shopify-sessions feed pending — add the <code style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>read_reports</code> scope to the Shopify app to switch to the exact same-source CR.</span></>}

@@ -4288,8 +4288,10 @@ export default {
             const from = qp('from') || istDay(29);   // default trailing 30 IST days
             const r = await rpcSales('f_website_cr', { p_from: from, p_to: to });
             if (!r.ok) return err('Website CR failed: ' + JSON.stringify(r.data), 502);
-            // Recent 3 IST days are provisional — late orders, cancellations, and GA4 session revisions still settle.
-            const provFrom = istDay(2);
+            // Recent 15 IST days are provisional — late orders, cancellations, and GA4 session revisions
+            // still settle. Widened 3 → 15 on 2026-08-16 (Afshaan): 3 days understated Shopify's real
+            // settling horizon, measured in the S207 audit. Caption-only — the feed is self-settling.
+            const provFrom = istDay(14);
             const rows = (r.data || []).map(x => ({ ...x, provisional: x.the_date >= provFrom }));
             const tot = rows.reduce((a, x) => { a.sessions += num(x.sessions); a.shopify += num(x.shopify_sessions); a.net += num(x.net_orders); a.gross += num(x.net_gross); return a; }, { sessions: 0, shopify: 0, net: 0, gross: 0 });
             return ok({ rows, from, to, provisional_from: provFrom,
