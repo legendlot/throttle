@@ -58,7 +58,7 @@ function statusCounts(rows) {
 function InventoryKpis({ counts, lowThreshold }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
-      <Kpi hue={STATUS_META.oos.color} lbl="Out of stock" val={fmtInt(counts.oos)} sub="live on the website" />
+      <Kpi hue={STATUS_META.oos.color} lbl="Out of stock" val={fmtInt(counts.oos)} sub="website + Amazon FBA" />
       <Kpi hue={STATUS_META.low.color} lbl={`Low (< ${lowThreshold})`} val={fmtInt(counts.low)} sub="approaching zero" />
       <Kpi hue={HUE.returns} lbl="Unbuyable" val={fmtInt(counts.unbuyable)} sub="listing not purchasable" />
       <Kpi hue={HUE.units} lbl="Units on hand" val={fmtInt(counts.units)} sub="across tracked SKUs" />
@@ -144,7 +144,7 @@ export default function InventoryPage() {
     <div className="so-page" style={{ gap: 12 }}>
       <PageHead
         title="Inventory"
-        sub="Availability watch and history audit · Website (Shopify) only"
+        sub="Availability watch and history audit · Website (Shopify) + Amazon (FBA fulfillable)"
         right={
           <SegmentedToggle
             options={[{ key: 'watch', label: 'Watch' }, { key: 'history', label: 'History' }]}
@@ -469,7 +469,11 @@ function Watch({ session, isAdmin }) {
         </div>
 
         <p style={{ fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--t3)', padding: '14px 18px 16px', margin: 0, lineHeight: 1.6 }}>
-          Website (Shopify) only — Amazon is not wired yet. Durations shown with ≥ reach the start
+          Two channels, and the counts above are the BLENDED total. <b style={{ color: 'var(--t2)' }}>Website</b> is
+          Shopify availability; <b style={{ color: 'var(--t2)' }}>Amazon</b> is FBA <b style={{ color: 'var(--t2)' }}>fulfillable</b> quantity
+          — units in a fulfilment centre, sellable now. Amazon stock that is reserved, inbound-working or
+          inbound-shipped is deliberately excluded, so an Amazon row reading 0 can still have units in transit.
+          Amazon history starts 2026-08-16; Website reaches further back. Durations shown with ≥ reach the start
           of the history we hold (<span style={{ fontFamily: 'var(--mono)', color: 'var(--t4)' }}>{meta.history_start ? istTime(meta.history_start) : '—'}</span>) and are
           therefore a floor, not an exact age.
         </p>
