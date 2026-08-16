@@ -609,6 +609,20 @@ export default function TemplatesPage() {
         showToast('The email contains a literal "${…}" placeholder — Gmail hides every element styled with it. Remove it (usually pasted-in ${FONT}) before saving.', 'error');
         return;
       }
+      // A CTA still pointing at the BARE HOMEPAGE is almost always the starter scaffold nobody
+      // changed — that was the default until 2026-08-16 (Mishica, #bugs 1786189428.760609), and
+      // an unchanged "Shop now" drops the reader on the front page with nothing to act on.
+      //
+      // CONFIRM, not block: a homepage link is legitimate in a brand or newsletter email, so
+      // refusing it outright would be wrong. Same soft idiom as the stray-merge-tag check below;
+      // the two hard blocks above (missing {unsubscribe_url}, a literal ${…}) are reserved for
+      // things that are never correct.
+      const bareHome = /href\s*=\s*(["'])https?:\/\/(?:www\.)?legendoftoys\.com\/?\1/i;
+      if ((bareHome.test(payload.content.html_body || '') || bareHome.test(payload.content.mjml || ''))
+        && !window.confirm(
+          'A button or link still points at the bare homepage (legendoftoys.com).\n\n'
+          + 'That is the starter link — readers who click a CTA expect the thing it names, not the '
+          + 'front page. Point it at the product or collection instead.\n\nSave anyway?')) return;
       const stray = findUndeclaredTokens(
         [payload.content.subject, payload.content.html_body, payload.content.text_body],
         payload.variables.map((v) => v.token));
