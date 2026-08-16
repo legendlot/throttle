@@ -46,7 +46,12 @@ function statusCounts(rows) {
   const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0, units: 0 };
   for (const r of rows) {
     c[r.status] = (c[r.status] || 0) + 1;
-    if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
+    // ⚠️ "Unbuyable" means HAS STOCK BUT CANNOT BE BOUGHT — the actionable listing problem.
+    // It deliberately excludes out-of-stock rows: an OOS SKU is already counted by the OOS tile,
+    // and on Amazon `purchasable` is DERIVED from fulfillable qty (S289), so without this guard
+    // every OOS Amazon row double-counted here — 102 of them, making the tile read ~149 when the
+    // real number of stocked-but-unbuyable listings was 2.
+    if (!r.purchasable && r.status !== 'gone' && (Number(r.available_qty) || 0) > 0) c.unbuyable++;
     if (r.status !== 'gone') c.units += Number(r.available_qty) || 0;
   }
   return c;
@@ -60,7 +65,7 @@ function InventoryKpis({ counts, lowThreshold }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
       <Kpi hue={STATUS_META.oos.color} lbl="Out of stock" val={fmtInt(counts.oos)} sub="website + Amazon FBA" />
       <Kpi hue={STATUS_META.low.color} lbl={`Low (< ${lowThreshold})`} val={fmtInt(counts.low)} sub="approaching zero" />
-      <Kpi hue={HUE.returns} lbl="Unbuyable" val={fmtInt(counts.unbuyable)} sub="listing not purchasable" />
+      <Kpi hue={HUE.returns} lbl="Unbuyable" val={fmtInt(counts.unbuyable)} sub="in stock, not buyable" />
       <Kpi hue={HUE.units} lbl="Units on hand" val={fmtInt(counts.units)} sub="across tracked SKUs" />
       <Kpi hue={HUE.neutral} lbl="Delisted" val={fmtInt(counts.gone)} sub="gone from the feed" />
     </div>
@@ -228,7 +233,8 @@ function Watch({ session, isAdmin }) {
   const filtered = useMemo(() => {
     if (filter === 'all') return enriched;
     if (filter === 'attention') return enriched.filter(r => r.status === 'oos' || r.status === 'low');
-    if (filter === 'unbuyable') return enriched.filter(r => !r.purchasable && r.status !== 'gone');
+    // Must match statusCounts' definition exactly, or the tile and the view it opens disagree.
+    if (filter === 'unbuyable') return enriched.filter(r => !r.purchasable && r.status !== 'gone' && (Number(r.available_qty) || 0) > 0);
     return enriched.filter(r => r.status === filter);
   }, [enriched, filter]);
 
@@ -256,7 +262,12 @@ function Watch({ session, isAdmin }) {
       let units = 0, oldest = null;
       for (const r of every) {
         c[r.status] = (c[r.status] || 0) + 1;
-        if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
+        // ⚠️ "Unbuyable" means HAS STOCK BUT CANNOT BE BOUGHT — the actionable listing problem.
+    // It deliberately excludes out-of-stock rows: an OOS SKU is already counted by the OOS tile,
+    // and on Amazon `purchasable` is DERIVED from fulfillable qty (S289), so without this guard
+    // every OOS Amazon row double-counted here — 102 of them, making the tile read ~149 when the
+    // real number of stocked-but-unbuyable listings was 2.
+    if (!r.purchasable && r.status !== 'gone' && (Number(r.available_qty) || 0) > 0) c.unbuyable++;
         if (r.status !== 'gone') units += r.available_qty;
         const t = (r.status === 'oos' || r.status === 'low') && r.since ? new Date(r.since).getTime() : null;
         if (t && (oldest === null || t < oldest)) oldest = t;
@@ -418,7 +429,15 @@ function Watch({ session, isAdmin }) {
                       <tr key={`${r.channel_id}:${r.sku}`} style={{ background: 'var(--surface2)' }}>
                         <td style={{ paddingLeft: 42, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
                           {variantLabel(r)}
-                          {!r.purchasable && r.status !== 'gone' && (
+                          {/* S289: this table is multi-channel now — the same variant appears once
+                              per channel with different stock. Without this chip the two rows are
+                              indistinguishable. */}
+                          {r.channel_name && (
+                            <Pill color={/amazon/i.test(r.channel_name) ? HUE.units : HUE.neutral} style={{ marginLeft: 8 }}>
+                              {/amazon/i.test(r.channel_name) ? 'Amazon' : 'Website'}
+                            </Pill>
+                          )}
+                          {!r.purchasable && r.status !== 'gone' && (Number(r.available_qty) || 0) > 0 && (
                             <Pill color={STATUS_META.low.color} style={{ marginLeft: 8 }}>Unbuyable</Pill>
                           )}
                           <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t4)', marginTop: 2 }}>{r.sku}</div>
@@ -473,7 +492,10 @@ function Watch({ session, isAdmin }) {
           Shopify availability; <b style={{ color: 'var(--t2)' }}>Amazon</b> is FBA <b style={{ color: 'var(--t2)' }}>fulfillable</b> quantity
           — units in a fulfilment centre, sellable now. Amazon stock that is reserved, inbound-working or
           inbound-shipped is deliberately excluded, so an Amazon row reading 0 can still have units in transit.
-          Amazon history starts 2026-08-16; Website reaches further back. Durations shown with ≥ reach the start
+          <b style={{ color: 'var(--t2)' }}>Unbuyable</b> counts only SKUs that hold stock yet cannot be
+          bought — an out-of-stock SKU is already in the Out-of-stock tile, and on Amazon buyability is
+          derived from stock, so counting both would double it. Amazon history is loaded from the FBA
+          ledger and has a deliberate few-day gap before the live hourly feed begins. Durations shown with ≥ reach the start
           of the history we hold (<span style={{ fontFamily: 'var(--mono)', color: 'var(--t4)' }}>{meta.history_start ? istTime(meta.history_start) : '—'}</span>) and are
           therefore a floor, not an exact age.
         </p>

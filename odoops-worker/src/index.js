@@ -3908,29 +3908,58 @@ async function fetchLedgerWindow(env, channelId, host, mkt, fromISO, toISO) {
 // itself off once the cursor passes `ledger_backfill_until`. Writes are idempotent upserts, so a
 // re-run over covered ground is a no-op.
 const LEDGER_TICK_WINDOW_DAYS = 30;
+// Must stay strictly greater than detect_stock_alerts' lookback (3 days at time of writing).
+const LEDGER_ALERT_SAFE_LAG_DAYS = 5;
+// ⚠️ STATE LIVES IN sales.settings, DELIBERATELY **NOT** IN connector_config.config.
+// `patchConnectorConfig` is a whole-jsonb read-modify-write, and this tick holds its config snapshot
+// across a report poll that can run TEN MINUTES. The amazon_spapi connector writes that same blob
+// from its own workflow during that window (fin_cursor, returns_cursor, pending_report_id,
+// settlement_seen). Writing the stale snapshot back would silently revert them — reverting
+// `settlement_seen` alone would re-process settlements already handled. A separate k/v key has no
+// shared writer, so there is nothing to clobber. Do not move this state back into config.
+const LEDGER_KEYS = { cursor: 'fba_ledger_cursor', until: 'fba_ledger_until', enabled: 'fba_ledger_enabled' };
+async function ledgerSetting(k) {
+  const r = await sbSales(`/rest/v1/settings?key=eq.${encodeURIComponent(k)}&select=value&limit=1`);
+  return (r.ok && r.data[0]) ? r.data[0].value : null;
+}
+async function setLedgerSetting(k, v) {
+  await sbSales('/rest/v1/settings?on_conflict=key', {
+    method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify({ key: k, value: String(v), updated_at: nowISO() }),
+  });
+}
 async function fbaLedgerBackfillTick(env) {
+  const [enabled, cursor, until] = await Promise.all([
+    ledgerSetting(LEDGER_KEYS.enabled), ledgerSetting(LEDGER_KEYS.cursor), ledgerSetting(LEDGER_KEYS.until),
+  ]);
+  if (enabled !== 'true') return { skipped: 'disabled' };
+  if (!cursor || !until) return { skipped: 'cursor/until not set' };
+  if (cursor >= until) { await setLedgerSetting(LEDGER_KEYS.enabled, 'false'); return { done: true, cursor }; }
+  // Config is READ-ONLY here — host/marketplace only, never written back.
   const cc = await sbSales(`/rest/v1/connector_config?adapter_kind=eq.amazon_spapi&select=channel_id,config&limit=1`);
   const row = (cc.ok && cc.data[0]) ? cc.data[0] : null;
   if (!row) return { skipped: 'no amazon connector' };
   const c = row.config || {};
-  if (!c.ledger_backfill_enabled) return { skipped: 'disabled' };
-  const cursor = c.ledger_backfill_cursor, until = c.ledger_backfill_until;
-  if (!cursor || !until) return { skipped: 'cursor/until not set' };
-  if (cursor >= until) {
-    await patchConnectorConfig(row.channel_id, c, { ledger_backfill_enabled: false, ledger_backfill_done_at: nowISO() });
-    return { done: true, cursor };
-  }
   const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
   const mkt = c.marketplace_id;
+  if (!mkt) return { skipped: 'no marketplace_id' };
   const fromMs = Date.parse(cursor + 'T00:00:00Z');
-  const endMs = Math.min(fromMs + LEDGER_TICK_WINDOW_DAYS * 86400000, Date.parse(until + 'T00:00:00Z'));
+  // ⚠️ HARD CLAMP, not a convention. Backfilled rows must never land inside detect_stock_alerts'
+  // 3-day lookback or they interleave with live readings and fire retroactive oos/restock pings at
+  // the team (the Slack seam is LIVE). Enforcing it here means a mis-set `until` cannot cause that;
+  // relying on whoever seeds the setting to pick a safe date is not a safety property.
+  const alertSafeMs = Date.now() - LEDGER_ALERT_SAFE_LAG_DAYS * 86400000;
+  const endMs = Math.min(fromMs + LEDGER_TICK_WINDOW_DAYS * 86400000,
+                         Date.parse(until + 'T00:00:00Z'), alertSafeMs);
+  if (endMs <= fromMs) return { skipped: 'window would enter the stock-alert lookback', cursor };
   const res = await fetchLedgerWindow(env, row.channel_id, host, mkt,
     new Date(fromMs).toISOString(), new Date(endMs).toISOString());
   // Advance ONLY on a completed report. A rate-limited or still-processing window must be retried
   // next tick against the SAME cursor, never skipped — a silently skipped window is a permanent hole.
   if (res.status !== 'DONE') return { retry_same_window: cursor, status: res.status };
   const next = new Date(endMs).toISOString().slice(0, 10);
-  await patchConnectorConfig(row.channel_id, c, { ledger_backfill_cursor: next });
+  await setLedgerSetting(LEDGER_KEYS.cursor, next);
+  if (next >= until) await setLedgerSetting(LEDGER_KEYS.enabled, 'false');
   return { window: [cursor, next], ...res };
 }
 
@@ -4859,7 +4888,12 @@ export default {
               p_channels: chans, p_include_unmapped: inclUnmapped,
             });
             if (!r.ok) return err('Inventory status failed: ' + JSON.stringify(r.data), 502);
-            const rows = r.data || [];
+            // S289: this payload became MULTI-CHANNEL the moment the Amazon FBA feed landed, and the
+            // page had no way to tell the rows apart — the same variant appeared twice with different
+            // numbers and no label. Stamp the channel name so the UI can distinguish them.
+            const allChans = await getChannels();
+            const nameById = Object.fromEntries(allChans.map(c => [c.id, c.name]));
+            const rows = (r.data || []).map(x => ({ ...x, channel_name: nameById[x.channel_id] || null }));
             // The seeded history starts here; a `since` at that floor means "at least this
             // long", not exactly — the UI renders it with a ≥ so it can't overstate precision.
             const hz = await sbSales('/rest/v1/inventory_reading?select=captured_at&order=captured_at.asc&limit=1');
