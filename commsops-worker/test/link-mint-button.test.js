@@ -133,7 +133,8 @@ const comps = () => ([
   {
     const c = [{ type: 'body', parameters: [{ type: 'text', text: 'hi' }] }];
     const tpl = { content: { buttons: [
-      { type: 'URL', text: 'Dive Back In', target_base: 'https://legendoftoys.com/collections/all' },
+      { type: 'URL', text: 'Dive Back In', url: 'https://lottoys.in/r/{{1}}',
+        target_base: 'https://legendoftoys.com/collections/all' },
     ] } };
     let minted = null;
     await applyButtonRedirects(c, {
@@ -154,7 +155,8 @@ const comps = () => ([
   // (132000) — failing loudly beats delivering a button pointing at a literal {{1}}.
   {
     const c = [{ type: 'body', parameters: [] }];
-    const tpl = { content: { buttons: [{ type: 'URL', target_base: 'https://legendoftoys.com/x' }] } };
+    const tpl = { content: { buttons: [{ type: 'URL', url: 'https://lottoys.in/r/{{1}}',
+      target_base: 'https://legendoftoys.com/x' }] } };
     await applyButtonRedirects(c, {
       template: tpl, baseUrl: 'https://lottoys.in', mint: async () => null,
     });
@@ -165,7 +167,7 @@ const comps = () => ([
   // (i) default_target — the always-resolves half. A VARIABLE base whose per-recipient suffix is
   // missing falls back to it; a STATIC base never consults it.
   {
-    const tpl = { content: { buttons: [{ type: 'URL',
+    const tpl = { content: { buttons: [{ type: 'URL', url: 'https://lottoys.in/r/{{1}}',
       target_base: 'https://www.legendoftoys.com/products/{{1}}',
       default_target: 'https://www.legendoftoys.com/collections/all' }] } };
     // missing suffix → default
@@ -188,12 +190,51 @@ const comps = () => ([
     // a STATIC base ignores default_target entirely — overriding it would silently retarget a
     // button that already works.
     got = null;
-    const staticTpl = { content: { buttons: [{ type: 'URL',
+    const staticTpl = { content: { buttons: [{ type: 'URL', url: 'https://lottoys.in/r/{{1}}',
       target_base: 'https://legendoftoys.com/account/orders',
       default_target: 'https://legendoftoys.com/collections/all' }] } };
     await applyButtonRedirects([], { template: staticTpl, baseUrl: 'https://lottoys.in',
       mint: async (t) => { got = t; return 'c4'; } });
     assert.equal(got, 'https://legendoftoys.com/account/orders', 'static base is never overridden');
+  }
+
+  // (j) HOSTILE-REVIEW REGRESSION GUARD (S289). The spec-driven loop removed an accident that had
+  // been doing real work: render.js only emits a button component when the mapping has a button
+  // slot, which only exists when the approved url carries a placeholder. Iterating specs meant a
+  // target_base on a STATIC approved url would synthesize a parameter Meta rejects — turning an
+  // untracked send into a FAILED one. The likeliest way to hit it is opting in the ORIGINAL
+  // template instead of its clone during the redirect wave.
+  {
+    const c = [{ type: 'body', parameters: [] }];
+    const tpl = { content: { buttons: [{
+      type: 'URL', text: 'Order Details',
+      url: 'https://legendoftoys.com/account/orders',          // STATIC — no {{1}}
+      target_base: 'https://legendoftoys.com/account/orders',
+    }] } };
+    let minted = false;
+    await applyButtonRedirects(c, {
+      template: tpl, baseUrl: 'https://lottoys.in', mint: async () => { minted = true; return 'zz'; },
+    });
+    assert.equal(minted, false, 'must not mint for a statically-approved button');
+    assert.equal(c.filter((x) => x.type === 'button').length, 0,
+      'must not synthesize a parameter Meta would reject');
+  }
+
+  // (k) the same template ONCE RE-APPROVED as /r/{{1}} does mint — i.e. the guard keys on the
+  // Meta-facing url, not on the presence of target_base.
+  {
+    const c = [{ type: 'body', parameters: [] }];
+    const tpl = { content: { buttons: [{
+      type: 'URL', text: 'Order Details',
+      url: 'https://lottoys.in/r/{{1}}',
+      target_base: 'https://legendoftoys.com/account/orders',
+    }] } };
+    await applyButtonRedirects(c, {
+      template: tpl, baseUrl: 'https://lottoys.in', mint: async () => 'ok1',
+    });
+    const btn = c.find((x) => x.type === 'button');
+    assert.ok(btn, 'the clone shape still synthesizes');
+    assert.deepEqual(btn.parameters, [{ type: 'text', text: 'ok1' }]);
   }
 
   console.log('link-mint-button.test.js: all assertions passed');

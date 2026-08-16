@@ -142,7 +142,14 @@ const SPARSE_BELOW_PCT = 95;
 // Does this condition MEAN "none / never / zero"? Only those undercount in a way the author
 // cannot see: `at least 1` also skips absent profiles, but nobody reads that as "everyone".
 function meansNone(row) {
-  const n = Number(row?.value);
+  // ⚠️ A BLANK VALUE IS NOT ZERO — `Number('')`, `Number('  ')` and `Number(null)` are all 0, so
+  // without this an attr row warns the instant its attribute is typed and BEFORE any value is
+  // entered (the default operator is `eq`, so every fresh row hits it). Caught in the S289
+  // hostile review: a guard that fires on a half-written row is one authors learn to ignore,
+  // which is the failure this whole warning exists to avoid.
+  const raw = row?.value;
+  if (raw === null || raw === undefined || String(raw).trim() === '') return false;
+  const n = Number(raw);
   if (!Number.isFinite(n)) return false;
   if (row.op === 'eq' || row.op === 'lte') return n === 0;
   if (row.op === 'lt') return n <= 1;

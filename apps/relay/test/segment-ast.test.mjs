@@ -311,6 +311,15 @@ t('only the "means none" shapes warn, and only on a SPARSE attribute', () => {
   assert.equal(on({ op: 'gt', value: '0' }), null);
   // an attribute we have no coverage figure for stays silent rather than guessing
   assert.equal(coverageWarning({ type: 'attr', attr: 'something_new', op: 'eq', value: '0' }), null);
+  // ⚠️ A HALF-WRITTEN ROW MUST STAY SILENT (S289 hostile review). Number('') === 0, so without an
+  // explicit blank check every fresh attr row warns the moment its attribute is typed — the
+  // default operator is `eq` and the value box is still empty. A guard that fires on a row nobody
+  // has finished writing is one authors learn to dismiss.
+  assert.equal(on({ op: 'eq', value: '' }), null, 'empty value is not zero');
+  assert.equal(on({ op: 'eq', value: '   ' }), null, 'whitespace is not zero');
+  assert.equal(on({ op: 'eq', value: null }), null, 'null is not zero');
+  assert.equal(on({ op: 'eq' }), null, 'absent is not zero');
+  assert.equal(meansNone({ op: 'eq', value: '' }), false);
   // non-attr rows are not this function's business
   assert.equal(coverageWarning({ type: 'event', event: 'order_placed', count: 0 }), null);
   assert.ok(meansNone({ op: 'eq', value: 0 }));

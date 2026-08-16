@@ -470,6 +470,30 @@ async function applyButtonRedirects(components, { template, baseUrl, mint } = {}
     if (spec.type != null && String(spec.type).toUpperCase() !== 'URL') continue;
     const comp = byIndex.get(i) || null;
     if (comp && (comp.sub_type || 'url') !== 'url') continue;   // quick_reply carries a payload, not a link
+
+    // ⚠️ SYNTHESIS REQUIRES EVIDENCE THAT META EXPECTS A PARAMETER. (Hostile review, S289.)
+    //
+    // Meta accepts a button parameter only for a button approved as `…/{{1}}`, and rejects one
+    // sent for a STATIC approved url. Before this loop read the SPECS, that was enforced by
+    // accident: render.js emits a button component only from a `component:'button'` mapping slot,
+    // which only exists when the approved url carries a placeholder. Reading specs removed the
+    // accident, so the evidence has to be named.
+    //
+    // An EXISTING component IS that evidence — render.js would not have emitted one otherwise —
+    // so the pre-existing path is left exactly as it was, including for specs that carry no `url`
+    // key at all. Only the NEW synthesis path has to prove it, and its only available proof is the
+    // Meta-facing url.
+    //
+    // Without this, a `target_base` set on a template whose approved url is still static — which
+    // is precisely the shape of the six pre-clone templates, and the likeliest slip in the clone
+    // wave (opting in the ORIGINAL rather than its clone) — would turn a merely-untracked send
+    // into a FAILED one on Order Placed and Winback. Measured 2026-08-16: zero live templates are
+    // in that state today, so this is a latent trap being closed, not a live fix.
+    //
+    // Same test buildComponents uses to decide whether to serialise an example url, so the two
+    // cannot disagree.
+    if (!comp && !/\{\{\d+\}\}/.test(String(spec.url || ''))) continue;
+
     const param = comp ? (comp.parameters || []).find((p) => p.type === 'text') : null;
 
     // ── The token that ALWAYS resolves (Afshaan, 2026-08-16) ────────────────────────────────

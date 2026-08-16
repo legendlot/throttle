@@ -62,6 +62,26 @@ async function run(path, n, opts = {}) {
     assert.equal(logs.length, 0);
   });
 
+  await t('identity filters are REDACTED in the log — no customer address in a diagnostic', async () => {
+    logs.length = 0;
+    global.fetch = async () => ({
+      ok: true, status: 200,
+      text: async () => JSON.stringify(Array.from({ length: 5000 }, (_, i) => ({ i }))),
+    });
+    console.log = (...a) => { if (String(a[0]).startsWith('db_max_rows')) logs.push(a); };
+    try {
+      await A.sbProfile('comms')(
+        '/rest/v1/identifiers?type=eq.email&value=eq.someone%40example.com&select=profile_id',
+        { SUPABASE_URL: 'https://x', SUPABASE_SERVICE_ROLE_KEY: 'k' }, {});
+    } finally { console.log = origLog; }
+    assert.equal(logs.length, 1, 'still flagged');
+    const payload = logs[0][1];
+    assert.ok(!/example\.com/.test(payload), 'the address must not appear');
+    assert.ok(/value=eq\.…/.test(payload), 'redacted, not dropped');
+    assert.ok(/identifiers/.test(payload), 'the table is still identifiable — the diagnostic still works');
+    assert.ok(/type=eq\.email/.test(payload), 'non-identity filters survive');
+  });
+
   global.fetch = origFetch;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -44,8 +44,14 @@ function sbProfile(profile) {
     // harmless false positive; that is the right side to err on for a fault this quiet.
     if (Array.isArray(data) && data.length === DB_MAX_ROWS
         && !/[?&]limit=/.test(path) && !(opts.headers || {}).Range) {
+      // Redact the identity filters before logging. Every path carrying an address today also
+      // carries limit=1 and so can never reach this line — but a future unlimited read that
+      // filters on one would otherwise print a customer's email or phone into the log, and the
+      // table + filter NAME is all this diagnostic needs. Same posture as the TrustSignal
+      // query-string note in reference/integrations.md.
+      const safe = String(path).replace(/((?:identifier_)?value|to_address|email|phone)=eq\.[^&]*/gi, '$1=eq.…');
       console.log('db_max_rows_truncated', JSON.stringify({
-        profile, rows: data.length, path: String(path).slice(0, 300),
+        profile, rows: data.length, path: safe.slice(0, 300),
       }));
     }
     return { ok: res.ok, status: res.status, data };
