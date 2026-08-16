@@ -3510,7 +3510,14 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
       for (let w = 0; w < windows.length; w++) {
         const [fromISO, toISO] = windows[w];
         try {
-          const res = await step.do(`ledger-w${w}`, { retries: { limit: 2, delay: '60 seconds' }, timeout: '15 minutes' }, async () => {
+          // ⚠️ PACE, DON'T RETRY-INTO-IT. SP-API `createReport` is rate-limited to ~1 request per
+          // 60s sustained with a burst of ~15. The first run of this backfill fired windows
+          // back-to-back: windows 0-8 drained the burst bucket and windows 9-14 ALL failed
+          // `createReport 429`, retries included, because a 60s retry delay is exactly the refill
+          // rate and three attempts cannot outrun it. Spacing the calls is the fix; a bigger retry
+          // budget only fails slower and burns the whole run's wall-clock.
+          if (w > 0) await step.sleep(`ledger-pace-${w}`, '70 seconds');
+          const res = await step.do(`ledger-w${w}`, { retries: { limit: 4, delay: '120 seconds' }, timeout: '20 minutes' }, async () => {
             SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
             const token = await getAmazonToken(this.env);
             const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
