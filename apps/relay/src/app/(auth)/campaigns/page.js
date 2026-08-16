@@ -393,9 +393,13 @@ export default function CampaignsPage() {
   // WA tests: country code is a selector (default +91) so nobody hand-types prefixes.
   // Bare-digit entries get the selected code; entries pasted with a leading + pass through.
   const [testCc, setTestCc] = useState('+91');
-  const composeTestTo = () => c.channel !== 'whatsapp' ? testTo
+  // SMS is phone-based too — it used to fall into the email branch and go out unprefixed, which
+  // renderPhoneForSms rejects as invalid_phone. SMS pins +91 (the only country it supports).
+  const isPhoneChannel = c.channel === 'whatsapp' || c.channel === 'sms';
+  const composeTestTo = () => !isPhoneChannel ? testTo
     : testTo.split(',').map((s) => s.trim()).filter(Boolean)
-        .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '') : testCc + s.replace(/\D/g, '').replace(/^0+/, ''))
+        .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '')
+          : (c.channel === 'sms' ? '+91' : testCc) + s.replace(/\D/g, '').replace(/^0+/, ''))
         .join(',');
   const [testBusy, setTestBusy] = useState(false);
   const [testResults, setTestResults] = useState(null);
@@ -1078,15 +1082,17 @@ export default function CampaignsPage() {
         {c.id && canBuild && (
           <Panel title="Send a test" pad>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              {c.channel === 'whatsapp' && (
-                <select className="f-inp mono" value={testCc} onChange={(e) => setTestCc(e.target.value)}
-                  disabled={testBusy} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
-                  {['+91', '+1', '+44', '+971', '+65'].map((x) => <option key={x} value={x}>{x}</option>)}
+              {isPhoneChannel && (
+                <select className="f-inp mono" value={c.channel === 'sms' ? '+91' : testCc}
+                  onChange={(e) => setTestCc(e.target.value)}
+                  disabled={testBusy || c.channel === 'sms'} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
+                  {(c.channel === 'sms' ? ['+91'] : ['+91', '+1', '+44', '+971', '+65'])
+                    .map((x) => <option key={x} value={x}>{x}</option>)}
                 </select>
               )}
               <input className="f-inp" style={{ flex: '1 1 320px' }} value={testTo}
                 onChange={(e) => setTestTo(e.target.value)}
-                placeholder={c.channel === 'whatsapp' ? '9876543210, 9876543211' : 'you@legendoftoys.com'}
+                placeholder={isPhoneChannel ? '9876543210, 9876543211' : 'you@legendoftoys.com'}
                 disabled={testBusy || !c.template_id} />
               <Btn onClick={sendTest} disabled={testBusy || !c.template_id || !testTo.trim()}>
                 <Send size={14} /> {testBusy ? 'Sending…' : 'Send test'}

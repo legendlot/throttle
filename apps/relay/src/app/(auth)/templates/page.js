@@ -110,12 +110,26 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
   const undeclared = order.filter((tok) => !declared.includes(tok));
   const notInBody = order.filter((tok) => !bodyTokens.includes(tok));
 
+  // An SMS template that exists ONLY in Relay can never send, and nothing used to say so:
+  // adapters/sms.js passes provider_template_id straight to TrustSignal as `template_id`, so a
+  // null one is rejected by the vendor, and an unregistered body is rejected by the carrier even
+  // if the vendor accepts it. Both were previously invisible until a send failed. (2026-08-16)
+  const missingDlt = !String(s.dlt_template_id || '').trim();
+  const missingVendor = !String(providerTemplateId || '').trim();
+  // Mirrors render.js F6 at authoring time, but WIDER: render.js uses /https?:\/\//i, so a
+  // scheme-less "legendoftoys.com/sale" slips past it. A bare domain is still a URL to the
+  // carrier's verbatim match. Warn-only here — the send-time rule is deliberately untouched.
+  const hasUrl = /https?:\/\//i.test(body) || /[a-z0-9-]+\.(com|in|co|net|io|shop)(\/|\s|$)/i.test(body);
+
   const problems = [];
   if (stillRaw) problems.push('Body still contains {#var#} — replace each with a named {token}, left to right.');
   if (tooMany) problems.push(`${order.length} variables — pr1..pr5 is a hard vendor ceiling.`);
   if (arityBad) problems.push(`Variable order has ${order.length} entries but the DLT template registers ${s.dlt_var_count} placeholder${s.dlt_var_count === 1 ? '' : 's'}.`);
   if (undeclared.length) problems.push(`Not declared in Variables below: ${undeclared.join(', ')}`);
   if (notInBody.length) problems.push(`In the order but not used in the body: ${notInBody.join(', ')}`);
+  if (missingDlt) problems.push('No DLT template id — this body is not registered with the carrier, so every send is rejected. Register it on the DLT portal first.');
+  if (missingVendor) problems.push('No vendor template — this template does not exist at TrustSignal, so the send is rejected before it reaches the carrier. It arrives via the DLT catalogue pull, not from here.');
+  if (hasUrl) problems.push('The body contains a link written directly into the text. A URL must sit inside a {token}, or the delivered text stops matching the DLT registration.');
 
   return (
     <Panel title="Content · SMS" pad>
@@ -123,6 +137,20 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
         The body must stay word-for-word what is registered on DLT — the carrier matches delivered
         text against the registration, so rewording it gets the message rejected. Only the
         placeholders change: replace each <code>{'{#var#}'}</code> with a named <code>{'{token}'}</code>.
+      </div>
+      {/* The three questions this editor kept getting asked, answered where they get asked
+          (2026-08-16). SMS is not WhatsApp: nothing is submitted from here, and there is no
+          media. Without this the editor looks like a template builder that is missing buttons. */}
+      <div className="dim" style={{ fontSize: 12, marginBottom: 14, lineHeight: 1.5,
+             padding: '10px 12px', borderRadius: 8, border: '1px solid var(--line, #333)' }}>
+        <strong>SMS templates are not authored here.</strong> Each one is registered on the DLT
+        portal first, then pulled into Relay by the catalogue sync — what you edit on this page is
+        the variable naming, not the message. So there is deliberately{' '}
+        <strong>no Submit&nbsp;for&nbsp;approval button</strong> (there is nothing to submit to —
+        DLT approval happens on the portal and is not instant) and{' '}
+        <strong>no image upload</strong> (SMS is plain text; images need WhatsApp or RCS).
+        A template typed straight into this page will have no DLT id and no vendor template, and
+        every send on it fails.
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 14 }}>
@@ -242,12 +270,20 @@ export default function TemplatesPage() {
   // into the number field — every miskeyed "+91" prefix was a failed test. A pasted full
   // international number (leading +) is respected as-is; otherwise cc + digits compose.
   const [testCc, setTestCc] = useState('+91');
+  // SMS is phone-based too, and treating it as "not whatsapp ⇒ email" meant a bare 10-digit
+  // number was passed through unprefixed. trustsignal-client renderPhoneForSms demands a
+  // 13-char +91 E.164 and returns invalid_phone otherwise, so every SMS test send failed on a
+  // number typed the obvious way. (2026-08-16)
   const composeTestTo = () => {
     const raw = testTo.trim();
     if (!raw) return '';
-    if (t.channel !== 'whatsapp') return raw;
+    if (t.channel !== 'whatsapp' && t.channel !== 'sms') return raw;
     if (raw.startsWith('+')) return raw.replace(/[^\d+]/g, '');
-    return testCc + raw.replace(/\D/g, '').replace(/^0+/, '');
+    // SMS pins +91 rather than reading testCc: the selector is disabled on SMS, but the state
+    // survives switching templates, so a testCc left at +44 by a WhatsApp template would
+    // otherwise compose a number the vendor rejects as unsupported_country.
+    const cc = t.channel === 'sms' ? '+91' : testCc;
+    return cc + raw.replace(/\D/g, '').replace(/^0+/, '');
   };
   const [testVals, setTestVals] = useState('{}');
   const [testing, setTesting] = useState(false);
@@ -589,6 +625,16 @@ export default function TemplatesPage() {
       }
       if (!c.template_type) { showToast('Set the consent type before activating.', 'error'); return; }
       if (n > 5) { showToast(`${n} variables — pr1..pr5 is a hard vendor ceiling.`, 'error'); return; }
+      // An SMS template with no DLT registration and no vendor template can NEVER send — the
+      // vendor rejects a null template_id and the carrier rejects unregistered text. Activating
+      // one produced a green, sendable-looking template that failed on every send, which is
+      // exactly how "Freedom to Play Sale_17Aug" reached active. (2026-08-16)
+      if (!String(c.dlt_template_id || '').trim()) {
+        showToast('No DLT template id — register the body on the DLT portal before activating, or every send is rejected.', 'error'); return;
+      }
+      if (!String(t.provider_template_id || '').trim()) {
+        showToast('No vendor template — this template does not exist at TrustSignal yet. It arrives via the DLT catalogue pull; it cannot be activated before then.', 'error'); return;
+      }
       if (typeof c.dlt_var_count === 'number' && n !== c.dlt_var_count) {
         showToast(`Variable order has ${n} entries but the DLT template registers ${c.dlt_var_count}.`, 'error'); return;
       }
@@ -660,7 +706,11 @@ export default function TemplatesPage() {
   }
 
   async function sendTest() {
-    if (!testTo.trim()) { showToast('Test recipient email required', 'error'); return; }
+    if (!testTo.trim()) {
+      showToast((t.channel === 'whatsapp' || t.channel === 'sms')
+        ? 'Test recipient phone number required' : 'Test recipient email required', 'error');
+      return;
+    }
     let vals = {};
     try { vals = testVals.trim() ? JSON.parse(testVals) : {}; }
     catch { showToast('Test values must be valid JSON', 'error'); return; }
@@ -1176,11 +1226,15 @@ export default function TemplatesPage() {
             </div>
             <div className="form-grid">
               <div className="ff"><div className="kv-k">Test recipient</div>
-                {t.channel === 'whatsapp' ? (
+                {(t.channel === 'whatsapp' || t.channel === 'sms') ? (
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <select className="f-inp mono" value={testCc} onChange={(e) => setTestCc(e.target.value)}
-                      disabled={testing} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
-                      {['+91', '+1', '+44', '+971', '+65'].map((c) => <option key={c} value={c}>{c}</option>)}
+                    {/* SMS is +91-only: renderPhoneForSms rejects every other country with
+                        unsupported_country, so offering them would only produce failed tests. */}
+                    <select className="f-inp mono" value={t.channel === 'sms' ? '+91' : testCc}
+                      onChange={(e) => setTestCc(e.target.value)}
+                      disabled={testing || t.channel === 'sms'} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
+                      {(t.channel === 'sms' ? ['+91'] : ['+91', '+1', '+44', '+971', '+65'])
+                        .map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)}
                       placeholder="7019103926" disabled={testing} style={{ flex: 1 }} />

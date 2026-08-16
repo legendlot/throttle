@@ -205,10 +205,14 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
     } catch (e) { showToast(e.message || 'Could not save read time', 'error'); }
   }
 
+  // SMS is phone-based too — it used to fall into the email branch and go out unprefixed, which
+  // renderPhoneForSms rejects as invalid_phone. SMS pins +91 (the only country it supports).
+  const isPhoneChannel = campaign.channel === 'whatsapp' || campaign.channel === 'sms';
   function composeTestTo() {
-    if (campaign.channel !== 'whatsapp') return testTo;
+    if (!isPhoneChannel) return testTo;
     return testTo.split(',').map((s) => s.trim()).filter(Boolean)
-      .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '') : testCc + s.replace(/\D/g, '').replace(/^0+/, ''))
+      .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '')
+        : (campaign.channel === 'sms' ? '+91' : testCc) + s.replace(/\D/g, '').replace(/^0+/, ''))
       .join(',');
   }
   async function sendArmTest(v) {
@@ -386,15 +390,17 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
             <div style={{ marginTop: 16 }}>
               <FieldLabel>Send a test of each arm</FieldLabel>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                {campaign.channel === 'whatsapp' && (
-                  <select className="f-inp mono" value={testCc} onChange={(e) => setTestCc(e.target.value)}
-                    disabled={testBusyId != null} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
-                    {['+91', '+1', '+44', '+971', '+65'].map((x) => <option key={x} value={x}>{x}</option>)}
+                {isPhoneChannel && (
+                  <select className="f-inp mono" value={campaign.channel === 'sms' ? '+91' : testCc}
+                    onChange={(e) => setTestCc(e.target.value)}
+                    disabled={testBusyId != null || campaign.channel === 'sms'} style={{ width: 96, flex: '0 0 auto' }} aria-label="Country code">
+                    {(campaign.channel === 'sms' ? ['+91'] : ['+91', '+1', '+44', '+971', '+65'])
+                      .map((x) => <option key={x} value={x}>{x}</option>)}
                   </select>
                 )}
                 <input className="f-inp" style={{ flex: '1 1 260px' }} value={testTo}
                   onChange={(e) => setTestTo(e.target.value)}
-                  placeholder={campaign.channel === 'whatsapp' ? '9876543210, 9876543211' : 'you@legendoftoys.com'}
+                  placeholder={isPhoneChannel ? '9876543210, 9876543211' : 'you@legendoftoys.com'}
                   disabled={testBusyId != null} />
                 {variants.map((v) => (
                   <Btn key={v.id} onClick={() => sendArmTest(v)}
