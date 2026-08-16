@@ -1100,6 +1100,7 @@ export default function CampaignsPage() {
                   (suppression still applies). Recorded but <strong>excluded from this campaign&apos;s stats</strong>.</>}
             </div>
             {testResults && (
+              <div className="table-scroll">
               <table className="dt" style={{ marginTop: 12 }}>
                 <thead><tr><th>To</th><th>Result</th><th>Detail</th></tr></thead>
                 <tbody>
@@ -1118,6 +1119,7 @@ export default function CampaignsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </Panel>
         )}
@@ -1337,6 +1339,7 @@ export default function CampaignsPage() {
               )}
               action={<span className="mono dim" style={{ fontSize: 11 }}>{shown.length} broadcast{shown.length === 1 ? '' : 's'}</span>}>
               {/* Lean list (§7.2) — the old 14-column set stays in the CSV export. */}
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr>
                   <th>Broadcast</th><th>Status</th><th>When</th>
@@ -1396,6 +1399,7 @@ export default function CampaignsPage() {
                   })}
                 </tbody>
               </table>
+              </div>
               {shown.length === 0 && (
                 <div className="tw-note" style={{ margin: '10px 16px' }}>No broadcasts in this view.</div>
               )}

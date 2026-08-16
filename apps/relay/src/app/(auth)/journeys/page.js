@@ -789,6 +789,7 @@ export default function JourneysPage() {
                   </span>
                 );
               })()}>
+              <div className="table-scroll">
               <table className="dt">
                 {/* Lean COMMAND list (§7.3): On/Off · Journey (trigger·version) · Enrolled ·
                     Conv · Revenue · Read · Last activity. The full analytics set (cost, sent,
@@ -879,6 +880,7 @@ export default function JourneysPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </Panel>
           )}
     </div>

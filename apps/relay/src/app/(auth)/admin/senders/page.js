@@ -120,6 +120,7 @@ export default function SendersPage() {
             {rows.length === 0
               ? <div style={{ padding: 24, color: 'var(--text-3)' }}>No sender identities yet.</div>
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr><th>Channel</th><th>Address</th><th>Provider</th><th>Status</th><th>DNS</th><th></th></tr></thead>
                   <tbody>
@@ -138,6 +139,7 @@ export default function SendersPage() {
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
         )}

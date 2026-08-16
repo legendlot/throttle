@@ -285,7 +285,7 @@ export default function AnalyticsPage() {
             {camps.length === 0
               ? <EmptyState icon="send" title="No sent campaigns yet" hint="Per-campaign delivery, engagement, and attribution appear here once a campaign sends." />
               : (
-                <div className="table-scroll">
+                <div className="table-scroll wide">
                 <table className="dt">
                   <thead><tr>
                     <th>Campaign</th><th className="num">Sent</th><th className="num">Delivered</th>
@@ -336,7 +336,7 @@ export default function AnalyticsPage() {
             {journeys.length === 0
               ? <EmptyState icon="git-branch" title="No journeys yet" hint="Triggered, revenue and conversion per journey appear here once enrolments run." />
               : (
-                <div className="table-scroll">
+                <div className="table-scroll wide">
                 <table className="dt">
                   <thead><tr>
                     <th>Journey</th><th>Purpose</th><th>Status</th><th className="num">Triggered</th><th className="num">Sent</th>
@@ -465,7 +465,7 @@ export default function AnalyticsPage() {
             {health.length === 0
               ? <EmptyState icon="mail" title="No sender activity" hint="Bounce and complaint rates per sender identity appear here once emails are sent." />
               : (
-                <div className="table-scroll">
+                <div className="table-scroll wide">
                 <table className="dt">
                   <thead><tr>
                     <th>Sender</th><th>Channel</th><th>Quality</th><th className="num">Sent</th><th className="num">Delivered</th>

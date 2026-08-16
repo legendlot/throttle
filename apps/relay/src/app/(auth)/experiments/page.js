@@ -82,6 +82,7 @@ export default function ExperimentsPage() {
                   {FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
                 </select>
               }>
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr>
                   <th>Started</th><th>Campaign</th><th>Hypothesis</th><th>Arms</th>
@@ -125,6 +126,7 @@ export default function ExperimentsPage() {
                   })}
                 </tbody>
               </table>
+              </div>
               {shown.length === 0 && (
                 <div className="tw-note" style={{ margin: '10px 16px' }}>No experiments match this filter.</div>
               )}

@@ -579,6 +579,7 @@ export default function SegmentsPage() {
                   ? <EmptyState title="No members yet" hint="Paste emails or phone numbers above to build the list." />
                   : (
                     <>
+                      <div className="table-scroll">
                       <table className="dt">
                         <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Added</th>{canEdit && <th />}</tr></thead>
                         <tbody>
@@ -599,6 +600,7 @@ export default function SegmentsPage() {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                       {members.total > members.rows.length && (
                         <div className="dim" style={{ fontSize: 12, marginTop: 10 }}>
                           Showing {members.rows.length} of {members.total} — newest first.
@@ -708,6 +710,7 @@ export default function SegmentsPage() {
             {pv && Array.isArray(pv.sample) && pv.sample.length > 0 && (
               <div style={{ marginTop: 14 }}>
                 <div className="kv-k" style={{ marginBottom: 6 }}>Sample of matched customers</div>
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th><th>Last order</th></tr></thead>
                   <tbody>
@@ -722,6 +725,7 @@ export default function SegmentsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
             {pv && Array.isArray(pv.sample) && pv.sample.length === 0 && (pv.total ?? 0) > 0 && (
@@ -750,6 +754,7 @@ export default function SegmentsPage() {
                   which reads as "this audience is empty" rather than "nobody has counted it"
                   — Winback 90 showed 0 against a live 25,084. memberState() splits the two
                   on materialized_at. Do NOT collapse it back to a plain number. */}
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>Name</th><th>Kind</th><th>Conditions</th><th className="num">Members</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
@@ -783,6 +788,7 @@ export default function SegmentsPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </Panel>
           )}
     </div>

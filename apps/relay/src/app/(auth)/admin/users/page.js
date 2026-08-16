@@ -115,6 +115,7 @@ export default function UsersPage() {
           : assignments.length === 0
             ? <div style={{ padding: 24, color: 'var(--text-3)' }}>No one has been granted access yet.</div>
             : (
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Assigned</th><th>Toggle</th></tr></thead>
                 <tbody>
@@ -130,6 +131,7 @@ export default function UsersPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
       </Panel>
     </div>

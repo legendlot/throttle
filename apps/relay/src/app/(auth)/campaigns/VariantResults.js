@@ -241,6 +241,7 @@ export default function VariantResults({ campaign, perms, onChanged }) {
             {snapVerdict && (
               <div style={{ marginTop: 16 }}>
                 <FieldLabel>Snapshot at decision time vs. live now</FieldLabel>
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr><th>Arm</th><th className="num">Read ÷ sent (at decision)</th><th className="num">Read ÷ sent (now)</th></tr></thead>
                   <tbody>
@@ -256,6 +257,7 @@ export default function VariantResults({ campaign, perms, onChanged }) {
                     })}
                   </tbody>
                 </table>
+                </div>
                 {diverged && (
                   <div className="tw-note" style={{ marginTop: 8, marginBottom: 0 }}>
                     <strong>The numbers moved after we called it.</strong> At decision time the

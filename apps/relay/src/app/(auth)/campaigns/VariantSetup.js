@@ -412,6 +412,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
                   {testResult.error ? (
                     <div style={{ fontSize: 12.5, color: 'var(--red, #f87171)' }}>{testResult.error}</div>
                   ) : (
+                    <div className="table-scroll">
                     <table className="dt">
                       <thead><tr><th>To</th><th>Result</th><th>Detail</th></tr></thead>
                       <tbody>
@@ -425,6 +426,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
               )}

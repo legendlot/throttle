@@ -175,6 +175,7 @@ export default function ConnectorsPage() {
             {senders.length === 0
               ? <div style={{ padding: 18, color: 'var(--text-3)' }}>No {channel} sender configured yet.</div>
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr><th>Address</th><th>Provider</th><th>Status</th></tr></thead>
                   <tbody>
@@ -187,6 +188,7 @@ export default function ConnectorsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
         ))}

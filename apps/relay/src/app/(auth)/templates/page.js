@@ -1077,6 +1077,7 @@ export default function TemplatesPage() {
                 No archived versions yet. The next save records one.
               </div>
             ) : (
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>Ver</th><th>Status</th><th>Meta</th><th>Account</th><th>Saved</th><th>By</th></tr></thead>
                 <tbody>
@@ -1095,6 +1096,7 @@ export default function TemplatesPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </Panel>
         )}
@@ -1282,6 +1284,7 @@ export default function TemplatesPage() {
                 <EmptyState icon="file-text" title="No templates match"
                   hint="Nothing in the library fits every filter. Clear one to widen the search." />
               ) : (
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
@@ -1354,6 +1357,7 @@ export default function TemplatesPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
               )}
             </Panel>
           )}

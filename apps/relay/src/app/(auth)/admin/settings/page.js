@@ -300,6 +300,7 @@ export default function SettingsPage() {
               A window may cross midnight (21:00 → 10:00). Journey sends <strong>park and retry</strong> at
               the channel’s own boundary rather than being dropped.
             </div>
+            <div className="table-scroll">
             <table className="dt">
               <thead><tr><th>Channel</th><th>Quiet hours</th><th>From</th><th>To</th><th>Why</th></tr></thead>
               <tbody>
@@ -326,6 +327,7 @@ export default function SettingsPage() {
                   ))}
               </tbody>
             </table>
+            </div>
             <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
               {/* Disabled on an empty list: that state means the READ failed (or the table is
                   genuinely empty), and saving nothing is never what the author wants — it would

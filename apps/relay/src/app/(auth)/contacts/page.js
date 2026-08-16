@@ -342,6 +342,7 @@ export default function ContactsPage() {
               : (!detail.identifiers || detail.identifiers.length === 0)
               ? <div style={{ padding: 16, color: 'var(--text-4)', fontSize: 12.5 }}>No identifiers.</div>
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr><th>Type</th><th>Value</th><th>Verified</th><th>Source</th></tr></thead>
                   <tbody>
@@ -355,6 +356,7 @@ export default function ContactsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
         </div>
@@ -387,6 +389,7 @@ export default function ContactsPage() {
                 <b>Blocked at the send gate.</b> This outranks consent and stops
                 <b> every</b> message including order and shipping updates.
               </div>
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>Channel</th><th>Address</th><th>Reason</th><th>Blocked</th><th></th></tr></thead>
                 <tbody>
@@ -413,6 +416,7 @@ export default function ContactsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </>
           )}
         </Panel>
@@ -450,6 +454,7 @@ export default function ContactsPage() {
                         the Captured column is when the customer acted, Recorded is when it
                         reached us, and they can disagree by minutes.</>}
                     </div>
+                    <div className="table-scroll">
                     <table className="dt">
                       <thead><tr>
                         <th>Channel</th><th>Purpose</th><th>State</th><th>Source</th>
@@ -483,6 +488,7 @@ export default function ContactsPage() {
                         })}
                       </tbody>
                     </table>
+                    </div>
                   </>
                 );
               })()}
@@ -541,6 +547,7 @@ export default function ContactsPage() {
             : (!detail.events || detail.events.length === 0)
             ? <div style={{ padding: 16, color: 'var(--text-4)', fontSize: 12.5 }}>No events.</div>
             : (
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>Event</th><th>When</th><th>Source</th></tr></thead>
                 <tbody>
@@ -553,6 +560,7 @@ export default function ContactsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
         </Panel>
       </div>
@@ -617,6 +625,7 @@ export default function ContactsPage() {
                   ? 'Search covers name, email and phone. Anonymous sessions are excluded unless you show them.'
                   : 'Profiles arrive via ingestion (Shopify / internal events). Once seeded they appear here.'} />
             : (
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr>
                   <th>Name</th><th>Email</th><th>Phone</th><th>Channels</th>
@@ -656,6 +665,7 @@ export default function ContactsPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             )}
       </Panel>
     </div>

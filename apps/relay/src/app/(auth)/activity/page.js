@@ -140,6 +140,7 @@ export default function ActivityPage() {
                   <Download size={14} /> Download CSV
                 </Btn>
               }>
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr><th>When (IST)</th><th>Customer</th><th>Phone</th><th>Items</th><th>Value</th><th>Message</th><th>Recovered</th></tr></thead>
                 <tbody>
@@ -162,6 +163,7 @@ export default function ActivityPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
               {more && (
                 <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}>
                   <Btn onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load more'}</Btn>

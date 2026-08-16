@@ -295,6 +295,7 @@ export default function OverviewPage() {
                 Journeys
                 <button className="ov-view-all" onClick={() => router.push('/journeys')}>OPEN →</button>
               </div>
+              <div className="table-scroll">
               <table className="dt">
                 <thead><tr>
                   <th>Journey</th><th className="num">Enrolled · 30d</th><th className="num">In flight</th>
@@ -312,6 +313,7 @@ export default function OverviewPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </>

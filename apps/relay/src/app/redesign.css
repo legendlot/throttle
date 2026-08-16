@@ -137,7 +137,12 @@
    column that scrolled cells slide visibly through — badges from column 2 appeared beside the
    journey name. Keep this element padding-free so left:0 lands on the table's own edge. */
 .table-scroll{overflow-x:auto}
-.table-scroll .dt{min-width:1180px}
+/* Every .dt cell is white-space:nowrap, so ANY table can outgrow its panel and clip silently
+   (the campaigns-analytics table lost Spend+ROI this way). The plain wrapper is inert while the
+   table fits and scrolls only when it doesn't. `.wide` opts a known-14-column table into a
+   spread-out minimum; do not put a min-width on the plain wrapper — it would force a permanent
+   scrollbar on small tables. */
+.table-scroll.wide .dt{min-width:1180px}
 /* Keep the row's identity visible while scrolling 14 columns — a number you cannot attribute to a
    row is not readable. The background must be OPAQUE (--surface is #1c1f25, not a blend) or the
    cells passing underneath show through. */
