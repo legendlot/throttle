@@ -285,6 +285,7 @@ export default function AnalyticsPage() {
             {camps.length === 0
               ? <EmptyState icon="send" title="No sent campaigns yet" hint="Per-campaign delivery, engagement, and attribution appear here once a campaign sends." />
               : (
+                <div className="table-scroll">
                 <table className="dt">
                   <thead><tr>
                     <th>Campaign</th><th className="num">Sent</th><th className="num">Delivered</th>
@@ -324,6 +325,7 @@ export default function AnalyticsPage() {
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
           </Panel>
 
