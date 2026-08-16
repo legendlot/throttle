@@ -101,9 +101,59 @@ function emptyTemplate() {
 // authored + approved on Sigmo (RCS Settings › Templates); what Relay owns is which vendor
 // template this row sends, the param slots (csparams index order — positional at the vendor,
 // NEVER alphabetical), the mandatory SMS fallback leg, and the optional tracked-link variable.
-function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, smsTemplates }) {
+function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, smsTemplates,
+                     session, templateRowId, onBound }) {
+  const { showToast } = useToast();
+  const [submitting, setSubmitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const r = rcs || {};
   const up = (k, v) => setRcs({ ...r, [k]: v });
+  const d = r.draft || {};
+  const upd = (k, v) => setRcs({ ...r, draft: { ...d, [k]: v } });
+
+  // Authoring → vendor submit (S290 part 3). The vendor derives the param slots from the
+  // [bracketed] names in order of first appearance; approval is the vi hub's call and lands
+  // via Sync. Submit needs the row SAVED first — the vendor id is stamped onto it.
+  async function submitToVendor() {
+    if (!templateRowId) { showToast('Save the template first — the vendor id is stamped onto the saved row.', 'error'); return; }
+    const type = d.type || 'text_message';
+    const spec = { name: d.vendor_name || '', type };
+    if (type === 'text_message') {
+      spec.textMessageContent = d.body || '';
+      spec.suggestions = (d.btn_text || '').trim()
+        ? [{ suggestionType: 'url_action', displayText: d.btn_text.trim(),
+             postback: (d.btn_postback || '').trim(), url: (d.btn_url || '').trim(), application: 'Browser' }]
+        : [];
+    } else {
+      spec.orientation = d.orientation || 'HORIZONTAL';
+      spec.standAlone = {
+        cardTitle: d.card_title || '', cardDescription: d.body || '', mediaUrl: d.media_url || '',
+        suggestions: (d.btn_text || '').trim()
+          ? [{ suggestionType: 'url_action', displayText: d.btn_text.trim(),
+               postback: (d.btn_postback || '').trim(), url: (d.btn_url || '').trim(), application: 'Browser' }]
+          : [],
+      };
+    }
+    setSubmitting(true);
+    try {
+      const res = await workerFetch('rcsSubmitTemplate', { id: templateRowId, spec }, session);
+      const out = res?.data || {};
+      showToast(`Submitted — vendor id ${out.provider_template_id}, status ${out.status}`, 'success');
+      onBound?.(out.provider_template_id, out.status, out.var_params || []);
+    } catch (e) { showToast(e.message || 'Vendor submit failed', 'error'); }
+    finally { setSubmitting(false); }
+  }
+  async function syncStatus() {
+    setSyncing(true);
+    try {
+      const res = await workerFetch('rcsSyncTemplateStatus', {}, session);
+      const upd2 = (res?.data?.updated || []).find((x) => x.id === templateRowId);
+      const reg = (res?.data?.registry || []).find((x) => x.id === providerTemplateId);
+      if (reg) up('provider_status', reg.status);
+      showToast(reg ? `Vendor status: ${reg.status}${reg.error ? ' — ' + reg.error : ''}` : 'Synced', upd2?.error || reg?.error ? 'error' : 'success');
+    } catch (e) { showToast(e.message || 'Sync failed', 'error'); }
+    finally { setSyncing(false); }
+  }
   const params = Array.isArray(r.var_params) ? r.var_params : [];
   const declared = (variables || []).map((v) => (v.token || '').trim()).filter(Boolean);
   const undeclared = params.filter((p) => !declared.includes(p));
@@ -120,14 +170,69 @@ function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setPr
 
   return (
     <Panel title="Content · RCS (binding)" pad>
-      <div className="dim" style={{ fontSize: 12, marginBottom: 14, lineHeight: 1.5,
-             padding: '10px 12px', borderRadius: 8, border: '1px solid var(--line, #333)' }}>
-        <strong>RCS templates are not authored here.</strong> The message — text, image, card,
-        buttons — is built and approved on Sigmo (RCS Settings › Templates). This page binds an
-        approved vendor template into Relay: its id, its variable slots in registered order, and
-        the SMS template that sends when a phone cannot receive RCS. Never send on a template
-        Sigmo does not show as approved.
-      </div>
+      {!providerTemplateId && (
+        <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 8, border: '1px solid var(--line, #333)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Compose &amp; submit</div>
+          <div className="dim" style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+            Write the message here and submit — it is created at TrustSignal and goes for carrier
+            approval (text usually clears in about a minute; rich cards take longer). Use
+            <code> [square_brackets] </code> for variables; the slots are read from them in order.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 10 }}>
+            <div className="ff"><div className="kv-k">Vendor name (≤20, a-z 0-9 _)</div>
+              <input className="f-inp mono" value={d.vendor_name || ''} disabled={disabled || submitting}
+                onChange={(e) => upd('vendor_name', e.target.value)} placeholder="LOT_Winback_Text" /></div>
+            <div className="ff"><div className="kv-k">Kind</div>
+              <select className="f-inp" value={d.type || 'text_message'} disabled={disabled || submitting}
+                onChange={(e) => upd('type', e.target.value)}>
+                <option value="text_message">Text message</option>
+                <option value="rich_card">Rich card (image + button)</option>
+              </select></div>
+            {(d.type === 'rich_card') && (
+              <div className="ff"><div className="kv-k">Card title</div>
+                <input className="f-inp" value={d.card_title || ''} disabled={disabled || submitting}
+                  onChange={(e) => upd('card_title', e.target.value)} /></div>
+            )}
+          </div>
+          {(d.type === 'rich_card') && (
+            <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">Image URL (2:1 horizontal, ≤2MB — upload via Library first)</div>
+              <input className="f-inp mono" value={d.media_url || ''} disabled={disabled || submitting}
+                onChange={(e) => upd('media_url', e.target.value)} placeholder="https://…/sale.png" /></div>
+          )}
+          <div className="ff" style={{ marginBottom: 10 }}>
+            <div className="kv-k">{d.type === 'rich_card' ? 'Card description' : 'Message text'}</div>
+            <textarea className="f-inp" rows={3} value={d.body || ''} disabled={disabled || submitting}
+              onChange={(e) => upd('body', e.target.value)}
+              placeholder="Hey [name]! The [sale_name] is live. Use code [code]: [link]" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 10 }}>
+            <div className="ff"><div className="kv-k">Button text (optional)</div>
+              <input className="f-inp" value={d.btn_text || ''} disabled={disabled || submitting}
+                onChange={(e) => upd('btn_text', e.target.value)} placeholder="Shop Now" /></div>
+            <div className="ff"><div className="kv-k">Button URL</div>
+              <input className="f-inp mono" value={d.btn_url || ''} disabled={disabled || submitting}
+                onChange={(e) => upd('btn_url', e.target.value)} placeholder="https://lottoys.in/r/sale-rcs" /></div>
+            <div className="ff"><div className="kv-k">Button id (postback)</div>
+              <input className="f-inp mono" value={d.btn_postback || ''} disabled={disabled || submitting}
+                onChange={(e) => upd('btn_postback', e.target.value)} placeholder="SHOP_NOW" /></div>
+          </div>
+          <div className="dim" style={{ fontSize: 11, marginBottom: 10 }}>
+            A button needs all three fields — the vendor rejects a suggestion without an id.
+            Unsaved work here is kept with the draft when you Save.
+          </div>
+          <Btn kind="primary" onClick={submitToVendor} disabled={disabled || submitting}>
+            <Send size={14} /> {submitting ? 'Submitting…' : 'Submit to TrustSignal'}
+          </Btn>
+        </div>
+      )}
+      {providerTemplateId && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <Badge label={`Vendor: ${r.provider_status || 'unknown'}`}
+                 tone={(r.provider_status || '') === 'approved' ? 'green' : 'yellow'} />
+          <span className="dim" style={{ fontSize: 12 }}>Approval is the carrier hub&apos;s call — Sync pulls the latest.</span>
+          <Btn onClick={syncStatus} disabled={syncing} style={{ marginLeft: 'auto' }}>{syncing ? 'Syncing…' : 'Sync status'}</Btn>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 14 }}>
         <div className="ff">
@@ -200,9 +305,26 @@ function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setPr
   );
 }
 
-function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
+function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, session, templateRowId, onMirrored }) {
+  const { showToast } = useToast();
+  const [mirroring, setMirroring] = useState(false);
   const s = sms || {};
   const up = (k, v) => setSms({ ...s, [k]: v });
+  // S290 part 3 — push the vendor mirror for a DLT-registered body straight from here, so
+  // nobody retypes it into Sigmo. The DLT-portal registration stays FIRST: this button only
+  // arms once the 19-digit id from the portal is in the field.
+  const canMirror = !providerTemplateId && /^\d{19}$/.test(String(s.dlt_template_id || ''))
+    && !!s.template_type && !!String(s.body || '').trim();
+  async function createMirror() {
+    if (!templateRowId) { showToast('Save the template first — the vendor id is stamped onto the saved row.', 'error'); return; }
+    setMirroring(true);
+    try {
+      const res = await workerFetch('smsCreateVendorTemplate', { id: templateRowId }, session);
+      showToast(`Vendor mirror created — id ${res?.data?.provider_template_id}`, 'success');
+      onMirrored?.(res?.data?.provider_template_id);
+    } catch (e) { showToast(e.message || 'Mirror create failed', 'error'); }
+    finally { setMirroring(false); }
+  }
   const order = Array.isArray(s.var_order) ? s.var_order : [];
   const body = s.body || '';
 
@@ -319,6 +441,18 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
         </div>
       )}
 
+      {!providerTemplateId && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <Btn kind="primary" onClick={createMirror} disabled={disabled || mirroring || !canMirror}>
+            <Send size={14} /> {mirroring ? 'Creating…' : 'Create at TrustSignal'}
+          </Btn>
+          <span className="dim" style={{ fontSize: 12 }}>
+            {canMirror
+              ? 'Pushes this body + consent type + DLT id to the vendor — no Sigmo step.'
+              : 'Arms once the body, consent type and the 19-digit DLT id (from the portal) are set — register on the DLT portal first.'}
+          </span>
+        </div>
+      )}
       {problems.length > 0 ? (
         <div style={{ fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8,
                       border: '1px solid rgba(220,140,40,.45)', background: 'rgba(220,140,40,.08)' }}>
@@ -499,6 +633,7 @@ export default function TemplatesPage() {
         link_target_base: c.link_target_base || '',
         ttl: typeof c.ttl === 'number' ? c.ttl : null,
         provider_status: c.provider_status || '',
+        draft: (c.draft && typeof c.draft === 'object') ? c.draft : {},
       },
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
@@ -680,6 +815,8 @@ export default function TemplatesPage() {
         link_param: (r.link_param || '').trim(),
         link_target_base: (r.link_target_base || '').trim(),
         provider_status: r.provider_status || '',
+        // Unsubmitted compose work rides with the draft so half-written copy survives a Save.
+        ...(r.draft && Object.keys(r.draft).length ? { draft: r.draft } : {}),
       };
       if (typeof r.ttl === 'number' && r.ttl > 0) content.ttl = r.ttl;
     } else if (edRef.current && !preserveBodyRef.current) {
@@ -1161,12 +1298,19 @@ export default function TemplatesPage() {
           locked={!!t.provider_template_id} session={session} wabas={wabas} />
         ) : t.channel === 'sms' ? (
           <SmsEditor sms={t.sms} setSms={(s) => set('sms', s)} variables={t.variables}
-            disabled={saving || !canEdit} providerTemplateId={t.provider_template_id} />
+            disabled={saving || !canEdit} providerTemplateId={t.provider_template_id}
+            session={session} templateRowId={t.id}
+            onMirrored={(pid) => set('provider_template_id', pid)} />
         ) : t.channel === 'rcs' ? (
           <RcsEditor rcs={t.rcs} setRcs={(r) => set('rcs', r)} variables={t.variables}
             disabled={saving || !canEdit}
             providerTemplateId={t.provider_template_id}
             setProviderTemplateId={(v) => set('provider_template_id', v)}
+            session={session} templateRowId={t.id}
+            onBound={(pid, status, varParams) => setT((prev) => ({ ...prev,
+              provider_template_id: pid,
+              rcs: { ...prev.rcs, provider_status: status, rcs_type: prev.rcs?.draft?.type || prev.rcs?.rcs_type || 'text_message',
+                     var_params: varParams } }))}
             smsTemplates={rows.filter((x) => x.channel === 'sms' && x.provider_template_id
               && (x.content?.template_type === 'explicit'))} />
         ) : (

@@ -1925,6 +1925,91 @@ async function handlePost(body, auth, env) {
       const r = await WATPL.waUploadHeaderMedia(env, body);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    case 'rcsSubmitTemplate': {           // S290 — author an RCS template FROM Relay: create at
+      // TrustSignal (vi-hub approval follows), stamp the Relay row as its binding. Single-surface:
+      // the vendor derives csparams from the [bracketed] params, and var_params mirrors that.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const { id, spec } = body;
+      if (!id || !spec) return err('id_and_spec_required', 400);
+      const rowR = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=id,channel,content,provider_template_id&limit=1`, env);
+      const row = rowR.ok && rowR.data?.[0];
+      if (!row || row.channel !== 'rcs') return err('rcs_template_not_found', 404);
+      if (row.provider_template_id) return err('already_submitted:this row is bound to a vendor template', 400);
+      // Bot id from the rcs sender row — never hardcoded, and refusing beats guessing.
+      const sndR = await A.sbComms(`/rest/v1/sender_identities?channel=eq.rcs&status=eq.active&select=address&limit=1`, env);
+      const botId = sndR.ok && sndR.data?.[0]?.address;
+      if (!botId) return err('no_active_rcs_sender', 400);
+      const r = await RCSTPL.tsCreateRcsTemplate(env, { ...spec, botId });
+      if (!r.ok) return err(r.error, 400);
+      const patched = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          provider_template_id: r.id,
+          content: { ...(row.content || {}), rcs_type: spec.type, var_params: r.var_params,
+                     provider_status: r.status },
+        }),
+      });
+      if (!patched.ok) return err(`vendor_created_${r.id}_but_row_patch_failed`, 500);
+      return ok({ provider_template_id: r.id, status: r.status, var_params: r.var_params });
+    }
+    case 'rcsSyncTemplateStatus': {       // S290 — vendor registry → provider_status on every
+      // bound rcs row (+ returns the registry so the UI can list unbound approved templates).
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const list = await RCSTPL.tsListRcsTemplates(env, body || {});
+      if (!list.ok) return err(list.error, 400);
+      const rowsR = await A.sbComms(`/rest/v1/templates?channel=eq.rcs&provider_template_id=not.is.null&select=id,content,provider_template_id`, env);
+      const rows = (rowsR.ok && rowsR.data) || [];
+      const byId = new Map(list.templates.map((t) => [t.id, t]));
+      const updated = [];
+      for (const row of rows) {
+        const v = byId.get(row.provider_template_id);
+        if (!v) continue;
+        const cur = row.content?.provider_status || '';
+        if (cur === v.status && (row.content?.var_params || []).join(',') === v.var_params.join(',')) continue;
+        await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({ content: { ...(row.content || {}), provider_status: v.status,
+            var_params: v.var_params.length ? v.var_params : (row.content?.var_params || []),
+            ...(v.error ? { provider_error: v.error } : {}) } }),
+        });
+        updated.push({ id: row.id, status: v.status, error: v.error || null });
+      }
+      const boundIds = new Set(rows.map((r2) => r2.provider_template_id));
+      return ok({ updated, registry: list.templates, unbound: list.templates.filter((t) => !boundIds.has(t.id)) });
+    }
+    case 'smsCreateVendorTemplate': {     // S290 — push the vendor MIRROR for a DLT-registered
+      // SMS template: create + the two follow-up updates (type, dlt id), stamp the row. The
+      // DLT-portal registration stays first and stays human — this exists so nobody has to
+      // retype the same body into Sigmo afterwards.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const rowR = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(body.id)}&select=id,name,channel,content,provider_template_id&limit=1`, env);
+      const row = rowR.ok && rowR.data?.[0];
+      if (!row || row.channel !== 'sms') return err('sms_template_not_found', 404);
+      if (row.provider_template_id) return err('already_mirrored', 400);
+      const c = row.content || {};
+      // Rebuild the REGISTERED text: each named {token}, in var_order, back to a positional
+      // {#var#} — the vendor stores the DLT body, not our named form.
+      const order = Array.isArray(c.var_order) ? c.var_order : [];
+      let registered = String(c.body || '');
+      for (const tok of order) {
+        const re = new RegExp(`\\{${tok}\\}`);
+        if (!re.test(registered)) return err(`token_not_in_body:${tok}`, 400);
+        registered = registered.replace(re, '{#var#}');
+      }
+      if (/\{[a-zA-Z0-9_]+\}/.test(registered)) return err('body_has_tokens_outside_var_order', 400);
+      const r = await SMSTPL.tsCreateSmsTemplate(env, {
+        name: row.name, content: registered, header: c.header || 'LGNDRC',
+        template_type: c.template_type, dlt_template_id: c.dlt_template_id,
+      });
+      if (!r.ok) return err(r.error + (r.id ? `:vendor_id=${r.id}` : ''), 400);
+      const patched = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({ provider_template_id: r.id,
+          content: { ...c, provider_status: 'pending', source: 'relay_authored' } }),
+      });
+      if (!patched.ok) return err(`vendor_created_${r.id}_but_row_patch_failed`, 500);
+      return ok({ provider_template_id: r.id });
+    }
     case 'cashfreeMintTestLink': {        // J3 — mint a Cashfree pay-link (sandbox bring-up proof)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await CF.createPaymentLink(env, {

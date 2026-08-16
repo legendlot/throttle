@@ -68,4 +68,49 @@ async function tsListTemplates(env, opts = {}) {
   };
 }
 
-module.exports = { tsListTemplates, normalizeTemplateType, countDltVars };
+// ── Write side (S290 part 3 — Relay-native authoring) ────────────────────────
+// The header comment above says "deliberately no write path" — that predates 2026-08-17, when
+// the three calls were PROVEN live with a created-then-deleted probe:
+//   create  POST /v1/accounts/templates       {name, content, headers:[…]} → {template:{id}}
+//           — template_type and the DLT id CANNOT be set at create (arrive empty)
+//   update  POST /v1/templates/:id            {"template_type":"Service-Explicit"|"Service-Implicit"}
+//           and {"dlt_entity_id":"<19-digit>"} — ⚠️ the key is dlt_entity_id (the vendor field
+//           that actually holds the DLT TEMPLATE id, per the S259 finding). ⚠️ NEVER send
+//           `dlt_template_id` on this call: probed live, it CLEARS the stored id.
+//   delete  — NO API. Web-app session route only (/sms/template/delete/:id); archive in Relay.
+// This creates the VENDOR MIRROR only. The DLT-portal registration stays external and stays
+// first — creating a mirror for an unregistered body reproduces the exact unsendable state
+// this file's read side exists to prevent.
+const TYPE_TO_VENDOR = { explicit: 'Service-Explicit', implicit: 'Service-Implicit' };
+
+async function tsCreateSmsTemplate(env, { name, content, header, template_type, dlt_template_id } = {}) {
+  if (!String(name || '').trim()) return { ok: false, error: 'name_required' };
+  if (!String(content || '').trim()) return { ok: false, error: 'content_required' };
+  if (!String(header || '').trim()) return { ok: false, error: 'header_required' };
+  const vendorType = TYPE_TO_VENDOR[template_type];
+  if (!vendorType) return { ok: false, error: `invalid_template_type:${template_type}` };
+  if (!/^\d{19}$/.test(String(dlt_template_id || '')))
+    return { ok: false, error: 'dlt_template_id_required:19-digit id from the DLT portal' };
+
+  const c = await TS.tsFetch(env, 'sms', '/v1/accounts/templates', {
+    method: 'POST', body: { name: String(name).trim(), content, headers: [String(header).trim()] },
+  });
+  if (!c.ok) return { ok: false, error: TS.redact(`${c.error.codeMsg || 'error'}:${c.error.message}`) };
+  const id = c.data?.template?.id;
+  if (!id) return { ok: false, error: 'create_returned_no_id' };
+
+  // The two follow-up updates. A failure here leaves a half-configured vendor row — surface
+  // the id so the caller can retry the update rather than duplicating the create.
+  const t = await TS.tsFetch(env, 'sms', `/v1/templates/${encodeURIComponent(id)}`, {
+    method: 'POST', body: { template_type: vendorType },
+  });
+  if (!t.ok) return { ok: false, id, error: `created_but_type_failed:${TS.redact(t.error.message || '')}` };
+  const d = await TS.tsFetch(env, 'sms', `/v1/templates/${encodeURIComponent(id)}`, {
+    method: 'POST', body: { dlt_entity_id: String(dlt_template_id) },
+  });
+  if (!d.ok) return { ok: false, id, error: `created_but_dlt_id_failed:${TS.redact(d.error.message || '')}` };
+
+  return { ok: true, id, template_type, dlt_template_id: String(dlt_template_id) };
+}
+
+module.exports = { tsListTemplates, normalizeTemplateType, countDltVars, tsCreateSmsTemplate };
