@@ -9,7 +9,7 @@ import { fmtDateTime } from '@/components/format.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
 import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin,
-  opsForAttr, conditionWarning, defaultOpFor, ruleWarnings,
+  opsForAttr, conditionWarning, coverageWarning, defaultOpFor, ruleWarnings,
   eventLeafKey, eventWarning, eventLeaves } from '@/lib/segmentAst.js';
 
 const GROUPS = [
@@ -99,6 +99,11 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
         wrong, rather than a modal on save. A saved segment is read back through this editor, so
         an older rule carrying an inert condition surfaces the moment anyone opens it. */}
     {(() => { const w = conditionWarning(r); return w
+      ? <span style={{ fontSize: 11.5, color: 'var(--warn, #e0a33e)', flexBasis: '100%' }}>⚠ {w}</span>
+      : null; })()}
+    {/* Absent-is-not-zero. Separate from the inert ⚠ above because it is a different claim —
+        this row DOES match real people, just far fewer than "never bought" reads as. */}
+    {(() => { const w = coverageWarning(r); return w
       ? <span style={{ fontSize: 11.5, color: 'var(--warn, #e0a33e)', flexBasis: '100%' }}>⚠ {w}</span>
       : null; })()}
   </>}
@@ -713,6 +718,9 @@ export default function SegmentsPage() {
             {(() => {
               const warns = ruleWarnings(seg.group, seg.items, eventCounts);
               if (!warns.length) return null;
+              // Red is reserved for "the audience is silently everyone". An undercount is amber:
+              // the rule works, it just means less than it reads as. Colouring it red alongside
+              // the widening case would flatten the difference that matters most.
               const widening = warns.some((w) => w.widening);
               return (
                 <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 7,
@@ -722,7 +730,9 @@ export default function SegmentsPage() {
                   <strong>
                     {widening
                       ? 'This rule excludes nobody — the audience is currently everyone.'
-                      : 'One condition in this rule matches nobody.'}
+                      : warns.some((w) => w.kind === 'inert')
+                        ? 'One condition in this rule matches nobody.'
+                        : 'One condition matches far fewer people than it probably should.'}
                   </strong>
                   <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
                     {warns.map((w, i) => <li key={i}>{w.text}</li>)}

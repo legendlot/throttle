@@ -103,6 +103,52 @@ const DATE_OPS = ['before_days', 'within_days'];
 // silently dropped, so the warning can say WHY instead of the row just looking fine.
 const EMPTY_ATTRS = { first: 'is not a real attribute', locale: 'is empty on every profile' };
 
+// ── ABSENT IS NOT ZERO, and on this data most profiles are absent ─────────────────────────────
+//
+// A "never bought" rule written the obvious way — `lifetime_orders is exactly 0` — returns a
+// FRACTION of the people it means. On an anonymous browser the attribute is not `0`, it is not
+// there at all, and `eval_segment_node` can only match rows that HAVE a value. Measured
+// 2026-08-14 on 30d `collection_viewed`: `is exactly 0` matched **1,912** profiles against
+// **21,319** for `Match NONE of [lifetime_orders at least 1]` — 11× the people. The bucket split
+// of those 22,773 viewers is the whole story: **19,404 have no attribute**, 1,909 hold a real
+// zero, 1,461 hold ≥1. Reported by Mishica (#bugs `1786723806.382959`).
+//
+// ⚠️ This is NOT the inert class. The condition is well-formed, the operator is legal for the
+// type, and it matches real people — it just silently means "of the customers we happen to know
+// an order count for" instead of "everyone who never bought". It reads as correct, which is why
+// it needs saying at the form.
+//
+// Coverage MEASURED 2026-08-16 over all 186,867 comms.profiles:
+//   SELECT k, count(*) FROM comms.profiles p,
+//     LATERAL jsonb_object_keys(coalesce(p.attributes,'{}'::jsonb)) k GROUP BY k;
+// Re-measure before editing — a wrong figure here either cries wolf or misses the case.
+// Only `attributes` keys are listed; display_name/city/locale are promoted COLUMNS and are not
+// resolved through this path.
+const ATTR_COVERAGE = {
+  lifetime_orders: 47.0,
+  total_spent: 47.0,
+  accepts_email_marketing: 47.0,
+  accepts_sms_marketing: 47.0,
+  shopify_created_at: 47.0,
+  full_name: 30.0,
+  last_order_at: 21.8,
+  tags: 4.5,
+  lifetime_value: 3.6,
+  last_delivery_at: 1.0,
+};
+// Below this, "the ones we have a value for" is a materially different population from "everyone".
+const SPARSE_BELOW_PCT = 95;
+
+// Does this condition MEAN "none / never / zero"? Only those undercount in a way the author
+// cannot see: `at least 1` also skips absent profiles, but nobody reads that as "everyone".
+function meansNone(row) {
+  const n = Number(row?.value);
+  if (!Number.isFinite(n)) return false;
+  if (row.op === 'eq' || row.op === 'lte') return n === 0;
+  if (row.op === 'lt') return n <= 1;
+  return false;
+}
+
 const attrType = (attr) => ATTR_TYPES[String(attr || '').trim()] || 'unknown';
 
 // Which operators to offer for an attribute. Unknown attribute → everything.
@@ -127,6 +173,21 @@ function conditionWarning(row) {
   }
   if (t === 'date') return `"${attr}" is a date — use "within last (days)" or "older than (days)".`;
   return `"${attr}" is a ${t}, so this operator matches nobody.`;
+}
+
+// The undercount warning, kept SEPARATE from conditionWarning because it is a different claim.
+// conditionWarning says "this matches nobody"; this says "this matches far fewer than you mean",
+// and collapsing them would put the wrong sentence on the banner.
+function coverageWarning(row) {
+  if (!row || row.type !== 'attr') return null;
+  const attr = String(row.attr || '').trim();
+  if (!attr || !meansNone(row)) return null;
+  const cov = ATTR_COVERAGE[attr];
+  if (cov == null || cov >= SPARSE_BELOW_PCT) return null;
+  const absent = Math.round(100 - cov);
+  return `${absent}% of profiles have no "${attr}" at all, and absent is not zero — this condition `
+    + `skips every one of them, so it means "of the customers we know a value for", not "everyone". `
+    + `For a true "never" rule use Match NONE of [ ${attr} at least 1 ] instead.`;
 }
 
 // A default operator that is valid for the attribute, used when the attribute changes under an
@@ -285,14 +346,22 @@ function eventWarning(row, count) {
 // event checks simply contribute nothing, so every existing caller and test is unchanged.
 function ruleWarnings(group, items, eventCounts) {
   return flattenItems(group, items)
-    .map(({ row, group: g }) => {
-      const text = row && row.type === 'event'
+    .flatMap(({ row, group: g }) => {
+      const out = [];
+      const inert = row && row.type === 'event'
         ? eventWarning(row, eventCounts?.[eventLeafKey(row)])
         : conditionWarning(row);
-      return text ? { text, widening: g === 'none' } : null;
+      if (inert) out.push({ text: inert, kind: 'inert', widening: g === 'none' });
+      // Reported even when the row is also inert: they are different faults and fixing one does
+      // not fix the other.
+      const under = coverageWarning(row);
+      if (under) out.push({ text: under, kind: 'undercount', widening: false });
+      return out;
     })
-    .filter(Boolean)
-    .sort((a, b) => Number(b.widening) - Number(a.widening));
+    // Inert-and-widening first (silently everyone), then the rest of the inert ones (silently
+    // nobody), then undercounts (quietly fewer than you meant).
+    .sort((a, b) => (Number(b.widening) - Number(a.widening))
+      || (Number(b.kind === 'inert') - Number(a.kind === 'inert')));
 }
 
 // Distinct event leaves in a rule, as [{ key, leaf }] — what the page needs to count. Distinct by
@@ -308,4 +377,5 @@ function eventLeaves(group, items) {
 
 export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS,
   ATTR_TYPES, OPS_BY_TYPE, EMPTY_ATTRS, attrType, opsForAttr, conditionWarning, defaultOpFor, flattenItems, ruleWarnings,
-  eventLeafKey, eventWarning, eventLeaves };
+  eventLeafKey, eventWarning, eventLeaves,
+  ATTR_COVERAGE, SPARSE_BELOW_PCT, meansNone, coverageWarning };

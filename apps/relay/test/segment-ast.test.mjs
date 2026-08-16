@@ -13,7 +13,8 @@
 import assert from 'node:assert';
 import { parseDef, itemsToDef, toLeaf, toRow, countConditions,
   opsForAttr, conditionWarning, defaultOpFor, ruleWarnings,
-  eventLeafKey, eventWarning, eventLeaves } from '../src/lib/segmentAst.js';
+  eventLeafKey, eventWarning, eventLeaves,
+  coverageWarning, meansNone, ATTR_COVERAGE } from '../src/lib/segmentAst.js';
 
 // Mirrors the OPS list in the segments page. Kept as a fixture rather than imported because the
 // page is a React client component and this suite runs under bare node.
@@ -28,18 +29,46 @@ const t = (n, f) => { try { f(); pass++; console.log('  ok  ', n); }
 
 const roundTrip = (def) => { const p = parseDef(def); return itemsToDef(p.group, p.items); };
 
-// ── the 11 live definitions, verbatim ────────────────────────────────────────
+// ── EVERY live definition, verbatim ──────────────────────────────────────────
+// ⚠️ Pulled from comms.segments 2026-08-16 (S289) — ALL 15, closing the long-standing gap where
+// this pinned 5 of 12 while the header claimed 11 and the commit claimed "every one". This is the
+// pair that silently rewrites a live audience on save, so partial coverage was a real hole.
+// Re-pull with:  SELECT jsonb_object_agg(name, definition) FROM comms.segments;
 const LIVE = {
-  'All buyers_Mishica': { all: [{ attr: 'lifetime_orders', op: 'gte', value: '1' }, { consent: true, channel: 'email', purpose: 'marketing', state: 'opted_in' }] },
+  'Test': { all: [{ op: 'eq', attr: 'city', value: 'Bangalore' }] },
   'HP Drop Test': { all: [{ count: 1, event: 'collection_viewed', where: { prop: 'collection_handle', value: 'l-o-t-build' } }] },
-  'Winback 90': { all: [{ attr: 'last_order_at', op: 'before_days', value: '90' }, { attr: 'lifetime_orders', op: 'gte', value: '1' }] },
-  'T-30 spend': { all: [{ attr: 'lifetime_value', op: 'gt', value: '3000' }, { attr: 'last_order_at', op: 'within_days', value: '30' }] },
+  'T-30 visitors': { all: [{ op: 'eq', attr: 'lifetime_orders', value: '0' }, { count: 1, event: 'collection_viewed', within: '30 days' }] },
+  'T-30 purchasers': { all: [{ op: 'within_days', attr: 'last_order_at', value: '30' }, { op: 'gte', attr: 'lifetime_orders', value: '1' }] },
+  'T-90 purchasers': { all: [{ op: 'within_days', attr: 'last_order_at', value: '90' }, { op: 'gte', attr: 'lifetime_orders', value: '1' }] },
+  'T-180 purchasers': { all: [{ state: 'opted_in', channel: 'whatsapp', consent: true, purpose: 'marketing' }, { op: 'within_days', attr: 'last_order_at', value: '180' }, { op: 'gte', attr: 'lifetime_orders', value: '1' }] },
+  'All buyers_Mishica': { all: [{ op: 'gte', attr: 'lifetime_orders', value: '1' }, { state: 'opted_in', channel: 'email', consent: true, purpose: 'marketing' }] },
+  'LOT Internal Staff': { all: [{ op: 'eq', attr: 'audience', value: 'internal_staff' }] },
+  'Winback 90 — Email': { all: [{ op: 'before_days', attr: 'last_order_at', value: 90 }, { state: 'opted_in', channel: 'email', consent: true, purpose: 'marketing' }] },
+  'T-90 Collection Views': { all: [{ count: 1, event: 'collection_viewed', within: '90 days' }, { none: [{ op: 'gte', attr: 'lifetime_orders', value: '1' }] }] },
+  'Last order within 120 days': { all: [{ op: 'within_days', attr: 'last_order_at', value: '120' }, { op: 'before_days', attr: 'last_order_at', value: '30' }] },
+  'High Speed Browsers_Mishica': { all: [{ count: 1, event: 'product_viewed', where: { prop: 'product_handle', value: ['apex-4x4-rc-car', 'gazer-4x4-rc-car', 'doughty-4x4-rc-car'] } }] },
+  'T-30 days purchasers, > 3000 spend': { all: [{ count: 1, event: 'order_placed', within: '30 days' }, { op: 'gte', attr: 'lifetime_value', value: '3000' }] },
+  'All customers excluding T-15 purchasers': { none: [{ op: 'within_days', attr: 'last_order_at', value: '15' }, { state: 'opted_out', channel: 'whatsapp', consent: true, purpose: 'marketing' }] },
+  'T-180 site visitors, excluding T-15 purchasers': { all: [{ op: 'within_days', attr: 'shopify_created_at', value: '180' }, { op: 'before_days', attr: 'last_order_at', value: '15' }] },
   'empty': {},
 };
 
+// ⚠️ KEY ORDER IS NOT A DIFFERENCE. These definitions live in a JSONB column, which does not
+// preserve key order, so comparing with deepStrictEqual against the literal above reports a diff
+// for every single row — a first cut of this check "found" 15 round-trip failures, all of them
+// key order and none of them real. Canonicalise, then compare.
+const canon = (v) => (Array.isArray(v) ? v.map(canon)
+  : (v && typeof v === 'object')
+    ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+    : v);
+
 for (const [name, def] of Object.entries(LIVE)) {
   t(`round-trip is lossless: ${name}`, () => {
-    assert.deepStrictEqual(roundTrip(def), def);
+    // `Winback 90 — Email` stores value as a NUMBER and comes back a string — the one real
+    // difference across all 15, pinned separately below and proven a no-op against the live
+    // evaluator. Normalise it here so this test measures structure, not that known coercion.
+    const norm = (d) => JSON.parse(JSON.stringify(canon(d), (k, v) => (k === 'value' && typeof v === 'number' ? String(v) : v)));
+    assert.deepStrictEqual(norm(roundTrip(def)), norm(def));
   });
 }
 
@@ -185,12 +214,28 @@ t('a correct rule produces no warnings at all', () => {
     { type: 'event', event: 'product_viewed', count: 1 },
   ];
   assert.deepEqual(ruleWarnings('all', clean), []);
-  // every live saved definition must be warning-free — none of them carried this fault when
-  // measured 2026-08-15, and a regression here would mean we broke a real audience.
+  // ⚠️ AMENDED 2026-08-16 (S289). This used to assert every live definition is warning-FREE. That
+  // stopped being true the moment the undercount guard landed — and the exception is a genuine
+  // finding, not a regression: `T-30 visitors` is written `lifetime_orders is exactly 0`, which is
+  // precisely Mishica's "never bought" case, so it really does address a fraction of the people it
+  // reads as. It is the ONLY live segment affected, which is also the evidence that the guard does
+  // not cry wolf: 14 of 15 stay silent.
+  //
+  // What must stay true for every live definition is that none is INERT — an inert live segment
+  // would mean we broke a real audience.
   for (const [name, def] of Object.entries(LIVE)) {
     const p = parseDef(def);
-    assert.deepEqual(ruleWarnings(p.group, p.items), [], `${name} should have no warnings`);
+    const w = ruleWarnings(p.group, p.items);
+    assert.deepEqual(w.filter((x) => x.kind === 'inert'), [], `${name} must have no inert condition`);
+    if (name !== 'T-30 visitors') {
+      assert.deepEqual(w, [], `${name} should have no warnings at all`);
+    }
   }
+  // pin the one exception by name, so silencing it needs a deliberate edit here
+  const tv = parseDef(LIVE['T-30 visitors']);
+  const tvw = ruleWarnings(tv.group, tv.items);
+  assert.equal(tvw.length, 1);
+  assert.equal(tvw[0].kind, 'undercount');
 });
 
 // ── event leaves: the inert class that can only be answered by counting ──────────────────────
@@ -238,6 +283,49 @@ t('eventLeaves returns each DISTINCT event leaf once, as a storable leaf', () =>
   assert.equal(leaves.find((l) => l.leaf.event === 'product_viewed').leaf.within, '30 days');
   // rows inside a nested group are found too
   assert.equal(eventLeaves('all', [{ type: 'group', group: 'none', rows: [b] }]).length, 1);
+});
+
+// ── absent is not zero (Mishica, #bugs 1786723806.382959) ────────────────────────────────────
+t('"never bought" written as lifetime_orders is exactly 0 is flagged as an UNDERCOUNT', () => {
+  const row = { type: 'attr', attr: 'lifetime_orders', op: 'eq', value: '0' };
+  const w = coverageWarning(row);
+  assert.ok(w, 'must warn');
+  assert.ok(w.includes('53%'), 'names the share with no value (100 - 47.0 coverage)');
+  assert.ok(w.includes('Match NONE of'), 'gives the rule that actually works');
+  // it is NOT the inert class — the condition is well-formed and matches real people
+  assert.equal(conditionWarning(row), null);
+  const warns = ruleWarnings('all', [row]);
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0].kind, 'undercount');
+  assert.equal(warns[0].widening, false, 'red is reserved for "the audience is everyone"');
+});
+
+t('only the "means none" shapes warn, and only on a SPARSE attribute', () => {
+  const on = (o) => coverageWarning({ type: 'attr', attr: 'lifetime_orders', ...o });
+  assert.ok(on({ op: 'eq', value: '0' }));
+  assert.ok(on({ op: 'lte', value: '0' }));
+  assert.ok(on({ op: 'lt', value: '1' }));
+  // "at least 1" also skips absent profiles, but nobody reads it as "everyone" — no warning
+  assert.equal(on({ op: 'gte', value: '1' }), null);
+  assert.equal(on({ op: 'eq', value: '3' }), null);
+  assert.equal(on({ op: 'gt', value: '0' }), null);
+  // an attribute we have no coverage figure for stays silent rather than guessing
+  assert.equal(coverageWarning({ type: 'attr', attr: 'something_new', op: 'eq', value: '0' }), null);
+  // non-attr rows are not this function's business
+  assert.equal(coverageWarning({ type: 'event', event: 'order_placed', count: 0 }), null);
+  assert.ok(meansNone({ op: 'eq', value: 0 }));
+  assert.ok(!meansNone({ op: 'eq', value: 'abc' }));
+});
+
+t('an inert AND undercounting row reports BOTH — fixing one does not fix the other', () => {
+  // a date operator on a numeric attr (inert) that also means "none" on a sparse attr
+  const row = { type: 'attr', attr: 'lifetime_orders', op: 'eq', value: '0' };
+  const dead = { type: 'attr', attr: 'lifetime_orders', op: 'within_days', value: '30' };
+  const warns = ruleWarnings('none', [dead, row]);
+  assert.equal(warns.length, 2);
+  assert.equal(warns[0].kind, 'inert', 'the widening inert one sorts first');
+  assert.equal(warns[0].widening, true);
+  assert.equal(warns[1].kind, 'undercount');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
