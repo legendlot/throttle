@@ -373,7 +373,21 @@ async function send(env, opts) {
     } else {
       const sys = {};
       if (purpose === 'marketing') {
-        const u = await unsubscribeUrl(env, opts.profileId, channel);
+        let u = await unsubscribeUrl(env, opts.profileId, channel);
+        // Test sends carry no profileId, so every test email shipped the literal
+        // "{unsubscribe_url}" as a dead footer link (found 2026-08-16, Mishica's builder
+        // report). Try the test recipient's own profile so internal testers see the real
+        // flow; failing that, a preview link — the invalid-token page — so the footer
+        // renders exactly as it will in a live send. Live sends are unchanged: no token,
+        // no link, same fail-closed posture as before.
+        if (!u && opts.isTest) {
+          const idr = await A.sbComms(
+            `/rest/v1/identifiers?type=eq.email&value=eq.${A.enc(String(to).trim().toLowerCase())}` +
+            `&select=profile_id&limit=1`, env);
+          const pid = idr.ok ? idr.data?.[0]?.profile_id : null;
+          if (pid) u = await unsubscribeUrl(env, pid, channel);
+          if (!u) u = 'https://commsops.afshaan.workers.dev/unsubscribe?token=test-preview';
+        }
         if (u) sys.unsubscribe_url = u;
       }
       const body = renderEmail(template, {
