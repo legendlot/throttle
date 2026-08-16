@@ -216,9 +216,23 @@ function lintWaTemplate(content = {}, variables) {
         err('button_mapped_but_static', `URL button ${i + 1} is static but a button mapping exists. `
           + 'Sending a parameter for a static button is rejected — drop the mapping or add {{1}}.');
       }
-      if (vars.length === 1 && !mappedBtn) {
-        err('button_var_unmapped', `URL button ${i + 1} carries {{1}} but no mapping entry supplies `
-          + 'it — every send will fail to bind it.');
+      // ⚠️ `target_base` is a SECOND, equally valid supplier of the {{1}} — added 2026-08-16 for
+      // the static-URL clone wave, and without this exception that wave cannot be submitted at all.
+      //
+      // A redirect-backed button gets its suffix at SEND time: applyButtonRedirects mints a code
+      // against `target_base` and writes it into the button component, synthesizing that component
+      // when the template has no button mapping slot (links.js). A STATIC template being cloned to
+      // `/r/{{1}}` has no per-recipient variable to map — the whole point is that the token always
+      // resolves to the base — so demanding a mapping entry here would reject exactly the shape the
+      // clone wave is built on, with a message telling the author to add a variable that has no
+      // value to carry.
+      //
+      // The check still fires for a `{{1}}` button with NEITHER a mapping slot NOR `target_base`,
+      // which remains a genuine dead link: nothing anywhere would supply the parameter.
+      if (vars.length === 1 && !mappedBtn && !b.target_base) {
+        err('button_var_unmapped', `URL button ${i + 1} carries {{1}} but nothing supplies it — no `
+          + 'mapping entry and no target_base. Every send will fail to bind it. Either map a '
+          + 'variable to the button, or set target_base so a tracked link is minted at send time.');
       }
     }
   });

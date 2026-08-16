@@ -205,5 +205,39 @@ t('marketing with no opt-out WARNS but does not block', () => {
   assert.ok(r.warnings.some((w) => w.code === 'marketing_no_optout'));
 });
 
+// ── the static-URL clone shape (2026-08-16) ──────────────────────────────────────────
+// A `/r/{{1}}` button whose suffix is minted at SEND time from `target_base` needs no mapping
+// slot — links.js synthesizes the button component. Without this exception the whole static-URL
+// clone wave is unsubmittable.
+t('a {{1}} URL button with target_base and NO mapping slot is allowed', () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Dive Back In', url: 'https://lottoys.in/r/{{1}}',
+                target_base: 'https://legendoftoys.com/collections/all' }],
+  }));
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.ok(!codes(r).includes('button_var_unmapped'));
+});
+
+t('a {{1}} URL button with NEITHER a mapping slot NOR target_base is still caught', () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop', url: 'https://lottoys.in/r/{{1}}' }],
+  }));
+  assert.ok(codes(r).includes('button_var_unmapped'),
+    'nothing supplies the parameter — that is still a dead link');
+});
+
+t('the clone shape serialises a valid Meta sample url from the default suffix', () => {
+  // buildComponents falls back to DEFAULT_URL_EXAMPLE_SUFFIX when there is no example_suffix and
+  // no button slot, so the clone needs no `example` of its own — and must NOT carry a full url in
+  // one, which is the button_example_is_url trap.
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Shop Now', url: 'https://lottoys.in/r/{{1}}',
+                target_base: 'https://www.legendoftoys.com/collections/all',
+                example: 'https://lottoys.in/r/kQ7mZ2xW9pLd4RtV6nBh8s' }],
+  }));
+  assert.ok(codes(r).includes('button_example_is_url'),
+    'a full url in `example` is the nested-sample trap and must still be refused');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
