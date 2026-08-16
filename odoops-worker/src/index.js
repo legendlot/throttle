@@ -3832,6 +3832,108 @@ async function syncAmazonInventory(env) {
     in_stock: rows.filter(r => r.available_qty > 0).length, pull_complete: pullComplete };
 }
 
+// ── FBA ledger → inventory history: ONE window (S289) ─────────────────────────
+// Shared by the workflow trigger and the hourly cron tick so the two can never drift.
+//
+// ⚠️ Three parsing facts, each established by probe_fba_ledger against the REAL report. Do not
+// "simplify" any away — each one silently produces wrong data rather than an error:
+//   1. EVERY field is wrapped in literal double quotes ("08/15/2026"), header included.
+//   2. Dates are MM/DD/YYYY, not ISO.
+//   3. `Disposition` is multi-valued; only SELLABLE is sellable stock. ~50% of rows are not
+//      (CUSTOMER_DAMAGED etc.) — summing all of them roughly doubles reported history.
+const _unqLedger = (v) => String(v ?? '').trim().replace(/^"(.*)"$/s, '$1').trim();
+async function fetchLedgerWindow(env, channelId, host, mkt, fromISO, toISO) {
+  const token = await getAmazonToken(env);
+  const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+  const rid = await createAmazonReport(host, H, mkt, fromISO, toISO,
+    'GET_LEDGER_SUMMARY_VIEW_DATA',
+    { aggregateByLocation: 'COUNTRY', aggregatedByTimePeriod: 'DAILY' });
+  let rep = null;
+  for (let a = 0; a < 40; a++) {
+    await new Promise(r => setTimeout(r, 15000));
+    const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+    rep = await pr.json().catch(() => ({}));
+    if (!['IN_QUEUE', 'IN_PROGRESS'].includes(rep.processingStatus)) break;
+  }
+  if (rep?.processingStatus !== 'DONE' || !rep.reportDocumentId) {
+    return { rows: 0, written: 0, skipped: 0, status: rep?.processingStatus || 'unknown' };
+  }
+  const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+  const text = await fetchAmazonDoc(await dr.json());
+  const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+  const header = (grid[0] || []).map(_unqLedger);
+  const ix = (n) => header.findIndex(h => h.toLowerCase() === n);
+  const dI = ix('date'), mI = ix('msku'), tI = ix('title'), dispI = ix('disposition'), endI = ix('ending warehouse balance');
+  // Assert the shape — a renamed column must fail loudly, not quietly write zeros.
+  if (dI < 0 || mI < 0 || endI < 0 || dispI < 0) throw new Error('ledger header shape changed: ' + header.join('|').slice(0, 200));
+  const agg = new Map(); let skipped = 0;
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (_unqLedger(row[dispI]).toUpperCase() !== 'SELLABLE') { skipped++; continue; }
+    const md = _unqLedger(row[dI]).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    const sku = _unqLedger(row[mI]);
+    if (!md || !sku) continue;
+    const k = `${md[3]}-${md[1]}-${md[2]}|${sku}`;
+    const cur = agg.get(k) || { iso: `${md[3]}-${md[1]}-${md[2]}`, sku, title: _unqLedger(row[tI]) || null, qty: 0 };
+    cur.qty += num(_unqLedger(row[endI]));
+    agg.set(k, cur);
+  }
+  const mm = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&select=channel_sku,product_code`);
+  const skuMap = new Map((mm.ok ? mm.data : []).map(x => [String(x.channel_sku), x.product_code]));
+  const body = [...agg.values()].map(a => ({
+    // End of the ledger day in the MARKETPLACE timezone (IST) = 18:30 UTC — cannot collide with
+    // the live hourly readings on the (captured_at, channel_id, sku) PK.
+    captured_at: `${a.iso}T18:30:00.000Z`,
+    channel_id: channelId, sku: a.sku, product_code: skuMap.get(a.sku) || null,
+    product_title: a.title, available_qty: Math.round(a.qty),
+    purchasable: a.qty > 0, pull_complete: true,
+  }));
+  if (body.length) {
+    await sbInsertChunked('/rest/v1/inventory_reading?on_conflict=captured_at,channel_id,sku',
+      body, 'return=minimal,resolution=merge-duplicates');
+  }
+  return { rows: Math.max(grid.length - 1, 0), written: body.length, skipped, status: 'DONE' };
+}
+
+// ── FBA ledger backfill: ONE WINDOW PER HOURLY CRON TICK (S289) ───────────────
+// ⚠️ WHY A CRON TICK AND NOT A LOOP. SP-API `createReport` allows ~1 request/60s sustained with a
+// burst of ~15. A single workflow walking 18 windows back-to-back drained the burst and then failed
+// EVERY remaining window with 429 — retries included, because a 60s retry delay is exactly the
+// refill rate. Worse, the failed calls still consume quota, so restarting immediately made recovery
+// slower. One window per hourly tick is structurally incapable of hitting the limit and needs no
+// backoff logic at all. Do not "speed this up" by looping windows inside one tick.
+//
+// Cursor-driven so it is resumable and terminating: `ledger_backfill_cursor` advances one window per
+// success (including an empty window — no data for a period is a real answer), and the job switches
+// itself off once the cursor passes `ledger_backfill_until`. Writes are idempotent upserts, so a
+// re-run over covered ground is a no-op.
+const LEDGER_TICK_WINDOW_DAYS = 30;
+async function fbaLedgerBackfillTick(env) {
+  const cc = await sbSales(`/rest/v1/connector_config?adapter_kind=eq.amazon_spapi&select=channel_id,config&limit=1`);
+  const row = (cc.ok && cc.data[0]) ? cc.data[0] : null;
+  if (!row) return { skipped: 'no amazon connector' };
+  const c = row.config || {};
+  if (!c.ledger_backfill_enabled) return { skipped: 'disabled' };
+  const cursor = c.ledger_backfill_cursor, until = c.ledger_backfill_until;
+  if (!cursor || !until) return { skipped: 'cursor/until not set' };
+  if (cursor >= until) {
+    await patchConnectorConfig(row.channel_id, c, { ledger_backfill_enabled: false, ledger_backfill_done_at: nowISO() });
+    return { done: true, cursor };
+  }
+  const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+  const mkt = c.marketplace_id;
+  const fromMs = Date.parse(cursor + 'T00:00:00Z');
+  const endMs = Math.min(fromMs + LEDGER_TICK_WINDOW_DAYS * 86400000, Date.parse(until + 'T00:00:00Z'));
+  const res = await fetchLedgerWindow(env, row.channel_id, host, mkt,
+    new Date(fromMs).toISOString(), new Date(endMs).toISOString());
+  // Advance ONLY on a completed report. A rate-limited or still-processing window must be retried
+  // next tick against the SAME cursor, never skipped — a silently skipped window is a permanent hole.
+  if (res.status !== 'DONE') return { retry_same_window: cursor, status: res.status };
+  const next = new Date(endMs).toISOString().slice(0, 10);
+  await patchConnectorConfig(row.channel_id, c, { ledger_backfill_cursor: next });
+  return { window: [cursor, next], ...res };
+}
+
 // ── Stock alerts → Slack (S223) ────────────────────────────────────────────────
 // Drains sales.stock_alert_outbox. Detection lives in the DB (detect_stock_alerts, which only
 // enqueues flips CONFIRMED across N consecutive readings) — this is purely the sender.
@@ -4138,6 +4240,13 @@ export default {
       const ai = await syncAmazonInventory(env);
       if (ai?.skus) console.log('odoops cron: amazon inventory', JSON.stringify(ai));
     } catch (e) { console.error('odoops cron (amazon inventory) failed:', e?.message || e); }
+    // FBA inventory HISTORY — exactly ONE 30-day window per tick, paced by the cron itself so it
+    // cannot hit the SP-API createReport rate limit. Self-terminating via its cursor. Best-effort:
+    // a failed tick simply retries the same window next hour.
+    try {
+      const lb = await fbaLedgerBackfillTick(env);
+      if (lb && !lb.skipped) console.log('odoops cron: fba ledger backfill', JSON.stringify(lb));
+    } catch (e) { console.error('odoops cron (fba ledger backfill) failed:', e?.message || e); }
     // Drain the confirmed-flip outbox to Slack. Runs AFTER syncInventorySnapshot so a flip
     // detected this tick goes out this tick. Inert (logs + holds) until SLACK_WEBHOOK_STOCK is set.
     try {
