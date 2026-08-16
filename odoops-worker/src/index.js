@@ -4109,6 +4109,22 @@ export default {
             return ok({ rows: r.data || [] });
           }
 
+          case 'getAccessories': {   // S289 — "Accessories & others" MEMO line (unmapped spares/gift-wrap/service)
+            // ⚠️ Memo only — this is read straight off staging and is NOT in sales_fact, so it is
+            // deliberately OUTSIDE every Odo total. Do not add it into gross/units anywhere.
+            if (!canView(P)) return err('No permission', 403);
+            const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
+            const r = await rpcSales('f_accessories_rollup', {
+              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
+              p_channels: chans.length ? chans : null,
+            });
+            if (!r.ok) return err('Accessories rollup failed: ' + JSON.stringify(r.data), 502);
+            const rows = r.data || [];
+            const total = rows.reduce((a, x) => { a.units += num(x.units); a.gross += num(x.gross); a.skus += num(x.skus); return a; },
+                                      { units: 0, gross: 0, skus: 0 });
+            return ok({ rows, total });
+          }
+
           case 'getMarketing': {
             const r = await rpcSales('f_mkt_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'platform' });
             if (!r.ok) return err('Marketing rollup failed: ' + JSON.stringify(r.data), 502);

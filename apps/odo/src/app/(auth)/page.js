@@ -61,6 +61,9 @@ export default function Dashboard() {
   const [prevRows, setPrevRows] = useState([]);
   const [segRows, setSegRows] = useState([]);        // order-grain (f_order_rollup) — headline only
   const [segPrevRows, setSegPrevRows] = useState([]);
+  // "Accessories & others" MEMO — unmapped spares/gift-wrap/service. Deliberately NOT folded into
+  // any total: it is read off staging, never sales_fact. Kept in its own state so it can't leak in.
+  const [acc, setAcc] = useState({ rows: [], total: { units: 0, gross: 0, skus: 0 } });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
@@ -91,9 +94,11 @@ export default function Dashboard() {
       // order-grain (complete, sku-map-independent) — drives the hybrid headline totals only
       salesGet('getSegregation', { from, to, channel_id: chArg }, session),
       salesGet('getSegregation', { from: pp.from, to: pp.to, channel_id: chArg }, session),
-    ]).then(([cur, prev, seg, segPrev]) => {
+      salesGet('getAccessories', { from, to, channel_id: chArg }, session),
+    ]).then(([cur, prev, seg, segPrev, accessories]) => {
       setRows(cur?.rows || []); setPrevRows(prev?.rows || []);
       setSegRows(seg?.rows || []); setSegPrevRows(segPrev?.rows || []);
+      setAcc({ rows: accessories?.rows || [], total: accessories?.total || { units: 0, gross: 0, skus: 0 } });
     })
       .catch(e => setErr(e.message || 'Failed to load'))
       .finally(() => setLoading(false));
@@ -378,6 +383,25 @@ export default function Dashboard() {
                 );
               })}
             </div>
+
+            {/* Accessories & others — ONE bundled MEMO line. Sits below the variant board on
+                purpose: these are real sales that have no product variant (gift wrap, spares,
+                paid repairs), so they can be seen without being attributed to a car. NOT in any
+                total above — mapping them to variants would inflate variant units. */}
+            {acc.total.gross > 0 && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ ...NAME, color: 'var(--t2)' }}>Accessories &amp; others</span>
+                  <span style={{ ...NUM, color: 'var(--t3)', width: 54 }}>{fmtInt(acc.total.units)}</span>
+                  <span style={{ ...NUM, color: 'var(--t2)', fontWeight: 600, width: 78 }}>{inr(acc.total.gross)}</span>
+                </div>
+                <div style={{ fontFamily: 'var(--ui)', fontSize: 10.5, color: 'var(--t3)', marginTop: 5, lineHeight: 1.5 }}>
+                  {acc.rows.map(r => r.bucket).filter((v, i, a) => a.indexOf(v) === i).join(' · ')}
+                  {' — '}{fmtInt(acc.total.skus)} unmapped SKUs.{' '}
+                  <b style={{ color: 'var(--t2)' }}>Memo only — not counted in the totals above.</b>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

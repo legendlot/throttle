@@ -369,6 +369,35 @@ export default function ReceivingPage() {
     } catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
+  // Exp/box is the only thing that makes the inward variance report mean anything, and it
+  // was being left unset from memory alone — every row on SHP-154 read "no expected qty
+  // set", so the report's headline comparison was dead weight. Afshaan 2026-08-16: tighten
+  // the ENTRY, do not stop intake. So this nudges once at box save and the operator can
+  // still proceed; after the prompt, whatever is saved (a number, or nothing) is deliberate.
+  // Scoped to lines actually being counted whose PO qty is known — there is nothing to
+  // expect against on a line the PO never priced, and nagging about those trains it away.
+  function confirmMissingBoxExpectations() {
+    const countedLineIds = new Set(
+      Object.entries(boxQtys)
+        .filter(([, qty]) => Number(qty) > 0)
+        .map(([key]) => key.split(':')[0])
+    );
+    const missing = (lines || [])
+      .filter(l => l.line_type !== 'unexpected')
+      .filter(l => countedLineIds.has(l.line_id))
+      .filter(l => (parseInt(l.qty_expected) || 0) > 0)
+      .filter(l => !(Number(boxExpects[l.line_id]) > 0));
+    if (!missing.length) return true;
+    const shown = missing.slice(0, 6).map(l => l.part_code).join(', ');
+    const more  = missing.length > 6 ? `, and ${missing.length - 6} more` : '';
+    const isOne = missing.length === 1;
+    return window.confirm(
+      `${missing.length} line${isOne ? '' : 's'} in this box ha${isOne ? 's' : 've'} no Exp/box set:\n${shown}${more}\n\n`
+      + 'The inward variance report cannot compare these — they will read "not set" '
+      + 'instead of showing a shortfall or an excess.\n\nSave the box anyway?'
+    );
+  }
+
   // Persist what was expected in this box alongside the count. Best-effort: a failure
   // here must never lose the counts the operator just entered, so it is logged and
   // swallowed rather than surfaced as a failed intake.
@@ -611,6 +640,7 @@ export default function ReceivingPage() {
         ok_qty:  parseInt(boxQtys[`${lid}:OK`])      || 0,
         dmg_qty: parseInt(boxQtys[`${lid}:Damaged`]) || 0,
       }));
+      if (!confirmMissingBoxExpectations()) return;
       setBoxSubmitting(true);
       try {
         const res = await workerFetch('amendBoxIntake', {
@@ -647,6 +677,7 @@ export default function ReceivingPage() {
     if (!entries.length && !unexpectedItems.length) {
       showToast('Enter at least one qty', 'error'); return;
     }
+    if (!confirmMissingBoxExpectations()) return;
     setBoxSubmitting(true);
     try {
       const res = await workerFetch('postBoxIntake', {
@@ -683,6 +714,7 @@ export default function ReceivingPage() {
       entries.filter(e => e.condition === 'OK').map(e => e.line_id)
     )];
 
+    if (!confirmMissingBoxExpectations()) return;
     setBoxSubmitting(true);
     try {
       // Step 1: Submit box intake
