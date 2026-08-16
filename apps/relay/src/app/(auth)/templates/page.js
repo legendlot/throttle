@@ -598,6 +598,17 @@ export default function TemplatesPage() {
         showToast('Marketing emails must include {unsubscribe_url} — add the merge tag before saving.', 'error');
         return;
       }
+      // A literal ${…} (a JS-template placeholder pasted in with handoff content) inside an
+      // inline style makes Gmail drop the WHOLE style attribute, and MJML's font-size:0px
+      // outer-cell pattern then renders the element at zero size — buttons, captions and the
+      // unsubscribe footer silently vanish for Gmail readers while the canvas looks perfect.
+      // Cost a live debugging round 2026-08-16 (Freedom to Play Emailer: one ${FONT} in
+      // mj-all propagated into 20 compiled styles). {token} single-brace merge tags are fine;
+      // "${" specifically is never legitimate authored content.
+      if ((payload.content.html_body || '').includes('${') || (payload.content.mjml || '').includes('${')) {
+        showToast('The email contains a literal "${…}" placeholder — Gmail hides every element styled with it. Remove it (usually pasted-in ${FONT}) before saving.', 'error');
+        return;
+      }
       const stray = findUndeclaredTokens(
         [payload.content.subject, payload.content.html_body, payload.content.text_body],
         payload.variables.map((v) => v.token));
@@ -644,6 +655,14 @@ export default function TemplatesPage() {
       // Send the in-memory template so it works before/without saving. Test values are
       // passed as BOTH constants and recipient overrides so any matching var resolves.
       const payload = buildPayload();
+      // Same guard as save(): a literal ${…} in the HTML makes Gmail drop whole style
+      // attributes and zero-size the affected elements — a test of that template "loses"
+      // buttons/footer in the inbox and burns a debugging round on a healthy pipeline.
+      if (t.channel === 'email' &&
+          ((payload.content.html_body || '').includes('${') || (payload.content.mjml || '').includes('${'))) {
+        showToast('The email contains a literal "${…}" placeholder — Gmail hides every element styled with it. Remove it before testing.', 'error');
+        setTesting(false); return;
+      }
       const r = await workerFetch('sendTest', {
         channel: t.channel, to: composeTestTo(),
         // purpose drives sender ROUTING (purpose-match within the template's WABA) — without
