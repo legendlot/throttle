@@ -74,17 +74,26 @@ async function send(rendered, env) {
 
 // TrustSignal RCS webhook events → normalized updates for webhooks.js handleTrustsignalRcs.
 //
-// ⚠️ Every field name here is INFERRED — the vendor publishes webhook payloads for WhatsApp
-// (25+) and none for RCS, same gap as SMS. Events are registered per-type in the Sigmo UI
-// (Delivery_status · Fallback · Click · User_response · Template · Bot), and the payload may or
-// may not carry the event name — so classification falls back to shape (a url ⇒ click, a status
-// ⇒ delivery). Unknown statuses return canonical_status:null and are logged upstream, never
-// thrown: the published catalogue is explicitly partial.
+// Field names verified against the vendor's OWN "RCS Webhook Payload Reference" (Sigmo UI,
+// read 2026-08-17 while registering the webhooks — this reference exists in the portal even
+// though the Postman collection ships no RCS payloads). The documented shapes:
+//   Delivery Status (webhook_type 'rcs_message'): transaction_id · mid · to · route ·
+//     status ∈ {delivered, nonrcs, failed, read} · st (submission ts) · dlrt (DLR ts) ·
+//     credit (number) · error · error_code · variables
+//   Click (also webhook_type 'rcs_message'): status:'click' · final_url · st · ip · user_agent
+//     — a click is a STATUS VALUE on the message webhook, not its own event shape.
+//   Fallback (webhook_type 'rcs_fallback_status'): transaction_id · mid (the SMS leg's id) ·
+//     status ∈ {delivered, failed} · st · dlrt · error — ⚠️ this is the SMS LEG'S OWN DLR,
+//     not a mere "fallback happened" ping: it BOTH implies the flip AND carries the surviving
+//     leg's terminal status.
+//   User Response (webhook_type 'rcs_user_response'): phone · response · response_type ·
+//     tlmsgid · mvar · camp_id — NO transaction_id; tlmsgid is the message reference.
+// The legacy event/url fallbacks below are kept as a second net for undocumented variants;
+// unknown statuses still return canonical_status:null and are logged upstream, never thrown.
 //
-// The one mapping that carries real logic (F4): BOTH a `Fallback` event AND a Delivery_status of
-// `nonrcs` mean "the RCS leg did not deliver; the SMS leg went out". They can both arrive, in
-// either order. Each is emitted as {fallback_flip:true}; idempotency lives in the handler's
-// PATCH predicate (fallback_from IS NULL), not here.
+// F4: BOTH 'rcs_fallback_status' AND a Delivery_status of 'nonrcs' imply the flip, can both
+// arrive, in either order. Each is emitted with {fallback_flip:true}; idempotency lives in the
+// handler's PATCH predicate (fallback_from IS NULL), not here.
 const RCS_STATUS = {
   delivered: 'delivered',
   read: 'opened',                  // RCS 'read' → our canonical 'opened' (same as WA)
@@ -99,29 +108,44 @@ const RCS_STATUS = {
 function one(p) {
   if (!p || typeof p !== 'object') return null;
   const txid = p.transaction_id || p.transactionId || p.txid || null;
-  const at = p.timestamp || p.time || p.created_at || new Date().toISOString();
-  const ev = String(p.event || p.event_type || p.type || '').toLowerCase();
+  // dlrt is the delivery-report timestamp, st the submission timestamp — dlrt dates the event
+  // being reported, so it wins when present.
+  const at = p.dlrt || p.st || p.timestamp || p.time || new Date().toISOString();
+  const wt = String(p.webhook_type || '').toLowerCase();
+  const ev = String(p.event || p.event_type || '').toLowerCase();
   const status = String(p.status || p.delivery_status || '').toLowerCase();
   const route = String(p.route || '').toLowerCase() || null;
+  const credit = p.credit ?? p.sms_cost ?? null;
+  const cost = credit == null || !Number.isFinite(Number(credit)) ? null : Number(credit);
 
-  // Fallback — as its own event or as a nonrcs delivery status.
-  if (ev === 'fallback' || status === 'nonrcs') {
-    // The SMS leg's credit, when the payload carries one — applied ONLY on the flip (F4).
-    const cost = p.sms_cost ?? p.cost ?? null;
-    return { provider_message_id: txid, fallback_flip: true, at,
-             cost: cost == null || !Number.isFinite(Number(cost)) ? null : Number(cost) };
+  // User_response — carries NO transaction_id; tlmsgid references the message log. Journey
+  // branching is build step 10; the handler logs these so real shapes accumulate first.
+  if (wt === 'rcs_user_response' || ev === 'user_response' || p.postback) {
+    return { provider_message_id: txid || p.tlmsgid || null, user_response: true,
+             postback: p.postback || p.response || null, at };
   }
 
-  // Click — F12: this maps onto the EXISTING `link_clicked` event upstream; never a new name.
-  const url = p.url || p.clicked_url || p.dest_url || null;
-  if (ev === 'click' || (url && !status)) {
+  // The SMS fallback leg's DLR — flip + the surviving leg's own terminal status in one event.
+  if (wt === 'rcs_fallback_status' || ev === 'fallback') {
+    return {
+      provider_message_id: txid, fallback_flip: true, at, cost,
+      sms_status: status === 'delivered' ? 'delivered' : status === 'failed' ? 'failed' : null,
+      reason: status === 'failed' ? String(p.error || 'fallback_failed').slice(0, 140) : null,
+    };
+  }
+
+  // Click — a status value on the message webhook; the url field is `final_url`.
+  // F12: maps onto the EXISTING `link_clicked` event upstream; never a new name.
+  const url = p.final_url || p.url || p.clicked_url || p.dest_url || null;
+  if (status === 'click' || ev === 'click' || (url && !status)) {
     return { provider_message_id: txid, click: true, clicked_url: url, at, route };
   }
 
-  // User_response (suggested-reply postback) — journey branching is build step 10; recorded
-  // by the handler as a log line until then so real payload shapes accumulate.
-  if (ev === 'user_response' || p.postback) {
-    return { provider_message_id: txid, user_response: true, postback: p.postback || p.reply || null, at };
+  // nonrcs — the RCS leg reporting it went out as SMS. Flip only; the SMS leg's status
+  // arrives separately on 'rcs_fallback_status'. No cost carried: the delivery webhook's
+  // `credit` on this status describes the RCS attempt, not the SMS leg.
+  if (status === 'nonrcs') {
+    return { provider_message_id: txid, fallback_flip: true, at, cost: null, sms_status: null, reason: null };
   }
 
   if (!status) return null;

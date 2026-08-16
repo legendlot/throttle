@@ -44,28 +44,57 @@ const GOOD = {
     assert.strictEqual(r.reason, 'rcs_template_not_registered');
   });
 
-  // ── parseStatusWebhook(): classification.
-  t('Fallback event → fallback_flip', () => {
-    const [ev] = parseStatusWebhook({ event: 'Fallback', transaction_id: 'tx1', sms_cost: '0.1' });
-    assert.strictEqual(ev.fallback_flip, true);
-    assert.strictEqual(ev.provider_message_id, 'tx1');
-    assert.strictEqual(ev.cost, 0.1);           // F11 — string credit coerced to number
-  });
-  t('Delivery_status nonrcs → fallback_flip too (both arrive, either order)', () => {
-    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'nonrcs' });
-    assert.strictEqual(ev.fallback_flip, true);
-  });
-  t('delivered → delivered', () => {
-    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'delivered', route: 'rcs' });
+  // ── parseStatusWebhook(): classification. Payload shapes below are the vendor's OWN examples
+  //    from the Sigmo "RCS Webhook Payload Reference" (read 2026-08-17), verbatim where possible.
+  t("documented Delivery Status payload → delivered, dated by dlrt, credit read", () => {
+    const [ev] = parseStatusWebhook({
+      transaction_id: 'txn_123456789', mid: 'msg_987654321', to: '+919999999999',
+      route: 'rcs', status: 'delivered', st: '2026-07-23T10:15:00Z', dlrt: '2026-07-23T10:15:03Z',
+      credit: 1, template_id: 'welcome_template', bot_id: 'sample_bot',
+      error: '', error_code: '', webhook_type: 'rcs_message',
+    });
     assert.strictEqual(ev.canonical_status, 'delivered');
+    assert.strictEqual(ev.at, '2026-07-23T10:15:03Z');   // dlrt wins over st
     assert.strictEqual(ev.route, 'rcs');
   });
+  t("documented Click payload → click with final_url (a STATUS value, not an event shape)", () => {
+    const [ev] = parseStatusWebhook({
+      transaction_id: 'txn_123456789', to: '+919999999999', status: 'click',
+      st: '2026-07-23T10:30:15Z', final_url: 'https://example.com/offer',
+      ip: '103.25.142.18', user_agent: 'Mozilla/5.0 (Linux; Android 14)', webhook_type: 'rcs_message',
+    });
+    assert.strictEqual(ev.click, true);
+    assert.strictEqual(ev.clicked_url, 'https://example.com/offer');
+  });
+  t("documented Fallback payload → flip + the SMS leg's own terminal status", () => {
+    const [ev] = parseStatusWebhook({
+      transaction_id: 'txn_456789123', mid: 'sms_mid_123456', to: '+919999999999',
+      status: 'delivered', st: '2026-07-23T14:20:00Z', dlrt: '2026-07-23T14:20:03Z',
+      error: '', webhook_type: 'rcs_fallback_status',
+    });
+    assert.strictEqual(ev.fallback_flip, true);
+    assert.strictEqual(ev.sms_status, 'delivered');
+  });
+  t('a FAILED fallback carries the flip AND the failure reason (F8)', () => {
+    const [ev] = parseStatusWebhook({
+      transaction_id: 'txn_1', status: 'failed', error: 'dnd', webhook_type: 'rcs_fallback_status',
+    });
+    assert.strictEqual(ev.fallback_flip, true);
+    assert.strictEqual(ev.sms_status, 'failed');
+    assert.strictEqual(ev.reason, 'dnd');
+  });
+  t('Delivery_status nonrcs → flip only, no sms_status, no cost (that arrives on the fallback DLR)', () => {
+    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'nonrcs', credit: 1, webhook_type: 'rcs_message' });
+    assert.strictEqual(ev.fallback_flip, true);
+    assert.strictEqual(ev.sms_status, null);
+    assert.strictEqual(ev.cost, null);
+  });
   t("RCS 'read' → canonical 'opened' (same mapping as WhatsApp)", () => {
-    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'read' });
+    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'read', webhook_type: 'rcs_message' });
     assert.strictEqual(ev.canonical_status, 'opened');
   });
-  t('failed carries a reason', () => {
-    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'failed', error: 'blocked' });
+  t('failed carries a reason from `error`', () => {
+    const [ev] = parseStatusWebhook({ transaction_id: 'tx1', status: 'failed', error: 'blocked', error_code: 'E42' });
     assert.strictEqual(ev.canonical_status, 'failed');
     assert.strictEqual(ev.reason, 'blocked');
   });
@@ -74,15 +103,16 @@ const GOOD = {
     assert.strictEqual(ev.canonical_status, null);
     assert.strictEqual(ev.raw_status, 'quantum_flux');
   });
-  t('Click event → click with url', () => {
-    const [ev] = parseStatusWebhook({ event: 'Click', transaction_id: 'tx1', url: 'https://x/y' });
-    assert.strictEqual(ev.click, true);
-    assert.strictEqual(ev.clicked_url, 'https://x/y');
-  });
-  t('User_response → postback captured, no status write', () => {
-    const [ev] = parseStatusWebhook({ event: 'User_response', transaction_id: 'tx1', postback: 'BUY_NOW' });
+  t("documented User Response payload → captured via tlmsgid (it has NO transaction_id)", () => {
+    const [ev] = parseStatusWebhook({
+      phone: '+919999999999', mtype: 'text', response: 'I would like to know more',
+      status: 'received', from: '+919999999999', st: '2026-07-23T11:15:30Z',
+      bot_id: 'bot_12345', response_type: 'text', webhook_type: 'rcs_user_response',
+      tlmsgid: 'msg_987654321', template_id: 'welcome_template',
+    });
     assert.strictEqual(ev.user_response, true);
-    assert.strictEqual(ev.postback, 'BUY_NOW');
+    assert.strictEqual(ev.provider_message_id, 'msg_987654321');
+    assert.strictEqual(ev.postback, 'I would like to know more');
   });
   t('array, {data:[]}, {events:[]} and single-object payloads all normalize', () => {
     const p = { transaction_id: 'tx1', status: 'delivered' };

@@ -252,6 +252,24 @@ async function handleTrustsignalRcs(env, body) {
         await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}&fallback_from=is.null`, env,
           { method: 'PATCH', body: JSON.stringify(patch) }),
         { message_id: row.id });
+      // 'rcs_fallback_status' is the SMS leg's OWN DLR, so it can carry the surviving leg's
+      // terminal status in the same event (vendor payload reference). Applied SEPARATELY from
+      // the flip — flip idempotency is the fallback_from predicate, status monotonicity is the
+      // rank ladder, and coupling them would make the second fallback event (both 'nonrcs' and
+      // the DLR arrive) silently drop a real delivered/failed.
+      if (ev.sms_status && rcsUpgrade(row.status, ev.sms_status)) {
+        A.checkWrite('rcs_fallback_status_patch_failed',
+          await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              status: ev.sms_status,
+              provider_status: ev.sms_status,
+              ...(ev.reason ? { reason: ev.reason } : {}),
+              ...(ev.sms_status === 'delivered' && ev.at ? { delivered_at: ev.at } : {}),
+            }),
+          }),
+          { message_id: row.id, to: ev.sms_status });
+      }
       continue;
     }
 

@@ -23,15 +23,27 @@ const RCS_MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile
                   channel: 'rcs', fallback_from: null };
 
 (async () => {
-  await t('Fallback event flips channel rcs→sms, keyed on fallback_from IS NULL', async () => {
+  await t('fallback DLR flips channel rcs→sms (keyed fallback_from IS NULL) AND applies the SMS leg status', async () => {
     const calls = stub({ ...RCS_MSG });
-    await handleTrustsignalRcs({}, { event: 'Fallback', transaction_id: 'tx1', sms_cost: '0.15' });
-    const patch = calls.find((c) => c.method === 'PATCH');
-    assert.ok(patch, 'no PATCH issued');
-    assert.ok(patch.path.includes('fallback_from=is.null'), 'flip not keyed on fallback_from IS NULL');
-    assert.strictEqual(patch.body.channel, 'sms');
-    assert.strictEqual(patch.body.fallback_from, 'rcs');
-    assert.strictEqual(patch.body.pricing.provider_credit, 0.15);   // SMS leg's credit, on the flip
+    await handleTrustsignalRcs({}, {
+      transaction_id: 'tx1', mid: 'sms_mid_1', status: 'delivered',
+      st: '2026-08-17T00:00:00Z', dlrt: '2026-08-17T00:00:03Z', webhook_type: 'rcs_fallback_status',
+    });
+    const patches = calls.filter((c) => c.method === 'PATCH');
+    assert.strictEqual(patches.length, 2, 'expected flip + status patches');
+    assert.ok(patches[0].path.includes('fallback_from=is.null'), 'flip not keyed on fallback_from IS NULL');
+    assert.strictEqual(patches[0].body.channel, 'sms');
+    assert.strictEqual(patches[0].body.fallback_from, 'rcs');
+    assert.strictEqual(patches[1].body.status, 'delivered');
+    assert.strictEqual(patches[1].body.delivered_at, '2026-08-17T00:00:03Z');
+  });
+
+  await t('nonrcs flips without a status patch (the SMS DLR arrives separately)', async () => {
+    const calls = stub({ ...RCS_MSG });
+    await handleTrustsignalRcs({}, { transaction_id: 'tx1', status: 'nonrcs', webhook_type: 'rcs_message' });
+    const patches = calls.filter((c) => c.method === 'PATCH');
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].body.channel, 'sms');
   });
 
   await t('an rcs-leg delivered arriving AFTER the flip is discarded', async () => {
@@ -64,7 +76,8 @@ const RCS_MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile
 
   await t('a click emits link_clicked (F12 — the existing event name, never a new one)', async () => {
     const calls = stub({ ...RCS_MSG });
-    await handleTrustsignalRcs({}, { event: 'Click', transaction_id: 'tx1', url: 'https://x/y', timestamp: 'T' });
+    await handleTrustsignalRcs({}, { transaction_id: 'tx1', status: 'click',
+      final_url: 'https://x/y', st: '2026-08-17T00:01:00Z', webhook_type: 'rcs_message' });
     const ev = calls.find((c) => c.path.startsWith('/rest/v1/events'));
     assert.ok(ev, 'no event insert');
     assert.strictEqual(ev.body.name, 'link_clicked');
