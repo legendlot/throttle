@@ -3360,25 +3360,43 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
         const mkt = c.marketplace_id;
         const token = await getAmazonToken(this.env);
         const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
-        const url = `${host}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace`
-                  + `&granularityId=${encodeURIComponent(mkt)}&marketplaceIds=${encodeURIComponent(mkt)}`;
-        const res = await fetch(url, { headers: H });
-        const body = await res.json().catch(() => ({}));
-        const summaries = body?.payload?.inventorySummaries || [];
-        const sample = summaries.slice(0, 3).map(s => ({
-          sellerSku: s.sellerSku, asin: s.asin, condition: s.condition,
-          totalQuantity: s.totalQuantity,
+        const base = `${host}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace`
+                   + `&granularityId=${encodeURIComponent(mkt)}&marketplaceIds=${encodeURIComponent(mkt)}`;
+        // Page fully — the first page alone cannot answer the question that matters.
+        const summaries = []; let next = null, pages = 0, http = 0, errors = null;
+        do {
+          const res = await fetch(next ? `${base}&nextToken=${encodeURIComponent(next)}` : base, { headers: H });
+          http = res.status;
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { errors = body?.errors || null; break; }
+          summaries.push(...(body?.payload?.inventorySummaries || []));
+          next = body?.pagination?.nextToken || null;
+          pages++;
+          if (next) await new Promise(r => setTimeout(r, 600));   // FBA Inventory is rate-limited (~2 rps)
+        } while (next && pages < 40);
+        // ⚠️ THE DECISIVE CHECK: does FBA inventory speak the SAME SKU vocabulary as the sales feed?
+        // The sales side keys on merchant SKUs (lotcars-…-flex). If summaries return Amazon-assigned
+        // SKUs instead, sku_map cannot resolve them and this is a mapping problem, not an adapter.
+        const mm = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&select=channel_sku,product_code`);
+        const mapped = new Map((mm.ok ? mm.data : []).map(r => [String(r.channel_sku), r.product_code]));
+        const skus = summaries.map(s => String(s.sellerSku || ''));
+        const hits = skus.filter(s => mapped.has(s));
+        const sample = summaries.slice(0, 5).map(s => ({
+          sellerSku: s.sellerSku, asin: s.asin,
           fulfillable: s.inventoryDetails?.fulfillableQuantity,
-          inbound_working: s.inventoryDetails?.inboundWorkingQuantity,
-          inbound_shipped: s.inventoryDetails?.inboundShippedQuantity,
           reserved: s.inventoryDetails?.reservedQuantity?.totalReservedQuantity,
+          in_sku_map: mapped.has(String(s.sellerSku)),
         }));
         const result = {
-          probed_at: new Date().toISOString(), http: res.status,
-          ok: res.ok, errors: body?.errors || null,
-          summary_count: summaries.length,
-          has_next: Boolean(body?.pagination?.nextToken),
+          probed_at: new Date().toISOString(), http, ok: !errors, errors,
+          pages, summary_count: summaries.length,
           with_fulfillable: summaries.filter(s => s.inventoryDetails?.fulfillableQuantity != null).length,
+          sku_map_size: mapped.size,
+          sku_map_hits: hits.length,
+          sku_map_hit_pct: skus.length ? Math.round(hits.length / skus.length * 1000) / 10 : null,
+          looks_merchant_sku: skus.filter(s => /^lot/i.test(s)).length,
+          sample_hits: hits.slice(0, 5),
+          sample_misses: skus.filter(s => !mapped.has(s)).slice(0, 8),
           sample,
         };
         await sbSales('/rest/v1/settings?on_conflict=key', {
