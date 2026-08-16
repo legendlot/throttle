@@ -3407,6 +3407,69 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
       });
       return { probe: 'fba_inventory', http: out?.http, count: out?.summary_count };
     }
+    // ── FBA ledger probe (S289) ────────────────────────────────────────────────────────────────
+    // For the 18-month inventory HISTORY backfill. Everything about this report is unverified:
+    // whether the role grant covers it, whether DAILY granularity is honoured, which column carries
+    // sellable stock, and what the real date range limit is. Probe before building — the live-feed
+    // probe already caught one wrong premise (page 1 looked like a SKU-vocabulary mismatch).
+    if (trigger === 'probe_fba_ledger') {
+      const out = await step.do('probe-fba-ledger', { retries: { limit: 2, delay: '30 seconds' }, timeout: '15 minutes' }, async () => {
+        SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+        const cfg = await loadConnectorCfg(channelId);
+        const c = cfg?.config || {};
+        const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+        const mkt = c.marketplace_id;
+        const days = Number((event.payload || {}).probeDays) || 14;
+        const endISO = new Date(Date.now() - 86400000).toISOString();
+        const startISO = new Date(Date.now() - days * 86400000).toISOString();
+        const token = await getAmazonToken(this.env);
+        const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+        const result = { probed_at: new Date().toISOString(), window: [startISO, endISO] };
+        try {
+          const rid = await createAmazonReport(host, H, mkt, startISO, endISO,
+            'GET_LEDGER_SUMMARY_VIEW_DATA',
+            { aggregateByLocation: 'COUNTRY', aggregatedByTimePeriod: 'DAILY' });
+          result.reportId = rid;
+          let rep = null;
+          for (let a = 0; a < 30; a++) {
+            await new Promise(r => setTimeout(r, 15000));
+            const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+            rep = await pr.json().catch(() => ({}));
+            if (!['IN_QUEUE', 'IN_PROGRESS'].includes(rep.processingStatus)) break;
+          }
+          result.processingStatus = rep?.processingStatus || 'unknown';
+          if (rep?.processingStatus === 'DONE' && rep.reportDocumentId) {
+            const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+            const text = await fetchAmazonDoc(await dr.json());
+            const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+            const header = (grid[0] || []).map(h => String(h).trim());
+            const idx = (n) => header.findIndex(h => h.toLowerCase() === n);
+            const dI = idx('date'), mI = idx('msku'), dispI = idx('disposition'), endI = idx('ending warehouse balance');
+            const dates = {}, disp = {};
+            for (let r = 1; r < grid.length; r++) {
+              if (dI >= 0) dates[String(grid[r][dI] ?? '').trim()] = 1;
+              if (dispI >= 0) { const d = String(grid[r][dispI] ?? '').trim(); disp[d] = (disp[d] || 0) + 1; }
+            }
+            const ds = Object.keys(dates).sort();
+            result.header = header;
+            result.rows = Math.max(grid.length - 1, 0);
+            result.distinct_dates = ds.length;
+            result.date_span = [ds[0] || null, ds[ds.length - 1] || null];
+            result.disposition_histogram = disp;
+            result.col_index = { date: dI, msku: mI, disposition: dispI, ending_warehouse_balance: endI };
+            result.sample_rows = grid.slice(1, 4);
+          } else {
+            result.errors = rep?.errors || null;
+          }
+        } catch (e) { result.error = String(e?.message || e); }
+        await sbSales('/rest/v1/settings?on_conflict=key', {
+          method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+          body: JSON.stringify({ key: 'probe_fba_ledger_result', value: JSON.stringify(result).slice(0, 20000), updated_at: new Date().toISOString() }),
+        });
+        return result;
+      });
+      return { probe: 'fba_ledger', status: out?.processingStatus, rows: out?.rows };
+    }
     // Per-connector window cap (default MAX_WINDOWS). A deep one-time backfill — e.g. the Uniware
     // aggregator walking ~70 daily windows — can set config.wf_max_windows higher so one instance
     // finishes in a single pass instead of resuming across many cron ticks. Read once (durable step).
