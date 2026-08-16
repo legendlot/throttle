@@ -3567,6 +3567,88 @@ async function syncInventorySnapshot(env) {
     pull_complete: pullComplete, flips, alerts, reading_error: readingErr };
 }
 
+// ── Amazon FBA inventory (S289) ────────────────────────────────────────────────
+// Decided by Afshaan 2026-08-16: the availability signal for Amazon is FBA **fulfillable quantity**
+// (option a), NOT listing buyability. Fulfillable = units in an FC, sellable right now — reserved,
+// inbound-working and inbound-shipped are deliberately EXCLUDED, because a unit that is inbound or
+// reserved cannot serve the next order and counting it would report cover we do not have.
+//
+// Lands as an adapter, not a redesign: `sales.inventory_reading` is already channel-keyed and both
+// reader RPCs take a channel filter, so Amazon rows coexist with the Website rows.
+//
+// ⚠️ Writes inventory_reading ONLY — never inventory_snapshot. That daily table is keyed
+// (the_date, sku) with NO channel column, so Amazon SKUs would collide with Website SKUs and
+// silently corrupt the /funnel stock markers (RULE-INV-001 keeps its semantics unchanged).
+//
+// Verified before building (probe_fba_inventory, 2026-08-16): HTTP 200, 208 SKUs over 5 pages,
+// 208/208 carry fulfillableQuantity, 189 are merchant-vocabulary SKUs and 133 (63.9%) already
+// resolve through the Amazon sku_map. The remainder stay product_code=null — same as an unmapped
+// Website SKU — and are simply not attributed to a variant.
+const FBA_INV_MAX_PAGES = 40;
+async function syncAmazonInventory(env) {
+  const cc = await sbSales(`/rest/v1/connector_config?adapter_kind=eq.amazon_spapi&select=channel_id,config&limit=1`);
+  const row = (cc.ok && cc.data[0]) ? cc.data[0] : null;
+  if (!row) return { skipped: 'no amazon_spapi connector_config row' };
+  const channelId = row.channel_id;
+  const c = row.config || {};
+  const host = c.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+  const mkt = c.marketplace_id;
+  if (!mkt) return { skipped: 'amazon config missing marketplace_id' };
+
+  const skuMap = new Map();
+  {
+    const mm = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&select=channel_sku,product_code`);
+    for (const r of (mm.ok ? mm.data : [])) skuMap.set(String(r.channel_sku), r.product_code);
+  }
+  const token = await getAmazonToken(env);
+  const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+  const base = `${host}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace`
+             + `&granularityId=${encodeURIComponent(mkt)}&marketplaceIds=${encodeURIComponent(mkt)}`;
+  // captured_at is TRUE UTC, hour-truncated — same clock as the Website readings so the two
+  // channels line up in history. Never the +5.5h IST shift (RULE-INV-001 invariant 1).
+  const capturedAt = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
+
+  const bySku = new Map(); let next = null, pages = 0, truncated = false;
+  do {
+    const res = await fetch(next ? `${base}&nextToken=${encodeURIComponent(next)}` : base, { headers: H });
+    if (!res.ok) throw new Error(`FBA inventory ${res.status}`);
+    const body = await res.json().catch(() => null);
+    for (const s of (body?.payload?.inventorySummaries || [])) {
+      const sku = s.sellerSku && String(s.sellerSku).trim();
+      if (!sku) continue;
+      const fulfillable = Math.round(num(s.inventoryDetails?.fulfillableQuantity));
+      bySku.set(sku, {
+        sku, product_code: skuMap.get(sku) || null,
+        product_title: s.productName || null,
+        available_qty: fulfillable,
+        // "Purchasable" for FBA means a customer can buy it now — i.e. there is fulfillable stock.
+        // Deliberately NOT listing status: option (b) was considered and not chosen.
+        purchasable: fulfillable > 0,
+      });
+    }
+    next = body?.pagination?.nextToken || null;
+    pages++;
+    if (next && pages >= FBA_INV_MAX_PAGES) { truncated = true; break; }
+    if (next) await new Promise(r => setTimeout(r, 600));   // FBA Inventory is rate-limited (~2 rps)
+  } while (next);
+
+  // Same gate as the Website walk: a truncated page-walk must never read as "everything else went
+  // out of stock". Stored for forensics, but excluded from status/events/alerts by pull_complete.
+  const pullComplete = !truncated;
+  const rows = [...bySku.values()];
+  if (rows.length) {
+    await sbInsertChunked('/rest/v1/inventory_reading?on_conflict=captured_at,channel_id,sku',
+      rows.map(r => ({
+        captured_at: capturedAt, channel_id: channelId, sku: r.sku, product_code: r.product_code,
+        product_title: r.product_title, available_qty: r.available_qty,
+        purchasable: r.purchasable, pull_complete: pullComplete,
+      })), 'return=minimal,resolution=merge-duplicates');
+  }
+  return { channel_id: channelId, captured_at: capturedAt, pages, skus: rows.length,
+    mapped: rows.filter(r => r.product_code).length,
+    in_stock: rows.filter(r => r.available_qty > 0).length, pull_complete: pullComplete };
+}
+
 // ── Stock alerts → Slack (S223) ────────────────────────────────────────────────
 // Drains sales.stock_alert_outbox. Detection lives in the DB (detect_stock_alerts, which only
 // enqueues flips CONFIRMED across N consecutive readings) — this is purely the sender.
@@ -3866,6 +3948,13 @@ export default {
     // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
     // Best-effort; never disturbs the rest of the cron.
     try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
+    // Amazon FBA fulfillable qty → inventory_reading (S289). Its OWN try/catch on purpose: Amazon
+    // and Shopify availability are independent feeds, and an SP-API blip must not take the Website
+    // reading down with it (nor the Slack drain below).
+    try {
+      const ai = await syncAmazonInventory(env);
+      if (ai?.skus) console.log('odoops cron: amazon inventory', JSON.stringify(ai));
+    } catch (e) { console.error('odoops cron (amazon inventory) failed:', e?.message || e); }
     // Drain the confirmed-flip outbox to Slack. Runs AFTER syncInventorySnapshot so a flip
     // detected this tick goes out this tick. Inert (logs + holds) until SLACK_WEBHOOK_STOCK is set.
     try {
@@ -4538,6 +4627,11 @@ export default {
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { const res = await syncInventorySnapshot(env); return ok(res); }
             catch (e) { return err('Inventory snapshot failed: ' + String(e?.message || e), 502); }
+          }
+          case 'syncAmazonInventoryNow': {   // manual FBA fulfillable-qty pull (super-admin) — S289
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { const res = await syncAmazonInventory(env); return ok(res); }
+            catch (e) { return err('Amazon inventory sync failed: ' + String(e?.message || e), 502); }
           }
           case 'shopifyqlProbe': {   // diagnostic: run any ShopifyQL string → confirm the sessions query + response shape (super-admin)
             if (!canSuperAdmin(P)) return err('No permission', 403);
