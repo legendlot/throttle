@@ -3470,6 +3470,119 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
       });
       return { probe: 'fba_ledger', status: out?.processingStatus, rows: out?.rows };
     }
+    // ── FBA inventory HISTORY backfill (S289) ──────────────────────────────────────────────────
+    // GET_LEDGER_SUMMARY_VIEW_DATA → sales.inventory_reading, dated historically. Walks 30-day
+    // windows backwards from LEDGER_BACKFILL_END_LAG_DAYS ago. Idempotent (upsert on the reading PK),
+    // so a re-run over the same window is a no-op and a crash can simply be re-triggered.
+    //
+    // ⚠️ NEVER writes inside the stock-alert lookback. sales.detect_stock_alerts runs hourly on a
+    // 3-day window and the Slack seam is LIVE (111 alerts sent in the 7 days to 2026-08-16 — the
+    // "built, inert" note in systems/odo.md is stale). Backfilled rows landing in that window would
+    // interleave with live readings and fire a burst of retroactive oos/restock pings at the team.
+    // END_LAG_DAYS=5 keeps every written row safely outside it.
+    //
+    // ⚠️ Three parsing facts, all established by probe_fba_ledger against the real report — do not
+    // "simplify" any of them away:
+    //   1. EVERY field is wrapped in literal double quotes ("08/15/2026"), header included.
+    //   2. Dates are MM/DD/YYYY, not ISO.
+    //   3. `Disposition` is multi-valued (SELLABLE, CUSTOMER_DAMAGED, DEFECTIVE, …). Only SELLABLE
+    //      is sellable stock; summing all dispositions would inflate history with damaged units.
+    if (trigger === 'backfill_fba_ledger') {
+      const p = event.payload || {};
+      const MONTHS = Number(p.months) || 18;
+      const END_LAG_DAYS = Number(p.endLagDays) || 5;
+      const WIN_DAYS = Number(p.windowDays) || 30;
+      const unq = (v) => String(v ?? '').trim().replace(/^"(.*)"$/s, '$1').trim();
+      const cfgR = await step.do('ledger-cfg', async () => {
+        SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+        const cfg = await loadConnectorCfg(channelId);
+        return cfg?.config || {};
+      });
+      const host = cfgR.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+      const mkt = cfgR.marketplace_id;
+      const endMs = Date.now() - END_LAG_DAYS * 86400000;
+      const startMs = endMs - MONTHS * 30 * 86400000;
+      const windows = [];
+      for (let s = startMs; s < endMs; s += WIN_DAYS * 86400000) {
+        windows.push([new Date(s).toISOString(), new Date(Math.min(s + WIN_DAYS * 86400000, endMs)).toISOString()]);
+      }
+      const totals = { windows: windows.length, rows: 0, written: 0, skipped_non_sellable: 0, failed: [] };
+      for (let w = 0; w < windows.length; w++) {
+        const [fromISO, toISO] = windows[w];
+        try {
+          const res = await step.do(`ledger-w${w}`, { retries: { limit: 2, delay: '60 seconds' }, timeout: '15 minutes' }, async () => {
+            SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+            const token = await getAmazonToken(this.env);
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+            const rid = await createAmazonReport(host, H, mkt, fromISO, toISO,
+              'GET_LEDGER_SUMMARY_VIEW_DATA',
+              { aggregateByLocation: 'COUNTRY', aggregatedByTimePeriod: 'DAILY' });
+            let rep = null;
+            for (let a = 0; a < 40; a++) {
+              await new Promise(r => setTimeout(r, 15000));
+              const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+              rep = await pr.json().catch(() => ({}));
+              if (!['IN_QUEUE', 'IN_PROGRESS'].includes(rep.processingStatus)) break;
+            }
+            if (rep?.processingStatus !== 'DONE' || !rep.reportDocumentId) {
+              // FATAL=false: an empty/expired window must not abort the whole walk.
+              return { rows: 0, written: 0, skipped: 0, status: rep?.processingStatus || 'unknown' };
+            }
+            const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+            const text = await fetchAmazonDoc(await dr.json());
+            const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+            const header = (grid[0] || []).map(unq);
+            const ix = (n) => header.findIndex(h => h.toLowerCase() === n);
+            const dI = ix('date'), mI = ix('msku'), tI = ix('title'), dispI = ix('disposition'), endI = ix('ending warehouse balance');
+            if (dI < 0 || mI < 0 || endI < 0 || dispI < 0) throw new Error('ledger header shape changed: ' + header.join('|').slice(0, 200));
+            // (date, msku) → sellable end-of-day balance. COUNTRY aggregation + SELLABLE should give
+            // one row each, but sum defensively rather than let a duplicate silently win.
+            const agg = new Map(); let skipped = 0;
+            for (let r = 1; r < grid.length; r++) {
+              const row = grid[r];
+              if (unq(row[dispI]).toUpperCase() !== 'SELLABLE') { skipped++; continue; }
+              const md = unq(row[dI]).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);   // MM/DD/YYYY
+              const sku = unq(row[mI]);
+              if (!md || !sku) continue;
+              const iso = `${md[3]}-${md[1]}-${md[2]}`;
+              const k = `${iso}|${sku}`;
+              const cur = agg.get(k) || { iso, sku, title: unq(row[tI]) || null, qty: 0 };
+              cur.qty += num(unq(row[endI]));
+              agg.set(k, cur);
+            }
+            const skuMapR = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&select=channel_sku,product_code`);
+            const skuMap = new Map((skuMapR.ok ? skuMapR.data : []).map(x => [String(x.channel_sku), x.product_code]));
+            const body = [...agg.values()].map(a => ({
+              // End of the ledger day in the MARKETPLACE timezone (IST) = 18:30 UTC. Distinct from
+              // the live hourly readings by construction, so the two never collide on the PK.
+              captured_at: `${a.iso}T18:30:00.000Z`,
+              channel_id: channelId, sku: a.sku, product_code: skuMap.get(a.sku) || null,
+              product_title: a.title, available_qty: Math.round(a.qty),
+              purchasable: a.qty > 0, pull_complete: true,
+            }));
+            if (body.length) {
+              await sbInsertChunked('/rest/v1/inventory_reading?on_conflict=captured_at,channel_id,sku',
+                body, 'return=minimal,resolution=merge-duplicates');
+            }
+            return { rows: Math.max(grid.length - 1, 0), written: body.length, skipped, status: 'DONE' };
+          });
+          totals.rows += res.rows || 0; totals.written += res.written || 0;
+          totals.skipped_non_sellable += res.skipped || 0;
+        } catch (e) {
+          // One bad window must not lose the other seventeen — record and continue.
+          totals.failed.push({ window: [fromISO, toISO], error: String(e?.message || e).slice(0, 160) });
+        }
+      }
+      await step.do('ledger-record', async () => {
+        SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+        await sbSales('/rest/v1/settings?on_conflict=key', {
+          method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+          body: JSON.stringify({ key: 'fba_ledger_backfill_result', value: JSON.stringify(totals).slice(0, 20000), updated_at: new Date().toISOString() }),
+        });
+        return true;
+      });
+      return totals;
+    }
     // Per-connector window cap (default MAX_WINDOWS). A deep one-time backfill — e.g. the Uniware
     // aggregator walking ~70 daily windows — can set config.wf_max_windows higher so one instance
     // finishes in a single pass instead of resuming across many cron ticks. Read once (durable step).
