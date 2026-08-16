@@ -149,7 +149,7 @@ export default function LinksPage() {
     <>
       <PageHead
         title="Links"
-        sub="Short links you own — repoint them any time, including after printing."
+        sub="Short links you name yourself — repoint them any time, including after printing."
         actions={canEdit && (
           <Btn kind="primary" onClick={() => setEditing({ mode: 'create', slug: '', target_url: '', title: '' })}>
             <Plus size={14} /> New link
@@ -177,6 +177,34 @@ export default function LinksPage() {
         </div>
       )}
 
+      {/* ⚠️ SAY THE SCOPE ON THE PAGE, not only in the source comment above.
+          This page lists kind='campaign' links only. Nothing on screen said so, and the page title
+          read as "every link you have" — so on 15 Aug a template's per-person link was looked for
+          here, not found, and read as "my campaign is not being tracked" on send day, while the
+          campaign banner simultaneously (and correctly) said "Tracked per person". Both surfaces
+          were right; the gap between them was the whole problem.
+          Stated as plain text rather than an ⓘ because the person who needs it is looking for
+          something that is ABSENT — they have no reason to open a tooltip about a list they have
+          already concluded is wrong. */}
+      <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--t2)',
+                  display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span>
+          Only links you create here appear in this list. The per-person links a template mints at
+          send time are not listed — their clicks roll up on the campaign itself.
+        </span>
+        <InfoDot label="Why per-person links are not listed">
+          <p>There are two kinds of short link, with deliberately opposite rules.</p>
+          <p><b>The ones on this page</b> you name yourself. They never expire, the destination stays
+            editable, and they are what goes on packaging and print.</p>
+          <p><b>Per-person links</b> are minted automatically, one for every recipient, when a
+            campaign or journey sends. They run to tens of thousands per send and each one maps to a
+            single customer — so listing them here would be unreadable and would put customer
+            journeys in an admin table.</p>
+          <p>To see how a campaign&rsquo;s links performed, open the campaign: its stats carry
+            <b> Clicked</b> and <b>Click rate</b> across everyone who received it.</p>
+        </InfoDot>
+      </p>
+
       <Panel
         title="Short links" count={links?.length}
         action={
@@ -193,9 +221,11 @@ export default function LinksPage() {
         {loadError ? (
           <EmptyState icon="alert" title="Could not load links" hint="Refresh to try again." />
         ) : !links?.length ? (
+          /* An empty list is exactly when someone concludes their campaign is untracked — it is the
+             emptiest possible evidence for the wrong conclusion. Repeat the scope here. */
           <EmptyState
             icon="inbox" title="No links yet"
-            hint="Create one to get a short URL you can repoint later — useful anywhere the destination might change after the link is out."
+            hint="Create one to get a short URL you can repoint later — useful anywhere the destination might change after the link is out. Empty is normal: a campaign sending per-person links adds nothing to this list."
           />
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
