@@ -45,6 +45,25 @@ t('`global` is unreachable from a purpose (it is the no-template route)', () => 
   assert.ok(!Object.values(PURPOSE_ROUTE).includes('global'));
 });
 
+t('a click payload (final_url, no status) parses as a click, never a status write (S290)', () => {
+  const { parseStatusWebhook } = require('../src/adapters/sms.js');
+  const [ev] = parseStatusWebhook({
+    id: '17847889229334938_0', transaction_id: '1784788927235213696334938',
+    number: 9990012234, final_url: 'https://google.com', route: 'promotional',
+    ip: '49.205.42.42', created_at: '2026-07-23T06:45:02.801946631Z',
+  });
+  assert.strictEqual(ev.click, true);
+  assert.strictEqual(ev.clicked_url, 'https://google.com');
+  assert.strictEqual(ev.at, '2026-07-23T06:45:02.801946631Z');
+});
+
+t('a DLR carrying BOTH a status and (hypothetically) a url stays a status event', () => {
+  const { parseStatusWebhook } = require('../src/adapters/sms.js');
+  const [ev] = parseStatusWebhook({ transaction_id: 'tx', status: 'delivered', final_url: 'https://x' });
+  assert.ok(!ev.click);
+  assert.strictEqual(ev.canonical_status, 'delivered');
+});
+
 t('binding a utility journey to an `explicit` template is a hard error (F3)', () => {
   assert.throws(
     () => assertBindable({ purpose: 'utility', template_type: 'explicit' }),

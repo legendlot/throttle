@@ -115,7 +115,7 @@ function downloadCampaignsCsv(rows, overview, tab, experiments = {}) {
 // later and nothing widened it, so a channel the whole backend supports was unreachable from
 // the UI. Same failure as the journey trigger picker's hardcoded 7-event list. If a new adapter
 // is added to send.js, add it here in the same change.
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUS_TONE = {
   draft: 'gray', pending_approval: 'yellow', approved: 'blue', scheduled: 'yellow',
@@ -395,7 +395,7 @@ export default function CampaignsPage() {
   const [testCc, setTestCc] = useState('+91');
   // SMS is phone-based too — it used to fall into the email branch and go out unprefixed, which
   // renderPhoneForSms rejects as invalid_phone. SMS pins +91 (the only country it supports).
-  const isPhoneChannel = c.channel === 'whatsapp' || c.channel === 'sms';
+  const isPhoneChannel = c.channel === 'whatsapp' || c.channel === 'sms' || c.channel === 'rcs';
   const composeTestTo = () => !isPhoneChannel ? testTo
     : testTo.split(',').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.startsWith('+') ? s.replace(/[^\d+]/g, '')

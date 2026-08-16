@@ -263,6 +263,10 @@ function renderRcs(template, ctx) {
     provider_template_id: template.provider_template_id,
     rcs_type: content.rcs_type || 'text_message',
     vars,
+    // The registered slot ORDER (csparams index order from the catalogue pull) — the vendor
+    // represents send-time variables positionally (custom_paramN / pr1..prN), so the adapter
+    // needs the order, not just the name→value map.
+    var_order: params,
     ttl: content.ttl || null,
     sms_fallback_template_id: content.sms_fallback_template_id || null,
   };

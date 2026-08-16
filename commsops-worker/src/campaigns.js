@@ -657,6 +657,11 @@ async function processQueueMessage(env, body) {
         templateId: arm?.template_id || camp.template_id,
         variantId: arm?.id || null,
         constants: camp.vars || {},
+        // vars double as the event context (exactly as sendTest does): a campaign has no
+        // trigger event, so EVENT-sourced tokens (the journey-shaped templates — ABC 2's
+        // discount_code, the RCS binding's slots) would otherwise fall to fallbacks or fail
+        // for every recipient.
+        eventContext: camp.vars || {},
         tracking: { campaign: camp.name, utm: camp.utm },
         source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
       });
@@ -784,6 +789,7 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
         profileId, to: addr,
         templateId,
         constants: camp.vars || {},
+        eventContext: camp.vars || {},   // same doubling as the live path above + sendTest
         tracking: { campaign: `${camp.name} (test)`, utm: camp.utm },
         source: `campaign_test:${id}`,
       });

@@ -127,6 +127,13 @@ function parseStatusWebhook(payload) {
   const p = payload || {};
   const id = p.transaction_id || null;
   if (!id) return [];
+  // Click (S290) — registered as its own Sigmo event onto the same route. Documented shape
+  // (SMS Webhook Payload Reference, read 2026-08-17): transaction_id · number · final_url ·
+  // created_at · route · geo/device fields — and NO status field, which is the discriminator.
+  if (p.final_url && !p.status) {
+    return [{ provider_message_id: id, click: true, clicked_url: p.final_url,
+              at: p.created_at || p.st || null }];
+  }
   const raw = String(p.status || '').toLowerCase();
   const ev = {
     provider_message_id: id,

@@ -176,6 +176,44 @@ async function unsubscribeUrl(env, profileId, channel) {
   return `${base}/unsubscribe?token=${token}`;
 }
 
+// Per-recipient /r/ minting for a LINK VARIABLE (S290) — the SMS/RCS counterpart of the WA
+// button-redirect flow above. A template opts in via content.link_param (the token name) +
+// content.link_target_base (the real destination). Each send mints its own code, so clicks
+// resolve to a person via the links row (message_id + profile_id), not just a count.
+//
+// The minted URL is injected into the render ctx under BOTH the constants key and — when the
+// declared variable is event-sourced — the event field, so it wins regardless of how the
+// variable was authored. ⚠️ One authoring rule: the link variable must NOT carry a stored
+// `value` (resolveVar's constant branch reads v.value FIRST); use a fallback instead.
+// Failure posture: minting is best-effort — a mint failure falls back to whatever the
+// variable resolves to (typically the campaign-slug fallback), never a blocked send.
+async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults) {
+  const c = template.content || {};
+  if (!c.link_param || !c.link_target_base) return;
+  try {
+    const linkBase = await LINKS.getLinkBaseUrl(env);
+    if (!linkBase) return;
+    const utm = purpose === 'marketing'
+      ? resolveUtm({ channel, tracking: opts.tracking, template, defaults: utmDefaults })
+      : null;
+    const code = await LINKS.mintLink(env, {
+      baseUrl: linkBase, target: c.link_target_base, utm,
+      messageId: opts._reservedId || null, profileId: opts.profileId || null, channel,
+    });
+    if (!code) return;
+    const url = `${String(linkBase).replace(/\/$/, '')}/r/${code}`;
+    ctx.constants = { ...(ctx.constants || {}), [c.link_param]: url };
+    const decl = (template.variables || []).find((v) => v && v.token === c.link_param);
+    if (decl && decl.source === 'event') {
+      ctx.event = { ...(ctx.event || {}), [decl.field || decl.token]: url };
+    }
+  } catch (e) {
+    // Best-effort by design — the fallback value still renders. Logged because a silent
+    // permanent mint failure would quietly downgrade attribution to aggregate-only.
+    console.log('link_var_mint_failed', String(e?.message || e).slice(0, 140));
+  }
+}
+
 async function logMessage(env, row) {
   const r = await A.sbComms('/rest/v1/messages', env, {
     method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row),
@@ -362,14 +400,19 @@ async function send(env, opts) {
       // positional pr1..pr5, so the adapter needs {sender, purpose, provider_template_id,
       // template_type, var_order, vars, body} — none of which renderEmail produces.
       //
-      // ⚠️ NO UTM TAGGING HERE, deliberately. `isdesturl` rewrites urls in the outgoing body, and
-      // DLT matches delivered content against the registered template — appending utm_* to a url
-      // inside a {#var#} changes the value the carrier sees. Attribution for SMS waits for the
-      // Phase-B `/r/<code>` redirect, exactly as WA url-buttons do (see the WA button note above).
-      const body = renderSms(template, {
+      // ⚠️ NO UTM TAGGING of body urls, deliberately. `isdesturl` rewrites urls in the outgoing
+      // body, and DLT matches delivered content against the registered template — appending
+      // utm_* to a url inside a {#var#} changes the value the carrier sees. Instead the
+      // Phase-B `/r/<code>` redirect carries attribution (S290): when the template declares a
+      // link variable (content.link_param + link_target_base), each send mints its own code —
+      // DLT-safe because the url IS the variable's value, and the utm rides server-side on
+      // the redirect, never in the delivered text.
+      const ctx = {
         profile, event: opts.eventContext, constants: opts.constants,
         recipient: opts.recipient, system: {},
-      });
+      };
+      await mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults);
+      const body = renderSms(template, ctx);
       rendered = { ...body, to, sender: sender.address, purpose };
     } else if (channel === 'rcs') {
       // D6 — RCS is marketing-only: the one provisioned bot is registered `promotional` with
@@ -380,6 +423,10 @@ async function send(env, opts) {
         profile, event: opts.eventContext, constants: opts.constants,
         recipient: opts.recipient, system: {},
       };
+      // Same per-recipient link minting as SMS (S290) — the RCS body and the SMS fallback leg
+      // render from this ONE ctx, so both legs carry the same minted code and a click is
+      // attributable whichever leg delivered.
+      await mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults);
       const body = renderRcs(template, ctx);
 
       // The mandatory SMS fallback leg (with_fallback is the ONLY vendor send path) is resolved
@@ -511,4 +558,4 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
            provider_message_id: res.provider_message_id || null };
 }
 
-module.exports = { send, getActiveSender, pickSender, waWindowOpen };
+module.exports = { send, getActiveSender, pickSender, waWindowOpen, mintLinkVariable };

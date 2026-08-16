@@ -207,7 +207,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
 
   // SMS is phone-based too — it used to fall into the email branch and go out unprefixed, which
   // renderPhoneForSms rejects as invalid_phone. SMS pins +91 (the only country it supports).
-  const isPhoneChannel = campaign.channel === 'whatsapp' || campaign.channel === 'sms';
+  const isPhoneChannel = campaign.channel === 'whatsapp' || campaign.channel === 'sms' || campaign.channel === 'rcs';
   function composeTestTo() {
     if (!isPhoneChannel) return testTo;
     return testTo.split(',').map((s) => s.trim()).filter(Boolean)

@@ -163,7 +163,9 @@ h1{font-size:18px;margin:0 0 10px}p{color:#bbb;font-size:14px;line-height:1.5;ma
 
 // TrustSignal SMS DLR → message status + DND suppression.
 // Only ever moves state FORWARD: a late 'sent' must not overwrite a 'delivered'.
-const TERMINAL = new Set(['delivered', 'failed', 'bounced']);
+// 'clicked' (S290) is terminal for DLR purposes too — a click implies delivery, and the DLR
+// often arrives after the click; letting it through would regress clicked → delivered.
+const TERMINAL = new Set(['delivered', 'failed', 'bounced', 'clicked']);
 
 async function handleTrustsignalSms(env, body) {
   const events = require('./adapters/sms.js').parseStatusWebhook(body);
@@ -174,6 +176,29 @@ async function handleTrustsignalSms(env, body) {
       `&select=id,status,to_address,profile_id,channel&limit=1`, env);
     const row = cur.ok && cur.data?.[0];
     if (!row) continue;                       // unknown id — log-only, never create a row
+    // Click (S290) — BEFORE the terminal guard: a click always postdates delivery, so
+    // 'delivered' (terminal) would otherwise swallow every click. Emits the channel-agnostic
+    // link_clicked (F12) with the same idempotency shape as the Resend/RCS click paths.
+    if (ev.click) {
+      if (row.profile_id && ev.clicked_url) {
+        A.checkWrite('sms_click_event_failed', await A.sbComms('/rest/v1/events', env, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=ignore-duplicates' },
+          body: JSON.stringify({
+            profile_id: row.profile_id, name: 'link_clicked',
+            occurred_at: ev.at || new Date().toISOString(), source: 'trustsignal_webhook',
+            properties: { url: ev.clicked_url, channel: row.channel,
+                          provider_message_id: ev.provider_message_id, message_id: row.id },
+            idempotency_key: `trustsignal:sms:clicked:${ev.provider_message_id}:${ev.clicked_url}:${ev.at}`,
+          }),
+        }), { message_id: row.id });
+      }
+      if (row.status !== 'clicked' && row.status !== 'failed' && row.status !== 'suppressed') {
+        await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(row.id)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'clicked' }) });
+      }
+      continue;
+    }
     if (TERMINAL.has(row.status)) continue;   // forward-only
     if (ev.canonical_status) {
       A.checkWrite('sms_dlr_patch_failed',

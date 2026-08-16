@@ -18,7 +18,7 @@ import ImageLibrary from '@/components/ImageLibrary.js';
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 // List channel filter — SMS chip is present ahead of Phase 2 so the mental model is stable.
 const CHAN_FILTERS = [
   { key: 'all', label: 'All' },
@@ -85,6 +85,7 @@ function emptyTemplate() {
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, mjml: '', variables: [],
     wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', header_format: '', header_media_url: '', body: '', footer: '', buttons: [], mapping: [] },
     sms: { body: '', var_order: [], template_type: '', dlt_template_id: '', dlt_var_count: null, header: '' },
+    rcs: { rcs_type: 'text_message', var_params: [], sms_fallback_template_id: '', link_param: '', link_target_base: '', ttl: null, provider_status: '' },
     approval_status: null, provider_template_id: null, utm: null,
   };
 }
@@ -95,6 +96,109 @@ function emptyTemplate() {
 // so the two things that actually break an SMS are (a) editing the registered copy and (b)
 // getting var_order's ORDER wrong, which produces a grammatical message carrying the wrong
 // words with nothing erroring anywhere. This editor is built around making both visible.
+// RcsEditor (S290) — deliberately a BINDING editor, not a content editor. RCS templates are
+// authored + approved on Sigmo (RCS Settings › Templates); what Relay owns is which vendor
+// template this row sends, the param slots (csparams index order — positional at the vendor,
+// NEVER alphabetical), the mandatory SMS fallback leg, and the optional tracked-link variable.
+function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, smsTemplates }) {
+  const r = rcs || {};
+  const up = (k, v) => setRcs({ ...r, [k]: v });
+  const params = Array.isArray(r.var_params) ? r.var_params : [];
+  const declared = (variables || []).map((v) => (v.token || '').trim()).filter(Boolean);
+  const undeclared = params.filter((p) => !declared.includes(p));
+  const linkParamUnknown = r.link_param && !params.includes(r.link_param);
+  const linkVarWithValue = r.link_param
+    && (variables || []).some((v) => v.token === r.link_param && v.source === 'constant' && v.value);
+
+  const problems = [];
+  if (!String(providerTemplateId || '').trim()) problems.push('No vendor template id — paste the id from Sigmo once the template is approved (RCS Settings › Templates).');
+  if (!r.sms_fallback_template_id) problems.push('No SMS fallback template — every RCS send requires one; the send is rejected without it.');
+  if (undeclared.length) problems.push(`Params not declared in Variables below: ${undeclared.join(', ')}`);
+  if (linkParamUnknown) problems.push(`Tracked link param "${r.link_param}" is not in the param list.`);
+  if (linkVarWithValue) problems.push(`The "${r.link_param}" variable carries a stored value — that value wins over the minted link. Use a fallback instead.`);
+
+  return (
+    <Panel title="Content · RCS (binding)" pad>
+      <div className="dim" style={{ fontSize: 12, marginBottom: 14, lineHeight: 1.5,
+             padding: '10px 12px', borderRadius: 8, border: '1px solid var(--line, #333)' }}>
+        <strong>RCS templates are not authored here.</strong> The message — text, image, card,
+        buttons — is built and approved on Sigmo (RCS Settings › Templates). This page binds an
+        approved vendor template into Relay: its id, its variable slots in registered order, and
+        the SMS template that sends when a phone cannot receive RCS. Never send on a template
+        Sigmo does not show as approved.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 14 }}>
+        <div className="ff">
+          <div className="kv-k">Vendor template id</div>
+          <input className="f-inp mono" value={providerTemplateId || ''} disabled={disabled}
+            onChange={(e) => setProviderTemplateId(e.target.value.trim())} placeholder="73he0n5x33x" />
+        </div>
+        <div className="ff">
+          <div className="kv-k">Type</div>
+          <select className="f-inp" value={r.rcs_type || 'text_message'} disabled={disabled}
+            onChange={(e) => up('rcs_type', e.target.value)}>
+            <option value="text_message">Text message</option>
+            <option value="text_message_with_media">Text with media</option>
+            <option value="rich_card">Rich card</option>
+            <option value="carousel">Carousel</option>
+          </select>
+        </div>
+        <div className="ff">
+          <div className="kv-k">SMS fallback template</div>
+          <select className="f-inp" value={r.sms_fallback_template_id || ''} disabled={disabled}
+            onChange={(e) => up('sms_fallback_template_id', e.target.value)}>
+            <option value="">— required —</option>
+            {(smsTemplates || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+          <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+            Only DLT-explicit (promotional) SMS templates are listed — the fallback rides the
+            promotional route, and the carrier enforces the category match.
+          </div>
+        </div>
+      </div>
+
+      <div className="ff" style={{ marginBottom: 14 }}>
+        <div className="kv-k">Variable slots (registered order)</div>
+        <input className="f-inp mono" value={params.join(', ')} disabled={disabled}
+          onChange={(e) => up('var_params', e.target.value.split(',').map((x) => x.trim()).filter(Boolean))}
+          placeholder="name, sale_name, discount, code, link" />
+        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+          Comma-separated, in the order the [bracketed] params appear in the registered template
+          — this is positional at the vendor. Declare a Variable below for each, token = param name.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 12 }}>
+        <div className="ff">
+          <div className="kv-k">Tracked link param (optional)</div>
+          <input className="f-inp mono" value={r.link_param || ''} disabled={disabled}
+            onChange={(e) => up('link_param', e.target.value.trim())} placeholder="link" />
+        </div>
+        <div className="ff">
+          <div className="kv-k">Link destination</div>
+          <input className="f-inp mono" value={r.link_target_base || ''} disabled={disabled}
+            onChange={(e) => up('link_target_base', e.target.value.trim())} placeholder="https://www.legendoftoys.com/sale" />
+          <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+            With both set, every send mints its own short link into that variable — clicks
+            resolve to the person, and the same link rides the SMS fallback leg.
+          </div>
+        </div>
+      </div>
+
+      {problems.length > 0 && (
+        <div style={{ fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8,
+                      border: '1px solid rgba(220,140,40,.45)', background: 'rgba(220,140,40,.08)' }}>
+          <strong>Not ready to send</strong>
+          <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+            {problems.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId }) {
   const s = sms || {};
   const up = (k, v) => setSms({ ...s, [k]: v });
@@ -277,7 +381,7 @@ export default function TemplatesPage() {
   const composeTestTo = () => {
     const raw = testTo.trim();
     if (!raw) return '';
-    if (t.channel !== 'whatsapp' && t.channel !== 'sms') return raw;
+    if (t.channel !== 'whatsapp' && t.channel !== 'sms' && t.channel !== 'rcs') return raw;
     if (raw.startsWith('+')) return raw.replace(/[^\d+]/g, '');
     // SMS pins +91 rather than reading testCc: the selector is disabled on SMS, but the state
     // survives switching templates, so a testCc left at +44 by a WhatsApp template would
@@ -381,6 +485,19 @@ export default function TemplatesPage() {
         dlt_template_id: c.dlt_template_id || '',
         dlt_var_count: typeof c.dlt_var_count === 'number' ? c.dlt_var_count : null,
         header: c.header || '',
+      },
+      // RCS (S290). The row is a BINDING onto a vendor-registered template — var_params in
+      // csparams index order, the mandatory SMS fallback reference, and the optional tracked
+      // link variable. Own sub-object for the same reason as sms: buildPayload must rebuild
+      // content without the email branch clobbering it (PATTERN-252).
+      rcs: {
+        rcs_type: c.rcs_type || 'text_message',
+        var_params: Array.isArray(c.var_params) ? c.var_params : [],
+        sms_fallback_template_id: c.sms_fallback_template_id || '',
+        link_param: c.link_param || '',
+        link_target_base: c.link_target_base || '',
+        ttl: typeof c.ttl === 'number' ? c.ttl : null,
+        provider_status: c.provider_status || '',
       },
       approval_status: r.approval_status || null,
       provider_template_id: r.provider_template_id || null,
@@ -550,6 +667,20 @@ export default function TemplatesPage() {
       if (typeof s.dlt_var_count === 'number') content.dlt_var_count = s.dlt_var_count;
       // Once a body has real {token}s and an order, it is no longer the raw catalogue mirror.
       content.needs_variable_authoring = /\{#var#\}/.test(content.body) || content.var_order.length === 0;
+    } else if (t.channel === 'rcs') {
+      // The rcs branch that stops save() from destroying a binding row (the same PATTERN-252
+      // failure the sms branch fixed for SMS: before this, an rcs row fell into the email
+      // shape and a save wiped var_params + the fallback reference).
+      const r = t.rcs || {};
+      content = {
+        rcs_type: r.rcs_type || 'text_message',
+        var_params: (r.var_params || []).map((x) => String(x).trim()).filter(Boolean),
+        sms_fallback_template_id: r.sms_fallback_template_id || '',
+        link_param: (r.link_param || '').trim(),
+        link_target_base: (r.link_target_base || '').trim(),
+        provider_status: r.provider_status || '',
+      };
+      if (typeof r.ttl === 'number' && r.ttl > 0) content.ttl = r.ttl;
     } else if (edRef.current && !preserveBodyRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design, mjml: ex.mjml || '' };
@@ -639,6 +770,17 @@ export default function TemplatesPage() {
         showToast(`Variable order has ${n} entries but the DLT template registers ${c.dlt_var_count}.`, 'error'); return;
       }
     }
+    // Same discipline for RCS (S290): an active binding must reference a real vendor template
+    // AND a real SMS fallback — with_fallback is the only send path, so either gap fails every
+    // send at the vendor.
+    if (t.channel === 'rcs' && t.status === 'active') {
+      if (!String(t.provider_template_id || '').trim()) {
+        showToast('No vendor template id — RCS templates are authored on Sigmo (RCS Settings › Templates); paste the approved template\u2019s id before activating.', 'error'); return;
+      }
+      if (!String(payload.content.sms_fallback_template_id || '').trim()) {
+        showToast('No SMS fallback template — every RCS send requires one (pick an active, DLT-explicit SMS template).', 'error'); return;
+      }
+    }
     if (t.channel === 'email') {
       if (t.purpose === 'marketing' && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
         showToast('Marketing emails must include {unsubscribe_url} — add the merge tag before saving.', 'error');
@@ -707,7 +849,7 @@ export default function TemplatesPage() {
 
   async function sendTest() {
     if (!testTo.trim()) {
-      showToast((t.channel === 'whatsapp' || t.channel === 'sms')
+      showToast((t.channel === 'whatsapp' || t.channel === 'sms' || t.channel === 'rcs')
         ? 'Test recipient phone number required' : 'Test recipient email required', 'error');
       return;
     }
@@ -1019,6 +1161,13 @@ export default function TemplatesPage() {
         ) : t.channel === 'sms' ? (
           <SmsEditor sms={t.sms} setSms={(s) => set('sms', s)} variables={t.variables}
             disabled={saving || !canEdit} providerTemplateId={t.provider_template_id} />
+        ) : t.channel === 'rcs' ? (
+          <RcsEditor rcs={t.rcs} setRcs={(r) => set('rcs', r)} variables={t.variables}
+            disabled={saving || !canEdit}
+            providerTemplateId={t.provider_template_id}
+            setProviderTemplateId={(v) => set('provider_template_id', v)}
+            smsTemplates={rows.filter((x) => x.channel === 'sms' && x.provider_template_id
+              && (x.content?.template_type === 'explicit'))} />
         ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
@@ -1226,7 +1375,7 @@ export default function TemplatesPage() {
             </div>
             <div className="form-grid">
               <div className="ff"><div className="kv-k">Test recipient</div>
-                {(t.channel === 'whatsapp' || t.channel === 'sms') ? (
+                {(t.channel === 'whatsapp' || t.channel === 'sms' || t.channel === 'rcs') ? (
                   <div style={{ display: 'flex', gap: 6 }}>
                     {/* SMS is +91-only: renderPhoneForSms rejects every other country with
                         unsupported_country, so offering them would only produce failed tests. */}
@@ -1384,7 +1533,7 @@ export default function TemplatesPage() {
                           color: r.channel === 'whatsapp' ? 'var(--wa, #25D366)'
                             : r.channel === 'email' ? 'var(--em, #a78bfa)' : 'var(--t2)' }}>
                           {r.channel === 'whatsapp' ? <MessageCircle size={14} /> : <Mail size={14} />}
-                          {r.channel === 'whatsapp' ? 'WhatsApp' : (r.channel === 'email' ? 'Email' : r.channel)}
+                          {r.channel === 'whatsapp' ? 'WhatsApp' : r.channel === 'email' ? 'Email' : r.channel === 'rcs' ? 'RCS' : r.channel}
                         </span>
                       </td>
                       <td className="dim" style={{ fontSize: 12.5 }}>{r.purpose}</td>

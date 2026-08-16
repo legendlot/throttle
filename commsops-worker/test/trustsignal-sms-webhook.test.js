@@ -94,6 +94,24 @@ const MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile_id:
     assert.ok(!calls.some((c) => c.path.includes('/suppressions')));
   });
 
+  await t('a click emits link_clicked and upgrades the row to clicked (S290)', async () => {
+    const calls = stub({ ...MSG, status: 'delivered' });
+    await handleTrustsignalSms({}, {
+      transaction_id: 'tx1', final_url: 'https://x/y', created_at: '2026-08-17T00:00:00Z',
+    });
+    const ev = calls.find((c) => c.path.startsWith('/rest/v1/events'));
+    assert.ok(ev, 'no link_clicked insert');
+    assert.strictEqual(ev.body.name, 'link_clicked');
+    const patch = calls.find((c) => c.method === 'PATCH');
+    assert.strictEqual(patch.body.status, 'clicked');
+  });
+
+  await t("a late DLR does not regress a clicked row (clicked is DLR-terminal)", async () => {
+    const calls = stub({ ...MSG, status: 'clicked' });
+    await handleTrustsignalSms({}, { transaction_id: 'tx1', status: 'delivered', dlrt: 'T' });
+    assert.ok(!calls.some((c) => c.method === 'PATCH'), 'regressed clicked → delivered');
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);

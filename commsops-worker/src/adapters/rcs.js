@@ -38,10 +38,22 @@ async function send(rendered, env) {
   // publishes no live example of a with_fallback RESPONSE, so the id/cost extraction below
   // handles both shapes the SMS side has shown (results[] and flat). First live send (build
   // step 8) validates this end to end — do not wire a journey to RCS before that has run.
+  // Variable convention hedge: the spec records `rcs_variables` (named), while the vendor's
+  // delivery-webhook reference lists pr1..pr5 as "custom parameters passed while sending RCS" —
+  // positional, exactly like SMS. Both are sent (names from the map, positions from var_order,
+  // which the catalogue pull writes in csparams index order); the first enabled live send tells
+  // us which one the vendor actually reads, and the loser gets removed then.
+  const prParams = {};
+  (Array.isArray(rendered.var_order) ? rendered.var_order : []).forEach((name, i) => {
+    const v = rendered.vars ? rendered.vars[name] : undefined;
+    if (v !== undefined && v !== null && v !== '' && i < 5) prParams[`pr${i + 1}`] = String(v);
+  });
+
   const body = {
     to,
     template_id: rendered.provider_template_id,
     ...(rendered.vars && Object.keys(rendered.vars).length ? { rcs_variables: rendered.vars } : {}),
+    ...prParams,
     ...(rendered.ttl ? { ttl: rendered.ttl } : {}),
     sms_fallback: {
       sender: fb.sender,
