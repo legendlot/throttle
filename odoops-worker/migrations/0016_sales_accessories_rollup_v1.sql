@@ -62,34 +62,46 @@ CREATE OR REPLACE FUNCTION sales.f_accessories_rollup(
 ) RETURNS TABLE(channel_id uuid, channel_name text, bucket text,
                 skus bigint, units bigint, gross numeric)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'sales','public'
+-- ⚠️ AGGREGATE TO (channel, sku) FIRST, THEN match the rules. The original body ran the rule
+-- subquery once per STAGED ROW (~200k over an FY window): 7,293 ms, which returned 502 to the
+-- dashboard and — because the call sat in the dashboard's Promise.all — blanked every KPI on the
+-- page. Aggregating first drops the subquery to ~500 loops: 632 ms, byte-identical output.
+-- Never widen this back to per-row matching.
 AS $$
-  WITH matched AS (
-    SELECT v.channel_id, v.channel_sku, v.qty, v.gross_value,
-           (SELECT r.bucket FROM sales.accessory_rules r
-             WHERE r.is_active
-               AND ((r.match_kind='prefix'   AND lower(v.channel_sku) LIKE lower(r.pattern)||'%')
-                 OR (r.match_kind='exact'    AND lower(v.channel_sku) = lower(r.pattern))
-                 OR (r.match_kind='contains' AND lower(v.channel_sku) LIKE '%'||lower(r.pattern)||'%'))
-             ORDER BY CASE r.match_kind WHEN 'exact' THEN 1 WHEN 'prefix' THEN 2 ELSE 3 END,
-                      length(r.pattern) DESC
-             LIMIT 1) AS bucket
+  WITH cand AS (
+    SELECT v.channel_id, v.channel_sku,
+           SUM(v.qty) AS qty, SUM(v.gross_value) AS gross
     FROM sales.v_staged v
     WHERE v.sale_date BETWEEN p_from AND p_to
       AND NOT v.is_cancelled
       AND v.row_type = 'sale'
       AND (p_channels IS NULL OR v.channel_id = ANY(p_channels))
-      AND NOT EXISTS (SELECT 1 FROM sales.sku_map m
-                       WHERE m.channel_id = v.channel_id AND m.channel_sku = v.channel_sku)
+    GROUP BY v.channel_id, v.channel_sku
+  ),
+  unmapped AS (
+    SELECT c.* FROM cand c
+    WHERE NOT EXISTS (SELECT 1 FROM sales.sku_map m
+                       WHERE m.channel_id = c.channel_id AND m.channel_sku = c.channel_sku)
+  ),
+  tagged AS (
+    SELECT u.*,
+           (SELECT r.bucket FROM sales.accessory_rules r
+             WHERE r.is_active
+               AND ((r.match_kind='prefix'   AND lower(u.channel_sku) LIKE lower(r.pattern)||'%')
+                 OR (r.match_kind='exact'    AND lower(u.channel_sku) = lower(r.pattern))
+                 OR (r.match_kind='contains' AND lower(u.channel_sku) LIKE '%'||lower(r.pattern)||'%'))
+             ORDER BY CASE r.match_kind WHEN 'exact' THEN 1 WHEN 'prefix' THEN 2 ELSE 3 END,
+                      length(r.pattern) DESC
+             LIMIT 1) AS bucket
+    FROM unmapped u
   )
-  SELECT m.channel_id, dc.name, m.bucket,
-         COUNT(DISTINCT m.channel_sku)::bigint,
-         SUM(m.qty)::bigint,
-         SUM(m.gross_value)::numeric
-  FROM matched m
-  LEFT JOIN public.dispatch_channels dc ON dc.id = m.channel_id
-  WHERE m.bucket IS NOT NULL
-  GROUP BY m.channel_id, dc.name, m.bucket
-  ORDER BY SUM(m.gross_value) DESC;
+  SELECT t.channel_id, dc.name, t.bucket,
+         COUNT(*)::bigint, SUM(t.qty)::bigint, SUM(t.gross)::numeric
+  FROM tagged t
+  LEFT JOIN public.dispatch_channels dc ON dc.id = t.channel_id
+  WHERE t.bucket IS NOT NULL
+  GROUP BY t.channel_id, dc.name, t.bucket
+  ORDER BY SUM(t.gross) DESC;
 $$;
 
 GRANT EXECUTE ON FUNCTION sales.f_accessories_rollup(date, date, uuid[]) TO service_role;
