@@ -298,8 +298,11 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         });
         // J2: log the wait_response step ONCE, at resolution, with the outcome it took —
         // responded | timeout | exit:<outcome> — so journey_funnel shows per-branch counts.
+        // `since` was captured at ENTRY (step.do(`since:`), so it survives a Workflow replay) —
+        // reuse it as the true entered_at rather than letting the insert default to now().
         await this.#logStep(env, step, enrolmentId, cur, s.type,
-          { awaited: s.awaited, within: s.within, outcome: terminateOutcome ? `exit:${terminateOutcome}` : outHandle });
+          { awaited: s.awaited, within: s.within, outcome: terminateOutcome ? `exit:${terminateOutcome}` : outHandle },
+          since);
         if (terminateOutcome) { await this.#end(env, step, enrolmentId, terminateOutcome, cur); return; }
         cur = G.resolveTarget(s, outHandle);
       } else if (s.type === 'condition') {
@@ -899,10 +902,26 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     return false;
   }
 
-  async #logStep(env, step, enrolmentId, stepId, stepType, result) {
+  // `enteredAt` is optional and exists for ONE case: a step whose row can only be written at
+  // RESOLUTION but which was ENTERED much earlier. Without it `enrolment_steps.entered_at`
+  // defaults to now() at insert, so a wait_response that parked for an hour claims it was entered
+  // an hour after it really was — measured 2026-08-16: `wait` steps average 0.09 min after
+  // enrolment (entry, correct) while `wait_response` averaged 60.58 (resolution). Two step types
+  // that both mean "pause here", disagreeing about what the column means.
+  //
+  // ⚠️ The row still has to be written at resolution — it carries the outcome
+  // (responded|timeout|exit:<x>) that gives journey_funnel its per-branch counts, and #logStep is
+  // keyed `step.do(log:<id>)` so it fires once per step and cannot run on both entry and exit.
+  // Passing the entry timestamp is what makes the column honest WITHOUT giving that up.
+  //
+  // Safe to change: `entered_at` has ZERO readers — journey_funnel counts by step_id/result and
+  // never touches it, and nothing else in the worker reads it. It is a diagnostic column, and one
+  // that lies is worth less than none.
+  async #logStep(env, step, enrolmentId, stepId, stepType, result, enteredAt) {
     await step.do(`log:${stepId}`, async () => {
       await A.sbComms('/rest/v1/enrolment_steps', env, { method: 'POST',
-        body: JSON.stringify({ enrolment_id: enrolmentId, step_id: stepId, step_type: stepType, result: result || {} }) });
+        body: JSON.stringify({ enrolment_id: enrolmentId, step_id: stepId, step_type: stepType,
+          result: result || {}, ...(enteredAt ? { entered_at: enteredAt } : {}) }) });
       await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolmentId)}`, env,
         { method: 'PATCH', body: JSON.stringify({ current_step: stepId }) });
       return true;
