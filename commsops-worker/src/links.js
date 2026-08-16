@@ -428,24 +428,79 @@ function buildButtonTarget(targetBase, suffix) {
  * `/r/{{1}}` there is no untracked link to fall back to, so a swallowed failure would deliver a
  * cart-recovery message whose only CTA drops the customer on the homepage — invisible damage that
  * later reads as a conversion problem. The caller turns this into a failed send instead.
+ *
+ * ── Two button shapes, and the static one is why this loop reads the SPECS ────────────────────
+ *
+ * A VARIABLE button (`…/products/{{1}}`) has a `component:'button'` slot in `content.mapping`, so
+ * render.js emits a button component carrying the per-recipient suffix, and the code below simply
+ * replaces that suffix with a minted one.
+ *
+ * A STATIC button (`…/collections/all`, no `{{1}}`) has NO mapping slot, because there was never a
+ * parameter to fill. render.js therefore emits no button component at all — so setting
+ * `target_base` on it used to change nothing: the template passed Meta, sent, and never tracked
+ * (BACKLOG [relay], 6 templates). The fix is to synthesize the component from the spec.
+ *
+ * `default_target` (optional, per button) is the always-resolves half of the same decision: a
+ * variable base whose per-recipient suffix is missing resolves to it rather than to a bare base.
+ * A static base never consults it — that base IS the destination.
  */
 async function applyButtonRedirects(components, { template, baseUrl, mint } = {}) {
   if (!baseUrl || !Array.isArray(components)) return components;
   const buttons = template?.content?.buttons;
   if (!Array.isArray(buttons) || !buttons.length) return components;
 
+  // Iterate the BUTTON SPECS, not the rendered components — a static-URL template has no button
+  // slot in `content.mapping`, so render.js emits no button component for it and a component-only
+  // loop could never reach it. That is the whole reason the six static templates could not be
+  // redirect-cloned: `target_base` alone shipped a template that passed Meta, sent, and never
+  // tracked. See the STATIC-BUTTON note below.
+  // EVERY button component is indexed, url or not. The rendered components are the truth of what
+  // is actually being sent, so an index already occupied by a quick_reply must be left completely
+  // alone even when the spec at that index is an opted-in URL button — synthesizing a second
+  // component there would send a link the message does not have.
+  const byIndex = new Map();
   for (const comp of components) {
     if (comp?.type !== 'button') continue;
-    if ((comp.sub_type || 'url') !== 'url') continue;      // quick_reply carries a payload, not a link
-    const spec = buttons[Number(comp.index ?? 0)];
+    byIndex.set(Number(comp.index ?? 0), comp);
+  }
+
+  for (let i = 0; i < buttons.length; i++) {
+    const spec = buttons[i];
     if (!spec?.target_base) continue;                       // not opted in — today's behaviour exactly
-    const param = (comp.parameters || []).find((p) => p.type === 'text');
-    const target = buildButtonTarget(spec.target_base, param?.text);
+    if (spec.type != null && String(spec.type).toUpperCase() !== 'URL') continue;
+    const comp = byIndex.get(i) || null;
+    if (comp && (comp.sub_type || 'url') !== 'url') continue;   // quick_reply carries a payload, not a link
+    const param = comp ? (comp.parameters || []).find((p) => p.type === 'text') : null;
+
+    // ── The token that ALWAYS resolves (Afshaan, 2026-08-16) ────────────────────────────────
+    // Per-recipient target when one exists, else the declared default. Only a base that actually
+    // carries `{{1}}` can fall back: a static base IS the destination, so overriding it with a
+    // default would silently retarget a working button.
+    const needsSuffix = String(spec.target_base).includes('{{1}}');
+    const suffix = param?.text;
+    const missing = suffix == null || String(suffix).trim() === '';
+    const target = (needsSuffix && missing && spec.default_target)
+      ? spec.default_target
+      : buildButtonTarget(spec.target_base, suffix);
     if (!target) continue;
+
     const code = await mint(target);
+    // Mint returning nothing leaves the message EXACTLY as rendered. For an existing component
+    // that is today's behaviour unchanged; for a synthesized one it means we add nothing, so a
+    // `/r/{{1}}` clone fails loudly at Meta rather than delivering a button pointing at a
+    // literal placeholder. Failing is the correct branch — see the header note.
     if (!code) continue;
-    if (param) param.text = code;
-    else (comp.parameters = comp.parameters || []).push({ type: 'text', text: code });
+
+    if (param) { param.text = code; continue; }
+    if (comp) { (comp.parameters = comp.parameters || []).push({ type: 'text', text: code }); continue; }
+
+    // ── STATIC BUTTON, no mapping slot: synthesize the component ────────────────────────────
+    // Pushed only AFTER a successful mint, never before — an empty button component is rejected
+    // by Meta (132000) and would turn a tracking upgrade into a dead send.
+    components.push({
+      type: 'button', sub_type: 'url', index: String(i),
+      parameters: [{ type: 'text', text: code }],
+    });
   }
   return components;
 }

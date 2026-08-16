@@ -126,5 +126,75 @@ const comps = () => ([
     assert.equal(JSON.stringify(c), before);
   }
 
+  // (g) STATIC button, no mapping slot → the component is SYNTHESIZED. This is the whole
+  // static-template class: render.js emits no button component (there was never a parameter to
+  // fill), so before this the opt-in changed nothing — the template passed Meta, sent, and never
+  // tracked.
+  {
+    const c = [{ type: 'body', parameters: [{ type: 'text', text: 'hi' }] }];
+    const tpl = { content: { buttons: [
+      { type: 'URL', text: 'Dive Back In', target_base: 'https://legendoftoys.com/collections/all' },
+    ] } };
+    let minted = null;
+    await applyButtonRedirects(c, {
+      template: tpl, baseUrl: 'https://lottoys.in',
+      mint: async (t) => { minted = t; return 'abc123'; },
+    });
+    assert.equal(minted, 'https://legendoftoys.com/collections/all',
+      'a static base is minted as-is — it IS the destination, no suffix substitution');
+    const btn = c.find((x) => x.type === 'button');
+    assert.ok(btn, 'a button component is synthesized for a static opted-in button');
+    assert.equal(btn.sub_type, 'url');
+    assert.equal(btn.index, '0');
+    assert.deepEqual(btn.parameters, [{ type: 'text', text: 'abc123' }]);
+    assert.equal(c[0].type, 'body', 'existing components are left in place');
+  }
+
+  // (h) a failed mint must add NOTHING. An empty/placeholder button component is rejected by Meta
+  // (132000) — failing loudly beats delivering a button pointing at a literal {{1}}.
+  {
+    const c = [{ type: 'body', parameters: [] }];
+    const tpl = { content: { buttons: [{ type: 'URL', target_base: 'https://legendoftoys.com/x' }] } };
+    await applyButtonRedirects(c, {
+      template: tpl, baseUrl: 'https://lottoys.in', mint: async () => null,
+    });
+    assert.equal(c.filter((x) => x.type === 'button').length, 0,
+      'no component is synthesized when the mint fails');
+  }
+
+  // (i) default_target — the always-resolves half. A VARIABLE base whose per-recipient suffix is
+  // missing falls back to it; a STATIC base never consults it.
+  {
+    const tpl = { content: { buttons: [{ type: 'URL',
+      target_base: 'https://www.legendoftoys.com/products/{{1}}',
+      default_target: 'https://www.legendoftoys.com/collections/all' }] } };
+    // missing suffix → default
+    let got = null;
+    await applyButtonRedirects([], { template: tpl, baseUrl: 'https://lottoys.in',
+      mint: async (t) => { got = t; return 'c1'; } });
+    assert.equal(got, 'https://www.legendoftoys.com/collections/all', 'no suffix → default_target');
+    // blank suffix counts as missing — a resolved-but-empty variable is not a destination
+    got = null;
+    await applyButtonRedirects(
+      [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '  ' }] }],
+      { template: tpl, baseUrl: 'https://lottoys.in', mint: async (t) => { got = t; return 'c2'; } });
+    assert.equal(got, 'https://www.legendoftoys.com/collections/all', 'blank suffix → default_target');
+    // a real per-recipient suffix WINS over the default
+    got = null;
+    await applyButtonRedirects(
+      [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'ghost' }] }],
+      { template: tpl, baseUrl: 'https://lottoys.in', mint: async (t) => { got = t; return 'c3'; } });
+    assert.equal(got, 'https://www.legendoftoys.com/products/ghost', 'per-recipient target wins');
+    // a STATIC base ignores default_target entirely — overriding it would silently retarget a
+    // button that already works.
+    got = null;
+    const staticTpl = { content: { buttons: [{ type: 'URL',
+      target_base: 'https://legendoftoys.com/account/orders',
+      default_target: 'https://legendoftoys.com/collections/all' }] } };
+    await applyButtonRedirects([], { template: staticTpl, baseUrl: 'https://lottoys.in',
+      mint: async (t) => { got = t; return 'c4'; } });
+    assert.equal(got, 'https://legendoftoys.com/account/orders', 'static base is never overridden');
+  }
+
   console.log('link-mint-button.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
