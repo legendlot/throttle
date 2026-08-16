@@ -8,6 +8,10 @@ const t = (n, f) => Promise.resolve().then(f).then(() => { pass++; console.log('
   (e) => { fail++; console.log('  FAIL', n, '\n        ', e.message); });
 const orig = A.sbComms;
 const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T', channel: 'email', purpose: 'utility', name: 'x', vars: {} };
+// One exactly-full page, sized from the real constant so the continuation branch is genuinely hit.
+const PAGE = Array.from({ length: CAMP.SENDS_PER_MSG },
+  (_, i) => ({ profile_id: `P${i + 1}`, address: `p${i + 1}@b.com` }));
+const LAST_PROFILE = PAGE[PAGE.length - 1].profile_id;
 
 (async () => {
   await t('recipients-RPC failure → THROWS (queue retries); campaign is NOT marked sent', async () => {
@@ -30,9 +34,11 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
     let heartbeatPatch = null;
     A.sbComms = async (path, env, opts = {}) => {
       if (path.includes('/campaigns?id=eq.C') && (!opts.method || opts.method === 'GET')) return { ok: true, data: [CAMPROW] };
-      if (path.includes('campaign_recipients')) return { ok: true, data: [
-        { profile_id: 'P1', address: 'a@b.com' }, { profile_id: 'P2', address: 'b@b.com' },
-        { profile_id: 'P3', address: 'c@b.com' }, { profile_id: 'P4', address: 'd@b.com' } ] };  // == SENDS_PER_MSG
+      // A FULL page — derived from SENDS_PER_MSG, never restated. The continuation only fires on
+      // `recs.length === SENDS_PER_MSG`, so a hardcoded count turns this into a test of the
+      // drain-the-shard branch the moment the constant moves (it did: 5 → 75, and this test then
+      // failed for years-of-nothing reasons while still being read as evidence of a real fan-out bug).
+      if (path.includes('campaign_recipients')) return { ok: true, data: PAGE };
       if (path.includes('/messages?on_conflict')) return { ok: true, data: [{ id: 'R' + Math.random() }] };
       if (path.includes('/templates?id=eq.')) {
         // throw RAW on the first template lookup only → recipient 1's send() throws
@@ -48,7 +54,7 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
     global.__threw_once = false;
     await CAMP.processQueueMessage({ BROADCAST_QUEUE: { send: async (m) => enq.push(m) } }, { campaignId: 'C', after: null });
     assert.equal(enq.length, 1, 'continuation enqueued despite recipient-1 throw');
-    assert.equal(enq[0].after, 'P4');
+    assert.equal(enq[0].after, LAST_PROFILE);
     assert.ok(heartbeatPatch, 'a processed full page must PATCH the campaign heartbeat (status=eq.sending filter)');
     assert.ok(heartbeatPatch.path.includes('id=eq.C'), 'heartbeat PATCH must target this campaign id');
     assert.ok(!!heartbeatPatch.body.updated_at, 'heartbeat PATCH body must carry updated_at');

@@ -798,5 +798,11 @@ async function sendCampaignTest(env, { id, to, draft, variantId }) {
 }
 
 module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBudget, minutesUntilQuiet, THROUGHPUT_PER_HOUR_PER_CHAIN, QUIET_MARGIN_MINUTES, startCampaign, processBuildChunk, stallCampaign, processQueueMessage, sendCampaignTest,
+  // Exported for the fan-out tests ONLY. The continuation test is `recs.length === SENDS_PER_MSG`,
+  // so a test that wants to exercise "a FULL page was processed" has to build a page of exactly
+  // this size. It used to hardcode 4 next to a `// == SENDS_PER_MSG` comment, which silently
+  // stopped being true the moment the constant moved (5 → 75) — the test then exercised the
+  // drain-the-shard branch while still claiming to test the continuation. Derive, never restate.
+  SENDS_PER_MSG,
   // S276 exclusions — exported for unit tests
   exclusionArgs, materializeExclusions };
