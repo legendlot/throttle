@@ -25,6 +25,7 @@ const CHAN_FILTERS = [
   { key: 'whatsapp', label: 'WhatsApp' },
   { key: 'email', label: 'Email' },
   { key: 'sms', label: 'SMS' },
+  { key: 'rcs', label: 'RCS' },
 ];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUSES = ['draft', 'active', 'archived'];
