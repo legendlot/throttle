@@ -27,6 +27,31 @@ function orderedParams(csparams) {
     .map((x) => String(x.name));
 }
 
+// tjson (the vendor's own stored template JSON) → the compose-draft shape Relay's previews
+// read (content.draft). Exists so a template authored directly in Sigmo still previews its
+// REAL registered copy in Relay — without this, only Relay-authored rows (which keep their
+// compose draft) had a body to render. Defensive on shape: tjson is undocumented, so absent
+// fields just yield a smaller draft, and a body-less tjson yields null (caller keeps hands off).
+function draftFromTjson(tjson, rcsType) {
+  if (!tjson || typeof tjson !== 'object') return null;
+  const sa = tjson.standAlone || tjson.standalone || {};
+  const body = tjson.textMessageContent || sa.cardDescription || '';
+  if (!String(body).trim()) return null;
+  const sugs = Array.isArray(tjson.suggestions) && tjson.suggestions.length ? tjson.suggestions
+    : Array.isArray(sa.suggestions) ? sa.suggestions : [];
+  const s0 = sugs[0] || {};
+  return {
+    type: rcsType || (sa.cardTitle ? 'rich_card' : 'text_message'),
+    body: String(body),
+    ...(sa.cardTitle ? { card_title: String(sa.cardTitle) } : {}),
+    ...(sa.mediaUrl ? { media_url: String(sa.mediaUrl) } : {}),
+    ...(s0.displayText ? { btn_text: String(s0.displayText) } : {}),
+    ...(s0.url ? { btn_url: String(s0.url) } : {}),
+    ...(s0.postback ? { btn_postback: String(s0.postback) } : {}),
+    vendor_mirrored: true,
+  };
+}
+
 // GET /api/v1/template — paginated. Read-only.
 async function tsListRcsTemplates(env, opts = {}) {
   const limit = Math.min(Number(opts.limit) || 50, 100);
@@ -150,4 +175,4 @@ async function tsDeleteRcsTemplate(env, id) {
   return { ok: true };
 }
 
-module.exports = { tsListRcsTemplates, orderedParams, tsCreateRcsTemplate, tsDeleteRcsTemplate, bracketParams };
+module.exports = { tsListRcsTemplates, orderedParams, tsCreateRcsTemplate, tsDeleteRcsTemplate, bracketParams, draftFromTjson };

@@ -1969,9 +1969,16 @@ async function handlePost(body, auth, env) {
         const v = byId.get(row.provider_template_id);
         if (!v) continue;
         const cur = row.content?.provider_status || '';
-        if (cur === v.status && (row.content?.var_params || []).join(',') === v.var_params.join(',')) continue;
+        // A row with no compose draft (template authored straight in Sigmo) gets one built
+        // from the vendor's stored tjson, so previews render the REAL registered copy.
+        // Never overwrites an existing draft — Relay-authored copy stays authoritative.
+        const vendorDraft = !String(row.content?.draft?.body || '').trim()
+          ? RCSTPL.draftFromTjson(v.tjson, v.rcs_type) : null;
+        if (cur === v.status && (row.content?.var_params || []).join(',') === v.var_params.join(',')
+          && !vendorDraft) continue;
         const merged = { ...(row.content || {}), provider_status: v.status,
-          var_params: v.var_params.length ? v.var_params : (row.content?.var_params || []) };
+          var_params: v.var_params.length ? v.var_params : (row.content?.var_params || []),
+          ...(vendorDraft ? { draft: vendorDraft } : {}) };
         // Set OR CLEAR — a stale rejection reason surviving an approval reads as still-broken.
         if (v.error) merged.provider_error = v.error; else delete merged.provider_error;
         await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
