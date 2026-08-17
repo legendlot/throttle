@@ -31,7 +31,7 @@ export const NAV_GROUPS = [
     ],
   },
   {
-    id: 'sales', label: 'OFFLINE SALES', icon: Store,
+    id: 'sales', label: 'SALES ORDERS', icon: Store,
     items: [
       { id: 'sales-orders',      label: 'Sales Orders',  route: '/sales/orders',      icon: ClipboardList, requires: 'sales_view' },
       { id: 'sales-collections', label: 'Collections',   route: '/sales/collections', icon: HandCoins,     requires: 'sales_view' },

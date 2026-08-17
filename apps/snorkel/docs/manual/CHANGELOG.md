@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.4.1] - 2026-08-17
+### Changed
+- Module renamed: "Offline Sales" is now "Sales Orders" (nav group in the app and the
+  matching manual part). Wording updated in the introduction and roles chapters. The
+  underlying GT/MT channels and permissions are unchanged.
+
 ## [1.4.0] - 2026-07-15
 ### Added
 - New "Moulds & Mould Orders" chapter in Vendors & Reorders: what a mould is (parts we

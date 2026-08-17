@@ -2,8 +2,8 @@
   "title": "Snorkel",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to procurement at Legend of Toys: requests, purchase orders, vendors, payments, offline sales and the asset register.",
-  "version": "1.4.0",
-  "date": "2026-06-25",
+  "version": "1.4.1",
+  "date": "2026-08-17",
   "app_url": "snorkel.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -227,7 +227,7 @@
       ]
     },
     {
-      "part": "Offline Sales",
+      "part": "Sales Orders",
       "subtitle": "Selling to General Trade and Modern Trade: orders, dispatch handoff, invoicing and collections.",
       "chapters": [
         {

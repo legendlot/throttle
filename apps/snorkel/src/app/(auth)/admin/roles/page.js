@@ -22,7 +22,7 @@ const PERM_DEFS = [
     { key: 'vendor_manage',          label: 'Manage vendors / forwarders / supplied items' },
     { key: 'company_address_manage', label: 'Manage company addresses' },
   ] },
-  { group: 'Offline Sales', items: [
+  { group: 'Sales Orders', items: [
     { key: 'sales_view',          label: 'View sales orders / partners / collections' },
     { key: 'sales_order_manage',  label: 'Create / edit / cancel orders + generate invoice' },
     { key: 'sales_order_confirm', label: 'Confirm orders → hand off to dispatch' },
