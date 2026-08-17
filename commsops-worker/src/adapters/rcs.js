@@ -75,6 +75,12 @@ async function send(rendered, env) {
   // F11 — RCS returns cost as a STRING ("0.1") where SMS returns a number. Coerce; a
   // non-numeric value is recorded as null rather than NaN.
   const cost = first?.cost ?? first?.rcs_cost ?? null;
+  // ⚠️ with_fallback's RESPONSE shape is undocumented (no live example in the collection). The
+  // first enabled live send (2026-08-17) came back WITHOUT transaction_id at this path — DLRs
+  // key on it, so a null here orphans the message forever. Log the shape when extraction
+  // misses so the real key can be bound rather than guessed.
+  if (!first?.transaction_id)
+    console.log('rcs_send_no_transaction_id', TS.redact(JSON.stringify(r.data) || '').slice(0, 500));
   return {
     provider_message_id: first?.transaction_id || null,
     status: 'sent',                 // accepted, NOT delivered — the webhook moves it forward
