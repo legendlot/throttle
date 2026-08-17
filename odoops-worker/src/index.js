@@ -4492,6 +4492,19 @@ export default {
             return ok({ rows: r.data || [] });
           }
 
+          case 'getCellOrders': {   // S294 — per-cell drill-through: order lines under a Detail slice
+            if (!canView(P)) return err('No permission', 403);
+            const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
+            const prods = (qp('products') || '').split(',').map(s => s.trim()).filter(Boolean);
+            const r = await rpcSales('f_cell_orders', {
+              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
+              p_channels: chans.length ? chans : null,
+              p_products: prods.length ? prods : null,
+              p_limit: qp('limit') ? Number(qp('limit')) : null,
+            });
+            if (!r.ok) return err('Cell orders failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
           case 'getAccessories': {   // S289 — "Accessories & others" MEMO line (unmapped spares/gift-wrap/service)
             // ⚠️ Memo only — this is read straight off staging and is NOT in sales_fact, so it is
             // deliberately OUTSIDE every Odo total. Do not add it into gross/units anywhere.

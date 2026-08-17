@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Modal } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
@@ -51,6 +51,7 @@ export default function Dashboard() {
   const [from, setFrom] = useState(MTD.from);
   const [to, setTo] = useState(MTD.to);
   const [group, setGroup] = useState('variant'); // drill table axis
+  const [drill, setDrill] = useState(null);      // S294 — { title, params } → underlying-orders modal
   const [trendMetric, setTrendMetric] = useState('gross');
   const [variantMetric, setVariantMetric] = useState('gross');
   const [sellerRollup, setSellerRollup] = useState('variant'); // variant | product
@@ -255,6 +256,19 @@ export default function Dashboard() {
 
   const ppLabel = preset ? `prior ${PRESETS.find(p => p.key === preset)?.label || ''}` : 'prior period';
   const rangeLabel = (preset && PRESETS.find(p => p.key === preset)?.label) || `${from} → ${to}`;
+
+  // S294 — drill-through: a Detail row opens the order lines underneath that slice.
+  // Params mirror what the row aggregated: axis value + the page's current range + channel filter.
+  const openDrill = (r) => {
+    const base = { from, to, channel_id: sel.join(',') };
+    if (group === 'variant') setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, products: r.key } });
+    else if (group === 'product') {
+      const codes = Object.keys(codeToProduct).filter(c => codeToProduct[c] === r.key);
+      setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, products: (codes.length ? codes : [r.key]).join(',') } });
+    }
+    else if (group === 'date') setDrill({ title: r.key, params: { ...base, from: r.key, to: r.key } });
+    else setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, channel_id: r.key } });
+  };
 
   return (
     <div className="so-page">
@@ -486,7 +500,8 @@ export default function Dashboard() {
               </tr></thead>
               <tbody>
                 {tblSort.sorted.map(r => (
-                  <tr key={r.key}>
+                  <tr key={r.key} onClick={() => openDrill(r)} style={{ cursor: 'pointer' }}
+                      title="View underlying orders">
                     <td>
                       {group === 'channel' ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -504,8 +519,79 @@ export default function Dashboard() {
             </table>
           )}
         </div>
+
+        {drill && (
+          <DrillModal title={drill.title} params={drill.params} session={session}
+            chName={chName} codeToProduct={codeToProduct} onClose={() => setDrill(null)} />
+        )}
       </>
       )}
     </div>
+  );
+}
+
+// S294 — underlying orders for one Detail slice. Line grain straight off staging (the same rows
+// recompute_facts aggregates), so the modal's sale total always matches the cell it was opened from.
+const DRILL_LIMIT = 1000;
+function DrillModal({ title, params, session, chName, codeToProduct, onClose }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    let dead = false;
+    salesGet('getCellOrders', { ...params, limit: DRILL_LIMIT }, session)
+      .then(r => { if (!dead) setRows(r?.rows || []); })
+      .catch(e => { if (!dead) { setErr(String(e?.message || e)); setRows([]); } });
+    return () => { dead = true; };
+  }, [params, session]);
+
+  const sale = (rows || []).filter(r => r.row_type === 'sale' && !r.is_cancelled);
+  const units = sale.reduce((a, r) => a + (Number(r.qty) || 0), 0);
+  const gross = sale.reduce((a, r) => a + (Number(r.gross_value) || 0), 0);
+
+  return (
+    <Modal open title={`Orders — ${title}`} onClose={onClose} size="lg">
+      {rows === null ? <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div> : (
+        <>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+            <span>{fmtInt(units)} units · {inr(gross)} live sale value</span>
+            {rows.length >= DRILL_LIMIT && <span style={{ color: 'var(--amber, #d97706)' }}>showing first {DRILL_LIMIT} lines — narrow the range for the rest</span>}
+            {err && <span style={{ color: 'var(--red)' }}>{err}</span>}
+          </div>
+          {rows.length === 0 ? (
+            <div style={{ ...EMPTY, padding: 24, textAlign: 'center' }}>No staged order lines for this slice.</div>
+          ) : (
+            <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+              <table className="so-table">
+                <thead><tr>
+                  <th>Date</th><th>Order</th><th>Channel</th><th>Variant</th>
+                  <th className="so-num">Qty</th><th className="so-num">Gross ₹</th><th>Status</th>
+                </tr></thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} style={r.is_cancelled || r.row_type === 'return' ? { opacity: 0.55 } : undefined}>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{r.sale_date}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+                        {r.order_ref || r.source_order_id || <span style={{ color: 'var(--t5)' }}>report row</span>}
+                      </td>
+                      <td style={{ fontSize: 11 }}>{chName[r.channel_id] || '—'}</td>
+                      <td style={{ fontSize: 11 }} title={r.channel_sku}>
+                        {r.product_code}{codeToProduct[r.product_code] ? ` · ${codeToProduct[r.product_code]}` : ''}
+                      </td>
+                      <td className="so-num">{fmtInt(r.qty)}</td>
+                      <td className="so-num bright">{inr(Number(r.gross_value) || 0)}</td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        {r.row_type === 'return' ? <span style={{ color: 'var(--red)' }}>RETURN</span>
+                          : r.is_cancelled ? <span style={{ color: 'var(--t5)' }}>CANCELLED</span>
+                          : <span style={{ color: 'var(--t4)' }}>SALE</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </Modal>
   );
 }
