@@ -891,7 +891,7 @@ export default function CampaignsPage() {
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to campaigns</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{c.id ? (c.name || 'Campaign') : 'New Campaign'}</span>
             <Badge label={cStatus.label} tone={cStatus.tone} dot={cStatus.dot} />
-            {c.audience_snapshot != null && <Badge label={`${c.audience_snapshot} reachable`} tone="blue" dot />}
+            {c.audience_snapshot != null && <Badge label={`${c.audience_snapshot} planned`} tone="blue" dot />}
           </div>
           <div className="po-head-r">
             {isDraft && canBuild && <Btn kind="primary" onClick={save} disabled={busy}><Check size={14} /> {busy ? 'Saving…' : 'Save draft'}</Btn>}
@@ -1282,13 +1282,15 @@ export default function CampaignsPage() {
         {stats && (
           <Panel title="Performance" pad>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-              {/* PLANNED, from audience_snapshot — the reachable count startCampaign claimed the
-                  send against. `stats.total` (which "Sent" used to be measured against) counts
-                  comms.messages ROWS, and the fan-out creates those just ahead of sending, so it
-                  reported ~100% for a campaign that had barely started. Same defect as the Control
-                  Tower bar, fixed 2026-08-14. */}
+              {/* PLANNED, from audience_snapshot — since S293 the post-exclusion sendable the
+                  send was planned against (the roster is larger on purpose: it carries the whole
+                  reachable set and the exclusion rules skip per-recipient at send time).
+                  `stats.total` (which "Sent" used to be measured against) counts comms.messages
+                  ROWS, and the fan-out creates those just ahead of sending, so it reported ~100%
+                  for a campaign that had barely started. Same defect as the Control Tower bar,
+                  fixed 2026-08-14. */}
               <Kpi label="Planned" value={c.audience_snapshot ?? '—'} tone="gray"
-                   sub={c.audience_snapshot ? 'reachable when the send began' : 'not yet sent'} />
+                   sub={c.audience_snapshot ? 'expected to receive when the send began' : 'not yet sent'} />
               <Kpi label="Sent" value={stats.sent ?? 0} tone="gray"
                    sub={c.audience_snapshot ? `${pct(stats.sent, c.audience_snapshot)}% of planned` : `${stats.total ?? 0} queued so far`} />
               {/* FAILED was returned by campaign_stats_list all along and rendered NOWHERE, while

@@ -384,7 +384,9 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   const claim = await A.sbComms(
     `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled,stopped,sent,stalled)`, env,
     { method: 'PATCH', body: JSON.stringify({
-        status: 'sending', audience_snapshot: camp.roster_size ?? sendable, sent_by: sentBy,
+        // Keep the stamped planned-recipients snapshot across a resume — overwriting it with
+        // roster_size re-introduced the pre-exclusion number every time a send was resumed.
+        status: 'sending', audience_snapshot: camp.audience_snapshot ?? sendable, sent_by: sentBy,
         shards_done: 0, updated_at: nowIso() }) });
   if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
     return { ok: false, error: 'already_claimed' };
@@ -433,11 +435,29 @@ async function processBuildChunk(env, body) {
   }
 
   const total = Number(row.roster_total || 0);
+  // audience_snapshot = PLANNED RECIPIENTS (post-exclusion sendable), NOT roster size. The
+  // roster deliberately carries the whole reachable set — exclusions are enforced per-recipient
+  // at send time — so stamping the roster total here made every "planned / of / % of planned"
+  // display show the pre-exclusion number (Mishica's 17Aug: approved at 24,904, PLANNED read
+  // 77,529). roster_size keeps the roster truth; the snapshot is what humans plan against.
+  // Cheap: campaign_reach WITHOUT re-materializing — the roster was just built from the same
+  // freshly-materialized member set. Falls back to the roster total if the read fails or the
+  // campaign carries no exclusion rules (the two numbers agree then anyway).
+  let planned = total;
+  if ((camp.exclude_segment_ids || []).length || (camp.exclude_campaign_ids || []).length
+      || camp.exclude_contacted_hours != null) {
+    const pr = await A.sbComms('/rest/v1/rpc/campaign_reach', env, { method: 'POST',
+      body: JSON.stringify({ p_segment_id: camp.segment_id, p_channel: camp.channel,
+        p_purpose: camp.purpose, ...exclusionArgs(camp) }) });
+    const prow = Array.isArray(pr.data) ? pr.data[0] : pr.data;
+    if (pr.ok && prow?.sendable != null) planned = Number(prow.sendable);
+  }
   // Approval re-check against the REAL roster, with nobody at a button (§9.14): a human-approved
   // campaign stands; an auto-approved one that outgrew the threshold parks LOUDLY. The park stamps
   // roster_built_at — the roster is complete and reusable; only the send needs eyes.
+  // (The threshold stays judged on the roster total — the conservative side of the two.)
   if (!camp.approved_by && await needsApproval(env, camp, total)) {
-    await setStatus(env, campaignId, { status: 'pending_approval', audience_snapshot: total,
+    await setStatus(env, campaignId, { status: 'pending_approval', audience_snapshot: planned,
       roster_built_at: nowIso(), roster_size: total, build_cursor: null });
     await AL.alert(env, `⏸️ *Relay — campaign parked for approval after roster build*\n"${camp.name}" `
       + `built a roster of ${total}, above the approval threshold. Nothing was sent. `
@@ -449,7 +469,7 @@ async function processBuildChunk(env, body) {
   // the empty representation tells us not to seed. shard_count is read back from the PATCHed row.
   const fin = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}&status=eq.building_roster`, env,
     { method: 'PATCH', body: JSON.stringify({ status: 'sending', roster_built_at: nowIso(),
-        roster_size: total, audience_snapshot: total, shards_done: 0, build_cursor: null,
+        roster_size: total, audience_snapshot: planned, shards_done: 0, build_cursor: null,
         updated_at: nowIso() }) });
   if (!fin.ok) throw new Error(`build_finalize_failed:${campaignId}:${fin.status}`);
   if (!Array.isArray(fin.data) || fin.data.length === 0) return;   // stopped concurrently
