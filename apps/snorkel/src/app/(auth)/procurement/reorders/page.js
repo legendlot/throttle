@@ -195,7 +195,7 @@ export default function ReordersPage() {
       const res = await workerFetch('postReorderRequest', {
         data: {
           request_type: rrType,
-          part_code:    rrType === 'part'    ? partCode : null,
+          part_code:    rrType === 'part'    ? partCode.trim().toUpperCase() : null,
           part_name:    rrType === 'part'    ? partName : null,
           product:      rrType === 'product' ? product  : null,
           variant:      rrType === 'product' ? variant  : null,

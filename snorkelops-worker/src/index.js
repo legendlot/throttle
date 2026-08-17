@@ -2104,7 +2104,9 @@ export default {
             const r = await insert('reorder_requests', {
               request_id:        reqId,
               request_type:      d.request_type || 'part',
-              part_code:         d.part_code    || null,
+              // Uppercase+trim on write (Afshaan 2026-08-16) — deliberately NOT validated
+              // against bom_register: a request naming a not-yet-created part is legitimate.
+              part_code:         d.part_code ? String(d.part_code).trim().toUpperCase() : null,
               product:           d.product      || null,
               variant:           d.variant      || null,
               color:             d.color        || null,
