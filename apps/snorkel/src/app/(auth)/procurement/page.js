@@ -7,6 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { ArrowRight, RefreshCw, Plus } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, Pipeline, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone, urgencyTone } from '@/components/format.js';
+import { NAV_GROUPS, filterNavByPerms } from '../../../lib/nav.js';
 
 const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
 const toInr = (v, cur) => (Number(v) || 0) * (FX[cur] || 1);
@@ -77,7 +78,23 @@ export default function ProcurementOverviewPage() {
     return { total, chinaPct: total ? Math.round((china / total) * 100) : 0 };
   }, [poRows]);
 
+  // This page is the app's DEFAULT LANDING (src/app/page.js hard-redirects here), so a user
+  // whose role has no procurement permission used to get "Access restricted." as their very
+  // first screen after signing in — Adnan, sales-only role, #bugs 2026-08-17 — and read it as
+  // having no Snorkel access at all. Bounce them to the first section their permissions
+  // actually show (nav order: Requests is everyone's front door). The restricted text stays
+  // for direct navigation by someone with genuinely nothing else.
+  const firstAllowed = useMemo(() => {
+    if (!perms || perms.procurement_view) return null;
+    const groups = filterNavByPerms(NAV_GROUPS, perms);
+    return groups[0]?.items?.[0]?.route || null;
+  }, [perms]);
+  useEffect(() => {
+    if (firstAllowed && firstAllowed !== '/procurement') router.replace(firstAllowed);
+  }, [firstAllowed, router]);
+
   if (perms && !perms.procurement_view) {
+    if (firstAllowed && firstAllowed !== '/procurement') return <Spinner />;
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 

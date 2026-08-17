@@ -1206,6 +1206,18 @@ async function handlePost(body, auth, env) {
         // form post. Take the stored value unconditionally — matching what the UI already claims
         // by greying the field out. A stale tab now cannot re-route a live template's sends.
         if (cur.data?.[0]?.provider_template_id && prev.waba_id != null) mergedContent.waba_id = prev.waba_id;
+        // RCS binding id (S293). Binding a row to an EXISTING Sigmo-authored vendor template by
+        // typing its id is a legitimate editor flow (S291), but this column was only ever
+        // written by the SUBMIT path — so a typed binding was silently dropped on Save: the
+        // editor showed VENDOR: APPROVED (client-side sync) while the row stayed unbound and
+        // the list read "not submitted" (Pruthvi, #bugs 2026-08-17). rcs ONLY — WhatsApp's id
+        // is Meta-owned via submit, SMS's comes from the mirror action. Bind/replace only:
+        // absent or blank carries the stored value, so a stale tab cannot CLEAR a live binding
+        // (the waba_id lesson, one field over).
+        const nextPtid = (channel === 'rcs'
+            && typeof body.provider_template_id === 'string' && body.provider_template_id.trim())
+          ? body.provider_template_id.trim()
+          : (cur.data?.[0]?.provider_template_id ?? null);
         // NO-OP ON NO CHANGES. `version` was bumped on EVERY save, so simply opening a
         // template and pressing Save inflated it — live rows had reached v5–v7 on a handful
         // of real edits, which makes the version meaningless exactly when you need it (which
@@ -1222,7 +1234,10 @@ async function handlePost(body, auth, env) {
           && (prevRow.status || 'active') === (status || 'active')
           // utm MUST be in this comparison: it is a real, savable field, and omitting it made a
           // utm-only edit return noop:true and silently never persist.
-          && stableJson(prevRow.utm ?? null) === stableJson(utm !== undefined ? J.sanitizeUtm(utm) : (prevRow.utm ?? null))) {
+          && stableJson(prevRow.utm ?? null) === stableJson(utm !== undefined ? J.sanitizeUtm(utm) : (prevRow.utm ?? null))
+          // ...and so must the rcs binding id, else a save whose ONLY change is the binding
+          // (status already synced, content unchanged) noops and drops it all over again.
+          && (prevRow.provider_template_id ?? null) === nextPtid) {
           return ok({ ...prevRow, noop: true });
         }
         // Freezing the variant ROWS while leaving template CONTENT editable is a half-measure:
@@ -1242,6 +1257,7 @@ async function handlePost(body, auth, env) {
             channel, name, purpose, language: language || 'en', content: mergedContent,
             variables: variables || [], status: status || 'active', version: v + 1, updated_at: nowIso(),
             ...(utm !== undefined ? { utm: J.sanitizeUtm(utm) } : {}),
+            ...(channel === 'rcs' ? { provider_template_id: nextPtid } : {}),
           }),
         });
         if (!r.ok) return err('db_error', 500);
@@ -1253,6 +1269,10 @@ async function handlePost(body, auth, env) {
           channel: channel || 'email', name, purpose: purpose || 'marketing',
           language: language || 'en', content: content || {}, variables: variables || [],
           status: status || 'active', created_by: auth.userId, utm: J.sanitizeUtm(utm),
+          // rcs only, same rule as the update branch — a NEW row typed against an existing
+          // Sigmo template binds on first save.
+          ...(channel === 'rcs' && typeof body.provider_template_id === 'string' && body.provider_template_id.trim()
+            ? { provider_template_id: body.provider_template_id.trim() } : {}),
         }),
       });
       if (!r.ok) return err('db_error:' + JSON.stringify(r.data), 500);

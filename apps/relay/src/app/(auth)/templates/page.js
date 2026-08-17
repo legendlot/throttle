@@ -907,6 +907,12 @@ export default function TemplatesPage() {
       channel: t.channel, name: t.name.trim(), purpose: t.purpose, language: t.language || 'en',
       status: t.status, content, variables,
       utm: t.utm || null,
+      // RCS ONLY: the typed vendor-binding id must ride with the save — it lived solely in
+      // React state, so binding a row to an existing Sigmo template looked bound (the sync
+      // showed VENDOR: APPROVED) and was dropped on Save; the list truthfully read the row
+      // as "not submitted" (Pruthvi, #bugs 2026-08-17). The worker writes it for rcs rows
+      // only and never clears a stored binding on a blank.
+      ...(t.channel === 'rcs' ? { provider_template_id: (t.provider_template_id || '').trim() || null } : {}),
     };
   }
 
