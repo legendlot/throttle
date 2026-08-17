@@ -553,8 +553,11 @@ function DrillModal({ title, params, session, chName, codeToProduct, onClose }) 
       {rows === null ? <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div> : (
         <>
           <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-            <span>{fmtInt(units)} units · {inr(gross)} live sale value</span>
-            {rows.length >= DRILL_LIMIT && <span style={{ color: 'var(--amber, #d97706)' }}>showing first {DRILL_LIMIT} lines — narrow the range for the rest</span>}
+            {/* On a truncated slice the sums cover only the fetched lines — say so, or the number
+                reads as a mismatch against the Detail row it was opened from. */}
+            {rows.length >= DRILL_LIMIT
+              ? <span style={{ color: 'var(--amber, #d97706)' }}>showing first {DRILL_LIMIT} lines ({fmtInt(units)} units · {inr(gross)} of the row's total) — narrow the range for the rest</span>
+              : <span>{fmtInt(units)} units · {inr(gross)} live sale value</span>}
             {err && <span style={{ color: 'var(--red)' }}>{err}</span>}
           </div>
           {rows.length === 0 ? (
