@@ -7,8 +7,9 @@
 // as labelled inputs and the message re-renders as you type, so "does this read right?" is
 // answered by looking, not by decoding a rendered string after the fact.
 //
-// Two channels, two token syntaxes — WhatsApp is positional ({{1}}) because that is what Meta
-// stores and `mapping` maps position→token; email is by name ({token}).
+// Four channels, three token syntaxes — WhatsApp is positional ({{1}}) because that is what
+// Meta stores and `mapping` maps position→token; email and SMS are by name ({token}); RCS is
+// bracketed named params ([token], the TrustSignal registration syntax).
 
 // A variable's value, in the same precedence the send path uses, so the preview does not
 // flatter the real thing: explicit value → fallback (profile vars) → Meta's example → unfilled.
@@ -40,6 +41,24 @@ function fillEmail(text, variables, values, mapping) {
   });
 }
 
+// TrustSignal RCS uses bracketed NAMED params ([name]) — see RcsEditor.
+function fillRcs(text, variables, values, mapping) {
+  return String(text || '').replace(/\[([a-zA-Z0-9_]+)\]/g, (whole, token) => {
+    const v = (variables || []).find((x) => x.token === token);
+    if (!v) return whole;
+    return resolveValue(v, mapping, values).text;
+  });
+}
+
+// The per-recipient tracked-link variable on an sms/rcs template (send.js mintLinkVariable).
+// It is FILLED BY THE SEND PATH, so the value editor must not demand a value for it — and a
+// value typed into it would actually WIN over the minted link, silently untracking the send.
+function mintedLinkParam(template) {
+  if (!template || (template.channel !== 'sms' && template.channel !== 'rcs')) return null;
+  const c = template.content || {};
+  return c.link_param && c.link_target_base ? c.link_param : null;
+}
+
 /* ---- the value editor -------------------------------------------------- */
 // Only `constant` variables need a human. Profile/event ones resolve per-recipient at send time,
 // so showing them as inputs would imply a control that does not exist — they are shown as
@@ -50,12 +69,25 @@ export function TemplateValues({ template, values, onChange, disabled }) {
   if (!variables.length) {
     return <div className="dim" style={{ fontSize: 13 }}>This template has no variables — nothing to fill in.</div>;
   }
+  const linkParam = mintedLinkParam(template);
   const constants = variables.filter((v) => v.source === 'constant');
   const derived = variables.filter((v) => v.source !== 'constant');
 
   return (
     <div>
       {constants.map((v) => {
+        if (v.token === linkParam) {
+          return (
+            <div key={v.token} style={{ marginBottom: 12 }}>
+              <div className="kv-k" style={{ marginBottom: 4 }}>{v.token.replace(/_/g, ' ')}</div>
+              <div className="tw-note" style={{ margin: 0 }}>
+                Filled automatically — every recipient gets their own tracked short link to{' '}
+                <span className="mono">{template.content.link_target_base}</span>. Leave it blank:
+                a value typed here would override the tracked link and untrack the whole send.
+              </div>
+            </div>
+          );
+        }
         const ex = mapping.find((m) => m.token === v.token)?.example;
         const val = values?.[v.token] ?? '';
         return (
@@ -126,6 +158,39 @@ export function TemplatePreview({ template, values }) {
         </div>
         <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
           {c.category || 'UTILITY'} · {c.language || 'en'} · {c.meta_name}
+        </div>
+      </div>
+    );
+  }
+
+  if (template.channel === 'sms' || template.channel === 'rcs') {
+    const isRcs = template.channel === 'rcs';
+    // SMS keeps its DLT-registered body locally; an RCS row is a BINDING — the creative lives
+    // at the vendor, so the best local render is the compose draft when one was kept.
+    const raw = isRcs ? (c.draft?.body || '') : (c.body || '');
+    const body = isRcs ? fillRcs(raw, variables, values, mapping)
+      : fillEmail(raw, variables, values, mapping);
+    return (
+      <div>
+        <div style={{
+          background: 'var(--surface-2, #f2f5f4)', borderRadius: 10, padding: '10px 12px',
+          maxWidth: 420, borderTopLeftRadius: 2, whiteSpace: 'pre-wrap',
+          fontSize: 13, lineHeight: 1.5, color: 'var(--t1, #111)',
+        }}>
+          {body || (
+            <span className="dim">
+              {isRcs
+                ? `The RCS creative is registered at TrustSignal${template.provider_template_id
+                    ? ` (id ${template.provider_template_id})` : ''} — Relay fills: ${
+                    (Array.isArray(c.var_params) && c.var_params.length) ? c.var_params.join(', ') : 'no variables'}.`
+                : 'No body on this template.'}
+            </span>
+          )}
+        </div>
+        <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
+          {isRcs
+            ? `RCS · ${c.rcs_type || 'text_message'} · falls back to SMS if the handset has no RCS`
+            : `SMS · DLT ${c.dlt_template_id || 'unregistered'}`}
         </div>
       </div>
     );
