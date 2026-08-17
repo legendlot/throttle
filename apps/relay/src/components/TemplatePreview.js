@@ -1,4 +1,5 @@
 'use client';
+import MsgPreview from '@/components/MsgPreview.js';
 // Live template preview + a plain-language value editor.
 //
 // Why this exists: the only way to fill a template's variables was a raw JSON "Constants" box,
@@ -35,15 +36,6 @@ function fillWa(text, mapping, variables, values) {
 
 function fillEmail(text, variables, values, mapping) {
   return String(text || '').replace(/\{(\w+)\}/g, (whole, token) => {
-    const v = (variables || []).find((x) => x.token === token);
-    if (!v) return whole;
-    return resolveValue(v, mapping, values).text;
-  });
-}
-
-// TrustSignal RCS uses bracketed NAMED params ([name]) — see RcsEditor.
-function fillRcs(text, variables, values, mapping) {
-  return String(text || '').replace(/\[([a-zA-Z0-9_]+)\]/g, (whole, token) => {
     const v = (variables || []).find((x) => x.token === token);
     if (!v) return whole;
     return resolveValue(v, mapping, values).text;
@@ -167,32 +159,28 @@ export function TemplatePreview({ template, values }) {
     const isRcs = template.channel === 'rcs';
     // SMS keeps its DLT-registered body locally; an RCS row is a BINDING — the creative lives
     // at the vendor, so the best local render is the compose draft when one was kept.
-    const raw = isRcs ? (c.draft?.body || '') : (c.body || '');
-    const body = isRcs ? fillRcs(raw, variables, values, mapping)
-      : fillEmail(raw, variables, values, mapping);
+    const d = c.draft || {};
+    const raw = isRcs ? (d.body || '') : (c.body || '');
     return (
-      <div>
-        <div style={{
-          background: 'var(--surface-2, #f2f5f4)', borderRadius: 10, padding: '10px 12px',
-          maxWidth: 420, borderTopLeftRadius: 2, whiteSpace: 'pre-wrap',
-          fontSize: 13, lineHeight: 1.5, color: 'var(--t1, #111)',
-        }}>
-          {body || (
-            <span className="dim">
-              {isRcs
-                ? `The RCS creative is registered at TrustSignal${template.provider_template_id
-                    ? ` (id ${template.provider_template_id})` : ''} — Relay fills: ${
-                    (Array.isArray(c.var_params) && c.var_params.length) ? c.var_params.join(', ') : 'no variables'}.`
-                : 'No body on this template.'}
-            </span>
-          )}
-        </div>
-        <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
-          {isRcs
-            ? `RCS · ${c.rcs_type || 'text_message'} · falls back to SMS if the handset has no RCS`
-            : `SMS · DLT ${c.dlt_template_id || 'unregistered'}`}
-        </div>
-      </div>
+      <MsgPreview
+        channel={template.channel}
+        sender={isRcs ? 'L.O.T' : (c.header || 'LGNDRC')}
+        body={raw}
+        variables={variables}
+        values={values}
+        image={isRcs && (d.type === 'rich_card' || c.rcs_type === 'rich_card')
+          ? (d.media_url || '') : null}
+        cardTitle={isRcs ? d.card_title : null}
+        chips={isRcs && d.btn_text ? [{ label: d.btn_text }] : []}
+        emptyNote={isRcs
+          ? `The RCS creative is registered at TrustSignal${template.provider_template_id
+              ? ` (id ${template.provider_template_id})` : ''} — Relay fills: ${
+              (Array.isArray(c.var_params) && c.var_params.length) ? c.var_params.join(', ') : 'no variables'}.`
+          : 'No body on this template.'}
+        meta={isRcs
+          ? `RCS · ${c.rcs_type || 'text_message'} · falls back to SMS if the handset has no RCS`
+          : `SMS · DLT ${c.dlt_template_id || 'unregistered'}`}
+      />
     );
   }
 

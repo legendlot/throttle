@@ -14,6 +14,7 @@ import WaPreview from '@/components/wa-editor/WaPreview.js';
 import { validateWaTemplate, WA_WABAS, normalizeMetaName } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import ImageLibrary from '@/components/ImageLibrary.js';
+import MsgPreview from '@/components/MsgPreview.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -1229,6 +1230,7 @@ export default function TemplatesPage() {
 
   if (view === 'form') {
     const isWa = t.channel === 'whatsapp';
+    const isPhone = isWa || t.channel === 'sms' || t.channel === 'rcs';
     // Unsaved-change tracking. WhatsApp only — see waSnapshot: an email's content lives in the
     // GrapesJS canvas, not in `t`, so a diff of `t` would report "clean" mid-edit and disable
     // the author's Save. Email keeps Save always enabled and leans on the worker's no-op guard.
@@ -1298,8 +1300,8 @@ export default function TemplatesPage() {
             while watching the bubble is the whole job of this screen, and the old stacked
             layout meant scrolling away from the preview to reach the field you were editing.
             Email keeps the single column — its GrapesJS editor has its own canvas + preview. */}
-        <div className={isWa ? 'tpl-split' : undefined}>
-        <div className={isWa ? 'tpl-main' : undefined}>
+        <div className={isPhone ? 'tpl-split' : undefined}>
+        <div className={isPhone ? 'tpl-main' : undefined}>
         {/* PRE-SEND SHAPE CHECK (S241). Three incidents on 2026-07-28 — a stale WABA pin and
             twice an IMAGE header Meta had not approved — were each discoverable only by
             pressing Send on live traffic, and each surfaced as an opaque Meta code that named
@@ -1647,6 +1649,35 @@ export default function TemplatesPage() {
           <aside className="tpl-side">
             <Panel title="Preview" pad>
               <WaPreview {...waPreviewProps(t.wa, t.variables)} senderLabel="Legend of Toys" />
+            </Panel>
+          </aside>
+        )}
+        {/* SMS + RCS get the same pinned handset preview WhatsApp has — Google Messages
+            look, because that is where both channels actually render. Fed straight from the
+            editor state, so the bubble tracks every keystroke like the WA one does. */}
+        {t.channel === 'sms' && (
+          <aside className="tpl-side">
+            <Panel title="Preview" pad>
+              <MsgPreview channel="sms" sender={t.sms?.header || 'LGNDRC'}
+                body={t.sms?.body} variables={t.variables}
+                meta={`SMS · DLT ${t.sms?.dlt_template_id || 'unregistered'}`} />
+            </Panel>
+          </aside>
+        )}
+        {t.channel === 'rcs' && (
+          <aside className="tpl-side">
+            <Panel title="Preview" pad>
+              <MsgPreview channel="rcs" sender="L.O.T"
+                body={t.rcs?.draft?.body} variables={t.variables}
+                image={(t.rcs?.draft?.type === 'rich_card' || t.rcs?.rcs_type === 'rich_card')
+                  ? (t.rcs?.draft?.media_url || '') : null}
+                cardTitle={t.rcs?.draft?.card_title}
+                chips={t.rcs?.draft?.btn_text ? [{ label: t.rcs.draft.btn_text }] : []}
+                emptyNote={t.provider_template_id
+                  ? `Bound to vendor template ${t.provider_template_id} — the creative lives at TrustSignal; Relay fills: ${
+                      (t.rcs?.var_params || []).join(', ') || 'no variables'}.`
+                  : 'Write the message in Compose & submit to see it here.'}
+                meta={`RCS · ${t.rcs?.rcs_type || 'text_message'} · falls back to SMS if the handset has no RCS`} />
             </Panel>
           </aside>
         )}
