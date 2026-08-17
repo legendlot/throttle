@@ -1863,6 +1863,12 @@ const uniwareAggAdapter = {
         occurred_at: r.occurred_at, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
         qty: Math.round(r.qty), gross_value: r.gross_value, discount_value: r.discount_value || 0, tax_value: r.tax_value || 0,
         row_type: r.row_type || 'sale', order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
+        // ⚠️ Must be in the upsert body: merge-duplicates keeps a column that isn't provided, so
+        // without this a RE-stage never refreshed ingested_at and the fetch skip ("staged AND
+        // unchanged since we staged it") could never start skipping an order whose `updated`
+        // postdates its first staging. A same-second pile of such orders re-fetched the identical
+        // slice every run and froze the cursor (10 days at 2026-07-22, ~150 runs/hr, zero new rows).
+        ingested_at: nowISO(),
       }));
       await sbInsertChunked('/rest/v1/stg_uniware?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
     }
