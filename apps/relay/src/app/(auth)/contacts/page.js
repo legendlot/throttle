@@ -3,11 +3,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { ArrowLeft, Plus, RefreshCw, LogOut, Mail, MessageCircle, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Plus, RefreshCw, LogOut, Mail, MessageCircle, MessageSquare, Smartphone } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+// `rcs` is here so an EXPLICIT rcs opt-out/opt-in can be recorded — that override is what
+// the gate's resolver honours. Day-to-day rcs consent is DERIVED from sms (see rcsEffective).
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 const STATE_TONE = { opted_in: 'green', opted_out: 'red', unknown: 'gray' };
@@ -25,7 +27,19 @@ const CHANNEL_ICONS = [
   { key: 'email', Icon: Mail, label: 'Email' },
   { key: 'whatsapp', Icon: MessageCircle, label: 'WhatsApp' },
   { key: 'sms', Icon: MessageSquare, label: 'SMS' },
+  { key: 'rcs', Icon: Smartphone, label: 'RCS' },
 ];
+
+// Effective RCS consent, mirroring comms.marketing_consented / gate.js exactly: rcs rides
+// the SMS opt-in unless a row explicitly says otherwise, and an SMS opt-OUT always wins —
+// even over an explicit rcs opt-in (S290). Showing the raw rcs ledger here instead would
+// read "never asked" for ~10k people the gate happily sends to (the S251 contradiction class).
+function rcsEffective(consent) {
+  const r = consent?.rcs, s = consent?.sms;
+  if (r === 'opted_out') return 'opted_out';
+  if (r === 'opted_in') return s === 'opted_in' ? 'opted_in' : s;
+  return s;
+}
 const CONSENT_COLOR = {
   opted_in: { fg: '#34d399', bg: 'rgba(52,211,153,.13)', bd: 'rgba(52,211,153,.34)' },
   opted_out: { fg: '#f87171', bg: 'rgba(248,113,113,.13)', bd: 'rgba(248,113,113,.34)' },
@@ -97,16 +111,17 @@ function ChannelStrip({ consent, hasEmail, hasPhone }) {
   return (
     <span style={{ display: 'inline-flex', gap: 4 }}>
       {CHANNEL_ICONS.map(({ key, Icon, label }) => {
-        // WhatsApp and SMS both ride the phone number; email rides the email address.
+        // WhatsApp, SMS and RCS all ride the phone number; email rides the email address.
         const reachable = key === 'email' ? hasEmail : hasPhone;
-        const state = consent?.[key];
+        const state = key === 'rcs' ? rcsEffective(consent) : consent?.[key];
         const tone = !reachable ? 'none' : (state === 'opted_in' ? 'opted_in'
           : state === 'opted_out' ? 'opted_out' : 'unknown');
         const c = CONSENT_COLOR[tone];
+        const derived = key === 'rcs' && consent?.rcs == null ? ' (follows SMS)' : '';
         const why = !reachable ? `${label}: no address on file`
-          : state === 'opted_in' ? `${label}: opted in to marketing`
-          : state === 'opted_out' ? `${label}: opted OUT of marketing`
-          : `${label}: reachable, no marketing consent recorded`;
+          : state === 'opted_in' ? `${label}: opted in to marketing${derived}`
+          : state === 'opted_out' ? `${label}: opted OUT of marketing${derived}`
+          : `${label}: reachable, no marketing consent recorded${derived}`;
         return (
           <span key={key} title={why} aria-label={why}
             style={{ width: 24, height: 24, borderRadius: 6, display: 'inline-flex',
@@ -281,7 +296,7 @@ export default function ContactsPage() {
     if (!detail?.profile?.id) return;
     const name = detail.profile.display_name || 'this contact';
     if (!window.confirm(
-      `Opt out ${name} from marketing on every channel (email, SMS, WhatsApp)?\n\n`
+      `Opt out ${name} from marketing on every channel (email, SMS, WhatsApp — RCS follows SMS)?\n\n`
       + `This is the account-level withdrawal — equivalent to Meta's "on-or-off-WhatsApp" toggle. `
       + `Transactional/utility messages (orders, shipping) are unaffected.`)) return;
     setOptingOut(true);
@@ -519,8 +534,9 @@ export default function ContactsPage() {
           <Panel title="Opt out everywhere" pad>
             <div className="tw-note" style={{ marginTop: 0 }}>
               Withdraws marketing consent on email, SMS, and WhatsApp in one action — the Meta
-              &quot;on-or-off-WhatsApp&quot; account-level withdrawal. Use when a customer&apos;s
-              request covers every channel, not just the one they wrote in on.
+              &quot;on-or-off-WhatsApp&quot; account-level withdrawal. RCS follows the SMS
+              opt-out automatically. Use when a customer&apos;s request covers every channel,
+              not just the one they wrote in on.
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
               <Btn onClick={optOutEverywhere} disabled={optingOut}><LogOut size={14} /> {optingOut ? 'Working…' : 'Opt out everywhere'}</Btn>

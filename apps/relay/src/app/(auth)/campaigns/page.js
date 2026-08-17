@@ -175,6 +175,13 @@ function untrackableButtons(tpl) {
 //                   campaign_slug_clicks() finds by regex, so it needs no wiring beyond the URL.
 //   untracked     — a raw destination URL. Nothing downstream can tag or count it.
 function templateTracking(tpl) {
+  // SMS/RCS mint per-recipient /r/ codes through content.link_param + link_target_base
+  // (send.js mintLinkVariable) — no Meta buttons involved, so check this before the
+  // button-shaped WhatsApp ladder below.
+  if (tpl && (tpl.channel === 'sms' || tpl.channel === 'rcs')
+    && tpl.content?.link_param && tpl.content?.link_target_base) {
+    return { state: 'per_recipient', buttons: [] };
+  }
   const btns = tpl?.content?.buttons;
   if (!Array.isArray(btns)) return { state: 'none', buttons: [] };
   const urlBtns = btns.filter((b) => String(b?.type || '').toUpperCase() === 'URL' && b?.url);
@@ -194,6 +201,29 @@ function templateTracking(tpl) {
 
 const slugify = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '').slice(0, 31);
+
+// Send-readiness for the vendor-reviewed phone channels, mirroring the template editors'
+// own checks — so an unsendable pick is visible HERE, where the campaign is being built,
+// not at the first failed send. (The SMS half exists because one hand-typed template with
+// neither id reached `active` before the activate guard landed, and the campaign picker
+// showed it exactly like a sendable one.)
+function templateSendProblems(tpl) {
+  if (!tpl) return [];
+  const out = [];
+  if (tpl.channel === 'sms') {
+    if (!tpl.provider_template_id || !String(tpl.content?.dlt_template_id || '').trim())
+      out.push('It has no DLT/vendor registration, so every send is rejected before the carrier sees it. Register the body on the DLT portal, then mirror it from the template editor.');
+  } else if (tpl.channel === 'rcs') {
+    if (!tpl.provider_template_id) {
+      out.push('It is not bound to a vendor RCS template — there is nothing to send.');
+    } else if ((tpl.content?.provider_status || '').toLowerCase() !== 'approved') {
+      out.push(`The vendor template is not approved yet (status: ${tpl.content?.provider_status || 'unknown'}). Use Sync status in the template editor once the carrier hub clears it.`);
+    }
+    if (!tpl.content?.sms_fallback_template_id)
+      out.push('It has no SMS fallback template — TrustSignal rejects every RCS send without one.');
+  }
+  return out;
+}
 
 
 // ── Tracking gate ────────────────────────────────────────────────────────────────────────────
@@ -990,11 +1020,23 @@ export default function CampaignsPage() {
               {isDraft && canBuild
                 ? <select className="f-inp" value={c.template_id} onChange={(e) => set('template_id', e.target.value)} disabled={busy}>
                     <option value="">— pick a template —</option>
-                    {chTemplates.map((t) => <option key={t.id} value={t.id}>{t.name} · v{t.version} ({t.status})</option>)}
+                    {chTemplates.map((t) => <option key={t.id} value={t.id}>{t.name} · v{t.version} ({t.status}){templateSendProblems(t).length ? ' · ⚠ cannot send' : ''}</option>)}
                   </select>
                 : <div className="kv-v">{tplName || <span className="dim">—</span>}</div>}
             </div>
           </div>
+
+          {templateSendProblems(selTpl).length > 0 && (
+            <div className="info-bar" style={{ marginTop: 14, background: 'rgba(248,113,113,.07)', borderColor: 'var(--red)' }}>
+              <AlertTriangle size={16} style={{ color: 'var(--red)', flexShrink: 0 }} />
+              <span>
+                <strong>“{selTpl?.name}” cannot send as it stands.</strong>
+                <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                  {templateSendProblems(selTpl).map((p, i) => <li key={i} style={{ marginBottom: 3 }}>{p}</li>)}
+                </ul>
+              </span>
+            </div>
+          )}
 
           {c.purpose === 'marketing' && (
             <div style={{ marginTop: 14 }}>

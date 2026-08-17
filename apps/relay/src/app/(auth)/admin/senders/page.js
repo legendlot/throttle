@@ -6,7 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 const STATUSES = ['draft', 'pending', 'active', 'disabled'];
 
 const STATUS_TONE = { active: 'green', pending: 'yellow', draft: 'gray', disabled: 'red' };

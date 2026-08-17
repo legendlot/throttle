@@ -62,7 +62,13 @@ const ATTR_SUGGEST = [
 // The hardcoded EVENT_SUGGEST that used to live here listed 10 of 34 registered events and
 // offered `email_clicked`, which S189 renamed to `link_clicked` — a condition that could
 // never match. Registering an event now surfaces it here automatically.
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+// Preview reachability — resolver-aware server-side (comms.preview_segment routes rcs
+// consent through comms.marketing_consented, and its suppression check spans sms too).
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
+// Consent LEAF channels — deliberately no `rcs`: the leaf reads raw ledger rows, and rcs
+// consent is DERIVED (sms opt-in + explicit overrides), so a raw-row leaf would count ~0
+// while the gate sends to ~10k. Build the condition on `sms` instead.
+const CONSENT_LEAF_CHANNELS = ['email', 'sms', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 
@@ -197,7 +203,7 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
 
   {r.type === 'consent' && <>
     <select className="f-inp" style={{ width: 120 }} value={r.channel} onChange={(e) => onPatch({ channel: e.target.value })} disabled={disabled}>
-      {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
+      {CONSENT_LEAF_CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
     </select>
     <select className="f-inp" style={{ width: 130 }} value={r.purpose} onChange={(e) => onPatch({ purpose: e.target.value })} disabled={disabled}>
       {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}

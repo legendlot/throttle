@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, Copy, Images, Archive, ArchiveRestore } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, MessageSquare, Smartphone, Copy, Images, Archive, ArchiveRestore } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { fmtDateTime } from '@/components/format.js';
@@ -52,6 +52,40 @@ function uniqueMetaName(base, taken) {
   return candidate;
 }
 const APPROVAL_TONE = { APPROVED: 'green', PENDING: 'yellow', REJECTED: 'red', PAUSED: 'yellow', DISABLED: 'red' };
+
+// One approval concept per channel, normalised for the list. WhatsApp is Meta's review
+// (UPPERCASE statuses), SMS is the DLT registration mirrored from the vendor catalogue
+// (lowercase `approved`, and only real with BOTH ids — a row typed straight into Relay with
+// neither can never send, which is exactly what the red chip is for), RCS is the carrier
+// hub's verdict on the bound vendor template, synced into content.provider_status. Email has
+// no approval concept and returns null.
+function templateApproval(r) {
+  if (r.channel === 'whatsapp') {
+    return r.approval_status
+      ? { label: r.approval_status, tone: APPROVAL_TONE[r.approval_status] || 'gray' }
+      : { label: 'not submitted', dim: true };
+  }
+  if (r.channel === 'sms') {
+    const hasIds = !!r.provider_template_id && !!String(r.content?.dlt_template_id || '').trim();
+    if (!hasIds) return { label: 'not registered', tone: 'red',
+      title: 'No DLT/vendor id — this template cannot send. Register the body on the DLT portal, then mirror it to the vendor from the editor.' };
+    const s = (r.approval_status || '').toLowerCase();
+    if (s === 'approved') return { label: 'DLT: approved', tone: 'green' };
+    return { label: s ? `DLT: ${s}` : 'DLT: unknown', tone: 'yellow' };
+  }
+  if (r.channel === 'rcs') {
+    if (!r.provider_template_id) return { label: 'not submitted', dim: true };
+    const s = (r.content?.provider_status || '').toLowerCase();
+    return { label: `Vendor: ${s || 'unknown'}`,
+      tone: s === 'approved' ? 'green' : r.content?.provider_error ? 'red' : 'yellow',
+      title: r.content?.provider_error || undefined };
+  }
+  return null;
+}
+const isApprovedForSend = (r) => {
+  const a = templateApproval(r);
+  return !!a && a.tone === 'green';
+};
 
 // Canonical snapshot of the editable state, for "has anything actually changed?".
 //
@@ -1213,6 +1247,15 @@ export default function TemplatesPage() {
             {t.id && <Badge label={`v${rows.find((r) => r.id === t.id)?.version || 1}`} tone="gray" />}
             {t.channel === 'whatsapp' && t.approval_status
               && <Badge label={`Meta: ${t.approval_status}`} tone={APPROVAL_TONE[t.approval_status] || 'gray'} />}
+            {t.channel === 'sms' && t.id
+              && (() => {
+                const a = templateApproval({ channel: 'sms', approval_status: t.approval_status,
+                  provider_template_id: t.provider_template_id, content: { dlt_template_id: t.sms?.dlt_template_id } });
+                return a && !a.dim ? <span title={a.title}><Badge label={a.label} tone={a.tone || 'gray'} /></span> : null;
+              })()}
+            {t.channel === 'rcs' && t.provider_template_id
+              && <Badge label={`Vendor: ${(t.rcs?.provider_status || 'unknown').toLowerCase()}`}
+                   tone={(t.rcs?.provider_status || '').toLowerCase() === 'approved' ? 'green' : 'yellow'} />}
           </div>
           <div className="po-head-r">
             {/* Fork the template you are looking at. Gated on t.id — a duplicate of an
@@ -1623,11 +1666,12 @@ export default function TemplatesPage() {
     if (purposeFilter !== 'all' && (r.purpose || '') !== purposeFilter) return false;
     if (statusFilter !== 'all' && (r.status || '') !== statusFilter) return false;
     if (wabaFilter !== 'all' && (r.content?.waba_id || '') !== wabaFilter) return false;
-    // Approval is a WhatsApp-only concept (email has no Meta review), so "Not approved"
-    // scopes to WhatsApp rather than sweeping every email template in as a false positive.
-    if (approvalFilter === 'approved' && r.approval_status !== 'APPROVED') return false;
+    // Approval spans every reviewed channel now (Meta for WA, DLT for SMS, the carrier hub
+    // for RCS) — email alone has no approval concept, so "Not approved" still excludes it
+    // rather than sweeping every email template in as a false positive.
+    if (approvalFilter === 'approved' && !isApprovedForSend(r)) return false;
     if (approvalFilter === 'not_approved'
-      && !(r.channel === 'whatsapp' && r.approval_status !== 'APPROVED')) return false;
+      && !(r.channel !== 'email' && !isApprovedForSend(r))) return false;
     // Name search also covers the Meta template name — that is the identifier that appears
     // in logs, in comms.messages and on Meta's side, so it is often what you actually have.
     if (needle && !`${r.name || ''} ${r.content?.meta_name || ''}`.toLowerCase().includes(needle)) return false;
@@ -1675,9 +1719,9 @@ export default function TemplatesPage() {
                 </select>
                 <select className="f-inp" value={approvalFilter} onChange={(e) => setApprovalFilter(e.target.value)}
                   style={{ width: 'auto', minWidth: 150 }}>
-                  <option value="all">Any Meta state</option>
+                  <option value="all">Any approval state</option>
                   <option value="approved">Approved</option>
-                  <option value="not_approved">Not approved (WA)</option>
+                  <option value="not_approved">Not approved</option>
                 </select>
                 {wabaOptions.length > 0 && (
                   <select className="f-inp" value={wabaFilter} onChange={(e) => setWabaFilter(e.target.value)}
@@ -1704,7 +1748,7 @@ export default function TemplatesPage() {
               ) : (
               <div className="table-scroll">
               <table className="dt">
-                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Status</th><th>Approval</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
                   {filteredRows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
@@ -1714,8 +1758,11 @@ export default function TemplatesPage() {
                         <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5,
                           color: r.channel === 'whatsapp' ? 'var(--wa, #25D366)'
                             : r.channel === 'email' ? 'var(--em, #a78bfa)' : 'var(--t2)' }}>
-                          {r.channel === 'whatsapp' ? <MessageCircle size={14} /> : <Mail size={14} />}
-                          {r.channel === 'whatsapp' ? 'WhatsApp' : r.channel === 'email' ? 'Email' : r.channel === 'rcs' ? 'RCS' : r.channel}
+                          {r.channel === 'whatsapp' ? <MessageCircle size={14} />
+                            : r.channel === 'sms' ? <MessageSquare size={14} />
+                            : r.channel === 'rcs' ? <Smartphone size={14} /> : <Mail size={14} />}
+                          {r.channel === 'whatsapp' ? 'WhatsApp' : r.channel === 'email' ? 'Email'
+                            : r.channel === 'rcs' ? 'RCS' : r.channel === 'sms' ? 'SMS' : r.channel}
                         </span>
                       </td>
                       <td className="dim" style={{ fontSize: 12.5 }}>{r.purpose}</td>
@@ -1729,11 +1776,12 @@ export default function TemplatesPage() {
                           : '—'}
                       </td>
                       <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
-                      <td>{r.channel === 'whatsapp'
-                        ? (r.approval_status
-                          ? <Badge label={r.approval_status} tone={APPROVAL_TONE[r.approval_status] || 'gray'} />
-                          : <span className="dim" style={{ fontSize: 12 }}>not submitted</span>)
-                        : <span className="dim">—</span>}</td>
+                      <td>{(() => {
+                        const a = templateApproval(r);
+                        if (!a) return <span className="dim">—</span>;
+                        if (a.dim) return <span className="dim" style={{ fontSize: 12 }}>{a.label}</span>;
+                        return <span title={a.title}><Badge label={a.label} tone={a.tone || 'gray'} /></span>;
+                      })()}</td>
                       <td className="mono dim">v{r.version}</td>
                       <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
                       <td>

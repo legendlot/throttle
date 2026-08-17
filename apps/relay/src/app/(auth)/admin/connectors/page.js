@@ -5,7 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 
-const CHANNELS = ['email', 'sms', 'whatsapp'];
+const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 const STATUS_TONE = { active: 'green', pending: 'yellow', draft: 'gray', disabled: 'red' };
 
 export default function ConnectorsPage() {
