@@ -1748,7 +1748,7 @@ export default {
               const lineRows = lines.map((l,i) => ({
                 po_number: poNumber, line_no: i+1, product: l.product||null, variant: l.variant||null,
                 item_type: l.item_type||'Other', description: l.description||null, part_code: l.part_code||null,
-                qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: 0, unit: (l.unit||'').trim()||'pcs',
+                qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: 0, unit: String(l.unit||'').trim()||'pcs',
                 unit_price: parseFloat(l.unit_price)||null, color: l.color||null,
                 component_type: l.component_type||null,
                 receive_format: l.receive_format || null,
@@ -1904,7 +1904,7 @@ export default {
                 po_number: d.po_number, line_no: i+1, product: l.product||null, variant: l.variant||null,
                 item_type: l.item_type||'Other', description: l.description||null, part_code: l.part_code||null,
                 qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: parseFloat(l.qty_received)||0,
-                unit: (l.unit||'').trim()||'pcs', unit_price: parseFloat(l.unit_price)||null, color: l.color||null,
+                unit: String(l.unit||'').trim()||'pcs', unit_price: parseFloat(l.unit_price)||null, color: l.color||null,
                 component_type: l.component_type||null,
                 receive_format: l.receive_format || null,
                 remote_qty: parseInt(l.remote_qty) || 0,
@@ -1966,7 +1966,7 @@ export default {
               po_number: d.po_number, line_no: maxLineNo + i + 1,
               product: l.product||null, variant: l.variant||null,
               item_type: l.item_type||'Part', description: l.description||null, part_code: l.part_code||null,
-              qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: 0, unit: (l.unit||'').trim()||'pcs',
+              qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: 0, unit: String(l.unit||'').trim()||'pcs',
               unit_price: l.unit_price != null && l.unit_price !== '' ? parseFloat(l.unit_price) : null,
               color: l.color||null, component_type: l.component_type||null,
               receive_format: l.receive_format || null,
@@ -2106,7 +2106,7 @@ export default {
               request_type:      d.request_type || 'part',
               // Uppercase+trim on write (Afshaan 2026-08-16) — deliberately NOT validated
               // against bom_register: a request naming a not-yet-created part is legitimate.
-              part_code:         d.part_code ? String(d.part_code).trim().toUpperCase() : null,
+              part_code:         d.part_code ? (String(d.part_code).trim().toUpperCase() || null) : null,
               product:           d.product      || null,
               variant:           d.variant      || null,
               color:             d.color        || null,

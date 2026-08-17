@@ -90,7 +90,7 @@ const PRINT_CSS = `
   .noprint { display: none !important; }
   /* Plain <style> tag: :global() is CSS-modules syntax and invalidates the whole rule,
      so the old aside/nav/header hide never applied. */
-  aside, nav, header { display: none !important; }
+  aside, nav, header, .pd-topbar { display: none !important; }
   /* The root clip: globals.css sets html/body height:100%/overflow:hidden and the
      (auth) shell wrappers pin height:100dvh inline, so anything past page 1 is cut. */
   html, body { height: auto !important; overflow: visible !important; background: #fff !important; }

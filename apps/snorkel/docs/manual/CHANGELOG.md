@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.4.2] - 2026-08-17
+### Changed
+- Cover subtitle now says "sales orders" in the module list (missed in 1.4.1's rename).
+
 ## [1.4.1] - 2026-08-17
 ### Changed
 - Module renamed: "Offline Sales" is now "Sales Orders" (nav group in the app and the

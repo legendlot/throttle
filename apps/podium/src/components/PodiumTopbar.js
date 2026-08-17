@@ -12,7 +12,7 @@ function fmtTime(d) {
 
 export function PodiumTopbar({ crumb, title, lastRefreshed, userLabel }) {
   return (
-    <div style={{
+    <div className="pd-topbar" style={{
       height: 'var(--topbar-h)', flex: 'none', borderBottom: '1px solid var(--divider)',
       display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px', background: 'var(--bg)',
     }}>
