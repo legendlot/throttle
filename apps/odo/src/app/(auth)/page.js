@@ -229,8 +229,9 @@ export default function Dashboard() {
       const prod = codeToProduct[r.product_code] || r.product_code;
       const key = group === 'date' ? r.sale_date : group === 'channel' ? r.channel_id : group === 'product' ? prod : r.product_code;
       const label = group === 'date' ? r.sale_date : group === 'channel' ? (chName[r.channel_id] || r.channel_id) : group === 'product' ? prod : (r.grp_label || r.product_code);
-      const a = agg[key] || (agg[key] = { key, label, units: 0, gross: 0 });
+      const a = agg[key] || (agg[key] = { key, label, units: 0, gross: 0, disc: 0, retU: 0, retV: 0 });
       a.units += Number(r.units) || 0; a.gross += Number(r.gross_value) || 0;
+      a.disc += Number(r.discount_value) || 0; a.retU += Number(r.returned_units) || 0; a.retV += Number(r.returned_value) || 0;
     }
     return Object.values(agg).sort((a, b) => b.gross - a.gross);
   }, [rows, group, chName, codeToProduct]);
@@ -497,6 +498,9 @@ export default function Dashboard() {
                 <SortHeader k="label" label={group === 'date' ? 'Day' : group === 'channel' ? 'Channel' : group === 'product' ? 'Product' : 'Variant'} sort={tblSort} />
                 <SortHeader k="units" label="Units" sort={tblSort} numeric />
                 <SortHeader k="gross" label="Gross ₹" sort={tblSort} numeric />
+                <SortHeader k="disc" label="Disc ₹" sort={tblSort} numeric />
+                <SortHeader k="retU" label="Ret u" sort={tblSort} numeric />
+                <SortHeader k="retV" label="Ret ₹" sort={tblSort} numeric />
               </tr></thead>
               <tbody>
                 {tblSort.sorted.map(r => (
@@ -513,6 +517,9 @@ export default function Dashboard() {
                     </td>
                     <td className="so-num">{fmtInt(r.units)}</td>
                     <td className="so-num bright">{inr(r.gross)}</td>
+                    <td className="so-num">{r.disc ? inr(r.disc) : <Nil />}</td>
+                    <td className="so-num">{r.retU ? fmtInt(r.retU) : <Nil />}</td>
+                    <td className="so-num">{r.retV ? inr(r.retV) : <Nil />}</td>
                   </tr>
                 ))}
               </tbody>

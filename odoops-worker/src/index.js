@@ -4954,7 +4954,7 @@ export default {
             });
             if (!r.ok) return err('Export failed: ' + JSON.stringify(r.data), 502);
             const chById = {}; (await getChannels()).forEach(c => { chById[c.id] = c.name; });
-            const rows = (r.data || []).map(x => ({ sale_date: x.sale_date, channel: chById[x.channel_id] || x.channel_id, product_code: x.product_code, variant: x.grp_label, units: Number(x.units), gross_value: Number(x.gross_value) }));
+            const rows = (r.data || []).map(x => ({ sale_date: x.sale_date, channel: chById[x.channel_id] || x.channel_id, product_code: x.product_code, variant: x.grp_label, units: Number(x.units), gross_value: Number(x.gross_value), discount_value: Number(x.discount_value) || 0, tax_value: Number(x.tax_value) || 0, returned_units: Number(x.returned_units) || 0, returned_value: Number(x.returned_value) || 0 }));
             return ok({ rows });
           }
 
