@@ -69,12 +69,16 @@ function AuthLayoutInner({ children }) {
         const c = sending[0];
         let sent = 0, total = Number(c.audience_snapshot || 0);
         try {
-          const ov = await garageFetch('getCampaignsOverview', {}, session);
-          const o = (Array.isArray(ov) ? ov : []).find((x) => x.id === c.id);
-          // ⚠️ Take `sent` from the overview but KEEP audience_snapshot as the denominator.
-          // This was `total = Number(o.total || total)`, which threw away the correct value it had
-          // just computed: `campaign_stats_list.total` counts comms.messages rows that EXIST, and
-          // the fan-out creates them just ahead of sending, so the rail sat at ~99% for an entire
+          // Single-campaign stats, NOT getCampaignsOverview: this poll only needs `sent` for
+          // the one sending campaign, and the overview aggregates EVERY campaign (~2s+ in the
+          // DB). During a live send this widget was the page's slowest request AND re-ran that
+          // aggregate on every poll tick (S293 load profile — the duplicate overview call set
+          // the whole home load's 7.3s tail). campaign_stats(id) is ~0.3s.
+          const o = await garageFetch('getCampaignStats', { id: c.id }, session);
+          // ⚠️ Take `sent` from the stats but KEEP audience_snapshot as the denominator.
+          // This was `total = Number(o.total || total)`, which threw away the correct value it
+          // had just computed: stats `total` counts comms.messages rows that EXIST, and the
+          // fan-out creates those just ahead of sending, so the rail sat at ~99% for an entire
           // send. Measured 2026-08-14 at 881/886 while 7,000 of 7,971 were still unreached.
           // Same defect + fix in the Control Tower "Sending now" panel — (auth)/page.js.
           if (o) { sent = Number(o.sent || 0); total = Number(total || o.total || 0); }
