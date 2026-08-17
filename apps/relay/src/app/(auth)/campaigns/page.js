@@ -600,28 +600,36 @@ export default function CampaignsPage() {
 
   const isDraft = c.status === 'draft';
 
-  async function save() {
-    if (!c.name.trim()) { showToast('Name required', 'error'); return; }
+  // Persist the on-screen form. Returns the campaign id on success, null on a validation
+  // stop (the toast has already said why). Shared by save() and submit() — submit MUST
+  // write the form before judging it (see submit()).
+  async function persist({ quiet = false } = {}) {
+    if (!c.name.trim()) { showToast('Name required', 'error'); return null; }
     let vars = {};
-    try { vars = c.vars.trim() ? JSON.parse(c.vars) : {}; } catch { showToast('Constants must be valid JSON', 'error'); return; }
+    try { vars = c.vars.trim() ? JSON.parse(c.vars) : {}; } catch { showToast('Constants must be valid JSON', 'error'); return null; }
+    const payload = {
+      name: c.name.trim(), channel: c.channel, purpose: c.purpose,
+      segment_id: c.segment_id || null, template_id: c.template_id || null,
+      vars, scheduled_at: c.scheduled_at ? new Date(c.scheduled_at).toISOString() : null,
+      utm: c.utm || null,
+      allow_partial: !!c.allow_partial,
+      exclude_segment_ids: c.exclude_segment_ids || [],
+      exclude_campaign_ids: c.exclude_campaign_ids || [],
+      // '' → null server-side ("rule off"); the worker re-validates rather than trusting this.
+      exclude_contacted_hours: c.exclude_contacted_hours === '' ? null : Number(c.exclude_contacted_hours),
+    };
+    if (c.id) payload.id = c.id;
+    const r = await workerFetch('saveCampaign', payload, session);
+    if (r?.data?.id && !c.id) set('id', r.data.id);
+    if (!quiet) showToast(c.id ? 'Campaign saved' : 'Campaign created', 'success');
+    return r?.data?.id || c.id || null;
+  }
+
+  async function save() {
     setBusy(true);
     try {
-      const payload = {
-        name: c.name.trim(), channel: c.channel, purpose: c.purpose,
-        segment_id: c.segment_id || null, template_id: c.template_id || null,
-        vars, scheduled_at: c.scheduled_at ? new Date(c.scheduled_at).toISOString() : null,
-        utm: c.utm || null,
-        allow_partial: !!c.allow_partial,
-        exclude_segment_ids: c.exclude_segment_ids || [],
-        exclude_campaign_ids: c.exclude_campaign_ids || [],
-        // '' → null server-side ("rule off"); the worker re-validates rather than trusting this.
-        exclude_contacted_hours: c.exclude_contacted_hours === '' ? null : Number(c.exclude_contacted_hours),
-      };
-      if (c.id) payload.id = c.id;
-      const r = await workerFetch('saveCampaign', payload, session);
-      if (r?.data?.id && !c.id) set('id', r.data.id);
-      showToast(c.id ? 'Campaign saved' : 'Campaign created', 'success');
-      load();
+      const id = await persist();
+      if (id) load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
     finally { setBusy(false); }
   }
@@ -664,6 +672,11 @@ export default function CampaignsPage() {
     if (!c.segment_id || !c.template_id) { showToast('Pick a segment and a template first', 'error'); return; }
     setBusy(true);
     try {
+      // Save the on-screen form BEFORE submitting. The live "will receive" preview reads the
+      // form, but submitCampaign judges the SAVED row — an exclusion set on screen and never
+      // saved silently vanished from the send while the preview showed it applied (Mishica,
+      // #bugs 2026-08-17: preview 24.9k, submitted audience 73.5k).
+      if (!(await persist({ quiet: true }))) { setBusy(false); return; }
       const r = await workerFetch('submitCampaign', { id: c.id }, session);
       const d = r?.data || {};
       showToast(d.status === 'approved' ? `Approved automatically — ${d.reachable} reachable` : `Submitted for approval — ${d.reachable} reachable`, 'success');
