@@ -88,8 +88,14 @@ const PRINT_CSS = `
   border-radius: 6px; box-shadow: 0 0 0 1px var(--border); font-family: Georgia, 'Times New Roman', serif; }
 @media print {
   .noprint { display: none !important; }
-  :global(aside), :global(nav), :global(header) { display: none !important; }
-  body { background: #fff !important; }
+  /* Plain <style> tag: :global() is CSS-modules syntax and invalidates the whole rule,
+     so the old aside/nav/header hide never applied. */
+  aside, nav, header { display: none !important; }
+  /* The root clip: globals.css sets html/body height:100%/overflow:hidden and the
+     (auth) shell wrappers pin height:100dvh inline, so anything past page 1 is cut. */
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  body div { height: auto !important; overflow: visible !important; }
+  main { padding: 0 !important; }
   .letter { box-shadow: none; padding: 0; max-width: none; }
 }
 `;
