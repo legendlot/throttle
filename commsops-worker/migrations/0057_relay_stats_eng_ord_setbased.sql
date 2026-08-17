@@ -1,0 +1,19 @@
+-- 0057 · relay_stats_eng_setbased_v2 (+_journeys) + relay_stats_ord_hashjoin_v3 (+ journeys twin
+-- + ord_ev MATERIALIZED tweak) · applied live 2026-08-17 (S293, "why is every screen slow")
+-- ⚠️ MIRROR MARKER of applied Supabase migrations — live DB is the source of truth
+-- (PATTERN-297: use pg_get_functiondef, never rebuild from this file).
+--
+-- Continuation of 0056. With the combo pricing in place, two more per-row shapes were the
+-- remaining cost in campaign_stats_list/journey_stats_list, both EXPLAIN-verified mid-send:
+--   · `eng` ran its link_clicked EXISTS once per unread message (124,693 probes) → both
+--     functions now hash the clicked-message-id set once and semi-join (IN over the same set).
+--   · `ord` nested-loop-probed events once per engaged profile (29,482 probes ≈ 3s) because
+--     the planner underestimates the eng CTE ~380 rows vs ~29k actual → order_placed events
+--     (7,733 rows total) are extracted once into `ord_ev AS MATERIALIZED` (MATERIALIZED blocks
+--     the single-ref CTE inlining that silently restored the nested loop) and hash-joined.
+-- Attribution/click semantics identical; spot-verified (15Aug clicked 3,413 / orders 46,
+-- consistent with live drift from the pre-change values).
+--
+-- ⚠️ Measurements DURING an active 77k-roster fan-out swing 2-5× on buffer churn — the
+-- worker-side 30s dashboard micro-cache (commsops src, same commit) is the load-independent
+-- half of this fix; do not judge these functions from a single mid-send timing.

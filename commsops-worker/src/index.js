@@ -44,6 +44,27 @@ const ok  = (data) => json({ ok: true, data });
 const err = (msg, status = 400, extra) => json({ ok: false, error: msg, ...(extra || {}) }, status);
 const nowIso = () => new Date().toISOString();
 
+// ── Dashboard micro-cache (S293) ────────────────────────────────────────────────
+// The four home-dashboard aggregates (campaigns/journeys overview, sends, deliverability)
+// recompute full message history in the DB on EVERY page load AND on the home page's ~15s
+// poll — during a live fan-out that made every Relay screen feel stuck (the DB is busy
+// sending; the aggregates queue behind it). 30s TTL, per-isolate, stores the in-flight
+// PROMISE so concurrent duplicate calls (home page + a second mount) collapse into one DB
+// hit. Auth is checked by the caller BEFORE consulting the cache; only the RPC data is
+// cached, never a Response object. A failed read is evicted so errors are never sticky.
+const DASH_CACHE = new Map();
+const DASH_TTL_MS = 30_000;
+function dashCached(key, fn) {
+  const hit = DASH_CACHE.get(key);
+  if (hit && Date.now() - hit.at < DASH_TTL_MS) return hit.p;
+  const p = fn().then(
+    (v) => { if (v === undefined) DASH_CACHE.delete(key); return v; },
+    (e) => { DASH_CACHE.delete(key); throw e; },
+  );
+  DASH_CACHE.set(key, { at: Date.now(), p });
+  return p;
+}
+
 // ── Segment-definition guards (S268) ────────────────────────────────────────────
 // These exist because a CLIENT-SIDE fix cannot protect a static-export app: the
 // segment builder's fix shipped at 12:35 IST and a browser still running the
@@ -573,38 +594,54 @@ async function handleGet(url, auth, env) {
       // from/to (ISO timestamptz) → the range _v2 RPC (calendar presets: Today/MTD/Last mo/FY);
       // plain `days` keeps the original trailing-window RPC.
       const from = url.searchParams.get('from'), to = url.searchParams.get('to');
-      const r = (from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to)))
-        ? await A.sbComms('/rest/v1/rpc/sends_overview_v2', env,
-            { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
-        : await A.sbComms('/rest/v1/rpc/sends_overview', env,
-            { method: 'POST', body: JSON.stringify({ p_days: Number(url.searchParams.get('days')) || 30 }) });
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      const ranged = from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to));
+      const days = Number(url.searchParams.get('days')) || 30;
+      const data = await dashCached(`so:${ranged ? `${from}:${to}` : days}`, async () => {
+        const r = ranged
+          ? await A.sbComms('/rest/v1/rpc/sends_overview_v2', env,
+              { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
+          : await A.sbComms('/rest/v1/rpc/sends_overview', env,
+              { method: 'POST', body: JSON.stringify({ p_days: days }) });
+        return r.ok ? r.data : undefined;
+      });
+      return data !== undefined ? ok(data) : err('db_error', 500);
     }
     case 'getDeliverabilityHealth': {
       const from = url.searchParams.get('from'), to = url.searchParams.get('to');
-      const r = (from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to)))
-        ? await A.sbComms('/rest/v1/rpc/deliverability_health_v2', env,
-            { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
-        : await A.sbComms('/rest/v1/rpc/deliverability_health', env,
-            { method: 'POST', body: JSON.stringify({ p_days: Number(url.searchParams.get('days')) || 30 }) });
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      const ranged = from && to && !Number.isNaN(Date.parse(from)) && !Number.isNaN(Date.parse(to));
+      const days = Number(url.searchParams.get('days')) || 30;
+      const data = await dashCached(`dh:${ranged ? `${from}:${to}` : days}`, async () => {
+        const r = ranged
+          ? await A.sbComms('/rest/v1/rpc/deliverability_health_v2', env,
+              { method: 'POST', body: JSON.stringify({ p_from: from, p_to: to }) })
+          : await A.sbComms('/rest/v1/rpc/deliverability_health', env,
+              { method: 'POST', body: JSON.stringify({ p_days: days }) });
+        return r.ok ? r.data : undefined;
+      });
+      return data !== undefined ? ok(data) : err('db_error', 500);
     }
     case 'getCampaignsOverview': {   // broadcast analytics list (BiteSpeed parity, Phase 1)
       const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
       const off = Number(url.searchParams.get('offset') || 0);
       // ONE set-based RPC for every campaign — never per-campaign getCampaignStats in a loop.
-      const r = await A.sbComms('/rest/v1/rpc/campaign_stats_list', env,
-        { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      const data = await dashCached(`co:${lim}:${off}`, async () => {
+        const r = await A.sbComms('/rest/v1/rpc/campaign_stats_list', env,
+          { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
+        return r.ok ? r.data : undefined;
+      });
+      return data !== undefined ? ok(data) : err('db_error', 500);
     }
 
     case 'getJourneysOverview': {    // journey analytics list — the campaigns-overview twin (S230)
       const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
       const off = Number(url.searchParams.get('offset') || 0);
       // ONE set-based RPC for every journey — never per-journey funnel calls in a loop.
-      const r = await A.sbComms('/rest/v1/rpc/journey_stats_list', env,
-        { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      const data = await dashCached(`jo:${lim}:${off}`, async () => {
+        const r = await A.sbComms('/rest/v1/rpc/journey_stats_list', env,
+          { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
+        return r.ok ? r.data : undefined;
+      });
+      return data !== undefined ? ok(data) : err('db_error', 500);
     }
 
     case 'getCampaignStats': {
