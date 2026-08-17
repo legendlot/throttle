@@ -57,6 +57,13 @@ const DASH_TTL_MS = 30_000;
 function dashCached(key, fn) {
   const hit = DASH_CACHE.get(key);
   if (hit && Date.now() - hit.at < DASH_TTL_MS) return hit.p;
+  // Bounded: the from/to keys are user-chosen date ranges, so a date-picker session mints
+  // unbounded distinct keys and nothing here expires on its own (entries are only replaced
+  // on re-request). Sweep the expired ones once the map is larger than any real page needs.
+  if (DASH_CACHE.size > 32) {
+    const cutoff = Date.now() - DASH_TTL_MS;
+    for (const [k, v] of DASH_CACHE) if (v.at < cutoff) DASH_CACHE.delete(k);
+  }
   const p = fn().then(
     (v) => { if (v === undefined) DASH_CACHE.delete(key); return v; },
     (e) => { DASH_CACHE.delete(key); throw e; },
