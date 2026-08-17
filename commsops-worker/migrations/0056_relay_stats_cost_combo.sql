@@ -1,0 +1,25 @@
+-- 0056 · relay_stats_cost_combo_v1 (+ _journeys) · applied live 2026-08-17 (S293)
+-- ⚠️ MIRROR of the applied Supabase migrations — the live DB is the source of truth
+-- (PATTERN-297: never rebuild a function from this file; use pg_get_functiondef).
+--
+-- Relay home load was ~7.5s to populated; the constraint was campaign_stats_list (6.9s
+-- in-browser) + journey_stats_list (4.0s): both priced every message ROW via
+-- comms.message_cost_inr() → rate_for(), one rate-card query per message — measured
+-- 12.7s across 153k messages. The rate resolves identically for every
+-- (channel, category, IST day), so both functions now price COMBOS: aggregate sent
+-- messages to (group, channel, pricing_category, billable, IST day) — a few hundred
+-- rows — and call rate_for once per combo.
+--
+-- Semantics preserved EXACTLY (verified by full-JSON diff against
+-- store.safety_relay_stats_pre_combo_2026_08_17 — every differing row was live drift
+-- of an in-flight send, none a repricing):
+--   · cost_inr: billable=false → 0; unresolvable rate → contributes nothing (matches
+--     sum() over NULL per-row costs); never-sent rows excluded.
+--   · unpriced: sent, billable IS NOT FALSE, no rate; journey variant keeps its
+--     status <> 'failed' condition via n_nonfailed.
+--   · message_cost_inr()/rate_for() UNCHANGED — single-message callers keep them.
+-- Measured after: campaign_stats_list 4.7s → 2.2s, journey_stats_list 1.4s → 1.1s
+-- (and sends_overview/deliverability_health, 0.7s/0.5s solo, stop queueing behind them).
+-- Full function bodies: pg_get_functiondef on comms.campaign_stats_list /
+-- comms.journey_stats_list — not duplicated here to keep the mirror honest about
+-- where truth lives.
