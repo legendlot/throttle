@@ -5,6 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download, OctagonX } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip, Modal, FieldLabel } from '@/components/ui.js';
+import { useConfirm, usePrompt } from '@/components/confirm.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
@@ -398,6 +399,8 @@ function ExcludePicker({ options, selected, onToggle, disabled, empty, renderLab
 export default function CampaignsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});
   // A/B chip + CSV per-arm export both key off this — ONE listExperiments call for the whole
@@ -691,7 +694,15 @@ export default function CampaignsPage() {
     finally { setBusy(false); }
   }
   async function reject() {
-    const reason = window.prompt('Reason for rejection (sends back to draft):', '');
+    const reason = await prompt({
+      tone: 'warn',
+      title: 'Return this campaign to draft?',
+      lede: 'The reason is shown to whoever picks it back up, so say what needs changing.',
+      placeholder: 'Audience is too broad, narrow to repeat buyers first',
+      multiline: true,
+      required: true,
+      confirmLabel: 'Return to draft',
+    });
     if (reason === null) return;
     setBusy(true);
     try { await workerFetch('rejectCampaign', { id: c.id, reason: reason || null }, session); showToast('Rejected — back to draft', 'success'); refresh(); }
@@ -699,7 +710,13 @@ export default function CampaignsPage() {
     finally { setBusy(false); }
   }
   async function cancelSchedule() {
-    if (!window.confirm('Cancel the scheduled send? The campaign stays approved and can be sent or re-scheduled.')) return;
+    if (!(await confirm({
+      tone: 'info',
+      title: 'Cancel the scheduled send?',
+      lede: 'The campaign stays approved. You can send it now or set a new schedule.',
+      confirmLabel: 'Clear the schedule',
+      cancelLabel: 'Keep it scheduled',
+    }))) return;
     setBusy(true);
     try { await workerFetch('cancelSchedule', { id: c.id }, session); showToast('Schedule cleared', 'success'); refresh(); }
     catch (e) { showToast(e.message || 'Cancel failed', 'error'); }
@@ -711,34 +728,57 @@ export default function CampaignsPage() {
   // cancel a safe resume for fear of double-sending.
   async function sendNow({ resume = false } = {}) {
     const seg = segments.find((s) => s.id === c.segment_id);
-    // Read the live flag, not a hardcoded assumption (review M12) — the day test_mode goes OFF,
-    // a stale "internal test gate" confirm would lie in the dangerous direction. Unknown/unloaded
-    // settings (fetch failed or still loading) fall through to the safe, more-alarming copy.
-    const gateLine = settings?.test_mode === false
-      ? '⚠️ TEST MODE IS OFF — this WILL send to real customers.'
-      : 'INTERNAL TEST GATE — sends off the allowlist are blocked.';
     // Spell the exclusions out in the confirm. A rule you set days ago and forgot is exactly
     // the thing that makes a send look mysteriously small afterwards — say it before, not after.
+    // They are list items now, not newline-joined prose: these are countable facts and the
+    // OS alert flattened them into a paragraph nobody parsed.
     const exclusionLines = [];
-    if ((c.exclude_segment_ids || []).length) exclusionLines.push(`· not in segment: ${c.exclude_segment_ids.map((id) => segments.find((s) => s.id === id)?.name || id).join(', ')}`);
-    if ((c.exclude_campaign_ids || []).length) exclusionLines.push(`· not already reached by: ${c.exclude_campaign_ids.map((id) => rows.find((r) => r.id === id)?.name || id).join(', ')}`);
-    if (c.exclude_contacted_hours) exclusionLines.push(`· not contacted on ${c.channel} in the last ${c.exclude_contacted_hours}h`);
-    const exclusionBlock = exclusionLines.length ? `\n\nExclusions in force:\n${exclusionLines.join('\n')}` : '';
+    if ((c.exclude_segment_ids || []).length) exclusionLines.push(`Not in segment: ${c.exclude_segment_ids.map((id) => segments.find((s) => s.id === id)?.name || id).join(', ')}`);
+    if ((c.exclude_campaign_ids || []).length) exclusionLines.push(`Not already reached by: ${c.exclude_campaign_ids.map((id) => rows.find((r) => r.id === id)?.name || id).join(', ')}`);
+    if (c.exclude_contacted_hours) exclusionLines.push(`Not contacted on ${c.channel} in the last ${c.exclude_contacted_hours}h`);
     const done = stats ? Number(stats.sent || 0) : 0;
+    // `resume` is the same worker action, but must NOT claim it "fans out to everyone
+    // reachable" — on a resume most of that audience is already messaged and will be deduped.
+    // Overstating it invites someone to cancel a safe resume for fear of double-sending.
     const body = resume
-      ? `Resume "${c.name}"?\n\n`
-        + (done ? `About ${done.toLocaleString('en-IN')} people have already been messaged — they are skipped automatically, nobody hears from this twice.\n\n` : '')
-        + `Sending picks up where it stopped, plus anyone it previously failed to reach.`
-      : `Send "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real messages to everyone reachable in the segment.`;
-    // Repeat it in the confirm: the inline banner sits in a panel that is easy to scroll past,
-    // and this is the last moment anyone can act on it.
+      ? <>
+          {done > 0 && <>About <b>{done.toLocaleString('en-IN')}</b> people have already been messaged. They are skipped automatically, so nobody hears from this twice.{' '}</>}
+          Sending picks up where it stopped, plus anyone it previously failed to reach.
+        </>
+      : <>Fans out real messages to everyone reachable in <b>{seg?.name || c.segment_id}</b>.</>;
     const tpl = templates.find((t) => t.id === c.template_id) || null;
     const untrackable = c.purpose === 'marketing' ? untrackableButtons(tpl) : [];
-    const trackingWarn = untrackable.length
-      ? `\n\n⚠️ NO LINK TRACKING — this send will record no clicks and no attributed revenue. `
-        + `Its button address is fixed at Meta and cannot be tagged.`
-      : '';
-    if (!window.confirm(`${gateLine}\n\n${body}${exclusionBlock}${trackingWarn}`)) return;
+    // TEST MODE OFF is the one state in this app where a click reaches real customers
+    // irreversibly and at scale, so it alone escalates to danger + a typed confirmation.
+    const live = settings?.test_mode === false;
+    // The button says what it does. "OK" on an OS alert never did.
+    const planned = Number(c.audience_snapshot || 0);
+    const confirmLabel = resume
+      ? 'Resume sending'
+      : planned ? `Send to ${planned.toLocaleString('en-IN')} people` : 'Send now';
+    if (!(await confirm({
+      tone: live ? 'danger' : 'warn',
+      title: resume ? `Resume "${c.name}"?` : `Send "${c.name}" now?`,
+      lede: body,
+      points: exclusionLines.length
+        ? exclusionLines.map((l) => l.replace(/^· /, ''))
+        : null,
+      warning: live
+        ? <><b>Test mode is OFF.</b> This will send to real customers.</>
+        : null,
+      // Repeat the tracking gap here: the inline banner sits in a panel that is easy to
+      // scroll past, and this is the last moment anyone can act on it.
+      note: [
+        live ? null : 'Internal test gate — sends off the allowlist are blocked.',
+        untrackable.length
+          ? 'No link tracking: this send records no clicks and no attributed revenue. '
+            + 'Its button address is fixed at Meta and cannot be tagged.'
+          : null,
+      ].filter(Boolean).join(' ') || null,
+      requireTyped: live && !resume ? 'SEND' : null,
+      confirmLabel,
+      cancelLabel: "Don't send",
+    }))) return;
     setBusy(true);
     try {
       const r = await workerFetch('sendCampaign', { id: c.id }, session);
@@ -756,14 +796,21 @@ export default function CampaignsPage() {
         const d = e.detail;
         const n = (x) => Number(x || 0).toLocaleString('en-IN');
         const shortfall = Math.max(Number(d.sendable || 0) - Number(d.remaining || 0), 0);
-        const proceed = window.confirm(
-          `NOTHING HAS BEEN SENT.\n\n`
-          + `"${c.name}" needs ${n(d.sendable)} sends. Only ${n(d.remaining)} are left of today's `
-          + `budget of ${n(d.budget)} (${n(d.used)} already used).\n\n`
-          + `If you send anyway, about ${n(d.remaining)} people are messaged and the other `
-          + `${n(shortfall)} are skipped. They are NOT retried tomorrow, and the campaign will `
-          + `still show as sent.\n\n`
-          + `Send the first ${n(d.remaining)} anyway?`);
+        const proceed = await confirm({
+          tone: 'danger',
+          title: 'Nothing has been sent',
+          lede: <>“{c.name}” needs <b>{n(d.sendable)}</b> sends. Only <b>{n(d.remaining)}</b> are
+                left of today’s budget of {n(d.budget)} ({n(d.used)} already used).</>,
+          points: [
+            <>About <b>{n(d.remaining)}</b> people would be messaged</>,
+            <>The other <b>{n(shortfall)}</b> are skipped</>,
+            'Skipped people are NOT retried tomorrow',
+            'The campaign will still show as sent',
+          ],
+          warning: 'Sending a partial batch is not reversible, and the shortfall is lost silently.',
+          confirmLabel: `Send the first ${n(d.remaining)}`,
+          cancelLabel: 'Send nothing',
+        });
         if (proceed) {
           try {
             const r2 = await workerFetch('sendCampaign', { id: c.id, allowPartial: true }, session);
@@ -781,15 +828,20 @@ export default function CampaignsPage() {
         const d = e.detail;
         const n = (x) => Number(x || 0).toLocaleString('en-IN');
         const hrs = (m) => (Number(m || 0) / 60).toFixed(1).replace(/\.0$/, '');
-        const proceed = window.confirm(
-          `NOTHING HAS BEEN SENT.\n\n`
-          + `"${c.name}" needs about ${hrs(d.needMinutes)}h to send ${n(d.sendable)} messages, but this `
-          + `channel goes quiet in ${hrs(d.minutesUntilQuiet)}h.\n\n`
-          + `Roughly ${n(d.reachableBeforeQuiet)} would be reached before the cutoff. The rest are `
-          + `NOT sent later — they are dropped for good, and the campaign will still show as sent.\n\n`
-          + `Best options are to send it earlier tomorrow, or narrow the audience to about `
-          + `${n(d.reachableBeforeQuiet)}.\n\n`
-          + `Send to the first ~${n(d.reachableBeforeQuiet)} anyway?`);
+        const proceed = await confirm({
+          tone: 'danger',
+          title: 'Nothing has been sent',
+          lede: <>“{c.name}” needs about <b>{hrs(d.needMinutes)}h</b> to send {n(d.sendable)} messages,
+                but this channel goes quiet in <b>{hrs(d.minutesUntilQuiet)}h</b>.</>,
+          points: [
+            <>Roughly <b>{n(d.reachableBeforeQuiet)}</b> reached before the cutoff</>,
+            'The rest are dropped for good, not sent later',
+            'The campaign will still show as sent',
+          ],
+          warning: <>Better options: send earlier tomorrow, or narrow the audience to about {n(d.reachableBeforeQuiet)}.</>,
+          confirmLabel: `Send the first ~${n(d.reachableBeforeQuiet)}`,
+          cancelLabel: 'Send nothing',
+        });
         if (proceed) {
           try {
             const r2 = await workerFetch('sendCampaign', { id: c.id, allowPartial: true }, session);
@@ -811,9 +863,13 @@ export default function CampaignsPage() {
       const pv = await garageFetch('getTopupPreview', { id: c.id }, session);
       const n = Number(pv?.addable || 0);
       if (!n) { showToast('Nobody new — the roster already covers everyone eligible', 'info'); return; }
-      if (!window.confirm(`${n.toLocaleString('en-IN')} people have become eligible since this campaign's `
-        + `audience was frozen (new opt-ins, mostly).\n\nAdd them to the roster? They are messaged when `
-        + `you press "Send to the missed" / Resume — nothing sends yet.`)) return;
+      if (!(await confirm({
+        tone: 'info',
+        title: `Add ${n.toLocaleString('en-IN')} newly eligible people?`,
+        lede: <>They became reachable after this campaign’s audience was frozen, mostly new opt-ins.</>,
+        note: 'Nothing sends yet. They go out when you press Resume.',
+        confirmLabel: `Add ${n.toLocaleString('en-IN')} to the roster`,
+      }))) return;
       const r = await workerFetch('applyTopup', { id: c.id }, session);
       showToast(`Added ${Number(r?.data?.added || 0).toLocaleString('en-IN')} — roster is now `
         + `${Number(r?.data?.roster_size || 0).toLocaleString('en-IN')}. Press Resume to send to them.`, 'success');
@@ -835,11 +891,20 @@ export default function CampaignsPage() {
   async function stopNow() {
     const done = stats ? Number(stats.sent || 0) : null;
     const of = Number(c.audience_snapshot || 0);
-    const progress = done != null && of > 0 ? `\n\nAbout ${done.toLocaleString('en-IN')} of ${of.toLocaleString('en-IN')} have been attempted so far.` : '';
-    if (!window.confirm(
-      `Stop "${c.name}" now?${progress}\n\nMessages already sent CANNOT be recalled — this only stops new ones. `
-      + `The batch in flight finishes first, so a few more may still go out.\n\n`
-      + `You can resume later with "Send now": anyone already messaged is skipped automatically.`)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Stop "${c.name}" now?`,
+      lede: done != null && of > 0
+        ? <>About <b>{done.toLocaleString('en-IN')}</b> of {of.toLocaleString('en-IN')} have been attempted so far.</>
+        : null,
+      points: [
+        <>Messages already sent <b>cannot be recalled</b></>,
+        'The batch in flight finishes first, so a few more may still go out',
+        'You can resume later — anyone already messaged is skipped automatically',
+      ],
+      confirmLabel: 'Stop sending',
+      cancelLabel: 'Keep sending',
+    }))) return;
     setBusy(true);
     try {
       await workerFetch('stopCampaign', { id: c.id }, session);

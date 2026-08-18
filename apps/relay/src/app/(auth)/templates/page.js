@@ -15,6 +15,7 @@ import { validateWaTemplate, WA_WABAS, normalizeMetaName } from '@/components/wa
 import { useNewParam } from '@/lib/useNewParam.js';
 import ImageLibrary from '@/components/ImageLibrary.js';
 import MsgPreview from '@/components/MsgPreview.js';
+import { useConfirm, useChoose } from '@/components/confirm.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -139,6 +140,8 @@ function emptyTemplate() {
 function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, smsTemplates,
                      session, templateRowId, onBound }) {
   const { showToast } = useToast();
+  const confirm = useConfirm();
+  const choose = useChoose();
   const [submitting, setSubmitting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const r = rcs || {};
@@ -935,13 +938,21 @@ export default function TemplatesPage() {
     // possible, but it is now the deliberate, explicitly-confirmed branch.
     preserveBodyRef.current = false;
     if (t.channel === 'email' && htmlOnly && edRef.current) {
-      preserveBodyRef.current = !window.confirm(
-        'REPLACE this email\'s HTML with the visual canvas?\n\n'
-        + 'This template was authored outside the editor, so the canvas is EMPTY — replacing means '
-        + 'losing the hand-authored email.\n\n'
-        + 'OK  = replace the body with the canvas (destructive)\n'
-        + 'Cancel = keep the HTML, save only name / subject / status'
-      );
+      // Was OK/Cancel standing in for two real answers, where Cancel silently meant
+      // "keep the HTML" — an outcome nobody reads a Cancel button as choosing.
+      const pick = await choose({
+        tone: 'danger',
+        title: 'Replace this email\u2019s HTML?',
+        lede: 'This template was authored outside the editor, so the visual canvas is empty.',
+        actions: [
+          { value: 'keep', label: 'Keep the HTML',
+            hint: 'Saves only name, subject and status. The email body is untouched.' },
+          { value: 'replace', label: 'Replace it with the canvas', tone: 'danger',
+            hint: 'The hand-authored email is lost. Recoverable only from version history.' },
+        ],
+      });
+      if (pick === null) { setSaving(false); return; }
+      preserveBodyRef.current = pick === 'keep';
     }
     const payload = buildPayload();
     // WS review follow-up: without this, a live/APPROVED template could be saved with
@@ -1023,17 +1034,26 @@ export default function TemplatesPage() {
       // things that are never correct.
       const bareHome = /href\s*=\s*(["'])https?:\/\/(?:www\.)?legendoftoys\.com\/?\1/i;
       if ((bareHome.test(payload.content.html_body || '') || bareHome.test(payload.content.mjml || ''))
-        && !window.confirm(
-          'A button or link still points at the bare homepage (legendoftoys.com).\n\n'
-          + 'That is the starter link — readers who click a CTA expect the thing it names, not the '
-          + 'front page. Point it at the product or collection instead.\n\nSave anyway?')) return;
+        && !(await confirm({
+          tone: 'warn',
+          title: 'A link still points at the bare homepage',
+          lede: <>Something still targets <span className="mono">legendoftoys.com</span>, which is the starter link.</>,
+          note: 'Readers who click a CTA expect the thing it names, not the front page. Point it at the product or collection instead.',
+          confirmLabel: 'Save anyway',
+          cancelLabel: 'Go back and fix it',
+        }))) return;
       const stray = findUndeclaredTokens(
         [payload.content.subject, payload.content.html_body, payload.content.text_body],
         payload.variables.map((v) => v.token));
-      if (stray.length && !window.confirm(
-        `These look like merge tags but aren't declared as variables:\n\n`
-        + stray.map((s) => `  {${s}}`).join('\n')
-        + `\n\nThey will be sent as literal text, not filled in. Save anyway?`)) return;
+      if (stray.length && !(await confirm({
+        tone: 'warn',
+        title: 'Undeclared merge tags',
+        lede: 'These look like merge tags but are not declared as variables:',
+        points: stray.map((tok) => <span className="mono">{`{${tok}}`}</span>),
+        warning: 'They will be sent as literal text, not filled in.',
+        confirmLabel: 'Save anyway',
+        cancelLabel: 'Go back and declare them',
+      }))) return;
     }
     setSaving(true);
     try {
@@ -1145,13 +1165,19 @@ export default function TemplatesPage() {
     // Full rows, not tokens — the source checks need to know where each token resolves.
     const errs = validateWaTemplate(buildPayload().content, t.variables);
     if (errs.length) { showToast(`Fix ${errs.length} issue${errs.length === 1 ? '' : 's'} before submitting`, 'error'); return; }
-    if (!window.confirm(
-      `Submit "${t.wa.meta_name}" to Meta for approval?\n\n`
-      + `This creates a real template on LOT's WhatsApp Business Account and enters Meta's `
-      + `review queue. Review typically takes minutes to hours and can't be undone from here.\n\n`
-      + `WARNING: while the review runs, EVERY send of this template fails (#132001). Measured, `
-      + `not theoretical — it took Order Placed down for 18 minutes on 2026-07-28. If a LIVE `
-      + `journey uses this template, pause it or cover it elsewhere first.`)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Submit "${t.wa.meta_name}" to Meta?`,
+      lede: 'This creates a real template on LOT\u2019s WhatsApp Business Account and enters Meta\u2019s review queue.',
+      points: [
+        'Review typically takes minutes to hours',
+        'It cannot be undone from here',
+      ],
+      warning: <>While the review runs, <b>every send of this template fails</b> (#132001).
+               Measured, not theoretical: it took Order Placed down for 18 minutes on 2026-07-28.</>,
+      note: 'If a live journey uses this template, pause it or cover it elsewhere first.',
+      confirmLabel: 'Submit to Meta',
+    }))) return;
     setSubmitting(true);
     try {
       const r = await workerFetch('waSubmitTemplate', { templateId: t.id }, session);
@@ -1176,13 +1202,18 @@ export default function TemplatesPage() {
     const archiving = r.status !== 'archived';
     if (archiving && u.journeys_live > 0) {
       const names = Array.isArray(u.live_names) ? u.live_names.join(', ') : '';
-      if (!window.confirm(
-        `"${r.name}" is used by ${u.journeys_live} LIVE journey${u.journeys_live === 1 ? '' : 's'}`
-        + (names ? ` (${names})` : '') + `.\n\n`
-        + `Archiving hides it from this library and from the journey and campaign pickers, `
-        + `so nobody can newly select it. It does NOT stop those live journeys sending it, `
-        + `and it does NOT touch Meta — blocking the send would break a customer-facing flow `
-        + `silently, which is worse.\n\nArchive anyway?`)) return;
+      if (!(await confirm({
+        tone: 'warn',
+        title: `Archive "${r.name}"?`,
+        lede: <>It is used by <b>{u.journeys_live}</b> live journey{u.journeys_live === 1 ? '' : 's'}{names ? ` (${names})` : ''}.</>,
+        points: [
+          'Hides it from this library and from the journey and campaign pickers',
+          'Nobody can newly select it',
+          <>It does <b>not</b> stop those live journeys sending it, and does not touch Meta</>,
+        ],
+        note: 'Blocking the send would break a customer-facing flow silently, which is worse.',
+        confirmLabel: 'Archive anyway',
+      }))) return;
     }
     try {
       await workerFetch('setTemplateArchived', { id: r.id, archived: archiving }, session);
@@ -1203,10 +1234,17 @@ export default function TemplatesPage() {
       u.sent ? `${u.sent} sent message(s)` : null,
     ].filter(Boolean);
     if (blockers.length) { showToast(`Still referenced by ${blockers.join(', ')} — archive instead`, 'error'); return; }
-    if (!window.confirm(
-      `Permanently delete "${r.name}"?\n\n`
-      + `It was never submitted to Meta and nothing references it, so this removes it and its `
-      + `version history from Relay only. There is no Meta copy to remove.\n\nThis cannot be undone.`)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Permanently delete "${r.name}"?`,
+      lede: 'It was never submitted to Meta and nothing references it.',
+      points: [
+        'Removes the template and its version history from Relay',
+        'There is no Meta copy to remove',
+      ],
+      warning: 'This cannot be undone.',
+      confirmLabel: 'Delete permanently',
+    }))) return;
     try {
       await workerFetch('deleteTemplate', { id: r.id }, session);
       showToast('Template deleted', 'success');
@@ -1271,12 +1309,16 @@ export default function TemplatesPage() {
                 there are unsaved edits, because the copy is built from the SAVED row
                 (`rows`), so anything on screen but not saved would silently not come with it. */}
             {canEdit && t.id && (
-              <Btn onClick={() => {
+              <Btn onClick={async () => {
                 const src = rows.find((r) => r.id === t.id);
                 if (!src) { showToast('Reload the list first', 'error'); return; }
-                if ((dirty || waDirty) && !window.confirm(
-                  'You have unsaved changes. The copy is made from the last SAVED version, '
-                  + 'so those changes will not be carried over. Duplicate anyway?')) return;
+                if ((dirty || waDirty) && !(await confirm({
+                  tone: 'warn',
+                  title: 'You have unsaved changes',
+                  lede: 'The copy is made from the last saved version, so those changes will not be carried over.',
+                  confirmLabel: 'Duplicate anyway',
+                  cancelLabel: 'Go back and save first',
+                }))) return;
                 startDuplicate(src);
               }} title="Open an unsaved copy of this template">
                 <Copy size={14} /> Duplicate
@@ -1440,12 +1482,18 @@ export default function TemplatesPage() {
                   the source and re-import. Subject, name and status above are still editable and
                   save normally.
                   <div style={{ marginTop: 8 }}>
-                    <Btn onClick={() => {
-                      if (window.confirm(
-                        'Switch to the visual editor?\n\nThe canvas starts EMPTY — this email\'s HTML '
-                        + 'is not MJML and cannot be loaded into it. Saving after switching REPLACES '
-                        + 'the email with whatever you build.\n\nThe current HTML stays recoverable in '
-                        + 'the version history.')) setHtmlOnly(false);
+                    <Btn onClick={async () => {
+                      if (await confirm({
+                        tone: 'warn',
+                        title: 'Switch to the visual editor?',
+                        lede: 'The canvas starts empty. This email\u2019s HTML is not MJML and cannot be loaded into it.',
+                        points: [
+                          'Saving after switching replaces the email with whatever you build',
+                          'The current HTML stays recoverable in the version history',
+                        ],
+                        confirmLabel: 'Switch to visual',
+                        cancelLabel: 'Stay on HTML',
+                      })) setHtmlOnly(false);
                     }}>Switch to visual editor (replaces this HTML)</Btn>
                   </div>
                 </div>

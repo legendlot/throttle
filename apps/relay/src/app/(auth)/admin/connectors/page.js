@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
+import { useConfirm } from '@/components/confirm.js';
 
 const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 const STATUS_TONE = { active: 'green', pending: 'yellow', draft: 'gray', disabled: 'red' };
@@ -11,6 +12,7 @@ const STATUS_TONE = { active: 'green', pending: 'yellow', draft: 'gray', disable
 export default function ConnectorsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [shopBusy, setShopBusy] = useState(false);
@@ -40,7 +42,13 @@ export default function ConnectorsPage() {
   }
 
   async function shopifyBackfill(mode) {
-    if (mode === 'full' && !window.confirm('Import ALL Shopify customers into Relay?\n\nProfiles + consent only — no emails are sent (Test Mode is the separate lock). Runs in the background.')) return;
+    if (mode === 'full' && !(await confirm({
+      tone: 'warn',
+      title: 'Import ALL Shopify customers into Relay?',
+      lede: 'Profiles and consent only. No emails are sent — Test Mode is the separate lock.',
+      note: 'Runs in the background.',
+      confirmLabel: 'Start the full import',
+    }))) return;
     setShopBusy(true); setShopResult(null);
     try {
       const r = await workerFetch('shopifyBackfill', { mode }, session);

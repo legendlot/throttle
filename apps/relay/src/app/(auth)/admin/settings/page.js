@@ -6,6 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Check, Lock, Unlock, ShieldAlert } from 'lucide-react';
 import { PageHead, Panel, Btn } from '@/components/ui.js';
+import { useConfirm } from '@/components/confirm.js';
 
 
 // <input type="datetime-local"> speaks LOCAL wall-clock with no zone; the column is
@@ -70,6 +71,7 @@ const FIELDS = [
 export default function SettingsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [form, setForm] = useState({});
   const [allowText, setAllowText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -102,13 +104,26 @@ export default function SettingsPage() {
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
   // Toggling the lock is the single most consequential action on this page.
-  function toggleTestMode() {
+  async function toggleTestMode() {
     const turningOff = form.test_mode !== false; // currently ON → about to unlock
     if (turningOff) {
-      const ok = window.confirm(
-        'UNLOCK real-customer sends?\n\nTest mode currently blocks every send to any address ' +
-        'outside the allowlist. Turning it OFF lets Relay email REAL CUSTOMERS.\n\n' +
-        'Only do this once sign-off is given. Continue?');
+      // The single most consequential toggle in Relay: everything downstream trusts this
+      // flag, and nothing else stands between a draft and the whole customer base. Typed
+      // confirmation, not because typing prevents mistakes, but because it forces a beat.
+      const ok = await confirm({
+        tone: 'danger',
+        title: 'Unlock real-customer sends?',
+        lede: 'Test mode currently blocks every send to any address outside the allowlist.',
+        points: [
+          <>Turning it off lets Relay message <b>real customers</b></>,
+          'Every campaign and journey is affected at once',
+          'Nothing else gates a send once this is off',
+        ],
+        warning: 'Only do this once sign-off is given.',
+        requireTyped: 'UNLOCK',
+        confirmLabel: 'Unlock real sends',
+        cancelLabel: 'Keep test mode on',
+      });
       if (!ok) return;
     }
     set('test_mode', turningOff ? false : true);
@@ -117,14 +132,22 @@ export default function SettingsPage() {
   // `payment_links_enabled` turning ON is the one toggle on this page that starts taking real
   // money from real customers, and it lives in a bulk save alongside quiet hours — so it gets the
   // same deliberate confirmation `test_mode` has, rather than being a stray click away.
-  function toggleField(key) {
+  async function toggleField(key) {
     const next = !form[key];
     if (key === 'payment_links_enabled' && next) {
-      const ok = window.confirm(
-        'Turn ON real payment collection?\n\n'
-        + 'The COD→prepaid journey will start minting live Cashfree payment links, cancelling real '
-        + 'Shopify orders and creating real prepaid replacements.\n\n'
-        + 'Only do this when you are ready for a real conversion test.');
+      const ok = await confirm({
+        tone: 'danger',
+        title: 'Turn on real payment collection?',
+        lede: 'The COD to prepaid journey starts acting on live orders.',
+        points: [
+          'Mints live Cashfree payment links',
+          'Cancels real Shopify orders',
+          'Creates real prepaid replacements',
+        ],
+        warning: 'Only do this when you are ready for a real conversion test.',
+        confirmLabel: 'Turn collection on',
+        cancelLabel: 'Leave it off',
+      });
       if (!ok) return;
     }
     set(key, next);
@@ -157,12 +180,15 @@ export default function SettingsPage() {
     const movedBack = next && savedCourierFrom && Date.parse(next) < Date.parse(savedCourierFrom);
     if (movedBack) {
       const n = impact && !impact.loading ? impact.total : null;
-      if (!window.confirm(
-        `Move the courier watermark BACK?\n\n`
-        + (n != null
-          ? `${n.toLocaleString('en-IN')} customer message${n === 1 ? '' : 's'} become eligible and will send at ~15 per 5-minute tick.\n\n`
-          : `This makes previously-skipped shipments eligible again.\n\n`)
-        + `These are real WhatsApp messages about orders, deliveries and returns.`)) return;
+      if (!(await confirm({
+        tone: 'danger',
+        title: 'Move the courier watermark back?',
+        lede: n != null
+          ? <><b>{n.toLocaleString('en-IN')}</b> customer message{n === 1 ? '' : 's'} become eligible and will send at about 15 per 5-minute tick.</>
+          : 'This makes previously-skipped shipments eligible again.',
+        warning: 'These are real WhatsApp messages about orders, deliveries and returns.',
+        confirmLabel: 'Move the watermark',
+      }))) return;
     }
     await save();
   }

@@ -15,6 +15,7 @@ import { Upload, RefreshCw, Trash2, Link2, ImageOff, Search, Download, Pencil, C
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { uploadMany, ACCEPT_MIME } from '@/components/ImageLibrary.js';
+import { useConfirm } from '@/components/confirm.js';
 
 function prettySize(n) {
   if (n == null) return '—';
@@ -27,6 +28,7 @@ const cleanName = (n) => String(n || '').replace(/^\d+_/, '');
 export default function LibraryPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [assets, setAssets] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -75,9 +77,16 @@ export default function LibraryPage() {
       showToast(`In use by ${a.used_by.map((t) => t.name).join(', ')} — remove it there first`, 'error');
       return;
     }
-    if (!window.confirm(
-      `Delete ${cleanName(a.name)}?\n\nThis removes the file permanently. No template currently `
-      + `references it, but any link to it that exists outside Relay will break.`)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Delete ${cleanName(a.name)}?`,
+      lede: 'This removes the file permanently.',
+      points: [
+        'No template currently references it',
+        'Any link to it that exists outside Relay will break',
+      ],
+      confirmLabel: 'Delete the file',
+    }))) return;
     try {
       await workerFetch('deleteMediaAsset', { path: a.path }, session);
       showToast('Deleted', 'success');
@@ -132,14 +141,19 @@ export default function LibraryPage() {
     // but anything already delivered to a customer keeps the dead link, so say so once
     // rather than letting it be discovered in an inbox.
     const used = a.used_by?.length || 0;
-    if (!window.confirm(
-      `Rename to "${next}"?\n\n`
-      + `The file is MOVED, so its current link stops working.\n`
-      + (used
-        ? `· ${used} template${used === 1 ? '' : 's'} using it will be repointed automatically.\n`
-        : `· No template uses it, so nothing needs repointing.\n`)
-      + `· Emails ALREADY DELIVERED keep the old link and will show a broken image.\n`
-      + `· WhatsApp messages already sent are unaffected.`)) return;
+    if (!(await confirm({
+      tone: 'warn',
+      title: `Rename to "${next}"?`,
+      lede: 'The file is moved, so its current link stops working.',
+      points: [
+        used
+          ? <><b>{used}</b> template{used === 1 ? '' : 's'} using it will be repointed automatically</>
+          : 'No template uses it, so nothing needs repointing',
+        'Emails already delivered keep the old link and will show a broken image',
+        'WhatsApp messages already sent are unaffected',
+      ],
+      confirmLabel: 'Rename the file',
+    }))) return;
     setBusy(true);
     try {
       const r = await workerFetch('renameMediaAsset', { path: a.path, new_name: next }, session);

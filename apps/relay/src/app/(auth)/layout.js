@@ -8,6 +8,7 @@ import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { Sidebar } from '../../components/chrome/Sidebar.js';
 import { ContextBar } from '../../components/chrome/ContextBar.js';
 import { CommandPalette } from '../../components/chrome/CommandPalette.js';
+import { ConfirmProvider } from '../../components/confirm.js';
 
 const SB_KEY = 'relay-sb-collapsed';
 const ONAIR_POLL_MS = 60_000;
@@ -105,6 +106,7 @@ function AuthLayoutInner({ children }) {
   }
 
   return (
+    <ConfirmProvider>
     <div className="app mo">
       <Sidebar
         groups={navGroups}
@@ -133,5 +135,6 @@ function AuthLayoutInner({ children }) {
         pathname={pathname}
       />
     </div>
+    </ConfirmProvider>
   );
 }

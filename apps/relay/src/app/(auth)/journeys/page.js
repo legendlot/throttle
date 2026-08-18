@@ -6,6 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch, InfoDot } from '@/components/ui.js';
+import { useConfirm, useChoose } from '@/components/confirm.js';
 import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
@@ -86,6 +87,8 @@ function emptyJourney() {
 export default function JourneysPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
+  const choose = useChoose();
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});   // journey_id → journey_stats_list row (campaign-style analytics)
   const [templates, setTemplates] = useState([]);
@@ -183,12 +186,16 @@ export default function JourneysPage() {
     // ceremony. Asymmetric on purpose.
     // Read the live flag, not a hardcoded assumption (review M12) — unknown/unloaded settings
     // (fetch failed or still loading) fall through to the safe, more-alarming copy.
-    if (next && !window.confirm(
-      (settings?.test_mode === false
-        ? `⚠️ TEST MODE IS OFF — this WILL enrol and message real customers.\n\n`
-        : `INTERNAL TEST GATE — sends off the allowlist are blocked.\n\n`) +
-      `Turn ON "${r.name}"?\n\nIt will start enrolling customers on every ${triggerSummary(r.trigger, segments)} and sending messages.`
-    )) return;
+    const live = settings?.test_mode === false;
+    if (next && !(await confirm({
+      tone: live ? 'danger' : 'warn',
+      title: `Turn on "${r.name}"?`,
+      lede: <>It starts enrolling customers on every <b>{triggerSummary(r.trigger, segments)}</b> and sending messages.</>,
+      warning: live ? <><b>Test mode is OFF.</b> This will enrol and message real customers.</> : null,
+      note: live ? null : 'Internal test gate — sends off the allowlist are blocked.',
+      confirmLabel: 'Turn it on',
+      cancelLabel: 'Leave it off',
+    }))) return;
     // Turning a journey OFF only stops NEW enrolments. Anyone already mid-journey keeps
     // running on their own workflow instance and will still be messaged — which is how a real
     // customer nearly got a send three minutes after a test journey was switched off (S230),
@@ -199,17 +206,28 @@ export default function JourneysPage() {
     // journey enrolling, and the dialog that appeared was about something else entirely. The
     // "off is the safe direction" reasoning holds for customers, not for the business: a paused
     // journey sends nothing to anyone, which is its own kind of harm and nobody gets an alert.
-    // Two steps on purpose — this one is the stray-click guard, the next is a real decision with
-    // two legitimate answers.
-    if (!next && !window.confirm(
-      `Turn OFF "${r.name}"?\n\nIt will stop enrolling new customers straight away.`)) return;
+    //
+    // This was TWO stacked confirms: a stray-click guard, then a decision whose second answer
+    // was carried by the Cancel button ("Cancel — let them finish"). Nobody reads Cancel as
+    // choosing a branch, and the risk is real: someone meaning to drain presses Cancel on the
+    // first dialog and stops nothing at all. Now one dialog, both answers stated, cancel
+    // meaning only cancel.
     let stopInFlight = false;
     if (!next) {
-      stopInFlight = window.confirm(
-        `"${r.name}" will stop enrolling anyone new.\n\n`
-        + `Customers already part-way through it will otherwise CARRY ON and still receive their remaining messages.\n\n`
-        + `OK — stop them too (nobody else hears from this journey)\n`
-        + `Cancel — let them finish (only new entries stop)`);
+      const pick = await choose({
+        tone: 'warn',
+        title: `Turn off "${r.name}"?`,
+        lede: 'New enrolments stop straight away either way. The question is what happens to customers already part-way through.',
+        actions: [
+          { value: 'drain', label: 'Let them finish',
+            hint: 'Anyone mid-journey still receives their remaining messages. Right for a copy tweak.' },
+          { value: 'stop', label: 'Stop them too', tone: 'danger',
+            hint: 'Nobody else hears from this journey. Right for pulling it.' },
+        ],
+        cancelLabel: 'Leave it running',
+      });
+      if (pick === null) return;
+      stopInFlight = pick === 'stop';
     }
     setTogglingId(r.id);
     setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: next ? 'active' : 'paused' } : x)));
@@ -361,10 +379,22 @@ export default function JourneysPage() {
     // enrolments; anyone already mid-journey keeps sending unless explicitly stopped.
     let stopInFlight = false;
     if (status !== 'active') {
-      stopInFlight = window.confirm(
-        `Customers already part-way through this journey will otherwise CARRY ON and still receive their remaining messages.\n\n`
-        + `OK — stop them too\n`
-        + `Cancel — let them finish (only new entries stop)`);
+      const pick = await choose({
+        tone: 'warn',
+        title: status === 'archived' ? 'Archive this journey?' : 'Pause this journey?',
+        lede: status === 'archived'
+          ? 'It stops enrolling and leaves the active list. Customers already part-way through are a separate question.'
+          : 'New enrolments stop straight away either way. The question is what happens to customers already part-way through.',
+        actions: [
+          { value: 'drain', label: 'Let them finish',
+            hint: 'Anyone mid-journey still receives their remaining messages.' },
+          { value: 'stop', label: 'Stop them too', tone: 'danger',
+            hint: 'Nobody else hears from this journey.' },
+        ],
+        cancelLabel: 'Leave it running',
+      });
+      if (pick === null) return;
+      stopInFlight = pick === 'stop';
     }
     setBusy(true);
     try {
@@ -707,7 +737,7 @@ export default function JourneysPage() {
               <span className="dim" style={{ fontSize: 13 }}>No published version yet — save first to enable the switch.</span>
             )}
             {j.id && j.status !== 'archived' && canBuild && (
-              <Btn onClick={() => { if (window.confirm('Archive this journey? It stops sending and leaves the active list.')) setStatus('archived'); }}
+              <Btn onClick={() => setStatus('archived')}
                 disabled={busy} style={{ marginLeft: 'auto' }}>Archive</Btn>
             )}
           </div>

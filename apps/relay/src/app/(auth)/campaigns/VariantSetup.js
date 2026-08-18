@@ -11,6 +11,7 @@ import { Plus, Trash2, Send, CheckCircle2, XCircle, AlertTriangle } from 'lucide
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Combobox, useToast } from '@throttle/ui';
 import { Panel, Badge, Btn, FieldLabel } from '@/components/ui.js';
+import { useConfirm } from '@/components/confirm.js';
 
 // ── Power / MDE math ────────────────────────────────────────────────────────────────
 // Mirrors commsops-worker/src/ab-stats.js's mde(p, n): 2.8·√(2p(1-p)/n)·100, at the
@@ -47,6 +48,7 @@ const fourHoursFromNowIso = () => new Date(Date.now() + 4 * 3600 * 1000).toISOSt
 
 export default function VariantSetup({ campaign, session, perms, reach, onChanged }) {
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const canBuild = !perms || perms.campaign_build;
 
   const [variants, setVariants] = useState([]);
@@ -142,7 +144,13 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   const APPROVAL_WARNING = 'This campaign is approved. Changing a version sends it back for approval.';
 
   async function updateVariant(v, patch) {
-    if (needsApprovalWarning && !window.confirm(`${APPROVAL_WARNING}\n\nContinue?`)) return;
+    if (needsApprovalWarning && !(await confirm({
+      tone: 'warn',
+      title: 'This campaign is already approved',
+      lede: 'Changing a version sends it back for approval.',
+      confirmLabel: 'Change it anyway',
+      cancelLabel: 'Leave it as is',
+    }))) return;
     setBusy(true);
     try {
       await workerFetch('saveCampaignVariant', {
@@ -159,7 +167,13 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   }
 
   async function addArmB() {
-    if (needsApprovalWarning && !window.confirm(`${APPROVAL_WARNING}\n\nContinue?`)) return;
+    if (needsApprovalWarning && !(await confirm({
+      tone: 'warn',
+      title: 'This campaign is already approved',
+      lede: 'Adding a B version sends it back for approval.',
+      confirmLabel: 'Add version B',
+      cancelLabel: 'Leave it as is',
+    }))) return;
     setBusy(true);
     try {
       await workerFetch('saveCampaignVariant', { campaignId, label: 'B', templateId: null, weight: 50 }, session);
@@ -170,10 +184,13 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
   }
 
   async function deleteArm(v) {
-    const msg = needsApprovalWarning
-      ? `${APPROVAL_WARNING}\n\nDelete arm "${v.label}"? This cannot be undone.`
-      : `Delete arm "${v.label}"? This cannot be undone.`;
-    if (!window.confirm(msg)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Delete arm "${v.label}"?`,
+      lede: needsApprovalWarning ? APPROVAL_WARNING : null,
+      warning: 'This cannot be undone.',
+      confirmLabel: 'Delete the arm',
+    }))) return;
     setBusy(true);
     try {
       await workerFetch('deleteCampaignVariant', { campaignId, id: v.id }, session);

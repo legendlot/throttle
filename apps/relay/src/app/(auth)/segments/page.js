@@ -6,6 +6,7 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
+import { useConfirm } from '@/components/confirm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions } from '@/lib/eventDefs.js';
 import { blankRow, toLeaf, parseDef, itemsToDef, countConditions, normalizeWithin,
@@ -303,6 +304,7 @@ function memberState(kind, memberCount, materializedAt, isStale) {
 export default function SegmentsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
@@ -539,7 +541,12 @@ export default function SegmentsPage() {
   async function removeMember(m) {
     if (!seg.id) return;
     const who = m.email || m.phone || m.display_name || 'this contact';
-    if (!window.confirm(`Remove ${who} from "${seg.name}"?`)) return;
+    if (!(await confirm({
+      tone: 'warn',
+      title: `Remove ${who} from "${seg.name}"?`,
+      lede: 'They stop matching this audience immediately. A rebuild can bring them back if they still match the rules.',
+      confirmLabel: 'Remove them',
+    }))) return;
     setMemBusy(true);
     try {
       const r = await workerFetch('removeSegmentMember', { id: seg.id, profile_id: m.profile_id }, session);

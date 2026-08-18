@@ -6,6 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Plus, RefreshCw, LogOut, Mail, MessageCircle, MessageSquare, Smartphone } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
+import { useConfirm } from '@/components/confirm.js';
 
 // `rcs` is here so an EXPLICIT rcs opt-out/opt-in can be recorded — that override is what
 // the gate's resolver honours. Day-to-day rcs consent is DERIVED from sms (see rcsEffective).
@@ -138,6 +139,7 @@ function ChannelStrip({ consent, hasEmail, hasPhone }) {
 export default function ContactsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
@@ -240,10 +242,14 @@ export default function ContactsPage() {
       ? '\n\nThis address reported a previous message as SPAM. Re-enabling sending to it '
         + 'puts sender reputation at risk for every other customer.'
       : '';
-    if (!window.confirm(
-      `Lift the ${b.reason} block on ${b.value}?\n\n`
-      + `They will start receiving ${b.channel} again — including marketing, if they are opted in.`
-      + `${extra}\n\nThis is recorded against your name.`)) return;
+    if (!(await confirm({
+      tone: 'danger',
+      title: `Lift the ${b.reason} block on ${b.value}?`,
+      lede: <>They start receiving <b>{b.channel}</b> again, including marketing if they are opted in.</>,
+      points: extra ? [extra.trim().replace(/^\n+/, '')] : null,
+      note: 'This is recorded against your name.',
+      confirmLabel: 'Lift the block',
+    }))) return;
     try {
       await workerFetch('removeSuppression', { id: b.id }, session);
       showToast('Block lifted', 'success');
@@ -295,10 +301,16 @@ export default function ContactsPage() {
   async function optOutEverywhere() {
     if (!detail?.profile?.id) return;
     const name = detail.profile.display_name || 'this contact';
-    if (!window.confirm(
-      `Opt out ${name} from marketing on every channel (email, SMS, WhatsApp — RCS follows SMS)?\n\n`
-      + `This is the account-level withdrawal — equivalent to Meta's "on-or-off-WhatsApp" toggle. `
-      + `Transactional/utility messages (orders, shipping) are unaffected.`)) return;
+    if (!(await confirm({
+      tone: 'warn',
+      title: `Opt ${name} out of all marketing?`,
+      lede: 'The account-level withdrawal, equivalent to Meta\u2019s on-or-off-WhatsApp toggle.',
+      points: [
+        'Applies to email, SMS and WhatsApp (RCS follows SMS)',
+        'Transactional messages (orders, shipping) are unaffected',
+      ],
+      confirmLabel: 'Opt them out',
+    }))) return;
     setOptingOut(true);
     setOptOutResult(null);
     try {
