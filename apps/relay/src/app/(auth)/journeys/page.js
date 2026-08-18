@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch, InfoDot } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Switch, InfoDot } from '@/components/ui.js';
 import { useConfirm, useChoose } from '@/components/confirm.js';
 import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
 import { fmtDateTime, inr } from '@/components/format.js';
@@ -771,21 +771,63 @@ export default function JourneysPage() {
                     <Badge key={st} label={`${humanEnrolmentStatus(st)}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
                   ))}
                 </div>
-                <Pipeline stages={(funnel.steps || []).map((s) => ({ stage: humanStepId(s.step_id), count: s.entered, tone: STEP_TONE[s.step_type] || 'gray' }))} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
-                  {(funnel.steps || []).map((s) => {
+                {/* ONE step list, not two. This rendered the same numbers twice: a row of
+                    horizontal Pipeline bars, then the identical steps again as badges below.
+                    Worse, the bars were scaled to max(entered) — and a funnel only ever
+                    decreases, so the bar length just restated the number printed beside it.
+                    The thing a funnel exists to show, the DROP between consecutive steps,
+                    appeared nowhere. Now each step carries its own retention. */}
+                <div className="jf">
+                  {(funnel.steps || []).map((s, i, arr) => {
                     const parked = Number((funnel.parked || {})[s.step_id] || 0);
                     const branches = Object.entries(s.results || {}).filter(([k]) => k !== 'entered');
+                    const entered = Number(s.entered || 0);
+                    const prev = i === 0 ? null : Number(arr[i - 1].entered || 0);
+                    const lost = prev == null ? 0 : Math.max(prev - entered, 0);
+                    // Two complementary readings, deliberately not the same one twice:
+                    //  · the meter is CUMULATIVE from entry, so the column of bars is the
+                    //    funnel's actual shape at a glance;
+                    //  · the line under it is the STEP-OVER-STEP drop, which is what locates
+                    //    the step that is losing people.
+                    // Making both step-over-step (the first attempt) put every bar at 80-100%
+                    // and the shape disappeared.
+                    const first = Number(arr[0]?.entered || 0);
+                    const kept = prev ? entered / prev : 1;
+                    const cume = first ? entered / first : 1;
+                    const t = STEP_TONE[s.step_type] || 'gray';
                     return (
-                      <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <strong style={{ fontSize: 13 }} title={`step id: ${s.step_id}`}>{humanStepId(s.step_id)}</strong>
-                        <Badge label={humanStepType(s.step_type)} tone={STEP_TONE[s.step_type] || 'gray'} />
-                        <span className="dim" style={{ fontSize: 12 }}>{s.entered} reached this step</span>
-                        {parked > 0 && <Badge label={`${parked} waiting here now`} tone="yellow" dot />}
-                        <span style={{ flex: 1 }} />
-                        {branches.length === 0
-                          ? <span className="dim" style={{ fontSize: 12 }}>—</span>
-                          : branches.map(([k, v]) => <Badge key={k} label={`${humanOutcome(k)}: ${v}`} tone={branchTone(k)} />)}
+                      <div className="jf-step" key={s.step_id}>
+                        <div className="jf-rail">
+                          <span className={`jf-node jf-${t}`} />
+                          {i < arr.length - 1 && <span className="jf-line" />}
+                        </div>
+                        <div className="jf-body">
+                          <div className="jf-head">
+                            <strong className="jf-name" title={`step id: ${s.step_id}`}>{humanStepId(s.step_id)}</strong>
+                            <Badge label={humanStepType(s.step_type)} tone={t} />
+                            <span className="jf-count">{entered.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="jf-meter" role="img"
+                               aria-label={`${Math.round(cume * 100)}% of everyone who entered reached this step`}
+                               title={`${Math.round(cume * 100)}% of everyone who entered`}>
+                            <span className="jf-meter-fill" style={{ width: `${Math.max(cume * 100, 1.5)}%` }} />
+                          </div>
+                          <div className="jf-sub">
+                            {prev == null
+                              ? <span className="jf-entered">entered the journey</span>
+                              : lost > 0
+                                ? <span className="jf-drop">−{lost.toLocaleString('en-IN')} ({Math.round((1 - kept) * 100)}%) did not reach this step</span>
+                                : <span className="jf-hold">everyone from the previous step reached this one</span>}
+                            {parked > 0 && <Badge label={`${parked} waiting here now`} tone="yellow" dot />}
+                          </div>
+                          {branches.length > 0 && (
+                            <div className="jf-branches">
+                              {branches.map(([k, v]) => (
+                                <Badge key={k} label={`${humanOutcome(k)}: ${v}`} tone={branchTone(k)} />
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

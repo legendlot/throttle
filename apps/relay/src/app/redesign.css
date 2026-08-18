@@ -215,14 +215,6 @@
 .empty-hint{font-size:12.5px;color:var(--t4);max-width:52ch}
 
 /* ---- pipeline bars (journey funnel) ---- */
-.pipeline{display:flex;flex-direction:column;gap:9px}
-.pl-row{display:flex;align-items:center;gap:10px}
-.pl-label{width:150px;font-family:var(--font-mono);font-size:11px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pl-track{flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:5px;overflow:hidden}
-.pl-fill{height:100%;border-radius:5px;transform-origin:left}
-.mo .pl-fill{animation:growRight .6s var(--ease) backwards}
-@keyframes growRight{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-.pl-count{width:32px;text-align:right;font-family:var(--font-mono);font-size:12px;font-weight:600}
 
 /* spend-chart kept for shared SpendChart (unused today) */
 .spend-chart{display:flex;align-items:flex-end;gap:10px;height:108px;padding:4px 2px 0}
@@ -444,3 +436,56 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 .cf-choice.is-danger .cf-choice-l{color:var(--red)}
 .cf-choice-h{font-size:11.5px;line-height:1.45;color:var(--t3)}
 .cf-choice-cancel{align-self:flex-end;margin-top:2px}
+
+/* ---- Failure breakdown (campaign Performance → Failed tile) --------------
+   Leads with the only question anyone asks of a five-figure failure count: how much of
+   this can we do something about? */
+.fb-split{display:flex;align-items:stretch;gap:18px;padding:14px 16px;margin-bottom:16px;background:var(--bg-2);border:1px solid var(--row-border);border-radius:var(--r-md)}
+.fb-split>div{display:flex;flex-direction:column;gap:2px}
+.fb-split-sep{width:1px;background:var(--border);flex:0 0 1px}
+.fb-split-n{font-family:var(--font-disp);font-size:23px;font-weight:700;color:var(--t1);line-height:1.1}
+.fb-split-n.fb-dim{color:var(--t4)}
+.fb-split-l{font-size:11.5px;color:var(--t3)}
+
+.fb-rows{display:flex;flex-direction:column;gap:9px}
+.fb-row{padding:12px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface)}
+/* Not actionable: recede. Same information, less pull. */
+.fb-row.is-blocked{background:transparent;border-color:var(--row-border)}
+.fb-row-top{display:flex;align-items:center;gap:10px}
+.fb-row-n{font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--t1);margin-left:auto}
+.fb-row.is-blocked .fb-row-n{color:var(--t3)}
+.fb-row-p{font-family:var(--font-mono);font-size:11px;color:var(--t4);width:34px;text-align:right}
+.fb-row-hint{margin-top:6px;font-size:12px;line-height:1.5;color:var(--t3);max-width:62ch}
+.fb-codes{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.fb-code{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:var(--r-sm);background:var(--bg-2);border:1px solid var(--row-border);font-size:11px}
+.fb-code .mono{font-family:var(--font-mono);color:var(--t2)}
+.fb-code-n{font-family:var(--font-mono);color:var(--t4)}
+
+/* ---- Journey funnel (journeys → Funnel panel) ---------------------------
+   Replaces the Pipeline bars + the duplicate badge list that rendered beneath them.
+   A funnel decreases monotonically, so a bar scaled to the largest step carries no
+   information the printed number doesn't. Each step is measured against the PREVIOUS
+   one instead, which is the comparison that locates where people are being lost. */
+.jf{display:flex;flex-direction:column}
+.jf-step{display:flex;gap:13px}
+.jf-rail{display:flex;flex-direction:column;align-items:center;flex:0 0 11px;padding-top:5px}
+.jf-node{width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--t4);box-shadow:0 0 0 3px var(--surface)}
+.jf-node.jf-blue{background:var(--blue)}.jf-node.jf-green{background:var(--green)}
+.jf-node.jf-yellow{background:var(--accent)}.jf-node.jf-gray{background:var(--t4)}
+.jf-line{flex:1;width:1px;background:var(--border);margin:3px 0}
+.jf-body{flex:1;min-width:0;padding-bottom:18px}
+.jf-step:last-child .jf-body{padding-bottom:0}
+
+.jf-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.jf-name{font-family:var(--font-ui);font-size:13.5px;font-weight:600;color:var(--t1)}
+.jf-count{margin-left:auto;font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--t1)}
+
+/* Retention against the previous step. Short and low-contrast on purpose: it is a
+   supporting cue for the number and the delta, not the headline. */
+.jf-meter{height:3px;border-radius:2px;background:var(--row-border);margin:8px 0 6px;overflow:hidden;max-width:420px}
+.jf-meter-fill{display:block;height:100%;border-radius:2px;background:var(--border-strong)}
+
+.jf-sub{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:11.5px}
+.jf-drop{color:var(--orange)}
+.jf-hold,.jf-entered{color:var(--t4)}
+.jf-branches{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}

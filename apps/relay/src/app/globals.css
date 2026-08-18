@@ -274,15 +274,6 @@ button { font-family: inherit; }
    the baseline instead of stretching the header. */
 .panel-title { display: inline-flex; align-items: center; gap: 8px; }
 
-/* Funnel step labels are now English phrases ("Payment not completed message"), not
-   short engine ids — 150px of monospace truncated most of them to "…messa…", which
-   defeats the point of translating them. Pipeline is used only by the journeys funnel,
-   so this is scoped in practice. UI font because it is prose now, not an identifier. */
-.pl-label {
-  width: 210px; font-family: var(--font-ui, system-ui); font-size: 11.5px;
-  color: var(--t2);
-}
-
 /* Native <select> dropdown popup — see the color-scheme note in :root. Explicit because
    `appearance:none` on select.f-inp makes some engines drop the inherited option colours. */
 select.f-inp option, select.f-inp optgroup {

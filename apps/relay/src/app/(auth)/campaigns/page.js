@@ -355,6 +355,85 @@ function TrackingModal({ tpl, base, session, campaign, onClose, onCreated, showT
   );
 }
 
+/* ---- Failure breakdown ------------------------------------------------
+   The classes come from comms.failure_class (one classifier, every channel). What matters
+   operationally is not the provider's error code but whether anyone can DO anything, so the
+   modal leads with that split and keeps the raw codes underneath for whoever needs them.
+   Ordered by that judgement, not by count: the actionable buckets sit above the wall of
+   Meta declines even when they are two orders of magnitude smaller. */
+const FAIL_CLASS = {
+  our_defect:        { label: 'Our defect',           tone: 'red',    act: true,
+                       hint: 'Relay built a message the provider rejected. Ours to fix.' },
+  registration:      { label: 'Not registered',       tone: 'orange', act: true,
+                       hint: 'DLT or vendor registration: template body, sender or URL whitelisting.' },
+  invalid_recipient: { label: 'Bad number or address', tone: 'orange', act: true,
+                       hint: 'The address does not exist or cannot receive. A data-quality fix.' },
+  transient:         { label: 'Temporary',            tone: 'yellow', act: true,
+                       hint: 'A wobble at the provider. Worth resending.' },
+  meta_declined:     { label: 'Provider declined',    tone: 'gray',   act: false,
+                       hint: 'Meta refused to deliver marketing to this person: per-user quality caps and experiment holdouts. Not a defect, not retryable, and nothing on our side changes it.' },
+  other:             { label: 'Unclassified',         tone: 'gray',   act: true,
+                       hint: 'Not yet mapped to a class. Worth a look if the count is climbing.' },
+};
+const FAIL_ORDER = ['our_defect', 'registration', 'invalid_recipient', 'transient', 'other', 'meta_declined'];
+
+// The headline the Failed tile carries, so the split is legible without opening anything.
+function unrecoverablePct(stats) {
+  const by = stats?.failed_by_class;
+  const total = Number(stats?.failed || 0);
+  if (!by || !total) return 'rejected by the provider';
+  const dead = Number(by.meta_declined?.n || 0);
+  if (!dead) return 'all actionable';
+  const share = Math.round((dead / total) * 100);
+  return share >= 99 ? 'nothing we can act on' : `${share}% not actionable`;
+}
+
+function FailureBreakdown({ stats, onClose }) {
+  const by = stats.failed_by_class || {};
+  const total = Number(stats.failed || 0);
+  const rows = FAIL_ORDER.filter((k) => by[k]?.n).map((k) => ({ key: k, ...FAIL_CLASS[k], ...by[k] }));
+  const actionable = rows.filter((r) => r.act).reduce((a, r) => a + Number(r.n || 0), 0);
+  const blocked = total - actionable;
+  return (
+    <Modal title={`${total.toLocaleString('en-IN')} failed`} onClose={onClose} maxWidth={620}>
+      <div className="fb-split">
+        <div><span className="fb-split-n">{actionable.toLocaleString('en-IN')}</span>
+             <span className="fb-split-l">worth acting on</span></div>
+        <div className="fb-split-sep" />
+        <div><span className="fb-split-n fb-dim">{blocked.toLocaleString('en-IN')}</span>
+             <span className="fb-split-l">outside our control</span></div>
+      </div>
+      <div className="fb-rows">
+        {rows.map((r) => (
+          <div className={`fb-row ${r.act ? '' : 'is-blocked'}`} key={r.key}>
+            <div className="fb-row-top">
+              <Badge label={r.label} tone={r.tone} dot={r.act} />
+              <span className="fb-row-n">{Number(r.n).toLocaleString('en-IN')}</span>
+              <span className="fb-row-p">{Math.round((r.n / total) * 100)}%</span>
+            </div>
+            <div className="fb-row-hint">{r.hint}</div>
+            <div className="fb-codes">
+              {Object.entries(r.reasons || {})
+                .sort((a, b) => b[1] - a[1])
+                .map(([code, n]) => (
+                  <span className="fb-code" key={code}>
+                    <span className="mono">{code}</span>
+                    <span className="fb-code-n">{Number(n).toLocaleString('en-IN')}</span>
+                  </span>
+                ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      {!rows.length && (
+        <div className="dim" style={{ fontSize: 12.5 }}>
+          No per-reason detail was recorded for these failures.
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function emptyCampaign() {
   return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null, utm: null,
     // Audience exclusions (S276) — all three optional, all evaluated live during the fan-out.
@@ -412,6 +491,10 @@ export default function CampaignsPage() {
   // bulk variant-count endpoint (adding one means touching the worker, out of scope here).
   const [experiments, setExperiments] = useState({});
   const [tab, setTab] = useState('all');
+  // Detail sub-tab. null = follow the campaign's status (see detailTab below); a real
+  // value means the operator picked one and we stop overriding it.
+  const [detailTabPick, setDetailTabPick] = useState(null);
+  const [failOpen, setFailOpen] = useState(false);
   const [segments, setSegments] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -938,6 +1021,23 @@ export default function CampaignsPage() {
   );
 
   if (view === 'form') {
+    // Once a campaign is sent there is nothing on the Setup form anyone can change — every
+    // field is disabled — yet that was the first and only thing the page showed, with the
+    // numbers pushed to the very bottom of a ~500-line scroll. Post-send the performance IS
+    // the page, so it becomes the landing tab and Setup drops to a reference view.
+    // "Has it left the building?" — anything past approval, plus anything that has already
+    // frozen an audience. Read off c.status directly; campaignStatus() returns display copy,
+    // not a machine key, so branching on its label would break the day a label is reworded.
+    const isSent = ['sending', 'sent', 'stopped', 'stalled', 'paused', 'building_roster'].includes(c.status)
+      || c.audience_snapshot != null;
+    const DETAIL_TABS = [
+      ...(isSent ? [{ id: 'overview', label: 'Overview' }] : []),
+      { id: 'setup', label: 'Setup' },
+      { id: 'preview', label: 'Preview' },
+    ];
+    const detailTab = DETAIL_TABS.some((t2) => t2.id === detailTabPick)
+      ? detailTabPick
+      : (isSent ? 'overview' : 'setup');
     const chTemplates = templates.filter((t) => t.channel === c.channel);
     const selTpl = templates.find((t) => t.id === c.template_id) || null;
     // c.vars is held as a JSON STRING (that is what save() posts). The editor works in objects,
@@ -963,6 +1063,15 @@ export default function CampaignsPage() {
           </div>
         </div>
 
+        {c.id && (
+          <div className="rtabs" style={{ alignSelf: 'flex-start', marginBottom: 14 }}>
+            {DETAIL_TABS.map((t2) => (
+              <button key={t2.id} className={`rtab ${detailTab === t2.id ? 'on' : ''}`}
+                      onClick={() => setDetailTabPick(t2.id)}>{t2.label}</button>
+            ))}
+          </div>
+        )}
+
         {gateBanner}
 
         {c.reject_reason && c.status === 'draft' && (
@@ -972,6 +1081,7 @@ export default function CampaignsPage() {
           </div>
         )}
 
+        {detailTab === 'setup' && (<>
         <Panel title="Setup" pad>
           <div className="form-grid">
             <div className="ff"><div className="kv-k">Name</div>
@@ -1172,11 +1282,19 @@ export default function CampaignsPage() {
         )}
 
         <VariantSetup campaign={c} session={session} perms={perms} reach={reach} onChanged={refresh} />
+        </>)}
 
         {/* Fill the template's variables as labelled fields and watch the message render, instead
             of hand-writing JSON against token names you have to already know. The raw JSON stays
             available underneath for anything the declared variables don't cover.
             auto-fit collapses the two columns to one below ~700px without a media query. */}
+        {detailTab === 'preview' && (<>
+        {!selTpl && (
+          <Panel title="Preview" pad>
+            <EmptyState icon="file-text" title="No template chosen yet"
+                        hint="Pick one on the Setup tab and the message renders here." />
+          </Panel>
+        )}
         {selTpl && (
           <div className="tpl-split" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', alignItems: 'start' }}>
             <Panel title="Values" pad>
@@ -1250,6 +1368,9 @@ export default function CampaignsPage() {
           </Panel>
         )}
 
+        </>)}
+
+        {detailTab === 'overview' && (<>
         <Panel title="Lifecycle" pad>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {!c.id && <span className="dim" style={{ fontSize: 13 }}>Save the draft to enable submit & send.</span>}
@@ -1362,8 +1483,15 @@ export default function CampaignsPage() {
                   Bounced/Complaints/Skipped each had a tile. A WhatsApp broadcast can fail ~40% at
                   Meta's engagement-quality block (wa_131049) with nothing on this page saying so —
                   the operator saw "Delivered" and no reason for the gap. */}
+              {/* Clickable: 91% of failures on a live WhatsApp broadcast are Meta declining
+                  to deliver marketing to that person, which nobody can act on. Lumping those
+                  in with our own template defects made a five-figure Failed number that read
+                  as either "all broken" or "all noise" depending on who looked. */}
               <Kpi label="Failed" value={stats.failed ?? 0} tone={stats.failed ? 'red' : 'gray'}
-                   sub={stats.sent ? `${pct(stats.failed, stats.sent)}% of sent · rejected by the provider` : 'rejected by the provider'} />
+                   onClick={stats.failed ? () => setFailOpen(true) : undefined}
+                   sub={stats.failed
+                     ? `${pct(stats.failed, stats.sent)}% of sent · ${unrecoverablePct(stats)}`
+                     : 'rejected by the provider'} />
               <Kpi label="Delivered" value={stats.delivered ?? 0} tone="green" sub={`${pct(stats.delivered, stats.sent)}% of sent`} />
               <Kpi label="Opened" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
               {/* Click-through. A campaign-kind (slug) link is ONE shared code sent to everyone, so
@@ -1408,6 +1536,11 @@ export default function CampaignsPage() {
             )}
           </Panel>
         )}
+
+        {failOpen && stats && (
+          <FailureBreakdown stats={stats} onClose={() => setFailOpen(false)} />
+        )}
+        </>)}
       </div>
     );
   }

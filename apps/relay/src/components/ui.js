@@ -165,28 +165,6 @@ export function SpendChart({ data = [] }) {
   );
 }
 
-/* ---- Pipeline -------------------------------------------------------- */
-export function Pipeline({ stages = [] }) {
-  if (!stages.length) return null;
-  const max = Math.max(...stages.map(s => s.count), 1);
-  return (
-    <div className="pipeline">
-      {stages.map((s, i) => {
-        const t = TONES[s.tone] || TONES.gray;
-        return (
-          <div className="pl-row" key={s.stage}>
-            <div className="pl-label">{s.stage}</div>
-            <div className="pl-track">
-              <div className="pl-fill" style={{ width: `${(s.count / max) * 100}%`, background: t.solid, animationDelay: `${i * 60}ms` }} />
-            </div>
-            <div className="pl-count" style={{ color: t.fg }}>{s.count}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 /* ---- Kpi ------------------------------------------------------------- */
 export function Kpi({ label, value, sub, tone = 'gray', series, delta, format, onClick }) {
   const t = TONES[tone] || TONES.gray;
