@@ -33,16 +33,39 @@ export default function EngagementsPage() {
 
   useEffect(() => {
     if (!session) return;
+    let cancelled = false;
     setLoading(true);
-    const params = { type, limit: 100, offset: 0 };
+    const base = { type };
     const tabFilter = TABS.find(t => t.id === tab)?.filter;
-    if (tabFilter) params.stage = tabFilter;
-    else if (stages.length) params.stages = stages.join(',');
-    if (search) params.search = search;
-    ignitionopsGet('getEngagements', params, session)
-      .then(r => setRows(r.engagements || []))
-      .catch(e => toast(e.message || 'Failed to load engagements', 'error'))
-      .finally(() => setLoading(false));
+    if (tabFilter) base.stage = tabFilter;
+    else if (stages.length) base.stages = stages.join(',');
+    if (search) base.search = search;
+
+    // Reann, 2026-08-18: "I can only see around 95 videos, but I should have close to 200."
+    // This asked for ONE page of 100 and stopped, so everything past the 100th row was
+    // invisible with nothing on screen to say so — there were 233. The worker caps a page at
+    // 200 and returns no total, so "a short page is the last page" is the only end signal
+    // available; walk the pages until one comes back short.
+    (async () => {
+      const PAGE = 200;
+      const MAX_PAGES = 25;   // 5,000-row backstop against a runaway loop, not an expected ceiling
+      const all = [];
+      for (let p = 0; p < MAX_PAGES; p++) {
+        const r = await ignitionopsGet('getEngagements', { ...base, limit: PAGE, offset: p * PAGE }, session);
+        if (cancelled) return;
+        const batch = r.engagements || [];
+        all.push(...batch);
+        if (batch.length < PAGE) break;
+      }
+      if (!cancelled) setRows(all);
+    })()
+      // Paging widens the window in which the filters can change mid-flight, so every state
+      // write is guarded — otherwise page 2 of the previous query lands on top of page 1 of
+      // the current one and the list silently mixes two filters.
+      .catch(e => { if (!cancelled) toast(e.message || 'Failed to load engagements', 'error'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
   }, [tab, type, stages, search, session]);
 
   function toggleStage(s) {
