@@ -115,6 +115,72 @@ async function handleStatuses(env, payload) {
       if (typeof u.reason === 'string' && /^wa_13105[23]/.test(u.reason)) {
         await WAM.invalidate(env, u.phone_number_id || null);
       }
+
+      // PERMANENTLY UNDELIVERABLE → suppress, exactly as Resend hard_bounce does for email
+      // (webhooks.js) and the TrustSignal DND callback does for SMS. WhatsApp was the one
+      // channel with no writer here: a one-off manual backfill on 2026-08-07 suppressed 131
+      // numbers and nothing wrote afterwards, so by 2026-08-18 there were 2,199 numbers that
+      // had hard-failed and were still in every audience. Measured cost of the gap: 6,061
+      // sends re-attempted to already-dead numbers, 1,292 numbers hit three times each.
+      //
+      // ⚠️ SCOPED TO THE TWO INVALID-RECIPIENT CODES ONLY. It must NEVER include the
+      // meta_declined family (131049 / 130472 / 131050) — those people ARE valid WhatsApp
+      // users that Meta declined to show THIS marketing message to, per-message. Suppressing
+      // them would permanently blocklist ~62k reachable customers, including for their order
+      // and shipping updates, off a per-message marketing verdict. That is the single most
+      // damaging mistake available in this file.
+      //
+      // ⚠️ Address comes from OUR OWN messages row, never the callback payload — gate.js
+      // matches `value=eq.<address being sent to>` in canonical E.164, and Meta echoes the
+      // recipient without a leading '+'. Same reasoning as the SMS DND path.
+      //
+      // Suppression is the one gate transactional cannot bypass, which is correct here: a
+      // number that is not on WhatsApp cannot receive a utility template either. It is not
+      // irreversible — /admin/contacts can lift a suppression (audited), which is the path if
+      // someone later joins WhatsApp on that number.
+      // ⚠️ THIRD STRIKE, not the first. wa_131026 is NOT reliably permanent — measured over
+      // the full history on 2026-08-18, numbers that hard-failed and LATER delivered fine:
+      //     1 prior failure → 13 of 169 recovered (7.7%)
+      //     2              →  4 of 634 (0.6%)
+      //     3              →  2 of 1292 (0.15%)
+      //     4 or more      →  0 of 235 (zero)
+      // Suppressing on the first failure would therefore have permanently blocked ~8% of
+      // them, including for order and shipping updates, on a signal that resolves itself.
+      // Three is where the curve flattens. It still retires ~1,500 numbers that are costing
+      // a send each per campaign, and historically would have caught 2 people wrongly.
+      if (u.canonical_status === 'failed' && msg.to_address
+          && typeof u.reason === 'string' && /^wa_(131026|131047)/.test(u.reason)) {
+        // comms.wa_hard_fail_count, not a PostgREST filter. The filter would have to be
+        // `or=(reason.like.wa_131026*,reason.like.wa_131047*)` — a shape that fails SILENTLY
+        // if the syntax drifts, returning no rows and so never suppressing. The RPC reuses
+        // comms.failure_class, so it cannot disagree with the taxonomy, and it also reports
+        // whether the number has DELIVERED since its last failure.
+        const q = await A.sbComms('/rest/v1/rpc/wa_hard_fail_count', env, {
+          method: 'POST', body: JSON.stringify({ p_to_address: msg.to_address }),
+        });
+        const stat = q.ok && Array.isArray(q.data) ? q.data[0] : null;
+        // Fail SAFE on an unreadable count: skipping costs one more send, suppressing on a
+        // bad read costs a customer permanently. `recovered` is an absolute veto — a number
+        // we have since reached is reachable, whatever its history says.
+        const priorFails = stat ? Number(stat.fails || 0) : 0;
+        if (priorFails >= 3 && stat && !stat.recovered) {
+          const sup = await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {
+            method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates' },
+            body: JSON.stringify({
+              channel: 'whatsapp', value: String(msg.to_address).replace(/[^\d+]/g, ''),
+              profile_id: msg.profile_id || null,
+              reason: `wa_undeliverable_${u.reason.split(':')[0]}`,
+            }),
+          });
+          // ⚠️ MUST be checked (PATTERN-218). sbComms returns {ok:false} on a non-2xx and
+          // never throws, so an unchecked write fails exactly the way the original gap did:
+          // silently, visible only as a failure count that never goes down.
+          if (!sup.ok) console.log('suppression_write_failed',
+            JSON.stringify({ channel: 'whatsapp', reason: u.reason, detail: sup.data }));
+          else console.log('wa_suppressed_undeliverable',
+            JSON.stringify({ reason: u.reason, prior_failures: priorFails }));
+        }
+      }
     }
     // A JOURNEY send that failed must WAKE its enrolment. Meta answers the send with 200 + a
     // wamid, so #doSend already returned 'sent', G.sendWentOut() passed, and the interpreter

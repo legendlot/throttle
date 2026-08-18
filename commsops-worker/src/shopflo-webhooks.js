@@ -17,7 +17,7 @@
 // new/changed wire shape is discovered, not lost (the doc warns the live shape may differ).
 const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
-const { recordConsent } = require('./consent.js');
+const { applyOptOut } = require('./optout.js');
 const FLO = require('./shopflo.js');
 const CAT = require('./product-category.js');
 
@@ -188,14 +188,33 @@ async function handleShopfloWebhook(env, request) {
     // Shopflo redelivers and the consent is re-attempted (never swallow a withdrawal error).
     //
     // This inner try/catch is the consent-stage boundary (Gate-1 review): once we're here,
-    // ANY failure — a returned {ok:false} OR a THROW from recordConsent's fetch (connection
+    // ANY failure — a returned {ok:false} OR a THROW from applyOptOut's consent write (connection
     // reset/DNS on the transport call) — must surface as the same 500. A throw must NOT be
     // allowed to fall through to the outer mapper-crash catch below, which acks 200 — that
     // would silently lose the opt-out, exactly the compliance failure this codebase forbids.
     let consent = 0;
     try {
       for (const c of FLO.consentRowsFrom(body, envlp.occurred_at)) {
-        const w = await recordConsent(env, { profile_id: r.profile_id, ...c });
+        // applyOptOut, not recordConsent. Both append the consent row; only applyOptOut also
+        // mirrors a STATE CHANGE into comms.events as opted_out/opted_in.
+        //
+        // This path wrote consent and no event, which is why Shopflo opt-outs were invisible
+        // to `campaign_stats.unsubscribes` (it counts the event): 420 consent opt-outs since
+        // 2026-08-01 against 0 matching events, so the 17 Aug emailer reported 2 unsubscribes
+        // in a window that took 69. Every other opt-out path — the unsubscribe link, the
+        // WhatsApp STOP keyword — already went through applyOptOut.
+        //
+        // Safe to route here only because applyOptOut now emits on state CHANGE alone:
+        // Shopflo restates marketing_consent on every checkout, so an unconditional emit
+        // would book a fresh "unsubscribe" each time a long-since-opted-out customer bought
+        // again. `captured_at` is passed through so the checkout's own timestamp wins the
+        // ledger's latest-wins ordering rather than the moment we happened to process it.
+        const w = await applyOptOut(env, {
+          profile_id: r.profile_id,
+          channel: c.channel, purpose: c.purpose, state: c.state,
+          source: c.source, captured_at: c.captured_at,
+          evidence: { shopflo_event: evName, marketing_consent: body?.customer?.marketing_consent },
+        });
         if (!w.ok) throw new Error('consent_write_failed');
         consent++;
       }

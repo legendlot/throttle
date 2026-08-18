@@ -4,7 +4,7 @@
 // semantics live in exactly one place.
 
 const A = require('./auth.js');
-const { recordConsent } = require('./consent.js');
+const { recordConsent, latestConsent } = require('./consent.js');
 
 // EXACT-MATCH, not substring — deliberate. "please stop sending me broken cars" is a
 // support complaint, not a withdrawal; substring-matching "stop" would silently opt that
@@ -60,12 +60,18 @@ function detectOptOut(text) {
 //
 // `evidence` is the DPDP s.6(10) proof burden — the fiduciary must PROVE the withdrawal
 // happened and on what basis. Always pass the raw artefact.
-async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', state, source, evidence, unsubscribe_token }) {
+async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', state, source, evidence, unsubscribe_token, captured_at }) {
   if (!profile_id) return { ok: false, error: 'profile_id_required' };
   if (state !== 'opted_out' && state !== 'opted_in') return { ok: false, error: 'bad_state' };
 
+  // Read the prior state BEFORE writing, or we would read back our own new row and every
+  // write would look like a no-change. Drives the event mirror below only — the consent
+  // row is appended unconditionally either way, because the ledger is the legal record and
+  // must show every assertion, including restatements.
+  const prior = await latestConsent(env, profile_id, channel, purpose);
+
   const c = await recordConsent(env, {
-    profile_id, channel, purpose, state, source, evidence, unsubscribe_token,
+    profile_id, channel, purpose, state, source, evidence, unsubscribe_token, captured_at,
   });
   if (!c.ok) throw new Error(`consent_write_failed:${JSON.stringify(c.data)}`);
 
@@ -73,18 +79,31 @@ async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', st
   // must not re-trigger the whole webhook and duplicate the consent row. sbComms returns
   // {ok:false} on a non-2xx rather than throwing, so check .ok explicitly — a bare
   // .catch() would only ever see network-layer rejections and would drop a 500 silently.
-  const ev = await A.sbComms('/rest/v1/events', env, {
-    method: 'POST',
-    body: JSON.stringify({
-      profile_id,
-      name: state === 'opted_out' ? 'opted_out' : 'opted_in',
-      source: source || null,
-      properties: { channel, purpose },
-    }),
-  }).catch((e) => ({ ok: false, data: String(e?.message || e) }));
-  if (!ev.ok) console.log('optout_event_error', JSON.stringify(ev.data));
+  //
+  // ⚠️ EVENT ON STATE CHANGE ONLY (added 2026-08-18). The consent ledger records every
+  // assertion; the event ledger records every CHANGE, and they are read for different
+  // things. `campaign_stats.unsubscribes` counts opted_out EVENTS, so an event per
+  // restatement inflates it: a source that re-asserts consent on every order (Shopflo does,
+  // on each checkout) would book one "unsubscribe" per subsequent purchase by someone who
+  // opted out months ago. Duplicates were already visible at 113 events across 97 profiles
+  // before Shopflo was routed through here, one profile carrying five.
+  // A failed read (latestConsent collapses "no row" and "read error" into 'unknown') falls
+  // through to emitting: for a mirror, a duplicate is recoverable and a miss is invisible.
+  if (prior !== state) {
+    const ev = await A.sbComms('/rest/v1/events', env, {
+      method: 'POST',
+      body: JSON.stringify({
+        profile_id,
+        name: state === 'opted_out' ? 'opted_out' : 'opted_in',
+        source: source || null,
+        properties: { channel, purpose, prior_state: prior },
+        occurred_at: captured_at || undefined,
+      }),
+    }).catch((e) => ({ ok: false, data: String(e?.message || e) }));
+    if (!ev.ok) console.log('optout_event_error', JSON.stringify(ev.data));
+  }
 
-  return { ok: true, profile_id, channel, purpose, state };
+  return { ok: true, profile_id, channel, purpose, state, changed: prior !== state };
 }
 
 module.exports = { detectOptOut, normalise, applyOptOut, KEYWORDS_OUT, KEYWORDS_IN };
