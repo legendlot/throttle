@@ -30,9 +30,12 @@ const PROFILE = '41bae11c-0078-468c-ba51-118e6c27f2ce';
 const RECENT = new Date(Date.now() - 3600000).toISOString();
 
 // Stub harness: records every Shopify mutation so the assertions can be about EFFECTS.
-function install({ enrolments = [], eventProps = {}, order = null, orderThrows = false }) {
+function install({ enrolments = [], eventProps = {}, order = null, orderThrows = false, newerAsk = false }) {
   const calls = { gql: [], alerts: [] };
   A.sbComms = async (path) => {
+    // The newerAskExists probe also hits /enrolments — route it on its distinctive filter,
+    // else the no_response list would answer it and every multi-enrolment test would skip.
+    if (path.includes('enrolled_at=gt.')) return { ok: true, data: newerAsk ? [{ id: 'en-newer' }] : [] };
     if (path.startsWith('/rest/v1/enrolments')) return { ok: true, data: enrolments };
     if (path.startsWith('/rest/v1/events')) return { ok: true, data: [{ properties: eventProps }] };
     return { ok: true, data: [] };
@@ -54,7 +57,7 @@ const tagsFor = (calls, kind) => calls.gql
   .filter((c) => new RegExp(kind).test(c.query))
   .flatMap((c) => c.variables.tags);
 
-const ENROLMENT = { id: 'en-1', ended_at: RECENT, context: { trigger_event_id: 'ev-1' } };
+const ENROLMENT = { id: 'en-1', journey_id: 'j-c2p', ended_at: RECENT, context: { trigger_event_id: 'ev-1' } };
 const ORDER_BASE = { id: 'gid://shopify/Order/6329360842804', name: '#LOT47217',
                      cancelledAt: null, displayFulfillmentStatus: 'UNFULFILLED' };
 
@@ -159,6 +162,19 @@ t('no recent no-response enrolment → nothing happens', async () => {
   assert.strictEqual(calls.gql.length, 0);
 });
 
+t('the multi-order race: a newer ask of the same journey vetoes the repair', async () => {
+  // Order A went no_response last week; order B's fresh ask is live and the customer tapped
+  // Confirm for B. Without the veto the repair would mark A confirmed off B's tap.
+  const calls = install({
+    enrolments: [ENROLMENT], eventProps: { shopify_order_id: '6329360842804' },
+    order: { ...ORDER_BASE, tags: ['relay-c2p-no-response'] },
+    newerAsk: true,
+  });
+  const r = await C2P.repairLateConfirm(ENV, { profileId: PROFILE, buttonId: 'Confirm COD Order' });
+  assert.strictEqual(r.skipped, 'newer_ask_exists');
+  assert.strictEqual(mutations(calls).length, 0, 'must not touch the old order');
+});
+
 t('an enrolment with no trigger event is skipped, not crashed on', async () => {
   const calls = install({ enrolments: [{ id: 'en-2', ended_at: RECENT, context: {} }] });
   const r = await C2P.repairLateConfirm(ENV, { profileId: PROFILE, buttonId: 'Confirm COD Order' });
@@ -182,7 +198,7 @@ t('a missing profile id is a no-op', async () => {
 
 t('the newest enrolment wins when a profile has several COD orders in the week', async () => {
   // Only the first enrolment resolves to an order carrying the tag; the walk must reach it.
-  const older = { id: 'en-0', ended_at: RECENT, context: { trigger_event_id: 'ev-0' } };
+  const older = { id: 'en-0', journey_id: 'j-c2p', ended_at: RECENT, context: { trigger_event_id: 'ev-0' } };
   const calls = install({
     enrolments: [ENROLMENT, older], eventProps: { shopify_order_id: '6329360842804' },
     order: { ...ORDER_BASE, tags: ['relay-c2p-no-response'] },

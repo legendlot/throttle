@@ -62,9 +62,26 @@ async function recentNoResponseEnrolments(env, profileId) {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString();
   const r = await A.sbComms(
     `/rest/v1/enrolments?profile_id=eq.${A.enc(profileId)}&status=eq.no_response` +
-    `&ended_at=gte.${A.enc(since)}&select=id,context,ended_at` +
+    `&ended_at=gte.${A.enc(since)}&select=id,journey_id,context,ended_at` +
     `&order=ended_at.desc&limit=${MAX_ENROLMENTS}`, env);
   return r.ok && Array.isArray(r.data) ? r.data : [];
+}
+
+// The multi-order race (hostile review, S297 — 37 live instances of the shape at review time):
+// a customer whose order A went no_response LAST week places order B this week and taps Confirm
+// inside B's fresh window. The live journey answers B correctly — but A's enrolment is still in
+// the 7-day lookback and A still carries the tag, so without this guard the repair would mark A
+// confirmed on the strength of a tap that was about B. If ANY newer enrolment of the same
+// journey exists, the tap is presumed to answer the newest ask and the old one is left alone —
+// skipping is the safe side: the worst case of skipping is the pre-fix status quo, while the
+// worst case of repairing is confirming an order the customer never answered for.
+async function newerAskExists(env, profileId, enrolment) {
+  if (!enrolment?.journey_id) return false;   // can't tell → let the tag checks decide
+  const r = await A.sbComms(
+    `/rest/v1/enrolments?profile_id=eq.${A.enc(profileId)}` +
+    `&journey_id=eq.${A.enc(enrolment.journey_id)}` +
+    `&enrolled_at=gt.${A.enc(enrolment.ended_at)}&select=id&limit=1`, env);
+  return r.ok && Array.isArray(r.data) && r.data.length > 0;
 }
 
 // The order this enrolment was about. The interpreter reads the same shopify_order_id off the
@@ -92,6 +109,10 @@ async function repairLateConfirm(env, { profileId, buttonId, providerMessageId }
   if (!enrolments.length) return { ok: true, skipped: 'no_recent_no_response_enrolment' };
 
   for (const en of enrolments) {
+    if (await newerAskExists(env, profileId, en)) {
+      console.log('c2p_late_confirm_skipped_newer_ask', JSON.stringify({ enrolment_id: en.id }));
+      return { ok: true, skipped: 'newer_ask_exists' };
+    }
     const oid = await orderIdForEnrolment(env, en);
     if (!oid) continue;
     const gid = String(oid).startsWith('gid://') ? String(oid) : `gid://shopify/Order/${oid}`;
