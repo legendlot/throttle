@@ -5,7 +5,6 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Check } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, Stamp } from '@/components/ui.js';
-import { fmtDateTime } from '@/components/format.js';
 
 export default function UsersPage() {
   const { session, perms } = useAuth();

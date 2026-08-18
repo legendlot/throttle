@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Switch, InfoDot } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Switch, InfoDot, Stamp } from '@/components/ui.js';
 import { useConfirm, useChoose } from '@/components/confirm.js';
 import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
 import { fmtDateTime, inr } from '@/components/format.js';
@@ -115,6 +115,30 @@ export default function JourneysPage() {
   const canBuild = !perms || perms.campaign_build;
   const canActivate = !perms || perms.send_activate;
 
+  // ONE activation gate, shared by the list Switch and the detail Switch.
+  //
+  // ⚠️ The two callers carry the trigger in DIFFERENT shapes and this is not interchangeable.
+  // A list row holds the stored jsonb on `.trigger`; the edit draft holds the FORM fields
+  // (triggerType / triggerEvent / triggerFilter …) and has no `.trigger` at all, so reading
+  // `row.trigger` off the draft yields undefined and triggerSummary renders '—' — the dialog
+  // whose entire job is to say what you are about to start would have read "enrolling
+  // customers on every — and sending messages". Caught in the S296 hostile review, and it
+  // does not throw, so nothing would have surfaced it. `buildTrigger` is the same converter
+  // save() uses, so the confirm describes exactly what will be persisted.
+  async function confirmActivate(row) {
+    const live = settings?.test_mode === false;
+    const trig = row && row.trigger ? row.trigger : buildTrigger(row || {});
+    return confirm({
+      tone: live ? 'danger' : 'warn',
+      title: `Turn on "${row?.name || 'this journey'}"?`,
+      lede: <>It starts enrolling customers on every <b>{triggerSummary(trig, segments)}</b> and sending messages.</>,
+      warning: live ? <><b>Test mode is OFF.</b> This will enrol and message real customers.</> : null,
+      note: live ? null : 'Internal test gate — sends off the allowlist are blocked.',
+      confirmLabel: 'Turn it on',
+      cancelLabel: 'Leave it off',
+    });
+  }
+
   // the trigger node must survive any change set (Backspace-delete guard)
   const setNodes = useCallback((updater) => setNodesRaw((prev) => {
     const next = typeof updater === 'function' ? updater(prev) : updater;
@@ -186,16 +210,7 @@ export default function JourneysPage() {
     // ceremony. Asymmetric on purpose.
     // Read the live flag, not a hardcoded assumption (review M12) — unknown/unloaded settings
     // (fetch failed or still loading) fall through to the safe, more-alarming copy.
-    const live = settings?.test_mode === false;
-    if (next && !(await confirm({
-      tone: live ? 'danger' : 'warn',
-      title: `Turn on "${r.name}"?`,
-      lede: <>It starts enrolling customers on every <b>{triggerSummary(r.trigger, segments)}</b> and sending messages.</>,
-      warning: live ? <><b>Test mode is OFF.</b> This will enrol and message real customers.</> : null,
-      note: live ? null : 'Internal test gate — sends off the allowlist are blocked.',
-      confirmLabel: 'Turn it on',
-      cancelLabel: 'Leave it off',
-    }))) return;
+    if (next && !(await confirmActivate(r))) return;
     // Turning a journey OFF only stops NEW enrolments. Anyone already mid-journey keeps
     // running on their own workflow instance and will still be messaged — which is how a real
     // customer nearly got a send three minutes after a test journey was switched off (S230),
@@ -375,6 +390,12 @@ export default function JourneysPage() {
   async function setStatus(status) {
     if (!j.id) { showToast('Save the journey first', 'error'); return; }
     if (status === 'active' && !j.active_version) { showToast('Save a version before activating', 'error'); return; }
+    // ⚠️ Turning ON needs the SAME gate the list toggle has. Found in the S296 hostile review:
+    // the list Switch asked before starting a journey, this one did not, so the identical
+    // action was guarded on one surface and one click away on the other — the PATTERN-218
+    // shape (a rule taught to N−1 of N sites). Shared with the list via confirmActivate so
+    // the two cannot drift again.
+    if (status === 'active' && !(await confirmActivate(j))) return;
     // Same ask as the list toggle — see the comment there. Flipping status only stops NEW
     // enrolments; anyone already mid-journey keeps sending unless explicitly stopped.
     let stopInFlight = false;
@@ -946,7 +967,7 @@ export default function JourneysPage() {
                         )}
                       </td>
                       <td className="num mono dim">{rate(o?.read_rate)}</td>
-                      <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{o?.at ? fmtDateTime(o.at) : fmtDateTime(r.updated_at)}</td>
+                      <td className="dim"><Stamp value={o?.at || r.updated_at} /></td>
                     </tr>
                     );
                   })}

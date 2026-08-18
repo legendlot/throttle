@@ -160,8 +160,14 @@ async function handleStatuses(env, payload) {
         });
         const stat = q.ok && Array.isArray(q.data) ? q.data[0] : null;
         // Fail SAFE on an unreadable count: skipping costs one more send, suppressing on a
-        // bad read costs a customer permanently. `recovered` is an absolute veto — a number
-        // we have since reached is reachable, whatever its history says.
+        // bad read costs a customer permanently. `recovered` is an absolute veto and is
+        // deliberately BROADER than "delivered since the last failure" — it also covers any
+        // delivery in the last 30 days. The narrow directional version shipped first and the
+        // S296 hostile review caught it: three numbers that had delivered on 31 Jul / 04 Aug
+        // / 10 Aug were suppressed off failures on 15-17 Aug, because nothing had been sent to
+        // them BETWEEN the failure and the check. A working delivery a week ago means a live
+        // WhatsApp account, and a 131026 in that window is far likelier to be a transient
+        // block than a non-existent user. Those three were lifted.
         const priorFails = stat ? Number(stat.fails || 0) : 0;
         if (priorFails >= 3 && stat && !stat.recovered) {
           const sup = await A.sbComms('/rest/v1/suppressions?on_conflict=channel,value', env, {

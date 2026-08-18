@@ -15,7 +15,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { AlertTriangle } from 'lucide-react';
-import { PageHead, Panel, Badge, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Badge, EmptyState, Stamp } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { STATE_META } from '../campaigns/VariantResults.js';
 
@@ -101,7 +101,7 @@ export default function ExperimentsPage() {
                     return (
                       <tr key={r.campaign_id} className={camp ? 'row-click' : ''}
                         onClick={camp ? () => router.push(`/campaigns?open=${r.campaign_id}`) : undefined}>
-                        <td className="mono dim" style={{ fontSize: 11.5 }}>{fmtDateTime(r.created_at)}</td>
+                        <td className="dim"><Stamp value={r.created_at} /></td>
                         <td>
                           {camp
                             ? <div style={{ fontWeight: 600, color: 'var(--t1)' }}>{camp.name}</div>

@@ -7,7 +7,6 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, MessageSquare, Smartphone, Copy, Images, Archive, ArchiveRestore } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Stamp } from '@/components/ui.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
-import { fmtDateTime } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
 import WaPreview from '@/components/wa-editor/WaPreview.js';

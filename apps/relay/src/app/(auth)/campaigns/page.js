@@ -391,7 +391,22 @@ function unrecoverablePct(stats) {
 function FailureBreakdown({ stats, onClose }) {
   const by = stats.failed_by_class || {};
   const total = Number(stats.failed || 0);
-  const rows = FAIL_ORDER.filter((k) => by[k]?.n).map((k) => ({ key: k, ...FAIL_CLASS[k], ...by[k] }));
+  // ⚠️ Derived from the DATA's keys, not from FAIL_ORDER alone. Filtering by a hardcoded
+  // list means a class added to comms.failure_class but not added here vanishes from the
+  // rows while its count stays in `total` — so it would land silently in "outside our
+  // control" via `total - actionable`, i.e. a NEW ACTIONABLE class would be reported as
+  // unactionable. All six classes are covered today, so the bug is invisible on current
+  // data; this is the S289 "works on today's data is not correct" shape. Unknown classes
+  // now surface as themselves and count as actionable, which is the safe direction: it
+  // over-reports work to do rather than hiding it.
+  const known = FAIL_ORDER.filter((k) => by[k]?.n);
+  const extra = Object.keys(by).filter((k) => by[k]?.n && !FAIL_CLASS[k]);
+  const rows = [...known, ...extra].map((k) => ({
+    key: k,
+    ...(FAIL_CLASS[k] || { label: k, tone: 'gray', act: true,
+                           hint: 'Class not yet described in the UI. Treated as actionable until it is.' }),
+    ...by[k],
+  }));
   const actionable = rows.filter((r) => r.act).reduce((a, r) => a + Number(r.n || 0), 0);
   const blocked = total - actionable;
   return (
@@ -843,9 +858,7 @@ export default function CampaignsPage() {
       tone: live ? 'danger' : 'warn',
       title: resume ? `Resume "${c.name}"?` : `Send "${c.name}" now?`,
       lede: body,
-      points: exclusionLines.length
-        ? exclusionLines.map((l) => l.replace(/^· /, ''))
-        : null,
+      points: exclusionLines.length ? exclusionLines : null,
       warning: live
         ? <><b>Test mode is OFF.</b> This will send to real customers.</>
         : null,
