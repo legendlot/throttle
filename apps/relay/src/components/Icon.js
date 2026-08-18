@@ -20,6 +20,7 @@ import {
   Store, ClipboardList, HandCoins, Boxes, Settings, BookOpen, Shield, Users,
   Building2, Truck, Inbox, BarChart3, ChevronRight, Printer, Pencil, Check,
   CheckCheck, Send, Info, Download, FileSearch, PartyPopper, SearchX, Trash2, Images,
+  Activity, AlertTriangle, GitBranch, Mail,
 } from 'lucide-react';
 
 const MAP = {
