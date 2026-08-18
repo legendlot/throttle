@@ -901,7 +901,7 @@ export default function JourneysPage() {
                       </td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                          <GitBranch size={15} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+                          <GitBranch size={14} style={{ color: 'var(--t4)', flexShrink: 0 }} />
                           <div>
                             <span style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</span>
                             {/* OFF alone hides WHY it's off — draft/archived still matter. */}

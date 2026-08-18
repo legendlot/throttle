@@ -271,7 +271,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="perm-row" style={{ alignItems: 'flex-start' }}>
                   <div className="perm-l">
-                    <span className="perm-lbl">Allowlist {locked ? <Lock size={11} style={{ verticalAlign: 'middle' }} /> : <Unlock size={11} style={{ verticalAlign: 'middle' }} />}</span>
+                    <span className="perm-lbl">Allowlist {locked ? <Lock size={12} style={{ verticalAlign: 'middle' }} /> : <Unlock size={12} style={{ verticalAlign: 'middle' }} />}</span>
                     <span className="perm-key">One per line. Lines starting with “@” match a whole domain; otherwise an exact email. Only these receive sends while locked.</span>
                   </div>
                   <textarea
@@ -438,8 +438,7 @@ export default function SettingsPage() {
 
             {/* Impact preview — the reason this is safe to expose at all. */}
             {impact && (
-              <div className="tw-note" style={{ marginTop: 12,
-                borderLeft: `3px solid ${impact.total > 0 ? 'var(--warn, #f59e0b)' : 'var(--ok, #16a34a)'}` }}>
+              <div className={`impact-box ${impact.total > 0 ? 'is-warn' : 'is-ok'}`}>
                 {impact.loading ? 'Checking what this would release…' : (
                   impact.total > 0 ? (
                     <>

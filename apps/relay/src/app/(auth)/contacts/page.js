@@ -128,7 +128,7 @@ function ChannelStrip({ consent, hasEmail, hasPhone }) {
             style={{ width: 24, height: 24, borderRadius: 6, display: 'inline-flex',
               alignItems: 'center', justifyContent: 'center',
               color: c.fg, background: c.bg, border: `1px solid ${c.bd}` }}>
-            <Icon size={13} />
+            <Icon size={14} />
           </span>
         );
       })}
@@ -412,7 +412,7 @@ export default function ContactsPage() {
             </div>
           ) : (
             <>
-              <div className="tw-note" style={{ margin: '10px 12px', borderLeft: '3px solid var(--red, #f87171)' }}>
+              <div className="note-box is-bad" style={{ margin: '10px 12px' }}>
                 <b>Blocked at the send gate.</b> This outranks consent and stops
                 <b> every</b> message including order and shipping updates.
               </div>

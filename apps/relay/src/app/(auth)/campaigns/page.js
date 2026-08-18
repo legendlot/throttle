@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download, OctagonX } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip, Modal, FieldLabel } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip, Modal, FieldLabel, InfoDot } from '@/components/ui.js';
 import { useConfirm, usePrompt } from '@/components/confirm.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
@@ -22,9 +22,9 @@ const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
 // Channel glyph — WhatsApp and email read very differently at a glance in a mixed list.
 function ChannelIcon({ channel }) {
   const c = String(channel || '').toLowerCase();
-  if (c === 'whatsapp') return <MessageCircle size={13} style={{ color: 'var(--wa, #25D366)' }} aria-label="WhatsApp" />;
-  if (c === 'email') return <Mail size={13} style={{ color: 'var(--em, #a78bfa)' }} aria-label="Email" />;
-  return <Send size={13} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
+  if (c === 'whatsapp') return <MessageCircle size={14} style={{ color: 'var(--wa, #25D366)' }} aria-label="WhatsApp" />;
+  if (c === 'email') return <Mail size={14} style={{ color: 'var(--em, #a78bfa)' }} aria-label="Email" />;
+  return <Send size={14} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
 }
 
 // ChannelChip moved to @/components/ui.js (2026-08-10) — the Analytics campaigns table had no
@@ -1295,8 +1295,14 @@ export default function CampaignsPage() {
                         hint="Pick one on the Setup tab and the message renders here." />
           </Panel>
         )}
+        {/* Values + Preview share .tpl-split with the template editor. This used to
+            override that class inline to an auto-fit 50/50 grid, so the identical preview
+            component rendered as a pinned 400px rail on /templates and as a half-width
+            column here — it visibly changed shape depending on which page you reached it
+            from. The rail is right: a preview is a reference surface you glance at while
+            editing beside it, not an equal half of the screen. */}
         {selTpl && (
-          <div className="tpl-split" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', alignItems: 'start' }}>
+          <div className="tpl-split">
             <Panel title="Values" pad>
               <TemplateValues template={selTpl} values={varsObj}
                 onChange={setVarsObj} disabled={busy || !isDraft || !canBuild} />
@@ -1371,7 +1377,12 @@ export default function CampaignsPage() {
         </>)}
 
         {detailTab === 'overview' && (<>
-        <Panel title="Lifecycle" pad>
+        <Panel title="Lifecycle" pad info={<>
+          <p>Marketing sends above the approval threshold need an approver. Below it, and
+          anything non-marketing, auto-approves on submit.</p>
+          <p>The send gate still applies per recipient regardless:
+          suppression → consent → frequency cap → quiet hours.</p>
+        </>}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {!c.id && <span className="dim" style={{ fontSize: 13 }}>Save the draft to enable submit & send.</span>}
 
@@ -1457,9 +1468,6 @@ export default function CampaignsPage() {
               );
             })()}
           </div>
-          <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-            Marketing sends above the approval threshold need an approver; below it (or non-marketing) auto-approve on submit. The send gate (suppression → consent → frequency cap → quiet hours) still applies per recipient.
-          </div>
         </Panel>
 
         <VariantProgress campaign={c} />
@@ -1493,7 +1501,7 @@ export default function CampaignsPage() {
                      ? `${pct(stats.failed, stats.sent)}% of sent · ${unrecoverablePct(stats)}`
                      : 'rejected by the provider'} />
               <Kpi label="Delivered" value={stats.delivered ?? 0} tone="green" sub={`${pct(stats.delivered, stats.sent)}% of sent`} />
-              <Kpi label="Opened" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
+              <Kpi label="Read" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
               {/* Click-through. A campaign-kind (slug) link is ONE shared code sent to everyone, so
                   it deliberately emits no per-recipient `link_clicked` event and its taps live in
                   comms.link_click instead. Reading `stats.clicked` alone printed a confident 0 on
@@ -1519,19 +1527,31 @@ export default function CampaignsPage() {
             </div>
             {stats.slug_codes?.length > 0 && (
               <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-                <strong>Clicks are measured on the shared campaign link</strong>{' '}
-                <span className="mono">/r/{stats.slug_codes.join(', /r/')}</span>{' '}
-                — one code sent to everyone, so these are taps and unique visitors,{' '}
-                <strong>not</strong> per-recipient attribution: they cannot say <em>who</em> clicked,
-                and cannot feed order attribution. Counted from the first send
-                {stats.slug_window_from ? ` (${fmtDateTime(stats.slug_window_from)})` : ''}, so
-                earlier taps on this permanent link are excluded.
+                Clicks are measured on the shared campaign link{' '}
+                <span className="mono">/r/{stats.slug_codes.join(', /r/')}</span>
+                <InfoDot label="What the shared-link click number can and cannot tell you">
+                  <p>One code is sent to <b>everyone</b>, so these are taps and unique visitors,
+                  <b> not</b> per-recipient attribution. They cannot say <em>who</em> clicked and
+                  cannot feed order attribution.</p>
+                  <p>Counted from the first send
+                  {stats.slug_window_from ? ` (${fmtDateTime(stats.slug_window_from)})` : ''}, so
+                  earlier taps on this permanent link are excluded.</p>
+                </InfoDot>
               </div>
             )}
             {stats.skipped_by_reason && Object.keys(stats.skipped_by_reason).length > 0 && (
-              <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-                <strong>Skipped by reason:</strong>{' '}
-                {Object.entries(stats.skipped_by_reason).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+              <div style={{ marginTop: 14 }}>
+                <div className="kv-k">Skipped by reason</div>
+                <div className="fb-codes" style={{ marginTop: 0 }}>
+                  {Object.entries(stats.skipped_by_reason)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([k, v]) => (
+                      <span className="fb-code" key={k}>
+                        <span className="mono">{k}</span>
+                        <span className="fb-code-n">{Number(v).toLocaleString('en-IN')}</span>
+                      </span>
+                    ))}
+                </div>
               </div>
             )}
           </Panel>
@@ -1555,7 +1575,7 @@ export default function CampaignsPage() {
     const pc = (n, d) => (d ? `${((n / d) * 100).toFixed(1)}%` : '—');
     return [
       { label: 'Sent · all time', value: sent.toLocaleString('en-IN'), delta: `${delivered.toLocaleString('en-IN')} delivered`, lead: true },
-      { label: 'Delivery', value: pc(delivered, sent), delta: 'of sent' },
+      { label: 'Delivery rate', value: pc(delivered, sent), delta: 'of sent' },
       { label: 'Read rate', value: pc(opened, delivered), delta: 'of delivered' },
       { label: 'Attr. revenue', value: rev ? inr(rev) : '—', delta: 'last-touch' },
       { label: 'Blended ROI', value: cost > 0 ? `${(rev / cost).toFixed(1)}×` : '—', delta: 'rev ÷ spend', color: cost > 0 ? 'var(--accent)' : undefined },
@@ -1574,7 +1594,7 @@ export default function CampaignsPage() {
             <Btn onClick={() => {
               const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
               downloadCampaignsCsv(shown, overview, tab, experiments);
-            }} disabled={!shownCount}><Download size={13} /> CSV</Btn>
+            }} disabled={!shownCount}><Download size={14} /> CSV</Btn>
             {canBuild && <Btn kind="primary" onClick={startNew}><Plus size={14} /> New campaign</Btn>}
           </>
         } />

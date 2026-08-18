@@ -36,7 +36,7 @@ function TriggerNode({ data, selected }) {
   return (
     <div style={nodeBox(selected, '#DE2A2A')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#DE2A2A' }}>
-        <Zap size={13} /> Trigger
+        <Zap size={14} /> Trigger
       </div>
       <div className="mono" style={{ marginTop: 4, color: 'var(--text-2, #555)' }}>
         {t.type === 'event' ? `event: ${t.name || '?'}`
@@ -82,7 +82,7 @@ function StepNode({ data, selected }) {
     <div style={nodeBox(selected, meta.color)}>
       <Handle type="target" position={Position.Left} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
-        {Icon && <Icon size={13} style={{ color: meta.color }} />} {meta.label}
+        {Icon && <Icon size={14} style={{ color: meta.color }} />} {meta.label}
       </div>
       <div className="mono" style={{ marginTop: 4, color: 'var(--text-2, #555)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
       {/* OUTCOMES render as their own rows under the body, not as absolutely-positioned

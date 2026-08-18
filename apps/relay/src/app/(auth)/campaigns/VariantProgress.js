@@ -35,7 +35,7 @@ export default function VariantProgress({ campaign }) {
   return (
     <Panel title="Sending — live per-arm progress" pad>
       <div className="tw-note" style={{ marginTop: 0 }}>
-        <Lock size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+        <Lock size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
         <strong>Versions are frozen.</strong>{' '}
         {campaign.status === 'paused'
           ? 'This campaign is paused (WhatsApp blocked a template mid-send). Arms cannot be edited while some recipients have already been sent to and others have not — that would mix two different tests into one result.'

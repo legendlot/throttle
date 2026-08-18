@@ -371,7 +371,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
                   const color = c.pass ? 'var(--green, #34d399)' : (c.blocking ? 'var(--red, #f87171)' : 'var(--accent, #f2cd1a)');
                   return (
                     <div key={c.key} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13 }}>
-                      <Icon size={15} style={{ color, flexShrink: 0, marginTop: 1 }} />
+                      <Icon size={14} style={{ color, flexShrink: 0, marginTop: 1 }} />
                       <div>
                         <span style={{ color: 'var(--t1)' }}>{CHECK_LABELS[c.key] || c.key}</span>
                         {c.blocking && <span className="dim" style={{ fontSize: 10.5, marginLeft: 6 }}>BLOCKING</span>}

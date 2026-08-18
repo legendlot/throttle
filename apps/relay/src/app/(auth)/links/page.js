@@ -35,7 +35,7 @@ function CopyBtn({ text, showToast }) {
     <Btn onClick={async () => {
       try { await navigator.clipboard.writeText(text); showToast('Copied', 'success'); }
       catch { showToast('Could not copy — select and copy manually', 'error'); }
-    }}><Copy size={13} /> Copy</Btn>
+    }}><Copy size={14} /> Copy</Btn>
   );
 }
 
@@ -251,7 +251,7 @@ export default function LinksPage() {
                     <a href={l.target_url} target="_blank" rel="noreferrer"
                        style={{ color: 'var(--t2)', display: 'inline-flex', gap: 4, alignItems: 'center',
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}>
-                      {l.target_url} <ExternalLink size={11} />
+                      {l.target_url} <ExternalLink size={12} />
                     </a>
                   </td>
                   <td style={{ padding: '8px', fontVariantNumeric: 'tabular-nums' }}>{l.click_count ?? 0}</td>
@@ -260,8 +260,8 @@ export default function LinksPage() {
                   </td>
                   <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <CopyBtn text={fullUrl(l.code)} showToast={showToast} />{' '}
-                    <Btn onClick={() => makeQr(l.code)}><QrCode size={13} /> QR</Btn>{' '}
-                    <Btn onClick={() => openDetail(l.code)}><BarChart3 size={13} /> Stats</Btn>{' '}
+                    <Btn onClick={() => makeQr(l.code)}><QrCode size={14} /> QR</Btn>{' '}
+                    <Btn onClick={() => openDetail(l.code)}><BarChart3 size={14} /> Stats</Btn>{' '}
                     {canEdit && (
                       <Btn onClick={() => setEditing({
                         mode: 'edit', code: l.code, target_url: l.target_url,
@@ -269,7 +269,7 @@ export default function LinksPage() {
                         // Carry the stored utm into the draft. Omitting it would make an unrelated
                         // edit (a title tweak) silently POST utm:null and wipe the tagging.
                         utm: l.utm || null,
-                      })}><Pencil size={13} /></Btn>
+                      })}><Pencil size={14} /></Btn>
                     )}
                   </td>
                 </tr>

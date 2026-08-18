@@ -1359,7 +1359,7 @@ export default function TemplatesPage() {
           shapeLoading ? (
             <div className="tw-note" style={{ marginBottom: 12 }}>Checking against Meta…</div>
           ) : shape && shape.checked && !shape.match ? (
-            <div className="tw-note" style={{ marginBottom: 12, borderLeft: '3px solid var(--danger, #dc2626)' }}>
+            <div className="note-box is-bad" style={{ marginBottom: 12 }}>
               <b>This template will not send as it stands.</b>
               <span className="dim"> — local differs from the copy Meta holds
                 {shape.meta_status ? ` (Meta: ${shape.meta_status})` : ''}.</span>
@@ -1375,7 +1375,7 @@ export default function TemplatesPage() {
               </div>
             </div>
           ) : shape && shape.checked && shape.match ? (
-            <div className="tw-note" style={{ marginBottom: 12, borderLeft: '3px solid var(--ok, #16a34a)' }}>
+            <div className="note-box is-good" style={{ marginBottom: 12 }}>
               <b>Matches Meta.</b>
               <span className="dim"> — approved on the pinned account and the shapes agree, so a
                 send will not be rejected for structure.</span>

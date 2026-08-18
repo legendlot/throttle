@@ -240,7 +240,7 @@ function GroupRow({ g, disabled, canEdit, eventDefs, propOpts, eventCounts, onPa
         <span className="dim" style={{ fontSize: 12 }}>{GROUPS.find((x) => x.id === g.group)?.hint}</span>
         <span style={{ flex: 1 }} />
         {canEdit && <Btn kind="ghost" onClick={() => onPatch({ rows: [...g.rows, blankRow('attr')] })} disabled={disabled}>
-          <Plus size={13} /> Condition
+          <Plus size={14} /> Condition
         </Btn>}
         {canEdit && <button className="dr-close" onClick={onRemove} disabled={disabled} title="Remove group"><Trash2 size={14} /></button>}
       </div>
@@ -681,7 +681,7 @@ export default function SegmentsPage() {
                               {canEdit && (
                                 <td style={{ textAlign: 'right' }}>
                                   <Btn onClick={() => removeMember(m)} disabled={memBusy}>
-                                    <Trash2 size={13} /> Remove
+                                    <Trash2 size={14} /> Remove
                                   </Btn>
                                 </td>
                               )}
@@ -861,7 +861,7 @@ export default function SegmentsPage() {
                       <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
                         <td>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-                            <Filter size={15} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+                            <Filter size={14} style={{ color: 'var(--t4)', flexShrink: 0 }} />
                             <span style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.name}</span>
                           </span>
                         </td>

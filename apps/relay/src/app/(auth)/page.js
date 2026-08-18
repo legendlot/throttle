@@ -152,7 +152,7 @@ export default function OverviewPage() {
 
   const kpis = [
     { label: 'Sent · 7d', value: totals.sent.toLocaleString('en-IN'), delta: `${totals.delivered.toLocaleString('en-IN')} delivered`, lead: true },
-    { label: 'Delivery', value: pctS(totals.delivered, totals.sent), delta: 'of sent' },
+    { label: 'Delivery rate', value: pctS(totals.delivered, totals.sent), delta: 'of sent' },
     { label: 'Read rate', value: pctS(totals.opened, totals.delivered), delta: 'of delivered' },
     // Revenue/ROI come from campaign_stats_list + journey_stats_list, which have
     // no window param — they are ALL-TIME figures and must not read as 7d.
@@ -168,7 +168,7 @@ export default function OverviewPage() {
           <p className="page-sub">Everything sending, right now — and how the last 7 days are landing.</p>
         </div>
         {(!perms || perms.campaign_build) && (
-          <Btn kind="primary" onClick={() => router.push('/campaigns?new=1')}><Plus size={15} /> New campaign</Btn>
+          <Btn kind="primary" onClick={() => router.push('/campaigns?new=1')}><Plus size={14} /> New campaign</Btn>
         )}
       </div>
 
@@ -247,7 +247,7 @@ export default function OverviewPage() {
                     const AIcon = a.icon;
                     return (
                       <div key={i} className="ov-act-row">
-                        <AIcon size={17} strokeWidth={1.75} style={{ color: a.color, flexShrink: 0, marginTop: 1 }} />
+                        <AIcon size={16} strokeWidth={1.75} style={{ color: a.color, flexShrink: 0, marginTop: 1 }} />
                         <div className="ov-act-txt">{a.text}</div>
                         <span className="ov-act-time">{a.time}</span>
                       </div>
@@ -304,7 +304,7 @@ export default function OverviewPage() {
                 <tbody>
                   {journeyOv.slice(0, 5).map((j) => (
                     <tr key={j.id} className="row-click" onClick={() => router.push('/journeys')}>
-                      <td><GitBranch size={13} style={{ verticalAlign: -2, marginRight: 8, color: 'var(--t4)' }} />{j.name}</td>
+                      <td><GitBranch size={14} style={{ verticalAlign: -2, marginRight: 8, color: 'var(--t4)' }} />{j.name}</td>
                       <td className="num mono">{j.enrolled_30d ?? '—'}</td>
                       <td className="num mono dim">{j.in_flight ?? '—'}</td>
                       <td className="num mono">{j.attributed_revenue ? inr(j.attributed_revenue) : '—'}</td>

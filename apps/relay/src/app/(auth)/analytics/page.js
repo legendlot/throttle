@@ -331,7 +331,7 @@ export default function AnalyticsPage() {
 
           <Panel title="Journeys" count={journeys.length} pad
             action={journeys.length > 0
-              ? <Btn onClick={() => downloadJourneysCsv(journeys)}><Download size={13} /> Export CSV</Btn>
+              ? <Btn onClick={() => downloadJourneysCsv(journeys)}><Download size={14} /> Export CSV</Btn>
               : <span className="dim" style={{ fontSize: 12 }}>revenue ÷ conversion per journey</span>}>
             {journeys.length === 0
               ? <EmptyState icon="git-branch" title="No journeys yet" hint="Triggered, revenue and conversion per journey appear here once enrolments run." />
@@ -460,7 +460,7 @@ export default function AnalyticsPage() {
 
           <Panel title={`Deliverability · ${presetLabel}`} count={health.length} pad
             action={health.length > 0
-              ? <Btn onClick={() => downloadFailuresCsv(health)}><Download size={13} /> Export failures</Btn>
+              ? <Btn onClick={() => downloadFailuresCsv(health)}><Download size={14} /> Export failures</Btn>
               : null}>
             {health.length === 0
               ? <EmptyState icon="mail" title="No sender activity" hint="Bounce and complaint rates per sender identity appear here once emails are sent." />

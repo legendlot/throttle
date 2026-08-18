@@ -156,14 +156,14 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms, p
     <div className="ck-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ck" role="dialog" aria-label="Command palette">
         <div className="ck-head">
-          <Search size={17} style={{ color: '#6f747b', flexShrink: 0 }} />
+          <Search size={16} style={{ color: '#6f747b', flexShrink: 0 }} />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Search screens, campaigns, journeys, segments, templates…" />
           <kbd className="ck-esc">esc</kbd>
         </div>
         <div className="ck-body" ref={bodyRef}>
           {rows.length === 0 && (
-            <div className="ck-empty"><SearchX size={17} style={{ color: 'var(--t4)' }} /> Nothing matches “{q}”.</div>
+            <div className="ck-empty"><SearchX size={16} style={{ color: 'var(--t4)' }} /> Nothing matches “{q}”.</div>
           )}
           {grouped.map((g) => (
             <div key={g.kind}>
@@ -177,7 +177,7 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms, p
                     className={`ck-row ${idx === sel ? 'sel' : ''}`}
                     onMouseEnter={() => setSel(idx)}
                     onClick={() => go(r)}>
-                    <span className="ck-ico"><RIcon size={15} strokeWidth={1.75} /></span>
+                    <span className="ck-ico"><RIcon size={14} strokeWidth={1.75} /></span>
                     <span className="ck-main">{r.label}</span>
                     <span className="ck-sec">{r.sub}</span>
                   </button>

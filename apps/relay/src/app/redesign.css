@@ -489,3 +489,23 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 .jf-drop{color:var(--orange)}
 .jf-hold,.jf-entered{color:var(--t4)}
 .jf-branches{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+
+/* Watermark impact preview (admin/settings). Was a 3px borderLeft accent — a banned
+   side-stripe, and it keyed off --warn/--ok which this app's :root never defines, so it
+   was silently rendering the hardcoded fallbacks rather than theme colour. Full border,
+   real tokens, and the state is carried by an icon-free tint plus the copy itself. */
+.impact-box{margin-top:12px;padding:10px 13px;border-radius:var(--r-md);font-size:12px;line-height:1.55;color:var(--t2)}
+.impact-box b{color:var(--t1);font-weight:600}
+.impact-box.is-warn{background:var(--accent-soft);border:1px solid var(--accent-bd)}
+.impact-box.is-ok{background:color-mix(in srgb,var(--green) 8%,transparent);border:1px solid color-mix(in srgb,var(--green) 28%,transparent)}
+
+/* Inline status note. Replaces four hand-rolled `borderLeft: 3px solid …` stripes — a
+   banned accent, and every one of them keyed off a var (--danger/--ok/--warn) that this
+   app's :root does not define, so all four were rendering their hardcoded fallback hex
+   instead of theme colour. One class, real tokens, full border. */
+.note-box{padding:10px 13px;border-radius:var(--r-md);font-family:var(--font-ui);font-size:12px;line-height:1.55;color:var(--t2)}
+.note-box b,.note-box strong{color:var(--t1);font-weight:600}
+.note-box.is-bad{background:color-mix(in srgb,var(--red) 8%,transparent);border:1px solid color-mix(in srgb,var(--red) 28%,transparent)}
+.note-box.is-bad b,.note-box.is-bad strong{color:var(--red)}
+.note-box.is-good{background:color-mix(in srgb,var(--green) 8%,transparent);border:1px solid color-mix(in srgb,var(--green) 28%,transparent)}
+.note-box.is-good b,.note-box.is-good strong{color:var(--green)}

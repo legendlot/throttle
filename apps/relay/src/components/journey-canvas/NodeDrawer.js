@@ -120,7 +120,7 @@ export default function NodeDrawer({ nodeId, config, templates, senders, onChang
         <strong style={{ textTransform: 'capitalize' }}>{t} · <span className="mono dim" style={{ fontSize: 11 }}>{nodeId}</span></strong>
         {!disabled && (
           <button className="btn" type="button" onClick={onDelete} style={{ color: '#DE2A2A' }}>
-            <Trash2 size={13} /> Delete node
+            <Trash2 size={14} /> Delete node
           </button>
         )}
       </div>

@@ -203,7 +203,8 @@ export default function LibraryPage() {
       {canEdit && (
         <div className="tw-note" style={{
           marginTop: 0, marginBottom: 12,
-          borderLeft: `3px solid ${dragging ? 'var(--accent, #7c9bff)' : 'transparent'}` }}>
+          border: `1px solid ${dragging ? 'var(--accent)' : 'transparent'}`,
+          borderRadius: 'var(--r-md)', transition: 'border-color .13s var(--ease)' }}>
           {dragging
             ? <b>Drop to upload.</b>
             : <>Drop image files anywhere on this page to upload them — <b>select as many as you
@@ -221,7 +222,7 @@ export default function LibraryPage() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>
           <span style={{ position: 'relative', flex: '1 1 220px', minWidth: 180, maxWidth: 340 }}>
-            <Search size={13} style={{ position: 'absolute', left: 10, top: '50%',
+            <Search size={14} style={{ position: 'absolute', left: 10, top: '50%',
               transform: 'translateY(-50%)', opacity: .5, pointerEvents: 'none' }} />
             <input className="f-inp" value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="Search file name…" style={{ width: '100%', paddingLeft: 30 }} />
@@ -294,12 +295,12 @@ export default function LibraryPage() {
                         : <Badge label="unused" tone="gray" dot />}
                     </span>
                     <span style={{ display: 'flex', gap: 6, marginTop: 'auto', flexWrap: 'wrap' }}>
-                      <Btn onClick={() => download(a)} title="Download this image"><Download size={13} /></Btn>
-                      <Btn onClick={() => copyUrl(a)} title="Copy the public URL"><Link2 size={13} /></Btn>
+                      <Btn onClick={() => download(a)} title="Download this image"><Download size={14} /></Btn>
+                      <Btn onClick={() => copyUrl(a)} title="Copy the public URL"><Link2 size={14} /></Btn>
                       {canEdit && (
                         <Btn onClick={() => startRename(a)} disabled={busy || renaming === a.path}
                           title="Rename — moves the file and repoints every template that uses it">
-                          <Pencil size={13} />
+                          <Pencil size={14} />
                         </Btn>
                       )}
                       {canEdit && (
@@ -307,7 +308,7 @@ export default function LibraryPage() {
                           title={used.length
                             ? `Used by ${used.map((t) => t.name).join(', ')} — remove it there first`
                             : 'Delete this image'}>
-                          <Trash2 size={13} />
+                          <Trash2 size={14} />
                         </Btn>
                       )}
                     </span>

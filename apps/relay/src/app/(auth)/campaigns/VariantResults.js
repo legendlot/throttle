@@ -197,7 +197,7 @@ export default function VariantResults({ campaign, perms, onChanged }) {
 
         {stillPeeking && (
           <div className="tw-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-            <Clock size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+            <Clock size={14} style={{ marginTop: 1, flexShrink: 0 }} />
             <span>
               You planned to read this at <strong>{fmtWhen(plannedReadAt)}</strong>. Checking again
               and again before then can find a &quot;winner&quot; in a coin toss — the numbers below
