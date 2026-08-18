@@ -47,6 +47,7 @@
   /* ── Brand + semantic (bright fg on dark — never deep hues) ── */
   --accent:      #F2CD1A;
   --accent-ink:  #17140a;                  /* text on a yellow fill */
+  --danger-ink:  #2a0b0b;                  /* text on a solid red fill (destructive confirm) */
   --accent-soft: rgba(242, 205, 26, .12);
   --accent-bd:   rgba(242, 205, 26, .34);
   --green:  #34d399;
