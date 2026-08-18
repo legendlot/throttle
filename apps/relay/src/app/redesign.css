@@ -196,6 +196,9 @@
 
 /* channel chip (campaigns table) */
 .chch{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.05em;padding:3px 6px;border-radius:5px;flex-shrink:0}
+/* Glyph variant: square, so every channel badge is the same footprint regardless of
+   which icon sits in it. The two-letter fallback keeps the text metrics above. */
+.chch-ico{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0}
 
 /* ---- tab bar (campaigns list / analytics window) ---- */
 .rtabs{display:flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:3px}
@@ -269,8 +272,10 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 /* ---- WhatsApp preview: a phone, so it reads as a real conversation ---- */
 /* Colours are hardcoded WhatsApp values on purpose — this simulates a third-party surface
    and must look identical in both app themes. Do NOT swap these for theme tokens. */
+/* Capped at a handset width. Uncapped it simply filled its column, so in a wide panel the
+   "phone" read as an ordinary wide card and the whole point of the mock was lost. */
 .wa-pv-phone{border-radius:14px;overflow:hidden;border:1px solid var(--border);
-  box-shadow:0 6px 22px rgba(0,0,0,.28)}
+  box-shadow:0 6px 22px rgba(0,0,0,.28);max-width:340px}
 .wa-pv-top{display:flex;align-items:center;gap:9px;padding:9px 11px;font-size:13.5px;font-weight:600}
 .wa-pv-avatar{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.28);flex:0 0 auto}
 .wa-pv-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -509,3 +514,43 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 .note-box.is-bad b,.note-box.is-bad strong{color:var(--red)}
 .note-box.is-good{background:color-mix(in srgb,var(--green) 8%,transparent);border:1px solid color-mix(in srgb,var(--green) 28%,transparent)}
 .note-box.is-good b,.note-box.is-good strong{color:var(--green)}
+
+/* ---- Stacked numeric cell -------------------------------------------------
+   A count and its rate are two quantities. Sharing one line meant the rate sat at a
+   different x-position on every row (it starts wherever the count above it happens to
+   end), so neither could be scanned as a column. Stacked, both align.
+   Tabular figures so digits do not jitter between rows. */
+.numstack{display:inline-flex;flex-direction:column;align-items:flex-end;line-height:1.25}
+.numstack-v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13px;color:var(--t1)}
+.numstack-s{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--t5);margin-top:1px}
+
+/* ---- Timestamp cell -------------------------------------------------------
+   "17 Aug 2026, 08:50 pm" is one string that wraps mid-value in a narrow column, so the
+   meridiem dropped onto its own line and the row grew. Date and clock are separate facts:
+   the date identifies the row, the time refines it. Stacked, with the time subordinate.
+   `white-space:nowrap` on each half is the actual fix for the wrap. */
+.stamp{display:inline-flex;flex-direction:column;line-height:1.25}
+.stamp-d{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--t2)}
+.stamp-t{font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10.5px;color:var(--t5);margin-top:1px}
+
+/* ---- Input width scale ----------------------------------------------------
+   `.f-inp` is width:100%, so a field expecting "3" rendered as wide as one expecting a
+   URL. That reads as broken rather than roomy: a text box is an affordance, and its width
+   is the app's guess at how much you are meant to type. A 600px box for a 2-digit number
+   guesses wrong, every time.
+
+   The grid CELL keeps its half-width so labels stay on a rhythm; the INPUT inside it is
+   sized to its content. Remaining space is left empty on purpose (Stripe/Linear do this).
+
+   Named steps, not ad-hoc px — the codebase had already drifted to inline width 64 / 84 /
+   96 for the same class of field. Pick the smallest that fits the longest real value.  */
+.f-inp.w-num  { width: 92px }    /* counts, hours, ₹ amounts, percentages: <= 6 digits */
+.f-inp.w-code { width: 150px }   /* country code, DLT id, short codes */
+.f-inp.w-date { width: 216px }   /* datetime-local: the native picker needs this much */
+.f-inp.w-slug { width: 290px }   /* short-link slugs, meta template names */
+.f-inp.w-name { width: 380px }   /* person/campaign names: long enough to read back */
+/* Below the form breakpoint every field goes full-width — a 92px box next to a thumb is
+   worse than a wide one, and the two-column grid has already collapsed by then. */
+@media(max-width:640px){
+  .f-inp.w-num,.f-inp.w-code,.f-inp.w-date,.f-inp.w-slug,.f-inp.w-name{width:100%}
+}

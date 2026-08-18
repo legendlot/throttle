@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw, Mail, MessageCircle, MessageSquare, Smartphone, Copy, Images, Archive, ArchiveRestore } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Stamp } from '@/components/ui.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { fmtDateTime } from '@/components/format.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
@@ -1603,7 +1603,7 @@ export default function TemplatesPage() {
                         : <span className="dim">—</span>}</td>
                       <td className="mono dim" style={{ fontSize: 11.5 }}>
                         {v.content?.waba_id ? wabaLabel(v.content.waba_id) : '—'}</td>
-                      <td className="mono dim">{fmtDateTime(v.created_at)}</td>
+                      <td className="dim"><Stamp value={v.created_at} /></td>
                       <td className="dim" style={{ fontSize: 12 }}>{v.created_by || '—'}</td>
                     </tr>
                   ))}
@@ -1868,7 +1868,7 @@ export default function TemplatesPage() {
                         return <span title={a.title}><Badge label={a.label} tone={a.tone || 'gray'} /></span>;
                       })()}</td>
                       <td className="mono dim">v{r.version}</td>
-                      <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
+                      <td className="dim"><Stamp value={r.updated_at} /></td>
                       <td>
                         <span style={{ display: 'inline-flex', gap: 6 }}>
                           <Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn>

@@ -151,7 +151,7 @@ export default function ConnectorsPage() {
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <label style={{ fontSize: 12, color: 'var(--text-3)' }}>Amount (₹)<br />
-                <input type="number" min="1" value={cfForm.amount}
+                <input type="number" min="1" className="f-inp mono w-num" value={cfForm.amount}
                   onChange={(e) => setCfForm((f) => ({ ...f, amount: e.target.value }))}
                   style={{ width: 90, marginTop: 4 }} /></label>
               <label style={{ fontSize: 12, color: 'var(--text-3)' }}>Customer phone<br />

@@ -1098,7 +1098,7 @@ export default function CampaignsPage() {
               </select>
             </div>
             <div className="ff"><div className="kv-k">Schedule (optional)</div>
-              <input className="f-inp mono" type="datetime-local" value={c.scheduled_at} onChange={(e) => set('scheduled_at', e.target.value)} disabled={busy || !isDraft || !canBuild} />
+              <input className="f-inp mono w-date" type="datetime-local" value={c.scheduled_at} onChange={(e) => set('scheduled_at', e.target.value)} disabled={busy || !isDraft || !canBuild} />
               {/* A scheduled send has nobody at a button. Both pre-send guards (budget, and
                   won't-finish-before-quiet-hours) are overridable with a dialog when a human
                   presses Send — but the scheduler cannot be asked, so without this a large
@@ -1652,10 +1652,16 @@ export default function CampaignsPage() {
                       <td className="mono" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
                         {st.sub ? st.sub : (o?.at ? `${st.label === 'Sent' ? 'Sent ' : ''}${fmtDateTime(o.at)}` : '—')}
                       </td>
+                      {/* Count and rate are two different quantities and were sharing one line,
+                          so the eye could not scan either column cleanly: the percentages sat at
+                          a different x-position on every row because the count above them varies
+                          in width. Stacked, the numbers form a column and the rates form a column. */}
                       <td className="num mono">
                         {o?.delivered != null && o?.sent > 0
-                          ? <><span style={{ color: 'var(--t1)' }}>{Number(o.delivered).toLocaleString('en-IN')}</span>{' '}
-                              <span style={{ color: 'var(--t5)', fontSize: 11 }}>{pct(o.delivered, o.sent)}%</span></>
+                          ? <span className="numstack">
+                              <span className="numstack-v">{Number(o.delivered).toLocaleString('en-IN')}</span>
+                              <span className="numstack-s">{pct(o.delivered, o.sent)}% of sent</span>
+                            </span>
                           : <span style={{ color: 'var(--t5)' }}>—</span>}
                       </td>
                       <td className="num mono dim">{rate(o?.read_rate)}</td>

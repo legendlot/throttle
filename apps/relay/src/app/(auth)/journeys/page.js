@@ -646,7 +646,7 @@ export default function JourneysPage() {
             </div>
             {j.reenrolment === 'cooldown' && (
               <div className="ff"><div className="kv-k">Cooldown (hours)</div>
-                <input className="f-inp mono" type="number" min="1" value={j.reenrolCooldown} onChange={(e) => set('reenrolCooldown', e.target.value)} disabled={busy || !editable} />
+                <input className="f-inp mono w-num" type="number" min="1" value={j.reenrolCooldown} onChange={(e) => set('reenrolCooldown', e.target.value)} disabled={busy || !editable} />
               </div>
             )}
             <div className="ff"><div className="kv-k">Max duration (auto-exit after)</div>

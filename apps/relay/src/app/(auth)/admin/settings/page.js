@@ -424,7 +424,7 @@ export default function SettingsPage() {
 
               <div className="ff">
                 <div className="kv-k">Segment-entry enrolments per tick</div>
-                <input className="f-inp mono" type="number" min={1} max={20000} disabled={saving}
+                <input className="f-inp mono w-num" type="number" min={1} max={20000} disabled={saving}
                   value={form.segment_entry_max_per_tick ?? ''}
                   onChange={(e) => set('segment_entry_max_per_tick', e.target.value)} />
                 <div className="tw-note" style={{ marginTop: 6 }}>

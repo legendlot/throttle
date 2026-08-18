@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Plus, RefreshCw, LogOut, Mail, MessageCircle, MessageSquare, Smartphone } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Stamp } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { useConfirm } from '@/components/confirm.js';
 
@@ -428,7 +428,7 @@ export default function ContactsPage() {
                         <Badge label={b.reason}
                           tone={b.reason === 'gdpr_redact' ? 'red' : b.reason === 'complaint' ? 'red' : 'yellow'} />
                       </td>
-                      <td className="mono dim">{fmtDateTime(b.created_at)}</td>
+                      <td className="dim"><Stamp value={b.created_at} /></td>
                       <td>
                         {b.reason === 'gdpr_redact'
                           ? <span className="dim" style={{ fontSize: 11.5 }}
@@ -498,7 +498,7 @@ export default function ContactsPage() {
                               <td className="dim">{c.purpose}</td>
                               <td><Badge label={c.state} tone={STATE_TONE[c.state] || 'gray'} /></td>
                               <td className="dim">{c.source || '—'}</td>
-                              <td className="mono dim">{fmtDateTime(c.captured_at)}</td>
+                              <td className="dim"><Stamp value={c.captured_at} /></td>
                               <td className="mono dim" title={bd ? `Recorded ${humanGap(bd)} after the customer acted — this source back-dates captured_at` : undefined}>
                                 {bd ? <span style={{ color: 'var(--warn, #f59e0b)' }}>+{humanGap(bd)} later</span> : '—'}
                               </td>
@@ -582,7 +582,7 @@ export default function ContactsPage() {
                   {detail.events.map((ev) => (
                     <tr key={ev.id}>
                       <td><Badge label={ev.name} tone="gray" /></td>
-                      <td className="mono dim">{fmtDateTime(ev.occurred_at)}</td>
+                      <td className="dim"><Stamp value={ev.occurred_at} /></td>
                       <td className="dim">{ev.source || '—'}</td>
                     </tr>
                   ))}
@@ -687,7 +687,7 @@ export default function ContactsPage() {
                         <td><ChannelStrip consent={r.consent} hasEmail={!!r.email} hasPhone={!!r.phone} /></td>
                         <td className="num mono dim">{a.lifetime_orders ?? '—'}</td>
                         <td className="num mono">{a.lifetime_value != null ? Number(a.lifetime_value).toLocaleString('en-IN') : <span className="dim">—</span>}</td>
-                        <td className="mono dim">{fmtDateTime(r.created_at)}</td>
+                        <td className="dim"><Stamp value={r.created_at} /></td>
                       </tr>
                     );
                   })}

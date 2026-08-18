@@ -81,3 +81,19 @@ export function urgencyTone(u) {
   if (v === 'urgent' || v === 'high') return 'yellow';
   return 'gray';
 }
+
+// A timestamp in a table cell, split into its two facts. `fmtDateTime` returns one string
+// ("17 Aug 2026, 08:50 pm") which wraps mid-value in a narrow column — the meridiem drops to
+// a second line and the row grows, which is what the Links table was doing. Date identifies
+// the row, clock refines it, so the clock is subordinate rather than equal.
+// Returns a plain string via `.text` for CSV/title use.
+export function stampParts(raw) {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (isNaN(d)) return null;
+  const opt = { timeZone: 'Asia/Kolkata' };
+  return {
+    date: d.toLocaleDateString('en-IN', { ...opt, day: '2-digit', month: 'short', year: 'numeric' }),
+    time: d.toLocaleTimeString('en-IN', { ...opt, hour: '2-digit', minute: '2-digit', hour12: true }),
+  };
+}

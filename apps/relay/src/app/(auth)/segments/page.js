@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Trash2, Filter, RefreshCw, Eye } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Stamp } from '@/components/ui.js';
 import { fmtDateTime } from '@/components/format.js';
 import { useConfirm } from '@/components/confirm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
@@ -146,7 +146,7 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
       <option value="eq">=</option>
       <option value="lte">≤</option>
     </select>
-    <input className="f-inp mono" style={{ width: 64 }} type="number" min="0" value={r.count} onChange={(e) => onPatch({ count: e.target.value })} disabled={disabled} />
+    <input className="f-inp mono w-num" type="number" min="0" value={r.count} onChange={(e) => onPatch({ count: e.target.value })} disabled={disabled} />
     <span className="dim" style={{ fontSize: 12 }}>within last</span>
     <input className="f-inp mono" style={{ width: 120 }} value={r.within || ''} onChange={(e) => onPatch({ within: e.target.value })} placeholder="120 days (opt)" disabled={disabled} />
     {/* Echo what a bare number will actually be saved as — the old field read
@@ -677,7 +677,7 @@ export default function SegmentsPage() {
                               <td>{m.display_name || <span className="dim">—</span>}</td>
                               <td className="mono">{m.email || <span className="dim">—</span>}</td>
                               <td className="mono">{m.phone || <span className="dim">—</span>}</td>
-                              <td className="dim">{fmtDateTime(m.added_at)}</td>
+                              <td className="dim"><Stamp value={m.added_at} /></td>
                               {canEdit && (
                                 <td style={{ textAlign: 'right' }}>
                                   <Btn onClick={() => removeMember(m)} disabled={memBusy}>
@@ -875,7 +875,7 @@ export default function SegmentsPage() {
                             </td>
                           );
                         })()}
-                        <td className="mono dim">{fmtDateTime(r.updated_at)}</td>
+                        <td className="dim"><Stamp value={r.updated_at} /></td>
                         <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
                       </tr>
                     );

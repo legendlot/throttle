@@ -17,8 +17,15 @@ const WA = {
   text: '#111', meta: '#8696A0', link: '#00A5F4', rule: '#E9EDEF', inputBg: '#fff',
 };
 
-export default function WaPreview({ wa, mapping, buttons, errs, senderLabel }) {
+// `fill` lets a CALLER supply its own text resolver. The templates editor passes nothing and
+// gets `previewText` (Meta's approval examples, which is what an author is checking). The
+// campaign page passes its value-resolver and gets the real merged copy. Same handset frame,
+// same image header, one component — the campaign page used to hand-roll a bare chat bubble on
+// the app's own dark surface, so the WhatsApp preview was neither phone-shaped nor able to show
+// the image header, on the channel that carries an image in nearly every send.
+export default function WaPreview({ wa, mapping, buttons, errs, senderLabel, fill, showStatus = true }) {
   const c = wa || {};
+  const render = (text, comp) => (fill ? fill(text, comp) : previewText(text, mapping, comp));
   // MUST mirror WaEditor's derivation exactly — `header_format` is what's load-bearing on the
   // wire, and an absent one defaults to TEXT when `header` is set (legacy rows). Reading a
   // non-existent `header_type` here would silently drop every image header from the preview.
@@ -26,7 +33,7 @@ export default function WaPreview({ wa, mapping, buttons, errs, senderLabel }) {
     : (c.header_format === 'TEXT' || (!c.header_format && c.header)) ? 'TEXT'
     : 'NONE';
   const btns = Array.isArray(buttons) ? buttons : [];
-  const bodyText = previewText(c.body, mapping, 'body');
+  const bodyText = render(c.body, 'body');
   const nPh = placeholdersIn(c.body || '').length;
 
   return (
@@ -51,12 +58,12 @@ export default function WaPreview({ wa, mapping, buttons, errs, senderLabel }) {
                 : <div className="wa-pv-img wa-pv-img-empty">Image header</div>
             )}
             {headerType === 'TEXT' && c.header && (
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>{previewText(c.header, mapping, 'header')}</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>{render(c.header, 'header')}</div>
             )}
             <div style={{ whiteSpace: 'pre-wrap' }}>
               {bodyText || <span style={{ color: '#999' }}>Body preview…</span>}
             </div>
-            {c.footer && <div style={{ color: WA.meta, fontSize: 12, marginTop: 6 }}>{c.footer}</div>}
+            {c.footer && <div style={{ color: WA.meta, fontSize: 12, marginTop: 6 }}>{render(c.footer, 'footer')}</div>}
             <div className="wa-pv-time" style={{ color: WA.meta }}>12:56</div>
           </div>
 
@@ -82,7 +89,7 @@ export default function WaPreview({ wa, mapping, buttons, errs, senderLabel }) {
         </div>
       </div>
 
-      {errs && errs.length > 0 ? (
+      {showStatus && errs && errs.length > 0 ? (
         <div className="wa-pv-status">
           <div className="kv-k" style={{ marginBottom: 6 }}>
             <Badge label={`${errs.length} to fix before submitting`} tone="yellow" />
@@ -91,7 +98,7 @@ export default function WaPreview({ wa, mapping, buttons, errs, senderLabel }) {
             {errs.map((e, i) => <li key={i} style={{ marginBottom: 3 }}>{e}</li>)}
           </ul>
         </div>
-      ) : (c.body || '').trim() ? (
+      ) : showStatus && (c.body || '').trim() ? (
         <div className="wa-pv-status">
           <Badge label="Ready to submit to Meta" tone="green" />
           <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>

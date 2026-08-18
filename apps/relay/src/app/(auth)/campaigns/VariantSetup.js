@@ -290,7 +290,7 @@ export default function VariantSetup({ campaign, session, perms, reach, onChange
                   />
                 </div>
                 <input
-                  className="f-inp mono" type="number" min="1" style={{ width: 84, flex: '0 0 auto' }}
+                  className="f-inp mono w-num" type="number" min="1" style={{ flex: '0 0 auto' }}
                   value={v.weight ?? ''}
                   onChange={(e) => setLocalWeight(v.id, e.target.value)}
                   onBlur={() => commitWeight(v)}

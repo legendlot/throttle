@@ -3,9 +3,9 @@
 // Ported from the handoff prototype (ui.jsx). Dependency-free React + the CSS
 // classes in redesign.css. Reuses formatters/tones from ./format.
 import { useState, useEffect, useRef } from 'react';
-import { X } from 'lucide-react';   // Modal close affordance (S282) — this module had no icon import before.
+import { X, MessageCircle, Mail, MessageSquare, MessageSquareText } from 'lucide-react';   // Modal close affordance (S282) — this module had no icon import before.
 import { Icon } from './Icon.js';
-import { TONES } from './format.js';
+import { TONES, stampParts } from './format.js';
 
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' &&
@@ -18,16 +18,34 @@ const prefersReducedMotion = () =>
 // table shipped with no channel marker at all — you could not tell a WhatsApp broadcast
 // from an email one (Afshaan, 2026-08-10). One definition, or the colour map drifts.
 // An unknown channel degrades to its first two letters rather than rendering nothing.
+// A GLYPH, not a two-letter abbreviation. WA / EM / SM / RC were text pretending to be an
+// icon: they need reading rather than recognising, and in a mixed list that is the slowest
+// possible way to answer "which channel is this row". Real icons are recognised pre-attentively.
+// The channel colour stays (it is the identity), so this is the same information, read faster.
+// One definition, so the campaigns list and the analytics table cannot drift apart.
+const CHANNEL = {
+  whatsapp: { Ico: MessageCircle,     label: 'WhatsApp', fg: 'var(--wa, #25D366)',   bg: 'rgba(37,211,102,.13)' },
+  email:    { Ico: Mail,              label: 'Email',    fg: 'var(--em, #a78bfa)',   bg: 'rgba(167,139,250,.13)' },
+  sms:      { Ico: MessageSquare,     label: 'SMS',      fg: 'var(--blue)',          bg: 'rgba(124,155,255,.13)' },
+  rcs:      { Ico: MessageSquareText, label: 'RCS',      fg: 'var(--blue)',          bg: 'rgba(124,155,255,.13)' },
+};
 export function ChannelChip({ channel }) {
   const c = String(channel || '').toLowerCase();
-  const map = {
-    whatsapp: { short: 'WA', fg: 'var(--wa, #25D366)', bg: 'rgba(37,211,102,.13)' },
-    email:    { short: 'EM', fg: 'var(--em, #a78bfa)', bg: 'rgba(167,139,250,.13)' },
-    sms:      { short: 'SM', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
-    rcs:      { short: 'RC', fg: 'var(--blue)', bg: 'rgba(124,155,255,.13)' },
-  };
-  const m = map[c] || { short: (c || '?').slice(0, 2).toUpperCase(), fg: 'var(--t3)', bg: 'rgba(255,255,255,.06)' };
-  return <span className="chch" style={{ color: m.fg, background: m.bg }} title={c || 'unknown channel'}>{m.short}</span>;
+  const m = CHANNEL[c];
+  // An unknown channel keeps the old two-letter fallback — better a legible abbreviation
+  // than a wrong glyph asserting a channel we do not actually recognise.
+  if (!m) {
+    return <span className="chch" style={{ color: 'var(--t3)', background: 'rgba(255,255,255,.06)' }}
+                 title={c || 'unknown channel'}>{(c || '?').slice(0, 2).toUpperCase()}</span>;
+  }
+  const { Ico } = m;
+  // title + aria-label, because an icon alone is not a label (colour is never the message).
+  return (
+    <span className="chch chch-ico" style={{ color: m.fg, background: m.bg }}
+          title={m.label} role="img" aria-label={m.label}>
+      <Ico size={14} strokeWidth={2} />
+    </span>
+  );
 }
 
 /* ---- Badge ----------------------------------------------------------- */
@@ -343,5 +361,18 @@ export function Modal({ title, children, onClose, maxWidth = 520 }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/* ---- Stamp ------------------------------------------------------------
+   Date over time, for any timestamp living in a table cell. See stampParts. */
+export function Stamp({ value, empty = '—' }) {
+  const p = stampParts(value);
+  if (!p) return <span className="dim">{empty}</span>;
+  return (
+    <span className="stamp" title={`${p.date}, ${p.time}`}>
+      <span className="stamp-d">{p.date}</span>
+      <span className="stamp-t">{p.time}</span>
+    </span>
   );
 }

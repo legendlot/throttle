@@ -17,7 +17,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Link2, Plus, Search, QrCode, Pencil, ExternalLink, Copy, History, BarChart3, X, Check,
 } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel, InfoDot, Modal } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, FieldLabel, InfoDot, Modal, Stamp } from '@/components/ui.js';
 import { UtmFields } from '@/components/utm.js';
 import { fmtDateTime, fmtDateShort } from '@/components/format.js';
 
@@ -256,7 +256,7 @@ export default function LinksPage() {
                   </td>
                   <td style={{ padding: '8px', fontVariantNumeric: 'tabular-nums' }}>{l.click_count ?? 0}</td>
                   <td style={{ padding: '8px', color: 'var(--t3)' }}>
-                    {l.last_clicked_at ? fmtDateTime(l.last_clicked_at) : '—'}
+                    <Stamp value={l.last_clicked_at} />
                   </td>
                   <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <CopyBtn text={fullUrl(l.code)} showToast={showToast} />{' '}

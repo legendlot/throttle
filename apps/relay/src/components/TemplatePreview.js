@@ -1,5 +1,6 @@
 'use client';
 import MsgPreview from '@/components/MsgPreview.js';
+import WaPreview from '@/components/wa-editor/WaPreview.js';
 // Live template preview + a plain-language value editor.
 //
 // Why this exists: the only way to fill a template's variables was a raw JSON "Constants" box,
@@ -122,32 +123,21 @@ export function TemplatePreview({ template, values }) {
   const mapping = c.mapping || [];
 
   if (template.channel === 'whatsapp') {
-    const header = c.header ? fillWa(c.header, mapping, variables, values) : '';
-    const body = fillWa(c.body, mapping, variables, values);
-    const footer = c.footer ? fillWa(c.footer, mapping, variables, values) : '';
-    const buttons = Array.isArray(c.buttons) ? c.buttons : [];
+    // Delegates to the SAME handset mock the template editor uses. This branch used to
+    // hand-roll a bare chat bubble on the app's own dark surface: not phone-shaped, and it
+    // rendered `header` as text only, so an IMAGE header — which nearly every LOT send
+    // carries — appeared nowhere at all. SMS and RCS already went through a framed preview,
+    // so WhatsApp was the one channel whose preview did not look like a handset.
     return (
       <div>
-        {/* Deliberately shaped like a chat bubble: the question being answered is "how will this
-            look on a handset", and a bare block of text does not answer it. */}
-        <div style={{
-          background: 'var(--surface-2, #f2f5f4)', borderRadius: 10, padding: '10px 12px',
-          maxWidth: 420, borderTopLeftRadius: 2, whiteSpace: 'pre-wrap',
-          fontSize: 13, lineHeight: 1.5, color: 'var(--t1, #111)',
-        }}>
-          {header && <div style={{ fontWeight: 700, marginBottom: 6 }}>{header}</div>}
-          <div>{body}</div>
-          {footer && <div style={{ fontSize: 11, opacity: .6, marginTop: 8 }}>{footer}</div>}
-          {buttons.length > 0 && (
-            <div style={{ marginTop: 10, borderTop: '1px solid rgba(0,0,0,.12)', paddingTop: 6 }}>
-              {buttons.map((b, i) => (
-                <div key={i} style={{ textAlign: 'center', color: '#1a73e8', fontSize: 13, padding: '5px 0' }}>
-                  {b.text || '(button)'}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <WaPreview
+          wa={c}
+          mapping={mapping}
+          buttons={Array.isArray(c.buttons) ? c.buttons : []}
+          senderLabel="Legend of Toys"
+          fill={(text) => fillWa(text, mapping, variables, values)}
+          showStatus={false}
+        />
         <div className="dim" style={{ fontSize: 11, marginTop: 8 }}>
           {c.category || 'UTILITY'} · {c.language || 'en'} · {c.meta_name}
         </div>
