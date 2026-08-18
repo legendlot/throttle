@@ -16,6 +16,7 @@ const { ingest } = require('./ingest.js');
 const { detectOptOut, applyOptOut } = require('./optout.js');
 const AL = require('./alerts.js');
 const WAM = require('./wa-media.js');   // media-id cache invalidation on a 131052/131053
+const C2P = require('./c2p-late-confirm.js');   // S297 — accept a confirm that missed its window
 
 // Canonical message status is monotonic — an out-of-order webhook must never regress it
 // (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
@@ -368,6 +369,29 @@ async function handleInbound(env, payload) {
           reason: rep?.error || 'unknown', provider_message_id: m.provider_message_id || null,
           button_id: m.button_id,
         }));
+      }
+
+      // WS-B.2 (S297) — a confirm tap that arrives AFTER its 60-minute window has closed has
+      // no wait to match and no live enrolment to wake, so everything above this line drops it
+      // on the floor. That is what left 32 orders cancelled (₹75,216) after the customer had
+      // actually confirmed. Repair the order's tags directly; see c2p-late-confirm.js for the
+      // measurements and for why a longer `within` is NOT the fix.
+      //
+      // Runs only on a confirm button, and only ever touches an order still carrying
+      // `relay-c2p-no-response` — an in-window confirm is left completely alone. Best-effort
+      // like every other call in this loop: a throw here would 500 the webhook and make Meta
+      // redeliver the batch, re-running the opt-out and window writes with it.
+      if (rep?.profile_id && C2P.isConfirmButton(m.button_id)) {
+        await C2P.repairLateConfirm(env, {
+          profileId: rep.profile_id,
+          buttonId: m.button_id,
+          providerMessageId: m.provider_message_id || null,
+        }).catch((e) => {
+          console.log('c2p_late_confirm_error', JSON.stringify({
+            reason: String(e?.message || e).slice(0, 160),
+            provider_message_id: m.provider_message_id || null,
+          }));
+        });
       }
     }
   }
