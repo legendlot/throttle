@@ -141,10 +141,18 @@ export default function ReportsPage() {
     lines.push(`Queries (customer-initiated),${t.queries ?? ''}`);
     lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);
     lines.push(`No stored history,${t.no_history ?? ''}`);
+    lines.push(`Assigned in range,${t.assigned ?? ''}`);
+    lines.push(`Handled in range,${t.handled ?? ''}`);
+    lines.push(`Closed in range,${t.closed ?? ''}`);
     lines.push('');
-    lines.push('Agent,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Resolution rate %,Resolve rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
+    // The date basis travels WITH the file, same reason as Basis/Channel above: a CSV
+    // read next week must not leave anyone guessing which day a closure landed on.
+    lines.push('Assigned/Handled/Resolved/Closed counted on,The day the activity happened');
+    lines.push('Queries/Open/Answered/rates/averages counted on,The day the conversation was raised');
+    lines.push('');
+    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Resolution rate %,Resolve rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
     for (const r of agentData.by_agent) {
-      lines.push([r.name, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
+      lines.push([r.name, r.assigned, r.handled, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
         r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
         r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
         r.waiting_agent, r.waiting_customer].map(esc).join(','));
@@ -320,7 +328,10 @@ function AgentsPanel({ data }) {
         <KpiCard label="Answered"       value={t.answered.toLocaleString()}  sub={t.answer_rate != null ? `${t.answer_rate}% of queries` : ''} tone="var(--ok-fg)" size={25} />
         <KpiCard label="Never answered" value={t.unanswered.toLocaleString()} sub="no agent reply"    tone={t.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
         <KpiCard label="Avg first reply" value={dur(t.avg_frt_min)}          sub={data.range?.business_hours ? 'business hours' : '24×7'} tone="var(--warn-fg)" size={25} />
-        <KpiCard label="Resolution rate" value={t.resolution_rate != null ? `${t.resolution_rate}%` : '—'} sub={`${t.closed.toLocaleString()} closed`} tone="var(--info-fg)" size={25} />
+        {/* sub must NOT quote t.closed: since 2026-08-19 that is closure-dated while the
+            rate is cohort-dated, so the two are different populations and pairing them
+            reads as "92% of 5,743". The rate's own denominator is the honest caption. */}
+        <KpiCard label="Resolution rate" value={t.resolution_rate != null ? `${t.resolution_rate}%` : '—'} sub={`of ${t.queries.toLocaleString()} queries raised`} tone="var(--info-fg)" size={25} />
       </div>
 
       {/* The cohort note is not decoration. Only ~a third of threads in a typical
@@ -333,6 +344,21 @@ function AgentsPanel({ data }) {
         <span>= <strong style={{ color: 'var(--t2)' }}>{t.queries.toLocaleString()}</strong> queries</span>
         <span>+ <strong style={{ color: 'var(--t2)' }}>{t.outbound_only.toLocaleString()}</strong> outbound-only (notifications we sent — not queries)</span>
         {t.no_history > 0 && <span>+ <strong style={{ color: 'var(--t2)' }}>{t.no_history.toLocaleString()}</strong> with no stored history</span>}
+      </div>
+
+      {/* Which date each number is counted on. Pruthvi #bugs 2026-08-18: closures used to
+          land on the day the conversation was RAISED, so a backlog-clearing day read empty.
+          Measured 2026-08-19: 76.8% of threads closed in the last 30 days were raised on a
+          different day. Each number now carries its own date; this strip says which, because
+          a mixed-basis table is unreadable without it. */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 'var(--gap)',
+        padding: '8px 12px', fontSize: 11.5, color: 'var(--t3)',
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+        <span style={{ color: 'var(--t2)' }}><strong>Counted on the day it happened:</strong></span>
+        <span><strong style={{ color: 'var(--t2)' }}>Assigned</strong> when handed to the agent</span>
+        <span><strong style={{ color: 'var(--t2)' }}>Handled</strong> when they replied to the customer</span>
+        <span><strong style={{ color: 'var(--t2)' }}>Resolved / Closed</strong> when it was closed</span>
+        <span>Everything else — Queries, Open, Answered, the rates and the averages — counts conversations <strong style={{ color: 'var(--t2)' }}>raised</strong> in this range, so a percentage compares like with like.</span>
       </div>
 
       {/* Resolved vs Closed only exists from 2026-07-28. Everything closed before that
@@ -359,12 +385,22 @@ function AgentsPanel({ data }) {
         </div>
       </Panel>
 
+      <Panel title="Activity in this range">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--gap)', padding: 12 }}>
+          <KpiCard label="Assigned"  value={(t.assigned ?? 0).toLocaleString()} sub="handed to an agent in range"  tone="var(--accent)"  size={22} />
+          <KpiCard label="Handled"   value={(t.handled ?? 0).toLocaleString()}  sub="agent replied to the customer" tone="var(--ok-fg)"   size={22} />
+          <KpiCard label="Closed"    value={(t.closed ?? 0).toLocaleString()}   sub="closed in range, whenever raised" tone="var(--info-fg)" size={22} />
+        </div>
+      </Panel>
+
       <Panel title="By agent">
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: 940, borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', minWidth: 1080, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <Th>Agent</Th>
+                <Th align="right">Assigned</Th>
+                <Th align="right">Handled</Th>
                 <Th align="right">Queries</Th>
                 <Th align="right">Open</Th>
                 <Th align="right">Resolved</Th>
@@ -383,6 +419,8 @@ function AgentsPanel({ data }) {
               {rows.map(r => (
                 <tr key={r.agent_id || r.name} style={{ borderBottom: '1px solid var(--border)' }}>
                   <Td color="var(--t1)">{r.name}</Td>
+                  <Td mono align="right">{(r.assigned ?? 0).toLocaleString()}</Td>
+                  <Td mono align="right" color={(r.handled ?? 0) > 0 ? 'var(--t1)' : 'var(--t3)'}>{(r.handled ?? 0).toLocaleString()}</Td>
                   <Td mono align="right" color="var(--t1)">{r.queries.toLocaleString()}</Td>
                   <Td mono align="right">{r.open.toLocaleString()}</Td>
                   <Td mono align="right" color={r.resolved > 0 ? 'var(--ok-fg)' : 'var(--t3)'}>{(r.resolved ?? 0).toLocaleString()}</Td>
