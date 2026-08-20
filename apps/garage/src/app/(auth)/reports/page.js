@@ -357,13 +357,18 @@ export default function ReportsPage() {
   async function loadProduction() {
     setTabLoading('production', true);
     try {
+      // Same defect as the Line Flush report, same fix: the range was applied client-side
+      // over the newest 50 runs of 425 and ~4 days of issue lines. Server-side now.
+      // `date_from`/`date_to` are this handler's own param names, not from/to.
       const [runs, issues] = await Promise.all([
-        garageFetch('getProductionRuns', {}, session).catch(() => []),
-        garageFetch('getIssues', {}, session).catch(() => []),
+        garageFetch('getProductionRuns',
+          { date_from: fromDate || undefined, date_to: toDate || undefined, limit: 2000 }, session).catch(() => []),
+        garageFetch('getIssues', { from: fromDate || undefined, to: toDate || undefined }, session).catch(() => []),
       ]);
-      const filteredRuns = (Array.isArray(runs) ? runs : []).filter((r) => withinRange(r.run_date || r.created_at, fromDate, toDate));
-      const filteredIssues = (Array.isArray(issues) ? issues : []).filter((r) => withinRange(r.issue_date || r.created_at, fromDate, toDate));
-      setProdData({ runs: filteredRuns, issues: filteredIssues });
+      setProdData({
+        runs:   Array.isArray(runs) ? runs : [],
+        issues: Array.isArray(issues) ? issues : [],
+      });
     } catch (e) {
       showToast(e.message || 'Failed to load production summary', 'error');
       setProdData({ runs: [], issues: [] });
@@ -375,15 +380,23 @@ export default function ReportsPage() {
   async function loadLineFlush() {
     setTabLoading('lineflush', true);
     try {
+      // ⚠️ The date range is applied SERVER-side now. It used to be a client-side
+      // withinRange() over whatever the worker's defaults returned — 50 flushes of 582 and
+      // 2,000 issue lines (~4 days) — so any window older than that read EMPTY or short and
+      // the report quietly understated a real period. The `limit` on flushes is explicit
+      // because the worker still defaults to 50 for flush-verify and Redline's list.
+      const range = { from: fromDate || undefined, to: toDate || undefined };
       const [summary, flushes, issues] = await Promise.all([
-        garageFetch('getReportSummary', { type: 'lineflush', from: fromDate || undefined, to: toDate || undefined }, session).catch(() => ({})),
-        garageFetch('getFlushes', {}, session).catch(() => []),
-        garageFetch('getIssues', {}, session).catch(() => []),
+        garageFetch('getReportSummary', { type: 'lineflush', ...range }, session).catch(() => ({})),
+        garageFetch('getFlushes', { ...range, limit: 2000 }, session).catch(() => []),
+        garageFetch('getIssues', range, session).catch(() => []),
       ]);
+      // No client-side re-filter: the server applied the same bounds to the same columns,
+      // so a second pass would be dead code that could only mask a server-side mistake.
       setFlushRpt({
         summary: summary || {},
-        flushes: (Array.isArray(flushes) ? flushes : []).filter((r) => withinRange(r.flush_date || r.created_at, fromDate, toDate)),
-        issues:  (Array.isArray(issues) ? issues : []).filter((r) => withinRange(r.issue_date, fromDate, toDate)),
+        flushes: Array.isArray(flushes) ? flushes : [],
+        issues:  Array.isArray(issues) ? issues : [],
       });
     } catch (e) {
       showToast(e.message || 'Failed to load line flush summary', 'error');
