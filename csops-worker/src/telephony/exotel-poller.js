@@ -60,11 +60,29 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
     stats.pages++;
     if (!r.calls.length) break;
 
-    for (const raw of r.calls) {
+    // ⚠️ Concurrency is deliberate and asymmetric — do not "tidy" it into one shape.
+    //
+    // The live cron handles ~5 calls a tick, so it runs SEQUENTIALLY: ticket creation
+    // must stay serialised or RULE-PITSTOP-018 coalescing races itself. Two calls from
+    // the same phone processed in parallel would both look for an open ticket, both
+    // find none, and both create one — defeating the whole rule.
+    //
+    // The backfill creates no tickets (createTickets:false) and its upserts are
+    // idempotent on (provider, provider_call_sid), so it fans out safely. Without this
+    // a day of calls is ~500 serialised round-trips — the per-row await that CLAUDE.md
+    // forbids, and enough wall-clock to time out the caller mid-run.
+    const batchSize = createTickets ? 1 : 10;
+
+    for (let i = 0; i < r.calls.length; i += batchSize) {
+      const batch = r.calls.slice(i, i + batchSize);
+      await Promise.all(batch.map(raw => processOne(raw)));
+    }
+
+    async function processOne(raw) {
       stats.seen++;
       try {
         const norm = exotelToNormalised(raw, { departmentId: opts.departmentId || null });
-        if (!norm.provider_call_sid) { stats.failed++; continue; }
+        if (!norm.provider_call_sid) { stats.failed++; return; }
 
         await pipeline.upsertCall(norm, exotelCallPatch(norm));
         stats.written++;
