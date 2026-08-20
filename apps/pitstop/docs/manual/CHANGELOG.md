@@ -3,6 +3,32 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.5.0] - 2026-08-20
+### Added
+- Telephony (/admin/telephony): new chapter. Who can place calls from Pitstop
+  and which phone rings first, how a call actually goes out (we ring the agent,
+  then the customer, on the Legend of Toys number), the mobile fallback when a
+  SIP device is not registered, and why an accurate mobile number matters for
+  attribution.
+
+### Changed
+- Calls: six KPI cards, not five (Abandoned added). New Abandoned and Needs
+  callback tabs. New section explaining the Talk column, conversation time with
+  line-open time after a slash. New "Calling someone back" section for the Call
+  button. Row menu now documents the one-press "Nothing needed - close" with
+  Undo. New callout on why every call gets a ticket, including very short ones.
+- Calls: warning that Missed and Abandoned are different things and that calls
+  before 20 August 2026 do not have the split, so historic Missed counts read
+  far lower than reality. Comparisons across that date will look like a
+  regression when they are a correction.
+- Call Detail: recordings now play. Replaced the old "a recording may lag" note,
+  which described a link that in fact never worked, with how to use the player,
+  the one-hour link expiry, and an honest note that pre-20-August calls cannot be
+  played because the old system only ever sent a file name.
+- MyOperator Accounts: documented the Exotel panel now at the top of that page,
+  the health line and the backfill, plus why the MyOperator accounts are kept
+  rather than deleted.
+
 ## [1.4.0] - 2026-06-27
 ### Changed
 - The Inbox: added email as a fourth channel throughout (lead, channel tabs).

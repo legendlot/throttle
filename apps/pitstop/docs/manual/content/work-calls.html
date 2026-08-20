@@ -4,14 +4,32 @@
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The call log and missed-call follow-up.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; quick row actions.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role agt">Agent</span> <span class="role lead">Lead</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">List every 30s.</div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">List every 30s; new calls appear within about 2 minutes.</div></div>
 </div>
 
 <h2 class="sec">Reading it</h2>
-<p>Five cards show Calls today, Answered, Missed, Answer rate and Awaiting callback. Tabs split the list into All Calls, My Calls, Unassigned, <strong>Open</strong>, <strong>Closed</strong> and Missed. <strong>Open</strong> and <strong>Closed</strong> show calls whose linked ticket is still being worked or has been resolved, so you can tell at a glance which calls still need attention; calls with no ticket yet stay under All, Unassigned or Missed. Each row shows the time, direction (incoming or outgoing), phone, customer, agent, duration, a status badge (<strong style="color:#1a8f43">Answered</strong>, <strong style="color:#c01f1f">Missed</strong>, <strong style="color:#c2570a">Abandoned</strong>, or Live), and the linked ticket if there is one.</p>
+<p>Six cards show Calls today, Answered, Missed, <strong>Abandoned</strong>, Answer rate and Awaiting callback. Tabs split the list into All Calls, My Calls, Unassigned, <strong>Open</strong>, <strong>Closed</strong>, Missed, <strong>Abandoned</strong> and <strong>Needs callback</strong>. Open and Closed show calls whose linked ticket is still being worked or has been resolved; calls with no ticket yet stay under All, Unassigned or Missed. Each row shows the time, direction (incoming or outgoing), phone, customer, agent, talk time, a status badge (<strong style="color:#1a8f43">Answered</strong>, <strong style="color:#c01f1f">Missed</strong>, <strong style="color:#c2570a">Abandoned</strong>, or Live), and the linked ticket if there is one.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Missed and Abandoned are not the same thing</div>
+  <p><strong>Missed</strong> means nobody picked up. <strong>Abandoned</strong> means the caller reached us and hung up before anyone spoke, usually within a few seconds. They need different responses: a missed call is a callback, an abandoned call usually means the person could not get through and may already have tried more than once. Both appear in <strong>Needs callback</strong>.</p>
+  <p>Older calls from before 20 August 2026 do not have this split. The previous phone system reported almost every abandoned call as answered, so historic Missed counts read far lower than reality. If you are comparing this month against last, expect the numbers to look worse; the earlier figure was the wrong one.</p>
+</div>
+
+<h2 class="sec">Talk time</h2>
+<p>The <strong>Talk</strong> column shows how long someone was actually speaking, with the total time the line was open shown smaller after a slash. So <span class="mono">1:45 /2:02</span> means a 2 minute 2 second call with 1 minute 45 seconds of conversation; the rest was ringing and connecting. A dash in the first position means nobody spoke at all.</p>
+
+<h2 class="sec">Calling someone back</h2>
+<p>Every row has a <strong>Call</strong> button. Press it and <em>your</em> phone rings first; answer it and we then dial the customer and join you together. The customer sees the Legend of Toys number, never your personal one, and you never have to type a number.</p>
+<p>If nothing happens, you may not have a calling device set up yet. Ask an admin to add you on Admin then Telephony.</p>
 
 <h2 class="sec">Acting on a call</h2>
-<p>The row menu (&hellip;) offers the right actions for that call: a missed call with no ticket can be <strong>Marked Called Back</strong> or turned into a ticket with <strong>Create Ticket</strong>; a call with a ticket offers <strong>Open Ticket</strong>. Clicking a row opens its ticket if it has one, otherwise the call detail.</p>
+<p>The row menu (&hellip;) offers the right actions for that call. A call whose ticket needs nothing can be closed in one press with <strong>Nothing needed &ndash; close</strong>; an <strong>Undo</strong> button appears next to the ticket number afterwards if you change your mind. A missed or abandoned call with no ticket can be <strong>Marked Called Back</strong> or turned into a ticket with <strong>Create Ticket</strong>; a call with a ticket offers <strong>Open Ticket</strong>. Clicking a row opens its ticket if it has one, otherwise the call detail.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Every call gets a ticket, and that is on purpose</div>
+  <p>Even a very short call opens a ticket. That is deliberate: someone who rang and hung up after four seconds usually could not get through, and the ticket is what a later WhatsApp message or callback attaches to. If it truly needed nothing, close it with one press rather than leaving it sitting in the queue.</p>
+</div>
 <p>The list shows 50 calls at a time. Use the <strong>Prev</strong> and <strong>Next</strong> buttons at the bottom to page back through older calls; the footer shows which rows and page you are on. Changing the tab, filters or search starts you back at the first page.</p>
 
 <div class="callout note">

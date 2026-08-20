@@ -1,4 +1,4 @@
-<p class="lead">MyOperator Accounts registers each calling account that feeds phone calls into Pitstop. Each account gets its own webhook URL and secret; you set it up here, then point MyOperator at the generated URL so its call events flow in.</p>
+<p class="lead">This page has two parts. The <strong>Exotel</strong> panel at the top shows whether the live phone connection is healthy and lets an admin recover calls Pitstop missed. Below it, MyOperator Accounts registers each calling account that feeds phone calls into Pitstop. Each account gets its own webhook URL and secret; you set it up here, then point MyOperator at the generated URL so its call events flow in.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Connecting calling lines to Pitstop.</div></div>
@@ -13,4 +13,13 @@
 <div class="callout danger">
   <div class="c-title">&#9940; Creating the account is only half the setup</div>
   <p>Calls will not authenticate until an engineer sets the matching secret in Cloudflare (the <code>MYOP_WEBHOOK_SECRET_&lt;SLUG&gt;</code> shown on the row), using <code>wrangler secret put</code>. That is a one-time technical step outside Pitstop. Because there is no edit, a typo in the slug, DID or owner can only be fixed by creating a new account.</p>
+</div>
+
+<h2 class="sec">The Exotel panel</h2>
+<p>A green dot and <strong>Connected</strong> means Pitstop is talking to the phone system and shows when the last call arrived. Red means it is not, and the message says why; the fix is usually a credential, so send that message to whoever set the account up rather than retrying.</p>
+<p><strong>Run backfill</strong> recovers calls that never reached Pitstop, for example during an outage. Set the date and time to start from and press it. It writes call records only and creates <strong>no tickets</strong>, so recovering a day of history will not flood the queue or reset anyone's clock. Running it twice is safe: it never duplicates a call.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; MyOperator is kept, not deleted</div>
+  <p>Phone calls moved from MyOperator to Exotel on 19 August 2026. The MyOperator accounts below are left in place on purpose, so that if any number turns out not to have moved, its calls still reach Pitstop. Leave them active.</p>
 </div>

@@ -1,0 +1,39 @@
+<p class="lead">Telephony decides who can place calls from inside Pitstop, and which phone rings when they do. Someone who is not listed here cannot use the Call button anywhere in the app.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Letting people call customers from Pitstop.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: set up and edit.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">When</div><div class="g-val">Someone joins, leaves or changes number.</div></div>
+</div>
+
+<h2 class="sec">Reading it</h2>
+<p>The line at the top tells you how many people can currently place calls, and warns you in orange if any cannot. The table lists everyone who might need to make calls: agents, leads and admins, plus anyone already set up. People who cannot call are listed <strong>first</strong>, because they are the ones needing attention.</p>
+<p>Each row shows the person, their role, their SIP device, their mobile number, and which of the two rings first.</p>
+
+<h2 class="sec">Setting someone up</h2>
+<div class="steps">
+  <p><strong>Find the person</strong> in the list. If they have never been set up, their Rings column reads <em>cannot call</em> and the button says <strong>Set up</strong>.</p>
+  <p><strong>Press Set up</strong> (or <strong>Edit</strong> for someone already configured). The row becomes editable.</p>
+  <p><strong>Fill in what they have.</strong> The mobile number is enough on its own. The SIP device is optional and only exists for people set up for browser calling; you can find it in Exotel under Co-workers and Groups.</p>
+  <p><strong>Choose what rings first:</strong> <strong>Mobile</strong> calls their phone, <strong>Softphone</strong> calls their computer.</p>
+  <p><strong>Press Save.</strong> They can use the Call button straight away; there is nothing to restart.</p>
+</div>
+
+<h2 class="sec">How a call actually goes out</h2>
+<p>When someone presses Call, we ring <em>them</em> first. Once they answer, we dial the customer and join the two together. The customer sees the Legend of Toys number, so nobody's personal number is ever exposed, and the call is recorded like any other.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; A missing SIP device is not a problem</div>
+  <p>If someone is set to Softphone but their computer is not registered, the call falls back to their mobile rather than failing. So a person with a mobile number always gets through.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Enter the mobile number carefully</div>
+  <p>The number here is how we recognise that person on a call. If it is wrong, their calls will show as unassigned in the call log and their name will not appear on their own tickets. Enter it the way you would dial it; the page tidies up the format for you.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Two people cannot share one SIP device</div>
+  <p>Each SIP device belongs to exactly one person. If you try to give the same one to a second person, the save is refused. Copy the device id from Exotel for the right person rather than reusing one that looks similar.</p>
+</div>
