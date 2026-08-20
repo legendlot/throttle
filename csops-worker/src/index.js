@@ -122,8 +122,20 @@ function toE164(raw) {
   // Safe for international numbers too: a country code never begins with 0, so a
   // leading zero is always a trunk prefix (0…) or an international prefix (00…).
   // `00974…` → `+974…` is correct.
-  d = d.replace(/^0+/, '');
-  if (!d) return null;
+  // ⚠️ Strip ONLY when the result is a plausible phone number (E.164 is max 15 digits).
+  //
+  // This function is also handed things that are NOT phone numbers: the Chatwoot web
+  // widget yields 20-22 digit visitor identifiers, and `findOrCreateWaThread` /
+  // `chatwootThread` fall back to matching a thread on this value. Stripping leading
+  // zeros unconditionally would change the stored shape of those identifiers
+  // (`+0099622…` -> `+99622…`) and a returning web visitor could miss their existing
+  // thread. Both forms are meaningless as phone numbers; the point is that the value
+  // stays BYTE-IDENTICAL to what is already in cs_wa_threads for anything that was
+  // never a phone number in the first place.
+  const stripped = d.replace(/^0+/, '');
+  // All zeros is not a number at all — return null rather than a bare "+0".
+  if (!stripped) return null;
+  if (stripped.length <= 15) d = stripped;
   if (d.length === 10) return `+91${d}`;
   if (d.length === 12 && d.startsWith('91')) return `+${d}`;
   return `+${d}`;
