@@ -94,6 +94,12 @@ export default function StoreHistoryPage() {
   // Issues state
   const [issueRows, setIssueRows] = useState([]);
   const [issueFilters, setIssueFilters] = useState({ product: '', type: '', from: '', to: '' });
+  // Search is held separately from the dropdown filters because it is DEBOUNCED — every
+  // keystroke would otherwise be a round trip to a 45k-row table.
+  const [issueSearch, setIssueSearch] = useState('');
+  const [issueSearchQ, setIssueSearchQ] = useState('');
+  const [flushSearch, setFlushSearch] = useState('');
+  const [flushSearchQ, setFlushSearchQ] = useState('');
   const [issuesLoading, setIssuesLoading] = useState(true);
   const [detailIssueNo, setDetailIssueNo] = useState(null);
 
@@ -110,11 +116,21 @@ export default function StoreHistoryPage() {
   const [flushDetail, setFlushDetail] = useState(null);
   const [flushDetailLoading, setFlushDetailLoading] = useState(false);
 
+  // ⚠️ These filters USED to run client-side over whatever the worker's flat row cap had
+  // returned — in practice the last 4 days. Filtering to an older date therefore emptied the
+  // table instead of reaching back, which is what "unable to see old entries" meant. They are
+  // server-side now; the client-side pass below is gone deliberately, not misplaced.
   const loadIssues = useCallback(async () => {
     if (!session) return;
     setIssuesLoading(true);
     try {
-      const data = await garageFetch('getIssues', {}, session);
+      const p = {};
+      if (issueFilters.product) p.product = issueFilters.product;
+      if (issueFilters.type)    p.issue_type = issueFilters.type;
+      if (issueFilters.from)    p.from = issueFilters.from;
+      if (issueFilters.to)      p.to = issueFilters.to;
+      if (issueSearchQ)         p.q = issueSearchQ;
+      const data = await garageFetch('getIssues', p, session);
       setIssueRows(Array.isArray(data) ? data : []);
     } catch (e) {
       showToast(e.message || 'Failed to load issues', 'error');
@@ -122,13 +138,18 @@ export default function StoreHistoryPage() {
     } finally {
       setIssuesLoading(false);
     }
-  }, [session, showToast]);
+  }, [session, showToast, issueFilters, issueSearchQ]);
 
   const loadFlushes = useCallback(async () => {
     if (!session) return;
     setFlushesLoading(true);
     try {
-      const data = await garageFetch('getFlushes', flushStatus ? { status: flushStatus } : {}, session);
+      // Explicit limit: the worker still defaults to 50 for the pending-queue and report
+      // callers, so the history screen has to say it wants history.
+      const p = { limit: 2000 };
+      if (flushStatus)  p.status = flushStatus;
+      if (flushSearchQ) p.q = flushSearchQ;
+      const data = await garageFetch('getFlushes', p, session);
       setFlushRows(Array.isArray(data) ? data : []);
     } catch (e) {
       showToast(e.message || 'Failed to load flushes', 'error');
@@ -136,7 +157,18 @@ export default function StoreHistoryPage() {
     } finally {
       setFlushesLoading(false);
     }
-  }, [session, flushStatus, showToast]);
+  }, [session, flushStatus, flushSearchQ, showToast]);
+
+  // 350ms debounce — the search now hits a 45k-row table, so a request per keystroke
+  // would be both slow and pointless.
+  useEffect(() => {
+    const t = setTimeout(() => setIssueSearchQ(issueSearch.trim()), 350);
+    return () => clearTimeout(t);
+  }, [issueSearch]);
+  useEffect(() => {
+    const t = setTimeout(() => setFlushSearchQ(flushSearch.trim()), 350);
+    return () => clearTimeout(t);
+  }, [flushSearch]);
 
   useEffect(() => { loadIssues(); }, [loadIssues]);
   useEffect(() => {
@@ -159,16 +191,9 @@ export default function StoreHistoryPage() {
     return () => { cancelled = true; };
   }, [detailFlushId, session, showToast]);
 
-  const filteredIssues = useMemo(() => {
-    const filtered = issueRows.filter((r) => {
-      if (issueFilters.product && r.product !== issueFilters.product) return false;
-      if (issueFilters.type && (r.issue_type || '') !== issueFilters.type) return false;
-      if (issueFilters.from && (r.issue_date || '') < issueFilters.from) return false;
-      if (issueFilters.to && (r.issue_date || '') > issueFilters.to) return false;
-      return true;
-    });
-    return aggregateIssues(filtered);
-  }, [issueRows, issueFilters]);
+  // The worker has already applied product/type/date/search, so this only groups the
+  // line rows into issues. Re-filtering here would be dead code that hides a server bug.
+  const filteredIssues = useMemo(() => aggregateIssues(issueRows), [issueRows]);
 
   const detailRows = useMemo(() => {
     if (!detailIssueNo) return [];
@@ -177,6 +202,7 @@ export default function StoreHistoryPage() {
 
   function clearFilters() {
     setIssueFilters({ product: '', type: '', from: '', to: '' });
+    setIssueSearch('');
   }
 
   return (
@@ -198,8 +224,24 @@ export default function StoreHistoryPage() {
       {activeTab === 'issues' && (
         <div style={panelStyle}>
           <div style={panelHeaderStyle}>
-            <span>Issues {filteredIssues.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({filteredIssues.length})</span>}</span>
+            <span>
+              Issues {filteredIssues.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({filteredIssues.length})</span>}
+              {/* The worker stops at 25,000 line rows to keep the payload sane. Landing
+                  exactly on it means there is more history behind the filter — say so,
+                  rather than presenting a clipped list as the whole answer. */}
+              {issueRows.length >= 25000 && (
+                <span style={{ color: 'var(--warn, #e8b93c)', marginLeft: 8, fontSize: 11, fontFamily: 'var(--mono)' }}>
+                  showing the newest 25,000 lines — narrow the dates to see further back
+                </span>
+              )}
+            </span>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                value={issueSearch}
+                onChange={(e) => setIssueSearch(e.target.value)}
+                placeholder="Search issue no, part, WO…"
+                style={{ ...inputStyle, minWidth: 200 }}
+              />
               <div style={{ minWidth: 180 }}>
                 <Combobox
                   value={issueFilters.product}
@@ -283,7 +325,13 @@ export default function StoreHistoryPage() {
         <div style={panelStyle}>
           <div style={panelHeaderStyle}>
             <span>Line Flushes {flushRows.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({flushRows.length})</span>}</span>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                value={flushSearch}
+                onChange={(e) => setFlushSearch(e.target.value)}
+                placeholder="Search flush ID, WO, run…"
+                style={{ ...inputStyle, minWidth: 200 }}
+              />
               <select
                 value={flushStatus}
                 onChange={(e) => setFlushStatus(e.target.value)}
