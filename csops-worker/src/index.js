@@ -2261,9 +2261,15 @@ async function setThreadTags(body, auth, env) {
 // Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
 // Active cars + drones from public.product_master; the UI derives product→model→
 // colour→sku from the flat rows.
+// The ticket form's product cascade. `puzzle` was NOT excluded on purpose — this filter
+// predates L.O.T Build existing at all, so all 8 Build products (28 variants) were invisible
+// and CS could not raise a ticket against one (Pruthvi 2026-08-20). Remotes stay out: a
+// ticket is raised against the primary unit, same principle as RULE-009.
+// `category` is selected so the caller can group/filter by it — the byte-exact three-value
+// set of RULE-TAXONOMY-001, not a derived label.
 async function getProductCatalog(_params, _auth, env) {
   const r = await sbPublic(
-    `/rest/v1/product_master?is_active=eq.true&component_type=in.(car,drone)&select=product,model,color,sku&order=product.asc,model.asc,color.asc`,
+    `/rest/v1/product_master?is_active=eq.true&component_type=in.(car,drone,puzzle)&select=product,model,color,sku,category&order=product.asc,model.asc,color.asc`,
     env,
   );
   if (!r.ok) return err('failed to load product catalog', 500);
