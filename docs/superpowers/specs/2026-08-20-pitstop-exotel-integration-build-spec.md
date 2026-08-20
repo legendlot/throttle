@@ -6,6 +6,11 @@
 >
 > **Date:** 2026-08-20 (S301) · **System:** Pitstop · **Worker:** `csops` · **Schema:** `store`
 >
+> **Revised 2026-08-20 after Afshaan's review** — §5 reversed (ticket for **every** call; the
+> suppression policy is rejected and recorded as wrong) and **§5A added** (the agent has the customer,
+> their last order, its delivery state, tracking and their call history on screen *before they say
+> hello*). §4.1 amended accordingly: the poller guarantees completeness, webhooks give speed.
+>
 > **Supersedes** [`2026-08-19-pitstop-exotel-migration-design.md`](./2026-08-19-pitstop-exotel-migration-design.md)
 > on §3.4, §4, §5.2, §8 and §9. Everything that document says about the API surface, the normalised
 > shape, attribution and the softphone still stands and is not restated here. **Read this document
@@ -93,20 +98,22 @@ Unchanged in shape from the S299 design §4 — three layers, one vendor-neutral
 ```
         EXOTEL   ExoPhone 08044656833 · switch · flow 108159 · recording store
            │
-           ├─ (a) GET /Calls          reconcile poller   ← SOURCE OF TRUTH, no flow edit
-           ├─ (b) agent-passthru-url  live agent + pop   ← needs a flow setting
-           ├─ (c) post-conversation Passthru             ← needs a flow applet
-           └─ (d) StatusCallback      outbound only      ← no flow edit
+           ├─ (a) GET /Calls          COMPLETENESS + settlement   ← no flow edit
+           ├─ (b) agent-passthru-url  live agent → screen-pop      ← one flow field
+           ├─ (c) post-conversation Passthru                       ← one flow applet
+           ├─ (d) StatusCallback      outbound only                ← no flow edit
+           └─ (e) start-of-flow Passthru  WARMS THE CONTEXT CACHE  ← one flow applet
            │
         csops worker · src/telephony/
            exotel-client.js     Basic-auth client, 200/min budget, backoff
            exotel-poller.js     (a) cron reconcile + backfill
-           exotel-webhooks.js   (b)(c)(d) normalise → pipeline
-           call-pipeline.js     VENDOR-NEUTRAL: upsert · ticket policy · coalesce · attribution
+           exotel-webhooks.js   (b)(c)(d)(e) normalise → pipeline
+           call-context.js      (e) assemble + cache the agent's context card  [§5A]
+           call-pipeline.js     VENDOR-NEUTRAL: upsert · ticket · coalesce · attribution
            │
         store.cs_calls · cs_tickets · cs_telephony_agents
            │
-        Pitstop  /calls · /calls/detail · /admin/telephony · <CallBar>
+        Pitstop  /calls · /calls/detail · /admin/telephony · <CallPop> · <CallBar>
 ```
 
 **`call-pipeline.js` is vendor-neutral and is the whole point.** MyOperator and Exotel both normalise
@@ -118,32 +125,44 @@ this seam — not owned infrastructure — is the answer to "what if we leave Ex
 
 ## 4. Layer 1 — data plane
 
-### 4.1 ⭐ The structural change: poll-primary, webhook-accelerated
+### 4.1 ⭐ The structural change: the poller guarantees completeness, webhooks give speed
 
-**The S299 design made a start-of-flow Passthru the primary inbound path. That is now rejected.**
+**Neither mechanism alone is sufficient, and each was primary in an earlier draft. Both were wrong.**
 
-A caller who hangs up during the greeting — a large share of the ~30 % short-call population — dials
-no agent, holds no conversation and triggers no no-answer branch. **Under a webhook-only design that
-call produces no event at all**, which is precisely the population we are trying to start measuring.
-Webhooks cannot be made complete here without putting our endpoint in the customer's call path.
+- **A webhook-only design is incomplete.** A caller who hangs up during the greeting dials no agent,
+  holds no conversation and triggers no no-answer branch — so no webhook fires, and that is precisely
+  the ~30 % short-call population we most need to see (§5.1 shows 79 % of them are repeat callers
+  failing to get through). Webhooks cannot be made complete without putting our endpoint in the
+  customer's call path.
+- **A poller-only design is too slow.** §5A requires the agent to have full context *before they say
+  hello*. A 5-minute reconcile cannot serve a screen-pop.
 
-So:
+So the roles are split, and neither is "primary":
 
 | | Role | Latency | Completeness | Flow edit? |
 |---|---|---|---|---|
-| **(a) `GET /Calls` poller** | **Source of truth for the call log** | ≤ 5 min | **100 %** — every call Exotel billed, including greeting-abandons, no-answers and failures | **No** |
-| (b) `agent-passthru-url` | Screen-pop + live agent attribution | seconds | Calls that reached a dial attempt | Yes — one field |
+| **(a) `GET /Calls` poller** | **Completeness guarantee + settlement.** No call is ever missing; duration/recording/price settle here | ≤ 5 min | **100 %** — every call Exotel billed | **No** |
+| **(e) start-of-flow Passthru** | **Warms the context cache** so the pop is instant (§5A) | — | Best-effort | Yes — one applet |
+| (b) `agent-passthru-url` | Screen-pop delivery + live agent attribution | seconds | Calls that reached a dial attempt | Yes — one field |
 | (c) post-conversation Passthru | Immediate end-of-call record | seconds | Answered calls only | Yes — one applet |
 | (d) `StatusCallback` | Outbound (click-to-call) state | seconds | Calls we placed | No |
+
+⚠️ **Nothing downstream may assume a webhook fired.** Every hook writes through the same idempotent
+upsert on `UNIQUE (provider, provider_call_sid)`, and the poller is what closes the gap when one
+does not arrive. If a webhook path is ever the only writer of some field, that field will be silently
+missing on the calls that matter most.
 
 **Consequences, and they are large:**
 
 1. **Restoring the call log needs no Exotel-side change whatsoever** — only the API key and token.
-   Phase 2 stops the bleeding without waiting on anyone's approval to touch a live IVR.
+   Phase 2 stops the bleeding without waiting on anyone's approval to touch a live IVR. The screen-pop
+   (§5A) is what needs the flow edits, and it is a later phase.
 2. **The missed-call defect (§2.3) is fixed by the poller**, not by re-routing the no-answer branch.
    Exotel's `Status` on an unanswered call is authoritative and we read it directly.
-3. The in-path risk the S299 design carried — *"Passthru holds a live call while csops works"* —
-   **disappears**. (b) and (c) are accelerators; if either is down, the poller still records the call.
+3. The in-path risk — *"Passthru holds a live call while csops works"* — is **contained rather than
+   eliminated**: (e) does sit in the flow, so it returns a bare 200 and does every piece of work in
+   `ctx.waitUntil()`. If (b), (c) or (e) is down, the poller still records the call and the pop
+   degrades to an on-demand fetch.
 4. Ticket creation moves from "during the call" to "within 5 minutes of it". Acceptable for a queue-
    worked team, and (b) restores instant awareness for the agent on the call once approved.
 
@@ -180,8 +199,10 @@ New table `store.cs_telephony_agents` (user ↔ Exotel identity: `sip_id`, `agen
 
 | Object | Column | Purpose |
 |---|---|---|
-| `store.cs_calls` | `ticket_suppressed_reason text` | Why this call deliberately created no ticket — `short_call` \| `abandoned` \| `missed` \| `backfill`. Makes the §5 policy auditable instead of invisible. |
 | `store.cs_calls` | `needs_callback bool DEFAULT false` | Drives the callback queue (§5.3). Set by the pipeline, cleared by `called_back_at`. |
+
+⛔ **`ticket_suppressed_reason` was in an earlier draft and is DELETED** — §5.1 rejects the
+suppression policy it existed to audit. Do not reintroduce it.
 
 ⚠️ **Two `NOT NULL` columns constrain the insert path** (verified 2026-08-19): `call_session_id` —
 mirror `CallSid` into both it and `provider_call_sid` so the ~20 existing call sites keep working —
@@ -221,80 +242,173 @@ run once over a wider window, recovers it — Exotel serves 6 months, 1-month wi
 
 ⚠️ **The backfill deliberately creates NO tickets.** Retro-firing ticket creation over days of calls
 would spray hundreds of `[Pending — auto-created from call]` rows into a live queue and reset every
-SLA clock. Rows land as call history with `ticket_suppressed_reason='backfill'`; CS raises tickets by
-hand for anything that needs one. Auto-creation begins at the moment the poller goes live and that
+SLA clock. Rows land as call history only; CS raises tickets by hand for anything that needs one. Auto-creation begins at the moment the poller goes live and that
 boundary is visible on the rows.
 
 ⚠️ **Snapshot first:** `CREATE TABLE store.safety_cs_calls_2026_08_20 AS SELECT * FROM store.cs_calls;`
 
 ---
 
-## 5. Ticket policy at volume — the part Pitstop actually needs
+## 5. Ticket policy at volume
 
 > Afshaan 2026-08-20: *"get pitstop up to speed to handle the call volume and integrate tickets."*
+> And, on the policy below: *"my idea is to get a ticket created for every call that hits us, cos I
+> can't think of a reason that we'd get a random call for no reason… it could be a trivial call sure
+> — for which if we end up creating a ticket, it should be fairly easy to close that ticket (one
+> click close)."*
 
-### 5.1 What today's policy does, measured
+### 5.1 ⛔ The suppression policy is REJECTED. A ticket is created for every call.
 
-Every answered call creates a ticket, or coalesces into an open same-phone ticket within 24 h
-(RULE-PITSTOP-018). Measured over **July 2026, incoming calls only**:
+An earlier draft of this spec proposed suppressing ticket creation for calls under a talk-time
+threshold. **That was wrong, and the data that was used to justify it actually refutes it.** Recorded
+here so it is not re-proposed.
 
-| Measure | Value |
-|---|---|
-| Incoming calls | 2,778 |
-| Calls that produced or joined a ticket | **2,778 — every single one** |
-| Distinct tickets after coalescing | 1,432 |
-| Calls lasting 1–15 s (nobody spoke) | **1,308 (47 %)** |
-| **Tickets whose longest call was ≤ 15 s** | **428 (29.9 % of all call tickets)** |
-| …of those, closed with disposition `query` | **427 of 428** |
-| Median time those tickets sat open before closing | **~26 hours** |
-| Closed across N distinct minutes / biggest one-minute burst | 274 / 6 |
+Measured over **July 2026, incoming calls**: 2,778 calls → 1,432 tickets after coalescing, of which
+**428 had no call longer than 15 s**. The draft read those 428 as noise. They are not:
 
-**Read that carefully.** Roughly **14 tickets a day are created for calls in which nobody spoke**.
-They are not bulk-cleared — they are closed in ones and twos across 274 separate minutes, after
-sitting in the queue for a median of a day. That is a human triaging an empty ticket, 428 times a
-month, and 427 of 428 land on the same catch-all disposition.
+| Of the 428 "nobody spoke" tickets | Count | What it actually means |
+|---|---|---|
+| **Had repeat calls coalesced in** | **337 (79 %)** | The customer called back — often three or four times in minutes. These are people **failing to get through**, not noise |
+| Went on to host a WhatsApp conversation | 39 | The call ticket became the container a later channel attached to |
+| Customer wrote in themselves afterwards | 12 | Same |
 
-### 5.2 The policy (recommendation — Pruthvi's to confirm)
+**Suppressing those tickets would have deleted the record of a service failure** — 337 tickets a
+month evidencing customers who tried repeatedly to reach us — and would have broken the container
+that WhatsApp and email later attach to. A short call is the *strongest* signal that someone needs
+calling back, not the weakest.
 
-**A ticket is created when someone actually spoke. Everything else is a call record and, where
-relevant, a callback.**
+**So: every call gets a `cs_calls` row AND a ticket, or coalesces into an open one per
+RULE-PITSTOP-018. No `ticket_suppressed_reason` column. No `TICKET_MIN_TALK_S`. RULE-PITSTOP-007
+stands unamended.**
+
+### 5.2 The real problem is the CLOSE, and it is already solved in the backend
+
+The 428 tickets sat a median **~26 hours** before closing, closed in ones and twos across 274
+separate minutes. The draft blamed ticket creation. The actual cause is triage friction: closing one
+means opening the ticket, opening the triage form, and choosing **issue category + subcategory +
+disposition** — visible in the history as four field-writes in the same second.
+
+**The one-click close already exists.** `updateTicket` fast-closes on disposition
+(`csops-worker/src/index.js` ~2469):
 
 ```
-answered  AND talk_duration_seconds >= TICKET_MIN_TALK_S (default 15)
-    → create ticket, or coalesce per RULE-PITSTOP-018   [unchanged behaviour]
-
-answered  AND talk < 15s          → cs_calls only · ticket_suppressed_reason='short_call'
-abandoned (talk = 0)              → cs_calls only · ticket_suppressed_reason='abandoned'
-missed / busy / no-answer         → cs_calls only · ticket_suppressed_reason='missed'
-                                    · needs_callback = true
-failed                            → cs_calls only · ticket_suppressed_reason='missed'
-outbound, any duration            → unchanged from today
+disposition → 'query'      ⇒ stage='closed', closed_reason='resolved',  closed_at, closed_by_user_id
+disposition → 'no_action'  ⇒ stage='closed', closed_reason='no_action', closed_at, closed_by_user_id
 ```
 
-- `TICKET_MIN_TALK_S` is a **worker env var, not a literal** — Pruthvi will want to tune it, and
-  re-deploying for a number is how thresholds become permanent by accident.
-- **RULE-PITSTOP-018 coalescing is untouched.** Scope stays phone + department + 24 h, and the S156
-  amendment (a coalesced *incoming* call takes over ticket ownership; an outgoing one never does)
-  is carried over verbatim. It encodes a real incident.
-- **Every call still gets a `cs_calls` row.** This policy suppresses *tickets*, never call records —
-  the same distinction RULE-PITSTOP-018 already draws.
-- Expected effect at July volume: **~428 fewer tickets a month**, with zero loss of call history and
-  a callback queue that surfaces the calls that genuinely need chasing.
+`updateTicket` gates on **`cs_ticket_manage`**, which **every `cs_agent` holds** (verified against
+`store.roles`: `cs_agent` has `cs_ticket_manage=true`, `cs_ticket_admin=null`). So no permission
+change and no new stage transition is required.
 
-⚠️ **This needs to be a documented amendment to RULE-PITSTOP-007/018, not a quiet code change.**
-"Every answered call creates a ticket" is currently a stated invariant; changing it silently would be
-exactly the kind of drift the knowledge layer exists to prevent.
+⚠️ Note this is *not* the `closeTicket` handler — that one takes the mid-flight path and **does**
+demand `cs_ticket_admin` plus a reason. Anything built here must use the disposition fast-close, or
+ordinary agents will be locked out.
+
+**Build:** a **`Nothing needed`** action on the call row, the call detail and the ticket header —
+one click, one `updateTicket` call setting `disposition='query'` plus a default
+category/subcategory, with an **Undo** toast (re-triage to `awaiting_info` already reopens a
+fast-closed ticket, ~2483). A second button **`Needs callback`** leaves it open and flags it.
+
+That is the whole fix. It turns a ~26-hour median into a keystroke, and it needs no schema change.
 
 ### 5.3 Callback queue
 
-Missed and unanswered calls stop being tickets and become a **worklist**. `needs_callback` is set by
-the pipeline and cleared when `called_back_at` is stamped — the column and the "call back" affordance
-already exist on `/calls/detail`; nothing new is invented, it is given a queue.
+Missed and unanswered calls keep their ticket **and** raise `needs_callback` — a worklist, not a
+substitute for the ticket. Cleared when `called_back_at` is stamped; the column and the "call back"
+affordance already exist on `/calls/detail`.
 
-Sticky-agent interaction is favourable and worth stating: Exotel routes a repeat caller back to the
-same agent, and RULE-PITSTOP-018 coalesces their calls onto one ticket. The two reinforce each other
-— the agent who missed the call is the one it rings back to, and the ticket they eventually raise is
-the one the earlier calls attached to.
+Sticky-agent interaction is favourable: Exotel routes a repeat caller back to the same agent, and
+RULE-PITSTOP-018 coalesces their calls onto one ticket. The agent who missed the call is the one it
+rings back to, and the ticket is the one the earlier attempts already attached to.
+
+---
+
+## 5A. The agent knows everything before saying hello
+
+> Afshaan 2026-08-20: *"as soon as the call is connected the agent should have all the info ready —
+> who the customer is, what was their last purchase, is that order delivered or not, tracking
+> details, is this the customer's first call or nth call… so the agent doesn't waste time digging
+> for basic info, which is very irritating if the customer has a grievance."*
+
+### 5A.1 The latency budget, and why §4.1 had to be amended
+
+A poller cannot serve this. **This requirement is what reinstates the start-of-flow hook** that
+§4.1 rejected — but for a different job. §4.1's reasoning still holds: a start-of-flow webhook can
+never be the *source of truth*, because a caller who hangs up during the greeting may not fire it
+reliably. It can be the thing that **warms the cache**.
+
+The runway is generous, and it is free:
+
+```
+call lands ──► Greeting TTS (~6–8 s) ──► Connect rings agent (up to 30 s) ──► agent answers
+     │                                          │
+     └─ (e) start Passthru                      └─ (b) agent-passthru-url
+        bare 200, work in waitUntil:               fires with the ACTIVE agent
+        resolve + cache context                    → push pop to that agent's browser
+        ≈ 35 s of runway before hello              → reads the already-warm cache
+```
+
+By the time the agent's headset clicks, the context has been ready for half a minute.
+
+### 5A.2 Hook roles, restated
+
+| Hook | Job | Notes |
+|---|---|---|
+| **(e) start-of-flow Passthru** | **Warm the context cache.** Resolve identity + orders + shipments + history, key it by `CallSid` **and** `customer_phone` | **Bare 200 immediately**, everything in `ctx.waitUntil()` — Exotel is holding a live call. Never blocks; a failure degrades to an on-demand fetch |
+| **(b) `agent-passthru-url`** | Deliver the pop to the **agent who is actually being rung** | Also the attribution fix |
+| **(d) `StatusCallback`** | Outbound state | Unchanged |
+| **(a) `GET /Calls` poller** | **Completeness backstop + settlement.** Guarantees no call is ever missing; settles duration, recording and price ~2 min after the call | **Demoted from "source of truth" to "guarantee".** Still essential — it is what makes greeting-hangups and no-answers visible at all |
+
+**The poller is not dropped and its role is not diminished in importance** — only in latency
+primacy. Webhooks give speed; the poller gives certainty. Neither alone is sufficient.
+
+### 5A.3 The context card — most of it already exists
+
+`csops` already has the expensive parts. This is assembly and pre-warming, not new integration:
+
+| Field the agent needs | Source | Status |
+|---|---|---|
+| Who the customer is | `shopifyLookup({phone})` → customer + `recent_orders` | ✅ built |
+| Last purchase — order no, date, items, value | same, with the Shopify admin deep link | ✅ built |
+| **Is it delivered?** | `attachShipments()` → `ecom_shipments.lifecycle` + `SHIPMENT_LIFECYCLE_LABEL` ("Out for delivery", "Delivered 18 Jul") | ✅ built |
+| **Tracking details** | same → `courier`, `awb`, `tracking_link`, `dispatched_at`, `delivered_at`, `parcels` | ✅ built |
+| COD amount due | same → `is_cod`, `cod_collectable`, `cod_collected` | ✅ built |
+| **RTO alert** | same → `alert` flag on `lifecycle='rto'` | ✅ built |
+| Past tickets (last 5) | `lookupPastCases({phone})` | ✅ built |
+| **First call or nth call** | `count(*)` + `max(started_at)` on `cs_calls` by phone | ❌ **new — trivial** |
+| Open ticket right now | `cs_tickets` open by phone | ❌ new — trivial |
+| Open WhatsApp thread | `cs_wa_threads` by phone | ❌ new — trivial |
+
+⚠️ `attachShipments` exists precisely because **Shopify's fulfilment stops at "dispatched" and never
+moves** — "where is my order" cannot be answered from Shopify alone. Do not re-derive delivery state
+from Shopify; the lifecycle comes from `public.ecom_shipments`.
+
+**New: `GET getCallContext({ phone | call_sid })`** — one action returning the whole card, served
+from the warm cache when present and resolved live otherwise. Same payload feeds the screen-pop, the
+call detail page and the ticket header, so there is one shape to get right.
+
+### 5A.4 What the agent sees
+
+A `<CallPop>` in the Pitstop `(auth)` shell, driven by hook (b):
+
+- **Identity line** — name, phone, `3rd call in 7 days` (or **`First-time caller`**), *last call 2 days
+  ago about …*
+- **Live order card** — most recent order, its lifecycle label, courier + AWB with a one-click
+  tracking link, COD due if any. **RTO shows as a red banner without being asked for.**
+- **History strip** — last 5 tickets as chips (disposition + date), any open ticket surfaced first,
+  any open WhatsApp thread linked.
+- **Actions** — *Open ticket* · *Nothing needed* (§5.2 one-click close) · *Needs callback*.
+
+**Degradation is explicit, never a spinner in the agent's face:** an unknown number renders as
+`Unknown caller — no Shopify match`, with search; a Shopify timeout renders the card without the
+order block rather than blocking the pop. The agent must never wait on our fetch while a customer is
+talking.
+
+⚠️ The pop must survive route changes → it mounts in the **layout**, not a page. Same constraint as
+`<CallBar>` (§7), and they should be one component tree.
+
+⚠️ **Never key its data-loading effect on `session`** (CORE.md) — a token refresh lands ~hourly and
+would tear down a live call surface mid-conversation. Key on `userId`.
 
 ---
 
@@ -338,7 +452,7 @@ is not the dashboard API key and is not self-serve. See §9.
 | 2 | **`Abandoned` tab + badge**, distinct from `Missed` | 47 % of inbound is currently mislabelled `answered`. Two different operational meanings: nobody spoke vs nobody picked up |
 | 3 | **`Needs callback` tab**, driven by `needs_callback` | The worklist that replaces 428 empty tickets/month |
 | 4 | **Talk time vs leg time** shown separately in the row and detail | `duration_seconds` keeps its current meaning so no existing metric silently shifts; `talk_duration_seconds` is the honest one |
-| 5 | **Suppressed-ticket affordance** — a call with `ticket_suppressed_reason` shows why, with a one-click *Create ticket* | The policy must be reversible by an agent in the moment, or it will be experienced as data loss |
+| 5 | **`Nothing needed` one-click close** on the call row, call detail and ticket header (§5.2), with Undo | Turns a ~26-hour median close into a keystroke. Backend already supports it — `updateTicket({disposition:'query'})` |
 | 6 | KPI cards recomputed on the corrected statuses; **answer rate** = answered ÷ (answered + missed + abandoned) | Today's KPIs read a `missed` figure that is 0.25 % and false |
 | 7 | Keyset pagination on `(started_at, id)` rather than offset | 6,300 rows/month; offset paging degrades and can drop rows under concurrent inserts |
 | 8 | Agent column resolves via `cs_telephony_agents` | ~30 % of calls currently credit nobody |
@@ -375,7 +489,7 @@ action directly, not merely to relay.
 | Ref | Question | Default if unanswered |
 |---|---|---|
 | **D-1** | Should an abandoned IVR-drop count as **missed**, or its own **abandoned** class? | **Its own class.** They mean different things operationally and merging them hides both |
-| **D-2** | Ticket policy §5.2 — is 15 s the right talk-time floor? | **15 s**, as an env var, tunable without a deploy |
+| **D-2** | Default issue category/subcategory that `Nothing needed` stamps | **General Queries / General queries** — what the team already uses on 427 of 428 of these |
 | **D-3** | Should recording move to **dual**-channel? | **Leave single.** Revisit only if speaker-separated QA/transcription is wanted |
 | **D-4** | Which agents get a softphone, which stay on a mobile leg? | All five with SIP devices; Pruthvi stays mobile-only (he has no SIP device) |
 
@@ -388,8 +502,8 @@ action directly, not merely to relay.
 | **0** | P-1 (top-up + billing email) · P-2 (credentials) · put P-3…P-8 and D-1…D-4 to Pruthvi | Pruthvi |
 | **1** | Additive migration (§4.2) · extract `call-pipeline.js` vendor-neutral · re-point the MyOperator path at it with **behaviour byte-identical** | Reviewed diff |
 | **2** | **Poller live (§4.1). The call log is restored.** No Exotel-side change required | P-2 only |
-| **3** | Backfill the blind window · recording player · ticket policy §5.2 · callback queue · attribution | Snapshot before backfill |
-| **4** | `agent-passthru-url` + post-conversation Passthru (screen-pop, live attribution) | P-5 |
+| **3** | Backfill the blind window · recording player · **one-click close (§5.2)** · callback queue · attribution | Snapshot before backfill |
+| **4** | **Screen-pop (§5A)** — start-of-flow Passthru warms the cache, `agent-passthru-url` delivers the pop, `getCallContext` + `<CallPop>` | P-5 |
 | **5** | Click-to-call · `/admin/telephony` | — |
 | **6** | Softphone | P-4 |
 
@@ -412,7 +526,7 @@ session's live change is silently reverted (PATTERN-220).
 | **Account balance hits zero and voice stops** | **HIGH — live now** | P-1. Nothing in this build protects against it |
 | Pitstop stays blind while this is built | **HIGH — live now** | Phase 2 needs only P-2; backfill recovers the window |
 | Missed count jumps and reads as a regression | MED | §4.3 — warn the team in the same breath as the release |
-| Ticket policy is experienced as lost tickets | MED | `ticket_suppressed_reason` is visible on the call with one-click *Create ticket* (§8 item 5) |
+| Context fetch blocks a live call | MED | Start Passthru returns a bare 200; all work in `ctx.waitUntil()`. The pop degrades to a partial card, never a spinner (§5A.4) |
 | Poller misses calls at a page boundary | MED | Unique sort key + tie-break on `Sid`; overlapping 30-min window; idempotent upsert |
 | Async settlement leaves rows incomplete | MED | Second poller pass over the last 24 h (§4.1) |
 | Exotel status/direction strings drift | MED | Map to NULL and **log**, never pass through raw |
@@ -436,12 +550,14 @@ ExoPhone, the switch, the IVR runtime or the recording store.**
 
 1. A customer calls `08044656833` and within five minutes the call is in Pitstop's log with the right
    agent and the right status — and within seconds, once Phase 4 lands.
-2. A call in which someone actually spoke has a ticket; one in which nobody did has a call record and,
-   if it went unanswered, a place in the callback queue.
+2. **Every call has a ticket.** A trivial one is closed in a single click; an unanswered one also sits
+   in the callback queue.
 3. Any past call plays back inside Pitstop.
-4. An agent opens a ticket, clicks **Call**, and talks without leaving Pitstop.
-5. Missed and abandoned are separated, and both numbers are true.
-6. Nobody on the CS team opens `my.in.exotel.com` in a normal week.
+4. An agent's phone rings and the customer, their last order, its delivery state, tracking and their
+   call history are **already on screen** — nth-caller included.
+5. An agent opens a ticket, clicks **Call**, and talks without leaving Pitstop.
+6. Missed and abandoned are separated, and both numbers are true.
+7. Nobody on the CS team opens `my.in.exotel.com` in a normal week.
 
 ---
 
