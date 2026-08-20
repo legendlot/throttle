@@ -19,6 +19,10 @@
 import {
   makeCallPipeline, agentEmailFromLegs, normaliseDirection,
 } from './telephony/call-pipeline.js';
+import { exotelConfigured, makeExotelClient } from './telephony/exotel-client.js';
+import {
+  reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
+} from './telephony/exotel-poller.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -659,6 +663,31 @@ export default {
         e => console.error('[purchase-date] cron backfill error', e),
       ));
     }
+
+    // Exotel reconcile (S301). The cron is */2, and this is the COMPLETENESS
+    // GUARANTEE for the call log — not an optimisation. A caller who hangs up during
+    // the greeting fires no webhook at all, so polling Exotel's own record is the only
+    // way to see them. Inert until EXOTEL_API_KEY/TOKEN are set.
+    //
+    // The window is 30 min against a 2-min tick: the overlap is free (the upsert is
+    // idempotent on (provider, provider_call_sid)) and it means one failed tick
+    // self-heals on the next rather than leaving a permanent hole.
+    if (exotelConfigured(env)) {
+      const pipe = callPipeline(env);
+      ctx.waitUntil(reconcileExotelCalls(env, pipe).then(
+        r => console.log('[exotel] cron reconcile', JSON.stringify(r)),
+        e => console.error('[exotel] cron reconcile error', e),
+      ));
+      // Settlement runs less often — Exotel finalises Duration/Price/RecordingUrl
+      // ~2 min after a call ends, so a sweep every 10 min catches them all without
+      // spending the shared 200/min budget on rows that were never going to be ready.
+      if (mins % 10 === 0) {
+        ctx.waitUntil(settleExotelCalls(env, pipe, sb).then(
+          r => console.log('[exotel] cron settle', JSON.stringify(r)),
+          e => console.error('[exotel] cron settle error', e),
+        ));
+      }
+    }
   },
 };
 
@@ -712,6 +741,7 @@ async function handleGet(action, params, auth, env) {
     case 'getCalls':         return getCalls(params, auth, env);
     case 'getCall':          return getCall(params, auth, env);
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
+    case 'getExotelHealth':  return getExotelHealth(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -743,6 +773,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'cancelTicket':     return cancelTicket(body, auth, env);
     case 'escalateTicket':   return escalateTicket(body, auth, env);
     case 'closeTicket':      return closeTicket(body, auth, env);
+    case 'runExotelBackfill': return runExotelBackfill(body, auth, env);
     case 'createMyopAccount': return createMyopAccount(body, auth, env);
     case 'updateMyopAccount': return updateMyopAccount(body, auth, env);
     case 'createDepartment':     return createDepartment(body, auth, env);
@@ -3008,6 +3039,78 @@ async function webhookCallSummary(body, env, account) {
   }
   const r = await pipe.attributeAgent(norm, { agent, callMeta });
   return json({ ok: true, assigned: r.assigned });
+}
+
+// ── Exotel operations ────────────────────────────────────────────────────────
+
+/**
+ * Live health probe for the Exotel integration.
+ *
+ * Exists because "the poller is running" and "the poller is working" look identical
+ * from the outside when credentials are wrong — a 401 every two minutes reads as a
+ * quiet day. This makes the failure legible, and later backs the /admin/telephony
+ * status panel.
+ *
+ * Reads one call. Never returns the key or token.
+ */
+async function getExotelHealth(_params, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  if (!exotelConfigured(env)) {
+    return ok({ configured: false, reason: 'EXOTEL_API_KEY / EXOTEL_API_TOKEN not set' });
+  }
+  const client = makeExotelClient(env);
+  const started = Date.now();
+  const r = await client.listCalls({ pageSize: 1, sortAsc: false, details: true });
+
+  const [logged, latest] = await Promise.all([
+    sb(`/rest/v1/cs_calls?provider=eq.exotel&select=id&limit=1`, env),
+    sb(`/rest/v1/cs_calls?provider=eq.exotel&select=started_at,status,direction`
+       + `&order=started_at.desc.nullslast&limit=1`, env),
+  ]);
+
+  const sample = r.calls?.[0] || null;
+  return ok({
+    configured: true,
+    account_sid: client.accountSid,
+    host: client.host,
+    reachable: r.ok,
+    error: r.ok ? null : r.error,
+    http_status: r.status ?? null,
+    latency_ms: Date.now() - started,
+    // Field names, not values — enough to confirm the response shape without putting
+    // a customer's number in an admin payload.
+    sample_fields: sample ? Object.keys(sample) : [],
+    sample_detail_fields: sample?.Details ? Object.keys(sample.Details) : [],
+    sample_status: sample?.Status ?? null,
+    sample_direction: sample?.Direction ?? null,
+    rows_in_pitstop: (logged.data || []).length > 0,
+    latest_logged: latest.data?.[0] || null,
+  });
+}
+
+/**
+ * One-shot backfill of the blind window (cutover 2026-08-19 18:08 IST → now).
+ *
+ * ⚠️ Creates NO tickets. Retro-firing ticket creation over days of calls would spray
+ * hundreds of '[Pending — auto-created from call]' rows into a live queue and reset
+ * every SLA clock. Rows land as call history; CS raises tickets by hand for anything
+ * that needs one.
+ * ⚠️ Snapshot store.safety_cs_calls_2026_08_20 was taken before this shipped.
+ */
+async function runExotelBackfill(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  if (!exotelConfigured(env)) return err('Exotel not configured', 503);
+
+  const since = body?.since ? new Date(body.since) : new Date('2026-08-19T12:38:00Z'); // 18:08 IST
+  const until = body?.until ? new Date(body.until) : new Date();
+  if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime())) {
+    return err('since/until must be ISO timestamps', 422);
+  }
+  if (since >= until) return err('since must be before until', 422);
+
+  const r = await backfillExotelCalls(env, callPipeline(env), { since, until });
+  console.log('[exotel] backfill', JSON.stringify(r));
+  return ok(r);
 }
 
 // ── MyOp account registry ────────────────────────────────────────────────────
