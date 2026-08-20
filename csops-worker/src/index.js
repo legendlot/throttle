@@ -755,6 +755,7 @@ async function handleGet(action, params, auth, env) {
     case 'getCall':          return getCall(params, auth, env);
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
     case 'getExotelHealth':  return getExotelHealth(params, auth, env);
+    case 'getCallRecording': return getCallRecording(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -3054,6 +3055,58 @@ async function webhookCallSummary(body, env, account) {
   return json({ ok: true, assigned: r.assigned });
 }
 
+/**
+ * Resolve a PLAYABLE recording URL for one call.
+ *
+ * ⚠️ Exotel's RecordingUrl is PRE-SIGNED and EXPIRES (RecordingUrlValidity, 5-60 min).
+ * A URL stored at poll time is dead by the time an agent clicks it, so playback must
+ * resolve on demand and a stored URL must NEVER be treated as permanent. This is why
+ * the player asks the worker for a link instead of rendering cs_calls.recording_url.
+ *
+ * Recordings have never once played in Pitstop: recording_url is NULL on all 17,705
+ * MyOperator rows and the detail page rendered the filename as inert text. MyOperator
+ * rows stay unplayable (we only ever received a filename, and that vendor's CDR API is
+ * not wired) - they now say so plainly instead of showing a dead affordance.
+ */
+async function getCallRecording(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const id = params.get('call_id');
+  if (!id) return err('call_id required');
+
+  const r = await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(id)}`
+    + `&select=provider,provider_call_sid,recording_url,recording_filename,duration_seconds&limit=1`, env);
+  const call = r.data?.[0];
+  if (!call) return err('Call not found', 404);
+
+  if (call.provider !== 'exotel') {
+    return ok({
+      playable: false,
+      reason: 'MyOperator calls only ever gave us a filename, never a playable URL.',
+      filename: call.recording_filename || null,
+    });
+  }
+  if (!exotelConfigured(env)) return err('Exotel not configured', 503);
+  if (!call.provider_call_sid) return ok({ playable: false, reason: 'No provider call id on this row.' });
+
+  const client = makeExotelClient(env);
+  const fresh = await client.getCallsBySid([call.provider_call_sid], { recordingValidityMinutes: 60 });
+  if (!fresh.ok) return err(`Could not reach Exotel: ${fresh.error}`, 502);
+
+  const url = fresh.calls?.[0]?.RecordingUrl || null;
+  if (!url) {
+    return ok({
+      playable: false,
+      reason: 'Exotel has no recording for this call (short or unanswered calls often have none).',
+    });
+  }
+  // Cache the latest known URL so the list can show a recording EXISTS without a
+  // per-row API call. It is deliberately not treated as playable on its own.
+  await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(id)}`, env,
+    { method: 'PATCH', body: JSON.stringify({ recording_url: url }) }).catch(() => {});
+
+  return ok({ playable: true, url, expires_in_minutes: 60 });
+}
+
 // ── Exotel operations ────────────────────────────────────────────────────────
 
 /**
@@ -3353,6 +3406,13 @@ async function getCalls(params, auth, env) {
   if (tab === 'my')          filters.push(`agent_user_id=eq.${auth.userId}`);
   else if (tab === 'unassigned') filters.push(`agent_user_id=is.null`, `ticket_id=is.null`);
   else if (tab === 'missed') filters.push(`status=eq.missed`, `called_back_at=is.null`);
+  // Abandoned is DISTINCT from missed and the split is the point: `missed` = nobody
+  // picked up; `abandoned` = the caller hung up seconds in, having reached us. Merging
+  // them hides both. 36 of 39 abandoned calls on the first live day lasted under 20s.
+  else if (tab === 'abandoned') filters.push(`status=eq.abandoned`);
+  // The callback worklist. Replaces nothing - every call still has its ticket; this is
+  // the list of people who tried to reach us and did not.
+  else if (tab === 'callback') filters.push(`needs_callback=is.true`, `called_back_at=is.null`);
   else if (ticketState === 'open')   filters.push(`ticket.closed_at=is.null`);
   else if (ticketState === 'closed') filters.push(`ticket.closed_at=not.is.null`);
 
@@ -3372,7 +3432,11 @@ async function getCalls(params, auth, env) {
     filters.push(`or=(customer_phone.ilike.${enc},customer_name.ilike.${enc},did.ilike.${enc})`);
   }
 
-  const select = 'id,myop_account_id,cs_department_id,call_session_id,direction,did,customer_phone,customer_name,agent_user_id,agent_name,status,duration_seconds,recording_filename,recording_url,started_at,ended_at,ticket_id,called_back_at,created_at';
+  // S301 additions: `provider` tells the UI which vendor a row came from;
+  // `talk_duration_seconds` is the honest conversation length, while
+  // `duration_seconds` keeps its original leg-time meaning so no existing metric
+  // silently shifts; `dial_status` carries the granularity `status` discards.
+  const select = 'id,myop_account_id,cs_department_id,call_session_id,direction,did,customer_phone,customer_name,agent_user_id,agent_name,status,duration_seconds,recording_filename,recording_url,started_at,ended_at,ticket_id,called_back_at,created_at,provider,provider_call_sid,talk_duration_seconds,dial_status,needs_callback,exophone';
   // Open/Closed tabs inner-join the ticket so a call with no ticket is excluded
   // and the closed_at filter on the embed can take effect.
   const ticketEmbed = ticketState ? 'ticket:ticket_id!inner(ticket_no,closed_at)' : 'ticket:ticket_id(ticket_no)';
@@ -3400,23 +3464,34 @@ async function getCallsKpis(_params, auth, env) {
   const deptFilter = await resolveDeptFilter(null, auth, env);
   const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
 
-  const [today, answered, missed, myOpen, unansweredAwaitingCallback] = await Promise.all([
-    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}${deptClause}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}&status=eq.answered${deptClause}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}&status=eq.missed${deptClause}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_calls?agent_user_id=eq.${auth.userId}&created_at=gte.${encodeURIComponent(startOfTodayIso)}${deptClause}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_calls?status=eq.missed&called_back_at=is.null${deptClause}&select=id&limit=5000`, env),
+  const day = `created_at=gte.${encodeURIComponent(startOfTodayIso)}`;
+  const [today, answered, missed, abandoned, myOpen, awaitingCallback] = await Promise.all([
+    sb(`/rest/v1/cs_calls?${day}${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?${day}&status=eq.answered${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?${day}&status=eq.missed${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?${day}&status=eq.abandoned${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?agent_user_id=eq.${auth.userId}&${day}${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?needs_callback=is.true&called_back_at=is.null${deptClause}&select=id&limit=5000`, env),
   ]);
 
-  const total_today = (today.data || []).length;
-  const answered_today = (answered.data || []).length;
-  const missed_today = (missed.data || []).length;
-  const answer_rate_pct = total_today > 0 ? Math.round((answered_today / total_today) * 100) : null;
+  const total_today     = (today.data || []).length;
+  const answered_today  = (answered.data || []).length;
+  const missed_today    = (missed.data || []).length;
+  const abandoned_today = (abandoned.data || []).length;
+
+  // The denominator is calls that REACHED US, not every row. Dividing by total_today
+  // counts outbound calls we placed ourselves as though they were inbound we answered,
+  // which flatters the rate. Null rather than 0 when there is nothing to divide by -
+  // 0% reads as a failure, where the truth is "no data yet".
+  const reached = answered_today + missed_today + abandoned_today;
+  const answer_rate_pct  = reached > 0 ? Math.round((answered_today  / reached) * 100) : null;
+  const abandon_rate_pct = reached > 0 ? Math.round((abandoned_today / reached) * 100) : null;
 
   return ok({
-    total_today, answered_today, missed_today, answer_rate_pct,
+    total_today, answered_today, missed_today, abandoned_today,
+    answer_rate_pct, abandon_rate_pct,
     my_calls_today: (myOpen.data || []).length,
-    unanswered_awaiting_callback: (unansweredAwaitingCallback.data || []).length,
+    unanswered_awaiting_callback: (awaitingCallback.data || []).length,
   });
 }
 
@@ -3430,6 +3505,9 @@ async function markCalledBack(body, auth, env) {
       called_back_at: new Date().toISOString(),
       called_back_by_user_id: auth.userId,
       called_back_note: note || null,
+      // Clear the flag as well as stamping the time - the queue filters on
+      // needs_callback, so leaving it set keeps a handled call in the worklist.
+      needs_callback: false,
     }),
   });
   if (!r.ok) return err(`mark called-back failed: ${JSON.stringify(r.data)}`, r.status);
