@@ -1,8 +1,9 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
    SCANS — Inbox stream (Pit Wall v2). Scan feed with date
-   presets, activity filters, UPC search (server-side ≥3 chars
-   via getScansByUpc — global, box-label aware; client-side 1–2), voided toggle, summary
+   presets, activity filters, search (server-side ≥3 chars via
+   getScansByUpc — global, box-label aware, and since 2026-08-20 it also matches
+   PRODUCT / VARIANT / COLOUR; client-side 1–2), voided toggle, summary
    tiles and cursor load-more. Data actions unchanged:
    useScans (getAllScans) · getScanSummary · getScansByUpc.
    ════════════════════════════════════════════════════════════ */
@@ -175,7 +176,9 @@ export default function ScansPage() {
     }
     if (trimmed.length >= 3) {
       // ≥3 chars → global server lookup via getScansByUpc (all history, not just the
-      // loaded page). Handles full UPCs, bare/short numbers, and box labels (LOT-…-E/R).
+      // loaded page). Handles full UPCs, bare/short numbers, box labels (LOT-…-E/R) — and
+      // product / variant / colour text, matched against the same concatenated string the
+      // PRODUCT column renders, so pasting what is on screen finds it.
       debounceRef.current = setTimeout(async () => {
         if (!session) return;
         setUpcLoading(true);
@@ -234,7 +237,14 @@ export default function ScansPage() {
     if (upcMode && !showVoided) rows = rows.filter(r => !r.voided);
     if (upcMode && activityFilter) rows = rows.filter(r => r.activity === activityFilter);
     if (!upcMode && trimmed.length >= 1 && trimmed.length <= 2) {
-      rows = rows.filter(r => (r.upc || '').toUpperCase().includes(trimmed));
+      // Match the SERVER's fields, not just upc — otherwise typing "gh" filters on UPC while
+      // typing "gho" suddenly searches products too, which reads as the box being broken.
+      // `unit_product` — already product+model+colour joined by the worker, and the exact
+      // string the PRODUCT column renders. NOT r.product/model/color: those fields do not
+      // exist on a scan row, so filtering on them would silently match nothing.
+      rows = rows.filter(r => (
+        `${r.upc || ''} ${r.unit_product || ''}`
+      ).toUpperCase().includes(trimmed));
     }
     return rows;
   }, [baseRows, upcMode, showVoided, activityFilter, trimmed]);
@@ -275,7 +285,7 @@ export default function ScansPage() {
         <input
           data-search-primary
           type="text"
-          placeholder="Search UPC / box label…  · /"
+          placeholder="Search UPC, box label, product…  · /"
           style={searchInput}
           value={upcSearch}
           onChange={e => setUpcSearch(e.target.value)}
