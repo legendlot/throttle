@@ -344,5 +344,9 @@ export function makeCallPipeline(deps) {
   return {
     upsertCall, ensureTicket, attributeAgent, patchTicketCallFields,
     insertHistorySystem, callIdentity,
+    // Exposed so adapters (the Exotel poller) can reuse the same sb/toE164 the
+    // pipeline was constructed with, rather than re-threading them through every
+    // call site and risking two different phone normalisers in one codebase.
+    deps,
   };
 }

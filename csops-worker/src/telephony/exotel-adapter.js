@@ -125,7 +125,13 @@ export function exotelCallPatch(norm) {
   const patch = {
     status: norm.status,
     dial_status: norm.dial_status,
-    raw_meta: { last_event: 'poll', provider: 'exotel' },
+    // Persist the raw legs. Same instrument-first move the MyOperator path made after
+    // S144: the real Details.Legs[] shape has not been observed, and attribution is
+    // built on guesses until it is. This makes the next real routed call the evidence.
+    raw_meta: {
+      last_event: 'poll', provider: 'exotel',
+      legs: Array.isArray(norm.legs) ? norm.legs : [],
+    },
   };
   const maybe = {
     started_at: norm.started_at,
@@ -151,4 +157,60 @@ export function isSettled(norm) {
     return norm.talk_duration_seconds !== null && norm.leg_duration_seconds !== null;
   }
   return true;
+}
+
+/**
+ * Every identifier in an Exotel call that could name one of OUR agents.
+ *
+ * ⚠️ Deliberately shape-tolerant rather than reading one documented field. The docs
+ * say Details.Legs[] carries { Id, OnCallDuration, Status, AnsweredBy }, but the real
+ * payload has not been observed yet, and the codebase has been burned by trusting a
+ * vendor's documented field name before (metaAttachmentKind, the dropped reels). So
+ * this walks the leg objects and collects anything that LOOKS like an identity — a
+ * SIP URI or a 10+ digit number — and lets the caller match those against the known
+ * roster. An unknown field name costs nothing; a wrong assumption costs attribution.
+ *
+ * Outbound is exact and needs no guessing: we set `From` to the agent on connect.
+ */
+export function agentCandidates(call, direction) {
+  const out = [];
+  const push = (v) => {
+    if (typeof v !== 'string') return;
+    const s = v.trim();
+    if (!s) return;
+    if (/^sip:/i.test(s)) out.push(s.toLowerCase());
+    else if (/^\+?\d[\d\s-]{8,}$/.test(s)) out.push(s);
+  };
+
+  // Outbound: leg 1 IS the agent, by construction (Calls/connect From=agent).
+  if (direction === 'outgoing') push(call.From);
+
+  const legs = Array.isArray(call.Details?.Legs) ? call.Details.Legs : [];
+  for (const leg of legs) {
+    if (!leg || typeof leg !== 'object') continue;
+    for (const v of Object.values(leg)) push(v);
+  }
+  // Some payloads expose the connected party at the top level instead.
+  push(call.Details?.AnsweredBy);
+  push(call.DialWhomNumber);
+
+  return [...new Set(out)];
+}
+
+/**
+ * Match candidate identifiers against the agent roster.
+ * `roster` is { bySip: Map, byPhone: Map } built once per poll run — never per row.
+ */
+export function matchAgent(candidates, roster, toE164) {
+  for (const c of candidates) {
+    if (/^sip:/i.test(c)) {
+      const hit = roster.bySip.get(c.toLowerCase());
+      if (hit) return { ...hit, matched_on: 'sip', matched_value: c };
+    } else {
+      const e164 = toE164(c);
+      const hit = e164 && roster.byPhone.get(e164);
+      if (hit) return { ...hit, matched_on: 'phone', matched_value: e164 };
+    }
+  }
+  return null;
 }

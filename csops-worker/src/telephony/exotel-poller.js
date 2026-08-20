@@ -15,7 +15,9 @@
 // webhooks may both write the same call in any order without duplication.
 
 import { makeExotelClient, exotelConfigured } from './exotel-client.js';
-import { exotelToNormalised, exotelCallPatch, isSettled } from './exotel-adapter.js';
+import {
+  exotelToNormalised, exotelCallPatch, isSettled, agentCandidates, matchAgent,
+} from './exotel-adapter.js';
 
 // Overlapping window: we re-read more than one tick's worth every time. The upsert is
 // idempotent so overlap is free, and it means a single failed tick self-heals on the
@@ -28,6 +30,34 @@ const SETTLE_LOOKBACK_HOURS = 24;
 const SETTLE_BATCH = 100;          // Sid= accepts at most 100 per request
 
 const MAX_PAGES = 40;              // 4,000 calls — a decade of headroom at ~250/day
+
+/**
+ * The Pitstop-user <-> Exotel-identity roster, loaded ONCE per poll run.
+ *
+ * ⚠️ Once per RUN, not once per row. Six rows joined against every call in the window
+ * is the per-row await CLAUDE.md forbids, and it would triple the DB traffic of a
+ * poll for data that changes about twice a year.
+ */
+async function loadAgentRoster(env, sb) {
+  const r = await sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
+    + `&select=user_id,sip_id,agent_phone&limit=500`, env);
+  const bySip = new Map(), byPhone = new Map();
+  for (const a of r.data || []) {
+    const entry = { id: a.user_id, sip_id: a.sip_id || null };
+    if (a.sip_id) bySip.set(String(a.sip_id).toLowerCase(), entry);
+    if (a.agent_phone) byPhone.set(a.agent_phone, entry);
+  }
+  return { bySip, byPhone, size: (r.data || []).length };
+}
+
+/** Resolve the display name for a matched agent, cached across the run. */
+async function nameFor(userId, env, sb, cache) {
+  if (cache.has(userId)) return cache.get(userId);
+  const r = await sb(`/rest/v1/users_profile?id=eq.${userId}&select=full_name&limit=1`, env);
+  const n = r.data?.[0]?.full_name || null;
+  cache.set(userId, n);
+  return n;
+}
 
 /**
  * Walk a date window and upsert every call Exotel has.
@@ -43,8 +73,12 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
   const since = opts.since || new Date(until.getTime() - RECONCILE_WINDOW_MIN * 60 * 1000);
   const createTickets = opts.createTickets !== false;
 
-  const stats = { seen: 0, written: 0, ticketed: 0, coalesced: 0, failed: 0, pages: 0 };
+  const stats = { seen: 0, written: 0, ticketed: 0, coalesced: 0, attributed: 0, failed: 0, pages: 0 };
   let cursor = null;
+
+  const { sb, toE164 } = pipeline.deps;
+  const roster = await loadAgentRoster(env, sb);
+  const nameCache = new Map();
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const r = await client.listCalls({
@@ -101,6 +135,27 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
           if (t.coalesced_into) stats.coalesced++;
           else if (t.created)   stats.ticketed++;
           else if (!t.ok)       console.error(`[exotel:poll] ticket failed sid=${norm.provider_call_sid} ${t.error}`);
+        }
+
+        // Agent attribution. Without this every Exotel call reads "unassigned" — it
+        // was 0% against MyOperator's 65% until this landed, which also empties the
+        // My Calls tab and the agent report for anything after the cutover.
+        //
+        // Matched against the roster rather than a documented field name; see
+        // agentCandidates(). A miss is logged with what we DID see, so the real leg
+        // shape becomes evident from the logs instead of guesswork.
+        const cands = agentCandidates(raw, norm.direction);
+        const hit = matchAgent(cands, roster, toE164);
+        if (hit) {
+          const name = await nameFor(hit.id, env, sb, nameCache);
+          await pipeline.attributeAgent(
+            { ...norm, agent_ref: { sip_id: hit.matched_on === 'sip' ? hit.matched_value : null } },
+            { agent: { id: hit.id, name } },
+          );
+          stats.attributed++;
+        } else if (norm.status === 'answered' && cands.length) {
+          console.log(`[exotel:poll] no agent matched sid=${norm.provider_call_sid} `
+            + `candidates=${JSON.stringify(cands).slice(0, 200)}`);
         }
       } catch (e) {
         // One malformed call must not abort the whole window.
