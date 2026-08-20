@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { EmptyState, Spinner, useEscapeClose } from '@throttle/ui';
-import { Plus, CopyCheck, Copy } from 'lucide-react';
+import { Plus, CopyCheck, Copy, PhoneCall, RefreshCw, Activity } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 
 const CSOPS_URL = process.env.NEXT_PUBLIC_CSOPS_URL || 'https://csops.afshaan.workers.dev';
@@ -60,6 +60,8 @@ export default function MyopAccountsPage() {
       </header>
 
       {error && <div style={errBox}>{error}</div>}
+
+      <ExotelPanel session={session} />
 
       <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -199,6 +201,116 @@ function Field({ label, children }) {
       <span style={{ display:'block', fontSize: 12, color:'var(--t3)', marginBottom: 4 }}>{label}</span>
       {children}
     </label>
+  );
+}
+
+/**
+ * Exotel — health + the one-shot historic backfill.
+ *
+ * Lives here rather than in a console snippet because the backfill needs a real
+ * Pitstop session: the worker gates it on cs_ticket_admin, and hand-extracting the
+ * JWT out of localStorage produced a 401 (the stored shape is not a bare
+ * { access_token }). csopsPost already holds the working session — use it.
+ */
+function ExotelPanel({ session }) {
+  const [health, setHealth] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState(null);
+  // Default: the MyOperator → Exotel cutover, 2026-08-19 18:08 IST.
+  const [since, setSince] = useState('2026-08-19T18:08');
+
+  async function checkHealth() {
+    setChecking(true); setErr(null);
+    try { setHealth(await csopsGet('getExotelHealth', {}, session)); }
+    catch (e) { setErr(String(e.message || e)); }
+    finally { setChecking(false); }
+  }
+  useEffect(() => { if (session) checkHealth(); /* eslint-disable-line */ }, [session]);
+
+  async function runBackfill() {
+    // Irreversible-ish and long-running: confirm, because a mistyped `since` walks
+    // months of history rather than a day.
+    if (!window.confirm(
+      `Backfill Exotel calls from ${since} (IST) to now?\n\n`
+      + 'Creates call records only — NO tickets. Safe to re-run: writes are idempotent.'
+    )) return;
+    setRunning(true); setErr(null); setResult(null);
+    try {
+      // datetime-local is IST wall-clock; send a real instant.
+      const iso = new Date(since + ':00+05:30').toISOString();
+      setResult(await csopsPost('runExotelBackfill', { since: iso }, session));
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setRunning(false); }
+  }
+
+  const dotColor = !health ? 'var(--t3)'
+    : !health.configured ? 'var(--t3)'
+    : health.reachable ? 'var(--ok-fg, #16a34a)' : '#dc2626';
+
+  return (
+    <div style={{ background:'var(--surface-1)', border:'1px solid var(--border-1)', borderRadius:8, padding:18, marginBottom:18 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+          <PhoneCall size={16} strokeWidth={1.75} style={{ color:'var(--accent)' }} />
+          <div>
+            <h2 style={{ margin:0, fontSize:15, fontWeight:700 }}>Exotel</h2>
+            <p style={{ margin:'2px 0 0', color:'var(--t3)', fontSize:12 }}>
+              Live call log. Polls every 2 minutes — no webhook or flow change needed.
+            </p>
+          </div>
+        </div>
+        <button onClick={checkHealth} disabled={checking} style={btnSecondary}>
+          <RefreshCw size={12} style={{ marginRight:5, verticalAlign:-2 }} />
+          {checking ? 'Checking…' : 'Re-check'}
+        </button>
+      </div>
+
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:14, fontSize:12.5, color:'var(--t2)', flexWrap:'wrap' }}>
+        <span style={{ width:8, height:8, borderRadius:999, background:dotColor, display:'inline-block' }} />
+        {!health ? 'Checking…'
+          : !health.configured ? <span>Not configured — <code style={mono}>{health.reason}</code></span>
+          : health.reachable
+            ? <span>
+                Connected to <code style={mono}>{health.account_sid}</code> ({health.latency_ms}ms).
+                {health.latest_logged?.started_at
+                  ? ` Last call logged ${new Date(health.latest_logged.started_at).toLocaleString('en-IN')}.`
+                  : ' No Exotel calls logged yet.'}
+              </span>
+            : <span style={{ color:'#dc2626' }}>
+                Unreachable — {health.error} (HTTP {health.http_status}). Check EXOTEL_API_KEY / EXOTEL_API_TOKEN.
+              </span>}
+      </div>
+
+      <div style={{ marginTop:16, paddingTop:14, borderTop:'1px solid var(--border-1)' }}>
+        <div style={{ display:'flex', alignItems:'flex-end', gap:10, flexWrap:'wrap' }}>
+          <div>
+            <label style={{ display:'block', fontSize:11, color:'var(--t3)', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em' }}>
+              Backfill from (IST)
+            </label>
+            <input type="datetime-local" value={since} onChange={e => setSince(e.target.value)}
+                   style={{ ...input, width:220 }} />
+          </div>
+          <button onClick={runBackfill} disabled={running || !health?.reachable} style={btnPrimary}>
+            <Activity size={13} /> {running ? 'Backfilling…' : 'Run backfill'}
+          </button>
+        </div>
+        <p style={{ margin:'9px 0 0', color:'var(--t3)', fontSize:11.5, maxWidth:640 }}>
+          Recovers calls Pitstop missed. Writes call records only — <strong>no tickets</strong>, so a
+          day of history will not flood the queue or reset SLA clocks. Idempotent: re-running never
+          duplicates.
+        </p>
+      </div>
+
+      {err && <div style={{ ...errBox, marginTop:12, marginBottom:0 }}>{err}</div>}
+      {result && (
+        <pre style={{ ...mono, marginTop:12, marginBottom:0, padding:12, background:'var(--surface-2)',
+                      border:'1px solid var(--border-1)', borderRadius:6, overflowX:'auto', fontSize:11.5 }}>
+{JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
 
