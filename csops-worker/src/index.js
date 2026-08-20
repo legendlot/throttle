@@ -23,6 +23,7 @@ import { exotelConfigured, makeExotelClient } from './telephony/exotel-client.js
 import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
+import { makeCallContext } from './telephony/call-context.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -583,7 +584,11 @@ function gateRequirements(current, target, disposition, ticket, attachments_coun
 // ── Entrypoint ───────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  // `ctx` is required by the Exotel call-flow webhooks: they must return a bare 200
+  // immediately (Exotel is holding a live customer on the line) and do their work in
+  // ctx.waitUntil(). Adding the third parameter is backward-compatible - Cloudflare has
+  // always passed it.
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
     const url = new URL(request.url);
@@ -594,6 +599,15 @@ export default {
     }
     if (url.pathname === '/webhooks/myoperator' && request.method === 'POST') {
       return handleMyOperatorWebhook(request, env);
+    }
+    // Exotel fires these as GET from inside a call flow — there is no header slot, so
+    // the shared secret travels in the query string (same posture as the MyOperator
+    // webhook). Both mounted before the JWT gate.
+    if (url.pathname === '/webhooks/exotel/warm') {
+      return handleExotelWarm(request, url, env, ctx);
+    }
+    if (url.pathname === '/webhooks/exotel/agent') {
+      return handleExotelAgent(request, url, env, ctx);
     }
     if (url.pathname === '/webhooks/bitespeed' && request.method === 'POST') {
       return handleBiteSpeedWebhook(request, env);
@@ -756,6 +770,7 @@ async function handleGet(action, params, auth, env) {
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
     case 'getExotelHealth':  return getExotelHealth(params, auth, env);
     case 'getCallRecording': return getCallRecording(params, auth, env);
+    case 'getCallContext':   return getCallContext(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -3105,6 +3120,191 @@ async function getCallRecording(params, auth, env) {
     { method: 'PATCH', body: JSON.stringify({ recording_url: url }) }).catch(() => {});
 
   return ok({ playable: true, url, expires_in_minutes: 60 });
+}
+
+// ── Exotel call-flow webhooks (Phase 4 — the screen-pop) ─────────────────────
+
+/**
+ * Constant-time-ish comparison of the shared secret. Not a timing-attack-proof
+ * primitive, but it avoids the trivial early-exit of `!==` on a token in a query
+ * string that lands in logs and referrers.
+ */
+/**
+ * Run background work without blocking the response. Falls back to fire-and-forget if
+ * ctx is somehow absent — the isolate may be torn down early, but a missing ctx must
+ * never turn a webhook into a 500 while a customer is on the line.
+ */
+function background(ctx, promise) {
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(promise);
+  else promise.catch(e => console.error('[bg] unsupervised task failed', e?.message || e));
+}
+
+function exotelWebhookAuthed(url, env) {
+  const given = url.searchParams.get('token') || '';
+  const want = env.EXOTEL_WEBHOOK_TOKEN || '';
+  if (!want || given.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= given.charCodeAt(i) ^ want.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * START-OF-FLOW hook. Exotel calls this the moment a call lands, before the greeting
+ * finishes, so we have the greeting (~6s) plus the ring (up to 30s) to have the
+ * customer's whole picture ready.
+ *
+ * ⚠️ RETURNS A BARE 200 IMMEDIATELY. Exotel is holding a live customer on the line
+ * while it waits for this response — every lookup happens in ctx.waitUntil(). If this
+ * ever blocks, a customer hears silence, which is far worse than a missing screen-pop.
+ *
+ * ⚠️ This is an ACCELERATOR, not a source of truth. The poller remains the completeness
+ * guarantee (a caller who hangs up during the greeting may fire nothing at all), so
+ * nothing downstream may assume this ran.
+ */
+async function handleExotelWarm(request, url, env, ctx) {
+  if (!exotelWebhookAuthed(url, env)) return err('Unauthorized', 401);
+
+  const sid   = url.searchParams.get('CallSid') || url.searchParams.get('sid');
+  const from  = url.searchParams.get('CallFrom') || url.searchParams.get('From');
+  const to    = url.searchParams.get('CallTo') || url.searchParams.get('To');
+  const dir   = url.searchParams.get('Direction') || 'incoming';
+
+  // Respond first, work after. Nothing below is allowed to delay the response.
+  background(ctx, (async () => {
+    try {
+      const pipe = callPipeline(env);
+      const context = makeCallContext({ env, sb, toE164, shopifyLookup });
+      const phone = normaliseDirection(dir, 'exotel') === 'outgoing' ? to : from;
+
+      // Create the row NOW so the agent's browser can see an in-flight call. status is
+      // NOT NULL, so an in-flight call must be written as in_progress rather than blank.
+      const norm = {
+        provider: 'exotel',
+        call_session_id: sid, provider_call_sid: sid,
+        account_id: null, department_id: null,
+        direction: normaliseDirection(dir, 'exotel'),
+        exophone: url.searchParams.get('CallTo') || null,
+        customer_phone: phone,
+        started_at: new Date().toISOString(),
+        legs: [], agent_ref: {},
+      };
+      const row = await pipe.upsertCall(norm, {
+        status: 'in_progress',
+        started_at: norm.started_at,
+        raw_meta: { last_event: 'warm', provider: 'exotel' },
+      });
+      if (row?.id) await context.warm(row.id, phone);
+      console.log(`[exotel:warm] sid=${sid} phone=${phone ? 'yes' : 'none'} warmed=${!!row?.id}`);
+    } catch (e) {
+      console.error(`[exotel:warm] failed sid=${sid}: ${e?.message || e}`);
+    }
+  })());
+
+  return json({ ok: true });
+}
+
+/**
+ * AGENT hook — Exotel's own `agent-passthru-url` on the Connect applet: "when dialling
+ * multiple agents, we will pass the details of the currently active agent to this URL".
+ *
+ * This is what makes the pop land on the RIGHT agent's screen, and it doubles as the
+ * live attribution fix. It is a notification, not a step in the call path, so it cannot
+ * block the customer — which is why it is preferred over inserting a Passthru applet
+ * ahead of Connect.
+ */
+async function handleExotelAgent(request, url, env, ctx) {
+  if (!exotelWebhookAuthed(url, env)) return err('Unauthorized', 401);
+
+  const sid = url.searchParams.get('CallSid') || url.searchParams.get('sid');
+  // Exotel's parameter naming here is not pinned down in the docs, and the observed
+  // call payload used `To` for the agent leg. Accept the plausible spellings rather
+  // than guess one; unknown values simply fail to match the roster and get logged.
+  const agentRef = url.searchParams.get('AgentId')
+    || url.searchParams.get('AgentSipId')
+    || url.searchParams.get('CurrentAgent')
+    || url.searchParams.get('To')
+    || url.searchParams.get('DialWhomNumber');
+
+  background(ctx, (async () => {
+    try {
+      if (!sid || !agentRef) {
+        console.log(`[exotel:agent] no agent ref sid=${sid} params=${JSON.stringify([...url.searchParams.keys()])}`);
+        return;
+      }
+      const roster = await sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
+        + `&select=user_id,sip_id,agent_phone&limit=500`, env);
+      const wantSip = String(agentRef).toLowerCase();
+      const wantTel = toE164(agentRef);
+      const hit = (roster.data || []).find(a =>
+        (a.sip_id && a.sip_id.toLowerCase() === wantSip) ||
+        (a.agent_phone && wantTel && a.agent_phone === wantTel));
+      if (!hit) {
+        console.log(`[exotel:agent] unmatched agent ref "${agentRef}" sid=${sid}`);
+        return;
+      }
+      const prof = await sb(`/rest/v1/users_profile?id=eq.${hit.user_id}&select=full_name&limit=1`, env);
+      await sb(`/rest/v1/cs_calls?provider=eq.exotel&provider_call_sid=eq.${encodeURIComponent(sid)}`, env, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          agent_user_id: hit.user_id,
+          agent_name: prof.data?.[0]?.full_name || null,
+          agent_sip_id: hit.sip_id || null,
+        }),
+      });
+      console.log(`[exotel:agent] sid=${sid} -> ${prof.data?.[0]?.full_name || hit.user_id}`);
+    } catch (e) {
+      console.error(`[exotel:agent] failed sid=${sid}: ${e?.message || e}`);
+    }
+  })());
+
+  return json({ ok: true });
+}
+
+/**
+ * The screen-pop payload, for the browser.
+ *
+ * `mine=true` returns the caller's own in-flight call — that is what the CallBar polls
+ * so a pop only ever lands on the agent actually on the call.
+ */
+async function getCallContext(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const context = makeCallContext({ env, sb, toE164, shopifyLookup });
+
+  const callId = params.get('call_id');
+  const phone = params.get('phone');
+
+  if (params.get('mine') === 'true') {
+    // In-flight call assigned to me. Bounded to the last 30 min so a stuck
+    // in_progress row cannot pop on someone's screen indefinitely.
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const r = await sb(`/rest/v1/cs_calls?status=eq.in_progress`
+      + `&agent_user_id=eq.${auth.userId}`
+      + `&started_at=gte.${encodeURIComponent(since)}`
+      + `&select=id,provider_call_sid,customer_phone,direction,started_at,ticket_id,customer_context`
+      + `&order=started_at.desc&limit=1`, env);
+    const call = r.data?.[0];
+    if (!call) return ok({ active: false });
+    return ok({
+      active: true,
+      call: { id: call.id, phone: call.customer_phone, direction: call.direction,
+              started_at: call.started_at, ticket_id: call.ticket_id },
+      context: call.customer_context || await context.assemble({ phone: call.customer_phone, excludeCallId: call.id }),
+    });
+  }
+
+  if (callId) {
+    const r = await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(callId)}`
+      + `&select=id,customer_phone,customer_context&limit=1`, env);
+    const call = r.data?.[0];
+    if (!call) return err('Call not found', 404);
+    // Stored context is a snapshot of what the agent saw; fall back to live assembly
+    // when the warm hook never ran (it is an accelerator, not a guarantee).
+    return ok(call.customer_context
+      || await context.assemble({ phone: call.customer_phone, excludeCallId: call.id }));
+  }
+
+  if (phone) return ok(await context.assemble({ phone }));
+  return err('call_id, phone or mine=true required');
 }
 
 // ── Exotel operations ────────────────────────────────────────────────────────

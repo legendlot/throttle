@@ -8,6 +8,7 @@ import { csopsGet } from '../../lib/csopsFetch.js';
 import { routeMatch } from '../../lib/nav.js';
 import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
 import PresenceToggle from '../../components/PresenceToggle.js';
+import CallPop from '../../components/CallPop.js';
 
 // Routes that own their own gutters and their own scrolling. The inbox runs two independent
 // scroll areas (thread list + message list) edge to edge, so `main` must neither pad it nor
@@ -129,6 +130,10 @@ function AuthLayoutInner({ children }) {
         </main>
       </div>
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} perms={perms || {}} session={session} />
+      {/* Mounted in the LAYOUT, not a page: a call can arrive while the agent is
+          anywhere in Pitstop, and a page-mounted pop would unmount on navigation
+          mid-call. Renders nothing unless the agent has a live call. */}
+      <CallPop />
     </div>
   );
 }
