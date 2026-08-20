@@ -11,6 +11,7 @@ import '@xyflow/react/dist/style.css';
 import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag } from 'lucide-react';
 import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
 import { humanOutcome } from './labels.js';
+import { isNot } from '@/lib/journeyTrigger.js';
 
 const STEP_META = {
   send:          { label: 'Send',              icon: null,      color: 'var(--accent, #F2CD1A)' },
@@ -49,7 +50,12 @@ function TriggerNode({ data, selected }) {
           the trigger form (S241). */}
       {t.type === 'event' && t.filter && Object.keys(t.filter).length > 0 && (
         <div className="mono" style={{ marginTop: 3, fontSize: 10, color: '#B45309' }}>
-          {Object.entries(t.filter).map(([k, v]) => `${k}=${v}`).join(' & ')}
+          {/* ⚠️ A `ne` filter stores an OBJECT ({not: 'L.O.T Build'}, S273). A bare `${v}`
+              rendered it as `primary_category=[object Object]` — which is not merely ugly:
+              it shows an EXCLUSION wearing an equals sign, i.e. its own opposite. That is
+              the exact failure triggerSummary's comment warns about; the list got the
+              guard and the canvas did not. Keep the two in step. */}
+          {Object.entries(t.filter).map(([k, v]) => (isNot(v) ? `${k}≠${v.not}` : `${k}=${v}`)).join(' & ')}
         </div>
       )}
       <Handle type="source" position={Position.Right} id="entry" />
