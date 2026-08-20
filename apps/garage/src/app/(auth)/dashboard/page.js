@@ -29,6 +29,26 @@ import { useProducts } from '../../../hooks/useProducts.js';
 
 const fmt = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN');
 
+// Local-date string N days back, for a server-side date window. Built from the local
+// calendar date rather than an ISO slice of a UTC timestamp: the floor works in IST, and
+// toISOString() would roll the boundary back a day for anything before 05:30.
+function daysAgoStr(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// The dashboard bar list is narrow, so the codes stay short here — the Reports tab spells
+// them out in full. 'Not yet set' is kept verbatim: it is a real state (units awaiting a
+// Store decision), not an unknown, and shortening it would read like a data gap.
+const DISPO_SHORT = {
+  UDR: 'UDR — re-dispatch',
+  CXR: 'CXR — to repair',
+  BRV: 'BRV — to repair',
+  Loss: 'Loss — write-off',
+};
+
 function formatActivityTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -69,7 +89,13 @@ export default function OverviewPage() {
         garageFetch('getDashboard',  {}, session),
         garageFetch('getGRNSummary', {}, session),
         garageFetch('getIssues',     {}, session),
-        garageFetch('getReturns',    {}, session),
+        // ⚠️ Was getReturns → store.returns_log, the v1 table with ZERO rows. Returns v2
+        // (RULE-RET-001, S104) moved to return_units and this panel was never repointed, so
+        // it read "No returns in the last 30 days" against 6,517 real returns — for months,
+        // and silently, because an empty panel looks like a quiet week rather than a fault.
+        // Same 30-day window as before, now applied SERVER-side (it used to slice client-side
+        // over whatever the 100-row cap returned).
+        garageFetch('getReturnsSummary', { from: daysAgoStr(30) }, session),
         garageFetch('getShipments',  {}, session),
         garageFetch('getProductionRuns', { status: 'Submitted' }, session).then(d => Array.isArray(d) ? d : []).catch(() => []),
       ]);
@@ -171,19 +197,16 @@ export default function OverviewPage() {
   const urgentCount = attention.filter(a => a.sev === 'bad').length;
   const visibleAttention = attention.slice(0, 8);
 
-  // ── Returns by channel (last 30d) ────────────────────────────────────
-  const returnsByChannel = useMemo(() => {
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-    const map = {};
-    (sections.returns || []).forEach(r => {
-      const d = new Date(r.return_date || r.created_at || '');
-      if (isNaN(d) || d < cutoff) return;
-      const ch = r.channel || 'Other';
-      map[ch] = (map[ch] || 0) + (Number(r.qty) || 1);
-    });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  }, [sections.returns]);
-  const returnsMax = returnsByChannel.length ? Math.max(...returnsByChannel.map(([, q]) => q)) : 0;
+  // ── Returns by disposition (last 30d) ────────────────────────────────
+  // Disposition, not channel: v2 records where a returned unit is GOING (UDR back out,
+  // CXR/BRV to repair, Loss written off), and has no channel at all. The worker already
+  // aggregates and applies the window, so this only shapes it for the bar list.
+  const returnsByDisposition = useMemo(() => (sections.returns || [])
+    .map((r) => [DISPO_SHORT[r.disposition] || r.disposition, Number(r.units) || 0])
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6), [sections.returns]);
+  const returnsMax = returnsByDisposition.length ? Math.max(...returnsByDisposition.map(([, q]) => q)) : 0;
 
   return (
     <div>
@@ -276,13 +299,13 @@ export default function OverviewPage() {
 
             {/* RIGHT — returns mini + recent activity */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <Panel title="Returns by Channel" icon={TrendingUp}
+              <Panel title="Returns by Disposition" icon={TrendingUp}
                 action={<button onClick={() => router.push('/returns/shipments')} style={linkBtn}>Open<ArrowRight size={12} strokeWidth={1.75} /></button>}>
-                {returnsByChannel.length === 0 ? (
+                {returnsByDisposition.length === 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--t3)' }}>No returns in the last 30 days.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-                    {returnsByChannel.map(([ch, qty]) => (
+                    {returnsByDisposition.map(([ch, qty]) => (
                       <div key={ch}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 5 }}>
                           <Route size={14} strokeWidth={1.75} style={{ color: 'var(--info-fg)' }} />
