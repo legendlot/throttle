@@ -107,7 +107,20 @@ async function sbCount(path, env) {
 // Normalise an India phone to E.164 (mirrors createTicket's logic).
 function toE164(raw) {
   if (!raw) return null;
-  const d = String(raw).replace(/\D/g, '');
+  let d = String(raw).replace(/\D/g, '');
+  // ⚠️ Strip leading zeros BEFORE classifying (S301, 2026-08-20). Exotel returns
+  // Indian numbers in NATIONAL format — `09959953604` — where MyOperator sent bare
+  // 10-digit or 91-prefixed. The old code fell through to `+09959953604`, which is
+  // not a valid E.164 number and, worse, is a DIFFERENT KEY from the `+91…` that all
+  // 17,703 MyOperator rows use: coalescing (RULE-PITSTOP-018), the Shopify lookup and
+  // WhatsApp thread matching would all silently miss, so every Exotel caller would
+  // show as "Unknown caller" with no order history. Found on the first live poll.
+  //
+  // Safe for international numbers too: a country code never begins with 0, so a
+  // leading zero is always a trunk prefix (0…) or an international prefix (00…).
+  // `00974…` → `+974…` is correct.
+  d = d.replace(/^0+/, '');
+  if (!d) return null;
   if (d.length === 10) return `+91${d}`;
   if (d.length === 12 && d.startsWith('91')) return `+${d}`;
   return `+${d}`;
