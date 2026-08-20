@@ -343,9 +343,13 @@ export default function ReportsPage() {
   async function loadInward() {
     setTabLoading('inward', true);
     try {
-      const rows = await garageFetch('getGRNSummary', {}, session);
-      const arr = (Array.isArray(rows) ? rows : []).filter((r) => withinRange(r.grn_date, fromDate, toDate));
-      setGrnData(arr);
+      // Server-side window, same fix as the Line Flush and Production reports: this used to
+      // fetch the worker's default 500 and filter by grn_date in the browser, so any period
+      // older than the newest 500 of 1,547 GRNs read short. No client-side re-filter — the
+      // server applied the same bounds to the same column.
+      const rows = await garageFetch('getGRNSummary',
+        { from: fromDate || undefined, to: toDate || undefined, limit: 5000 }, session);
+      setGrnData(Array.isArray(rows) ? rows : []);
     } catch (e) {
       showToast(e.message || 'Failed to load GRN summary', 'error');
       setGrnData([]);
