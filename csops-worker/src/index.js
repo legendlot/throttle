@@ -3458,14 +3458,25 @@ async function getTelephonyAgents(_params, auth, env) {
     sb(`/rest/v1/users_profile?active=is.true&select=id,full_name,role&order=full_name.asc`, env),
   ]);
   const byId = Object.fromEntries((agents.data || []).map(a => [a.user_id, a]));
-  // Return EVERY active user, not just the mapped ones — the useful question on this
-  // screen is "who cannot be called from", and a list of only the working rows hides
-  // exactly that.
-  return ok({
-    users: (profiles.data || []).map(u => ({
+
+  // Scope to people who could plausibly place a call, PLUS anyone already configured.
+  //
+  // The first version returned every active user so that "who cannot call" was visible.
+  // In practice that is 77 rows, 71 of them `viewer` accounts that will never touch a
+  // phone — which buries the one row that matters (a cs_agent with no device). Showing
+  // everything and showing nothing fail the same way.
+  const CALLING_ROLES = new Set(['cs_agent', 'cs_lead', 'admin', 'super_admin']);
+  const users = (profiles.data || [])
+    .filter(u => CALLING_ROLES.has(u.role) || byId[u.id])
+    .map(u => ({
       user_id: u.id, full_name: u.full_name, role: u.role,
       telephony: byId[u.id] || null,
-    })),
+    }));
+
+  return ok({
+    users,
+    // The number worth acting on: CS people who cannot currently place a call.
+    needs_setup: users.filter(u => !u.telephony?.is_active).length,
     exophone: env.EXOTEL_EXOPHONE || EXOPHONE_DEFAULT,
   });
 }
