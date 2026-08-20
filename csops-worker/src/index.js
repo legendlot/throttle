@@ -12,6 +12,15 @@
  * Plan:  docs/superpowers/plans/2026-05-26-pitstop.md
  */
 
+// ── Telephony ────────────────────────────────────────────────────────────────
+// The vendor-neutral call pipeline (S301). MyOperator and Exotel both normalise into
+// one NormalisedCall and call in here, so ticket creation, RULE-PITSTOP-018 coalescing
+// and agent attribution exist once. See src/telephony/call-pipeline.js.
+import {
+  makeCallPipeline, agentEmailFromLegs, normaliseDirection,
+} from './telephony/call-pipeline.js';
+
+
 // ── CORS ─────────────────────────────────────────────────────────────────────
 
 const CORS = {
@@ -464,12 +473,11 @@ async function visibilityFilters(params, auth, env) {
 // ── Domain constants ─────────────────────────────────────────────────────────
 
 const SLA_DAYS = { pending: 7, query: 1, no_action: 1, awaiting_info: 7, replacement: 5, refund: 7, repair: 14 };
-// Coalesce window for repeat calls (RULE-PITSTOP-018): a new answered call from a
-// phone that already has an OPEN ticket in the same department created within this
-// window attaches to that ticket instead of spawning a duplicate. Every call is
-// still logged independently in cs_calls. 24h captures dropped-call + callback +
-// same-day follow-up bursts without merging genuinely-separate later interactions.
-const COALESCE_WINDOW_MS = 24 * 60 * 60 * 1000;
+// COALESCE_WINDOW_MS (RULE-PITSTOP-018) is imported from the telephony pipeline — it
+// governs BOTH vendors, so it lives with the code that applies it. A new answered call
+// from a phone that already has an OPEN ticket in the same department inside the window
+// attaches to that ticket instead of spawning a duplicate; every call is still logged
+// independently in cs_calls.
 
 const SHARED_STAGES = [
   'intake', 'awaiting_evidence', 'verified', 'pickup_scheduled',
@@ -2784,6 +2792,16 @@ async function closeTicket(body, auth, env) {
   return advanceStage({ ticket_id, target_stage: 'closed', patch: { closed_reason: reason || 'resolved' } }, auth, env, new Request('https://x'));
 }
 
+// ── Telephony pipeline binding ───────────────────────────────────────────────
+// Dependency injection rather than imports: sb / shopifyLookup / resolveAgentByEmail
+// all live in this file, so call-pipeline.js importing them would be circular.
+// Cheap to construct — it is a closure over `env`, not a connection.
+function callPipeline(env) {
+  return makeCallPipeline({
+    env, sb, toE164, shopifyLookup, resolveAgentByEmail, inferOrderLink, SLA_DAYS,
+  });
+}
+
 // ── MyOperator webhook ───────────────────────────────────────────────────────
 
 // Resolve a MyOp account by slug. Returns null if not found or inactive.
@@ -2823,31 +2841,21 @@ async function handleMyOperatorWebhook(request, env) {
   if (type === 'call.summary')                                return webhookCallSummary(body, env, account);
   return json({ ok: true, ignored: type });
 }
-
 // MyOperator wraps the call details in a nested `payload` object; the envelope
 // carries session_id / customer_identifier / system_identifier / direction /
 // timestamp / event_type at the top level. Normalise both into one flat shape.
-// MyOperator's `direction` lands in store.cs_calls.direction, which is CHECK-constrained to
-// exactly {'incoming','outgoing'}. Passing the vendor's string through raw is the same shape
-// that lost every shared Instagram reel (see metaAttachmentKind): one unfamiliar value and the
-// INSERT is rejected — and upsertCsCall does not check the result, so the call record would
-// vanish silently. NULL is deliberate for an unrecognised value: a CHECK passes on NULL, so the
-// call is still logged (minus its direction) instead of being dropped entirely.
-// Live vocabulary as of 2026-08-04: 15,906 rows, only 'incoming'/'outgoing' — so this is a
-// guard against future drift, not a bug being fixed.
-function myopDirection(v) {
-  const d = String(v || '').toLowerCase().trim();
-  if (d === 'incoming' || d === 'inbound')  return 'incoming';
-  if (d === 'outgoing' || d === 'outbound') return 'outgoing';
-  if (d) console.log(`[myop] unmapped direction "${v}" — storing null so the call still records`);
-  return null;
-}
-
+//
+// `direction` is mapped by the shared normaliseDirection() rather than passed through
+// raw: cs_calls.direction is CHECK-constrained to {'incoming','outgoing'}, and one
+// unfamiliar vendor string would reject the INSERT and lose the call. That is the
+// metaAttachmentKind failure class which silently dropped every shared Instagram reel.
+// Live vocabulary as of 2026-08-04: 15,906 rows, only 'incoming'/'outgoing' — so this
+// is a guard against future drift, not a bug being fixed.
 function parseMyOp(body) {
   const p = (body && body.payload) || {};
   return {
     session_id: body.session_id || null,
-    direction:  myopDirection(body.direction || p.direction),   // 'incoming' | 'outgoing' | null
+    direction:  normaliseDirection(body.direction || p.direction, 'myop'),
     did:        body.system_identifier || p.did || null,
     phone:      body.customer_identifier || p.customer_number || null,
     timestamp:  body.timestamp || null,
@@ -2859,39 +2867,24 @@ function parseMyOp(body) {
   };
 }
 
-// MyOperator delivers one leg per routing hop. On a ROUTED call (first agent
-// misses → it rings the next, who answers) the FIRST agent leg is the one who
-// did NOT take the call; the agent who actually connected is the answered /
-// positive-duration leg, typically the terminal hop. Pick that one — not the
-// first. Falls back to the last agent-bearing leg, then the first, so a plain
-// single-agent call is unchanged. (Pruthvi S144 — Maria missed → Sunitha
-// answered, but the ticket was being attributed to Maria.)
-function pickConnectedLeg(legs) {
-  const arr = (Array.isArray(legs) ? legs : []).filter(l => l && l.agent && l.agent.email);
-  if (!arr.length) return null;
-  // status field name varies; treat as connected only when it positively says so
-  const isConnected = (l) => {
-    const s = String(l.status || l.leg_status || l.disposition || l.call_status || '').toLowerCase();
-    if (!s) return null; // no status signal
-    if (/no.?answer|missed|fail|reject|cancel|abandon|busy|unanswer/.test(s)) return false;
-    return /answer|connect|complet|success|talk|bridge/.test(s);
+// MyOperator's flat shape → the vendor-neutral NormalisedCall the pipeline consumes.
+// MyOperator keeps its original identity: UNIQUE (myop_account_id, call_session_id),
+// which ~20 existing call sites and that constraint both still depend on.
+function myopNorm(c, account) {
+  return {
+    provider: 'myoperator',
+    call_session_id: c.session_id,
+    provider_call_sid: null,
+    account_id: account?.id || null,
+    department_id: account?.default_department_id || null,
+    direction: c.direction,
+    exophone: c.did,
+    customer_phone: c.phone,
+    started_at: c.timestamp || null,
+    legs: c.legs,
+    agent_ref: {},
   };
-  const dur = (l) => Number(l.duration ?? l.duration_seconds ?? l.billsec ?? l.talk_time ?? 0) || 0;
-  // 1) explicit connected leg → prefer the terminal one
-  const connected = arr.filter(l => isConnected(l) === true);
-  if (connected.length) return connected[connected.length - 1];
-  // 2) positive-duration leg → prefer the terminal one
-  const talked = arr.filter(l => dur(l) > 0);
-  if (talked.length) return talked[talked.length - 1];
-  // 3) no status/duration signal → the LAST agent leg beats the first for routed calls
-  return arr[arr.length - 1];
 }
-
-function agentEmailFromLegs(legs) {
-  const l = pickConnectedLeg(legs);
-  return (l && l.agent && l.agent.email) || null;
-}
-
 // Best-effort agent resolution by email via the GoTrue admin API. Never throws.
 async function resolveAgentByEmail(email, env) {
   if (!email) return { id: null, name: null };
@@ -2910,162 +2903,50 @@ async function resolveAgentByEmail(email, env) {
   } catch { return { id: null, name: null }; }
 }
 
-async function insertHistorySystem(ticket_id, field_name, old_value, new_value, note, env) {
-  await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
-    ticket_id, field_name,
-    old_value: old_value == null ? null : String(old_value),
-    new_value: new_value == null ? null : String(new_value),
-    note,
-    changed_by_user_id: null, changed_by_name: 'MyOperator (auto)',
-  }) }).catch(() => {});
-}
+// insertHistorySystem() and upsertCsCall() moved to src/telephony/call-pipeline.js
+// (S301) — they are vendor-neutral and Exotel needs them too. The INSERT-result check
+// added there is the one behaviour change: it was silently dropping failed rows.
 
-// Upsert a cs_calls row keyed on (account, session). Idempotent and additive —
-// the call.answered / call.end / call.summary legs each patch in their own fields.
-async function upsertCsCall(account, c, patch, env) {
-  const existing = await sb(
-    `/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_id,status&limit=1`,
-    env,
-  );
-  if (existing.data?.[0]) {
-    await sb(`/rest/v1/cs_calls?id=eq.${existing.data[0].id}`, env, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    });
-    return existing.data[0];
-  }
-  const ins = await sb(`/rest/v1/cs_calls`, env, {
-    method: 'POST',
-    body: JSON.stringify({
-      myop_account_id:  account.id,
-      cs_department_id: account.default_department_id || null,
-      call_session_id:  c.session_id,
-      direction:        c.direction,
-      did:              c.did,
-      customer_phone:   toE164(c.phone),
-      ...patch,
-    }),
-  });
-  // The result was never checked: a rejected INSERT returned null and the caller carried on,
-  // so a call could disappear with no trace anywhere. Log it — a customer phoning us and
-  // leaving no record is the same failure class as the dropped Instagram reels.
-  if (!ins.ok) {
-    console.error(`[myop] cs_calls insert failed ${ins.status} session=${c.session_id} `
-      + `dir=${c.direction} ${JSON.stringify(ins.data)?.slice(0, 200)}`);
-    return null;
-  }
-  return ins.data?.[0] || null;
-}
 
 async function webhookCallAnswered(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
+  const norm = myopNorm(c, account);
+  const pipe = callPipeline(env);
 
   // 1) cs_calls — record the answered state (idempotent)
-  await upsertCsCall(account, c, {
+  await pipe.upsertCall(norm, {
     status: 'answered',
     started_at: c.timestamp || new Date().toISOString(),
     raw_meta: { last_event: 'answered' },
-  }, env);
-
-  // 2) cs_tickets — auto-create if not present
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_no&limit=1`, env);
-  if (existing.data?.[0]) {
-    // Already created — make sure cs_calls.ticket_id is linked
-    await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
-      method: 'PATCH', body: JSON.stringify({ ticket_id: existing.data[0].id }),
-    });
-    return json({ ok: true, deduped: true, ticket_no: existing.data[0].ticket_no });
-  }
-
-  const phone = toE164(c.phone);
-
-  // Coalesce repeat calls (RULE-PITSTOP-018): if this phone already has an OPEN
-  // ticket in the same department created within COALESCE_WINDOW_MS, attach this
-  // call to it (cs_calls.ticket_id + a history note) rather than spawning a
-  // duplicate. A customer who calls several times — dropped + callback + same-day
-  // follow-up — stays on one ticket; every call is still its own cs_calls row.
-  if (phone) {
-    const sinceIso = new Date(Date.now() - COALESCE_WINDOW_MS).toISOString();
-    const dept = account?.default_department_id || null;
-    const deptFilter = dept ? `&cs_department_id=eq.${dept}` : `&cs_department_id=is.null`;
-    const open = await sb(
-      `/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(phone)}`
-      + `&stage=not.in.(closed,cancelled,rejected)`
-      + `&created_at=gte.${encodeURIComponent(sinceIso)}`
-      + deptFilter
-      + `&select=id,ticket_no&order=created_at.desc&limit=1`, env);
-    if (open.data?.[0]) {
-      const keep = open.data[0];
-      await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
-        method: 'PATCH', body: JSON.stringify({ ticket_id: keep.id }),
-      });
-      await insertHistorySystem(keep.id, 'call_coalesced', null, c.session_id,
-        `repeat call coalesced into this ticket (session ${c.session_id}${c.direction ? ', ' + c.direction : ''}) — see call log`, env);
-      return json({ ok: true, coalesced_into: keep.ticket_no });
-    }
-  }
-
-  const agentEmail = agentEmailFromLegs(c.legs);   // usually null on answered; backfilled by call.summary
-  const [agent, shop] = await Promise.all([ resolveAgentByEmail(agentEmail, env), shopifyLookup({ phone }, env) ]);
-
-  const year = String(new Date().getFullYear());
-  const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
-  if (!seqRes.ok) return err('seq failed', 500);
-  const seq = Number(seqRes.data);
-  if (!Number.isFinite(seq) || seq <= 0) return err('seq invalid', 500);
-  const ticket_no = `CS-${year}-${String(seq).padStart(5, '0')}`;
-
-  const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
-    ticket_no, call_session_id: c.session_id, auto_created: true,
-    myop_account_id: account?.id || null,
-    cs_department_id: account?.default_department_id || null,
-    created_by_user_id: null, created_by_name: 'MyOperator (auto)',
-    intake_channel: 'phone', call_direction: c.direction, call_did: c.did,
-    call_answered_at: c.timestamp || new Date().toISOString(),
-    customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
-    customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
-    disposition: 'pending', issue_description: '[Pending — auto-created from call]',
-    // Link the order when it is unambiguous — the Shopify lookup above is already in hand,
-    // so this costs no extra API call.
-    ...(inferOrderLink(shop) || {}),
-    due_at: new Date(Date.now() + (SLA_DAYS['pending'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
-    assigned_agent_id: agent.id, assigned_agent_name: agent.name,
-    stage: 'intake',
-  }) });
-  if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
-
-  // 3) link cs_calls.ticket_id + customer/agent enrichment
-  await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
-    method: 'PATCH',
-    body: JSON.stringify({
-      ticket_id: ins.data[0].id,
-      agent_user_id: agent.id,
-      agent_name: agent.name,
-      customer_name: shop.found ? shop.customer.name : null,
-    }),
   });
 
-  await insertHistorySystem(ins.data[0].id, 'ticket_created', null, ticket_no, 'auto-created from call', env);
-  return json({ ok: true, ticket_no });
+  // 2) cs_tickets — dedupe / coalesce (RULE-PITSTOP-018) / create
+  const r = await pipe.ensureTicket(norm);
+  if (!r.ok) return err(r.error, r.status || 500);
+  if (r.deduped)        return json({ ok: true, deduped: true, ticket_no: r.ticket_no });
+  if (r.coalesced_into) return json({ ok: true, coalesced_into: r.coalesced_into });
+  return json({ ok: true, ticket_no: r.ticket_no });
 }
 
 async function webhookCallEnd(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
+  const norm = myopNorm(c, account);
+  const pipe = callPipeline(env);
 
   const answered = Number(c.duration) > 0;
   const endedAt  = c.timestamp || new Date().toISOString();
 
   // 1) cs_calls — always patch/insert; status is 'answered' if duration>0, else 'missed'
-  await upsertCsCall(account, c, {
+  await pipe.upsertCall(norm, {
     status: answered ? 'answered' : 'missed',
     ended_at: endedAt,
     duration_seconds: c.duration,
     recording_filename: c.recording_filename,
     myop_client_ref_id: c.client_ref_id,
     raw_meta: { last_event: 'end' },
-  }, env);
+  });
 
   // 2) cs_tickets — patch if exists; create only if answered (out-of-order delivery)
   const ticketPatch = {
@@ -3074,21 +2955,29 @@ async function webhookCallEnd(body, env, account) {
     call_recording_filename: c.recording_filename,
     myop_client_ref_id: c.client_ref_id,
   };
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
-  if (existing.data?.[0]) {
-    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(ticketPatch) });
-    return json({ ok: true, patched: true });
-  }
+  const patched = await pipe.patchTicketCallFields(norm, ticketPatch);
+  if (patched) return json({ ok: true, patched: true });
+
   // Missed call with no prior call.answered → cs_calls row stands alone, no ticket
   if (!answered) {
     return json({ ok: true, skipped: 'unanswered call — cs_calls row written, no ticket' });
   }
-  // out-of-order: answered call where call.end arrived before call.answered
-  const created = await webhookCallAnswered(body, env, account);
-  const createdData = await created.clone().json().catch(() => null);
-  if (!createdData?.ok) return created;
-  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(ticketPatch) });
-  return created;
+  // Out-of-order: an answered call whose call.end arrived before call.answered.
+  // ⚠️ This upsert is NOT redundant with the one above. The original delegated to
+  // webhookCallAnswered(), which stamped started_at and reset raw_meta.last_event to
+  // 'answered' before creating the ticket. Dropping it left started_at NULL whenever
+  // call.answered never followed — caught reviewing this extraction, not in testing,
+  // because the MyOperator path has carried no traffic since 2026-08-19.
+  await pipe.upsertCall(norm, {
+    status: 'answered',
+    started_at: c.timestamp || new Date().toISOString(),
+    raw_meta: { last_event: 'answered' },
+  });
+  const created = await pipe.ensureTicket(norm);
+  if (!created.ok) return err(created.error, created.status || 500);
+  await pipe.patchTicketCallFields(norm, ticketPatch);
+  if (created.coalesced_into) return json({ ok: true, coalesced_into: created.coalesced_into });
+  return json({ ok: true, ticket_no: created.ticket_no });
 }
 
 // call.summary carries agent identity (legs[].agent.email) that call.answered
@@ -3096,6 +2985,8 @@ async function webhookCallEnd(body, env, account) {
 async function webhookCallSummary(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return json({ ok: true, skipped: 'no session_id' });
+  const norm = myopNorm(c, account);
+  const pipe = callPipeline(env);
   const agentEmail = agentEmailFromLegs(c.legs);
 
   // Instrument (step 1): persist the raw legs so the next real routed call
@@ -3106,48 +2997,17 @@ async function webhookCallSummary(body, env, account) {
     legs: Array.isArray(c.legs) ? c.legs : [],
     chosen_agent_email: agentEmail || null,
   };
-  const callQ = `/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`;
-
   if (!agentEmail) {
-    await sb(callQ, env, { method: 'PATCH', body: JSON.stringify({ raw_meta: callMeta }) });
+    await pipe.attributeAgent(norm, { agent: null, callMeta });
     return json({ ok: true, skipped: 'no agent email in summary' });
   }
   const agent = await resolveAgentByEmail(agentEmail, env);
   if (!agent.id) {
-    await sb(callQ, env, { method: 'PATCH', body: JSON.stringify({ raw_meta: callMeta }) });
+    await pipe.attributeAgent(norm, { agent: null, callMeta });
     return json({ ok: true, skipped: 'agent email not matched: ' + agentEmail });
   }
-
-  // cs_calls — always backfill (works for both answered and missed calls)
-  await sb(callQ, env, {
-    method: 'PATCH',
-    body: JSON.stringify({ agent_user_id: agent.id, agent_name: agent.name, raw_meta: callMeta }),
-  });
-
-  // cs_tickets — reassign ownership to the agent who actually handled the call.
-  // A call's OWN ticket is found by its session_id (the creating call). A
-  // COALESCED repeat call (RULE-PITSTOP-018) has no ticket of its own, so fall
-  // back to the ticket it was attached to (cs_calls.ticket_id). Ownership rule
-  // (Pruthvi S156): an INCOMING answered call always takes the ticket — the
-  // agent who handled the support call owns it, even when the ticket was
-  // auto-created by an earlier OUTGOING (e.g. COD-confirmation) call. An OUTGOING
-  // call never steals a ticket it merely coalesced into. Before this, the summary
-  // keyed only on the new call's session_id, so a coalesced incoming call never
-  // found the ticket and the outgoing-call agent kept the credit.
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
-  let ticketId = existing.data?.[0]?.id || null;
-  if (!ticketId && c.direction === 'incoming') {
-    const callRow = await sb(`${callQ}&select=ticket_id`, env);
-    ticketId = callRow.data?.[0]?.ticket_id || null;
-  }
-  if (ticketId) {
-    await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}`, env, {
-      method: 'PATCH',
-      body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }),
-    });
-    await insertHistorySystem(ticketId, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
-  }
-  return json({ ok: true, assigned: agent.name });
+  const r = await pipe.attributeAgent(norm, { agent, callMeta });
+  return json({ ok: true, assigned: r.assigned });
 }
 
 // ── MyOp account registry ────────────────────────────────────────────────────
