@@ -72,6 +72,12 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
   const [progress, setProgress] = useState(null);
   const [selected, setSelected] = useState([]);
   const [dragging, setDragging] = useState(false);
+  // True from the moment we ask for the OS file picker until it resolves. The backdrop
+  // closes this modal on any outside click, so coming back from the native dialog and
+  // clicking onto the page dismissed the library — indistinguishable, to the operator,
+  // from the upload button doing nothing. The Library PAGE has no backdrop, which is
+  // exactly why uploading worked there and appeared not to here (Pruthvi, 2026-08-20).
+  const [pickerOpen, setPickerOpen] = useState(false);
   const fileRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -89,6 +95,17 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
     }
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
+
+  // Belt and braces for pickerOpen. Not every browser fires `cancel` on a file input, and a
+  // stuck `true` would mean the backdrop never closes the modal again. Regaining window focus
+  // means the native dialog is gone either way; the delay lets a real `change` land first so
+  // an actual upload still suppresses the backdrop while it runs.
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    const clear = () => setTimeout(() => setPickerOpen(false), 300);
+    window.addEventListener('focus', clear);
+    return () => window.removeEventListener('focus', clear);
+  }, [pickerOpen]);
 
   async function handleFiles(fileList) {
     const files = Array.from(fileList || []);
@@ -112,7 +129,7 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
   }
 
   return (
-    <div onClick={onClose}
+    <div onClick={() => { if (busy || pickerOpen) return; onClose(); }}
       style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()}
@@ -131,7 +148,7 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
           </span>
           <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
             <Btn onClick={load} disabled={busy}><RefreshCw size={14} /> Refresh</Btn>
-            <Btn kind="primary" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>
+            <Btn kind="primary" onClick={() => { if (!fileRef.current) return; setPickerOpen(true); fileRef.current.click(); }} disabled={busy}>
               <Upload size={14} /> {busy ? 'Uploading…' : 'Upload images'}
             </Btn>
             <Btn onClick={onClose}><X size={14} /></Btn>
@@ -211,8 +228,11 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
           </div>
         )}
 
+        {/* `cancel` fires when the native dialog is dismissed without choosing; without it
+            pickerOpen would stay true and the backdrop would stop closing the modal at all. */}
         <input ref={fileRef} type="file" accept={ACCEPT_MIME} multiple style={{ display: 'none' }}
-          onChange={(e) => { const f = e.target.files; e.target.value = ''; handleFiles(f); }} />
+          onCancel={() => setPickerOpen(false)}
+          onChange={(e) => { const f = e.target.files; e.target.value = ''; setPickerOpen(false); handleFiles(f); }} />
       </div>
     </div>
   );
