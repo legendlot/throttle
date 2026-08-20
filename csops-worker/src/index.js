@@ -24,6 +24,8 @@ import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
 import { makeCallContext } from './telephony/call-context.js';
+import { mapExotelStatus } from './telephony/exotel-adapter.js';
+import { fromIstNaive } from './telephony/exotel-client.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -609,6 +611,9 @@ export default {
     if (url.pathname === '/webhooks/exotel/agent') {
       return handleExotelAgent(request, url, env, ctx);
     }
+    if (url.pathname === '/webhooks/exotel/status' && request.method === 'POST') {
+      return handleExotelStatus(request, url, env, ctx);
+    }
     if (url.pathname === '/webhooks/bitespeed' && request.method === 'POST') {
       return handleBiteSpeedWebhook(request, env);
     }
@@ -771,6 +776,7 @@ async function handleGet(action, params, auth, env) {
     case 'getExotelHealth':  return getExotelHealth(params, auth, env);
     case 'getCallRecording': return getCallRecording(params, auth, env);
     case 'getCallContext':   return getCallContext(params, auth, env);
+    case 'getTelephonyAgents': return getTelephonyAgents(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -802,6 +808,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'cancelTicket':     return cancelTicket(body, auth, env);
     case 'escalateTicket':   return escalateTicket(body, auth, env);
     case 'closeTicket':      return closeTicket(body, auth, env);
+    case 'placeCall':        return placeCall(body, auth, env);
+    case 'setTelephonyAgent': return setTelephonyAgent(body, auth, env);
     case 'runExotelBackfill': return runExotelBackfill(body, auth, env);
     case 'createMyopAccount': return createMyopAccount(body, auth, env);
     case 'updateMyopAccount': return updateMyopAccount(body, auth, env);
@@ -3305,6 +3313,191 @@ async function getCallContext(params, auth, env) {
 
   if (phone) return ok(await context.assemble({ phone }));
   return err('call_id, phone or mine=true required');
+}
+
+// ── Click-to-call (Phase 5) ──────────────────────────────────────────────────
+
+const EXOPHONE_DEFAULT = '08044656833';   // the account's only ExoPhone
+
+/**
+ * Ring the agent, then the customer, and bridge them — all on the ExoPhone, so the
+ * customer never sees a personal number and the agent never dials one.
+ *
+ * ⚠️ Gated on cs_ticket_manage, checked FIRST (RULE-011). Placing a call spends real
+ * money and rings a real customer.
+ */
+async function placeCall(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  if (!exotelConfigured(env)) return err('Exotel not configured', 503);
+
+  const to = toE164(body?.to);
+  if (!to) return err('A valid customer number is required', 422);
+
+  // Refuse to ring ourselves. Without this, a mistyped or mis-parsed number can put
+  // the ExoPhone in a loop with itself.
+  if (to === toE164(env.EXOTEL_EXOPHONE || EXOPHONE_DEFAULT)) {
+    return err('That is our own number', 422);
+  }
+
+  const me = await sb(`/rest/v1/cs_telephony_agents?user_id=eq.${auth.userId}&is_active=is.true`
+    + `&select=sip_id,agent_phone,device_preference&limit=1`, env);
+  const agent = me.data?.[0];
+  if (!agent) {
+    return err('You have no telephony device set up. Ask an admin to add you on Admin → Telephony.', 409);
+  }
+  // Prefer the configured device, but fall back rather than fail: an agent whose SIP
+  // is not registered can still take the call on their mobile.
+  const from = (agent.device_preference === 'sip' && agent.sip_id)
+    ? agent.sip_id
+    : (agent.agent_phone || agent.sip_id);
+  if (!from) return err('Your telephony device has no SIP id or phone number', 409);
+
+  // ⚠️ CustomField is Exotel's ONLY carry-through to the callbacks, and it is capped at
+  // 128 chars. This is what makes outbound attribution exact by construction instead of
+  // inferred from a leg — so it is built compactly and asserted, never truncated blind.
+  const custom = `u=${auth.userId}` + (body?.ticket_id ? `;t=${body.ticket_id}` : '');
+  if (custom.length > 128) return err('Internal: CustomField too long', 500);
+
+  const client = makeExotelClient(env);
+  const statusCallback = env.EXOTEL_WEBHOOK_TOKEN
+    ? `https://csops.afshaan.workers.dev/webhooks/exotel/status?token=${encodeURIComponent(env.EXOTEL_WEBHOOK_TOKEN)}`
+    : undefined;
+
+  const r = await client.connect({
+    from, to,
+    callerId: env.EXOTEL_EXOPHONE || EXOPHONE_DEFAULT,
+    customField: custom,
+    statusCallback,
+    timeLimit: 3600,
+    timeout: 30,
+  });
+
+  if (!r.ok) {
+    // 429 is the shared 200/min account budget, not a per-agent limit — say so, or the
+    // agent retries into the same wall.
+    if (r.status === 429) return err('Exotel is rate-limiting the account — try again in a minute.', 429);
+    return err(`Could not place the call: ${r.error}`, 502);
+  }
+
+  const placed = r.data?.Call || {};
+  const sid = placed.Sid;
+
+  // Write the row immediately as in_progress so the call appears in the log — and the
+  // CallPop fires — the moment it starts, rather than up to 2 minutes later when the
+  // poller catches up. status is NOT NULL, so there is no "pending" resting state.
+  if (sid) {
+    const pipe = callPipeline(env);
+    await pipe.upsertCall({
+      provider: 'exotel',
+      call_session_id: sid, provider_call_sid: sid,
+      account_id: null, department_id: null,
+      direction: 'outgoing',
+      exophone: env.EXOTEL_EXOPHONE || EXOPHONE_DEFAULT,
+      customer_phone: to,
+      legs: [], agent_ref: {},
+    }, {
+      status: 'in_progress',
+      started_at: new Date().toISOString(),
+      agent_user_id: auth.userId,
+      agent_name: auth.fullName || null,
+      agent_sip_id: from.startsWith('sip:') ? from : null,
+      ticket_id: body?.ticket_id || null,
+      raw_meta: { last_event: 'placed', provider: 'exotel' },
+    });
+  }
+  console.log(`[exotel:place] sid=${sid} by=${auth.userId} device=${from.startsWith('sip:') ? 'sip' : 'tel'}`);
+  return ok({ sid, status: placed.Status || 'in-progress', from_device: from.startsWith('sip:') ? 'sip' : 'tel' });
+}
+
+/**
+ * StatusCallback for calls we placed. Gives the outbound leg its state in seconds
+ * rather than waiting for the next poll.
+ *
+ * ⚠️ Still not a source of truth — the poller reconciles regardless. This only makes
+ * the UI feel live.
+ */
+async function handleExotelStatus(request, url, env, ctx) {
+  if (!exotelWebhookAuthed(url, env)) return err('Unauthorized', 401);
+  const payload = await request.json().catch(() => null);
+
+  background(ctx, (async () => {
+    try {
+      const call = payload?.Call || payload || {};
+      const sid = call.Sid || call.CallSid;
+      if (!sid) return;
+      const talk = Number(call.Details?.ConversationDuration ?? call.ConversationDuration);
+      const { status, dial_status } = mapExotelStatus(call.Status, talk);
+      const patch = { status, dial_status, raw_meta: { last_event: 'status', provider: 'exotel' } };
+      if (Number.isFinite(talk)) patch.talk_duration_seconds = talk;
+      if (call.Duration != null) patch.duration_seconds = Number(call.Duration);
+      if (call.EndTime) patch.ended_at = fromIstNaive(call.EndTime);
+      if (call.RecordingUrl) patch.recording_url = call.RecordingUrl;
+
+      await sb(`/rest/v1/cs_calls?provider=eq.exotel&provider_call_sid=eq.${encodeURIComponent(sid)}`, env,
+        { method: 'PATCH', body: JSON.stringify(patch) });
+      console.log(`[exotel:status] sid=${sid} -> ${status}`);
+    } catch (e) {
+      console.error('[exotel:status] failed', e?.message || e);
+    }
+  })());
+
+  return json({ ok: true });
+}
+
+// ── Telephony roster (Phase 5) ───────────────────────────────────────────────
+
+/**
+ * Who can be dialled from, and on what device. This is what gates click-to-call
+ * working for a given agent, so it needs to be visible and editable rather than a
+ * table only SQL can reach.
+ */
+async function getTelephonyAgents(_params, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const [agents, profiles] = await Promise.all([
+    sb(`/rest/v1/cs_telephony_agents?select=*&order=created_at.asc`, env),
+    sb(`/rest/v1/users_profile?active=is.true&select=id,full_name,role&order=full_name.asc`, env),
+  ]);
+  const byId = Object.fromEntries((agents.data || []).map(a => [a.user_id, a]));
+  // Return EVERY active user, not just the mapped ones — the useful question on this
+  // screen is "who cannot be called from", and a list of only the working rows hides
+  // exactly that.
+  return ok({
+    users: (profiles.data || []).map(u => ({
+      user_id: u.id, full_name: u.full_name, role: u.role,
+      telephony: byId[u.id] || null,
+    })),
+    exophone: env.EXOTEL_EXOPHONE || EXOPHONE_DEFAULT,
+  });
+}
+
+async function setTelephonyAgent(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { user_id, sip_id, agent_phone, device_preference, is_active } = body || {};
+  if (!user_id) return err('user_id required');
+  if (device_preference && !['sip', 'tel'].includes(device_preference)) {
+    return err('device_preference must be sip or tel', 422);
+  }
+  const phone = agent_phone ? toE164(agent_phone) : null;
+  // An agent's number must be stored in the same shape cs_calls uses, or attribution
+  // silently never matches it — the exact class of bug that made every Exotel caller
+  // read as "Unknown caller".
+  const row = {
+    user_id,
+    provider: 'exotel',
+    sip_id: sip_id || null,
+    agent_phone: phone,
+    device_preference: device_preference || (sip_id ? 'sip' : 'tel'),
+    is_active: is_active !== false,
+    last_synced_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  const r = await sb(`/rest/v1/cs_telephony_agents?on_conflict=user_id`, env, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) return err(`Save failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ agent: r.data?.[0] || row });
 }
 
 // ── Exotel operations ────────────────────────────────────────────────────────

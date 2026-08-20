@@ -21,6 +21,7 @@ export const NAV_SETUP = [
   { id: 'shifts',      label: 'Shifts & Presence', route: '/admin/shifts',    icon: 'users', requires: 'cs_ticket_reassign' },
   { id: 'departments', label: 'Departments',   route: '/admin/departments',  icon: 'users', requires: 'cs_ticket_admin' },
   { id: 'myop',        label: 'MyOp Accounts', route: '/admin/myop',         icon: 'phone', requires: 'cs_ticket_admin' },
+  { id: 'telephony',   label: 'Telephony',     route: '/admin/telephony',    icon: 'phone', requires: 'cs_ticket_admin' },
   { id: 'wa',          label: 'WA Templates',  route: '/admin/wa-templates', icon: 'msg',   requires: 'cs_ticket_admin' },
   { id: 'tags',        label: 'Tags',          route: '/admin/tags',         icon: 'list',  requires: 'cs_ticket_admin' },
 ];
@@ -48,6 +49,7 @@ const CRUMBS = {
   '/admin/shifts':        { crumb: 'Setup · Admin',    title: 'Shifts & Presence' },
   '/admin/departments':   { crumb: 'Setup · Admin',    title: 'Departments' },
   '/admin/myop':          { crumb: 'Setup · Admin',    title: 'MyOperator Accounts' },
+  '/admin/telephony':     { crumb: 'Setup · Admin',    title: 'Telephony' },
   '/admin/wa-templates':  { crumb: 'Setup · Admin',    title: 'WhatsApp Templates' },
   '/admin/tags':          { crumb: 'Setup · Admin',    title: 'Tags' },
   '/manual':              { crumb: 'Help',             title: 'System Manual' },

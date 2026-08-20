@@ -7,6 +7,7 @@ import { EmptyState, Spinner, useListNav } from '@throttle/ui';
 import { Search, PhoneIncoming, PhoneOutgoing, Phone, MoreHorizontal, ExternalLink, FilePlus2, CheckCheck, Filter, CircleCheck, Undo2 } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../components/CallStatusBadge.js';
+import CallButton from '../../../components/CallButton.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { KpiCard, Tabs, selectStyle } from '../../../components/kit/index.js';
 import { TrendChart, hourFmt } from '../../../components/kit/Chart.js';
@@ -414,8 +415,9 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
           <span style={{ color: 'var(--t3)' }}>—</span>
         )}
       </Td>
-      <Td style={{ position: 'relative' }}>
-        <button onClick={() => setMenuOpen(o => !o)} style={btnIcon}>
+      <Td style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+        <CallButton phone={call.customer_phone} ticketId={call.ticket_id} size="sm" label="Call" onPlaced={onAction} />
+        <button onClick={() => setMenuOpen(o => !o)} style={{ ...btnIcon, marginLeft: 4 }}>
           <MoreHorizontal size={16} />
         </button>
         {menuOpen && (

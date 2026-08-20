@@ -7,6 +7,7 @@ import { EmptyState, Spinner } from '@throttle/ui';
 import { ArrowLeft, PhoneIncoming, PhoneOutgoing, ExternalLink, CheckCheck, FilePlus2, Play, AlertCircle } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../../components/CallStatusBadge.js';
+import CallButton from '../../../../components/CallButton.js';
 
 function fmtDate(iso) {
   if (!iso) return '—';
@@ -113,7 +114,10 @@ export default function CallDetailPage() {
 
       <RecordingSection call={call} session={session} />
 
-      <section style={{ marginTop: 24, display:'flex', gap: 10 }}>
+      <section style={{ marginTop: 24, display:'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Calling back is the single most common thing to do from a call record - it
+            belongs on the page, not two clicks away in a row menu. */}
+        <CallButton phone={call.customer_phone} ticketId={call.ticket_id} label="Call back" />
         {!ticketNo && (
           <button onClick={convert} style={btnPrimary}>
             <FilePlus2 size={14} /> Create Ticket From Call

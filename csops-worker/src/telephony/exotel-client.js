@@ -84,7 +84,17 @@ export function makeExotelClient(env) {
     let init = { method, headers };
     if (body) {
       headers['Content-Type'] = 'application/x-www-form-urlencoded';
-      init.body = new URLSearchParams(body).toString();
+      // ⚠️ Array values must be REPEATED keys, not stringified. StatusCallbackEvents
+      // is an array, and `new URLSearchParams({k:[a,b]})` yields `k=a%2Cb` — a single
+      // comma-joined value Exotel does not recognise, so we would subscribe to nothing
+      // and silently never receive a status callback.
+      const form = new URLSearchParams();
+      for (const [k, v] of Object.entries(body)) {
+        if (v === undefined || v === null || v === '') continue;
+        if (Array.isArray(v)) v.forEach(item => form.append(k, String(item)));
+        else form.append(k, String(v));
+      }
+      init.body = form.toString();
     }
 
     let res;
@@ -162,7 +172,34 @@ export function makeExotelClient(env) {
     return { ok: true, calls: unwrapCalls(r.data) };
   }
 
-  return { call, listCalls, getCallsBySid, spent: () => spent, accountSid: sid, host };
+  /**
+   * Click-to-call. Rings `from` (the agent — an E.164 number OR a SIP URI) first, then
+   * dials `to` (the customer) and bridges them, presenting the ExoPhone as caller ID.
+   *
+   * ⚠️ CustomField is capped at 128 characters by Exotel. It is what makes outbound
+   * attribution exact BY CONSTRUCTION rather than inferred from a leg, so it must
+   * never be silently truncated into garbage — the caller enforces the limit.
+   */
+  async function connect({ from, to, callerId, customField, statusCallback, timeLimit, timeout }) {
+    return call('Calls/connect', {
+      method: 'POST',
+      body: {
+        From: from,
+        To: to,
+        CallerId: callerId,
+        CallType: 'trans',
+        Record: 'true',
+        CustomField: customField,
+        StatusCallback: statusCallback,
+        StatusCallbackEvents: statusCallback ? ['terminal', 'answered'] : undefined,
+        StatusCallbackContentType: statusCallback ? 'application/json' : undefined,
+        TimeLimit: timeLimit,
+        TimeOut: timeout,
+      },
+    });
+  }
+
+  return { call, connect, listCalls, getCallsBySid, spent: () => spent, accountSid: sid, host };
 }
 
 // Exotel returns a single call as { Call: {...} } and a list as { Calls: [...] }.
