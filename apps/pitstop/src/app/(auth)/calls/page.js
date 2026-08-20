@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@throttle/auth';
 import { EmptyState, Spinner, useListNav } from '@throttle/ui';
-import { Search, PhoneIncoming, PhoneOutgoing, Phone, MoreHorizontal, ExternalLink, FilePlus2, CheckCheck, Filter } from 'lucide-react';
+import { Search, PhoneIncoming, PhoneOutgoing, Phone, MoreHorizontal, ExternalLink, FilePlus2, CheckCheck, Filter, CircleCheck, Undo2 } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../components/CallStatusBadge.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
@@ -18,7 +18,18 @@ const TABS = [
   { id: 'open',       label: 'Open' },        // call-linked tickets still open
   { id: 'closed',     label: 'Closed' },      // call-linked tickets resolved
   { id: 'missed',     label: 'Missed' },
+  // Abandoned is NOT a flavour of missed and must not be folded into it: missed =
+  // nobody picked up; abandoned = the caller reached us and hung up seconds in.
+  // MyOperator logged every abandoned call as `answered`, which is why 44% of inbound
+  // was invisible until 2026-08-20.
+  { id: 'abandoned',  label: 'Abandoned' },
+  { id: 'callback',   label: 'Needs callback' },
 ];
+
+// What "Nothing needed" stamps. Matches what the team already picks on 427 of 428 of
+// these, so the one-click path writes the same data a manual triage would.
+const TRIVIAL_CATEGORY = 'General Queries';
+const TRIVIAL_SUBCATEGORY = 'General queries';
 
 const PAGE_SIZE = 50;
 
@@ -34,6 +45,26 @@ function fmtDuration(secs) {
   const m = Math.floor(secs / 60);
   const s = secs % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Talk time is the honest number; leg time is what the line was open for and is what
+// every historic metric was built on. Show talk, and reveal leg on hover rather than
+// silently swapping one for the other.
+function DurationCell({ call }) {
+  const talk = call.talk_duration_seconds;
+  const leg  = call.duration_seconds;
+  if (talk == null) {
+    return <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{fmtDuration(leg)}</span>;
+  }
+  return (
+    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          title={`Talk ${fmtDuration(talk)} · line open ${fmtDuration(leg)}`}>
+      {fmtDuration(talk)}
+      {leg != null && leg !== talk && (
+        <span style={{ color: 'var(--t4)', fontSize: 10.5 }}> /{fmtDuration(leg)}</span>
+      )}
+    </span>
+  );
 }
 
 function fmtTime(iso) {
@@ -176,12 +207,16 @@ export default function CallsPage() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       {/* KPI strip */}
-      <section style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+      <section style={{ display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
         <KpiCard label="Calls today"       value={kpis?.total_today ?? '—'}    tone="var(--info-fg)" sub="all lanes" size={26} />
-        <KpiCard label="Answered"          value={kpis?.answered_today ?? '—'} tone="var(--ok-fg)"   sub={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}% rate` : ''} size={26} />
-        <KpiCard label="Missed"            value={kpis?.missed_today ?? '—'}   tone="var(--bad-fg)"  sub="today" size={26} />
-        <KpiCard label="Answer rate"       value={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}%` : '—'} tone={(kpis?.answer_rate_pct != null && kpis.answer_rate_pct < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)'} sub="target 90%" size={26} />
-        <KpiCard label="Awaiting callback" value={kpis?.unanswered_awaiting_callback ?? '—'} tone="var(--warn-fg)" sub="missed, to return" size={26} />
+        <KpiCard label="Answered"          value={kpis?.answered_today ?? '—'} tone="var(--ok-fg)"   sub="someone spoke" size={26} />
+        <KpiCard label="Missed"            value={kpis?.missed_today ?? '—'}   tone="var(--bad-fg)"  sub="nobody picked up" size={26} />
+        <KpiCard label="Abandoned"         value={kpis?.abandoned_today ?? '—'} tone="var(--warn-fg)"
+                 sub={kpis?.abandon_rate_pct != null ? `${kpis.abandon_rate_pct}% — hung up` : 'hung up first'} size={26} />
+        <KpiCard label="Answer rate"       value={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}%` : '—'}
+                 tone={(kpis?.answer_rate_pct != null && kpis.answer_rate_pct < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)'}
+                 sub="of calls that reached us" size={26} />
+        <KpiCard label="Awaiting callback" value={kpis?.unanswered_awaiting_callback ?? '—'} tone="var(--warn-fg)" sub="tried, didn't reach us" size={26} />
       </section>
 
       {/* Hourly call-volume chart */}
@@ -225,7 +260,7 @@ export default function CallsPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead style={{ background: 'var(--surface-2)', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
-              <Th>Time</Th><Th></Th><Th>Phone</Th><Th>Customer</Th><Th>Agent</Th><Th>Duration</Th><Th>Status</Th><Th>Ticket</Th><Th></Th>
+              <Th>Time</Th><Th></Th><Th>Phone</Th><Th>Customer</Th><Th>Agent</Th><Th>Talk</Th><Th>Status</Th><Th>Ticket</Th><Th></Th>
             </tr>
           </thead>
           <tbody>
@@ -283,6 +318,8 @@ function Kbd({ children }) {
 
 function CallRow({ call, session, onAction, focused, onMouseEnter }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [closed, setClosed] = useState(false);   // drives the inline Undo affordance
   const router = useRouter();
   const ticketNo = call.ticket?.ticket_no;
 
@@ -290,6 +327,48 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
     setMenuOpen(false);
     try { await csopsPost('markCalledBack', { call_id: call.id }, session); onAction(); }
     catch (e) { alert(e.message); }
+  }
+
+  // One-click close for a call that needed nothing.
+  //
+  // No new endpoint: updateTicket already fast-closes on disposition 'query'
+  // (stage -> closed, closed_reason 'resolved'), and it gates on cs_ticket_manage,
+  // which every cs_agent holds. ⚠️ Do NOT switch this to closeTicket — that takes the
+  // mid-flight path and demands cs_ticket_admin, locking ordinary agents out.
+  //
+  // This is the actual fix for the ~26h median it took to clear these: the cost was
+  // never ticket creation, it was that closing one meant opening a triage form.
+  async function nothingNeeded() {
+    setMenuOpen(false);
+    setBusy(true);
+    try {
+      await csopsPost('updateTicket', {
+        ticket_id: call.ticket_id,
+        patch: {
+          disposition: 'query',
+          issue_category: TRIVIAL_CATEGORY,
+          issue_subcategory: TRIVIAL_SUBCATEGORY,
+        },
+      }, session);
+      setClosed(true);
+      onAction();
+    } catch (e) { alert(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Undo is a genuine round-trip: re-triaging to 'pending' on a closed ticket clears
+  // closed_at/closed_reason and returns it to intake — its exact prior state.
+  async function undoClose() {
+    setBusy(true);
+    try {
+      await csopsPost('updateTicket', {
+        ticket_id: call.ticket_id,
+        patch: { disposition: 'pending' },
+      }, session);
+      setClosed(false);
+      onAction();
+    } catch (e) { alert(e.message); }
+    finally { setBusy(false); }
   }
 
   function convert() {
@@ -314,13 +393,23 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
       <Td><code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{call.customer_phone || '—'}</code></Td>
       <Td>{call.customer_name || (call.customer_phone ? `Caller ${maskPhone(call.customer_phone)}` : '—')}</Td>
       <Td>{call.agent_name || <span style={{ color: 'var(--t3)' }}>— unassigned —</span>}</Td>
-      <Td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{fmtDuration(call.duration_seconds)}</Td>
+      <Td><DurationCell call={call} /></Td>
       <Td><CallStatusBadge status={call.status} /></Td>
       <Td>
         {ticketNo ? (
-          <Link href={`/queue/detail?ticket_no=${ticketNo}`} style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: 12, textDecoration: 'none' }}>
-            {ticketNo} <ExternalLink size={10} style={{ verticalAlign: 'middle' }} />
-          </Link>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Link href={`/queue/detail?ticket_no=${ticketNo}`} style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: 12, textDecoration: 'none' }}>
+              {ticketNo} <ExternalLink size={10} style={{ verticalAlign: 'middle' }} />
+            </Link>
+            {closed && (
+              <button onClick={undoClose} disabled={busy} title="Reopen this ticket"
+                style={{ display:'inline-flex', alignItems:'center', gap:3, padding:'1px 6px',
+                         background:'var(--surface-2)', border:'1px solid var(--border-1)',
+                         borderRadius:4, color:'var(--t2)', fontSize:10.5, cursor:'pointer' }}>
+                <Undo2 size={10} /> Undo
+              </button>
+            )}
+          </span>
         ) : (
           <span style={{ color: 'var(--t3)' }}>—</span>
         )}
@@ -335,11 +424,17 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
             background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 6,
             minWidth: 180, padding: 4, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
           }}>
-            {!ticketNo && call.status === 'missed' && (
+            {!ticketNo && (call.status === 'missed' || call.status === 'abandoned') && (
               <>
                 <MenuItem icon={<FilePlus2 size={12} />} label="Create Ticket" onClick={convert} />
                 {!call.called_back_at && <MenuItem icon={<CheckCheck size={12} />} label="Mark Called Back" onClick={markCalled} />}
               </>
+            )}
+            {ticketNo && call.needs_callback && !call.called_back_at && (
+              <MenuItem icon={<CheckCheck size={12} />} label="Mark Called Back" onClick={markCalled} />
+            )}
+            {ticketNo && call.ticket_id && !closed && (
+              <MenuItem icon={<CircleCheck size={12} />} label="Nothing needed — close" onClick={nothingNeeded} />
             )}
             {ticketNo && <MenuItem icon={<ExternalLink size={12} />} label="Open Ticket" onClick={() => router.push(`/queue/detail?ticket_no=${ticketNo}`)} />}
             {!ticketNo && call.status !== 'missed' && (
