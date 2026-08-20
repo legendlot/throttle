@@ -3233,33 +3233,81 @@ async function handleExotelAgent(request, url, env, ctx) {
     || url.searchParams.get('To')
     || url.searchParams.get('DialWhomNumber');
 
+  const customerRaw = url.searchParams.get('CallFrom') || url.searchParams.get('From');
+  const dirRaw = url.searchParams.get('Direction') || 'incoming';
+
   background(ctx, (async () => {
     try {
-      if (!sid || !agentRef) {
-        console.log(`[exotel:agent] no agent ref sid=${sid} params=${JSON.stringify([...url.searchParams.keys()])}`);
-        return;
-      }
-      const roster = await sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
-        + `&select=user_id,sip_id,agent_phone&limit=500`, env);
-      const wantSip = String(agentRef).toLowerCase();
-      const wantTel = toE164(agentRef);
-      const hit = (roster.data || []).find(a =>
-        (a.sip_id && a.sip_id.toLowerCase() === wantSip) ||
-        (a.agent_phone && wantTel && a.agent_phone === wantTel));
-      if (!hit) {
-        console.log(`[exotel:agent] unmatched agent ref "${agentRef}" sid=${sid}`);
-        return;
-      }
-      const prof = await sb(`/rest/v1/users_profile?id=eq.${hit.user_id}&select=full_name&limit=1`, env);
-      await sb(`/rest/v1/cs_calls?provider=eq.exotel&provider_call_sid=eq.${encodeURIComponent(sid)}`, env, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          agent_user_id: hit.user_id,
-          agent_name: prof.data?.[0]?.full_name || null,
-          agent_sip_id: hit.sip_id || null,
-        }),
+      // Log every parameter Exotel actually sends, once we have a sid. Their docs do
+      // not pin this payload down, and the last two field-name assumptions here were
+      // both wrong (To was the agent, AnsweredBy was "human"). Cheap, and it makes the
+      // real shape evident from the logs instead of another reading of the docs.
+      console.log(`[exotel:agent] sid=${sid} params=${JSON.stringify(
+        Object.fromEntries([...url.searchParams.entries()].filter(([k]) => k !== 'token')))}`);
+      if (!sid) return;
+
+      const pipe = callPipeline(env);
+      const direction = normaliseDirection(dirRaw, 'exotel') || 'incoming';
+
+      // ⚠️ CREATE the row if it does not exist yet, do not merely PATCH.
+      //
+      // This hook is now the ONLY flow-side hook we ask for: adding a Passthru applet
+      // at flow start would mean dropping it onto the slot that already holds the live
+      // Greeting, which risks replacing a customer-facing prompt to buy ~6 seconds. The
+      // ring gives us up to 30 seconds anyway. But that means the call row may not exist
+      // yet when this fires (the poller runs every 2 min), so a bare PATCH would match
+      // zero rows and silently do nothing.
+      const norm = {
+        provider: 'exotel',
+        call_session_id: sid, provider_call_sid: sid,
+        account_id: null, department_id: null,
+        direction,
+        exophone: url.searchParams.get('CallTo') || null,
+        customer_phone: customerRaw || null,
+        legs: [], agent_ref: {},
+      };
+      const row = await pipe.upsertCall(norm, {
+        status: 'in_progress',
+        started_at: new Date().toISOString(),
+        raw_meta: { last_event: 'agent', provider: 'exotel' },
       });
-      console.log(`[exotel:agent] sid=${sid} -> ${prof.data?.[0]?.full_name || hit.user_id}`);
+
+      // Attribute, so the pop lands on the right agent's screen.
+      let matched = null;
+      if (agentRef) {
+        const roster = await sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
+          + `&select=user_id,sip_id,agent_phone&limit=500`, env);
+        const wantSip = String(agentRef).toLowerCase();
+        const wantTel = toE164(agentRef);
+        matched = (roster.data || []).find(a =>
+          (a.sip_id && a.sip_id.toLowerCase() === wantSip) ||
+          (a.agent_phone && wantTel && a.agent_phone === wantTel)) || null;
+        if (!matched) console.log(`[exotel:agent] unmatched agent ref "${agentRef}" sid=${sid}`);
+      }
+      if (matched && row?.id) {
+        const prof = await sb(`/rest/v1/users_profile?id=eq.${matched.user_id}&select=full_name&limit=1`, env);
+        await sb(`/rest/v1/cs_calls?id=eq.${row.id}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            agent_user_id: matched.user_id,
+            agent_name: prof.data?.[0]?.full_name || null,
+            agent_sip_id: matched.sip_id || null,
+          }),
+        });
+      }
+
+      // Warm the context while the phone is still ringing. Skipped if a previous hook
+      // already did it — the card is a snapshot, and re-assembling costs Shopify calls
+      // for no gain.
+      if (row?.id) {
+        const phone = customerRaw || row.customer_phone;
+        const existing = await sb(`/rest/v1/cs_calls?id=eq.${row.id}&select=context_warmed_at&limit=1`, env);
+        if (phone && !existing.data?.[0]?.context_warmed_at) {
+          const context = makeCallContext({ env, sb, toE164, shopifyLookup });
+          await context.warm(row.id, phone);
+        }
+      }
+      console.log(`[exotel:agent] sid=${sid} agent=${matched ? 'matched' : 'none'} row=${!!row?.id}`);
     } catch (e) {
       console.error(`[exotel:agent] failed sid=${sid}: ${e?.message || e}`);
     }
