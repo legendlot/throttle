@@ -1389,7 +1389,15 @@ export default function CampaignsPage() {
 
         </>)}
 
-        {detailTab === 'overview' && (<>
+        {/* ⚠️ Lifecycle must be reachable on SETUP too while the campaign is not yet sending.
+            S296 made the detail tabs status-aware and put `overview` behind `isSent` — but this
+            panel is the ONLY place Submit / Approve / Reject / Send now are rendered, so from
+            2026-08-18 a campaign that was draft, pending_approval, approved or scheduled had no
+            tab that could show its own actions. Every campaign sat in draft with, in Pruthvi's
+            words, "no button to take it live"; 12 had piled up by 2026-08-20.
+            Sent campaigns keep it on Overview (S296's intent, alongside the stats); everything
+            earlier gets it on Setup, which is the tab those campaigns actually open on. */}
+        {(detailTab === 'overview' || (!isSent && detailTab === 'setup')) && (<>
         <Panel title="Lifecycle" pad info={<>
           <p>Marketing sends above the approval threshold need an approver. Below it, and
           anything non-marketing, auto-approves on submit.</p>
@@ -1482,7 +1490,11 @@ export default function CampaignsPage() {
             })()}
           </div>
         </Panel>
+        </>)}
 
+        {/* Results stay Overview-only: a draft has no stats and no variant progress, so
+            showing these on Setup would just be empty panels under the build form. */}
+        {detailTab === 'overview' && (<>
         <VariantProgress campaign={c} />
         <VariantResults campaign={c} perms={perms} onChanged={refresh} />
 
