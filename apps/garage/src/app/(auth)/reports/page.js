@@ -42,7 +42,7 @@ const REPORT_DOWNLOADS = {
     { type: 'vendors',           Icon: Store,         title: 'Vendor List',     desc: 'All active vendors with contact details' },
   ],
   returns: [
-    { type: 'returns',           Icon: RotateCw,      title: 'Returns Log',      desc: 'RTO and RTV returns across all channels, filterable by date' },
+    { type: 'returns',           Icon: RotateCw,      title: 'Returns Log',      desc: 'Every returned unit with disposition, condition and repair link, filterable by date' },
     { type: 'unit_restocks',     Icon: Undo2,         title: 'Unit Restocks',    desc: 'Units flipped back to stock by reason, channel, operator' },
   ],
   issuance: [
@@ -137,23 +137,10 @@ function formatDate(raw) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function withinRange(rawDate, from, to) {
-  if (!rawDate) return false;
-  const d = new Date(rawDate);
-  if (isNaN(d)) return false;
-  if (from) {
-    const f = new Date(from);
-    if (!isNaN(f) && d < f) return false;
-  }
-  if (to) {
-    const t = new Date(to);
-    if (!isNaN(t)) {
-      t.setHours(23, 59, 59, 999);
-      if (d > t) return false;
-    }
-  }
-  return true;
-}
+// withinRange() lived here and is deliberately GONE (2026-08-20). Every caller filtered a
+// date range in the browser over a list the worker had already capped, so each report
+// silently under-reported anything older than its cap. All four now filter server-side.
+// If you reach for a client-side date filter here again, check the worker first.
 
 function downloadCsv(rows, type) {
   if (!rows || !rows.length) return false;
@@ -426,20 +413,16 @@ export default function ReportsPage() {
   async function loadReturns() {
     setTabLoading('returns', true);
     try {
-      const rows = await garageFetch('getReturns', {}, session);
-      const arr = (Array.isArray(rows) ? rows : []).filter((r) => withinRange(r.return_date || r.created_at, fromDate, toDate));
-      const map = {};
-      arr.forEach((r) => {
-        const ch = r.channel || '—';
-        if (!map[ch]) map[ch] = { channel: ch, rto: 0, rtv: 0, total: 0, scrap: 0, claims: 0 };
-        map[ch].total += parseInt(r.qty, 10) || 1;
-        const t = (r.return_type || '').toLowerCase();
-        if (t.includes('rto')) map[ch].rto += parseInt(r.qty, 10) || 1;
-        if (t.includes('rtv')) map[ch].rtv += parseInt(r.qty, 10) || 1;
-        if ((r.action || '').toLowerCase().includes('scrap')) map[ch].scrap += parseInt(r.qty, 10) || 1;
-        if (r.claim_filed === 'Yes' || r.claim_filed === true) map[ch].claims += 1;
-      });
-      setRetData(Object.values(map).sort((a, b) => a.channel.localeCompare(b.channel)));
+      // ⚠️ This read `getReturns` → `store.returns_log`, the v1 table, which holds ZERO
+      // rows: Returns v2 (RULE-RET-001) moved to return_shipments/return_units in S104 and
+      // the report was never repointed. So this tab showed "No returns in selected range"
+      // for every range, against 6,517 real return units since 6 May — it read as no data
+      // rather than as the wrong table, which is why it went unreported for months.
+      // Aggregation now happens in the worker; the grouping key is DISPOSITION because v2
+      // has no channel, no claim flag, and a dead return_category.
+      const rows = await garageFetch('getReturnsSummary',
+        { from: fromDate || undefined, to: toDate || undefined }, session);
+      setRetData(Array.isArray(rows) ? rows : []);
     } catch (e) {
       showToast(e.message || 'Failed to load returns summary', 'error');
       setRetData([]);
@@ -916,27 +899,43 @@ function ComplianceSummary() {
   );
 }
 
+// The four-letter codes are what the floor uses, but a report is read by people who do not
+// work the returns bench — spell them out once here rather than in every cell.
+const DISPOSITION_LABEL = {
+  UDR: 'UDR — re-dispatch',
+  CXR: 'CXR — customer return, to repair',
+  BRV: 'BRV — brand review, to repair',
+  Loss: 'Loss — write-off',
+  'Not yet set': 'Not yet set',
+};
+
 function ReturnsSummary({ data, loading, load }) {
   return (
-    <SummaryShell title="Returns by Channel" data={data} loading={loading} load={load} empty="No returns in selected range">
+    // Returns v2 is disposition-driven (RULE-RET-001): UDR re-dispatches, CXR/BRV go to a
+    // repair run, Loss is a write-off. The old RTO/RTV/scrap/claims-by-channel headings
+    // described the v1 table and have no v2 equivalent — keeping them over v2 data would
+    // have meant inventing the numbers underneath them.
+    <SummaryShell title="Returns by Disposition" data={data} loading={loading} load={load} empty="No returns in selected range">
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <th style={tableThStyle}>Channel</th>
-          <th style={tableThStyle}>RTO</th>
-          <th style={tableThStyle}>RTV</th>
-          <th style={tableThStyle}>Total Units</th>
-          <th style={tableThStyle}>Scrap</th>
-          <th style={tableThStyle}>Claims Filed</th>
+          <th style={tableThStyle}>Disposition</th>
+          <th style={tableThStyle}>Units</th>
+          <th style={tableThStyle}>Awaiting inspection</th>
+          <th style={tableThStyle}>Inspected</th>
+          <th style={tableThStyle}>Released</th>
+          <th style={tableThStyle}>Switcheroo</th>
         </tr></thead>
         <tbody>
           {(data || []).map((r) => (
-            <tr key={r.channel}>
-              <td style={tableTdStyle}>{r.channel}</td>
-              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.rto}</td>
-              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.rtv}</td>
-              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{r.total}</td>
-              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: r.scrap > 0 ? '#ff7070' : 'var(--t3)' }}>{r.scrap}</td>
-              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.claims}</td>
+            <tr key={r.disposition}>
+              <td style={tableTdStyle}>{DISPOSITION_LABEL[r.disposition] || r.disposition}</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{r.units}</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.pending}</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.inspected}</td>
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.released}</td>
+              {/* A switcheroo is the customer returning something other than what they
+                  bought — always worth a second look, so it is coloured like an exception. */}
+              <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: r.switcheroo > 0 ? '#ff7070' : 'var(--t3)' }}>{r.switcheroo}</td>
             </tr>
           ))}
         </tbody>
