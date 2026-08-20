@@ -1,5 +1,17 @@
 # Pitstop × Exotel — telephony migration design
 
+> ⚠️ **PARTIALLY SUPERSEDED 2026-08-20 (S301) by
+> [`2026-08-20-pitstop-exotel-integration-build-spec.md`](./2026-08-20-pitstop-exotel-integration-build-spec.md).
+> Read that first.** It was written after reading live flow `108159` applet-by-applet, which this
+> document had not done. Superseded here: **§3.4 + §5.2** (the start-of-flow Passthru is rejected —
+> a caller who hangs up during the greeting emits no webhook at all, so the design is now
+> **poller-primary**, and restoring the call log needs no Exotel-side change), **§4** (hook
+> inventory), **§8** (phases) and **§9** (dependencies — **everything Exotel now routes through
+> Pruthvi**, per Afshaan 2026-08-20). Q-3 is **answered**: the flow is two applets with one group,
+> so `main`/`abc` department routing is dead.
+> Everything else here — API surface, `NormalisedCall`, schema §5.1, attribution §5.6, softphone §7,
+> out-of-scope §10 — **still stands and is not restated in the build spec.**
+
 > **Status:** DESIGN ONLY. Nothing in this document has been built. No change has been made to any
 > live system, worker, database object or Exotel setting. Afshaan's instruction 2026-08-19:
 > *"before building, confirm with me, do not make any changes to the live system."*
