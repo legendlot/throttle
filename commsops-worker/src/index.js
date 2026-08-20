@@ -352,8 +352,23 @@ async function handleGet(url, auth, env) {
       // which calls this on every open, does not.
       if (url.searchParams.get('with_usage') !== 'true') return ok(r.data);
       const ur = await A.sbComms('/rest/v1/rpc/template_usage', env, { method: 'POST', body: '{}' });
-      const u = (ur.ok && ur.data) || {};
-      return ok((r.data || []).map((t) => ({ ...t, usage: u[String(t.id)] || null })));
+      // ⚠️ A FAILED usage lookup must not read as "this template is used by nothing".
+      // It used to: `(ur.ok && ur.data) || {}` collapsed an error into an empty map, every
+      // template came back `usage: null`, and the Delete gate — `disabled={!!(r.usage && …)}`
+      // — went FALSE, i.e. the guard that stops you deleting a template a live journey
+      // depends on failed OPEN, silently. That was reachable in practice: template_usage()
+      // counts sent messages per template against comms.messages (260,571 rows) and there was
+      // no index on template_id, so it took ~125ms x 101 templates and blew the statement
+      // timeout. Index `messages_template_status_idx` added 2026-08-20 → 238ms, but the
+      // fail-open shape was the real defect and is fixed here rather than only made unlikely.
+      const usageOk = !!(ur.ok && ur.data && typeof ur.data === 'object');
+      const u = usageOk ? ur.data : {};
+      return ok((r.data || []).map((t) => ({
+        ...t,
+        // `unavailable` is a THIRD state, distinct from "no usage". The UI must treat it as
+        // "cannot prove this is unused" — block destructive actions, show it as unknown.
+        usage: usageOk ? (u[String(t.id)] || null) : { unavailable: true },
+      })));
     }
 
     case 'getCourierEmitImpact': {     // S254 — "how many messages does moving this release?"

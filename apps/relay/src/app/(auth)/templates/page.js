@@ -60,6 +60,51 @@ const APPROVAL_TONE = { APPROVED: 'green', PENDING: 'yellow', REJECTED: 'red', P
 // neither can never send, which is exactly what the red chip is for), RCS is the carrier
 // hub's verdict on the bound vendor template, synced into content.provider_status. Email has
 // no approval concept and returns null.
+// "Is this template actually doing anything?" — the question the library could not answer.
+// FOUR states, because collapsing to in-use/not-in-use loses the two that matter most:
+//   in use    — a LIVE journey or a campaign points at it. Editing it changes what customers get.
+//   past use  — nothing live points at it, but it has sent messages or sits in an older
+//               journey version. Safe to leave alone; NOT safe to delete, and its history
+//               is why. Calling this "not in use" would invite exactly that deletion.
+//   unused    — referenced by nothing, ever. The genuinely dormant pile (53 of 101).
+//   unknown   — the usage lookup FAILED. Never render this as "unused": absence of evidence
+//               arrives looking identical to evidence of absence, and the difference here is
+//               whether deleting is safe.
+function templateUsage(r) {
+  const u = r.usage;
+  if (u && u.unavailable) {
+    return { label: 'unknown', tone: 'gray',
+      detail: 'Could not check where this template is used — treat it as in use until this loads.' };
+  }
+  const live = Number(u?.journeys_live || 0);
+  const camps = Number(u?.campaigns || 0);
+  const otherJ = Number(u?.journeys_other || 0);
+  const sent = Number(u?.sent || 0);
+  const liveNames = Array.isArray(u?.live_names) ? u.live_names.filter(Boolean) : [];
+  const campNames = Array.isArray(u?.campaign_names) ? u.campaign_names.filter(Boolean) : [];
+
+  if (live > 0 || camps > 0) {
+    const bits = [];
+    if (liveNames.length) bits.push(`Live journeys: ${liveNames.join(', ')}`);
+    else if (live > 0) bits.push(`${live} live journey${live === 1 ? '' : 's'}`);
+    if (campNames.length) {
+      bits.push(`Campaigns: ${campNames.map((c) => (c && c.name ? `${c.name}${c.status ? ` (${c.status})` : ''}` : String(c))).join(', ')}`);
+    } else if (camps > 0) bits.push(`${camps} campaign${camps === 1 ? '' : 's'}`);
+    return { label: 'in use', tone: 'green', detail: bits.join(' · ') };
+  }
+  if (otherJ > 0 || sent > 0) {
+    const bits = [];
+    if (sent > 0) bits.push(`${sent.toLocaleString('en-IN')} message${sent === 1 ? '' : 's'} sent`);
+    if (otherJ > 0) bits.push(`in ${otherJ} older journey version${otherJ === 1 ? '' : 's'}`);
+    // `yellow`, NOT `amber` — TONES has no amber and an unknown key silently falls back to
+    // gray, which would render "past use" identically to "unused" and lose the distinction.
+    return { label: 'past use', tone: 'yellow',
+      detail: `Nothing live uses it now — ${bits.join(', ')}. Keep it: the history is attached.` };
+  }
+  return { label: 'unused', tone: 'gray',
+    detail: 'No live journey, no campaign, nothing ever sent. Safe to archive.' };
+}
+
 function templateApproval(r) {
   if (r.channel === 'whatsapp') {
     return r.approval_status
@@ -1832,7 +1877,7 @@ export default function TemplatesPage() {
               ) : (
               <div className="table-scroll">
               <table className="dt">
-                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Status</th><th>Approval</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Account</th><th>Used by</th><th>Status</th><th>Approval</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
                   {filteredRows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
@@ -1859,6 +1904,15 @@ export default function TemplatesPage() {
                             : <span style={{ color: 'var(--warn, #f59e0b)' }}>unpinned</span>)
                           : '—'}
                       </td>
+                      {/* Used-by pill (Pruthvi 2026-08-18/20): with 101 templates and 53 of
+                          them never referenced by anything, there was no way to tell a live
+                          template from a dead one without opening each. Hover names where. */}
+                      <td>{(() => {
+                        const usage = templateUsage(r);
+                        // Badge's own `title` — it also switches the cursor to `help`, so the
+                        // pill advertises that hovering it says more.
+                        return <Badge label={usage.label} tone={usage.tone} title={usage.detail} />;
+                      })()}</td>
                       <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td>{(() => {
                         const a = templateApproval(r);
@@ -1892,12 +1946,18 @@ export default function TemplatesPage() {
                               provider_template_id: one live template carries
                               approval_status=APPROVED with a NULL id (Meta has seen it, we
                               lost the id), and deleting that would orphan it on Meta. */}
+                          {/* ⚠️ The disabled test blocks on `unavailable` TOO. It used to read a
+                              FAILED usage lookup as "nothing references it" and go clickable —
+                              fail-open on the one control that permanently destroys a template
+                              a live journey may depend on. Unknown must mean no, not yes. */}
                           {canEdit && !r.provider_template_id && !r.approval_status && (
                             <Btn onClick={(e) => { e.stopPropagation(); destroy(r); }}
-                              disabled={!!(r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent))}
-                              title={r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent)
-                                ? 'Referenced by a journey, campaign or sent message — archive it instead'
-                                : 'Delete permanently (never submitted to Meta, nothing references it)'}>
+                              disabled={!!(r.usage && (r.usage.unavailable || r.usage.journeys_other || r.usage.campaigns || r.usage.sent))}
+                              title={r.usage && r.usage.unavailable
+                                ? 'Cannot check what uses this template right now — reload before deleting'
+                                : r.usage && (r.usage.journeys_other || r.usage.campaigns || r.usage.sent)
+                                  ? 'Referenced by a journey, campaign or sent message — archive it instead'
+                                  : 'Delete permanently (never submitted to Meta, nothing references it)'}>
                               <Trash2 size={14} />
                             </Btn>
                           )}
