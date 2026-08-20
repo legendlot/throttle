@@ -89,16 +89,19 @@ test('IST round-trips', () => {
 
 // ── normalisation ───────────────────────────────────────────────────────────
 
+// Modelled on a real payload (2026-08-20): on inbound, `To` is the AGENT leg and
+// PhoneNumberSid is the ExoPhone. An earlier fixture had To = our number, which made
+// the mapping look correct while it was not.
 const inboundCall = {
   Sid: 'CA-in-1', Status: 'completed', Direction: 'inbound',
-  From: '09876543210', To: '08044656833', PhoneNumber: '08044656833',
+  From: '09876543210', To: 'sip:sunithab17b95f7f', PhoneNumberSid: '08044656833',
   DateCreated: '2026-08-20 14:30:00', StartTime: '2026-08-20 14:30:02',
   EndTime: '2026-08-20 14:32:25', Duration: '143', Price: '0.85',
   RecordingUrl: 'https://recordings.exotel.com/x.mp3',
   Details: { ConversationDuration: '120', Legs: [{ Id: 1, Status: 'completed' }] },
 };
 
-test('inbound: From is the customer, To is our ExoPhone', () => {
+test('inbound: From is the customer, PhoneNumberSid is our ExoPhone', () => {
   const n = exotelToNormalised(inboundCall);
   assert.equal(n.customer_phone, '09876543210');
   assert.equal(n.exophone, '08044656833');
@@ -116,7 +119,7 @@ test('inbound: From is the customer, To is our ExoPhone', () => {
 test('outbound: To is the customer — getting this backwards files calls against ourselves', () => {
   const n = exotelToNormalised({
     ...inboundCall, Sid: 'CA-out-1', Direction: 'outbound-api',
-    From: '07022269161', To: '09876543210', PhoneNumber: '08044656833',
+    From: '07022269161', To: '09876543210', PhoneNumberSid: '08044656833',
   });
   assert.equal(n.direction, 'outgoing');
   assert.equal(n.customer_phone, '09876543210');
@@ -184,4 +187,48 @@ test('the paging cursor is read out of NextPageUri', () => {
   assert.equal(nextCursorOf({ Metadata: {} }), null, 'no cursor = last page, must terminate the walk');
   assert.equal(nextCursorOf({}), null);
   assert.equal(nextCursorOf(null), null);
+});
+
+// ── field mapping, corrected from a live payload 2026-08-20 ─────────────────
+
+test('inbound: To is the AGENT and PhoneNumberSid is the ExoPhone', async () => {
+  // Real payload shape. The first pass mapped `To` as our number, which stored an
+  // agent's SIP id in the exophone column and left attribution with no source.
+  const { exotelToNormalised: norm } = await import('./exotel-adapter.js');
+  const n = norm({
+    Sid: 'CA1', Status: 'completed', Direction: 'inbound',
+    From: '08879332991', To: 'sip:sunithab17b95f7f', PhoneNumberSid: '08044656833',
+    AnsweredBy: 'human', DateCreated: '2026-08-20 17:30:02', Duration: 122,
+    Details: { ConversationDuration: 105 },
+  });
+  assert.equal(n.customer_phone, '08879332991');
+  assert.equal(n.exophone, '08044656833', 'PhoneNumberSid is a NUMBER despite the name');
+  assert.notEqual(n.exophone, 'sip:sunithab17b95f7f', 'an agent SIP id must never land in exophone');
+});
+
+test('the agent is extracted from the opposite end to the customer', async () => {
+  const { agentCandidates } = await import('./exotel-adapter.js');
+  const inbound = agentCandidates({
+    From: '08879332991', To: 'sip:sunithab17b95f7f', AnsweredBy: 'human',
+    Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 121 } }] },
+  }, 'incoming');
+  assert.ok(inbound.includes('sip:sunithab17b95f7f'));
+  assert.ok(!inbound.includes('08879332991'), 'the customer is not a candidate agent');
+  assert.ok(!inbound.includes('human'), 'AnsweredBy is machine-detection, not an identity');
+
+  const outbound = agentCandidates({ From: '07022269161', To: '09876543210' }, 'outgoing');
+  assert.ok(outbound.includes('07022269161'), 'outbound: From is the agent we dialled first');
+});
+
+test('a matched SIP id resolves to the right agent', async () => {
+  const { matchAgent } = await import('./exotel-adapter.js');
+  const roster = {
+    bySip: new Map([['sip:sunithab17b95f7f', { id: 'u-sunitha' }]]),
+    byPhone: new Map([['+917022269161', { id: 'u-dhiraj' }]]),
+  };
+  const e164 = (r) => r ? '+91' + String(r).replace(/\D/g, '').replace(/^0+/, '').slice(-10) : null;
+  assert.equal(matchAgent(['sip:sunithab17b95f7f'], roster, e164)?.id, 'u-sunitha');
+  assert.equal(matchAgent(['07022269161'], roster, e164)?.id, 'u-dhiraj');
+  assert.equal(matchAgent(['sip:nobody'], roster, e164), null);
+  assert.equal(matchAgent([], roster, e164), null);
 });

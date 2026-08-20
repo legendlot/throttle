@@ -79,6 +79,7 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
   const { sb, toE164 } = pipeline.deps;
   const roster = await loadAgentRoster(env, sb);
   const nameCache = new Map();
+  const probed = { done: false };
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const r = await client.listCalls({
@@ -153,9 +154,23 @@ export async function reconcileExotelCalls(env, pipeline, opts = {}) {
             { agent: { id: hit.id, name } },
           );
           stats.attributed++;
-        } else if (norm.status === 'answered' && cands.length) {
-          console.log(`[exotel:poll] no agent matched sid=${norm.provider_call_sid} `
-            + `candidates=${JSON.stringify(cands).slice(0, 200)}`);
+        } else if (norm.status === 'answered') {
+          // Diagnostic, ONCE per run and only on a miss: the bulk list endpoint is
+          // known not to carry agent identity, so probe the SINGLE-call endpoint and
+          // log its structure. This answers "can we attribute from the API at all, or
+          // does it require the agent-passthru-url flow hook?" with evidence rather
+          // than another reading of the docs. Self-retiring: it stops firing the day
+          // attribution starts matching.
+          if (!probed.done) {
+            probed.done = true;
+            const one = await client.call(`Calls/${norm.provider_call_sid}`, { query: { details: 'true' } });
+            console.log(`[exotel:probe] sid=${norm.provider_call_sid} `
+              + `candidates=${JSON.stringify(cands)} `
+              + `single=${JSON.stringify(one.data).slice(0, 700)}`);
+          } else {
+            console.log(`[exotel:poll] no agent matched sid=${norm.provider_call_sid} `
+              + `candidates=${JSON.stringify(cands).slice(0, 200)}`);
+          }
         }
       } catch (e) {
         // One malformed call must not abort the whole window.

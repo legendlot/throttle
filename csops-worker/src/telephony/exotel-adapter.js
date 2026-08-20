@@ -82,8 +82,18 @@ export function exotelToNormalised(call, { departmentId = null } = {}) {
   const legDuration = num(call.Duration);
   const { status, dial_status } = mapExotelStatus(call.Status, talk);
 
+  // ⚠️ OBSERVED 2026-08-20 from a live inbound call — the field names are not what
+  // the shape suggests, and one of them was mapped wrongly on the first pass:
+  //   From           = the CUSTOMER
+  //   To             = the AGENT leg, e.g. "sip:sunithab17b95f7f"  ← NOT our number
+  //   PhoneNumberSid = the ExoPhone, e.g. "08044656833"            ← despite the name,
+  //                    this is a NUMBER, not a SID
+  // Using `To` as the ExoPhone on inbound stored an agent's SIP id in the exophone
+  // column. There is deliberately NO inbound fallback to `To` now: a wrong number is
+  // worse than a null one, because it looks like data.
   const customer_phone = inbound ? (call.From || null) : (call.To || null);
-  const exophone = call.PhoneNumber || (inbound ? (call.To || null) : (call.From || null));
+  const exophone = call.PhoneNumberSid || call.PhoneNumber
+    || (inbound ? null : (call.From || null));
 
   return {
     provider: 'exotel',
@@ -182,16 +192,28 @@ export function agentCandidates(call, direction) {
     else if (/^\+?\d[\d\s-]{8,}$/.test(s)) out.push(s);
   };
 
-  // Outbound: leg 1 IS the agent, by construction (Calls/connect From=agent).
-  if (direction === 'outgoing') push(call.From);
+  // The agent is on the OPPOSITE end from the customer:
+  //   inbound  → `To` is the agent leg (SIP id, or a mobile number)
+  //   outbound → `From` is the agent, by construction (Calls/connect From=agent)
+  // Confirmed live 2026-08-20: an inbound call carried To="sip:sunithab17b95f7f".
+  push(direction === 'outgoing' ? call.From : call.To);
 
+  // ⚠️ OBSERVED SHAPE (2026-08-20, live): legs are NESTED under a `Leg` key —
+  //     [{"Leg":{"Id":1,"OnCallDuration":121}}, {"Leg":{"Id":2,"OnCallDuration":105}}]
+  // — and carry NO agent identity whatsoever. The docs advertise `AnsweredBy`; the
+  // list endpoint does not return it. Walk recursively anyway so a future field is
+  // picked up automatically rather than silently ignored.
   const legs = Array.isArray(call.Details?.Legs) ? call.Details.Legs : [];
-  for (const leg of legs) {
-    if (!leg || typeof leg !== 'object') continue;
-    for (const v of Object.values(leg)) push(v);
-  }
-  // Some payloads expose the connected party at the top level instead.
-  push(call.Details?.AnsweredBy);
+  const walk = (node, depth = 0) => {
+    if (!node || depth > 3) return;
+    if (typeof node === 'string') { push(node); return; }
+    if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+    if (typeof node === 'object') { Object.values(node).forEach(v => walk(v, depth + 1)); }
+  };
+  walk(legs);
+  // ⚠️ NOT call.AnsweredBy — observed value is "human", i.e. answering-machine
+  // detection, not an identity. Pushing it would match nothing and mislead the next
+  // reader into thinking attribution had a source it does not.
   push(call.DialWhomNumber);
 
   return [...new Set(out)];
