@@ -2,86 +2,304 @@
   "title": "Depot",
   "title_accent": "Operations",
   "subtitle": "Dispatch back-office: outbound, returns, floor and stock audit",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "date": "2026-06-29",
   "app_url": "depot.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#DE2A2A",
   "accent_soft": "#F2CD1A",
   "roles": {
-    "op":  { "label": "OP",  "name": "Dispatch Operator",   "desc": "Works the floor: packs, allocates, dispatches, restocks and scans. Mostly the scanner plus the live read views." },
-    "sup": { "label": "SUP", "name": "Dispatch Supervisor", "desc": "Everything operators do, plus manages shipments, channels, roster and manpower, runs counts, and approves stock audits." },
-    "adm": { "label": "ADM", "name": "Admin",               "desc": "Full access across Depot." }
+    "op": {
+      "label": "OP",
+      "name": "Dispatch Operator",
+      "desc": "Works the floor: packs, allocates, dispatches, restocks and scans. Mostly the scanner plus the live read views."
+    },
+    "sup": {
+      "label": "SUP",
+      "name": "Dispatch Supervisor",
+      "desc": "Everything operators do, plus manages shipments, channels, roster and manpower, runs counts, and approves stock audits."
+    },
+    "adm": {
+      "label": "ADM",
+      "name": "Admin",
+      "desc": "Full access across Depot."
+    }
   },
   "parts": [
     {
       "part": "Getting Started",
       "subtitle": "What Depot is and how to move around it",
       "chapters": [
-        { "id": "welcome",    "title": "Welcome to Depot",        "file": "00-welcome.html",    "roles": ["op", "sup", "adm"] },
-        { "id": "navigation", "title": "Signing In and Navigation","file": "01-navigation.html", "roles": ["op", "sup", "adm"] },
-        { "id": "roles",      "title": "Roles and What You Can See","file": "02-roles.html",     "roles": ["op", "sup", "adm"] }
+        {
+          "id": "welcome",
+          "title": "Welcome to Depot",
+          "file": "00-welcome.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "navigation",
+          "title": "Signing In and Navigation",
+          "file": "01-navigation.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles",
+          "title": "Roles and What You Can See",
+          "file": "02-roles.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Overview",
       "subtitle": "The live warehouse cockpit",
       "chapters": [
-        { "id": "dashboard", "title": "Overview Dashboard", "route": "/dashboard", "file": "ov-dashboard.html", "roles": ["op", "sup", "adm"] }
+        {
+          "id": "dashboard",
+          "title": "Overview Dashboard",
+          "route": "/dashboard",
+          "file": "ov-dashboard.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Reports",
       "subtitle": "Every dispatch report, any period, with CSV export",
       "chapters": [
-        { "id": "reports", "title": "Reports", "route": "/reports", "file": "rpt-reports.html", "roles": ["sup", "adm"] }
+        {
+          "id": "reports",
+          "title": "Reports",
+          "route": "/reports",
+          "file": "rpt-reports.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Outbound",
       "subtitle": "The ship-out flow",
       "chapters": [
-        { "id": "fulfilment", "title": "Fulfilment Requests", "route": "/fulfilment-requests", "file": "out-fulfilment.html", "roles": ["sup", "adm"] },
-        { "id": "pipeline",  "title": "Pipeline",        "route": "/dispatch-pipeline",  "file": "out-pipeline.html",  "roles": ["op", "sup", "adm"] },
-        { "id": "shipments", "title": "Shipments",       "route": "/dispatch-shipments", "file": "out-shipments.html", "roles": ["sup", "adm"] },
-        { "id": "challans",  "title": "Challans",        "route": "/dispatch-challans",  "file": "out-challans.html",  "roles": ["sup", "adm"] },
-        { "id": "counts",    "title": "Dispatch Counts", "route": "/dispatch-counts",    "file": "out-counts.html",    "roles": ["op", "sup", "adm"] }
+        {
+          "id": "fulfilment",
+          "title": "Fulfilment Requests",
+          "route": "/fulfilment-requests",
+          "file": "out-fulfilment.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "pipeline",
+          "title": "Pipeline",
+          "route": "/dispatch-pipeline",
+          "file": "out-pipeline.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "shipments",
+          "title": "Shipments",
+          "route": "/dispatch-shipments",
+          "file": "out-shipments.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "challans",
+          "title": "Challans",
+          "route": "/dispatch-challans",
+          "file": "out-challans.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "counts",
+          "title": "Dispatch Counts",
+          "route": "/dispatch-counts",
+          "file": "out-counts.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Returns",
       "subtitle": "Reverse logistics",
       "chapters": [
-        { "id": "restock",        "title": "Unit Restock",   "route": "/restock",             "file": "ret-restock.html",        "roles": ["op", "sup", "adm"] },
-        { "id": "repack",         "title": "Repack",         "route": "/repack-runs",         "file": "ret-repack.html",         "roles": ["sup", "adm"] },
-        { "id": "repack-reports", "title": "Repack Reports", "route": "/repack-runs/reports", "file": "ret-repack-reports.html", "roles": ["sup", "adm"] }
+        {
+          "id": "restock",
+          "title": "Unit Restock",
+          "route": "/restock",
+          "file": "ret-restock.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "repack",
+          "title": "Repack",
+          "route": "/repack-runs",
+          "file": "ret-repack.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "repack-reports",
+          "title": "Repack Reports",
+          "route": "/repack-runs/reports",
+          "file": "ret-repack-reports.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Floor",
       "subtitle": "Live floor views, the scan feed, stock audit, roster and manpower",
       "chapters": [
-        { "id": "live-floor",      "title": "Live Floor",      "route": "/dispatch",        "file": "flr-live.html",        "roles": ["op", "sup", "adm"] },
-        { "id": "lines",           "title": "Lines",           "route": "/dispatch/lines",  "file": "flr-lines.html",       "roles": ["op", "sup", "adm"] },
-        { "id": "scan-feed",       "title": "Scan Feed",       "route": "/scans",           "file": "flr-scans.html",       "roles": ["op", "sup", "adm"] },
-        { "id": "stock-audit",     "title": "Stock Audit",     "route": "/dispatch-audits", "file": "flr-stock-audit.html", "roles": ["op", "sup", "adm"] },
-        { "id": "dispatch-roster", "title": "Dispatch Roster", "route": "/dispatch-roster", "file": "flr-roster.html",      "roles": ["sup", "adm"] },
-        { "id": "manpower",        "title": "Manpower",        "route": "/manpower",        "file": "flr-manpower.html",    "roles": ["sup", "adm"] }
+        {
+          "id": "live-floor",
+          "title": "Live Floor",
+          "route": "/dispatch",
+          "file": "flr-live.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "lines",
+          "title": "Lines",
+          "route": "/dispatch/lines",
+          "file": "flr-lines.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "scan-feed",
+          "title": "Scan Feed",
+          "route": "/scans",
+          "file": "flr-scans.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "stock-audit",
+          "title": "Stock Audit",
+          "route": "/dispatch-audits",
+          "file": "flr-stock-audit.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-roster",
+          "title": "Dispatch Roster",
+          "route": "/dispatch-roster",
+          "file": "flr-roster.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "manpower",
+          "title": "Manpower",
+          "route": "/manpower",
+          "file": "flr-manpower.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Setup",
       "subtitle": "Done-once configuration",
       "chapters": [
-        { "id": "channels", "title": "Channels", "route": "/dispatch-channels", "file": "set-channels.html", "roles": ["sup", "adm"] }
+        {
+          "id": "channels",
+          "title": "Channels",
+          "route": "/dispatch-channels",
+          "file": "set-channels.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Scanner",
       "subtitle": "The floor scanner, for dispatch stations",
       "chapters": [
-        { "id": "scan-basics",   "title": "The Floor Scanner",      "file": "scan-basics.html",   "roles": ["op", "sup", "adm"] },
-        { "id": "scan-dispatch", "title": "Dispatch Scan Stations", "file": "scan-dispatch.html", "roles": ["op", "sup", "adm"] }
+        {
+          "id": "scan-basics",
+          "title": "The Floor Scanner",
+          "file": "scan-basics.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "scan-dispatch",
+          "title": "Dispatch Scan Stations",
+          "file": "scan-dispatch.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        }
       ]
     }
   ]

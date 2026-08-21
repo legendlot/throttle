@@ -15,8 +15,20 @@
   <div class="a-row"><div class="a-key">Activity &mdash; Scans &amp; floor operations</div><div class="a-val">Total dispatch scans, operators, lines and active days, with charts by activity, by line, by day and by hour of day. The <strong>By activity</strong> table has a <strong>Full scan log CSV</strong> button that exports every individual dispatch scan in the range (timestamp, activity, UPC, product, operator, line, station, batch label).</div></div>
   <div class="a-row"><div class="a-key">Operators &mdash; Dispatch output</div><div class="a-val">Each operator with their total scans and a breakdown across the main activities (Pack, Dock, Allocate, Dispatch out, and so on) &mdash; the productivity report for the team.</div></div>
   <div class="a-row"><div class="a-key">Outbound</div><div class="a-val">Units dispatched by channel, shipments (by status, channel and day) plus a full shipments table, delivery challans (with quantity and value) and fulfilment requests. Each table exports to CSV.</div></div>
+  <div class="a-row"><div class="a-key">Outward &mdash; By channel &amp; SKU</div><div class="a-val">Everything that actually left, per sales channel and per SKU, over a range <strong>you set to the minute</strong>. This section has its own range controls, separate from the chips at the top of the page: quick buttons (Today, Yesterday, Last 7 days, Last 30 days, This month) or two date-and-time boxes. Three views &mdash; by channel, by SKU, or channel &times; SKU together &mdash; each with its own CSV.</div></div>
   <div class="a-row"><div class="a-key">Returns</div><div class="a-val">Restocks broken down by reason and by channel, with a link across to the dedicated <strong>Repack Reports</strong>.</div></div>
   <div class="a-row"><div class="a-key">Audits &amp; counts</div><div class="a-val">Stock audit totals (present / missing / extra / corrected) and the audit register, plus the dispatch count sessions &mdash; each as a table you can export.</div></div>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Two outward numbers, and both are correct</div>
+  <p><strong>Outward &mdash; By channel &amp; SKU</strong> will not match <strong>Units sent out by product</strong> higher up the page, and neither is broken. The by-product figure counts units <em>physically scanned out</em> at the Dispatch Out station. The Outward section counts everything that <em>actually left the building</em> &mdash; which also includes bulk shipments closed with the <strong>Mark shipped</strong> button in Shipments, a normal way to ship that produces no scans at all.</p>
+  <p>Because of that, the scan-based figure runs at roughly <strong>half</strong> the true outward volume. <strong>Use the Outward section for "how much went out"</strong>, and the by-product figure when you specifically want scanning activity.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The end time is not counted</div>
+  <p>The Outward range runs <em>up to</em> the end time, not including it. A unit sent out at exactly the end time falls into the next window &mdash; so if you run 08:00 to 20:00 and then 20:00 to 08:00, nothing is ever counted twice.</p>
 </div>
 
 <h2 class="sec">Downloading a report</h2>
