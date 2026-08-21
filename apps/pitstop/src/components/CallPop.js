@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { notify } from '../lib/notify.js';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import {
@@ -34,6 +35,7 @@ export default function CallPop() {
   const [state, setState] = useState(null);      // { call, context }
   const [dismissed, setDismissed] = useState(null); // call id the agent closed
   const alive = useRef(true);
+  const notifiedCallRef = useRef(null);   // last call id we raised a desktop notification for
 
   // ⚠️ Keyed on userId, NEVER on `session` (CORE.md): a token refresh lands ~hourly and
   // hands the app a new session object. Re-keying on it would tear down and restart the
@@ -49,6 +51,34 @@ export default function CallPop() {
         const r = await csopsGet('getCallContext', { mine: 'true' }, sessionRef.current);
         if (!alive.current) return;
         setState(r?.active ? r : null);
+        // Desktop notification for an incoming call, ONCE per call.
+        //
+        // ⚠️ This is the case the in-app pop cannot cover. The pop is only visible if Pitstop is
+        // the tab the agent is looking at; a call arrives whenever it arrives. The phone ringing
+        // is the primary alert — this exists so the agent knows WHO is calling before answering,
+        // which is the whole point of the screen-pop.
+        //
+        // ⚠️ `requireInteraction` is true here and nowhere else: a message can wait, a ringing
+        // phone cannot, and a notification that auto-dismisses after a few seconds is no use to
+        // someone who glanced away. The agent closes it, or clicking it opens the call.
+        const c = r?.active ? r.call : null;
+        if (c?.id && notifiedCallRef.current !== c.id) {
+          notifiedCallRef.current = c.id;
+          const who = r.context?.customer?.name;
+          const order = r.context?.last_order;
+          notify(
+            c.direction === 'outgoing' ? `Calling ${who || c.phone || ''}`.trim() : `📞 ${who || 'Unknown caller'}`,
+            {
+              // `order_no` is the field the card itself renders — not `name`/`order_number`,
+              // which do not exist on this shape and would have printed a bare "Last order".
+              body: [c.phone, order?.order_no ? `Last order ${order.order_no}` : null]
+                .filter(Boolean).join(' · ') || undefined,
+              tag: `call:${c.id}`,
+              requireInteraction: true,
+              onClick: () => router.push(c.ticket_id ? `/calls/detail?id=${c.id}` : `/new?phone=${encodeURIComponent(c.phone || '')}`),
+            },
+          );
+        }
       } catch { /* a failed poll must never surface an error over a live call */ }
     }
     tick();

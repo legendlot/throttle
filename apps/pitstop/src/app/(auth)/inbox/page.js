@@ -13,12 +13,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { useListNav } from '@throttle/ui';
+import { notify, notifyEnabled, setNotifyEnabled, notifyPermission, requestNotifyPermission, previewText } from '../../../lib/notify.js';
 import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
   Bell, BellOff, ShoppingBag, SlidersHorizontal, Users, PlayCircle,
-  AlertTriangle, Info,
+  AlertTriangle, Info, Monitor,
 } from 'lucide-react';
 import { ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -315,6 +316,12 @@ export default function InboxPage() {
   // signal of any kind: no tab badge, no sound, nothing. Polling alone doesn't help someone
   // looking at another tab.
   const [soundOn, setSoundOn] = useState(false);
+  const [notifOn, setNotifOn] = useState(false);
+  const [notifPerm, setNotifPerm] = useState('default');
+  // Threads we have already raised a desktop notification for, so a 15s poll that still shows
+  // the same unread thread does not re-notify every cycle. Keyed by thread id + the inbound
+  // timestamp, so a NEW message on an already-notified thread does notify again.
+  const notifiedRef = useRef(new Set());
   const [statsReady, setStatsReady] = useState(false);   // first successful stats load — see the chime effect
   const prevAwaitingRef = useRef(null);
   const [loadingConvo, setLoadingConvo] = useState(false);
@@ -586,6 +593,10 @@ export default function InboxPage() {
   // Restore the sound preference (per browser, per agent) and reset the tab title on unmount.
   useEffect(() => {
     try { setSoundOn(localStorage.getItem('pitstop_inbox_sound') === '1'); } catch {}
+    // Only restore the desktop-notification toggle if the OS permission is STILL granted.
+    // A previously-enabled agent whose browser permission was later revoked would otherwise see
+    // the bell lit while nothing could ever fire — the toggle must reflect reality, not intent.
+    try { setNotifOn(notifyEnabled() && notifyPermission() === 'granted'); } catch {}
     return () => { document.title = 'Pitstop · Customer Support'; };
   }, []);
 
@@ -603,6 +614,62 @@ export default function InboxPage() {
     prevAwaitingRef.current = totalAwaiting;
     if (soundOn && prev !== null && totalAwaiting > prev) chime();
   }, [totalAwaiting, soundOn, statsReady]);
+
+  // Desktop notification per newly-unread conversation, with the customer's name and a preview.
+  //
+  // ⚠️ Deliberately keyed off the THREAD LIST, not off `totalAwaiting` like the chime above.
+  // A count tells you something arrived; it cannot tell you WHO from or WHAT they said, and a
+  // notification reading "1 new message" is barely better than the tab badge that already
+  // exists. This walks the threads and notifies per conversation.
+  //
+  // ⚠️ The first pass SEEDS silently instead of announcing. Same hazard the chime's `statsReady`
+  // gate exists for — without it, an agent opening the page would get one notification per
+  // conversation already sitting in the backlog, dozens at once — but solved differently: the
+  // chime compares a count against its previous value, while this needs to know which specific
+  // threads it has already spoken about, so it carries a seen-set rather than a ready flag.
+  //
+  // ⚠️ Scope follows whatever thread list the agent is looking at (mine / unassigned / all), which
+  // is deliberately the same scope as the tab badge and the chime. An agent on the "all" tab is
+  // notified about colleagues' conversations too — that is consistent with the other two alerts,
+  // not an oversight. Narrow all three together or none.
+  //
+  // ⚠️ `tag` is what keeps this usable: three messages from one customer inside a minute REPLACE
+  // each other in the OS tray rather than stacking. Ten different customers still give ten
+  // notifications, which is correct — they are ten conversations.
+  const notifSeededRef = useRef(false);
+  useEffect(() => {
+    if (!notifOn || !threads.length) return;
+    const seen = notifiedRef.current;
+    const unreadNow = threads.filter(t => {
+      const lm = t.last_message;
+      const isUnread = t.unread ?? (!!lm && lm.direction === 'inbound' && t.thread_state !== 'closed');
+      return isUnread && lm && lm.direction === 'inbound';
+    });
+    // First pass after enabling: remember what is already there, announce nothing.
+    if (!notifSeededRef.current) {
+      unreadNow.forEach(t => seen.add(`${t.id}:${t.last_inbound_at || ''}`));
+      notifSeededRef.current = true;
+      return;
+    }
+    for (const t of unreadNow) {
+      const key = `${t.id}:${t.last_inbound_at || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const lm = t.last_message;
+      const body = previewText(lm.body || (lm.kind && lm.kind !== 'text' ? `[${lm.kind}]` : ''));
+      notify(displayName(t), {
+        body,
+        tag: `thread:${t.id}`,          // collapses repeats from one conversation
+        onClick: () => setSelectedId(t.id),
+      });
+    }
+    // Bound the set so a long shift cannot grow it without limit.
+    if (seen.size > 500) notifiedRef.current = new Set([...seen].slice(-250));
+  }, [threads, notifOn]);
+
+  // Re-seed whenever the agent turns notifications on, so enabling mid-shift does not announce
+  // the whole existing backlog.
+  useEffect(() => { if (!notifOn) notifSeededRef.current = false; }, [notifOn]);
 
   // The one number agents act on moves to the topbar (the old AwaitingTile's job) — it is the
   // single figure worth 40px of chrome, and the topbar has that width spare. Published as plain
@@ -1104,6 +1171,20 @@ export default function InboxPage() {
         onToggleIgnition={() => { setIgnitionScope(v => !v); setSelectedId(null); }}
         soundOn={soundOn}
         onToggleSound={() => { const v = !soundOn; setSoundOn(v); try { localStorage.setItem('pitstop_inbox_sound', v ? '1' : '0'); } catch {} if (v) chime(); }}
+        notifOn={notifOn}
+        notifPermission={notifPerm}
+        onToggleNotif={async () => {
+          if (notifOn) { setNotifOn(false); setNotifyEnabled(false); return; }
+          // Turning ON: ask for permission from inside this click. Browsers ignore (and Chrome
+          // can permanently block) a request made outside a user gesture, so this must stay here.
+          const perm = await requestNotifyPermission();
+          setNotifPerm(perm);
+          if (perm === 'granted') { setNotifOn(true); setNotifyEnabled(true); }
+          else { setNotifOn(false); setNotifyEnabled(false); setErr(
+            perm === 'denied'
+              ? 'Desktop notifications are blocked for this site. Allow them in your browser’s site settings, then try again.'
+              : 'Desktop notifications are not available in this browser.'); }
+        }}
         searchInput={searchInput} setSearchInput={setSearchInput}
         sort={sort} setSort={setSort}
         priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter}
@@ -2227,7 +2308,7 @@ function InboxCommandBar(props) {
     channel, setChannel, stats, allTotal,
     assignTabs, assignTab, setAssignTab,
     stateFilter, setStateFilter,
-    ignitionScope, onToggleIgnition, soundOn, onToggleSound,
+    ignitionScope, onToggleIgnition, soundOn, onToggleSound, notifOn, notifPermission, onToggleNotif,
     searchInput, setSearchInput,
     sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
     agentFilter, setAgentFilter, allTags, agents,
@@ -2351,6 +2432,20 @@ function InboxCommandBar(props) {
         )}
         {/* Chime toggle (S245). Opt-in and per-browser: a shared desk with several agents
             does not want a chorus. The tab badge is always on and needs no permission. */}
+        <button onClick={onToggleNotif} className={notifOn ? undefined : 'ps-seg'}
+          title={notifPermission === 'unsupported'
+            ? 'Desktop notifications are not supported in this browser'
+            : notifPermission === 'denied'
+              ? 'Blocked — allow notifications for this site in your browser settings'
+              : notifOn
+                ? 'Desktop notification on new customer message — click to turn off'
+                : 'Off — click for desktop notifications when this tab is in the background'}
+          disabled={notifPermission === 'unsupported'}
+          style={seg(notifOn, { padding: '4px 6px',
+            color: notifOn ? 'var(--accent)' : (notifPermission === 'denied' ? 'var(--bad-fg)' : 'var(--t3)'),
+            opacity: notifPermission === 'unsupported' ? 0.4 : 1 })}>
+          <Monitor size={11} />
+        </button>
         <button onClick={onToggleSound} className={soundOn ? undefined : 'ps-seg'}
           title={soundOn ? 'Chime on new customer message — click to mute' : 'Muted — click to chime on new customer messages'}
           style={seg(soundOn, { padding: '4px 6px', color: soundOn ? 'var(--accent)' : 'var(--t3)' })}>
