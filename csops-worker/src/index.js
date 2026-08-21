@@ -6605,7 +6605,21 @@ const EMAIL_INBOUND_MAX_PER_RUN   = 24;                 // per sync tick, across
 // host whatever arrived under the size cap, since refusing to store it just recreates
 // the unopenable-chip bug (an iPhone HEIC, say) while adding no safety: the file is
 // already in the mailbox and the agent's fallback is opening Gmail anyway.
-const EMAIL_INLINE_SAFE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']);
+// ⚠️ The test this list encodes is "can this EXECUTE in a browsing context?", not "is this an
+// image?". A customer-sent .html/.svg must never render inline; inert media is fine and should
+// open where the agent is already looking. Video was excluded only because the original list was
+// written from the image cases to hand — 126 customer videos (97 mp4 + 29 quicktime, measured
+// 2026-08-21) were force-downloading as a side effect, which for a damage-claim clip is exactly
+// the wrong friction. `image/jpg` is the non-standard spelling some clients send; it is a JPEG.
+// ⚠️ Deliberately NOT added: `image/heic` (10 stored) — inert, but only Safari renders it, so
+// inline would give Chrome a blank tab instead of a usable file. Downloading is the better
+// outcome there, and it is the case the note above this list already calls out.
+// ⚠️ Deliberately NOT added: `application/octet-stream` — it is "unknown", not "safe", and the
+// bytes behind it could be anything.
+const EMAIL_INLINE_SAFE_MIME = new Set([
+  'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'application/pdf',
+  'video/mp4', 'video/quicktime',
+]);
 
 // Supabase Storage with the service key (mirrors podiumops/snorkelops storageFetch).
 async function csStorageFetch(path, env, opts = {}) {

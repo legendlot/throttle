@@ -9,6 +9,7 @@ import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../components/IssuePicker.js';
 import { btnPrimary, btnGhost, Icon } from '../../../components/kit/index.js';
 import { fmtIstDateLong } from '../../../lib/datetime.js';
+import { catalogCategories, filterByCategory, categoryOfProduct } from '../../../lib/catalog.js';
 
 const PLATFORMS = [
   '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
@@ -354,7 +355,26 @@ function ProductCascade({ form, setForm, catalog }) {
   const resolveSku = (product, model, color) =>
     (catalog.find(c => c.product === product && c.model === model && c.color === color)?.sku) || '';
 
-  const products = withCurrent(uniq(catalog.map(c => c.product)), form.product);
+  // Category narrows the Product list. Local state, not form state — see lib/catalog.js on
+  // why it is never stored on the ticket. It follows the product when one is already set
+  // (UPC autofill overwrites the cascade directly), so the filter can never contradict the
+  // selection below it.
+  const [category, setCategory] = useState('');
+  const categories = catalogCategories(catalog);
+  const derived = categoryOfProduct(catalog, form.product);
+  const activeCat = derived || category;
+  const scoped = filterByCategory(catalog, activeCat);
+
+  function selCategory(c) {
+    setCategory(c);
+    // Only clear the selection if the chosen product genuinely falls outside the new filter —
+    // re-picking a product the agent had already found would be a regression, not a reset.
+    if (form.product && categoryOfProduct(catalog, form.product) !== c && c) {
+      setForm(s => ({ ...s, product: '', product_model: '', product_color: '', product_sku: '' }));
+    }
+  }
+
+  const products = withCurrent(uniq(scoped.map(c => c.product)), form.product);
   const models = withCurrent(uniq(catalog.filter(c => c.product === form.product).map(c => c.model)), form.product_model);
   const colors = withCurrent(uniq(catalog.filter(c => c.product === form.product && c.model === form.product_model).map(c => c.color)), form.product_color);
 
@@ -379,6 +399,10 @@ function ProductCascade({ form, setForm, catalog }) {
   const toOpts = (arr) => arr.map(x => ({ value: x, label: x }));
   return (
     <Row>
+      <Field label="Category">
+        <Combobox value={activeCat} options={toOpts(categories)} onChange={(v) => selCategory(v)}
+          placeholder="All categories" inputStyle={inputStyle} portal />
+      </Field>
       <Field label="Product">
         <Combobox value={form.product} options={toOpts(products)} onChange={(v) => selProduct(v)}
           placeholder="Search product…" inputStyle={inputStyle} allowClear={false} portal />

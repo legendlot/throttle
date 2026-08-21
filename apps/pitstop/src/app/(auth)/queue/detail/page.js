@@ -16,6 +16,7 @@ import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/disposit
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
 import { fmtIstDateTime } from '../../../../lib/datetime.js';
 import { fmtIstDayMonth, fmtIstDateLong, fmtIstStamp } from '../../../../lib/datetime.js';
+import { catalogCategories, filterByCategory, categoryOfProduct } from '../../../../lib/catalog.js';
 
 // ── Domain constants (mirror csops worker) ───────────────────────────────────
 
@@ -1099,7 +1100,22 @@ function DetailProductCascade({ form, setForm, catalog }) {
   const resolveSku = (product, model, color) =>
     (catalog.find(c => c.product === product && c.model === model && c.color === color)?.sku) || '';
 
-  const products = withCurrent(uniq(catalog.map(c => c.product)), form.product);
+  // Category narrows Product — same behaviour as the new-ticket cascade, shared logic in
+  // lib/catalog.js so the two cannot drift again. Filter only; never written to the ticket.
+  const [category, setCategory] = useState('');
+  const categories = catalogCategories(catalog);
+  const derived = categoryOfProduct(catalog, form.product);
+  const activeCat = derived || category;
+  const scoped = filterByCategory(catalog, activeCat);
+
+  function selCategory(c) {
+    setCategory(c);
+    if (form.product && categoryOfProduct(catalog, form.product) !== c && c) {
+      setForm(s => ({ ...s, product: '', product_model: '', product_color: '', product_sku: '' }));
+    }
+  }
+
+  const products = withCurrent(uniq(scoped.map(c => c.product)), form.product);
   const models   = withCurrent(uniq(catalog.filter(c => c.product === form.product).map(c => c.model)), form.product_model);
   const colors   = withCurrent(uniq(catalog.filter(c => c.product === form.product && c.model === form.product_model).map(c => c.color)), form.product_color);
 
@@ -1124,7 +1140,12 @@ function DetailProductCascade({ form, setForm, catalog }) {
   // cascade lives inside the edit-issue Modal, so the dropdown would otherwise clip).
   const toOpts = (arr) => arr.map(x => ({ value: x, label: x }));
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={lbl}>category</span>
+        <Combobox value={activeCat} options={toOpts(categories)} onChange={(v) => selCategory(v)}
+          placeholder="All categories" inputStyle={inputStyle} portal />
+      </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={lbl}>product</span>
         <Combobox value={form.product || ''} options={toOpts(products)} onChange={(v) => selProduct(v)}
