@@ -1556,56 +1556,63 @@ export default function InboxPage() {
                 </div>
               )}
 
+              {/* ⚠️ These two banners sit OUTSIDE the scrolling message list ON PURPOSE.
+                  The list pins itself to the newest message on every thread open
+                  (`el.scrollTop = el.scrollHeight`), so anything rendered as its first child is
+                  scrolled out of sight immediately on any thread longer than one screen — which is
+                  exactly where a "this thread may be stale" warning matters most. Keep them here,
+                  pinned above the scroller. Found by hostile review 2026-08-21; they shipped inside
+                  the scroller earlier the same day and were effectively invisible. */}
+              {/* ⚠️ A stale mirror must not look identical to a live thread. When the Chatwoot
+                  pull fails, `loadConvo` falls back to the DB-mirrored view — which only ever
+                  held OUR outbound side — and stamps `wa_live_error`. Until 2026-08-21 nothing
+                  read it, so the agent saw a conversation that could be missing every inbound
+                  message the customer sent, with no way to tell. Silent degradation to a
+                  plausible-looking wrong answer is the worst failure shape available here. */}
+              {convo?.wa_live_error && (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
+                  background: 'var(--warn-bg, #fef3c7)', border: '1px solid var(--warn-fg, #d97706)',
+                  borderRadius: 'var(--radius-sm)', padding: '8px 10px',
+                  color: 'var(--warn-fg, #92400e)', fontSize: 12, lineHeight: 1.45,
+                }}>
+                  <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>
+                    <strong>Showing a mirrored copy — this may be missing the customer&apos;s latest messages.</strong>{' '}
+                    The live conversation could not be loaded ({convo.wa_live_error}).{' '}
+                    <button onClick={() => loadConvo(convo.thread.id)} style={{
+                      background: 'none', border: 'none', padding: 0, font: 'inherit',
+                      color: 'inherit', textDecoration: 'underline', cursor: 'pointer',
+                    }}>Retry</button>
+                  </span>
+                </div>
+              )}
+
+              {/* `startConversation` sets `newNote` when the customer already had an open 24h
+                  window, so the template was deliberately NOT sent and the agent was moved
+                  straight here. Unrendered, that read as the compose box silently discarding
+                  their message. The note explains why nothing was sent — the window is open,
+                  so they can just type. */}
+              {newNote && (newNote.threadId == null || newNote.threadId === selectedId) && (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
+                  background: 'var(--info-bg, #eff6ff)', border: '1px solid var(--info-fg, #2563eb)',
+                  borderRadius: 'var(--radius-sm)', padding: '8px 10px',
+                  color: 'var(--info-fg, #1e40af)', fontSize: 12, lineHeight: 1.45,
+                }}>
+                  <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ flex: 1 }}>{newNote.text}</span>
+                  <button onClick={() => setNewNote(null)} title="Dismiss" style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    color: 'inherit', flexShrink: 0, lineHeight: 0,
+                  }}>
+                    <X size={13} />
+                  </button>
+                </div>
+              )}
+
               {/* Messages */}
               <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, background: 'var(--surface-2)' }}>
-                {/* ⚠️ A stale mirror must not look identical to a live thread. When the Chatwoot
-                    pull fails, `loadConvo` falls back to the DB-mirrored view — which only ever
-                    held OUR outbound side — and stamps `wa_live_error`. Until 2026-08-21 nothing
-                    read it, so the agent saw a conversation that could be missing every inbound
-                    message the customer sent, with no way to tell. Silent degradation to a
-                    plausible-looking wrong answer is the worst failure shape available here. */}
-                {convo?.wa_live_error && (
-                  <div style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
-                    background: 'var(--warn-bg, #fef3c7)', border: '1px solid var(--warn-fg, #d97706)',
-                    borderRadius: 'var(--radius-sm)', padding: '8px 10px',
-                    color: 'var(--warn-fg, #92400e)', fontSize: 12, lineHeight: 1.45,
-                  }}>
-                    <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span>
-                      <strong>Showing a mirrored copy — this may be missing the customer&apos;s latest messages.</strong>{' '}
-                      The live conversation could not be loaded ({convo.wa_live_error}).{' '}
-                      <button onClick={() => loadConvo(convo.thread.id)} style={{
-                        background: 'none', border: 'none', padding: 0, font: 'inherit',
-                        color: 'inherit', textDecoration: 'underline', cursor: 'pointer',
-                      }}>Retry</button>
-                    </span>
-                  </div>
-                )}
-
-                {/* `startConversation` sets `newNote` when the customer already had an open 24h
-                    window, so the template was deliberately NOT sent and the agent was moved
-                    straight here. Unrendered, that read as the compose box silently discarding
-                    their message. The note explains why nothing was sent — the window is open,
-                    so they can just type. */}
-                {newNote && (newNote.threadId == null || newNote.threadId === selectedId) && (
-                  <div style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
-                    background: 'var(--info-bg, #eff6ff)', border: '1px solid var(--info-fg, #2563eb)',
-                    borderRadius: 'var(--radius-sm)', padding: '8px 10px',
-                    color: 'var(--info-fg, #1e40af)', fontSize: 12, lineHeight: 1.45,
-                  }}>
-                    <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span style={{ flex: 1 }}>{newNote.text}</span>
-                    <button onClick={() => setNewNote(null)} title="Dismiss" style={{
-                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                      color: 'inherit', flexShrink: 0, lineHeight: 0,
-                    }}>
-                      <X size={13} />
-                    </button>
-                  </div>
-                )}
-
                 {/* Load older — WA/web history is Chatwoot-paged; deepen on demand up to 36 pages */}
                 {!oldestReached && (convo?.messages || []).length > 0 && (
                   <div style={{ textAlign: 'center', marginBottom: 12 }}>
