@@ -264,11 +264,15 @@ function OutwardReport({ session, toast }) {
     if (from >= to)   { toast('End must be after start', 'error'); return; }
     setBusy(true);
     try {
-      // NB the payload must be wrapped in `data` — workerFetch posts `{action, ...body}`
-      // and the handler reads `body.data`. Passing {from,to} flat silently returns all-time.
+      // Two wrapping layers, and BOTH bite silently if you get them wrong:
+      //  • the REQUEST must nest in `data` — workerFetch posts `{action, ...body}` and the
+      //    handler reads `body.data`, so a flat {from,to} returns all-time instead of erroring;
+      //  • the RESPONSE is the worker's `ok()` envelope `{ok:true, data:{…}}`, so the payload
+      //    is `r.data`. Reading `r` directly renders an empty report with no error at all —
+      //    which is exactly how this shipped the first time and what the live smoke caught.
       const r = await workerFetch('getOutwardReport', { data: { from, to } }, session);
-      if (r?.ok === false) throw new Error(r.error || 'Failed');
-      setData(r);
+      if (!r?.ok) throw new Error(r?.error || 'Failed');
+      setData(r.data);
     } catch (e) {
       toast(e.message || 'Outward report failed', 'error');
     } finally { setBusy(false); }
