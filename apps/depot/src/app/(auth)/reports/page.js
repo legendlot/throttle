@@ -217,6 +217,163 @@ function DispatchedByProduct({ data, from, to }) {
   );
 }
 
+// ── OUTWARD · channel × SKU ────────────────────────────────────────────────
+// Mohit's daily outward report (2026-08-21). Deliberately SEPARATE from the
+// page-level presets above: he asked for time-of-day, and the shared presets are
+// whole-IST-day only, so this section owns its own datetime range rather than
+// widening a control six other sections depend on.
+//
+// ⚠️ The number here will NOT match "Units sent out by product (DOUT)" above, and
+// that is correct, not a bug. That panel counts DOUT SCAN EVENTS. This one counts
+// units actually SHIPPED (dispatch_allocations.shipped_at), which also picks up
+// every bulk shipment closed with "Mark shipped" — a legitimate path that writes no
+// scans at all (settled 2026-08-14). DOUT alone runs ~half the true outward volume.
+function outwardIsoLocal(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function outwardRange(kind) {
+  const s = new Date(); s.setHours(0, 0, 0, 0);
+  const e = new Date(s);
+  if (kind === 'today')      e.setDate(e.getDate() + 1);
+  else if (kind === 'yday')  { s.setDate(s.getDate() - 1); }
+  else if (kind === '7d')    { s.setDate(s.getDate() - 6); e.setDate(e.getDate() + 1); }
+  else if (kind === '30d')   { s.setDate(s.getDate() - 29); e.setDate(e.getDate() + 1); }
+  else if (kind === 'month') { s.setDate(1); e.setMonth(e.getMonth() + 1, 1); }
+  return { from: outwardIsoLocal(s), to: outwardIsoLocal(e) };
+}
+function prettyWhen(v) {
+  if (!v) return '—';
+  const [d, t] = String(v).split('T');
+  return `${d} ${t || '00:00'}`;
+}
+
+function OutwardReport({ session, toast }) {
+  const initial = outwardRange('today');   // range pickers default to Today
+  const [kind, setKind]   = useState('today');
+  const [from, setFrom]   = useState(initial.from);
+  const [to, setTo]       = useState(initial.to);
+  const [data, setData]   = useState(null);
+  const [busy, setBusy]   = useState(false);
+  const [view, setView]   = useState('channel');   // channel | sku | full
+
+  const applyKind = (k) => { const r = outwardRange(k); setKind(k); setFrom(r.from); setTo(r.to); };
+
+  const run = useCallback(async () => {
+    if (!from || !to) { toast('Pick both a start and an end', 'error'); return; }
+    if (from >= to)   { toast('End must be after start', 'error'); return; }
+    setBusy(true);
+    try {
+      // NB the payload must be wrapped in `data` — workerFetch posts `{action, ...body}`
+      // and the handler reads `body.data`. Passing {from,to} flat silently returns all-time.
+      const r = await workerFetch('getOutwardReport', { data: { from, to } }, session);
+      if (r?.ok === false) throw new Error(r.error || 'Failed');
+      setData(r);
+    } catch (e) {
+      toast(e.message || 'Outward report failed', 'error');
+    } finally { setBusy(false); }
+  }, [from, to, session, toast]);
+
+  useEffect(() => { run(); /* first load only */ }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stamp = `${String(from).replace(/[:T]/g, '-')}_${String(to).replace(/[:T]/g, '-')}`;
+  const rows  = data?.rows || [];
+
+  return (
+    <>
+      <div style={sectionHead}>Outward · By channel &amp; SKU</div>
+
+      <Panel
+        header="Range"
+        headerAction={
+          <span style={{ display: 'inline-flex', gap: 6 }}>
+            <button style={btnS} onClick={run} disabled={busy}>{busy ? 'Loading…' : 'Run'}</button>
+          </span>
+        }
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          {[['today','Today'],['yday','Yesterday'],['7d','Last 7 days'],['30d','Last 30 days'],['month','This month']]
+            .map(([k, label]) => <Chip key={k} active={kind === k} onClick={() => applyKind(k)}>{label}</Chip>)}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t3)' }}>From</span>
+            <input type="datetime-local" value={from} onChange={(e) => { setKind('custom'); setFrom(e.target.value); }}
+                   style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 8px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13 }} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t3)' }}>To</span>
+            <input type="datetime-local" value={to} onChange={(e) => { setKind('custom'); setTo(e.target.value); }}
+                   style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 8px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13 }} />
+          </label>
+        </div>
+        <div style={{ marginTop: 10, fontFamily: 'var(--cond)', fontSize: 12, color: 'var(--t3)', lineHeight: 1.5 }}>
+          Counting everything sent out from <strong style={{ color: 'var(--t2)' }}>{prettyWhen(from)}</strong> up to
+          {' '}<strong style={{ color: 'var(--t2)' }}>{prettyWhen(to)}</strong>. All times are IST.
+          <br />
+          The end time is not included — a unit sent out at exactly {prettyWhen(to).split(' ')[1]} counts in the next
+          window, so back-to-back ranges never double up.
+        </div>
+      </Panel>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+        <KpiCard label="Units out" value={nf(data?.total_units)} />
+        <KpiCard label="Channels" value={nf((data?.by_channel || []).length)} />
+        <KpiCard label="SKUs" value={nf((data?.by_sku || []).length)} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <Chip active={view === 'channel'} onClick={() => setView('channel')}>By channel</Chip>
+        <Chip active={view === 'sku'}     onClick={() => setView('sku')}>By SKU</Chip>
+        <Chip active={view === 'full'}    onClick={() => setView('full')}>Channel × SKU</Chip>
+      </div>
+
+      {view === 'channel' && (
+        <Table
+          title="Units out by channel"
+          rows={data?.by_channel}
+          columns={[
+            { key: 'channel', label: 'Channel' },
+            { key: 'is_sale', label: 'Sale', fmt: (v) => (v ? 'Yes' : 'No') },
+            { key: 'skus',    label: 'SKUs',  num: true, fmt: nf },
+            { key: 'units',   label: 'Units', num: true, fmt: nf },
+          ]}
+          csvName={`outward-by-channel-${stamp}.csv`}
+        />
+      )}
+      {view === 'sku' && (
+        <Table
+          title="Units out by SKU"
+          rows={data?.by_sku}
+          columns={[
+            { key: 'sku',     label: 'SKU' },
+            { key: 'product', label: 'Product' },
+            { key: 'variant', label: 'Variant' },
+            { key: 'color',   label: 'Colour' },
+            { key: 'units',   label: 'Units', num: true, fmt: nf },
+          ]}
+          csvName={`outward-by-sku-${stamp}.csv`}
+        />
+      )}
+      {view === 'full' && (
+        <Table
+          title="Units out by channel × SKU"
+          rows={rows}
+          columns={[
+            { key: 'channel', label: 'Channel' },
+            { key: 'sku',     label: 'SKU' },
+            { key: 'product', label: 'Product' },
+            { key: 'variant', label: 'Variant' },
+            { key: 'color',   label: 'Colour' },
+            { key: 'units',   label: 'Units', num: true, fmt: nf },
+          ]}
+          csvName={`outward-channel-sku-${stamp}.csv`}
+        />
+      )}
+    </>
+  );
+}
+
 export default function ReportsPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
@@ -452,6 +609,9 @@ export default function ReportsPage() {
             <KpiCard label="Products dispatched" value={nf((data?.dispatched?.by_product || []).length)} />
           </div>
           <DispatchedByProduct data={data?.dispatched} from={from} to={to} />
+
+          {/* ── OUTWARD · CHANNEL × SKU (Mohit, 2026-08-21) ─── */}
+          <OutwardReport session={session} toast={toast} />
 
           {/* ── RETURNS ─────────────────────────────────────── */}
           <div style={sectionHead}>Returns · Restocks &amp; repack</div>
