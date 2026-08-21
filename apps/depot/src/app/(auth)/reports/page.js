@@ -278,7 +278,11 @@ function OutwardReport({ session, toast }) {
     } finally { setBusy(false); }
   }, [from, to, session, toast]);
 
-  useEffect(() => { run(); /* first load only */ }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-run on mount and whenever a PRESET chip moves the range — a chip that repaints the
+  // range caption while leaving the old numbers underneath it reads as wrong data, which is
+  // worse than making someone click. Typing in the datetime inputs flips `kind` to 'custom'
+  // and deliberately does NOT auto-run: it would fire on every half-finished keystroke.
+  useEffect(() => { if (kind !== 'custom') run(); }, [kind, from, to]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const stamp = `${String(from).replace(/[:T]/g, '-')}_${String(to).replace(/[:T]/g, '-')}`;
   const rows  = data?.rows || [];
