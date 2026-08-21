@@ -12,11 +12,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
+import { useListNav } from '@throttle/ui';
 import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
   Bell, BellOff, ShoppingBag, SlidersHorizontal, Users, PlayCircle,
+  AlertTriangle, Info,
 } from 'lucide-react';
 import { ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -497,6 +499,33 @@ export default function InboxPage() {
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
+
+  // ↑/↓ moves the highlight down the thread list, Enter opens the highlighted thread.
+  // `/queue` and `/calls` have had this since S257; `/inbox` never did, despite that
+  // session's handoff asserting it worked — it was deliberately not invented during a
+  // layout-only change (PATTERN-247), so it stayed missing until 2026-08-21.
+  //
+  // The hook already ignores keys while an INPUT/TEXTAREA/contenteditable has focus, which
+  // is what makes this safe on a screen whose main affordance is a message composer.
+  const { focusedIdx, setFocusedIdx } = useListNav(
+    threads.length,
+    (i) => { const t = threads[i]; if (t) setSelectedId(t.id); },
+  );
+
+  // Clicking a row re-anchors the keyboard cursor, so ↓ continues from what the agent just
+  // touched rather than from wherever the highlight had been left.
+  useEffect(() => {
+    if (!selectedId) return;
+    const i = threads.findIndex(t => t.id === selectedId);
+    if (i >= 0) setFocusedIdx(i);
+  }, [selectedId, threads, setFocusedIdx]);
+
+  // Keep the highlighted row on screen — the list is a 320px scroller and arrowing past its
+  // edge would otherwise move an invisible cursor.
+  const focusedRowRef = useRef(null);
+  useEffect(() => {
+    focusedRowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [focusedIdx]);
 
   // Scroll positioning on message change: normally pin to newest, but when older
   // history was just prepended (Load older) keep the viewport anchored on the message
@@ -1173,12 +1202,19 @@ export default function InboxPage() {
               <Empty>Loading…</Empty>
             ) : threads.length === 0 ? (
               <Empty>{assignTab === 'unassigned' ? 'No unassigned conversations.' : assignTab === 'mine' ? 'Nothing assigned to you.' : 'No conversations yet.'}</Empty>
-            ) : threads.map(t => {
+            ) : threads.map((t, i) => {
               const checked = selectedIds.has(t.id);
+              // The keyboard cursor is drawn as an inset left rail rather than a background,
+              // because `checked` and `active` already own the row's background — three
+              // competing fills would make none of them legible.
+              const kbFocused = i === focusedIdx && t.id !== selectedId;
               return (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'stretch',
-                  borderBottom: '1px solid var(--border)',
-                  background: checked ? 'var(--accent-bg)' : 'transparent' }}>
+                <div key={t.id}
+                  ref={i === focusedIdx ? focusedRowRef : null}
+                  style={{ display: 'flex', alignItems: 'stretch',
+                    borderBottom: '1px solid var(--border)',
+                    boxShadow: kbFocused ? 'inset 3px 0 0 var(--accent)' : undefined,
+                    background: checked ? 'var(--accent-bg)' : 'transparent' }}>
                   {selectMode && (
                     <label onClick={e => e.stopPropagation()}
                       style={{ display: 'flex', alignItems: 'center', padding: '0 4px 0 10px', cursor: 'pointer' }}>
@@ -1503,6 +1539,54 @@ export default function InboxPage() {
 
               {/* Messages */}
               <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, background: 'var(--surface-2)' }}>
+                {/* ⚠️ A stale mirror must not look identical to a live thread. When the Chatwoot
+                    pull fails, `loadConvo` falls back to the DB-mirrored view — which only ever
+                    held OUR outbound side — and stamps `wa_live_error`. Until 2026-08-21 nothing
+                    read it, so the agent saw a conversation that could be missing every inbound
+                    message the customer sent, with no way to tell. Silent degradation to a
+                    plausible-looking wrong answer is the worst failure shape available here. */}
+                {convo?.wa_live_error && (
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
+                    background: 'var(--warn-bg, #fef3c7)', border: '1px solid var(--warn-fg, #d97706)',
+                    borderRadius: 'var(--radius-sm)', padding: '8px 10px',
+                    color: 'var(--warn-fg, #92400e)', fontSize: 12, lineHeight: 1.45,
+                  }}>
+                    <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>
+                      <strong>Showing a mirrored copy — this may be missing the customer&apos;s latest messages.</strong>{' '}
+                      The live conversation could not be loaded ({convo.wa_live_error}).{' '}
+                      <button onClick={() => loadConvo(convo.thread.id)} style={{
+                        background: 'none', border: 'none', padding: 0, font: 'inherit',
+                        color: 'inherit', textDecoration: 'underline', cursor: 'pointer',
+                      }}>Retry</button>
+                    </span>
+                  </div>
+                )}
+
+                {/* `startConversation` sets `newNote` when the customer already had an open 24h
+                    window, so the template was deliberately NOT sent and the agent was moved
+                    straight here. Unrendered, that read as the compose box silently discarding
+                    their message. The note explains why nothing was sent — the window is open,
+                    so they can just type. */}
+                {newNote && (
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
+                    background: 'var(--info-bg, #eff6ff)', border: '1px solid var(--info-fg, #2563eb)',
+                    borderRadius: 'var(--radius-sm)', padding: '8px 10px',
+                    color: 'var(--info-fg, #1e40af)', fontSize: 12, lineHeight: 1.45,
+                  }}>
+                    <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ flex: 1 }}>{newNote}</span>
+                    <button onClick={() => setNewNote(null)} title="Dismiss" style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      color: 'inherit', flexShrink: 0, lineHeight: 0,
+                    }}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                )}
+
                 {/* Load older — WA/web history is Chatwoot-paged; deepen on demand up to 36 pages */}
                 {!oldestReached && (convo?.messages || []).length > 0 && (
                   <div style={{ textAlign: 'center', marginBottom: 12 }}>
