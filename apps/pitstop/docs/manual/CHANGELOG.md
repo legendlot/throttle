@@ -3,6 +3,23 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.6.0] - 2026-08-21
+### Added
+- The Inbox: new "Alerts: badge, chime and desktop notifications" section. What
+  each of the three alerts is for and why they are different - the badge only
+  helps if you can see the tab, the chime only if your sound is on, and the
+  desktop notification is the one that reaches an agent when Pitstop is behind
+  another window. Covers allowing the browser permission, what to do when the
+  button shows red or is greyed out, why repeats from one customer collapse into
+  a single notification, and that alerts follow whichever list (Mine / All) is
+  on screen.
+- The Inbox: new "Keyboard" section - arrow keys move the highlight, Enter opens,
+  and typing a reply is never interrupted.
+- The Inbox: warning callout for the "showing a mirrored copy" banner, telling
+  agents not to assume the last visible message is the last one sent.
+- New Ticket: the Category filter above Product, including that it is only a
+  finding aid and is never stored on the ticket.
+
 ## [1.5.0] - 2026-08-20
 ### Added
 - Telephony (/admin/telephony): new chapter. Who can place calls from Pitstop
