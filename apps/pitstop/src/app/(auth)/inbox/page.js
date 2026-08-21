@@ -514,10 +514,22 @@ export default function InboxPage() {
 
   // Clicking a row re-anchors the keyboard cursor, so ↓ continues from what the agent just
   // touched rather than from wherever the highlight had been left.
+  //
+  // ⚠️ This must fire ONCE PER SELECTION, not whenever `threads` changes. The list reloads on
+  // a 20s interval and `setThreads` always installs a fresh array, so keying this on `threads`
+  // alone re-ran it every poll and dragged the highlight back onto the selected row —
+  // an agent arrowing down the list to read ahead would be yanked back mid-browse, twice a
+  // minute, and the row would scroll under them too. The ref makes the sync edge-triggered on
+  // `selectedId`; `threads` stays in the dep list only so a selection made before its row has
+  // loaded still anchors once the row arrives (guarded by the `i < 0` early return, which
+  // deliberately does NOT mark the id synced).
+  const lastAnchoredSel = useRef(null);
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || selectedId === lastAnchoredSel.current) return;
     const i = threads.findIndex(t => t.id === selectedId);
-    if (i >= 0) setFocusedIdx(i);
+    if (i < 0) return;
+    lastAnchoredSel.current = selectedId;
+    setFocusedIdx(i);
   }, [selectedId, threads, setFocusedIdx]);
 
   // Keep the highlighted row on screen — the list is a 320px scroller and arrowing past its
@@ -836,7 +848,14 @@ export default function InboxPage() {
           }, session);
       if (r?.window_open) {
         // Not an error — the conversation exists and is live. Take the agent straight to it.
-        setNewNote(r.message || 'That customer already has an open window — opening the conversation.');
+        // ⚠️ Bound to the thread it is ABOUT, not left floating. The banner renders in the
+        // conversation pane, and nothing clears it on a thread switch — unbound, a note about
+        // this customer would keep showing while the agent read a different conversation.
+        // `thread_id` is absent only when the worker found an open window but returned no
+        // thread to jump to; there is no navigation in that case, so the note stays on
+        // whatever is open (threadId null renders anywhere) rather than being dropped.
+        setNewNote({ threadId: r.thread_id || null,
+                     text: r.message || 'That customer already has an open window — opening the conversation.' });
         setNewOpen(false); resetCompose();
         if (r.thread_id) { setSelectedId(r.thread_id); await loadConvo(r.thread_id); }
         loadThreads();
@@ -1569,7 +1588,7 @@ export default function InboxPage() {
                     straight here. Unrendered, that read as the compose box silently discarding
                     their message. The note explains why nothing was sent — the window is open,
                     so they can just type. */}
-                {newNote && (
+                {newNote && (newNote.threadId == null || newNote.threadId === selectedId) && (
                   <div style={{
                     display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12,
                     background: 'var(--info-bg, #eff6ff)', border: '1px solid var(--info-fg, #2563eb)',
@@ -1577,7 +1596,7 @@ export default function InboxPage() {
                     color: 'var(--info-fg, #1e40af)', fontSize: 12, lineHeight: 1.45,
                   }}>
                     <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span style={{ flex: 1 }}>{newNote}</span>
+                    <span style={{ flex: 1 }}>{newNote.text}</span>
                     <button onClick={() => setNewNote(null)} title="Dismiss" style={{
                       background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                       color: 'inherit', flexShrink: 0, lineHeight: 0,
