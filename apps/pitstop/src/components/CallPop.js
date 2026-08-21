@@ -7,6 +7,7 @@ import {
   AlertTriangle, MessageSquare, Clock, UserRound,
 } from 'lucide-react';
 import { csopsGet } from '../lib/csopsFetch.js';
+import { fmtIstDayMonth } from '../lib/datetime.js';
 
 /**
  * CallPop — the customer's whole picture, on screen before the agent says hello.
@@ -179,9 +180,12 @@ function ordinal(n) {
   const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
+// Declared, not aliased with `const`: this is referenced above its definition, and a
+// `const` alias would sit in the temporal dead zone. Also keeps the empty-string return
+// for a missing date — the shared helper renders an em dash, which is right for a field
+// label but wrong inside the ` · ${…}` fragments and title strings this feeds.
 function fmtDay(iso) {
-  if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  return iso ? fmtIstDayMonth(iso) : '';
 }
 
 const wrap = {

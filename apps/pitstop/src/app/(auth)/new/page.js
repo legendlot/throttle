@@ -8,6 +8,7 @@ import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../components/IssuePicker.js';
 import { btnPrimary, btnGhost, Icon } from '../../../components/kit/index.js';
+import { fmtIstDateLong } from '../../../lib/datetime.js';
 
 const PLATFORMS = [
   '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
@@ -192,7 +193,7 @@ export default function NewTicketPage() {
               {upcLookup.data.unit.color && ` · ${upcLookup.data.unit.color}`}
               {upcLookup.data.unit.sku && <span style={{ color: 'var(--t3)' }}> · SKU {upcLookup.data.unit.sku}</span>}
               {upcLookup.data.shipment?.shipped_at && (
-                <span style={{ color: 'var(--t3)' }}> · shipped {new Date(upcLookup.data.shipment.shipped_at).toLocaleDateString()}</span>
+                <span style={{ color: 'var(--t3)' }}> · shipped {fmtIstDateLong(upcLookup.data.shipment.shipped_at)}</span>
               )}
               {upcLookup.data.shipment?.awb && (
                 <span style={{ color: 'var(--t3)' }}> · AWB {upcLookup.data.shipment.awb}</span>

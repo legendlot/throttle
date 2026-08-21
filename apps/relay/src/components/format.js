@@ -2,17 +2,23 @@
 // Ported from the handoff prototype (ui.jsx). Mono cells use these for
 // dates / currency / counts. Tone maps drive every Badge and status pill.
 
+// ⚠️ Timezone is PINNED to IST on the date-only formatters too, not just the datetime
+// ones below. A date is MORE exposed to this than a timestamp, not less: rendered from a
+// browser west of IST, any instant between 00:00 and 05:30 IST falls back onto the previous
+// calendar day and the row silently reads a day early, with no clock shown to give the
+// error away. `fmtDateTime`/`fmtDateTimeShort`/`stampParts` were pinned when they were
+// written; these two were missed and kept the browser's zone until 2026-08-21 (S302).
 export function fmtDate(raw) {
   if (!raw) return '—';
   const d = new Date(raw);
   if (isNaN(d)) return String(raw).slice(0, 10);
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
 }
 export function fmtDateShort(raw) {
   if (!raw) return '—';
   const d = new Date(raw);
   if (isNaN(d)) return String(raw).slice(0, 10);
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
 }
 // Date + time, always. A date alone cannot order two things that happened on the same
 // day, which is exactly the case that matters here: several saves of one template, or

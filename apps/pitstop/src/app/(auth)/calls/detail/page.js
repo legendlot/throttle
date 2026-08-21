@@ -8,11 +8,9 @@ import { ArrowLeft, PhoneIncoming, PhoneOutgoing, ExternalLink, CheckCheck, File
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../../components/CallStatusBadge.js';
 import CallButton from '../../../../components/CallButton.js';
+import { fmtIstStamp } from '../../../../lib/datetime.js';
 
-function fmtDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
-}
+const fmtDate = fmtIstStamp;
 function fmtDuration(secs) {
   if (secs == null || secs <= 0) return '—';
   const m = Math.floor(secs / 60); const s = secs % 60;

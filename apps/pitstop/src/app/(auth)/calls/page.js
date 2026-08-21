@@ -11,6 +11,7 @@ import CallButton from '../../../components/CallButton.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { KpiCard, Tabs, selectStyle } from '../../../components/kit/index.js';
 import { TrendChart, hourFmt } from '../../../components/kit/Chart.js';
+import { fmtIstShort } from '../../../lib/datetime.js';
 
 const TABS = [
   { id: 'all',        label: 'All Calls' },
@@ -69,9 +70,7 @@ function DurationCell({ call }) {
 }
 
 function fmtTime(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return iso ? fmtIstShort(iso) : '—';
 }
 
 function DirectionIcon({ direction }) {

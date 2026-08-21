@@ -2,10 +2,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
 import { Search, ExternalLink, RefreshCw } from 'lucide-react';
+import { fmtIstDateLong, fmtIstDayMonth } from '../lib/datetime.js';
 
 const money = (amt, cur) => amt == null ? '' : `${cur || '₹'}${Number(amt).toLocaleString('en-IN')}`;
-const fmtDate = d => { try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); } catch { return d; } };
-const fmtShort = d => { try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }); } catch { return d; } };
+const fmtDate = fmtIstDateLong;
+const fmtShort = fmtIstDayMonth;
 
 // Courier lifecycle → dot colour. `rto` is the one an agent must not miss: a parcel heading
 // back to us changes the whole conversation, so it reads as an alert, not a status.

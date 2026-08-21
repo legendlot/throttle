@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { EmptyState, Spinner, useEscapeClose } from '@throttle/ui';
 import { Plus, CopyCheck, Copy, PhoneCall, RefreshCw, Activity } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
+import { fmtIstStamp } from '../../../../lib/datetime.js';
 
 const CSOPS_URL = process.env.NEXT_PUBLIC_CSOPS_URL || 'https://csops.afshaan.workers.dev';
 
@@ -275,7 +276,7 @@ function ExotelPanel({ session }) {
             ? <span>
                 Connected to <code style={mono}>{health.account_sid}</code> ({health.latency_ms}ms).
                 {health.latest_logged?.started_at
-                  ? ` Last call logged ${new Date(health.latest_logged.started_at).toLocaleString('en-IN')}.`
+                  ? ` Last call logged ${fmtIstStamp(health.latest_logged.started_at)}.`
                   : ' No Exotel calls logged yet.'}
               </span>
             : <span style={{ color:'#dc2626' }}>

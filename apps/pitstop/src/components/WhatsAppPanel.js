@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { MessageCircle, Image as ImageIcon, FileText, Clock, ExternalLink } from 'lucide-react';
 import { csopsGet } from '../lib/csopsFetch.js';
+import { fmtIstShort } from '../lib/datetime.js';
 
 const BITESPEED_BASE = 'https://chat.bitespeed.co';
 function buildBiteSpeedDeepLink(thread) {
@@ -161,7 +162,7 @@ function Card({ children }) {
 function MessageRow({ m }) {
   const isIn = m.direction === 'inbound';
   const queued = m.status === 'queued';
-  const fmt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+  const fmt = fmtIstShort;
   const ts = m.received_at || m.sent_at || m.created_at;
 
   return (

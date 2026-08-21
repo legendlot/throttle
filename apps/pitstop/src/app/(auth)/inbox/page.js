@@ -23,6 +23,7 @@ import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import TagPicker, { TagChip } from '../../../components/TagPicker.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 import { useRefreshState } from '../layout.js';
+import { fmtIstShort } from '../../../lib/datetime.js';
 
 // Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
 const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
@@ -137,7 +138,7 @@ const META_HUMAN_AGENT_APPROVED = false;
 // outcome for a handled batch to be recorded as something else.
 const BULK_CLOSE_REASONS = [['resolved', 'Resolved'], ...CLOSE_REASONS];
 
-const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+const shortTime = fmtIstShort;
 const relTime = (iso) => {
   if (!iso) return '';
   const ms = Date.now() - new Date(iso).getTime();

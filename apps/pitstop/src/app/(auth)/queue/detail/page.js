@@ -15,6 +15,7 @@ import AssignmentControl from '../../../../components/AssignmentControl.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
 import { fmtIstDateTime } from '../../../../lib/datetime.js';
+import { fmtIstDayMonth, fmtIstDateLong, fmtIstStamp } from '../../../../lib/datetime.js';
 
 // ── Domain constants (mirror csops worker) ───────────────────────────────────
 
@@ -562,7 +563,7 @@ function ShipmentBanner({ shipment: s }) {
   if (s.lifecycle !== 'rto') return null;
   const rto = true;
   const when = rto ? s.as_of : (s.delivered_at || s.as_of);
-  const date = when ? new Date(when).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : null;
+  const date = when ? fmtIstDayMonth(when) : null;
   return (
     <div style={{
       marginTop: 'var(--space-3, 12px)',
@@ -679,7 +680,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh, onOr
             <div>SKU: {dispatch.unit.sku || '—'}</div>
             {dispatch.shipment && (
               <>
-                <div>Shipped: {dispatch.shipment.shipped_at ? new Date(dispatch.shipment.shipped_at).toLocaleDateString() : '—'}</div>
+                <div>Shipped: {fmtIstDateLong(dispatch.shipment.shipped_at)}</div>
                 {dispatch.shipment.awb && <div>Outbound AWB: {dispatch.shipment.awb}</div>}
                 {dispatch.shipment.courier && <div>Courier: {dispatch.shipment.courier}</div>}
               </>
@@ -723,11 +724,7 @@ function CallBlock({ ticket: t }) {
     const rem = String(s % 60).padStart(2, '0');
     return `${m}:${rem}`;
   }
-  function fmtAnswered(iso) {
-    if (!iso) return '—';
-    const d = new Date(iso);
-    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  }
+  const fmtAnswered = fmtIstStamp;
 
   return (
     <div style={{
@@ -830,7 +827,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
 
       <Panel
         title="Return logistics"
-        subtitle={t.warehouse_received_at ? `at warehouse · received ${new Date(t.warehouse_received_at).toLocaleDateString()}` : `stage: ${t.stage}`}
+        subtitle={t.warehouse_received_at ? `at warehouse · received ${fmtIstDateLong(t.warehouse_received_at)}` : `stage: ${t.stage}`}
         editable={canEditReturn}
         onEdit={() => setEditing('return')}
         locked={!inspectedReached && stageIdx < SHARED.indexOf('verified')}
@@ -840,7 +837,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
           <PanelField label="Return AWB" value={t.return_awb || '—'} mono />
           <PanelField label="Courier"    value={t.return_courier || '—'} />
           <PanelField label="Return cost" value={t.return_cost_inr ? `₹${t.return_cost_inr}` : '—'} mono />
-          <PanelField label="Warehouse received" value={t.warehouse_received_at ? new Date(t.warehouse_received_at).toLocaleDateString() : '—'} />
+          <PanelField label="Warehouse received" value={fmtIstDateLong(t.warehouse_received_at)} />
         </PanelGrid>
         {t.inspection_note && (
           <div style={{ marginTop: 12, padding: 10, background: 'var(--surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5, color: 'var(--t2)' }}>
@@ -864,15 +861,15 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
             <PanelField label="New unit UPC" value={t.replacement_unit_upc || '—'} mono />
             <PanelField label="Replacement AWB" value={t.replacement_awb || '—'} mono />
             <PanelField label="Replacement cost" value={t.replacement_cost_inr ? `₹${t.replacement_cost_inr}` : '—'} mono />
-            <PanelField label="Dispatched" value={t.stage === 'replacement_dispatched' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
+            <PanelField label="Dispatched" value={t.stage === 'replacement_dispatched' || t.stage === 'closed' ? fmtIstDateLong(t.stage_changed_at) : '—'} />
           </PanelGrid>
         )}
         {t.disposition === 'refund' && (
           <PanelGrid>
             <PanelField label="Refund amount" value={t.refund_amount_inr ? `₹${t.refund_amount_inr}` : '—'} mono />
             <PanelField label="UTR / reference" value={t.refund_reference || '—'} mono />
-            <PanelField label="Initiated"      value={t.stage === 'refund_initiated' || t.stage === 'refund_completed' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
-            <PanelField label="Completed"      value={t.stage === 'refund_completed' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
+            <PanelField label="Initiated"      value={t.stage === 'refund_initiated' || t.stage === 'refund_completed' || t.stage === 'closed' ? fmtIstDateLong(t.stage_changed_at) : '—'} />
+            <PanelField label="Completed"      value={t.stage === 'refund_completed' || t.stage === 'closed' ? fmtIstDateLong(t.stage_changed_at) : '—'} />
           </PanelGrid>
         )}
         {t.disposition === 'repair' && (
@@ -882,7 +879,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
               <PanelField label="Repair order ID" value={t.repair_order_id || '—'} mono />
               <PanelField label="Run status" value={repairRun?.status || '—'} />
               <PanelField label="Repair AWB" value={t.replacement_awb || '—'} mono />
-              <PanelField label="Dispatched" value={t.stage === 'repair_dispatched' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
+              <PanelField label="Dispatched" value={t.stage === 'repair_dispatched' || t.stage === 'closed' ? fmtIstDateLong(t.stage_changed_at) : '—'} />
             </PanelGrid>
             {repairRun && (
               <div style={{ marginTop: 8, fontSize: 11, color: 'var(--t3)' }}>
@@ -1295,7 +1292,7 @@ function FeedItem({ item }) {
   const isHist = item.kind === 'history';
 
   const when = new Date(item.at);
-  const whenText = `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const whenText = fmtIstStamp(item.at);
 
   const who = item.data.changed_by_name || item.data.created_by_name || item.data.added_by_name || 'system';
 
