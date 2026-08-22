@@ -5147,14 +5147,18 @@ export default {
               return ok({ orders: [], totals: null, since, hours, configured: false,
                           server_now: new Date().toISOString() });
             }
-            const [o, t] = await Promise.all([
+            const [o, t, pr] = await Promise.all([
               rpcSales('f_live_orders', { p_since: since, p_limit: limit }),
               rpcSales('f_live_totals', { p_since: since }),
+              rpcSales('f_live_products', { p_since: since }),
             ]);
             if (!o.ok) return err('Live orders failed: ' + JSON.stringify(o.data), 502);
             return ok({
               orders: o.data || [],
               totals: (t.ok && t.data && t.data[0]) ? t.data[0] : null,
+              // Same window and predicates as the feed, so the product table reconciles against
+              // the header rather than being a second, independently-derived set of numbers.
+              products: pr.ok ? (pr.data || []) : [],
               since, hours, configured: true,
               // Surfaced so the page can show how stale the feed itself is rather than implying
               // "live" unconditionally — if the webhook stops, this is what reveals it.
