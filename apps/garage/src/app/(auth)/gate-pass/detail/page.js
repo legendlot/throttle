@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch, supabase } from '@throttle/db';
 import { Spinner, Modal, useToast } from '@throttle/ui';
-import { GP_PURPOSES, DIRECTION_LABEL, purposeLabel, returnState } from '../../../../lib/gatePass.js';
+import { GP_PURPOSES, DIRECTION_LABEL, purposeLabel, returnState, mergeFiles, fmtFileSize } from '../../../../lib/gatePass.js';
 
 const GATEPASS_BUCKET = 'gate-pass-docs';
 const TONE = {
@@ -266,8 +266,25 @@ function DetailContent() {
           )}
           {!isVoid && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <input type="file" multiple onChange={(e) => setDocFiles(Array.from(e.target.files || []))} style={{ fontSize: 12, color: 'var(--t2)' }} />
-              <button style={btnS} onClick={uploadDocs} disabled={uploading || !docFiles.length}>{uploading ? 'Uploading…' : 'Upload'}</button>
+              <input type="file" multiple
+                onChange={(e) => { setDocFiles((prev) => mergeFiles(prev, e.target.files)); e.target.value = ''; }}
+                style={{ fontSize: 12, color: 'var(--t2)' }} />
+              <button style={btnS} onClick={uploadDocs} disabled={uploading || !docFiles.length}>{uploading ? 'Uploading…' : `Upload${docFiles.length > 1 ? ` ${docFiles.length}` : ''}`}</button>
+              {docFiles.length > 0 && (
+                <div style={{ flexBasis: '100%', display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 }}>
+                  {docFiles.map((file, i) => (
+                    <div key={`${file.name}-${file.size}-${file.lastModified}`}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--t2)', maxWidth: 420 }}>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+                      <span style={{ color: 'var(--t3)', flexShrink: 0 }}>{fmtFileSize(file.size)}</span>
+                      <button type="button" title="Remove" disabled={uploading}
+                        onClick={() => setDocFiles((prev) => prev.filter((_, j) => j !== i))}
+                        style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer',
+                          fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

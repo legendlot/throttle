@@ -35,3 +35,28 @@ export function returnState(gp) {
   if (gp.expected_return_date && gp.expected_return_date < today) return 'overdue';
   return 'pending';
 }
+
+/* ── document picking ────────────────────────────────────────────────
+   A <input type="file"> reports ONLY the files chosen in the last dialog,
+   so `setFiles(Array.from(e.target.files))` silently discards everything
+   picked before it. A gate pass normally wants a vehicle photo, a material
+   photo and an invoice PDF — three different files, usually in three
+   different folders, so they get picked in three separate dialogs and only
+   the last one survives. On the New form, where the upload runs once on
+   create, that means exactly one document is ever saved (Siddhant,
+   2026-08-22). Multi-select inside a SINGLE dialog always worked, which is
+   why the failure looked intermittent.
+
+   mergeFiles appends instead of replacing, de-duping on name+size+mtime. */
+export function mergeFiles(prev, picked) {
+  const key = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+  const seen = new Set((prev || []).map(key));
+  return [...(prev || []), ...Array.from(picked || []).filter((f) => !seen.has(key(f)))];
+}
+
+export function fmtFileSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}

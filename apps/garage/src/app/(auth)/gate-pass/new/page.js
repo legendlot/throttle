@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch, supabase } from '@throttle/db';
 import { useToast } from '@throttle/ui';
-import { GP_PURPOSES } from '../../../../lib/gatePass.js';
+import { GP_PURPOSES, mergeFiles, fmtFileSize } from '../../../../lib/gatePass.js';
 
 const GATEPASS_BUCKET = 'gate-pass-docs';
 const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16, padding: '16px 18px' };
@@ -175,8 +175,28 @@ export default function NewGatePassPage() {
 
         <div style={field}>
           <label style={lbl}>Documents (invoices / photos — optional, multiple)</label>
-          <input type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files || []))} style={{ fontSize: 12, color: 'var(--t2)' }} />
-          {files.length > 0 && <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>{files.length} file(s) selected</div>}
+          <input type="file" multiple
+            onChange={(e) => { setFiles((prev) => mergeFiles(prev, e.target.files)); e.target.value = ''; }}
+            style={{ fontSize: 12, color: 'var(--t2)' }} />
+          <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
+            Pick more than one at a time, or add them one by one — each choice is added to the list below.
+          </div>
+          {files.length > 0 && (
+            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {files.map((file, i) => (
+                <div key={`${file.name}-${file.size}-${file.lastModified}`}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--t2)' }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+                  <span style={{ color: 'var(--t3)', flexShrink: 0 }}>{fmtFileSize(file.size)}</span>
+                  <button type="button" title="Remove"
+                    onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+                    style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer',
+                      fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
+                </div>
+              ))}
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{files.length} file(s) will be attached</div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
