@@ -19,9 +19,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
+import { Combobox } from '@throttle/ui';
 import { salesGet, inr, fmtInt } from '../../../lib/api.js';
 import { PageHead, PanelHead, Nil } from '../../../components/prism.js';
 import { SegmentedToggle } from '../../../components/kit.js';
+
+const PGROUPS = [['variant', 'By Variant'], ['product', 'By Product']];
 
 const WINDOWS = [['6', '6h'], ['12', '12h'], ['24', '24h'], ['72', '3d']];
 const POLL_MS = 20000;
@@ -53,6 +56,9 @@ export default function LivePage() {
   useEffect(() => { sessionRef.current = session; }, [session]);
 
   const [hours, setHours] = useState('12');
+  const [variants, setVariants] = useState([]);        // product_master — feeds the search
+  const [pFilter, setPFilter] = useState('');          // '' | p:<product> | v:<product_code>
+  const [pGroup, setPGroup] = useState('variant');
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
@@ -76,6 +82,11 @@ export default function LivePage() {
     const id = setTimeout(() => setFresh(new Set()), 8000);
     return () => clearTimeout(id);
   }, [fresh]);
+
+  useEffect(() => {
+    if (!session) return;
+    salesGet('getVariants', {}, session).then(r => setVariants(r?.rows || [])).catch(() => {});
+  }, [session]);
 
   const load = useCallback(async () => {
     const s = sessionRef.current;
@@ -110,6 +121,88 @@ export default function LivePage() {
     const id = setInterval(() => setNowMs(Date.now()), 15000);
     return () => clearInterval(id);
   }, []);
+
+  // ── product search + table ────────────────────────────────────────────────
+  // Same two-grain option list as the Dashboard's Detail search (PATTERN-160): a whole-product
+  // entry followed by its variants, contiguous under a per-product group header. Model and
+  // colour are in the label; product name, sku and codes ride in `search`, matched but never
+  // rendered, so a product, a variant, a colour or a code all reach the same rows.
+  const codeToVariant = useMemo(() => {
+    const m = {}; for (const v of variants) m[v.product_code] = v; return m;
+  }, [variants]);
+
+  const productOptions = useMemo(() => {
+    const byProduct = new Map();
+    for (const v of variants) {
+      const p = v.product || v.product_code;
+      if (!p) continue;
+      if (!byProduct.has(p)) byProduct.set(p, []);
+      byProduct.get(p).push(v);
+    }
+    const out = [];
+    for (const p of [...byProduct.keys()].sort((a, b) => a.localeCompare(b))) {
+      const vs = byProduct.get(p);
+      const codes = vs.map(v => v.product_code).filter(Boolean);
+      out.push({
+        value: `p:${p}`, label: p, group: p,
+        hint: vs.length > 1 ? `all ${vs.length} variants` : (vs[0].color || vs[0].model || vs[0].product_code),
+        search: [...vs.map(v => `${v.model || ''} ${v.color || ''} ${v.sku || ''}`), ...codes].join(' '),
+      });
+      // A single-variant product would otherwise appear twice as two entries filtering to the
+      // same one code; its model and colour are already in `search` above.
+      if (vs.length === 1) continue;
+      for (const v of vs.sort((a, b) => `${a.model} ${a.color}`.localeCompare(`${b.model} ${b.color}`))) {
+        const bits = [v.model, v.color].filter(Boolean).join(' · ');
+        out.push({
+          value: `v:${v.product_code}`, group: p,
+          label: bits ? `${p} · ${bits}` : `${p} · ${v.product_code}`,
+          hint: v.product_code,
+          search: `${p} ${v.model || ''} ${v.color || ''} ${v.sku || ''} ${v.ean || ''}`,
+        });
+      }
+    }
+    return out;
+  }, [variants]);
+
+  // Built from product_master, NOT from what sold — so picking something that hasn't sold in the
+  // window gives an EMPTY table rather than silently falling back to everything.
+  const pFilterCodes = useMemo(() => {
+    if (!pFilter) return null;
+    if (pFilter.startsWith('v:')) return new Set([pFilter.slice(2)]);
+    const p = pFilter.slice(2);
+    return new Set(variants.filter(v => (v.product || v.product_code) === p).map(v => v.product_code));
+  }, [pFilter, variants]);
+
+  const pFilterLabel = useMemo(
+    () => (pFilter ? (productOptions.find(o => o.value === pFilter)?.label || '') : ''),
+    [pFilter, productOptions]);
+
+  const productRows = useMemo(() => {
+    const src = data?.products || [];
+    const agg = {};
+    for (const r of src) {
+      if (pFilterCodes && !pFilterCodes.has(r.product_code)) continue;
+      const v = r.product_code ? codeToVariant[r.product_code] : null;
+      // An unmapped SKU has no product_code. It is KEPT and labelled as such rather than dropped —
+      // dropping would make this table quietly disagree with the header totals above it.
+      const key = pGroup === 'product'
+        ? (v?.product || r.product_code || r.channel_sku)
+        : (r.product_code || r.channel_sku);
+      const label = pGroup === 'product'
+        ? (v?.product || r.title || r.channel_sku)
+        : (v ? [v.product, [v.model, v.color].filter(Boolean).join(' · ')].filter(Boolean).join(' · ')
+             : (r.title || r.channel_sku));
+      const a = agg[key] || (agg[key] = { key, label, units: 0, gross: 0, orders: 0, unmapped: !r.product_code });
+      a.units += Number(r.units) || 0;
+      a.gross += Number(r.gross) || 0;
+      a.orders += Number(r.orders) || 0;
+      if (!r.product_code) a.unmapped = true;
+    }
+    return Object.values(agg).sort((a, b) => b.gross - a.gross);
+  }, [data, pGroup, pFilterCodes, codeToVariant]);
+
+  const productTotals = useMemo(() => productRows.reduce(
+    (a, r) => ({ units: a.units + r.units, gross: a.gross + r.gross }), { units: 0, gross: 0 }), [productRows]);
 
   const totals = data?.totals || null;
   const orders = data?.orders || [];
@@ -175,6 +268,61 @@ export default function LivePage() {
             <Tile label="Units"    value={fmtInt(totals?.units || 0)} />
             <Tile label="Gross"    value={inr(totals?.gross || 0)} bright />
             <Tile label="Cancelled" value={totals?.cancelled ? fmtInt(totals.cancelled) : '—'} />
+          </div>
+
+          {/* ── products, above the order list ── */}
+          <div className="so-card flush" style={{ marginBottom: 16 }}>
+            <PanelHead title="Products" style={{ marginBottom: 0 }}
+              qual={pFilterLabel ? `· ${pFilterLabel}` : undefined}
+              right={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {/* `portal` is REQUIRED — the dropdown sits inside .so-card, which clips and
+                      establishes its own stacking context (PATTERN-160). */}
+                  <div style={{ minWidth: 230 }}>
+                    <Combobox options={productOptions} value={pFilter} onChange={setPFilter}
+                      placeholder="Search product, variant or colour…" portal />
+                  </div>
+                  <SegmentedToggle options={PGROUPS} value={pGroup} onChange={setPGroup} size="sm" />
+                </div>
+              } />
+            {pFilterLabel && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+                padding: '8px 14px', borderBottom: '1px solid var(--border)',
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+                <span><b style={{ color: 'var(--t1)' }}>{fmtInt(productTotals.units)}</b> units</span>
+                <span><b style={{ color: 'var(--t1)' }}>{inr(productTotals.gross)}</b> gross</span>
+                <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => setPFilter('')}>Clear</button>
+              </div>
+            )}
+            {productRows.length === 0 ? (
+              <div style={{ padding: 28, textAlign: 'center', fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' }}>
+                {pFilterLabel
+                  ? <>No sales of <b style={{ color: 'var(--t2)' }}>{pFilterLabel}</b> in this window.</>
+                  : 'No Website sales in this window.'}
+              </div>
+            ) : (
+              <table className="so-table">
+                <thead><tr>
+                  <th>{pGroup === 'product' ? 'Product' : 'Variant'}</th>
+                  <th className="so-num">Orders</th>
+                  <th className="so-num">Units</th>
+                  <th className="so-num">Gross ₹</th>
+                </tr></thead>
+                <tbody>
+                  {productRows.map(r => (
+                    <tr key={r.key}>
+                      <td>
+                        {r.label}
+                        {r.unmapped && <span style={{ color: 'var(--amber, #d97706)', fontFamily: 'var(--mono)', fontSize: 10, marginLeft: 6 }}>unmapped</span>}
+                      </td>
+                      <td className="so-num">{fmtInt(r.orders)}</td>
+                      <td className="so-num">{fmtInt(r.units)}</td>
+                      <td className="so-num bright">{r.gross ? inr(r.gross) : <Nil />}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
 
           <div className="so-card flush">
