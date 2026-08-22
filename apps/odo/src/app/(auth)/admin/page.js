@@ -28,6 +28,13 @@ export default function AdminPage() {
   const [userOpts, setUserOpts] = useState([]);   // searchable LOT-people directory for the grant dropdown
   const [editRole, setEditRole] = useState(null);   // { role_key, label, permissions }
   const [drrDays, setDrrDays] = useState('');
+  // ⚠️ These MUST stay here, above the `!perms` / `!boot` early returns below. I first declared
+  // them further down next to their handler, which meant the first render (boot === null) ran 5
+  // hooks and the next ran 7 — React throws "rendered more hooks than during the previous render"
+  // and the whole Admin screen fell to the error boundary. Hooks cannot sit after a conditional
+  // return, however local to their feature they look.
+  const [whBusy, setWhBusy] = useState(false);
+  const [whResult, setWhResult] = useState(null);
 
   const load = () => { if (session) salesGet('getBootstrap', {}, session).then(setBoot); };
   useEffect(load, [session]);
@@ -58,8 +65,7 @@ export default function AdminPage() {
   };
   // Shopify webhook subscriptions — the switch that makes /live actually live. Idempotent:
   // it only creates topics not already pointing at our callback, so pressing it twice is safe.
-  const [whBusy, setWhBusy] = useState(false);
-  const [whResult, setWhResult] = useState(null);
+  // NB the useState pair for this lives with the other hooks ABOVE the early returns — see there.
   const registerWebhooks = () => {
     setWhBusy(true); setWhResult(null);
     salesPost('registerShopifyWebhooksNow', {}, session)
