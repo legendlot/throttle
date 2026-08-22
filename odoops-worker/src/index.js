@@ -259,6 +259,26 @@ const shopifyAdapter = {
       for (const oe of (conn?.edges || [])) {
         const o = oe.node;
         if (o.updatedAt && o.updatedAt > maxUpdated) maxUpdated = o.updatedAt;
+        mapShopifyOrderNode(o, rows, orderRows);
+      }
+      hasNext = !!conn?.pageInfo?.hasNextPage; after = conn?.pageInfo?.endCursor || null;
+    }
+    return { rows, orderRows, cursorAfter: maxUpdated, subreqs, partial };
+  },
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) await stageShopifyLines(rows, runId, channelId);
+    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
+  },
+};
+
+// ── Shopify order node → staging rows ────────────────────────────────────────
+// Extracted so the hourly poller AND the /webhook/shopify receiver share ONE mapping.
+// ⚠️ This is why the webhook re-fetches the order over GraphQL instead of mapping the payload
+// Shopify POSTs: webhooks deliver REST JSON, where `id` is a bare number, while this mapper (and
+// therefore every staged row) keys on the GraphQL gid — `gid://shopify/Order/123`. Two shapes for
+// source_order_id means the dedup index never matches and EVERY webhook order double-counts
+// against the poller's copy. One mapper, one id format, no drift.
+function mapShopifyOrderNode(o, rows, orderRows) {
         const fin = (o.displayFinancialStatus || '').toUpperCase();
         // CANCELLATION vs RETURN are distinct: cancelled = order voided (cancelledAt/VOIDED);
         // a refund on a NON-cancelled order is a return (captured below). REFUNDED no longer
@@ -312,26 +332,132 @@ const shopifyAdapter = {
             }
           }
         }
-      }
-      hasNext = !!conn?.pageInfo?.hasNextPage; after = conn?.pageInfo?.endCursor || null;
-    }
-    return { rows, orderRows, cursorAfter: maxUpdated, subreqs, partial };
-  },
-  async stage(rows, runId, channelId, fetched) {
-    if (rows.length) {
-      const body = rows.map(r => ({
-        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, order_name: r.order_name,
-        source_line_id: r.source_line_id, occurred_at: r.occurred_at, sale_date: r.sale_date,
-        channel_sku: r.channel_sku, variant_title: r.variant_title, title: r.title,
-        qty: Math.round(r.qty), gross_value: r.gross_value,
-        discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: r.row_type || 'sale',
-        order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
-      }));
-      await sbInsertChunked('/rest/v1/stg_shopify?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
-    }
-    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
-  },
-};
+}
+
+// ── Shopify order webhooks — near-live Website sales ─────────────────────────
+// The hourly poller stays exactly as it is and remains the RECONCILER: it re-reads by
+// updated_at and upserts the same rows, so anything the webhook misses (delivery failure,
+// worker error, a period where the subscription was gone) self-heals within the hour. The
+// webhook is a latency improvement, never a source of truth on its own.
+//
+// Dedup is what makes the two safe together: stg_orders_uniq is UNIQUE on
+// (channel_id, source_order_id, row_kind, COALESCE(refund_id,'')) and both paths write
+// refund_id '' (never NULL) for order rows, so a webhook order and its later poll collapse
+// onto one row instead of double-counting.
+const SHOPIFY_WEBHOOK_TOPICS = ['ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED', 'REFUNDS_CREATE'];
+
+async function verifyShopifyHmac(secret, rawBody, headerB64) {
+  if (!secret || !headerB64) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
+  const bytes = new Uint8Array(mac);
+  let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const expected = btoa(bin);
+  // Length check first, then constant-time compare — never a plain === on a signature.
+  if (expected.length !== headerB64.length) return false;
+  let diff = 0; for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ headerB64.charCodeAt(i);
+  return diff === 0;
+}
+
+// Re-fetch ONE order through the same GraphQL query + mapper the poller uses, then stage it.
+// Deliberately not mapping the webhook's own REST payload — see mapShopifyOrderNode.
+async function fetchAndStageShopifyOrder(env, numericOrderId) {
+  const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
+  const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
+  const channelId = (cc.ok && cc.data[0]) ? cc.data[0].channel_id : null;
+  if (!channelId) throw new Error('shopify webhook: no shopify connector_config row');
+  const gql = `query($q:String!){ orders(first:1, query:$q){ edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
+  let token = await getShopifyToken(env);
+  if (!token) throw new Error('Shopify auth failed (client credentials)');
+  const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
+    body: JSON.stringify({ query: gql, variables: { q: `id:${numericOrderId}` } }),
+  });
+  let res = await run(token).catch(() => null);
+  if (res && res.status === 401) { token = await getShopifyToken(env, true); if (token) res = await run(token).catch(() => null); }
+  if (!res || !res.ok) throw new Error(`Shopify ${res ? res.status : 'network'}`);
+  const data = await res.json().catch(() => null);
+  if (data?.errors?.length) throw new Error('Shopify GQL: ' + data.errors[0].message);
+  const node = data?.data?.orders?.edges?.[0]?.node;
+  if (!node) return { staged: 0, skipped: 'order_not_found' };
+  const rows = [], orderRows = [];
+  mapShopifyOrderNode(node, rows, orderRows);
+  // run_id null: a webhook is not a connector run, and the column is nullable.
+  await stageShopifyLines(rows, null, channelId);
+  await stageOrders(orderRows, null, channelId);
+  return { staged: orderRows.length, lines: rows.length, order: node.name };
+}
+
+async function handleShopifyOrderWebhook(env, request) {
+  const raw = await request.text();
+  // Shopify signs a webhook with the secret of the APP that created the subscription, and these are
+  // created by us through the Admin API using SHOPIFY_CLIENT_SECRET — so that IS the signing key and
+  // no new vendor credential is needed. SHOPIFY_WEBHOOK_SECRET stays as an override for the case
+  // where a subscription is made by hand in the Shopify admin, which signs with its own secret.
+  const signingSecret = env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_CLIENT_SECRET;
+  if (!signingSecret) return { status: 500, body: { error: 'webhook_secret_unset' } };
+  const okSig = await verifyShopifyHmac(signingSecret, raw,
+    request.headers.get('X-Shopify-Hmac-Sha256') || request.headers.get('x-shopify-hmac-sha256')).catch(() => false);
+  if (!okSig) return { status: 401, body: { error: 'bad_signature' } };
+  let payload = null; try { payload = JSON.parse(raw); } catch { /* keep null */ }
+  const topic = (request.headers.get('X-Shopify-Topic') || '').toLowerCase();
+  // refunds/create carries the REFUND as `id` and the order as `order_id`; the order topics carry
+  // the order as `id`. Picking the wrong one silently stages nothing (order_not_found).
+  const orderId = topic.startsWith('refunds/') ? payload?.order_id : payload?.id;
+  if (!orderId) return { status: 200, body: { ok: true, topic, skipped: 'no_order_id' } };
+  // ⚠️ ALWAYS 200 on a handled-but-failed webhook. Shopify retries on non-2xx and removes a
+  // subscription that keeps failing; the hourly poller already covers anything we drop here, so a
+  // transient Shopify/DB blip must not cost us the subscription itself.
+  try {
+    const r = await fetchAndStageShopifyOrder(env, orderId);
+    return { status: 200, body: { ok: true, topic, ...r } };
+  } catch (e) {
+    console.error('shopify webhook stage failed:', topic, orderId, e?.message || e);
+    return { status: 200, body: { ok: false, topic, error: String(e?.message || e) } };
+  }
+}
+
+// Idempotent registration — creates only the topics not already subscribed to this callback.
+async function registerShopifyWebhooks(env, callbackUrl) {
+  const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
+  const token = await getShopifyToken(env);
+  if (!token) throw new Error('Shopify auth failed');
+  const call = (query, variables) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+    body: JSON.stringify({ query, variables }),
+  }).then(r => r.json()).catch(() => null);
+  const listQ = `{ webhookSubscriptions(first:100){ edges{ node{ id topic endpoint{ __typename ... on WebhookHttpEndpoint { callbackUrl } } } } } }`;
+  const cur = await call(listQ, {});
+  const have = new Set((cur?.data?.webhookSubscriptions?.edges || [])
+    .filter(e => e.node?.endpoint?.callbackUrl === callbackUrl)
+    .map(e => e.node.topic));
+  const createQ = `mutation($topic:WebhookSubscriptionTopic!,$url:URL!){ webhookSubscriptionCreate(topic:$topic, webhookSubscription:{callbackUrl:$url, format:JSON}){ webhookSubscription{ id topic } userErrors{ field message } } }`;
+  const created = [], errors = [];
+  for (const topic of SHOPIFY_WEBHOOK_TOPICS) {
+    if (have.has(topic)) continue;
+    const r = await call(createQ, { topic, url: callbackUrl });
+    const ue = r?.data?.webhookSubscriptionCreate?.userErrors || [];
+    if (ue.length) errors.push({ topic, errors: ue });
+    else if (r?.data?.webhookSubscriptionCreate?.webhookSubscription) created.push(topic);
+    else errors.push({ topic, errors: r?.errors || 'unknown' });
+  }
+  return { callbackUrl, already: [...have], created, errors };
+}
+
+// stg_shopify line staging — shared by the poller and the webhook receiver.
+async function stageShopifyLines(rows, runId, channelId) {
+  if (!rows.length) return;
+  const body = rows.map(r => ({
+    run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, order_name: r.order_name,
+    source_line_id: r.source_line_id, occurred_at: r.occurred_at, sale_date: r.sale_date,
+    channel_sku: r.channel_sku, variant_title: r.variant_title, title: r.title,
+    qty: Math.round(r.qty), gross_value: r.gross_value,
+    discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: r.row_type || 'sale',
+    order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
+  }));
+  await sbInsertChunked('/rest/v1/stg_shopify?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
+}
 
 // Order/return-grain staging (drives f_order_rollup). Shared by every order-grain adapter
 // (Shopify now; Amazon/Snorkel later). Upserts on the (channel, order, kind, refund) unique index.
@@ -4281,6 +4407,13 @@ export default {
     const url = new URL(request.url);
     const action = url.searchParams.get('action');
 
+    // ── Shopify order webhook — no JWT; verified by HMAC (S303) ──
+    // Near-live Website sales. Mirrors /webhook/razorpay: signature-checked, before any auth.
+    if (request.method === 'POST' && url.pathname === '/webhook/shopify') {
+      const r = await handleShopifyOrderWebhook(env, request);
+      return new Response(JSON.stringify(r.body), { status: r.status, headers: { ...CORS, 'Content-Type': 'application/json' } });
+    }
+
     // ── Razorpay payment webhook (S185) — no JWT; verified by HMAC signature ──
     if (request.method === 'POST' && url.pathname === '/webhook/razorpay') {
       const raw = await request.text();
@@ -4930,6 +5063,12 @@ export default {
                 pOos, pRes) : null,
             });
           }
+          case 'registerShopifyWebhooksNow': {   // idempotent subscribe (super-admin) — S303
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const cb = (body.callbackUrl || `${env.PUBLIC_BASE_URL || 'https://odoops.afshaan.workers.dev'}/webhook/shopify`);
+            try { return ok(await registerShopifyWebhooks(env, cb)); }
+            catch (e) { return err('Webhook registration failed: ' + String(e?.message || e), 502); }
+          }
           case 'syncInventorySnapshotNow': {   // manual snapshot + diff (super-admin) — layer c test trigger
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { const res = await syncInventorySnapshot(env); return ok(res); }
@@ -4993,6 +5132,28 @@ export default {
           // Sales-value segregation (order-grain): gross/cancellations/discounts/returns/GST +
           // order-type counts, per (sale_date, channel). Populated for channels with order-grain
           // staging (Shopify now; Amazon/GT-MT later) — others simply have no rows here.
+          // Near-live Website feed (S303). Reads staging via f_live_orders/f_live_totals — NOT
+          // sales_fact, which is day-grain and cannot express an order's time. Website only: the
+          // page says so, because a "live" number quietly missing Amazon reads as Amazon stalling.
+          case 'getLiveSales': {
+            const hours = Math.min(Math.max(Number(qp('hours')) || 12, 1), 72);
+            const limit = Math.min(Math.max(Number(qp('limit')) || 60, 1), 200);
+            const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+            const [o, t] = await Promise.all([
+              rpcSales('f_live_orders', { p_since: since, p_limit: limit }),
+              rpcSales('f_live_totals', { p_since: since }),
+            ]);
+            if (!o.ok) return err('Live orders failed: ' + JSON.stringify(o.data), 502);
+            return ok({
+              orders: o.data || [],
+              totals: (t.ok && t.data && t.data[0]) ? t.data[0] : null,
+              since, hours,
+              // Surfaced so the page can show how stale the feed itself is rather than implying
+              // "live" unconditionally — if the webhook stops, this is what reveals it.
+              server_now: new Date().toISOString(),
+            });
+          }
+
           case 'getSegregation': {
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_order_rollup', {
