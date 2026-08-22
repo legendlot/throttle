@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Modal } from '@throttle/ui';
+import { Spinner, Modal, Combobox } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
@@ -58,6 +58,12 @@ export default function Dashboard() {
   const [connectors, setConnectors] = useState([]);
   const [unmappedCount, setUnmappedCount] = useState(0);
   const [codeToProduct, setCodeToProduct] = useState({});
+  const [variants, setVariants] = useState([]);   // product_master rows — feeds the Detail product search
+  // Detail-only product filter. '' = everything. 'p:<product>' = every variant of a product,
+  // 'v:<product_code>' = one variant. Deliberately scoped to the Detail table (that is what was
+  // asked for) — the KPIs, mix board and movers above stay whole-catalogue, so the panel head
+  // names the selection loudly enough that the two are never read as the same number.
+  const [productFilter, setProductFilter] = useState('');
   const [rows, setRows] = useState([]);
   const [prevRows, setPrevRows] = useState([]);
   const [segRows, setSegRows] = useState([]);        // order-grain (f_order_rollup) — headline only
@@ -78,7 +84,11 @@ export default function Dashboard() {
       })
       .catch(() => {});
     salesGet('getVariants', {}, session)
-      .then(r => { const m = {}; (r?.rows || []).forEach(v => { m[v.product_code] = v.product; }); setCodeToProduct(m); })
+      .then(r => {
+        const rows = r?.rows || [];
+        const m = {}; rows.forEach(v => { m[v.product_code] = v.product; });
+        setCodeToProduct(m); setVariants(rows);
+      })
       .catch(() => {});
   }, [session]);
 
@@ -222,10 +232,62 @@ export default function Dashboard() {
   const prevAsp = prev.units ? prev.gross / prev.units : 0;
   const pct = (c, p) => (p ? ((c - p) / p) * 100 : null);
 
+  // ── Detail product search ──────────────────────────────────────────────────
+  // One flat list carrying BOTH grains: a whole-product entry and each of its variants,
+  // contiguous under a per-product `group` header (Combobox emits a header on change, so
+  // same-group options must stay adjacent). Colour and model live in the label; the product
+  // name and the codes ride in `search`, which is matched but never rendered — so typing a
+  // product ("Flare"), a variant ("Base"), a colour ("Red") or a code all find the same rows.
+  const productOptions = useMemo(() => {
+    const byProduct = new Map();
+    for (const v of variants) {
+      const p = v.product || v.product_code;
+      if (!p) continue;
+      if (!byProduct.has(p)) byProduct.set(p, []);
+      byProduct.get(p).push(v);
+    }
+    const out = [];
+    for (const p of [...byProduct.keys()].sort((a, b) => a.localeCompare(b))) {
+      const vs = byProduct.get(p);
+      const codes = vs.map(v => v.product_code).filter(Boolean);
+      out.push({
+        value: `p:${p}`, label: p, group: p,
+        hint: vs.length > 1 ? `all ${vs.length} variants` : 'all variants',
+        search: [...vs.map(v => `${v.model || ''} ${v.color || ''} ${v.sku || ''}`), ...codes].join(' '),
+      });
+      for (const v of vs.sort((a, b) => `${a.model} ${a.color}`.localeCompare(`${b.model} ${b.color}`))) {
+        const bits = [v.model, v.color].filter(Boolean).join(' · ');
+        out.push({
+          value: `v:${v.product_code}`, group: p,
+          label: bits ? `${p} · ${bits}` : `${p} · ${v.product_code}`,
+          hint: v.product_code,
+          search: `${p} ${v.model || ''} ${v.color || ''} ${v.sku || ''} ${v.ean || ''}`,
+        });
+      }
+    }
+    return out;
+  }, [variants]);
+
+  // The set of product_codes the Detail table is restricted to — null when unfiltered.
+  // Built from product_master, NOT from the codes present in `rows`, so selecting a product
+  // that sold nothing in the range correctly yields an EMPTY table rather than silently
+  // falling back to everything.
+  const filterCodes = useMemo(() => {
+    if (!productFilter) return null;
+    if (productFilter.startsWith('v:')) return new Set([productFilter.slice(2)]);
+    const p = productFilter.slice(2);
+    return new Set(variants.filter(v => (v.product || v.product_code) === p).map(v => v.product_code));
+  }, [productFilter, variants]);
+
+  const filterLabel = useMemo(
+    () => (productFilter ? (productOptions.find(o => o.value === productFilter)?.label || '') : ''),
+    [productFilter, productOptions]);
+
   // drill table (re-aggregate rows on the chosen axis)
   const table = useMemo(() => {
     const agg = {};
     for (const r of rows) {
+      if (filterCodes && !filterCodes.has(r.product_code)) continue;
       const prod = codeToProduct[r.product_code] || r.product_code;
       const key = group === 'date' ? r.sale_date : group === 'channel' ? r.channel_id : group === 'product' ? prod : r.product_code;
       const label = group === 'date' ? r.sale_date : group === 'channel' ? (chName[r.channel_id] || r.channel_id) : group === 'product' ? prod : (r.grp_label || r.product_code);
@@ -234,8 +296,14 @@ export default function Dashboard() {
       a.disc += Number(r.discount_value) || 0; a.retU += Number(r.returned_units) || 0; a.retV += Number(r.returned_value) || 0;
     }
     return Object.values(agg).sort((a, b) => b.gross - a.gross);
-  }, [rows, group, chName, codeToProduct]);
+  }, [rows, group, chName, codeToProduct, filterCodes]);
   const tblSort = useTableSort(table, { initialKey: 'gross' });
+
+  // Totals for the current Detail selection — the "how much has this product sold" answer,
+  // summed off the same rows the table renders so the two can never disagree.
+  const tableTotals = useMemo(() => table.reduce((a, r) => ({
+    units: a.units + r.units, gross: a.gross + r.gross, retU: a.retU + r.retU,
+  }), { units: 0, gross: 0, retU: 0 }), [table]);
 
   const orderedChannels = useMemo(() => [...channels].sort((a, b) =>
     (GROUP_ORDER.indexOf(channelGroup(a.name)) - GROUP_ORDER.indexOf(channelGroup(b.name))) || a.name.localeCompare(b.name)
@@ -248,8 +316,12 @@ export default function Dashboard() {
   // EAN stays text instead of turning into 5.9e+12, and numbers arrive summable).
   const exportRows = (fmt) => salesGet('getSalesExport', { from, to, group, channel_id: sel.join(',') }, session)
     .then(r => {
-      const rows = r?.rows || [];
-      const base = `odo_${group}_${from}_${to}`;
+      // The export is a SEPARATE fetch from the table, so the Detail product filter has to be
+      // re-applied to it by hand. Without this the screen shows one product and the file
+      // silently contains the whole catalogue under a filename that says otherwise.
+      const rows = (r?.rows || []).filter(x => !filterCodes || filterCodes.has(x.product_code));
+      const slug = filterLabel ? '_' + filterLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') : '';
+      const base = `odo_${group}${slug}_${from}_${to}`;
       if (fmt === 'xlsx') downloadXlsx(rows, `${base}.xlsx`, `Odo ${group}`);
       else downloadCsv(rows, `${base}.csv`);
     }).catch(() => {});
@@ -262,13 +334,18 @@ export default function Dashboard() {
   // Params mirror what the row aggregated: axis value + the page's current range + channel filter.
   const openDrill = (r) => {
     const base = { from, to, channel_id: sel.join(',') };
+    // On the date and channel axes the row carries no product of its own, so a Detail product
+    // filter has to be threaded into the drill explicitly — otherwise clicking a filtered row
+    // opens EVERY product's orders for that day/channel and the modal's total contradicts the
+    // row it was opened from (the mismatch the DrillModal banner already warns about).
+    const filtered = filterCodes ? [...filterCodes].join(',') : '';
     if (group === 'variant') setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, products: r.key } });
     else if (group === 'product') {
       const codes = Object.keys(codeToProduct).filter(c => codeToProduct[c] === r.key);
       setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, products: (codes.length ? codes : [r.key]).join(',') } });
     }
-    else if (group === 'date') setDrill({ title: r.key, params: { ...base, from: r.key, to: r.key } });
-    else setDrill({ title: `${r.label} · ${rangeLabel}`, params: { ...base, channel_id: r.key } });
+    else if (group === 'date') setDrill({ title: filterLabel ? `${filterLabel} · ${r.key}` : r.key, params: { ...base, from: r.key, to: r.key, ...(filtered ? { products: filtered } : {}) } });
+    else setDrill({ title: `${filterLabel ? filterLabel + ' · ' : ''}${r.label} · ${rangeLabel}`, params: { ...base, channel_id: r.key, ...(filtered ? { products: filtered } : {}) } });
   };
 
   return (
@@ -485,12 +562,35 @@ export default function Dashboard() {
 
         {/* ── drill table ── */}
         <div className="so-card flush">
-          <PanelHead title="Detail" style={{ marginBottom: 0 }} right={
-            <SegmentedToggle options={GROUPS.map(g => [g.key, g.label])} value={group} onChange={setGroup} size="sm" />
-          } />
+          <PanelHead title="Detail" style={{ marginBottom: 0 }}
+            qual={filterLabel ? `· ${filterLabel}` : undefined}
+            right={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {/* `portal` is REQUIRED here — the dropdown lives inside .so-card, which clips
+                    and establishes its own stacking/transform context (PATTERN-160). */}
+                <div style={{ minWidth: 250 }}>
+                  <Combobox options={productOptions} value={productFilter} onChange={setProductFilter}
+                    placeholder="Search product, variant or colour…" portal />
+                </div>
+                <SegmentedToggle options={GROUPS.map(g => [g.key, g.label])} value={group} onChange={setGroup} size="sm" />
+              </div>
+            } />
+          {filterLabel && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+              padding: '8px 14px', borderBottom: '1px solid var(--border)',
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+              <span><b style={{ color: 'var(--t1)' }}>{fmtInt(tableTotals.units)}</b> units</span>
+              <span><b style={{ color: 'var(--t1)' }}>{inr(tableTotals.gross)}</b> gross</span>
+              {tableTotals.retU > 0 && <span>{fmtInt(tableTotals.retU)} returned</span>}
+              <span style={{ color: 'var(--t4)' }}>· {rangeLabel} · this panel only, the figures above are all products</span>
+              <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => setProductFilter('')}>Clear</button>
+            </div>
+          )}
           {table.length === 0 ? (
             <div style={{ ...EMPTY, padding: 36, textAlign: 'center' }}>
-              No sales for this range yet. Pull a channel from <b style={{ color: 'var(--t2)' }}>Connectors</b> or upload a report from <b style={{ color: 'var(--t2)' }}>Uploads</b>.
+              {filterLabel
+                ? <>No sales of <b style={{ color: 'var(--t2)' }}>{filterLabel}</b> in this range. Widen the range, clear the channel filter, or check it is mapped under <b style={{ color: 'var(--t2)' }}>Mapping</b>.</>
+                : <>No sales for this range yet. Pull a channel from <b style={{ color: 'var(--t2)' }}>Connectors</b> or upload a report from <b style={{ color: 'var(--t2)' }}>Uploads</b>.</>}
             </div>
           ) : (
             <table className="so-table">
