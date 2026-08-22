@@ -9,18 +9,39 @@
    trends, affected-unit lists, recommendations and action
    buttons have no backing data/mutations — omitted.
    ════════════════════════════════════════════════════════════ */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
-import { todayStr } from '@throttle/domain';
-import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
+import { todayStr, dateStr } from '@throttle/domain';
 import { useRefreshState } from '../layout.js';
 import {
-  Icon, Panel, FilterChip, ToneBadge, Drawer, fmt, lineColor, lineRgb, istToday,
+  Icon, Panel, FilterChip, ToneBadge, Drawer, fmt, lineColor, lineRgb,
 } from '../../../components/kit/index.js';
 
 const FPY_TARGET = 95;
+
+/* Step a YYYY-MM-DD by whole days using local calendar fields. Never round-trip
+   through toISOString() — in IST that returns the previous day (PATTERN-221). */
+function shiftDay(ymd, delta) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  return dateStr(new Date(y, m - 1, d + delta));
+}
+
+/* "22 Aug 2026" for the scorecard eyebrow when a past day is selected. */
+function fmtDay(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB',
+    { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+const dayNavStyle = {
+  background: 'transparent', border: 'none', color: 'var(--t2)', cursor: 'pointer',
+  fontSize: 15, lineHeight: 1, padding: 0, width: 14, textAlign: 'center',
+  fontFamily: 'var(--font-ui)',
+};
 
 /* severity → semantic tones (status colors only, per design rules) */
 const SEV_T = {
@@ -53,7 +74,7 @@ function Empty({ icon = 'shield', message }) {
 }
 
 /* ── FPY scorecard — overall + per line/product vs target ───── */
-function FpyScorecard({ rows, defects }) {
+function FpyScorecard({ rows, defects, dayLabel }) {
   if (!rows.length) {
     return (
       <Panel title="First-pass yield" icon="shield" style={{ marginBottom: 16 }}>
@@ -64,7 +85,12 @@ function FpyScorecard({ rows, defects }) {
 
   const totPass = rows.reduce((s, r) => s + (Number(r.first_pass_count) || 0), 0);
   const totInsp = rows.reduce((s, r) => s + (Number(r.total_inspected)  || 0), 0);
-  const totFail = Math.max(totInsp - totPass, 0);
+  // `total_inspected - first_pass_count` is NOT the fail count — a unit that passes on a
+  // re-inspection carries loop_count > 0, so it sits inside total_inspected and outside
+  // first_pass_count. Reporting that as "fail" told the floor 61 units had failed on a day
+  // with zero QC_FAIL scans (2026-08-22, Maheshreddy). Read both counts from the view.
+  const totFail   = rows.reduce((s, r) => s + (Number(r.fail_count)        || 0), 0);
+  const totRework = rows.reduce((s, r) => s + (Number(r.rework_pass_count) || 0), 0);
   const overall = totInsp > 0 ? +(totPass / totInsp * 100).toFixed(1) : 0;
 
   const sorted = [...rows].sort((a, b) => (Number(a.fpy_pct) || 0) - (Number(b.fpy_pct) || 0));
@@ -80,13 +106,16 @@ function FpyScorecard({ rows, defects }) {
       <div style={{ display: 'flex', alignItems: 'stretch', flexWrap: 'wrap' }}>
         {/* overall */}
         <div style={{ padding: '20px 26px', flexShrink: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 230 }}>
-          <span className="eyebrow">First-pass yield · today</span>
+          <span className="eyebrow">First-pass yield · {dayLabel}</span>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
             <span className="num" style={{ fontSize: 46, fontWeight: 700, lineHeight: 1,
               color: overall >= FPY_TARGET ? 'var(--ok-fg)' : 'var(--warn-fg)' }}>{overall}%</span>
           </div>
           <div className="num" style={{ fontSize: 12.5, color: 'var(--t3)', marginTop: 8 }}>
-            {fmt(totPass)} pass · {fmt(totFail)} fail · target {FPY_TARGET}%
+            {fmt(totPass)} first-pass · {fmt(totRework)} rework · {fmt(totFail)} fail
+          </div>
+          <div className="num" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 3 }}>
+            {fmt(totInsp)} inspected · target {FPY_TARGET}%
           </div>
         </div>
         {/* per-line bars */}
@@ -402,7 +431,7 @@ function DefectDrawer({ d, total, onClose }) {
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '13px 15px' }}>
           <div className="eyebrow">Occurrences · period</div>
           <div className="num" style={{ fontSize: 26, fontWeight: 700, color: 'var(--t1)', marginTop: 4 }}>{fmt(d.count)}</div>
-          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', marginTop: 3 }}>{pct}% of all defects today</div>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', marginTop: 3 }}>{pct}% of all defects in view</div>
         </div>
         <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginTop: 16, lineHeight: 1.5 }}>
           Unit-level detail is available in Scans — filter QC fails by this defect code.
@@ -414,8 +443,13 @@ function DefectDrawer({ d, total, onClose }) {
 
 /* ── page ───────────────────────────────────────────────────── */
 export default function QcPage() {
-  const { session }                         = useAuth();
+  const { session, userId }                 = useAuth();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
+
+  // Read the token from a ref inside the callback rather than closing over `session`,
+  // which goes stale — and key the loads on `userId` (CORE.md / AuthProvider).
+  const sessionRef = useRef(session);
+  useEffect(() => { sessionRef.current = session; }, [session]);
 
   const [cycleTime,   setCycleTime]   = useState(null);
   const [ctByLine,    setCtByLine]    = useState({});
@@ -429,13 +463,16 @@ export default function QcPage() {
   const [view,    setView]    = useState('pareto');   // 'pareto' | 'product'
   const [filters, setFilters] = useState({ line: 'all', cat: 'all' });
   const [drawer,  setDrawer]  = useState(null);
+  // Defaults to today, per the standing rule for every date picker in every app.
+  const [date,    setDate]    = useState(() => todayStr());
+  const isToday = date === todayStr();
 
   const loadAll = useCallback(async () => {
-    if (!session) return;
+    const s = sessionRef.current;
+    if (!s) return;
     setRefreshing(true);
     try {
-      const today = todayStr();
-      const data  = await garageFetch('getQCView', { from: today, to: today }, session);
+      const data  = await garageFetch('getQCView', { from: date, to: date }, s);
 
       setCycleTime(data.cycle_time       || null);
       setCtByLine(data.cycle_time_lines  || {});
@@ -451,9 +488,20 @@ export default function QcPage() {
       setRefreshing(false);
       setLastRefreshed(new Date());
     }
-  }, [session, setRefreshing, setLastRefreshed]);
+  }, [date, setRefreshing, setLastRefreshed]);
 
-  useAutoRefresh(loadAll, 30000, !session);
+  // Load on mount and on every date change. NB `useAutoRefresh` cannot carry this —
+  // it keys its effect on [skip, intervalMs] and holds fn in a ref, so a date change
+  // would never re-fetch.
+  useEffect(() => { if (userId) loadAll(); }, [userId, loadAll]);
+
+  // Poll only while looking at today. A past day is settled, so re-fetching it every
+  // 30s just churns and makes the "Updated hh:mm" stamp read as if it were live.
+  useEffect(() => {
+    if (!userId || !isToday) return;
+    const id = setInterval(() => loadAll(), 30000);
+    return () => clearInterval(id);
+  }, [userId, isToday, loadAll]);
 
   /* aggregate heatmap rows by line+code for the Pareto */
   const defects = useMemo(() => {
@@ -506,11 +554,31 @@ export default function QcPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)',
           border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '6px 11px', color: 'var(--t2)' }}>
           <Icon name="clock" size={14} />
-          <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{istToday()}</span>
+          <button type="button" title="Previous day" onClick={() => setDate(shiftDay(date, -1))}
+            style={dayNavStyle}>‹</button>
+          <input type="date" value={date} max={todayStr()}
+            onChange={e => { if (e.target.value) setDate(e.target.value); }}
+            className="num"
+            style={{ fontSize: 12.5, color: 'var(--t1)', background: 'transparent', border: 'none',
+              outline: 'none', fontFamily: 'inherit', colorScheme: 'dark', padding: 0, cursor: 'pointer' }} />
+          <button type="button" title="Next day" disabled={isToday}
+            onClick={() => setDate(shiftDay(date, 1))}
+            style={{ ...dayNavStyle, opacity: isToday ? 0.3 : 1,
+              cursor: isToday ? 'default' : 'pointer' }}>›</button>
         </div>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t3)' }}>
-          <span className="rl-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)' }} /> Auto-refresh 30s
-        </span>
+        {!isToday && (
+          <button type="button" onClick={() => setDate(todayStr())}
+            style={{ ...dayNavStyle, width: 'auto', padding: '6px 11px', fontSize: 11.5,
+              letterSpacing: '0.05em', textTransform: 'uppercase', border: '1px solid var(--border)',
+              borderRadius: 'var(--r-sm)', background: 'var(--surface)' }}>Today</button>
+        )}
+        {isToday ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t3)' }}>
+            <span className="rl-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)' }} /> Auto-refresh 30s
+          </span>
+        ) : (
+          <span style={{ fontSize: 12, color: 'var(--t3)' }}>Showing a past day — not live</span>
+        )}
       </div>
 
       {error && (
@@ -520,7 +588,7 @@ export default function QcPage() {
         </div>
       )}
 
-      <FpyScorecard rows={fpy} defects={defects} />
+      <FpyScorecard rows={fpy} defects={defects} dayLabel={isToday ? 'today' : fmtDay(date)} />
       <CycleStrip ct={cycleTime} ctByLine={ctByLine} />
 
       {/* defects + repeats */}
