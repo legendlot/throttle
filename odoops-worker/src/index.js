@@ -208,6 +208,12 @@ const SHOPIFY_API_VERSION_DEFAULT = '2026-04';
 // 183. Must divide an hour exactly, or bucket boundaries drift against the top of the hour and
 // the retention split below (which keys on minute = 0) stops recognising hourly rows.
 const INVENTORY_BUCKET_MS = 5 * 60 * 1000;
+
+// The two cron expressions, as configured in wrangler.toml. Named because scheduled() branches on
+// them and a silent mismatch is expensive: see the note in scheduled() about the tick that wrote
+// no readings at all. Keep these byte-identical to wrangler.toml.
+const HOURLY_CRON = '0 * * * *';
+const FAST_CRON   = '*/5 * * * *';
 let _shopToken = null, _shopTokenExp = 0;
 async function getShopifyToken(env, force = false) {
   // Custom app (Admin → Develop apps): a static Admin API access token (shpat_…). Use it directly.
@@ -4120,34 +4126,39 @@ export default {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
 
-    // ── FAST PATH (*/5) — stock freshness only ────────────────────────────────
-    // Website inventory + flip detection + the Slack drain, and NOTHING else. Deliberately not
-    // the connector producer: marketplace feeds are day-grain or batch, Meta already returns 403
-    // "Application request limit reached" at hourly, and running them 12x more often would cost
-    // data rather than gain it. Amazon inventory + the FBA ledger stay on the hourly tick too —
-    // SP-API is rate-limited and paced by that cron on purpose.
+    // ── stock freshness — runs on EVERY tick, then the fast tick stops here ───
+    // Website inventory + the Slack drain. detect_stock_alerts is NOT called here: it already runs
+    // inside syncInventorySnapshot on a complete pull with p_lookback_days: 3, and calling it on
+    // the DEFAULT 7 would break a live invariant — LEDGER_ALERT_SAFE_LAG_DAYS = 5 puts backfilled
+    // FBA ledger rows outside a 3-day window but inside a 7-day one, so backfilled history would
+    // start firing alerts. The drain is separate so a Slack outage never costs a flip: the outbox
+    // row is written by the capture either way and goes out on a later tick.
     //
-    // These three steps also came OFF the hourly path, so they run in exactly one place. Keeping
-    // a copy there as a "backstop" would mean two Shopify pulls racing onto the same bucket at
-    // :00 for no benefit.
-    if (event.cron === '*/5 * * * *') {
-      try {
-        const inv = await syncInventorySnapshot(env);
-        if (inv && !inv.skipped) console.log('odoops fast: inventory', JSON.stringify(inv));
-      } catch (e) { console.error('odoops fast (inventory) failed:', e?.message || e); }
-      // NB detection is NOT called here. syncInventorySnapshot already runs detect_stock_alerts
-      // (and the product-grain twin) internally, on a complete pull, with p_lookback_days: 3.
-      // ⚠️ Calling it here on the DEFAULT lookback (7) would break a live invariant:
-      // LEDGER_ALERT_SAFE_LAG_DAYS = 5 places backfilled FBA ledger rows deliberately OUTSIDE a
-      // 3-day window but well inside a 7-day one, so backfilled history would start firing alerts.
-      // The drain still runs separately below so a Slack outage never costs a flip — the outbox
-      // row is written by the capture either way and goes out on a later tick.
-      try {
-        const s = await sendStockAlerts(env);
-        if (s?.sent || s?.stale) console.log('odoops fast: stock alerts', JSON.stringify(s));
-      } catch (e) { console.error('odoops fast (stock alerts) failed:', e?.message || e); }
-      return;
+    // ⚠️ STRUCTURED SO NOTHING CAN STRAND, AND THAT IS THE POINT. The first version gated this
+    // whole block on `event.cron === FAST_CRON` and removed it from the hourly path, so it ran in
+    // exactly one place. Deployed, TWO fast ticks passed and wrote no readings at all — and because
+    // the hourly copy was gone, inventory was then captured NOWHERE. Whatever the runtime hands us
+    // in event.cron, an unrecognised value must degrade to "do more", never to "do nothing".
+    // So: capture always, and only the EARLY RETURN is gated on the fast cron. An unknown cron now
+    // falls through to the full hourly path (safe default) instead of silently skipping everything.
+    // Cost of the belt-and-braces: one extra Shopify pull at :00, upserting the same 5-minute
+    // bucket. That is a rounding error against losing stock capture entirely.
+    if (event.cron !== HOURLY_CRON && event.cron !== FAST_CRON) {
+      console.warn('odoops: unrecognised cron', JSON.stringify(event.cron), '— running the full path');
     }
+    try {
+      const inv = await syncInventorySnapshot(env);
+      if (inv && !inv.skipped) console.log('odoops: inventory', event.cron, JSON.stringify(inv));
+    } catch (e) { console.error('odoops (inventory) failed:', e?.message || e); }
+    try {
+      const s = await sendStockAlerts(env);
+      if (s?.sent || s?.stale) console.log('odoops: stock alerts', JSON.stringify(s));
+    } catch (e) { console.error('odoops (stock alerts) failed:', e?.message || e); }
+
+    // The fast tick is stock-only. Marketplace feeds deliberately stay hourly: Meta already returns
+    // 403 "Application request limit reached" at hourly, Amazon is async batch, sales_fact is
+    // day-grain. Amazon inventory + the FBA ledger stay hourly too — SP-API is paced by that cron.
+    if (event.cron === FAST_CRON) return;
 
     try {
       // PRODUCER: spawn one ConnectorWorkflow per enabled connector. Single-flight — skip a
