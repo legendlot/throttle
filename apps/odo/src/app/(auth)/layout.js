@@ -5,7 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
 import {
   LayoutDashboard, BarChart3, Store, Megaphone, Filter, Package, Landmark, Boxes,
-  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search,
+  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search, Radio,
 } from 'lucide-react';
 import { FreshnessProvider, FreshnessChip, useFreshness } from '../../components/Freshness.js';
 import { feedStatus } from '../../lib/freshness.js';
@@ -20,6 +20,9 @@ import { CommandPalette, useCommandPalette, paletteEntries } from '../../compone
 const NAV = [
   { label: 'Overview', items: [
     { route: '/',            label: 'Dashboard',   icon: LayoutDashboard, perm: 'sales_view' },
+    // Website-only, near-live. Sits under Overview next to the Dashboard because it answers the
+    // same question at a different latency — not under Sales, where it would read as a channel.
+    { route: '/live',        label: 'Live',        icon: Radio,           perm: 'sales_view' },
   ] },
   { label: 'Sales', items: [
     { route: '/performance', label: 'Performance', icon: BarChart3,       perm: 'sales_view' },
