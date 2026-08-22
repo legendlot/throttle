@@ -56,6 +56,22 @@ export default function AdminPage() {
     if (!window.confirm(`Delete role “${rk}”? Users on this role lose its permissions. This can't be undone.`)) return;
     salesPost('deleteRole', { role_key: rk }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
   };
+  // Shopify webhook subscriptions — the switch that makes /live actually live. Idempotent:
+  // it only creates topics not already pointing at our callback, so pressing it twice is safe.
+  const [whBusy, setWhBusy] = useState(false);
+  const [whResult, setWhResult] = useState(null);
+  const registerWebhooks = () => {
+    setWhBusy(true); setWhResult(null);
+    salesPost('registerShopifyWebhooksNow', {}, session)
+      .then(r => {
+        setWhResult(r);
+        const n = (r?.created || []).length;
+        toast?.showToast?.(n ? `Subscribed ${n} topic(s)` : 'Already subscribed — nothing to do', 'success');
+      })
+      .catch(e => { setWhResult({ error: e.message }); toast?.showToast?.(e.message, 'error'); })
+      .finally(() => setWhBusy(false));
+  };
+
   const saveDrr = () => {
     const n = Number(drrDays);
     if (!(Number.isFinite(n) && n >= 1 && n <= 365)) return toast?.showToast?.('Days must be 1–365', 'error');
@@ -148,6 +164,31 @@ export default function AdminPage() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
             <button className="so-btn" onClick={saveDrr} disabled={!drrDirty}>Save</button>
           </div>
+
+          {isSuper && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, padding: '11px 0', borderTop: '1px solid var(--border-table)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t1)', fontWeight: 500 }}>Shopify live-order webhooks</div>
+                <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, color: 'var(--t3)', marginTop: 2, lineHeight: 1.45 }}>
+                  Subscribes Shopify to push new, updated, cancelled and refunded orders to Odo as they happen — this
+                  is what makes <b>Live</b> live. Without it that page still works, but only refreshes on the hourly
+                  sync. Safe to press more than once: it only adds topics that aren’t already subscribed.
+                  {whResult && !whResult.error && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', marginTop: 6 }}>
+                      created: {(whResult.created || []).join(', ') || 'none'} · already: {(whResult.already || []).length}
+                      {(whResult.errors || []).length ? ` · errors: ${(whResult.errors || []).length}` : ''}
+                    </div>
+                  )}
+                  {whResult?.error && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{whResult.error}</div>
+                  )}
+                </div>
+              </div>
+              <button className="so-btn" style={{ flex: 'none' }} onClick={registerWebhooks} disabled={whBusy}>
+                {whBusy ? 'Subscribing…' : 'Subscribe'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
