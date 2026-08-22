@@ -252,9 +252,13 @@ export default function Dashboard() {
       const codes = vs.map(v => v.product_code).filter(Boolean);
       out.push({
         value: `p:${p}`, label: p, group: p,
-        hint: vs.length > 1 ? `all ${vs.length} variants` : 'all variants',
+        hint: vs.length > 1 ? `all ${vs.length} variants` : (vs[0].color || vs[0].model || vs[0].product_code),
         search: [...vs.map(v => `${v.model || ''} ${v.color || ''} ${v.sku || ''}`), ...codes].join(' '),
       });
+      // A single-variant product would otherwise appear twice, as two entries that filter to the
+      // exact same one code. The product entry already carries that variant's model and colour in
+      // `search`, so collapsing loses no way of finding it. 7 of 47 products today.
+      if (vs.length === 1) continue;
       for (const v of vs.sort((a, b) => `${a.model} ${a.color}`.localeCompare(`${b.model} ${b.color}`))) {
         const bits = [v.model, v.color].filter(Boolean).join(' · ');
         out.push({
