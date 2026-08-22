@@ -26,7 +26,11 @@ import { SegmentedToggle } from '../../../components/kit.js';
 
 const PGROUPS = [['variant', 'By Variant'], ['product', 'By Product']];
 
-const WINDOWS = [['6', '6h'], ['12', '12h'], ['24', '24h'], ['72', '3d']];
+// 'today' is the IST calendar day from midnight — the window that lines up with the Dashboard's
+// day-grain numbers. The rest are ROLLING hours, which at 21:00 reach back into yesterday evening
+// and deliberately will not match a daily total. Today is first and is the default, per the
+// standing rule that every range picker in every app opens on today.
+const WINDOWS = [['today', 'Today'], ['6', '6h'], ['12', '12h'], ['24', '24h'], ['72', '3d']];
 const POLL_MS = 20000;
 
 /* "2m ago" — the feed's own freshness. Shown next to every order and in the
@@ -55,7 +59,7 @@ export default function LivePage() {
   const sessionRef = useRef(session);
   useEffect(() => { sessionRef.current = session; }, [session]);
 
-  const [hours, setHours] = useState('12');
+  const [hours, setHours] = useState('today');
   const [variants, setVariants] = useState([]);        // product_master — feeds the search
   const [pFilter, setPFilter] = useState('');          // '' | p:<product> | v:<product_code>
   const [pGroup, setPGroup] = useState('variant');
@@ -219,7 +223,7 @@ export default function LivePage() {
     <div className="so-page">
       <PageHead
         title="Live"
-        sub={<>Website orders as they arrive <span className="so-qual">· last {WINDOWS.find(w => w[0] === hours)?.[1]}</span></>}
+        sub={<>Website orders as they arrive <span className="so-qual">· {hours === 'today' ? 'today' : `last ${WINDOWS.find(w => w[0] === hours)?.[1] || ''}`}</span></>}
       />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -298,7 +302,7 @@ export default function LivePage() {
               <div style={{ padding: 28, textAlign: 'center', fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' }}>
                 {pFilterLabel
                   ? <>No sales of <b style={{ color: 'var(--t2)' }}>{pFilterLabel}</b> in this window.</>
-                  : 'No Website sales in this window.'}
+                  : (hours === 'today' ? 'No Website sales yet today.' : 'No Website sales in this window.')}
               </div>
             ) : (
               <table className="so-table">
@@ -330,7 +334,9 @@ export default function LivePage() {
               qual={orders.length ? `· newest first` : undefined} />
             {orders.length === 0 ? (
               <div style={{ padding: 36, textAlign: 'center', fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' }}>
-                {data?.configured === false ? 'Feed unavailable — see the notice above.' : 'No Website orders in this window.'}
+                {data?.configured === false
+                  ? 'Feed unavailable — see the notice above.'
+                  : hours === 'today' ? 'No Website orders yet today.' : 'No Website orders in this window.'}
               </div>
             ) : (
               <table className="so-table">

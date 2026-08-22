@@ -5136,15 +5136,31 @@ export default {
           // sales_fact, which is day-grain and cannot express an order's time. Website only: the
           // page says so, because a "live" number quietly missing Amazon reads as Amazon stalling.
           case 'getLiveSales': {
-            const hours = Math.min(Math.max(Number(qp('hours')) || 12, 1), 72);
             const limit = Math.min(Math.max(Number(qp('limit')) || 60, 1), 200);
-            const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+            // Two kinds of window, and they are NOT interchangeable. 'today' is the IST calendar
+            // day from midnight — the one that lines up with the Dashboard's day-grain numbers.
+            // Everything else is a ROLLING N hours, which at 20:00 spans yesterday evening and
+            // will not match a daily total. Defaulting to today, per the standing rule that every
+            // range picker in every app opens on today.
+            const raw = String(qp('hours') || 'today');
+            const isToday = raw === 'today';
+            let since, hours = null;
+            if (isToday) {
+              // IST midnight as a TRUE UTC instant. Shift into the IST frame, truncate to the day,
+              // shift back — never toISOString().slice(0,10), which is only valid for deriving a
+              // DATE and lands a timestamp 5.5h out (PATTERN-221).
+              const IST = 5.5 * 3600 * 1000;
+              since = new Date(Math.floor((Date.now() + IST) / 86400000) * 86400000 - IST).toISOString();
+            } else {
+              hours = Math.min(Math.max(Number(raw) || 12, 1), 72);
+              since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+            }
             // Both RPCs scope on the Website channel via connector_config. With no such row they
             // return ZERO rows, which on screen is indistinguishable from "nobody bought anything"
             // — the one failure this page is built to never have. Surface it as its own state.
             const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
             if (!(cc.ok && cc.data && cc.data[0])) {
-              return ok({ orders: [], totals: null, since, hours, configured: false,
+              return ok({ orders: [], totals: null, since, hours, window: raw, configured: false,
                           server_now: new Date().toISOString() });
             }
             const [o, t, pr] = await Promise.all([
@@ -5159,7 +5175,7 @@ export default {
               // Same window and predicates as the feed, so the product table reconciles against
               // the header rather than being a second, independently-derived set of numbers.
               products: pr.ok ? (pr.data || []) : [],
-              since, hours, configured: true,
+              since, hours, window: raw, configured: true,
               // Surfaced so the page can show how stale the feed itself is rather than implying
               // "live" unconditionally — if the webhook stops, this is what reveals it.
               server_now: new Date().toISOString(),
