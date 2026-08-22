@@ -1,10 +1,10 @@
-<p class="lead">The QC screen is your daily quality scoreboard. It does not pass or fail units (that happens on the scanner during the quality check), but it turns every one of those pass/fail scans into a clear picture of <strong>how fast QC is moving</strong>, <strong>how much is passing first time</strong>, and <strong>what is going wrong and where</strong>. It refreshes itself every 30 seconds, so you can leave it open and trust the numbers.</p>
+<p class="lead">The QC screen is your daily quality scoreboard. It does not pass or fail units (that happens on the scanner during the quality check), but it turns every one of those pass/fail scans into a clear picture of <strong>how fast QC is moving</strong>, <strong>how much is passing first time</strong>, and <strong>what is going wrong and where</strong>. On today it refreshes itself every 30 seconds, so you can leave it open and trust the numbers; pick an earlier date and it stops refreshing, because a past day is settled and the figures should not move under you.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Spotting quality problems on the floor as they happen, today.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only: a live view.</div></div>
-  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Today, all lines (L1&ndash;L3).</div></div>
-  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Automatically, every 30s.</div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Any single day (opens on today), all lines.</div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 30s on today; a past day is fixed.</div></div>
 </div>
 
 <div class="callout note">
@@ -38,6 +38,18 @@
 
 <h2 class="sec">First Pass Yield by line</h2>
 <p>First Pass Yield (FPY) is the single most important quality number: <strong>the percentage of units that passed QC the first time</strong>, without needing repair. Each row is a line + product + date, with a coloured bar and a percentage.</p>
+<div class="callout"><strong>&#9888; &ldquo;Fail&rdquo; means failed &mdash; it is not the same as &ldquo;did not pass first time&rdquo;.</strong>
+The headline now reads <em>first-pass &middot; rework &middot; fail</em>, three separate numbers.
+<strong>Rework</strong> is a unit that failed earlier, was repaired and then <em>passed</em> on a
+re-check &mdash; it is a pass, not a failure. <strong>Fail</strong> counts only units with a QC&nbsp;Fail
+scan on the day. Until 22&nbsp;Aug&nbsp;2026 the screen added the two together and called the total
+&ldquo;fail&rdquo;, which on one morning showed 61 failures on a day with none at all.
+The percentage did not change and was never wrong: a unit that needed a second go genuinely is not a
+first-pass, so rework still pulls FPY down. That is the point of the measure &mdash; rework is waste
+even when the unit ends up passing.</div>
+<div class="callout"><strong>Pick a date.</strong> The date sits at the top left. Use the arrows to
+step a day either way, or click the date for a calendar; a <strong>Today</strong> button appears once
+you are on a past day. You cannot pick a future date.</div>
 <table class="tbl">
   <thead><tr><th>Colour</th><th>FPY</th><th>What it means</th></tr></thead>
   <tbody>
