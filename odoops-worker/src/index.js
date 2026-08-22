@@ -5139,6 +5139,14 @@ export default {
             const hours = Math.min(Math.max(Number(qp('hours')) || 12, 1), 72);
             const limit = Math.min(Math.max(Number(qp('limit')) || 60, 1), 200);
             const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+            // Both RPCs scope on the Website channel via connector_config. With no such row they
+            // return ZERO rows, which on screen is indistinguishable from "nobody bought anything"
+            // — the one failure this page is built to never have. Surface it as its own state.
+            const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
+            if (!(cc.ok && cc.data && cc.data[0])) {
+              return ok({ orders: [], totals: null, since, hours, configured: false,
+                          server_now: new Date().toISOString() });
+            }
             const [o, t] = await Promise.all([
               rpcSales('f_live_orders', { p_since: since, p_limit: limit }),
               rpcSales('f_live_totals', { p_since: since }),
@@ -5147,7 +5155,7 @@ export default {
             return ok({
               orders: o.data || [],
               totals: (t.ok && t.data && t.data[0]) ? t.data[0] : null,
-              since, hours,
+              since, hours, configured: true,
               // Surfaced so the page can show how stale the feed itself is rather than implying
               // "live" unconditionally — if the webhook stops, this is what reveals it.
               server_now: new Date().toISOString(),

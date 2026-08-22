@@ -59,8 +59,23 @@ export default function LivePage() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   // Ids seen on the previous poll — anything new gets a one-shot highlight so a
   // watcher notices an arrival without having to diff the list themselves.
+  // ⚠️ null means "no baseline yet": the FIRST load after mount or after a window change
+  // establishes the baseline and highlights nothing. Without that reset, switching 6h → 3d
+  // marks every newly-visible OLDER order as a fresh arrival — a screenful of false
+  // "just arrived" highlights at exactly the moment someone is watching for real ones.
   const seenRef = useRef(null);
   const [fresh, setFresh] = useState(() => new Set());
+
+  // Changing the window invalidates the baseline. Reset before the new load lands.
+  useEffect(() => { seenRef.current = null; setFresh(new Set()); }, [hours]);
+
+  // Make the highlight genuinely one-shot. Nothing cleared it before, so on a quiet spell the
+  // last arrivals stayed lit indefinitely and the highlight stopped meaning "new".
+  useEffect(() => {
+    if (!fresh.size) return;
+    const id = setTimeout(() => setFresh(new Set()), 8000);
+    return () => clearTimeout(id);
+  }, [fresh]);
 
   const load = useCallback(async () => {
     const s = sessionRef.current;
@@ -117,7 +132,7 @@ export default function LivePage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <SegmentedToggle options={WINDOWS} value={hours} onChange={setHours} size="sm" />
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-          <span className="so-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: onPollerOnly ? 'var(--amber, #d97706)' : 'var(--green, #16a34a)' }} />
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: onPollerOnly ? 'var(--amber, #d97706)' : 'var(--green, #16a34a)' }} />
           {newest ? `last order ${ago(newest, nowMs - skewMs)}` : 'no orders in window'}
         </span>
         {err && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>refresh failed — showing last good data</span>}
@@ -133,7 +148,16 @@ export default function LivePage() {
         </span>
       </div>
 
-      {onPollerOnly && (
+      {data && data.configured === false && (
+        <div style={{ padding: '9px 13px', marginBottom: 14, background: 'var(--warn-bg, #2a2110)',
+          border: '1px solid var(--warn-bd, #6b4d16)', borderRadius: 'var(--r-sm, 4px)',
+          fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--warn-fg, #d97706)' }}>
+          The Website connector is missing, so this page has nothing to read. The empty list below is
+          <b> not</b> a quiet sales day — check Connectors.
+        </div>
+      )}
+
+      {onPollerOnly && data?.configured !== false && (
         <div style={{ padding: '9px 13px', marginBottom: 14, background: 'var(--warn-bg, #2a2110)',
           border: '1px solid var(--warn-bd, #6b4d16)', borderRadius: 'var(--r-sm, 4px)',
           fontFamily: 'var(--ui)', fontSize: 12, color: 'var(--warn-fg, #d97706)' }}>
@@ -158,7 +182,7 @@ export default function LivePage() {
               qual={orders.length ? `· newest first` : undefined} />
             {orders.length === 0 ? (
               <div style={{ padding: 36, textAlign: 'center', fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t3)' }}>
-                No Website orders in this window.
+                {data?.configured === false ? 'Feed unavailable — see the notice above.' : 'No Website orders in this window.'}
               </div>
             ) : (
               <table className="so-table">
