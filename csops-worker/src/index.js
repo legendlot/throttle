@@ -6207,6 +6207,16 @@ function metaSendError(d, status) {
     return err('Meta refused this reply. Replying more than 24 hours after the customer wrote '
       + 'needs its Human Agent approval, which is still pending. The chat reopens if the customer messages again.', status);
   }
+  // 190 = OAuthException, i.e. the stored access token has expired or been revoked. This is
+  // NOT something an agent can act on, and the raw blob ("Session has expired on Thursday,
+  // 20-Aug-26 09:36:15 PDT ... fbtrace_id") reads like a fault with the message they just
+  // typed. It took ~2 days to be reported (Pruthvi 2026-08-21) while every Instagram reply
+  // silently failed and the team fell back to the Instagram app. Say plainly who can fix it.
+  if (Number(e.code) === 190) {
+    return err('Instagram is disconnected — its access token has expired, so no reply can be '
+      + 'sent from here until it is renewed. This is not a problem with your message. '
+      + 'Tell Afshaan; replying from the Instagram app still works meanwhile.', status);
+  }
   return err(`Meta send failed: ${JSON.stringify(Object.keys(e).length ? e : d)}`, status);
 }
 
