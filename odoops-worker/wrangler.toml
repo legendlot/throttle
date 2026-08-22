@@ -18,7 +18,11 @@ workers_dev = true
 # that left daily sell-out connectors stale). Design spec:
 # docs/superpowers/specs/2026-06-25-odo-ingestion-workflows-design.md.
 [triggers]
-crons = ["0 * * * *"]
+# "0 * * * *"  = the connector producer + everything day-grain.
+# "*/5 * * * *" = FAST PATH, Website inventory + stock-alert drain ONLY (see scheduled()).
+#   Marketplace feeds deliberately stay hourly: Meta already 403s "Application request limit
+#   reached" at hourly, Amazon is async batch, and sales_fact is day-grain.
+crons = ["0 * * * *", "*/5 * * * *"]
 
 [[workflows]]
 name = "odoops-connector"

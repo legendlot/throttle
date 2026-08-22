@@ -200,6 +200,14 @@ function pnlFamilyOf(name) {
 
 // ── Shopify (Website) ──────────────────────────────────────────
 const SHOPIFY_API_VERSION_DEFAULT = '2026-04';
+
+// Inventory reading bucket. 5 min so an OOS is confirmed in ~10 minutes (detect_stock_alerts
+// still wants inv_confirm_readings=2 CONSECUTIVE readings — that anti-flap rule is unchanged,
+// but 2 readings is now 10 minutes rather than the 2 hours hourly spacing made it). Measured
+// before the change, over 30 days: OOS alerts averaged 62 min with a FLOOR of 61 and a tail to
+// 183. Must divide an hour exactly, or bucket boundaries drift against the top of the hour and
+// the retention split below (which keys on minute = 0) stops recognising hourly rows.
+const INVENTORY_BUCKET_MS = 5 * 60 * 1000;
 let _shopToken = null, _shopTokenExp = 0;
 async function getShopifyToken(env, force = false) {
   // Custom app (Admin → Develop apps): a static Admin API access token (shpat_…). Use it directly.
@@ -3578,10 +3586,16 @@ async function syncInventorySnapshot(env) {
   let token = await getShopifyToken(env);
   if (!token) throw new Error('Shopify auth failed (client credentials)');
   const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-  // captured_at is TRUE UTC, hour-truncated. Do NOT reuse the +5.5h IST shift above — that is
-  // only valid for deriving the IST *date*; using it for a timestamptz would land every reading
-  // 5.5h in the future and corrupt every duration. IST conversion happens at display.
-  const capturedAt = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
+  // captured_at is TRUE UTC, truncated to INVENTORY_BUCKET_MS. Do NOT reuse the +5.5h IST shift
+  // above — that is only valid for deriving the IST *date*; using it for a timestamptz would land
+  // every reading 5.5h in the future and corrupt every duration. IST conversion happens at display.
+  //
+  // ⚠️ THE BUCKET IS WHAT MAKES THE CADENCE REAL, not the cron. inventory_reading's PK is
+  // (captured_at, channel_id, sku) and this write upserts on it, so while this was hour-truncated
+  // every run inside the same hour collapsed onto ONE row. Running the cron every 5 minutes against
+  // an hourly bucket would have produced 12 Shopify pulls an hour, no new readings, and not one
+  // alert sooner — while looking like it worked. Bucket and cron must move together.
+  const capturedAt = new Date(Math.floor(Date.now() / INVENTORY_BUCKET_MS) * INVENTORY_BUCKET_MS).toISOString();
   const bySku = new Map(); let after = null, hasNext = true, pages = 0;
   while (hasNext && pages < 8) {
     pages++;
@@ -4105,6 +4119,36 @@ export default {
   async scheduled(event, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
+
+    // ── FAST PATH (*/5) — stock freshness only ────────────────────────────────
+    // Website inventory + flip detection + the Slack drain, and NOTHING else. Deliberately not
+    // the connector producer: marketplace feeds are day-grain or batch, Meta already returns 403
+    // "Application request limit reached" at hourly, and running them 12x more often would cost
+    // data rather than gain it. Amazon inventory + the FBA ledger stay on the hourly tick too —
+    // SP-API is rate-limited and paced by that cron on purpose.
+    //
+    // These three steps also came OFF the hourly path, so they run in exactly one place. Keeping
+    // a copy there as a "backstop" would mean two Shopify pulls racing onto the same bucket at
+    // :00 for no benefit.
+    if (event.cron === '*/5 * * * *') {
+      try {
+        const inv = await syncInventorySnapshot(env);
+        if (inv && !inv.skipped) console.log('odoops fast: inventory', JSON.stringify(inv));
+      } catch (e) { console.error('odoops fast (inventory) failed:', e?.message || e); }
+      // NB detection is NOT called here. syncInventorySnapshot already runs detect_stock_alerts
+      // (and the product-grain twin) internally, on a complete pull, with p_lookback_days: 3.
+      // ⚠️ Calling it here on the DEFAULT lookback (7) would break a live invariant:
+      // LEDGER_ALERT_SAFE_LAG_DAYS = 5 places backfilled FBA ledger rows deliberately OUTSIDE a
+      // 3-day window but well inside a 7-day one, so backfilled history would start firing alerts.
+      // The drain still runs separately below so a Slack outage never costs a flip — the outbox
+      // row is written by the capture either way and goes out on a later tick.
+      try {
+        const s = await sendStockAlerts(env);
+        if (s?.sent || s?.stale) console.log('odoops fast: stock alerts', JSON.stringify(s));
+      } catch (e) { console.error('odoops fast (stock alerts) failed:', e?.message || e); }
+      return;
+    }
+
     try {
       // PRODUCER: spawn one ConnectorWorkflow per enabled connector. Single-flight — skip a
       // connector whose previous instance is still in flight (long backfill), so we never run two
@@ -4156,10 +4200,12 @@ export default {
     // Website-changes stream: pull change-log.ndjson from the Website repo + upsert change_events
     // (no-op until GITHUB_WEBSITE_PAT is set). Best-effort; never disturbs the rest of the cron.
     try { await syncChangeEvents(env); } catch (e) { console.error('odoops cron (change events) failed:', e?.message || e); }
-    // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
-    // Best-effort; never disturbs the rest of the cron.
-    try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
-    // Amazon FBA fulfillable qty → inventory_reading (S289). Its OWN try/catch on purpose: Amazon
+    // Stock in/out stream (layer c) MOVED to the */5 fast path above — Website inventory is now
+    // captured every 5 minutes, so pulling it again here would be a second Shopify pull landing on
+    // the same 5-minute bucket at :00 for no gain. recompute_stock_events and detect_stock_alerts
+    // still run inside that capture exactly as before, just 12x more often.
+    // Amazon FBA fulfillable qty → inventory_reading (S289). STAYS HOURLY — SP-API is rate-limited
+    // and paced by this cron deliberately. Its OWN try/catch on purpose: Amazon
     // and Shopify availability are independent feeds, and an SP-API blip must not take the Website
     // reading down with it (nor the Slack drain below).
     try {
