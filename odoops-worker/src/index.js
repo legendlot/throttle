@@ -5063,12 +5063,6 @@ export default {
                 pOos, pRes) : null,
             });
           }
-          case 'registerShopifyWebhooksNow': {   // idempotent subscribe (super-admin) — S303
-            if (!canSuperAdmin(P)) return err('No permission', 403);
-            const cb = (body.callbackUrl || `${env.PUBLIC_BASE_URL || 'https://odoops.afshaan.workers.dev'}/webhook/shopify`);
-            try { return ok(await registerShopifyWebhooks(env, cb)); }
-            catch (e) { return err('Webhook registration failed: ' + String(e?.message || e), 502); }
-          }
           case 'syncInventorySnapshotNow': {   // manual snapshot + diff (super-admin) — layer c test trigger
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { const res = await syncInventorySnapshot(env); return ok(res); }
@@ -5526,6 +5520,17 @@ export default {
             const batch = { ...ins.data[0], column_map: d.column_map || {}, csv_text: d.csv_text };
             try { const res = await ingestUpload(batch, env); return ok({ batch_id: batch.id, ...res }); }
             catch (e) { await sbSales(`/rest/v1/upload_batch?id=eq.${batch.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'error', error: String(e?.message || e) }) }); return err('Parse failed: ' + String(e?.message || e), 422); }
+          }
+          // Idempotent Shopify webhook subscribe (super-admin) — S303.
+          // ⚠️ MUST live in the POST switch. It first shipped in the GET switch while the Admin
+          // page calls it through salesPost, so every press returned "Unknown action" — the button
+          // was inert from the moment it shipped. `body`/`d` only exist on this side; the GET
+          // branch has no request body at all, which is the tell.
+          case 'registerShopifyWebhooksNow': {
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const cb = d.callbackUrl || `${env.PUBLIC_BASE_URL || 'https://odoops.afshaan.workers.dev'}/webhook/shopify`;
+            try { return ok(await registerShopifyWebhooks(env, cb)); }
+            catch (e) { return err('Webhook registration failed: ' + String(e?.message || e), 502); }
           }
           case 'setDrrWindow': {
             if (!canAdmin(P)) return err('No permission', 403);
