@@ -1,0 +1,13 @@
+{
+  "name": "Redline · LOT Production",
+  "short_name": "Redline",
+  "description": "LOT production floor — lines, hourly, QC, dispatch",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1b1b1e",
+  "theme_color": "#1b1b1e",
+  "icons": [
+    { "src": "/redline-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/redline-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
