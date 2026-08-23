@@ -295,6 +295,74 @@ button { font-family: inherit; }
 .so-bar { background: rgba(255,255,255,.05); border-radius: 4px; height: 6px; overflow: hidden; }
 .so-bar > i { display: block; height: 100%; border-radius: 4px; }
 
+/* ── mobile app shell ─────────────────────────────────────────
+   ≤767px the app becomes phone-shaped: the rail disappears in favour of a fixed
+   bottom tab bar (Home · Live · Sales · P&L · More) + a "More" bottom sheet that
+   carries the full nav. Desktop is untouched — everything below either lives
+   behind the media query or is display:none outside it. Several overrides fight
+   inline styles (the pages set grids/stickies via the style attribute), which is
+   what the !importants are for — they are load-bearing, not habit. */
+
+.so-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: rgba(10,11,15,.92); backdrop-filter: blur(14px); border-top: 1px solid var(--border-2);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.so-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 10px; cursor: pointer;
+  color: var(--t3); font-family: var(--mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.so-tab.active { color: var(--accent); }
+
+.so-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(4,5,7,.6);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.so-sheet { background: #101117; border-top: 1px solid var(--border); border-radius: 18px 18px 0 0;
+  max-height: 82dvh; overflow-y: auto; animation: sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.so-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.so-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--control); color: var(--t2);
+  font-family: var(--ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.so-sheet-item.active { background: var(--accent-soft); border-color: var(--accent-bd); color: var(--accent); }
+
+@media (max-width: 767px) {
+  .so-side { display: none; }
+  .so-tabbar { display: flex; }
+  .so-sheetwrap { display: flex; }
+
+  /* topbar: tighter gutter + notch-safe in standalone (env()=0 in a plain browser tab) */
+  .so-topbar { padding: 0 14px !important; height: calc(52px + env(safe-area-inset-top)) !important;
+    padding-top: env(safe-area-inset-top) !important; }
+  .so-clock { display: none !important; }
+
+  .so-scroll { padding: 14px 12px calc(84px + env(safe-area-inset-bottom)); }
+  .so-page { gap: 12px; }
+  .so-h1 { font-size: 21px; }
+
+  /* KPI rows: the fixed 3/4/5-up inline grids reflow to 2-up */
+  .so-page div[style*="repeat(5"], .so-page div[style*="repeat(4"], .so-page div[style*="repeat(3"] {
+    grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  /* asymmetric two-panel splits (chart + side list, form + preview) stack */
+  .so-page div[style*="1.4fr"], .so-page div[style*="1.3fr"], .so-page div[style*="1.25fr"],
+  .so-page div[style*="1.15fr"], .so-page div[style*="2.2fr"], .so-page div[style*="1fr 1fr"] {
+    grid-template-columns: minmax(0,1fr) !important; }
+
+  /* data tables keep their desktop shape and scroll sideways inside the card */
+  .so-card { overflow-x: auto; }
+  .so-card .so-table th, .so-card .so-table td { white-space: nowrap; }
+
+  /* scope strip becomes a swipe row instead of wrapping into a wall */
+  .so-scopebar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .so-scopebar::-webkit-scrollbar { display: none; }
+  .so-scope { flex: none; }
+
+  /* range bar: re-pin against the 14px mobile gutter (desktop cancels 22px) + swipeable presets */
+  .so-rangebar { top: -14px !important; }
+  .so-rangebar .so-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .so-rangebar .so-seg::-webkit-scrollbar { display: none; }
+
+  /* 16px text inputs stop iOS Safari's focus auto-zoom (dates open a native picker — exempt) */
+  .so-input:not([type="date"]), .so-select { font-size: 16px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

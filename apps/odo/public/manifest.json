@@ -1,0 +1,13 @@
+{
+  "name": "Odo · Consolidated Sales",
+  "short_name": "Odo",
+  "description": "LOT consolidated cross-channel sales",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08090c",
+  "theme_color": "#08090c",
+  "icons": [
+    { "src": "/odo-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/odo-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

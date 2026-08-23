@@ -5,7 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
 import {
   LayoutDashboard, BarChart3, Store, Megaphone, Filter, Package, Landmark, Boxes,
-  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search, Radio,
+  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search, Radio, Menu, X,
 } from 'lucide-react';
 import { FreshnessProvider, FreshnessChip, useFreshness } from '../../components/Freshness.js';
 import { feedStatus } from '../../lib/freshness.js';
@@ -58,7 +58,11 @@ function Shell({ children }) {
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [sheet, setSheet] = useState(false);   // mobile "More" bottom sheet
   const cmd = useCommandPalette();
+
+  // Mobile sheet closes itself on navigation — the tap already said where to go.
+  useEffect(() => { setSheet(false); }, [pathname]);
 
   // Rail state persists across reloads. Read after mount so the static export's first
   // paint matches the server HTML (no hydration mismatch), then snap to the stored value.
@@ -190,7 +194,7 @@ function Shell({ children }) {
 
       <div className="so-main">
         {/* top context bar — breadcrumb left, live/search/launcher right */}
-        <header style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        <header className="so-topbar" style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '0 26px', borderBottom: '1px solid #16171c', background: 'var(--topbar)', backdropFilter: 'blur(8px)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 10.5,
             letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t3)', minWidth: 0 }}>
@@ -211,6 +215,100 @@ function Shell({ children }) {
       </div>
 
       <CommandPalette open={cmd.open} onClose={() => cmd.setOpen(false)} entries={entries} onGo={(r) => router.push(r)} />
+
+      {/* ── mobile app chrome (≤767px — CSS decides, so desktop never renders it visibly) ── */}
+      <MobileTabBar flat={flat} active={active} moreOpen={sheet}
+        onGo={(r) => { setSheet(false); router.push(r); }} onMore={() => setSheet(s => !s)} />
+      {sheet && (
+        <MobileSheet groups={groups} active={active} user={user} P={P} signOut={signOut}
+          onGo={(r) => router.push(r)} onClose={() => setSheet(false)}
+          onConnectors={() => { setSheet(false); router.push('/connectors'); }} />
+      )}
+    </div>
+  );
+}
+
+// ── mobile bottom tab bar ────────────────────────────────────────────────────
+// Four primary destinations + More. Each tab must exist in the perm-filtered nav
+// (`flat`) to render, so gating stays identical to the rail.
+const MOBILE_TABS = [
+  { route: '/',            label: 'Home'  },
+  { route: '/live',        label: 'Live'  },
+  { route: '/performance', label: 'Sales' },
+  { route: '/pnl',         label: 'P&L'   },
+];
+
+function MobileTabBar({ flat, active, moreOpen, onGo, onMore }) {
+  const tabs = MOBILE_TABS.map(t => ({ ...t, it: flat.find(i => i.route === t.route) })).filter(t => t.it);
+  return (
+    <nav className="so-tabbar">
+      {tabs.map(t => {
+        const Icon = t.it.icon;
+        const on = !moreOpen && active(t.route);
+        return (
+          <button key={t.route} className={`so-tab${on ? ' active' : ''}`} onClick={() => onGo(t.it.to || t.route)}>
+            <Icon size={19} strokeWidth={on ? 2 : 1.75} style={{ flex: 'none' }} />
+            <span>{t.label}</span>
+          </button>
+        );
+      })}
+      <button className={`so-tab${moreOpen ? ' active' : ''}`} onClick={onMore}>
+        <Menu size={19} strokeWidth={moreOpen ? 2 : 1.75} style={{ flex: 'none' }} />
+        <span>More</span>
+      </button>
+    </nav>
+  );
+}
+
+// ── mobile "More" sheet — the full nav, grouped like the rail ────────────────
+function MobileSheet({ groups, active, user, P, signOut, onGo, onClose, onConnectors }) {
+  return (
+    <div className="so-sheetwrap" onMouseDown={onClose}>
+      <div className="so-sheet" onMouseDown={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+          <div style={{ width: 36, height: 36, flex: 'none', borderRadius: 11, background: 'var(--accent-grad)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: 'var(--cond)', fontWeight: 800, color: 'var(--accent-fg)', fontSize: 14 }}>
+            {(user?.full_name || user?.email || '?').trim().charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {user?.full_name || user?.email}
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)' }}>
+              {P.salesops_super_admin ? 'salesops · super admin' : P.salesops_admin ? 'salesops · admin' : 'salesops'}
+            </div>
+          </div>
+          <button className="so-btn bare" onClick={signOut} title="Sign out" style={{ display: 'flex', padding: 6, borderRadius: 8 }}>
+            <LogOut size={18} strokeWidth={1.75} style={{ color: 'var(--t3)' }} />
+          </button>
+          <button className="so-btn bare" onClick={onClose} title="Close" style={{ display: 'flex', padding: 6, borderRadius: 8 }}>
+            <X size={19} strokeWidth={1.75} style={{ color: 'var(--t2)' }} />
+          </button>
+        </div>
+
+        {groups.map(g => (
+          <div key={g.label} style={{ marginBottom: 14 }}>
+            <div className="so-navgroup" style={{ margin: 0, padding: '0 2px 7px' }}>{g.label}</div>
+            <div className="so-sheet-grid">
+              {g.items.map(it => {
+                const Icon = it.icon;
+                return (
+                  <button key={it.route} className={`so-sheet-item${active(it.route) ? ' active' : ''}`}
+                    onClick={() => onGo(it.to || it.route)}>
+                    <Icon size={17} strokeWidth={1.75} style={{ flex: 'none' }} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ margin: '0 -14px' }}>
+          <FreshnessCard onClick={onConnectors} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -224,7 +322,7 @@ function LiveClock({ mounted }) {
   const ist = new Date(now + 5.5 * 3600 * 1000);
   const hh = String(ist.getUTCHours()).padStart(2, '0'), mm = String(ist.getUTCMinutes()).padStart(2, '0');
   return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--mono)', fontSize: 10.5,
+    <span className="so-clock" style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--mono)', fontSize: 10.5,
       letterSpacing: '.1em', color: 'var(--t3)', whiteSpace: 'nowrap' }}>
       <span className="so-dot" style={{ background: '#34d399', animation: 'opulse 2.4s infinite' }} />
       LIVE · {hh}:{mm} IST

@@ -149,7 +149,7 @@ export function RangePicker({ from, to, onChange, right }) {
   // Near-opaque canvas tint + blur so content scrolls under a clean edge without showing a flat
   // black band across the canvas glow; z-index above cards but below portal popovers (.so-pop = 40).
   return (
-    <div style={{ position: 'sticky', top: -22, zIndex: 30, background: 'rgba(8,9,12,.86)', backdropFilter: 'blur(8px)', borderBottom: '1px solid var(--row-border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+    <div className="so-rangebar" style={{ position: 'sticky', top: -22, zIndex: 30, background: 'rgba(8,9,12,.86)', backdropFilter: 'blur(8px)', borderBottom: '1px solid var(--row-border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
       <div className="so-seg">
         {PRESETS.map(p => (
           <button key={p.key} className={activePreset === p.key ? 'on' : ''}
