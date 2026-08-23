@@ -345,9 +345,16 @@ button { font-family: inherit; }
   .so-page div[style*="1.15fr"], .so-page div[style*="2.2fr"], .so-page div[style*="1fr 1fr"] {
     grid-template-columns: minmax(0,1fr) !important; }
 
-  /* data tables keep their desktop shape and scroll sideways inside the card */
+  /* KPI tile top rows: the label must never be squeezed out by a badge/delta —
+     let the row wrap so ₹1.44 Cr always says what it is */
+  .so-stat-top { flex-wrap: wrap; row-gap: 2px; }
+
+  /* data tables keep their desktop shape and scroll sideways inside the card;
+     the first column (the row's label) pins so scrolled numbers keep their meaning */
   .so-card { overflow-x: auto; }
   .so-card .so-table th, .so-card .so-table td { white-space: nowrap; }
+  .so-card .so-table th:first-child, .so-card .so-table td:first-child {
+    position: sticky; left: 0; z-index: 1; background: var(--surface-solid); }
 
   /* scope strip becomes a swipe row instead of wrapping into a wall */
   .so-scopebar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
