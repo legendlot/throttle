@@ -52,7 +52,7 @@ export function DepotSidebar({ onCmdK, userLabel = '', userRole = '', onLogout }
   const initial = userLabel ? userLabel[0].toUpperCase() : '?';
 
   return (
-    <aside style={{ width: W, flexShrink: 0, background: 'var(--bg-2)', overflow: 'hidden',
+    <aside className="dp-rail" style={{ width: W, flexShrink: 0, background: 'var(--bg-2)', overflow: 'hidden',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%',
       transition: hydrated ? 'width var(--base) var(--ease)' : 'none' }}>
       {/* brand */}

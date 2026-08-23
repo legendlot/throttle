@@ -28,7 +28,7 @@ export function DepotTopbar({ refreshing = false, lastRefreshed = null, right })
   const updated = fmtTime(lastRefreshed);
 
   return (
-    <header style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex',
+    <header className="dp-topbar" style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex',
       alignItems: 'center', gap: 12, padding: '0 24px', flexShrink: 0, background: 'var(--bg)' }}>
       <span className="label" style={{ color: 'var(--t3)' }}>{crumb}</span>
       <span style={{ color: 'var(--border-2)' }}>/</span>
@@ -36,7 +36,7 @@ export function DepotTopbar({ refreshing = false, lastRefreshed = null, right })
         color: 'var(--t1)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{title}</h1>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
         {right}
-        {updated && <span className="num" style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}>
+        {updated && <span className="num dp-updated" style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}>
           Updated {updated}</span>}
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className={refreshing ? '' : 'rl-pulse'} style={{ width: 7, height: 7, borderRadius: '50%',

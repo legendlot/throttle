@@ -248,3 +248,60 @@ button { font-family: inherit; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   MOBILE APP SHELL (S304 — mirrors Odo/Garage/Redline)
+   ≤767px: the rail hides behind a fixed bottom tab bar
+   (Overview · Pipeline · Shipments · Floor · More) + a "More"
+   bottom sheet carrying the full nav. Desktop untouched.
+   Grid overrides use the "columns: <value>" PREFIX form so the
+   px-led list-row templates here can never match.
+   ══════════════════════════════════════════════════════════ */
+
+.dp-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.dp-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 8px; cursor: pointer;
+  color: var(--t3); font-family: var(--font-display); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; }
+.dp-tab.active { color: var(--yellow); }
+
+.dp-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(0,0,0,.55);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.dp-sheet { background: var(--surface); border-top: 1px solid var(--border-2);
+  border-radius: 16px 16px 0 0; max-height: 82dvh; overflow-y: auto; animation: dp-sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes dp-sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.dp-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.dp-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--t2);
+  font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.dp-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
+
+@media (max-width: 767px) {
+  .dp-rail { display: none; }
+  .dp-tabbar { display: flex; }
+  .dp-sheetwrap { display: flex; }
+
+  .dp-topbar { padding: 0 12px !important; gap: 8px !important;
+    height: calc(52px + env(safe-area-inset-top)) !important; padding-top: env(safe-area-inset-top) !important; }
+  .dp-updated { display: none !important; }
+
+  .dp-main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)) !important; }
+
+  /* whole-row fixed grids reflow (prefix form — px-led row templates never match) */
+  .dp-main [style*="columns: repeat(5"], .dp-main [style*="columns: repeat(4"],
+  .dp-main [style*="columns: repeat(3"], .dp-main [style*="columns: 1.6fr"] {
+    grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  .dp-main [style*="columns: 1fr 1fr"] {
+    grid-template-columns: minmax(0,1fr) !important; }
+
+  /* tables scroll sideways instead of crushing */
+  .dp-main table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .dp-main th { white-space: nowrap; }
+
+  /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
+  .dp-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
+  .dp-main select, .dp-main textarea { font-size: 16px !important; }
+}
