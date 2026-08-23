@@ -26,7 +26,7 @@ export function PitstopTopbar({ refreshing = false, lastRefreshed = null, badge 
   const { crumb, title } = resolveNav(pathname);
 
   return (
-    <header style={{ position: 'sticky', top: 0, zIndex: 20,
+    <header className="pt-topbar" style={{ position: 'sticky', top: 0, zIndex: 20,
       background: 'color-mix(in srgb, var(--bg) 88%, transparent)', backdropFilter: 'blur(12px)',
       borderBottom: '1px solid var(--border)', padding: '0 var(--pad)', height: 60,
       display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>

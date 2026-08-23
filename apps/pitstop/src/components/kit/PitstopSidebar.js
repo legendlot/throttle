@@ -37,7 +37,7 @@ export function PitstopSidebar({ perms = {}, badges = {}, userLabel = '', userRo
   const initial = userLabel ? userLabel[0].toUpperCase() : '?';
 
   return (
-    <aside style={{ width: collapsed ? COLLAPSED_W : EXPANDED_W, flexShrink: 0, background: 'var(--bg-2)',
+    <aside className="pt-rail" style={{ width: collapsed ? COLLAPSED_W : EXPANDED_W, flexShrink: 0, background: 'var(--bg-2)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%',
       overflow: 'hidden', transition: hydrated ? 'width 180ms cubic-bezier(0.4,0,0.2,1)' : 'none' }}>
 

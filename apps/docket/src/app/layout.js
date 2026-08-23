@@ -2,7 +2,11 @@ import './globals.css';
 import { AuthProvider } from '@throttle/auth';
 import { ToastProvider } from '@throttle/ui';
 
-export const metadata = { title: 'Docket · Tasks' };
+export const metadata = { title: 'Docket · Tasks', manifest: '/manifest.json' };
+
+// Mobile: real device width, notch-safe (viewport-fit) and a canvas-coloured
+// browser chrome. Desktop reads none of this.
+export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#181818' };
 
 export default function RootLayout({ children }) {
   return (

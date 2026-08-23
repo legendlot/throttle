@@ -929,3 +929,53 @@ button { cursor: pointer; background: none; border: none; }
 .kan-foot-right .deadline { font-size: 11.5px; }
 .kan-m { display: inline-flex; align-items: center; gap: 3px; font-family: var(--f-mono); font-size: 11px; color: var(--text-4); }
 .kan-m svg { color: var(--text-4); }
+
+/* ══════════════════════════════════════════════════════════
+   MOBILE APP SHELL (S304 family — mirrors the other LOT apps)
+   ≤767px: the rail hides behind a fixed bottom tab bar
+   (Dash/Notes · My Tasks · All Tasks · Checklist · More) + a
+   "More" bottom sheet mirroring the rail (fixed items + the
+   dynamic Programs / Spaces lists). Desktop untouched.
+   `dkm-` prefix — `dk-`/`sb` are taken by the desktop chrome.
+   ══════════════════════════════════════════════════════════ */
+
+.dkm-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.dkm-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 8px; cursor: pointer;
+  color: var(--t3); font-family: var(--font-mono, monospace); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; }
+.dkm-tab.active { color: var(--accent); }
+
+.dkm-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(0,0,0,.55);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.dkm-sheet { background: var(--surface); border-top: 1px solid var(--border-2);
+  border-radius: 16px 16px 0 0; max-height: 82dvh; overflow-y: auto; animation: dkm-sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes dkm-sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.dkm-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.dkm-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--t2);
+  font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.dkm-sheet-item.active { background: rgba(242,205,26,.12); border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 767px) {
+  .dk-app > .sb { display: none !important; }
+  .dkm-tabbar { display: flex; }
+  .dkm-sheetwrap { display: flex; }
+
+  .topbar { padding-left: 12px !important; padding-right: 12px !important; }
+  .dk-canvas { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
+
+  /* form pairs stack (the DatePicker's repeat(7,…) week grid is deliberately untouched) */
+  .dk-canvas [style*="columns: 1fr 1fr"] { grid-template-columns: minmax(0,1fr) !important; }
+
+  /* tables scroll sideways instead of crushing */
+  .dk-canvas table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .dk-canvas th { white-space: nowrap; }
+
+  /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
+  .dk-canvas input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
+  .dk-canvas select, .dk-canvas textarea { font-size: 16px !important; }
+}

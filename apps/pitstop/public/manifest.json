@@ -1,0 +1,13 @@
+{
+  "name": "Pitstop · Customer Support",
+  "short_name": "Pitstop",
+  "description": "LOT customer success — tickets, inbox, calls",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1b1b1e",
+  "theme_color": "#1b1b1e",
+  "icons": [
+    { "src": "/pitstop-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/pitstop-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

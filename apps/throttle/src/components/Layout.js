@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ToastProvider } from '@/lib/toast';
 import { supabaseBrand as supabase, getValidSession } from '@throttle/db';
+import { Inbox as InboxIcon, LayoutGrid, Timer, BarChart3, Megaphone, BookOpen,
+  Settings as SettingsIcon, Menu, X, LogOut } from 'lucide-react';
 
 const NAV_ITEMS = [
   { label: 'Requests',  href: '/requests/',  roles: ['requester', 'member', 'lead', 'admin'] },
@@ -234,6 +236,12 @@ export default function Layout({ children }) {
   const router = useRouter();
   const pathname = usePathname();
 
+  // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation).
+  // Declared BEFORE the loading/brandUser early returns — hooks after a conditional
+  // return crash the whole shell when the condition changes between renders (S303).
+  const [sheetOpen, setSheetOpen] = useState(false);
+  useEffect(() => { setSheetOpen(false); }, [pathname]);
+
   useEffect(() => {
     if (!loading && !session) router.replace('/login/');
   }, [session, loading, router]);
@@ -271,7 +279,7 @@ export default function Layout({ children }) {
         <div style={{ width: 1, height: 24, background: 'var(--b1)', margin: '0 16px' }} />
 
         {/* Nav */}
-        <nav style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <nav className="th-nav" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {visibleNav.map(item => {
             const isActive = pathname?.startsWith(item.href);
             return (
@@ -303,10 +311,10 @@ export default function Layout({ children }) {
         {/* Right side */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <NotificationBell brandUser={brandUser} />
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t2)' }}>
+          <span className="th-user" style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t2)' }}>
             {brandUser.name}
           </span>
-          <span style={{
+          <span className="th-user" style={{
             fontSize: 11,
             background: 'var(--s3)',
             color: 'var(--t2)',
@@ -320,6 +328,7 @@ export default function Layout({ children }) {
             {brandUser.role}
           </span>
           <button
+            className="th-user"
             onClick={signOut}
             style={{
               fontFamily: 'var(--sans)',
@@ -339,10 +348,91 @@ export default function Layout({ children }) {
       </header>
 
       {/* Page content */}
-      <main style={{ padding: '24px 20px' }}>
+      <main className="th-main" style={{ padding: '24px 20px' }}>
         {children}
       </main>
+
+      {/* ── mobile app chrome (≤767px — CSS decides; desktop never shows it) ── */}
+      <MobileTabBar visibleNav={visibleNav} pathname={pathname} moreOpen={sheetOpen}
+        onGo={(href) => { setSheetOpen(false); router.push(href); }} onMore={() => setSheetOpen(s => !s)} />
+      {sheetOpen && (
+        <MobileSheet visibleNav={visibleNav} pathname={pathname}
+          onGo={(href) => router.push(href)} onClose={() => setSheetOpen(false)}
+          userLabel={brandUser.name} userRole={brandUser.role} onLogout={signOut} />
+      )}
     </div>
     </ToastProvider>
+  );
+}
+
+// ── mobile chrome ────────────────────────────────────────────────────────────
+// Throttle's nav has no icons (it's a text top-nav), so the mobile chrome maps them.
+const TAB_ICONS = {
+  '/requests/': InboxIcon, '/board/': LayoutGrid, '/sprints/': Timer, '/dashboard/': BarChart3,
+  '/social/': Megaphone, '/manual/': BookOpen, '/settings/': SettingsIcon,
+};
+const MOBILE_TABS = ['/requests/', '/board/', '/social/', '/dashboard/'];
+
+function MobileTabBar({ visibleNav, pathname, moreOpen, onGo, onMore }) {
+  const tabs = MOBILE_TABS.map((href) => visibleNav.find((i) => i.href === href)).filter(Boolean);
+  return (
+    <nav className="th-tabbar">
+      {tabs.map((it) => {
+        const Icon = TAB_ICONS[it.href] || LayoutGrid;
+        const on = !moreOpen && pathname?.startsWith(it.href.replace(/\/$/, ''));
+        return (
+          <button key={it.href} className={`th-tab${on ? ' active' : ''}`} onClick={() => onGo(it.href)}>
+            <Icon size={19} strokeWidth={on ? 2 : 1.75} style={{ flexShrink: 0 }} />
+            <span>{it.label}</span>
+          </button>
+        );
+      })}
+      <button className={`th-tab${moreOpen ? ' active' : ''}`} onClick={onMore}>
+        <Menu size={19} strokeWidth={moreOpen ? 2 : 1.75} style={{ flexShrink: 0 }} />
+        <span>More</span>
+      </button>
+    </nav>
+  );
+}
+
+function MobileSheet({ visibleNav, pathname, onGo, onClose, userLabel, userRole, onLogout }) {
+  return (
+    <div className="th-sheetwrap" onMouseDown={onClose}>
+      <div className="th-sheet" onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+          <div style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 9, background: '#F2CD1A',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 700, color: '#17140a', fontSize: 15 }}>
+            {(userLabel || '?').trim().charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {userLabel}
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{userRole}</div>
+          </div>
+          <button onClick={onLogout} title="Sign out"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t3)' }}>
+            <LogOut size={18} strokeWidth={1.75} />
+          </button>
+          <button onClick={onClose} title="Close"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t2)' }}>
+            <X size={19} strokeWidth={1.75} />
+          </button>
+        </div>
+        <div className="th-sheet-grid">
+          {visibleNav.map((it) => {
+            const Icon = TAB_ICONS[it.href] || LayoutGrid;
+            const on = pathname?.startsWith(it.href.replace(/\/$/, ''));
+            return (
+              <button key={it.href} className={`th-sheet-item${on ? ' active' : ''}`} onClick={() => onGo(it.href)}>
+                <Icon size={17} strokeWidth={1.75} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,0 +1,13 @@
+{
+  "name": "Podium · People & Performance",
+  "short_name": "Podium",
+  "description": "LOT people OS — directory, performance, appraisals",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1b1b1e",
+  "theme_color": "#1b1b1e",
+  "icons": [
+    { "src": "/podium-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/podium-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

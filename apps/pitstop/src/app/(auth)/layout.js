@@ -1,11 +1,12 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher, useSearchShortcut } from '@throttle/ui';
-import { PitstopSidebar, PitstopTopbar, CommandPalette } from '../../components/kit/index.js';
+import { PitstopSidebar, PitstopTopbar, CommandPalette, Icon } from '../../components/kit/index.js';
+import { Menu, X, LogOut } from 'lucide-react';
 import { csopsGet } from '../../lib/csopsFetch.js';
-import { routeMatch } from '../../lib/nav.js';
+import { routeMatch, NAV_PRIMARY, NAV_SETUP, NAV_MANUAL, filterNavByPerms } from '../../lib/nav.js';
 import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
 import PresenceToggle from '../../components/PresenceToggle.js';
 import CallPop from '../../components/CallPop.js';
@@ -56,9 +57,14 @@ function AuthLayoutInner({ children }) {
   const { user, brandUser, role, perms, session, signOut, loading } = useAuth();
   const { refreshing, lastRefreshed, topbarBadge } = useRefreshState();
   const pathname = usePathname();
+  const router = useRouter();
   const flush = FLUSH_ROUTES.some(r => routeMatch(pathname, r));
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const [badges, setBadges] = useState({ open: 0, missed: 0 });
+
+  // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation) ─
+  const [sheetOpen, setSheetOpen] = useState(false);
+  useEffect(() => { setSheetOpen(false); }, [pathname]);
 
   // Global "/" → focus the primary search input on the active page.
   useSearchShortcut();
@@ -123,7 +129,7 @@ function AuthLayoutInner({ children }) {
         {/* `minHeight: 0` is what lets a flush route's flex child actually shrink instead of
             growing past the viewport; `overflow: hidden` keeps the page itself from scrolling
             behind the route's own scroll areas. */}
-        <main style={{ flex: 1, minHeight: 0,
+        <main className={`pt-main${flush ? ' flush' : ''}`} style={{ flex: 1, minHeight: 0,
           overflow: flush ? 'hidden' : 'auto',
           padding: flush ? 0 : 'var(--pad)' }}>
           {children}
@@ -134,6 +140,108 @@ function AuthLayoutInner({ children }) {
           anywhere in Pitstop, and a page-mounted pop would unmount on navigation
           mid-call. Renders nothing unless the agent has a live call. */}
       <CallPop />
+
+      {/* ── mobile app chrome (≤767px — CSS decides; desktop never shows it) ── */}
+      <MobileTabBar perms={perms || {}} badges={badges} pathname={pathname} moreOpen={sheetOpen}
+        onGo={(r) => { setSheetOpen(false); router.push(r); }} onMore={() => setSheetOpen(s => !s)} />
+      {sheetOpen && (
+        <MobileSheet perms={perms || {}} badges={badges} pathname={pathname} onGo={(r) => router.push(r)} onClose={() => setSheetOpen(false)}
+          userLabel={displayName} userRole={roleLabel} onLogout={signOut} />
+      )}
+    </div>
+  );
+}
+
+const onRoute = (route, pathname) => !!route &&
+  (route === '/' ? pathname === '/' : (pathname === route || pathname.startsWith(route + '/')));
+
+// ── mobile bottom tab bar — four primary destinations + More ────────────────
+const MOBILE_TABS = [
+  { route: '/',      label: 'Home',  badgeKey: null     },
+  { route: '/queue', label: 'Queue', badgeKey: 'open'   },
+  { route: '/inbox', label: 'Inbox', badgeKey: null     },
+  { route: '/calls', label: 'Calls', badgeKey: 'missed' },
+];
+
+function MobileTabBar({ perms, badges, pathname, moreOpen, onGo, onMore }) {
+  const visible = filterNavByPerms(NAV_PRIMARY, perms);
+  const tabs = MOBILE_TABS.map((t) => ({ ...t, it: visible.find((i) => i.route === t.route) })).filter((t) => t.it);
+  return (
+    <nav className="pt-tabbar">
+      {tabs.map((t) => {
+        const on = !moreOpen && onRoute(t.route, pathname);
+        const n = t.badgeKey ? badges?.[t.badgeKey] : 0;
+        return (
+          <button key={t.route} className={`pt-tab${on ? ' active' : ''}`} onClick={() => onGo(t.route)}>
+            <span style={{ position: 'relative', display: 'flex' }}>
+              <Icon name={t.it.icon} size={19} stroke={on ? 2 : 1.75} />
+              {n > 0 && <span className="pt-tab-badge">{n > 99 ? '99+' : n}</span>}
+            </span>
+            <span>{t.label}</span>
+          </button>
+        );
+      })}
+      <button className={`pt-tab${moreOpen ? ' active' : ''}`} onClick={onMore}>
+        <Menu size={19} strokeWidth={moreOpen ? 2 : 1.75} style={{ flexShrink: 0 }} />
+        <span>More</span>
+      </button>
+    </nav>
+  );
+}
+
+// ── mobile "More" sheet — the full nav, grouped like the rail ────────────────
+function MobileSheet({ perms, badges, pathname, onGo, onClose, userLabel, userRole, onLogout }) {
+  const work = filterNavByPerms(NAV_PRIMARY, perms);
+  const setup = filterNavByPerms(NAV_SETUP, perms);
+  const groups = [
+    { label: 'Work', items: work },
+    { label: 'Setup · Help', items: [...setup, NAV_MANUAL] },
+  ].filter((g) => g.items.length);
+  const go = (r) => { onClose(); onGo(r); };
+  return (
+    <div className="pt-sheetwrap" onMouseDown={onClose}>
+      <div className="pt-sheet" onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+          <div style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 9, background: 'var(--accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 700, color: 'var(--accent-fg)', fontSize: 15 }}>
+            {(userLabel || '?').trim().charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {userLabel}
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--t3)' }}>{userRole}</div>
+          </div>
+          <button onClick={onLogout} title="Sign out"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t3)' }}>
+            <LogOut size={18} strokeWidth={1.75} />
+          </button>
+          <button onClick={onClose} title="Close"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t2)' }}>
+            <X size={19} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {groups.map((g) => (
+          <div key={g.label} style={{ marginBottom: 14 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase',
+              letterSpacing: '0.1em', padding: '0 2px 7px' }}>{g.label}</div>
+            <div className="pt-sheet-grid">
+              {g.items.map((it) => {
+                const n = it.badgeKey ? badges?.[it.badgeKey] : 0;
+                return (
+                  <button key={it.route} className={`pt-sheet-item${onRoute(it.route, pathname) ? ' active' : ''}`} onClick={() => go(it.route)}>
+                    <Icon name={it.icon} size={17} stroke={1.75} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+                    {n > 0 && <span className="pt-tab-badge inline">{n > 99 ? '99+' : n}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

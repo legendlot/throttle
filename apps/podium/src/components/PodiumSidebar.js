@@ -58,7 +58,7 @@ export function PodiumSidebar({ groups, pathname, onNavigate, collapsed, onToggl
   const active = activeRoute(groups, pathname);
 
   return (
-    <aside style={{
+    <aside className="pd-rail" style={{
       width: collapsed ? 'var(--sidebar-w-collapsed)' : 'var(--sidebar-w)', flex: 'none',
       background: 'var(--bg-2)', borderRight: '1px solid var(--divider)',
       display: 'flex', flexDirection: 'column', transition: 'width 180ms var(--ease)',
