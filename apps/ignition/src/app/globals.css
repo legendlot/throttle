@@ -141,3 +141,53 @@ button { font-family: inherit; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   MOBILE APP SHELL (S304 family — mirrors the other LOT apps)
+   ≤767px: the shared @throttle/ui rail (.sb-wrap) hides behind a
+   fixed bottom tab bar (Dashboard · Influencers · Engagements ·
+   Schedule · More) + a "More" bottom sheet with the full nav.
+   Desktop untouched — everything sits behind the media query.
+   ══════════════════════════════════════════════════════════ */
+
+.ig-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.ig-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 8px; cursor: pointer;
+  color: var(--t3); font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; }
+.ig-tab.active { color: var(--accent); }
+
+.ig-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(0,0,0,.55);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.ig-sheet { background: var(--surface); border-top: 1px solid var(--border);
+  border-radius: 16px 16px 0 0; max-height: 82dvh; overflow-y: auto; animation: ig-sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes ig-sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.ig-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.ig-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--t2);
+  font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.ig-sheet-item.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 767px) {
+  /* the shared @throttle/ui Sidebar self-styles via an injected <style>; hiding its
+     root from THIS app's stylesheet affects only Ignition */
+  .sb-wrap { display: none !important; }
+  .ig-tabbar { display: flex; }
+  .ig-sheetwrap { display: flex; }
+
+  .ig-main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)) !important; }
+
+  /* form pairs stack (prefix form; the /schedule week grid repeat(7,…) is deliberately untouched) */
+  .ig-main [style*="columns: 1fr 1fr"] { grid-template-columns: minmax(0,1fr) !important; }
+
+  /* tables scroll sideways instead of crushing */
+  .ig-main table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .ig-main th { white-space: nowrap; }
+
+  /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
+  .ig-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
+  .ig-main select, .ig-main textarea { font-size: 16px !important; }
+}

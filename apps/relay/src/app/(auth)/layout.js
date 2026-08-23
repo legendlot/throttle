@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
+import { Menu, X, LogOut } from 'lucide-react';
 import { garageFetch } from '@throttle/db';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { Sidebar } from '../../components/chrome/Sidebar.js';
@@ -28,6 +29,9 @@ function AuthLayoutInner({ children }) {
   // Sidebar collapse persists across sessions (handoff §4 — localStorage).
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation) ─
+  const [sheetOpen, setSheetOpen] = useState(false);
+  useEffect(() => { setSheetOpen(false); }, [pathname]);
   // ON AIR rail — the currently-sending broadcast, from the same campaign data
   // the Campaigns list already reads (status === 'sending'). Read-only polling.
   const [onair, setOnair] = useState(null);
@@ -134,7 +138,139 @@ function AuthLayoutInner({ children }) {
         perms={perms}
         pathname={pathname}
       />
+
+      {/* ── mobile app chrome (≤767px — CSS decides; desktop never shows it) ── */}
+      <MobileTabBar navGroups={navGroups} pathname={pathname} moreOpen={sheetOpen}
+        onGo={(r) => { setSheetOpen(false); onNav(r); }} onMore={() => setSheetOpen((s) => !s)} />
+      {sheetOpen && (
+        <MobileSheet navGroups={navGroups} pathname={pathname} onGo={onNav} onClose={() => setSheetOpen(false)}
+          userLabel={displayName} userInitial={initial} userRole={role || ''} onLogout={signOut} />
+      )}
     </div>
     </ConfirmProvider>
+  );
+}
+
+const onRoute = (route, pathname) => !!route &&
+  (route === '/' ? pathname === '/' : (pathname === route || pathname.startsWith(route + '/')));
+
+// Flatten the perm-filtered nav (flat groups become single items) — tab bar + sheet
+// both read this, so gating stays identical to the rail.
+function flatNav(navGroups) {
+  const out = [];
+  for (const g of navGroups) {
+    if (g.flat) { out.push({ ...g }); continue; }
+    for (const it of g.items || []) out.push(it);
+  }
+  return out;
+}
+
+// ── mobile bottom tab bar — four primary destinations + More ────────────────
+const MOBILE_TABS = [
+  { route: '/',          label: 'Home'      },
+  { route: '/campaigns', label: 'Campaigns' },
+  { route: '/journeys',  label: 'Journeys'  },
+  { route: '/contacts',  label: 'Contacts'  },
+];
+
+function MobileTabBar({ navGroups, pathname, moreOpen, onGo, onMore }) {
+  const flat = flatNav(navGroups);
+  const tabs = MOBILE_TABS.map((t) => ({ ...t, it: flat.find((i) => i.route === t.route) })).filter((t) => t.it);
+  return (
+    <nav className="ry-tabbar">
+      {tabs.map((t) => {
+        const Icon = t.it.icon;
+        const on = !moreOpen && onRoute(t.route, pathname);
+        return (
+          <button key={t.route} className={`ry-tab${on ? ' active' : ''}`} onClick={() => onGo(t.route)}>
+            <Icon size={19} strokeWidth={on ? 2 : 1.75} style={{ flexShrink: 0 }} />
+            <span>{t.label}</span>
+          </button>
+        );
+      })}
+      <button className={`ry-tab${moreOpen ? ' active' : ''}`} onClick={onMore}>
+        <Menu size={19} strokeWidth={moreOpen ? 2 : 1.75} style={{ flexShrink: 0 }} />
+        <span>More</span>
+      </button>
+    </nav>
+  );
+}
+
+// ── mobile "More" sheet — the full nav, grouped like the rail ────────────────
+function MobileSheet({ navGroups, pathname, onGo, onClose, userLabel, userInitial, userRole, onLogout }) {
+  const flats = navGroups.filter((g) => g.flat);
+  const grouped = navGroups.filter((g) => !g.flat);
+  return (
+    <div className="ry-sheetwrap" onMouseDown={onClose}>
+      <div className="ry-sheet" onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+          <div style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 9, background: 'var(--accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 700, color: 'var(--accent-ink)', fontSize: 15 }}>
+            {userInitial}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {userLabel}
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 10, color: 'var(--t3)' }}>{userRole}</div>
+          </div>
+          <button onClick={onLogout} title="Sign out"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t3)' }}>
+            <LogOut size={18} strokeWidth={1.75} />
+          </button>
+          <button onClick={onClose} title="Close"
+            style={{ display: 'flex', padding: 6, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--t2)' }}>
+            <X size={19} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {flats.filter((g) => g.route === '/').map((g) => {
+          const Icon = g.icon;
+          return (
+            <div key={g.route} style={{ marginBottom: 14 }}>
+              <div className="ry-sheet-grid">
+                <button className={`ry-sheet-item${onRoute(g.route, pathname) ? ' active' : ''}`} onClick={() => onGo(g.route)}>
+                  {Icon && <Icon size={17} strokeWidth={1.75} style={{ flexShrink: 0 }} />}
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {grouped.map((g) => (
+          <div key={g.id} style={{ marginBottom: 14 }}>
+            <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase',
+              letterSpacing: '0.1em', padding: '0 2px 7px' }}>{g.label}</div>
+            <div className="ry-sheet-grid">
+              {(g.items || []).map((it) => {
+                const Icon = it.icon;
+                return (
+                  <button key={it.route} className={`ry-sheet-item${onRoute(it.route, pathname) ? ' active' : ''}`} onClick={() => onGo(it.route)}>
+                    {Icon && <Icon size={17} strokeWidth={1.75} style={{ flexShrink: 0 }} />}
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        {flats.filter((g) => g.route !== '/').map((g) => {
+          const Icon = g.icon;
+          return (
+            <div key={g.route} style={{ marginBottom: 14 }}>
+              <div className="ry-sheet-grid">
+                <button className={`ry-sheet-item${onRoute(g.route, pathname) ? ' active' : ''}`} onClick={() => onGo(g.route)}>
+                  {Icon && <Icon size={17} strokeWidth={1.75} style={{ flexShrink: 0 }} />}
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

@@ -3,7 +3,11 @@ import './redesign.css';
 import { AuthProvider } from '@throttle/auth';
 import { ToastProvider } from '@throttle/ui';
 
-export const metadata = { title: 'Snorkel · Procurement' };
+export const metadata = { title: 'Snorkel · Procurement', manifest: '/manifest.json' };
+
+// Mobile: real device width, notch-safe (viewport-fit) and a canvas-coloured
+// browser chrome. Desktop reads none of this.
+export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#16181a' };
 
 export default function RootLayout({ children }) {
   return (

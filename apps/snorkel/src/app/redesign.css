@@ -492,3 +492,56 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
   .main { overflow: visible !important; padding: 0 !important; height: auto !important; flex: none !important; }
   .screen { max-width: none !important; margin: 0 !important; animation: none !important; }
 }
+
+/* ══════════════════════════════════════════════════════════
+   MOBILE APP SHELL (S304 family — mirrors Odo/Garage/Redline/Depot)
+   ≤767px: the rail hides behind a fixed bottom tab bar
+   (Requests · POs · Sales · Payments · More) + a "More" bottom
+   sheet carrying the full perm-filtered nav. Desktop untouched.
+   Grid overrides use the "columns: <value>" PREFIX form so px-led
+   row templates never match; the !importants fight inline styles.
+   ══════════════════════════════════════════════════════════ */
+
+.sn-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.sn-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 8px; cursor: pointer;
+  color: var(--t3); font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; }
+.sn-tab.active { color: var(--accent); }
+
+.sn-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(0,0,0,.55);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.sn-sheet { background: var(--surface); border-top: 1px solid var(--border);
+  border-radius: 16px 16px 0 0; max-height: 82dvh; overflow-y: auto; animation: sn-sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes sn-sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.sn-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.sn-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--t2);
+  font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.sn-sheet-item.active { background: var(--accent-soft); border-color: var(--accent-bd); color: var(--accent); }
+
+@media (max-width: 767px) {
+  .sb { display: none !important; }
+  .sn-tabbar { display: flex; }
+  .sn-sheetwrap { display: flex; }
+
+  .main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
+  .cb { padding-left: 12px; padding-right: 12px; }
+
+  /* whole-row fixed grids reflow: KPI rows → 2-up, form pairs/triples stack */
+  .main [style*="columns: repeat(4"], .main [style*="columns: repeat(3"] {
+    grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  .main [style*="columns: 1fr 1fr"], .main [style*="columns: 2fr 1fr"] {
+    grid-template-columns: minmax(0,1fr) !important; }
+
+  /* tables scroll sideways instead of crushing */
+  .main table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .main th { white-space: nowrap; }
+
+  /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
+  .main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
+  .main select, .main textarea { font-size: 16px !important; }
+}

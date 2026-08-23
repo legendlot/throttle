@@ -1,0 +1,14 @@
+{
+  "name": "Relay · CX Comms",
+  "short_name": "Relay",
+  "description": "LOT customer comms orchestration — campaigns, journeys, segments",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "icons": [
+    { "src": "/brand/relay/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brand/relay/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/brand/relay/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

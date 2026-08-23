@@ -3,7 +3,11 @@ import './redesign.css';
 import { AuthProvider } from '@throttle/auth';
 import { ToastProvider } from '@throttle/ui';
 
-export const metadata = { title: 'Relay · Comms' };
+export const metadata = { title: 'Relay · Comms', manifest: '/manifest.json' };
+
+// Mobile: real device width, notch-safe (viewport-fit) and a canvas-coloured
+// browser chrome. Desktop reads none of this.
+export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#101114' };
 
 export default function RootLayout({ children }) {
   return (
