@@ -148,10 +148,11 @@ a { color: inherit; text-decoration: none; }
 
 /* ══════════════════════════════════════════════════════════
    MOBILE APP SHELL (S304 family — mirrors the other LOT apps)
-   ≤767px: the rail (AppShell/Shell.js `.t-sidebar` — NOT the dead
-   components/Layout.js top-nav) hides behind a fixed bottom tab
-   bar (Home · Requests · Board · Social · More) + a "More" bottom
-   sheet with the full nav. Desktop untouched.
+   ≤767px: the rail (AppShell/Shell.js `.t-sidebar`) hides behind a
+   fixed bottom tab bar (Home · Requests · Board · Social · More) +
+   a "More" bottom sheet with the full nav. Desktop untouched.
+   (The legacy components/Layout.js top-nav was dead code, deleted
+   S304 — its NotificationBell is backlogged, not lost: git history.)
    ══════════════════════════════════════════════════════════ */
 
 .th-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
