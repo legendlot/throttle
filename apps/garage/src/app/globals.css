@@ -335,9 +335,13 @@ main div:has(> table) {
      (e.g. "1fr 130px 70px…", "1fr 44px 44px") match none of these on purpose. */
   .g-main [style*="columns: repeat(4"], .g-main [style*="columns: repeat(3"] {
     grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  /* ⚠ the browser serialises a bare 0 inside minmax() as 0px in the style
+     ATTRIBUTE ("minmax(0, 1fr)" → "minmax(0px, 1fr)") — match the SERIALISED
+     form, never the source form. Caught by the S304 hostile review: the
+     source-form selectors below had never matched anything. */
   .g-main [style*="columns: 1fr 1fr"], .g-main [style*="columns: 2fr 1fr"],
-  .g-main [style*="columns: minmax(0, 1fr) minmax("], .g-main [style*="columns: minmax(0, 0.85fr)"],
-  .g-main [style*="columns: minmax(0, 1.7fr)"] {
+  .g-main [style*="columns: minmax(0px, 1fr) minmax("], .g-main [style*="columns: minmax(0px, 0.85fr)"],
+  .g-main [style*="columns: minmax(0px, 1.7fr)"] {
     grid-template-columns: minmax(0,1fr) !important; }
 
   /* tables scroll sideways instead of crushing their columns */

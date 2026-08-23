@@ -284,4 +284,7 @@ button { font-family: inherit; }
   /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
   .pt-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
   .pt-main select, .pt-main textarea { font-size: 16px !important; }
+
+  /* a live-call pop must not sit on top of the tab bar (S304 hostile review) */
+  .pt-callpop { bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
 }

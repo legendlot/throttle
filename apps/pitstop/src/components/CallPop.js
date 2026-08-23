@@ -100,7 +100,7 @@ export default function CallPop() {
     : `${ordinal(hist.prior_calls + 1)} call${hist.prior_calls >= 1 ? ` · ${hist.prior_calls} before` : ''}`;
 
   return (
-    <div style={wrap} role="dialog" aria-label="Incoming call">
+    <div className="pt-callpop" style={wrap} role="dialog" aria-label="Incoming call">
       <div style={head}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           {call.direction === 'outgoing'
