@@ -282,7 +282,7 @@ button { font-family: inherit; }
 .rl-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
 
 @media (max-width: 767px) {
-  .rl-rail { display: none; }
+  .rl-rail { display: none !important; }
   .rl-tabbar { display: flex; }
   .rl-sheetwrap { display: flex; }
 

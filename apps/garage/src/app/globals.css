@@ -316,7 +316,7 @@ main div:has(> table) {
 .g-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
 
 @media (max-width: 767px) {
-  .g-rail { display: none; }
+  .g-rail { display: none !important; }
   .g-tabbar { display: flex; }
   .g-sheetwrap { display: flex; }
 

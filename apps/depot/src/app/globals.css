@@ -280,7 +280,7 @@ button { font-family: inherit; }
 .dp-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
 
 @media (max-width: 767px) {
-  .dp-rail { display: none; }
+  .dp-rail { display: none !important; }
   .dp-tabbar { display: flex; }
   .dp-sheetwrap { display: flex; }
 
