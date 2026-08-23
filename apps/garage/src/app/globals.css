@@ -284,3 +284,69 @@ main div:has(> table) {
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   MOBILE APP SHELL (S304 — mirrors Odo's approach)
+   ≤767px: the rail hides behind a fixed bottom tab bar
+   (Overview · Issues · Stock · GRN · More) + a "More" bottom
+   sheet carrying the full nav. Desktop is untouched — everything
+   lives behind the media query; the !importants fight the pages'
+   inline styles and are load-bearing.
+   ══════════════════════════════════════════════════════════ */
+
+.g-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); }
+.g-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: none; padding: 6px 2px; border-radius: 8px; cursor: pointer;
+  color: var(--t3); font-family: var(--font-display); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; }
+.g-tab.active { color: var(--yellow); }
+
+.g-sheetwrap { position: fixed; inset: 0; z-index: 140; background: rgba(0,0,0,.55);
+  display: none; flex-direction: column; justify-content: flex-end; }
+.g-sheet { background: var(--surface); border-top: 1px solid var(--border-2);
+  border-radius: 16px 16px 0 0; max-height: 82dvh; overflow-y: auto; animation: g-sheetup .18s ease;
+  padding: 16px 16px calc(78px + env(safe-area-inset-bottom)); }
+@keyframes g-sheetup { from { transform: translateY(26px); opacity: .5 } to { transform: none; opacity: 1 } }
+.g-sheet-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.g-sheet-item { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--t2);
+  font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
+.g-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
+
+@media (max-width: 767px) {
+  .g-rail { display: none; }
+  .g-tabbar { display: flex; }
+  .g-sheetwrap { display: flex; }
+
+  /* topbar: tighter, notch-safe; the ⌘K field collapses to its icon; Live dot hides */
+  .g-topbar { padding: 0 12px !important; gap: 10px !important;
+    height: calc(56px + env(safe-area-inset-top)) !important; padding-top: env(safe-area-inset-top) !important; }
+  .g-searchbtn { width: 38px !important; justify-content: center; }
+  .g-searchbtn span, .g-searchbtn kbd { display: none; }
+  .g-live { display: none !important; }
+
+  .g-main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)) !important; }
+
+  /* fixed multi-column inline grids reflow: KPI/tile rows → 2-up, form pairs/
+     triples and asymmetric splits → stacked. Comma-free substrings because the
+     browser normalises the style attribute's spacing. Row-template grids
+     (e.g. "1fr 130px 70px…", "1fr 44px 44px") match none of these on purpose. */
+  .g-main [style*="repeat(4"], .g-main [style*="repeat(3"] {
+    grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  .g-main [style*="1fr 1fr"], .g-main [style*="2fr 1fr"], .g-main [style*="fr) minmax("] {
+    grid-template-columns: minmax(0,1fr) !important; }
+
+  /* tables scroll sideways instead of crushing their columns */
+  .g-main table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .g-main th { white-space: nowrap; }
+
+  /* QuickCreate FAB rides above the tab bar */
+  .qc-fab { bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
+  .qc-menu { bottom: calc(136px + env(safe-area-inset-bottom)) !important; }
+
+  /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
+  .g-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
+  .g-main select, .g-main textarea { font-size: 16px !important; }
+}

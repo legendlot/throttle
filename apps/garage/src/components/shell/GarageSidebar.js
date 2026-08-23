@@ -147,7 +147,7 @@ export function GarageSidebar({
   const isOn = (route) => route === activeRoute;
 
   return (
-    <aside style={{ width: W, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--border)', transition: 'width var(--base) var(--ease)', height: '100%', overflow: 'hidden' }}>
+    <aside className="g-rail" style={{ width: W, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--border)', transition: 'width var(--base) var(--ease)', height: '100%', overflow: 'hidden' }}>
       {/* header — clicking anywhere on the bar collapses/expands the rail */}
       <div onClick={onToggleCollapsed} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', height: 60, padding: collapsed ? 0 : '0 14px', borderBottom: '1px solid var(--border)', flexShrink: 0, cursor: 'pointer' }}>

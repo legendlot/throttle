@@ -28,7 +28,7 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
   })();
 
   return (
-    <header style={{ height: 60, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 22px', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
+    <header className="g-topbar" style={{ height: 60, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 22px', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0 }}>
         <span className="eyebrow" style={{ whiteSpace: 'nowrap' }}>{group}</span>
         <ChevronRight size={12} strokeWidth={1.75} style={{ color: 'var(--t4)', alignSelf: 'center' }} />
@@ -42,7 +42,7 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
         </button>
       )}
 
-      <button onClick={onOpenPalette} style={{
+      <button className="g-searchbtn" onClick={onOpenPalette} style={{
         marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9, width: 'min(300px, 32vw)',
         background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
         padding: '8px 12px', cursor: 'pointer', color: 'var(--t3)', transition: 'border-color var(--fast)',
@@ -58,7 +58,7 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
         <RefreshCw size={16} strokeWidth={1.75} style={{ animation: refreshing ? 'g-spin .7s linear infinite' : 'none' }} />
       </button>
 
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--ok-fg)', textTransform: 'uppercase' }}>
+      <span className="g-live" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--ok-fg)', textTransform: 'uppercase' }}>
         <span className="g-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok-fg)' }} />Live
       </span>
 
