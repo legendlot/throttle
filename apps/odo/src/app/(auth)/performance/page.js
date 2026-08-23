@@ -27,7 +27,7 @@ function OrderTypeTile({ icon: Icon, color, lbl, val, sub, now, prev }) {
         </div>
         <div style={{ fontFamily: 'var(--cond)', fontSize: 19, fontWeight: 700, color: 'var(--t1)', marginTop: 3 }}>{val}</div>
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)', whiteSpace: 'nowrap' }}>{sub}</span>
+      <span className="so-otile-sub" style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)', whiteSpace: 'nowrap' }}>{sub}</span>
     </div>
   );
 }

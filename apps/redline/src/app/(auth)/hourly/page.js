@@ -79,7 +79,7 @@ function StageFunnel({ totals, metric, setMetric }) {
     </div>
   );
   return (
-    <div style={{ display: 'flex', alignItems: 'stretch', gap: 6, marginBottom: 18 }}>
+    <div className="rl-funnel" style={{ display: 'flex', alignItems: 'stretch', gap: 6, marginBottom: 18 }}>
       <Cell m="inw_count" />
       <Yield pct={y1} />
       <Cell m="qc_pass_count" />

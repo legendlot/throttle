@@ -591,6 +591,11 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 
   .main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
   .cb { padding-left: 12px; padding-right: 12px; }
+  /* the nowrap crumbs were colliding with the LIVE·UPDATED cluster at 375px —
+     the clock text is chrome, not information; the crumbs/tab strip swipes */
+  .cb .tb-live { display: none; }
+  .cb-left { overflow-x: auto; scrollbar-width: none; }
+  .cb-left::-webkit-scrollbar { display: none; }
 
   /* Relay's fixed grids are almost all auto-fit (self-reflowing); only form pairs stack */
   .main [style*="columns: 1fr 1fr"] { grid-template-columns: minmax(0,1fr) !important; }

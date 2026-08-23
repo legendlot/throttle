@@ -181,7 +181,13 @@ a { color: inherit; text-decoration: none; }
   .th-tabbar { display: flex; }
   .th-sheetwrap { display: flex; }
 
-  .th-topbar { padding: 0 12px !important; }
+  /* topbar at 375px was a pile-up: title under the sprint pill + full search box.
+     Sprint + Live hide; the search collapses to an icon (it still opens the
+     palette on tap — the phone's only search affordance). */
+  .th-topbar { padding: 0 12px !important; gap: 8px !important; }
+  .th-sprint, .th-live { display: none !important; }
+  .th-topbar .t-search { width: 38px !important; justify-content: center; padding: 8px !important; }
+  .th-topbar .t-search span, .th-topbar .t-search kbd { display: none; }
   .th-main { padding: 14px 12px calc(84px + env(safe-area-inset-bottom)) !important; }
 
   /* whole-row fixed grids reflow (prefix form; the social repeat(7,…) calendar untouched) */

@@ -160,7 +160,7 @@ export function Topbar({ route, onPalette, sprint }) {
         <span className="t-title" style={{ fontSize: 17, whiteSpace: 'nowrap' }}>{meta.title}</span>
       </div>
 
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginLeft: 6, padding: '5px 11px', whiteSpace: 'nowrap', flexShrink: 0,
+      <span className="th-sprint" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginLeft: 6, padding: '5px 11px', whiteSpace: 'nowrap', flexShrink: 0,
         background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 999, fontSize: 12, color: 'var(--t2)' }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--yellow)' }} className="t-pulse" />
         <span style={{ fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--t3)' }}>SPRINT</span>
@@ -180,7 +180,7 @@ export function Topbar({ route, onPalette, sprint }) {
         <span style={{ position: 'absolute', top: 7, right: 8, width: 6, height: 6, borderRadius: '50%', background: 'var(--brand-red)' }} />
       </button>
 
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-display)', fontSize: 10,
+      <span className="th-live" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-display)', fontSize: 10,
         fontWeight: 700, letterSpacing: '0.14em', color: 'var(--ok-fg)', textTransform: 'uppercase' }}>
         <span className="t-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok-fg)' }} />Live
       </span>

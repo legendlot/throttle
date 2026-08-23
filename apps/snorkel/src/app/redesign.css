@@ -530,6 +530,11 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
 
   .main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
   .cb { padding-left: 12px; padding-right: 12px; }
+  /* same chrome family as Relay: crumb/tab strip swipes instead of colliding
+     with the right cluster */
+  .cb .tb-live { display: none; }
+  .cb-left { overflow-x: auto; scrollbar-width: none; }
+  .cb-left::-webkit-scrollbar { display: none; }
 
   /* whole-row fixed grids reflow: KPI rows → 2-up, form pairs/triples stack */
   .main [style*="columns: repeat(4"], .main [style*="columns: repeat(3"] {

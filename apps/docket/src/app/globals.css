@@ -971,6 +971,11 @@ button { cursor: pointer; background: none; border: none; }
   /* form pairs stack (the DatePicker's repeat(7,…) week grid is deliberately untouched) */
   .dk-canvas [style*="columns: 1fr 1fr"] { grid-template-columns: minmax(0,1fr) !important; }
 
+  /* The Grid rows: the owner/deadline chips were crushing task titles to one
+     glyph — give the title a real floor and let the chips wrap below it */
+  .gcard { flex-wrap: wrap; row-gap: 8px; }
+  .gcard .gtitle { min-width: 180px; }
+
   /* tables scroll sideways instead of crushing */
   .dk-canvas table { display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
   .dk-canvas th { white-space: nowrap; }

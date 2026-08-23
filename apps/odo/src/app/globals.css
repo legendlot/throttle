@@ -354,8 +354,10 @@ button { font-family: inherit; }
   .so-stat-lbl { min-width: min-content; }
 
   /* data tables keep their desktop shape and scroll sideways inside the card;
-     the first column (the row's label) pins so scrolled numbers keep their meaning */
-  .so-card { overflow-x: auto; }
+     the first column (the row's label) pins so scrolled numbers keep their meaning.
+     :has(.so-table) — scoping to TABLE cards only; a blanket .so-card rule painted
+     stray scrollbar tracks under every KPI tile (S304 phone smoke). */
+  .so-card:has(.so-table) { overflow-x: auto; }
   .so-card .so-table th, .so-card .so-table td { white-space: nowrap; }
   .so-card .so-table th:first-child, .so-card .so-table td:first-child {
     position: sticky; left: 0; z-index: 1; background: var(--surface-solid); }
@@ -372,6 +374,10 @@ button { font-family: inherit; }
 
   /* 16px text inputs stop iOS Safari's focus auto-zoom (dates open a native picker — exempt) */
   .so-input:not([type="date"]), .so-select { font-size: 16px; }
+
+  /* order-type tiles (Performance): the mono caption fought the label for a
+     ~160px tile and lost half its glyphs — the label already names the tile */
+  .so-otile-sub { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
