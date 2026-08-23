@@ -152,7 +152,7 @@ export function Sidebar({ route, onNavigate, collapsed, onToggle, onPalette, use
 export function Topbar({ route, onPalette, sprint }) {
   const meta = ROUTE_META[route] || { group: '', title: route };
   return (
-    <header style={{ height: 60, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 22px',
+    <header className="th-topbar" style={{ height: 60, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 22px',
       borderBottom: '1px solid var(--border)', background: 'var(--topbar-bg)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0 }}>
         <span className="eyebrow" style={{ whiteSpace: 'nowrap', padding: 0 }}>{meta.group}</span>

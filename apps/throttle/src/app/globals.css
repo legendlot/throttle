@@ -148,10 +148,10 @@ a { color: inherit; text-decoration: none; }
 
 /* ══════════════════════════════════════════════════════════
    MOBILE APP SHELL (S304 family — mirrors the other LOT apps)
-   ≤767px: the top-nav link row + user chips hide behind a fixed
-   bottom tab bar (Requests · Board · Social · Dashboard · More)
-   + a "More" bottom sheet with the full role-gated nav.
-   Desktop untouched.
+   ≤767px: the rail (AppShell/Shell.js `.t-sidebar` — NOT the dead
+   components/Layout.js top-nav) hides behind a fixed bottom tab
+   bar (Home · Requests · Board · Social · More) + a "More" bottom
+   sheet with the full nav. Desktop untouched.
    ══════════════════════════════════════════════════════════ */
 
 .th-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; display: none;
@@ -176,10 +176,11 @@ a { color: inherit; text-decoration: none; }
 .th-sheet-item.active { background: rgba(242,205,26,.12); border-color: rgba(242,205,26,.42); color: var(--accent); }
 
 @media (max-width: 767px) {
-  .th-nav, .th-user { display: none !important; }
+  .t-sidebar { display: none !important; }
   .th-tabbar { display: flex; }
   .th-sheetwrap { display: flex; }
 
+  .th-topbar { padding: 0 12px !important; }
   .th-main { padding: 14px 12px calc(84px + env(safe-area-inset-bottom)) !important; }
 
   /* whole-row fixed grids reflow (prefix form; the social repeat(7,…) calendar untouched) */
@@ -195,3 +196,8 @@ a { color: inherit; text-decoration: none; }
   .th-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
   .th-main select, .th-main textarea { font-size: 16px !important; }
 }
+
+/* tab badge (Requests/Board counts) — shared by the mobile tab bar + sheet */
+.th-tab-badge { position: absolute; top: -5px; right: -9px; background: var(--brand-red, #DE2A2A); color: #fff;
+  font-family: var(--font-mono); font-size: 8.5px; font-weight: 700; border-radius: 999px; padding: 1px 4px; line-height: 1.3; }
+.th-tab-badge.inline { position: static; flex-shrink: 0; }
