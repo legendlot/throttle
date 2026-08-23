@@ -345,9 +345,13 @@ button { font-family: inherit; }
   .so-page div[style*="1.15fr"], .so-page div[style*="2.2fr"], .so-page div[style*="1fr 1fr"] {
     grid-template-columns: minmax(0,1fr) !important; }
 
-  /* KPI tile top rows: the label must never be squeezed out by a badge/delta —
-     let the row wrap so ₹1.44 Cr always says what it is */
-  .so-stat-top { flex-wrap: wrap; row-gap: 2px; }
+  /* KPI tile top rows: the label must never be squeezed out by a badge/delta.
+     Desktop gives the label min-width:0 so it can ellipsize; on a 2-up phone tile
+     that lets it collapse to NOTHING before flex-wrap ever fires (wrap only
+     triggers when items can't shrink). min-content makes the label hold its text,
+     so the badge/delta wrap to a second line instead of erasing what ₹1.44 Cr is. */
+  .so-stat-top { flex-wrap: wrap; row-gap: 3px; }
+  .so-stat-lbl { min-width: min-content; }
 
   /* data tables keep their desktop shape and scroll sideways inside the card;
      the first column (the row's label) pins so scrolled numbers keep their meaning */
