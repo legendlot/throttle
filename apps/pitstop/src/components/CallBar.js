@@ -115,8 +115,15 @@ export default function CallBar() {
 
   const accept = () => { webPhone.current?.AcceptCall(); };
   const hangup = () => { webPhone.current?.HangupCall(); setCall(null); };
-  const toggleMute = () => { webPhone.current?.ToggleMute(); setMuted((m) => !m); };
-  const toggleHold = () => { webPhone.current?.ToggleHold(); setHeld((h) => !h); };
+  // ⚠️ The SDK's ToggleMute/ToggleHold synchronously fire the mutetoggle/holdtoggle event
+  // back through the call listener, which is what updates `muted`/`held`. The buttons must
+  // NOT also flip state — that double-flip is exactly the "mute and hold are not working"
+  // bug Pruthvi reported on launch day (state flipped twice, icon never moved). Debounce
+  // mirrors Exotel's own sample app, which carries the same guard for the same reason.
+  const lastToggle = useRef(0);
+  const debounced = (fn) => { const n = Date.now(); if (n - lastToggle.current < 350) return; lastToggle.current = n; fn(); };
+  const toggleMute = () => debounced(() => webPhone.current?.ToggleMute());
+  const toggleHold = () => debounced(() => webPhone.current?.ToggleHold());
   const dial = () => {
     const n = dialNum.replace(/[^\d+]/g, '');
     if (!/^\+?\d{10,14}$/.test(n)) return;
@@ -169,8 +176,9 @@ export default function CallBar() {
             {phase === 'online' ? 'Softphone ready' : phase === 'registering' ? 'Softphone connecting…' : 'Softphone offline'}
           </span>
           {phase === 'online' && (
-            <button onClick={() => setDialOpen((o) => !o)} style={iconBtn} aria-label="Dialpad" title="Dial a number">
-              {dialOpen ? <X size={14} /> : <Phone size={14} />}
+            <button onClick={() => setDialOpen((o) => !o)} aria-label="Dialpad" title="Dial a number"
+              style={{ ...iconBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600 }}>
+              {dialOpen ? <X size={14} /> : <Phone size={14} />} {dialOpen ? 'Close' : 'Dial'}
             </button>
           )}
           {phase === 'offline' && (
