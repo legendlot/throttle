@@ -1397,6 +1397,10 @@ async function getDirectorySyncPreview(url, auth, env) {
   const gEmails = new Set();
   const gSuspended = new Set();
   let excludedCount = 0;
+  // How many Google accounts actually carry a manager relation. Reported because it cannot be
+  // inferred from the review rows: `mgr_suggested` is null BOTH when Google has no manager AND
+  // when Google's manager already matches Podium's — an S306 claim was wrongly derived that way.
+  let gWithManager = 0;
   const newCands = [];
   const changed = [];
   const baseline = [];
@@ -1476,6 +1480,7 @@ async function getDirectorySyncPreview(url, auth, env) {
     const email = (gu.primaryEmail || '').toLowerCase();
     if (!email) continue;
     gEmails.add(email);
+    if ((gu.relations || []).some(x => x.type === 'manager' && x.value)) gWithManager++;
     if (gu.suspended) gSuspended.add(email);
     if (ouExcluded(gu.orgUnitPath, excluded)) { excludedCount++; continue; }
     if (ignored.has(email)) continue;
@@ -1522,6 +1527,8 @@ async function getDirectorySyncPreview(url, auth, env) {
                   .sort((a, b) => a.full_name.localeCompare(b.full_name)),
     counts: {
       google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length,
+      google_with_manager: gWithManager,
+      active_in_podium: emps.filter(e => e.status !== 'exited').length,
       moved: changed.filter(c => c.tier === 'moved').length,
       differs: changed.filter(c => c.tier === 'differs').length,
       baseline: baseline.length,
