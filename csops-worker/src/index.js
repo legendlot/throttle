@@ -5626,22 +5626,15 @@ async function relayWaIngestInbound(m, env) {
   if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
-  // S245 — marketing/txn "wrong number" handling: raise a ticket + send ONE redirect. Flag-gated
-  // and allow-listed inside, so this is a no-op for support and while the switch is off. Wrapped:
-  // a failure here must never lose the customer's message, which is already safely stored above.
-  let effectiveTicketId = linkedTicketId;
+  // S245 — marketing/txn "wrong number" handling: send ONE redirect. Flag-gated and allow-listed
+  // inside, so this is a no-op for support and while the switch is off. Wrapped: a failure here
+  // must never lose the customer's message, which is already safely stored above.
+  // ⚠️ TICKET-RAISING REMOVED 2026-08-24 (S305, Afshaan): these contacts END at the redirect —
+  // do not re-add a ticket-creation step here. Rationale + measured queue cost inside
+  // maybeWrongNumberRedirect (the old ensureTicketForThread helper is deleted).
+  const effectiveTicketId = linkedTicketId;
   try {
-    const wn = await maybeWrongNumberRedirect(thread, m, phone, linkedTicketId, env);
-    if (wn?.ticket_id) {
-      effectiveTicketId = wn.ticket_id;
-      // Back-link the inbound message we just wrote (it was inserted with a null ticket_id,
-      // because the ticket did not exist yet) so the ticket opens with the customer's actual words.
-      const insertedId = ins.data?.[0]?.id;
-      if (insertedId) {
-        await sb(`/rest/v1/cs_wa_messages?id=eq.${insertedId}`, env,
-          { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ticket_id: wn.ticket_id }) }).catch(() => {});
-      }
-    }
+    await maybeWrongNumberRedirect(thread, m, phone, linkedTicketId, env);
   } catch (e) { console.error('[relay-wa] wrong-number redirect failed', e?.message || e); }
 
   if (effectiveTicketId) {
@@ -5857,34 +5850,6 @@ async function wrongNumberConfig(env) {
   return r.ok ? (r.data?.[0] || null) : null;
 }
 
-// Raise a ticket for an inbound that has none, so it enters the queue. Mirrors linkMessagingThread's
-// insert but with no acting user — this is machine-created, and attributing it to an agent would put
-// it in that person's name and their assigned count.
-async function ensureTicketForThread(thread, firstText, env) {
-  const year = String(new Date().getFullYear());
-  const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
-  if (!seqRes.ok) return null;
-  const ticket_no = `CS-${year}-${String(Number(seqRes.data)).padStart(5, '0')}`;
-  const ins = await sb(`/rest/v1/cs_tickets`, env, {
-    method: 'POST', headers: { Prefer: 'return=representation' },
-    body: JSON.stringify({
-      ticket_no,
-      created_by_user_id: null, created_by_name: 'Relay (auto)',
-      intake_channel: 'whatsapp',
-      customer_name: thread.customer_handle || thread.customer_phone || 'WhatsApp customer',
-      customer_phone: thread.customer_phone || null,
-      disposition: 'pending',
-      // Left UNASSIGNED on purpose: it must surface in the Unassigned queue for whoever picks it
-      // up, not be silently parked on an agent who has never seen it.
-      assigned_agent_id: null, assigned_agent_name: null,
-      stage: 'intake',
-      issue_description: String(firstText || '').slice(0, 500),
-      due_at: new Date(Date.now() + 7 * 86400000).toISOString(),
-    }),
-  });
-  return ins.ok ? (ins.data?.[0] || null) : null;
-}
-
 // Is this customer mid-journey? A C2P customer may answer with FREE TEXT ("yes confirm") rather
 // than tapping, so the button_id check alone is not enough — and cutting across a live money
 // journey with "please use the support number" is the worst outcome this feature could produce.
@@ -5912,19 +5877,22 @@ async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
   if (!thread.waba_phone_number_id || !ids.includes(String(thread.waba_phone_number_id)))
     return { skipped: 'not_a_redirect_number' };
 
+  // A conversation handed to Ignition stays in Ignition (Afshaan, 2026-08-24 S305): never cut
+  // across the Influencer team's chat with a support redirect, and never raise CS paperwork on it.
+  if (thread.ignition_connect) return { skipped: 'ignition_connect' };
+
   if (m?.button_id) return { skipped: 'button_tap' };                       // C2P / interactive reply
   const txt = String(m?.text || '').trim().toLowerCase();
   if (OPTOUT_WORDS.has(txt)) return { skipped: 'optout_keyword' };
   if (await hasActiveEnrolment(phone, env)) return { skipped: 'mid_journey' };
 
-  // Raise the ticket only once every guard has passed — i.e. only for a genuine "wrong number"
-  // contact. A mid-journey reply is not a support case, and a repeat message inside 24h already
-  // has the ticket the first one created.
-  let ticket = null;
-  if (!ticketId) {
-    ticket = await ensureTicketForThread(thread, m?.text, env);
-    if (ticket?.id) ticketId = ticket.id;
-  }
+  // NO ticket is raised here — Afshaan, 2026-08-24 (S305), REVERSING the S245 "so it enters the
+  // queue" behaviour: a customer reply to a marketing/utility send must END at the redirect below.
+  // We do not want to encourage conversation on these numbers, and the queue cost was measured
+  // before removal: 26–345 auto tickets/day (spiking with every campaign), almost all never
+  // worked — 26/26 same-day open, 292 of 345 still open from the 15 Aug sale. If this phone
+  // already HAS an open ticket, the caller's phone-match (ticketId) still links the redirect row
+  // to it — linking to existing paperwork is fine; minting new paperwork is not.
 
   // Once per thread per 24h — a customer sending three messages gets one redirect, not three.
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -5950,13 +5918,10 @@ async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
       }),
     });
     data = await resp.json().catch(() => ({}));
-    // ticket_id is returned on the failure paths too: the ticket was already created above, so the
-    // caller must still back-link it. Losing that link would leave a ticket whose opening message
-    // is missing — the customer's actual words — which is worse than the failed redirect itself.
-  } catch (e) { return { error: `send_failed:${e.message}`, ticket_id: ticket?.id || null }; }
+  } catch (e) { return { error: `send_failed:${e.message}` }; }
   const msg = data?.data || data?.message || data || {};
   if (!resp.ok || data?.ok === false || msg.status === 'failed')
-    return { error: `send_rejected:${msg.reason || resp.status}`, ticket_id: ticket?.id || null };
+    return { error: `send_rejected:${msg.reason || resp.status}` };
 
   await sb(`/rest/v1/cs_wa_messages`, env, {
     method: 'POST', prefer: 'return=minimal',
@@ -5969,7 +5934,7 @@ async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
       sent_at: new Date().toISOString(),
     }),
   }).catch(() => {});
-  return { sent: true, ticket_id: ticket?.id || null };
+  return { sent: true };
 }
 
 async function handleRelayWaWebhook(request, env) {
@@ -7696,6 +7661,11 @@ async function linkMessagingThread(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, ticket_no } = body;
   if (!thread_id || !ticket_no) return err('thread_id and ticket_no required');
+  // Same Ignition wall as createTicketFromThread (Afshaan, 2026-08-24 S305): a transferred
+  // conversation may not be bound to Pitstop paperwork until it is returned.
+  const thr = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,ignition_connect&limit=1`, env);
+  if (!thr.data?.[0]) return err('Thread not found', 404);
+  if (thr.data[0].ignition_connect) return err('This conversation is with the Influencer team (Ignition). Return it to Pitstop before linking a ticket.', 422);
   const tk = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=id,ticket_no&limit=1`, env);
   const ticket = tk.data?.[0];
   if (!ticket) return err('Ticket not found', 404);
@@ -7862,6 +7832,10 @@ async function createTicketFromThread(body, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
+
+  // A conversation handed to Ignition stays in Ignition (Afshaan, 2026-08-24 S305): no Pitstop
+  // ticket may be raised on it unless it is transferred back first (bridgeReturnConnect).
+  if (thread.ignition_connect) return err('This conversation is with the Influencer team (Ignition). Return it to Pitstop before raising a ticket.', 422);
 
   // Already linked? Return that ticket (no dup).
   const linkRes = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&ticket_id=not.is.null&select=ticket_id&limit=1`, env);
