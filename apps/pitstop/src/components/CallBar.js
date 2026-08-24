@@ -81,11 +81,11 @@ export default function CallBar() {
           setMuted(false); setHeld(false);
         } else if (eventType === 'callEnded') {
           setCall(null); setMuted(false); setHeld(false);
-        } else if (eventType === 'mutetoggle') {
-          setMuted((m) => !m);
-        } else if (eventType === 'holdtoggle') {
-          setHeld((h) => !h);
         }
+        // ⚠️ mutetoggle/holdtoggle echoes are deliberately IGNORED. The SDK fires them on the
+        // COMMAND, not on the audio actually changing (ToggleHold echoes even with no call), so
+        // counting echoes desynced the label from the audio by one — Pruthvi's launch-day
+        // "mute is reversed" bug. Our buttons are the only toggle source; state is set there.
       };
       const handleRegisterEvents = (event) => {
         if (event === 'registered') setPhase('online');
@@ -120,18 +120,24 @@ export default function CallBar() {
 
   const accept = () => { webPhone.current?.AcceptCall(); };
   const hangup = () => { webPhone.current?.HangupCall(); setCall(null); };
-  // ⚠️ The SDK's ToggleMute/ToggleHold synchronously fire the mutetoggle/holdtoggle event
-  // back through the call listener, which is what updates `muted`/`held`. The buttons must
-  // NOT also flip state — that double-flip is exactly the "mute and hold are not working"
-  // bug Pruthvi reported on launch day (state flipped twice, icon never moved). Debounce
-  // mirrors Exotel's own sample app, which carries the same guard for the same reason.
+  // State is COMMAND-driven: flip our flag only when the SDK accepted the toggle (no throw).
+  // Echo events are ignored (see handleCallEvents) — counting both was the double-flip bug,
+  // counting echoes alone was the reversed-mute bug. Debounce mirrors Exotel's sample app.
   const debounced = (fn) => { const n = Date.now(); if (n - lastToggle.current < 350) return; lastToggle.current = n; fn(); };
-  const toggleMute = () => debounced(() => webPhone.current?.ToggleMute());
-  const toggleHold = () => debounced(() => webPhone.current?.ToggleHold());
+  const toggleMute = () => debounced(() => {
+    try { webPhone.current?.ToggleMute(); setMuted((m) => !m); }
+    catch (e) { console.warn('[callbar] mute toggle refused', e?.message || e); }
+  });
+  const toggleHold = () => debounced(() => {
+    try { webPhone.current?.ToggleHold(); setHeld((h) => !h); }
+    catch (e) { console.warn('[callbar] hold toggle refused', e?.message || e); }
+  });
   const dial = () => {
     const n = dialNum.replace(/[^\d+]/g, '');
     if (!/^\+?\d{10,14}$/.test(n)) return;
-    setCall({ state: 'active', number: n, startedAt: Date.now() });
+    // 'dialing', NOT 'active': mute/hold must not render until the 'connected' event —
+    // a toggle before the call object exists is a dead command that desyncs the label.
+    setCall({ state: 'dialing', number: n, startedAt: null });
     setDialOpen(false);
     webPhone.current?.MakeCall(n, (status) => {
       if (status !== 'success') setCall(null);
@@ -152,6 +158,16 @@ export default function CallBar() {
             <Phone size={14} /> Accept
           </button>
           <button onClick={hangup} style={{ ...btn, background: 'var(--danger-fg)', color: '#fff' }} aria-label="Reject">
+            <PhoneOff size={14} />
+          </button>
+        </div>
+      )}
+      {call?.state === 'dialing' && (
+        <div style={row}>
+          <PhoneCall size={15} style={{ color: 'var(--warn-fg)' }} />
+          <span style={num}>{call.number}</span>
+          <span style={{ fontSize: 12, opacity: 0.75 }}>Dialling…</span>
+          <button onClick={hangup} style={{ ...btn, background: 'var(--danger-fg)', color: '#fff' }} aria-label="Cancel">
             <PhoneOff size={14} />
           </button>
         </div>
