@@ -1359,6 +1359,9 @@ async function assignPodiumRole(body, auth, env) {
 const DEPT_ALIAS = { 'd2c': 'D2C / Website' }; // OU leaf → podium department name
 // Guards client-supplied ids before they reach a PostgREST `in.()` filter.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// '' and NULL must be indistinguishable for a Google org unit — see collectChange. Never
+// persist ''; it reads back falsy and permanently breaks move detection for that person.
+function normOu(s) { return (s === undefined || s === null || s === '') ? null : String(s); }
 
 function ouExcluded(ou, excluded) {
   return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
@@ -1412,18 +1415,26 @@ async function getDirectorySyncPreview(url, auth, env) {
   // `google_org_unit` is the baseline, written only when HR resolves a row (update OR
   // dismiss) — so dismissing teaches the sync to stop re-reporting that disagreement.
   function collectChange(emp, gu) {
-    const liveOu = gu.orgUnitPath || '';
-    const prevOu = emp.google_org_unit || null;
-    const ouMoved = !!prevOu && prevOu !== liveOu;
+    // ⚠️ '' and NULL must mean the SAME thing here, or an OU-less Google account poisons the
+    // baseline permanently: we would store '', read it back as falsy (⇒ prevOu null again),
+    // re-baseline it on EVERY sync forever, and — because `ouMoved` needs a truthy prevOu —
+    // that person's real moves would be downgraded to `differs` for good. Normalise both
+    // sides and never store ''. (Same falsy-empty-string class as `Number('') === 0`.)
+    const liveOu = normOu(gu.orgUnitPath);
+    const prevOu = normOu(emp.google_org_unit);
+    // A vanished OU (had one, now none) is not a department move — don't cry wolf.
+    const ouMoved = !!prevOu && !!liveOu && prevOu !== liveOu;
 
     const suggestedDeptId = mapOuToDept(liveOu, deptByName);
     const deptDiffers = !!suggestedDeptId && suggestedDeptId !== emp.department_id;
 
+    // String() because a non-string `value` from the API would throw on .toLowerCase() and
+    // take the whole preview down with a 500.
     const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
     // ⚠️ Never suggest an EXITED manager: `emps` is unfiltered by status, and proposing one
     // would recreate the dangling-manager class (reports pointing at an exited row, floating
     // to the top of the org chart as pseudo-roots) that S306 had to repair by hand.
-    const gMgrRaw = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    const gMgrRaw = rel ? empByEmail.get(String(rel.value).toLowerCase()) : null;
     const gMgr = gMgrRaw && gMgrRaw.status !== 'exited' ? gMgrRaw : null;
     const mgrDiffers = !!gMgr && gMgr.id !== emp.manager_id && gMgr.id !== emp.id;
 
@@ -1433,7 +1444,8 @@ async function getDirectorySyncPreview(url, auth, env) {
       // (prevOu NULL ⇒ ouMoved false ⇒ it lands in the low-confidence `differs` tier).
       // Someone who simply agrees with Google never enters `changed`, so this is the only
       // place their baseline can be written. Also self-heals people added via New Person.
-      if (prevOu !== liveOu) baseline.push({ id: emp.id, org_unit: liveOu });
+      // Only ever baseline a REAL org unit — recording '' is what created the loop above.
+      if (liveOu && prevOu !== liveOu) baseline.push({ id: emp.id, org_unit: liveOu });
       return;
     }
 
@@ -1543,7 +1555,7 @@ async function importDirectoryCandidates(body, auth, env) {
     const patch = { updated_at: nowIso(), synced_from_google_at: nowIso() };
     if ('department_id' in u) patch.department_id = u.department_id || null;
     if ('manager_id' in u) patch.manager_id = u.manager_id || null;
-    if (typeof u.org_unit === 'string') patch.google_org_unit = u.org_unit;
+    if (normOu(u.org_unit) !== null) patch.google_org_unit = normOu(u.org_unit);
     // Never let a sync make someone their own manager (mirrors the EmployeeForm guard).
     if (patch.manager_id && String(patch.manager_id) === String(u.id)) {
       result.errors.push(`update ${u.id}: cannot report to self`); continue;
@@ -1562,9 +1574,10 @@ async function importDirectoryCandidates(body, auth, env) {
   if (baselineIn.length) {
     const byOu = new Map();
     for (const b of baselineIn) {
-      if (!b || !UUID_RE.test(String(b.id || '')) || typeof b.org_unit !== 'string') continue;
-      if (!byOu.has(b.org_unit)) byOu.set(b.org_unit, []);
-      byOu.get(b.org_unit).push(b.id);
+      const ou = b ? normOu(b.org_unit) : null;
+      if (!b || !UUID_RE.test(String(b.id || '')) || ou === null) continue;
+      if (!byOu.has(ou)) byOu.set(ou, []);
+      byOu.get(ou).push(b.id);
     }
     for (const [ou, ids] of byOu) {
       for (let i = 0; i < ids.length; i += 100) {
@@ -1582,7 +1595,7 @@ async function importDirectoryCandidates(body, auth, env) {
   for (const x of dismiss) {
     if (!x || !x.id) { result.errors.push('dismiss: missing employee id'); continue; }
     const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(x.id)}&status=neq.exited`, env,
-      { method: 'PATCH', body: JSON.stringify({ google_org_unit: typeof x.org_unit === 'string' ? x.org_unit : null, updated_at: nowIso() }) });
+      { method: 'PATCH', body: JSON.stringify({ google_org_unit: normOu(x.org_unit), updated_at: nowIso() }) });
     if (r.ok) result.dismissed.push(x.id); else result.errors.push(`dismiss ${x.id}: ${JSON.stringify(r.data)}`);
   }
 
