@@ -1274,7 +1274,7 @@ async function getDirectorySyncPreview(url, auth, env) {
   const [sres, igRes, eRes, dRes] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
-    sb(`/rest/v1/employees?select=id,full_name,work_email,status&limit=5000`, env),
+    sb(`/rest/v1/employees?select=id,full_name,work_email,status,department_id,manager_id,google_org_unit&limit=5000`, env),
     sb(`/rest/v1/departments?select=id,name&limit=500`, env),
   ]);
   const excluded = (sres.ok && sres.data?.[0]?.directory_excluded_ous) || ['/Admin and general'];
@@ -1289,6 +1289,58 @@ async function getDirectorySyncPreview(url, auth, env) {
   const gSuspended = new Set();
   let excludedCount = 0;
   const newCands = [];
+  const changed = [];
+  const deptNameById = new Map(depts.map(d => [d.id, d.name]));
+  const empById = new Map(emps.map(e => [e.id, e]));
+
+  // MOVE detection for people already in Podium (S306).
+  //
+  // ⚠️ The load-bearing distinction: Podium's 21 departments are FINER-GRAINED than the
+  // Google OU tree, so "Google says a different department" is the NORMAL steady state for
+  // a correctly-filed employee, not evidence of a move. Proposing every disagreement would
+  // flatten Podium's granularity onto Google's on the first careless Apply. So two tiers:
+  //   · 'moved'   — the OU actually CHANGED since we last baselined it. A real event.
+  //   · 'differs' — Google disagrees but nothing changed (or we never baselined). Needs a
+  //                 human to say which system is right; defaults to no action in the UI.
+  // `google_org_unit` is the baseline, written only when HR resolves a row (update OR
+  // dismiss) — so dismissing teaches the sync to stop re-reporting that disagreement.
+  function collectChange(emp, gu) {
+    const liveOu = gu.orgUnitPath || '';
+    const prevOu = emp.google_org_unit || null;
+    const ouMoved = !!prevOu && prevOu !== liveOu;
+
+    const suggestedDeptId = mapOuToDept(liveOu, deptByName);
+    const deptDiffers = !!suggestedDeptId && suggestedDeptId !== emp.department_id;
+
+    const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
+    const gMgr = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    const mgrDiffers = !!gMgr && gMgr.id !== emp.manager_id && gMgr.id !== emp.id;
+
+    if (!ouMoved && !deptDiffers && !mgrDiffers) return;
+
+    const reasons = [];
+    if (ouMoved) reasons.push(`Google OU changed: ${prevOu || '—'} → ${liveOu || '—'}`);
+    if (deptDiffers) reasons.push('Google OU maps to a different department');
+    if (mgrDiffers) reasons.push('Google manager differs');
+
+    changed.push({
+      id: emp.id,
+      email: emp.work_email,
+      full_name: emp.full_name,
+      org_unit: liveOu,
+      prev_org_unit: prevOu,
+      tier: ouMoved ? 'moved' : 'differs',
+      reasons,
+      dept_current_id: emp.department_id || null,
+      dept_current_name: emp.department_id ? (deptNameById.get(emp.department_id) || '—') : null,
+      dept_suggested_id: deptDiffers ? suggestedDeptId : null,
+      dept_suggested_name: deptDiffers ? (deptNameById.get(suggestedDeptId) || null) : null,
+      mgr_current_id: emp.manager_id || null,
+      mgr_current_name: emp.manager_id ? (empById.get(emp.manager_id)?.full_name || '—') : null,
+      mgr_suggested_id: mgrDiffers ? gMgr.id : null,
+      mgr_suggested_name: mgrDiffers ? gMgr.full_name : null,
+    });
+  }
   for (const gu of gusers) {
     const email = (gu.primaryEmail || '').toLowerCase();
     if (!email) continue;
@@ -1296,7 +1348,11 @@ async function getDirectorySyncPreview(url, auth, env) {
     if (gu.suspended) gSuspended.add(email);
     if (ouExcluded(gu.orgUnitPath, excluded)) { excludedCount++; continue; }
     if (ignored.has(email)) continue;
-    if (empByEmail.has(email)) continue;     // already an employee
+    const known = empByEmail.get(email);
+    if (known) {                             // already an employee → check for a MOVE
+      if (known.status !== 'exited') collectChange(known, gu);
+      continue;
+    }
     if (gu.suspended) continue;              // suspended & not in Podium → not a new active hire
     const deptId = mapOuToDept(gu.orgUnitPath, deptByName);
     const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
@@ -1322,13 +1378,21 @@ async function getDirectorySyncPreview(url, auth, env) {
     reason: gSuspended.has(e.work_email.toLowerCase()) ? 'suspended in Google' : 'no Google account',
   }));
 
+  const tierRank = { moved: 0, differs: 1 };
+  changed.sort((a, b) => (tierRank[a.tier] - tierRank[b.tier]) || a.full_name.localeCompare(b.full_name));
+
   return ok({
     new_candidates: newCands.sort((a, b) => a.full_name.localeCompare(b.full_name)),
     departed,
+    changed,
     departments: depts,
     managers: emps.filter(e => e.status === 'active').map(e => ({ id: e.id, full_name: e.full_name }))
                   .sort((a, b) => a.full_name.localeCompare(b.full_name)),
-    counts: { google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length },
+    counts: {
+      google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length,
+      moved: changed.filter(c => c.tier === 'moved').length,
+      differs: changed.filter(c => c.tier === 'differs').length,
+    },
   });
 }
 
@@ -1339,8 +1403,39 @@ async function importDirectoryCandidates(body, auth, env) {
   const create = Array.isArray(d.create) ? d.create : []; // [{email, department_id, manager_id, job_title}]
   const exit = Array.isArray(d.exit) ? d.exit : [];        // [email,...]
   const ignore = Array.isArray(d.ignore) ? d.ignore : [];  // [email,...]
+  // S306 move-review. `update` = HR-confirmed department/manager changes for people ALREADY
+  // in Podium; `dismiss` = "Podium is right, stop reporting this" — writes no org data, only
+  // baselines the OU. Both carry `org_unit` so the next preview can tell a real move from
+  // Google's coarser granularity. Never auto-applied: a row reaches here only because a human
+  // picked it in the modal (RULE-PODIUM-007, amended).
+  const update = Array.isArray(d.update) ? d.update : [];  // [{id, department_id, manager_id, org_unit}]
+  const dismiss = Array.isArray(d.dismiss) ? d.dismiss : []; // [{id, org_unit}]
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
-  const result = { created: [], exited: [], ignored: [], errors: [] };
+  if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
+  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], errors: [] };
+
+  for (const u of update) {
+    if (!u || !u.id) { result.errors.push('update: missing employee id'); continue; }
+    const patch = { updated_at: nowIso(), synced_from_google_at: nowIso() };
+    if ('department_id' in u) patch.department_id = u.department_id || null;
+    if ('manager_id' in u) patch.manager_id = u.manager_id || null;
+    if (typeof u.org_unit === 'string') patch.google_org_unit = u.org_unit;
+    // Never let a sync make someone their own manager (mirrors the EmployeeForm guard).
+    if (patch.manager_id && String(patch.manager_id) === String(u.id)) {
+      result.errors.push(`update ${u.id}: cannot report to self`); continue;
+    }
+    const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(u.id)}&status=neq.exited`, env,
+      { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch) });
+    if (r.ok && r.data?.length) result.updated.push({ id: u.id, full_name: r.data[0].full_name });
+    else result.errors.push(`update ${u.id}: ${JSON.stringify(r.data)}`);
+  }
+
+  for (const x of dismiss) {
+    if (!x || !x.id) { result.errors.push('dismiss: missing employee id'); continue; }
+    const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(x.id)}&status=neq.exited`, env,
+      { method: 'PATCH', body: JSON.stringify({ google_org_unit: typeof x.org_unit === 'string' ? x.org_unit : null, updated_at: nowIso() }) });
+    if (r.ok) result.dismissed.push(x.id); else result.errors.push(`dismiss ${x.id}: ${JSON.stringify(r.data)}`);
+  }
 
   if (ignore.length) {
     const rows = ignore.map(em => ({ email: String(em).toLowerCase(), ignored_by: auth.userId }));
@@ -1380,6 +1475,7 @@ async function importDirectoryCandidates(body, auth, env) {
         status: 'active',
         auth_user_id: authMap[em] || null,
         google_user_id: gu.id || null,
+        google_org_unit: gu.orgUnitPath || null, // baseline the OU at creation → future moves are detectable
         synced_from_google_at: nowIso(),
         created_by: auth.userId,
       };

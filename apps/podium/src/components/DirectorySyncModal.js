@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, RefreshCw, UserPlus, UserMinus, Ban } from 'lucide-react';
+import { X, RefreshCw, UserPlus, UserMinus, Ban, ArrowLeftRight, Check } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 
 // On-demand Google Directory sync — review-and-confirm. Proposes new joiners +
@@ -13,6 +13,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
   const [data, setData] = useState(null);
   const [rows, setRows] = useState([]);          // new candidates (editable)
   const [departed, setDeparted] = useState([]);  // {…, exit}
+  const [moves, setMoves] = useState([]);        // existing people whose Google signal changed
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
@@ -26,6 +27,15 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
         manager_id: c.suggested_manager_id || '',
       })));
       setDeparted((r.departed || []).map(d => ({ ...d, exit: false })));
+      // A 'moved' row (Google's OU actually changed) defaults to Update with Google's
+      // suggestion pre-filled. A 'differs' row defaults to NO action — Podium is finer
+      // grained than Google, so a standing disagreement is usually Podium being right.
+      setMoves((r.changed || []).map(c => ({
+        ...c,
+        action: c.tier === 'moved' ? 'update' : 'none',
+        department_id: c.dept_suggested_id || c.dept_current_id || '',
+        manager_id: c.mgr_suggested_id || c.mgr_current_id || '',
+      })));
     } catch (e) {
       setError(e.message || 'Sync failed');
     } finally { setLoading(false); }
@@ -35,18 +45,26 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
   function setRow(email, patch) {
     setRows(prev => prev.map(r => (r.email === email ? { ...r, ...patch } : r)));
   }
+  function setMove(id, patch) {
+    setMoves(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
+  }
 
   async function submit() {
     const create = rows.filter(r => r.action === 'import')
       .map(r => ({ email: r.email, department_id: r.department_id || null, manager_id: r.manager_id || null, job_title: r.job_title || null }));
     const ignore = rows.filter(r => r.action === 'ignore').map(r => r.email);
     const exit = departed.filter(d => d.exit).map(d => d.work_email);
-    if (!create.length && !ignore.length && !exit.length) { showToast('Nothing selected', 'error'); return; }
+    const update = moves.filter(m => m.action === 'update')
+      .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
+    const dismiss = moves.filter(m => m.action === 'dismiss').map(m => ({ id: m.id, org_unit: m.org_unit }));
+    if (!create.length && !ignore.length && !exit.length && !update.length && !dismiss.length) { showToast('Nothing selected', 'error'); return; }
     if (create.length > 20) { showToast('Import at most 20 at a time', 'error'); return; }
     setSubmitting(true);
     try {
-      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, exit, ignore } }, session);
-      const msg = `${res.created?.length || 0} added · ${res.exited?.length || 0} exited · ${res.ignored?.length || 0} ignored`;
+      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, exit, ignore, update, dismiss } }, session);
+      const parts = [`${res.created?.length || 0} added`, `${res.exited?.length || 0} exited`, `${res.ignored?.length || 0} ignored`];
+      if (update.length || dismiss.length) parts.push(`${res.updated?.length || 0} updated`, `${res.dismissed?.length || 0} dismissed`);
+      const msg = parts.join(' · ');
       showToast(res.errors?.length ? `${msg} · ${res.errors.length} error(s)` : msg, res.errors?.length ? 'error' : 'success');
       onDone && onDone();
       onClose();
@@ -79,11 +97,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
             <>
               <div style={summary}>
                 <b>{c?.google_total ?? 0}</b> in Google · <b>{c?.excluded_ou ?? 0}</b> shared (skipped) ·
-                <b style={{ color: 'var(--podium-accent)' }}> {c?.new ?? 0}</b> new · <b>{c?.departed ?? 0}</b> departed
+                <b style={{ color: 'var(--podium-accent)' }}> {c?.new ?? 0}</b> new · <b>{c?.departed ?? 0}</b> departed ·
+                <b style={{ color: 'var(--podium-accent)' }}> {c?.moved ?? 0}</b> moved · <b>{c?.differs ?? 0}</b> differing
               </div>
 
-              {rows.length === 0 && departed.length === 0 && (
-                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium. Nothing to sync.</div>
+              {rows.length === 0 && departed.length === 0 && moves.length === 0 && (
+                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium, in the same department, under the same manager. Nothing to sync.</div>
               )}
 
               {rows.length > 0 && (
@@ -119,6 +138,60 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                               options={(data.managers || []).map(m => ({ value: m.id, label: m.full_name }))} />
                           </td>
                           <td style={{ ...td, fontSize: 11 }}>{r.has_login ? <span style={{ color: 'var(--state-success-fg)' }}>linked</span> : <span style={{ color: 'var(--text-3)' }}>none</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
+              {moves.length > 0 && (
+                <>
+                  <div style={{ ...sectionTitle, marginTop: 16 }}><ArrowLeftRight size={13} /> Moved / differing ({moves.length})</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.5 }}>
+                    <b style={{ color: 'var(--podium-accent)' }}>Moved</b> = this person’s Google org unit actually changed since the last sync — a real move, pre-filled and set to update.
+                    <b> Differing</b> = Google simply disagrees with Podium; Podium’s departments are finer-grained than Google’s, so this is usually Podium being right. Those default to no action —
+                    set the correct department/manager yourself, or dismiss to stop it being reported again.
+                  </div>
+                  <table style={table}>
+                    <thead><tr>
+                      <th style={th}>Action</th><th style={th}>Person</th><th style={th}>What changed</th>
+                      <th style={th}>Department</th><th style={th}>Manager</th>
+                    </tr></thead>
+                    <tbody>
+                      {moves.map(m => (
+                        <tr key={m.id} style={{ opacity: m.action === 'dismiss' ? 0.45 : 1 }}>
+                          <td style={td}>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button title="Apply the department / manager shown" style={pill(m.action === 'update', 'var(--podium-accent)', '#1f1f1f')} onClick={() => setMove(m.id, { action: 'update' })}><Check size={12} /></button>
+                              <button title="Leave Podium as it is (and stop reporting this)" style={pill(m.action === 'dismiss', 'var(--surface-3)', 'var(--text-2)')} onClick={() => setMove(m.id, { action: 'dismiss' })}><Ban size={12} /></button>
+                            </div>
+                            {m.action === 'none' && <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 3 }}>no action</div>}
+                          </td>
+                          <td style={td}>
+                            <div style={{ fontWeight: 600 }}>{m.full_name}</div>
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{m.email}</div>
+                          </td>
+                          <td style={{ ...td, fontSize: 11, color: 'var(--text-3)', maxWidth: 240 }}>
+                            <span style={{
+                              display: 'inline-block', marginBottom: 3, padding: '1px 6px', borderRadius: 3, fontSize: 9.5,
+                              fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+                              background: m.tier === 'moved' ? 'var(--podium-accent)' : 'var(--surface-3)',
+                              color: m.tier === 'moved' ? '#1f1f1f' : 'var(--text-2)',
+                            }}>{m.tier === 'moved' ? 'Moved' : 'Differs'}</span>
+                            {(m.reasons || []).map((x, i) => <div key={i}>{x}</div>)}
+                            <div style={{ marginTop: 3 }}>Now in Podium: {m.dept_current_name || '—'} · {m.mgr_current_name || 'no manager'}</div>
+                          </td>
+                          <td style={td}>
+                            <Combobox value={m.department_id || ''} disabled={m.action === 'dismiss'} onChange={v => setMove(m.id, { department_id: v, action: m.action === 'none' ? 'update' : m.action })}
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
+                              options={(data.departments || []).map(d => ({ value: d.id, label: d.name }))} />
+                          </td>
+                          <td style={td}>
+                            <Combobox value={m.manager_id || ''} disabled={m.action === 'dismiss'} onChange={v => setMove(m.id, { manager_id: v, action: m.action === 'none' ? 'update' : m.action })}
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
+                              options={(data.managers || []).filter(x => x.id !== m.id).map(x => ({ value: x.id, label: x.full_name }))} />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
