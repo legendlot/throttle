@@ -67,6 +67,11 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       const parts = [`${res.created?.length || 0} added`, `${res.exited?.length || 0} exited`, `${res.ignored?.length || 0} ignored`];
       if (update.length || dismiss.length) parts.push(`${res.updated?.length || 0} updated`, `${res.dismissed?.length || 0} dismissed`);
       if (res.baselined) parts.push(`${res.baselined} recorded`);
+      // An exit silently moves reporting lines, so say so rather than let it pass unseen.
+      const moved = (res.reassigned || []).reduce((n, x) => n + (x.people?.length || 0), 0);
+      if (moved) parts.push(`${moved} report${moved === 1 ? '' : 's'} reassigned`);
+      const needs = (res.reassign_needs_attention || []).reduce((n, x) => n + (x.people?.length || 0), 0);
+      if (needs) parts.push(`${needs} need a manager`);
       const msg = parts.join(' · ');
       showToast(res.errors?.length ? `${msg} · ${res.errors.length} error(s)` : msg, res.errors?.length ? 'error' : 'success');
       onDone && onDone();

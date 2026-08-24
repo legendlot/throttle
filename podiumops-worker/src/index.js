@@ -663,6 +663,105 @@ async function createEmployee(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+// ── Auto-reassign reports when a manager exits (S306) ────────────────────────
+// Exiting someone used to PATCH only that person, leaving every active report pointing at
+// an exited row. Those reports then float to the TOP of the org chart as pseudo-roots, and
+// the stale line keeps governing access (the manager chain IS the visibility tier here).
+// It happened twice in one day — Varun Nandakumar (3 reports) and Jyothi S (2).
+//
+// Reports escalate to the exiting person's nearest ACTIVE ancestor, which is the same call a
+// human makes by hand. Idempotent by design: re-running an exit re-reconciles, so it also
+// cleans up stragglers left by exits that predate this code.
+async function reassignReportsOnExit(exitingId, auth, env) {
+  const out = { escalated: [], unassigned: [], dotted_cleared: 0, to_manager: null, errors: [] };
+  const r = await sb(`/rest/v1/employees?select=id,full_name,status,manager_id,secondary_manager_id&limit=5000`, env);
+  if (!r.ok) { out.errors.push('reassign: could not load employees'); return out; }
+  const all = r.data || [];
+  const byId = new Map(all.map(e => [e.id, e]));
+  const exiting = byId.get(exitingId);
+  if (!exiting) { out.errors.push('reassign: exiting employee not found'); return out; }
+
+  const reports = all.filter(e => e.manager_id === exitingId && e.status !== 'exited');
+  const dotted = all.filter(e => e.secondary_manager_id === exitingId && e.status !== 'exited');
+  if (!reports.length && !dotted.length) return out;
+
+  // ⚠️ Walk PAST chained exits. Escalating to a manager who has also left would just move the
+  // dangling line up a level and silently recreate the bug. Cycle-guarded by a seen-set.
+  let heir = null;
+  const seen = new Set([exitingId]);
+  let cursor = exiting.manager_id;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    const cand = byId.get(cursor);
+    if (!cand) break;
+    if (cand.status !== 'exited') { heir = cand; break; }
+    cursor = cand.manager_id;
+  }
+
+  if (reports.length) {
+    // A report can never inherit itself (only reachable through a pre-existing cycle).
+    const movable = reports.filter(e => !heir || e.id !== heir.id);
+    const stuck = reports.filter(e => heir && e.id === heir.id);
+    for (const e of stuck) out.unassigned.push({ id: e.id, full_name: e.full_name, why: 'would report to self' });
+
+    if (!heir) {
+      // The exiting person was a root (or every ancestor has left). There is no defensible
+      // automatic answer, so the line is LEFT INTACT and surfaced for a human rather than
+      // nulled — silently orphaning people is worse than a stale line someone can see.
+      for (const e of movable) out.unassigned.push({ id: e.id, full_name: e.full_name, why: 'no active manager above the exiting employee' });
+    } else if (movable.length) {
+      const ids = movable.map(e => e.id).filter(id => UUID_RE.test(id));
+      const pr = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id`, env,
+        { method: 'PATCH', body: JSON.stringify({ manager_id: heir.id, updated_at: nowIso() }) });
+      if (!pr.ok) out.errors.push(`reassign: ${JSON.stringify(pr.data)}`);
+      else {
+        out.to_manager = { id: heir.id, full_name: heir.full_name };
+        out.escalated = movable.map(e => ({ id: e.id, full_name: e.full_name }));
+        await sb(`/rest/v1/manager_reassignments`, env, {
+          method: 'POST', prefer: 'return=minimal',
+          body: JSON.stringify(movable.map(e => ({
+            exited_employee_id: exitingId, report_employee_id: e.id,
+            from_manager_id: exitingId, to_manager_id: heir.id,
+            line: 'solid', reason: 'escalated', created_by: auth?.userId || null,
+          }))),
+        });
+      }
+    }
+    if (out.unassigned.length) {
+      await sb(`/rest/v1/manager_reassignments`, env, {
+        method: 'POST', prefer: 'return=minimal',
+        body: JSON.stringify(out.unassigned.map(e => ({
+          exited_employee_id: exitingId, report_employee_id: e.id,
+          from_manager_id: exitingId, to_manager_id: null,
+          line: 'solid', reason: 'left_unassigned', created_by: auth?.userId || null,
+        }))),
+      });
+    }
+  }
+
+  // Dotted lines confer NO access and are directory-only, so escalating one would invent a
+  // relationship nobody stated. A dangling dotted line to someone who has left is just noise
+  // — clear it, and record that we did.
+  if (dotted.length) {
+    const ids = dotted.map(e => e.id).filter(id => UUID_RE.test(id));
+    const dr = await sb(`/rest/v1/employees?id=in.(${ids.join(',')})&status=neq.exited&select=id`, env,
+      { method: 'PATCH', body: JSON.stringify({ secondary_manager_id: null, updated_at: nowIso() }) });
+    if (!dr.ok) out.errors.push(`reassign dotted: ${JSON.stringify(dr.data)}`);
+    else {
+      out.dotted_cleared = Array.isArray(dr.data) ? dr.data.length : 0;
+      await sb(`/rest/v1/manager_reassignments`, env, {
+        method: 'POST', prefer: 'return=minimal',
+        body: JSON.stringify(dotted.map(e => ({
+          exited_employee_id: exitingId, report_employee_id: e.id,
+          from_manager_id: exitingId, to_manager_id: null,
+          line: 'dotted', reason: 'cleared_dotted', created_by: auth?.userId || null,
+        }))),
+      });
+    }
+  }
+  return out;
+}
+
 async function updateEmployee(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.employee_id) return err('employee_id required', 400);
@@ -675,6 +774,11 @@ async function updateEmployee(body, auth, env) {
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // Exiting someone must never leave their reports pointing at an exited row.
+  if (patch.status === 'exited') {
+    const reassigned = await reassignReportsOnExit(body.employee_id, auth, env);
+    return ok({ ...(r.data?.[0] || {}), reassigned });
+  }
   return ok(r.data?.[0]);
 }
 
@@ -1432,7 +1536,7 @@ async function importDirectoryCandidates(body, auth, env) {
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
   if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
   if (baselineIn.length > 2000) return err('baseline list too large', 400);
-  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], baselined: 0, errors: [] };
+  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], baselined: 0, reassigned: [], reassign_needs_attention: [], errors: [] };
 
   for (const u of update) {
     if (!u || !u.id) { result.errors.push('update: missing employee id'); continue; }
@@ -1492,7 +1596,19 @@ async function importDirectoryCandidates(body, auth, env) {
   for (const em of exit) {
     const r = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(em)}&status=eq.active`, env,
       { method: 'PATCH', body: JSON.stringify({ status: 'exited', date_exited: nowIso().slice(0, 10), updated_at: nowIso() }) });
-    if (r.ok) result.exited.push(em); else result.errors.push(`exit ${em}: ${JSON.stringify(r.data)}`);
+    if (r.ok) {
+      result.exited.push(em);
+      // Same guarantee as the manual exit path — reports must not be left dangling.
+      // `status=eq.active` above means data[] is empty when the person was already exited,
+      // so this only fires on a real transition.
+      const who = r.data?.[0]?.id;
+      if (who) {
+        const re = await reassignReportsOnExit(who, auth, env);
+        if (re.escalated.length) result.reassigned.push({ email: em, to: re.to_manager?.full_name, people: re.escalated.map(x => x.full_name) });
+        if (re.unassigned.length) result.reassign_needs_attention.push({ email: em, people: re.unassigned });
+        result.errors.push(...re.errors);
+      }
+    } else result.errors.push(`exit ${em}: ${JSON.stringify(r.data)}`);
   }
 
   if (create.length) {
