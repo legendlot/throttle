@@ -5594,7 +5594,11 @@ export default {
             return ok({ drr_window_days: days });
           }
           case 'setProductCost': {   // S189 — upsert a per-SKU standard COGS (effective-dated)
-            if (!canAdmin(P)) return err('No permission', 403);
+            // Super-admin, matching getProductCosts. The S307 gate moved the COGS *read* to super
+            // admin and left this write on canAdmin — which would have let an admin-without-super-admin
+            // CHANGE the input to Gross Margin on a P&L they are not allowed to see. No such user
+            // exists today, which is exactly why it survived review the first time.
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const code = String(d.product_code || '').trim();
             const cost = Number(d.cogs_inr);
             if (!code) return err('product_code required');

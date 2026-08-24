@@ -121,7 +121,10 @@ function PnlTable({ cols, months, lines, channelKey, editable, autoLines, sessio
 export default function PnlView({ scope }) {
   const router = useRouter();
   const { session, perms } = useAuth();
-  const isAdmin = !!(perms && perms.salesops_admin);
+  // Super-admin, not admin: every P&L handler behind this view (getPnl, getPnlManual,
+  // setPnlManual) is canSuperAdmin since S307. Deriving edit rights from salesops_admin would
+  // render editable Brand/SG&A cells that 403 on save for an admin-without-super-admin.
+  const isAdmin = !!(perms && perms.salesops_super_admin);
   const isOverall = scope === 'overall';
   const label = isOverall ? 'Company P&L' : (FAMILIES[scope]?.label || scope);
   const title = isOverall ? 'Company P&L' : `${FAMILIES[scope]?.label || scope} P&L`;

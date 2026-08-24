@@ -13,7 +13,8 @@ const rs = n => Math.round(Number(n) || 0).toLocaleString('en-IN');
 export default function ProductPnlPage() {
   const { session, perms } = useAuth();
   const router = useRouter();
-  const isAdmin = !!(perms && perms.salesops_admin);
+  // Super-admin: getProductCosts / setProductCost are both canSuperAdmin since S307.
+  const isAdmin = !!(perms && perms.salesops_super_admin);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [prod, setProd] = useState(null);
