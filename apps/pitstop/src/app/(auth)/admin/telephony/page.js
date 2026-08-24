@@ -35,6 +35,18 @@ export default function TelephonyAdminPage() {
   }
   useEffect(() => { if (session) load(); /* eslint-disable-line */ }, [session]);
 
+  // Phase 6 (S305): one idempotent button — creates the Exotel integrations app if
+  // missing, then upserts a usermapping per active SIP agent. Per-user results are
+  // shown verbatim: a bounced mapping is a roster data fix, not a retry.
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupResult, setSetupResult] = useState(null);
+  async function runSoftphoneSetup() {
+    setSetupBusy(true); setSetupResult(null);
+    try { setSetupResult(await csopsPost('softphoneSetup', {}, session)); }
+    catch (e) { setSetupResult({ error: String(e.message || e) }); }
+    finally { setSetupBusy(false); }
+  }
+
   if (!perms?.cs_ticket_admin) {
     return <EmptyState icon="🔒" message="Admin permission required to manage telephony." />;
   }
@@ -61,6 +73,39 @@ export default function TelephonyAdminPage() {
       </header>
 
       {error && <div style={errBox}>{error}</div>}
+
+      <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, padding: '12px 14px', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 14 }}>Browser softphone</strong>
+          <span style={{ color: 'var(--t3)', fontSize: 13, flex: 1, minWidth: 200 }}>
+            Registers each SIP agent with Exotel so calls ring inside Pitstop. Safe to re-run.
+          </span>
+          <button onClick={runSoftphoneSetup} disabled={setupBusy}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 12px',
+              fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid var(--border-1)',
+              background: 'var(--accent)', color: '#fff', cursor: setupBusy ? 'wait' : 'pointer' }}>
+            {setupBusy ? 'Setting up…' : 'Run softphone setup'}
+          </button>
+        </div>
+        {setupResult && (
+          <div style={{ marginTop: 10, fontSize: 13 }}>
+            {setupResult.error
+              ? <span style={{ color: 'var(--danger-fg)' }}>{setupResult.error}</span>
+              : (
+                <>
+                  <div>App: <code style={mono}>{setupResult.app}</code>{setupResult.app_id ? <> · <code style={mono}>{setupResult.app_id}</code></> : null}</div>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {(setupResult.mappings || []).map((m) => (
+                      <li key={m.email || m.user_id} style={{ color: m.ok ? 'var(--ok-fg)' : 'var(--danger-fg)' }}>
+                        {m.email || m.user_id} — {m.ok ? (m.existing ? 'already mapped' : 'mapped') : m.error}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+          </div>
+        )}
+      </div>
 
       <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

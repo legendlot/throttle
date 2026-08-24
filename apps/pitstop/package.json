@@ -18,6 +18,7 @@
     "@throttle/auth": "*",
     "@throttle/db": "*",
     "@throttle/ui": "*",
-    "@throttle/domain": "*"
+    "@throttle/domain": "*",
+    "@exotel-npm-dev/exotel-ip-calling-crm-websdk": "^1.2.2"
   }
 }

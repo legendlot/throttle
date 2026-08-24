@@ -290,4 +290,6 @@ button { font-family: inherit; }
 
   /* a live-call pop must not sit on top of the tab bar (S304 hostile review) */
   .pt-callpop { bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
+  /* same rule for the softphone bar (Phase 6) */
+  .pt-callbar { bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
 }

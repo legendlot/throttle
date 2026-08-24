@@ -10,6 +10,7 @@ import { routeMatch, NAV_PRIMARY, NAV_SETUP, NAV_MANUAL, filterNavByPerms } from
 import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
 import PresenceToggle from '../../components/PresenceToggle.js';
 import CallPop from '../../components/CallPop.js';
+import CallBar from '../../components/CallBar.js';
 
 // Routes that own their own gutters and their own scrolling. The inbox runs two independent
 // scroll areas (thread list + message list) edge to edge, so `main` must neither pad it nor
@@ -140,6 +141,8 @@ function AuthLayoutInner({ children }) {
           anywhere in Pitstop, and a page-mounted pop would unmount on navigation
           mid-call. Renders nothing unless the agent has a live call. */}
       <CallPop />
+      {/* Phase 6 softphone (S305) — audio device; CallPop stays as the context card. */}
+      <CallBar />
 
       {/* ── mobile app chrome (≤767px — CSS decides; desktop never shows it) ── */}
       <MobileTabBar perms={perms || {}} badges={badges} pathname={pathname} moreOpen={sheetOpen}

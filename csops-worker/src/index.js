@@ -24,6 +24,7 @@ import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
 import { makeCallContext } from './telephony/call-context.js';
+import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
 
@@ -789,6 +790,11 @@ async function handleGet(action, params, auth, env) {
     case 'getCallRecording': return getCallRecording(params, auth, env);
     case 'getCallContext':   return getCallContext(params, auth, env);
     case 'getTelephonyAgents': return getTelephonyAgents(params, auth, env);
+    case 'getSoftphoneToken': {
+      // Any authed CS user may ask; the handler itself 404s unless they are an
+      // active SIP agent, which is what gates the SDK download in the browser.
+      return makeSoftphone({ env, sb, ok, err }).getSoftphoneToken(params, auth);
+    }
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -821,6 +827,10 @@ async function handlePost(action, body, auth, env, request) {
     case 'escalateTicket':   return escalateTicket(body, auth, env);
     case 'closeTicket':      return closeTicket(body, auth, env);
     case 'placeCall':        return placeCall(body, auth, env);
+    case 'softphoneSetup': {
+      const g = require('cs_ticket_admin', auth); if (g) return g;
+      return makeSoftphone({ env, sb, ok, err }).softphoneSetup(body, auth);
+    }
     case 'setTelephonyAgent': return setTelephonyAgent(body, auth, env);
     case 'runExotelBackfill': return runExotelBackfill(body, auth, env);
     case 'createMyopAccount': return createMyopAccount(body, auth, env);
