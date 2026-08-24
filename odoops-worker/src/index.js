@@ -4136,6 +4136,17 @@ async function sendStockAlerts(env) {
 // this drains sales.connector_alert_outbox to Slack. Same convention as sendStockAlerts: an Incoming
 // Webhook URL in a secret (SLACK_WEBHOOK_OPS), POST { text }, FAIL-OPEN — no webhook ⇒ hold pending,
 // never mark sent, so the feature is inert until the secret exists and nothing posts by accident.
+// Indian digit grouping (3,65,753) written out rather than via toLocaleString('en-IN'), so the
+// output cannot depend on how much ICU data the Workers runtime happens to ship. These are
+// lakh-scale figures in a Slack message a human has to judge at a glance.
+const fmtInr = v => {
+  const n = Math.round(Number(v) || 0);
+  const s = String(Math.abs(n));
+  const last3 = s.slice(-3), rest = s.slice(0, -3);
+  const grouped = rest ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + last3 : last3;
+  return (n < 0 ? '-' : '') + grouped;
+};
+
 function connectorAlertText(rows) {
   const nameOf = r => (r.detail && r.detail.channel_name) || r.adapter_kind || 'unknown';
   const down = rows.filter(r => r.alert_kind === 'stale');
@@ -4155,6 +4166,23 @@ function connectorAlertText(rows) {
       const d = r.detail || {};
       return `   • *${nameOf(r)}* — no sales in ${d.days_silent} days (normally ~every ${d.typical_gap_days}d; last sale ${d.last_sale})`;
     }).join('\n'));
+  }
+  // Unmapped revenue. Worth spelling out the consequence in the message: "unmapped SKU" reads like a
+  // tidy-up chore, while "missing from every Odo number" is what actually makes someone act — the
+  // S307 Cred SKU (₹3.67L) was found by accident, not because anyone was watching a queue count.
+  const unmapped = rows.filter(r => r.alert_kind === 'unmapped');
+  if (unmapped.length) {
+    parts.push(`:red_circle: *Unmapped SKUs — revenue missing from Odo* (${unmapped.length})`);
+    parts.push(unmapped.map(r => {
+      const d = r.detail || {};
+      const top = Array.isArray(d.top_skus) ? d.top_skus : [];
+      const head = `   • *${nameOf(r)}* — ₹${fmtInr(d.unmapped_gross)} across ${d.sku_count} SKU${d.sku_count === 1 ? '' : 's'}`
+                 + ` (${d.unmapped_units} units, last ${d.last_date}) is NOT in sales_fact`;
+      const list = top.map(t => `        – \`${t.sku}\` ₹${fmtInr(t.gross)} (${t.units}u)`).join('\n');
+      const more = d.sku_count > top.length ? `\n        – …and ${d.sku_count - top.length} more` : '';
+      return list ? `${head}\n${list}${more}` : head;
+    }).join('\n'));
+    parts.push('   _Map them in Odo → Mapping; resolving backfills the history automatically._');
   }
   return parts.join('\n');
 }
