@@ -1313,7 +1313,11 @@ async function getDirectorySyncPreview(url, auth, env) {
     const deptDiffers = !!suggestedDeptId && suggestedDeptId !== emp.department_id;
 
     const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
-    const gMgr = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    // ⚠️ Never suggest an EXITED manager: `emps` is unfiltered by status, and proposing one
+    // would recreate the dangling-manager class (reports pointing at an exited row, floating
+    // to the top of the org chart as pseudo-roots) that S306 had to repair by hand.
+    const gMgrRaw = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    const gMgr = gMgrRaw && gMgrRaw.status !== 'exited' ? gMgrRaw : null;
     const mgrDiffers = !!gMgr && gMgr.id !== emp.manager_id && gMgr.id !== emp.id;
 
     if (!ouMoved && !deptDiffers && !mgrDiffers) return;
