@@ -232,7 +232,7 @@ export default function ImageLibrary({ session, onPick, onPickMany, onClose, mul
             pickerOpen would stay true and the backdrop would stop closing the modal at all. */}
         <input ref={fileRef} type="file" accept={ACCEPT_MIME} multiple style={{ display: 'none' }}
           onCancel={() => setPickerOpen(false)}
-          onChange={(e) => { const f = e.target.files; e.target.value = ''; setPickerOpen(false); handleFiles(f); }} />
+          onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; setPickerOpen(false); handleFiles(f); }} />
       </div>
     </div>
   );

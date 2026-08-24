@@ -176,7 +176,7 @@ export default function NewGatePassPage() {
         <div style={field}>
           <label style={lbl}>Documents (invoices / photos — optional, multiple)</label>
           <input type="file" multiple
-            onChange={(e) => { setFiles((prev) => mergeFiles(prev, e.target.files)); e.target.value = ''; }}
+            onChange={(e) => { const picked = Array.from(e.target.files || []); setFiles((prev) => mergeFiles(prev, picked)); e.target.value = ''; }}
             style={{ fontSize: 12, color: 'var(--t2)' }} />
           <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
             Pick more than one at a time, or add them one by one — each choice is added to the list below.

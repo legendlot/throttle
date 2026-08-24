@@ -321,7 +321,7 @@ export default function LibraryPage() {
       </Panel>
 
       <input ref={fileRef} type="file" accept={ACCEPT_MIME} multiple style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files; e.target.value = ''; handleFiles(f); }} />
+        onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; handleFiles(f); }} />
     </div>
   );
 }
