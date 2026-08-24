@@ -14,6 +14,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
   const [rows, setRows] = useState([]);          // new candidates (editable)
   const [departed, setDeparted] = useState([]);  // {…, exit}
   const [moves, setMoves] = useState([]);        // existing people whose Google signal changed
+  const [baseline, setBaseline] = useState([]);  // nothing to review — just record the OU we saw
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
@@ -30,6 +31,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
       // A 'moved' row (Google's OU actually changed) defaults to Update with Google's
       // suggestion pre-filled. A 'differs' row defaults to NO action — Podium is finer
       // grained than Google, so a standing disagreement is usually Podium being right.
+      setBaseline(r.baseline || []);
       setMoves((r.changed || []).map(c => ({
         ...c,
         action: c.tier === 'moved' ? 'update' : 'none',
@@ -57,13 +59,14 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     const update = moves.filter(m => m.action === 'update')
       .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
     const dismiss = moves.filter(m => m.action === 'dismiss').map(m => ({ id: m.id, org_unit: m.org_unit }));
-    if (!create.length && !ignore.length && !exit.length && !update.length && !dismiss.length) { showToast('Nothing selected', 'error'); return; }
+    if (!create.length && !ignore.length && !exit.length && !update.length && !dismiss.length && !baseline.length) { showToast('Nothing selected', 'error'); return; }
     if (create.length > 20) { showToast('Import at most 20 at a time', 'error'); return; }
     setSubmitting(true);
     try {
-      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, exit, ignore, update, dismiss } }, session);
+      const res = await podiumopsPost('importDirectoryCandidates', { data: { create, exit, ignore, update, dismiss, baseline } }, session);
       const parts = [`${res.created?.length || 0} added`, `${res.exited?.length || 0} exited`, `${res.ignored?.length || 0} ignored`];
       if (update.length || dismiss.length) parts.push(`${res.updated?.length || 0} updated`, `${res.dismissed?.length || 0} dismissed`);
+      if (res.baselined) parts.push(`${res.baselined} recorded`);
       const msg = parts.join(' · ');
       showToast(res.errors?.length ? `${msg} · ${res.errors.length} error(s)` : msg, res.errors?.length ? 'error' : 'success');
       onDone && onDone();
@@ -102,7 +105,14 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
               </div>
 
               {rows.length === 0 && departed.length === 0 && moves.length === 0 && (
-                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium, in the same department, under the same manager. Nothing to sync.</div>
+                <div style={{ padding: 20, color: 'var(--text-3)' }}>Everyone in Google is already in Podium, in the same department, under the same manager. Nothing to review.</div>
+              )}
+
+              {baseline.length > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', marginBottom: 10, lineHeight: 1.5 }}>
+                  Applying will also record the current Google org unit for <b>{baseline.length}</b> {baseline.length === 1 ? 'person who matches' : 'people who match'} Podium already.
+                  This writes nothing but that org unit — no department, no manager, nobody moves. It is what lets a future change be recognised as a real move rather than a disagreement.
+                </div>
               )}
 
               {rows.length > 0 && (

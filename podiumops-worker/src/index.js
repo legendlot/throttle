@@ -1253,6 +1253,8 @@ async function assignPodiumRole(body, auth, env) {
 // ────────────────────────────────────────────────────────────────────────────
 
 const DEPT_ALIAS = { 'd2c': 'D2C / Website' }; // OU leaf → podium department name
+// Guards client-supplied ids before they reach a PostgREST `in.()` filter.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function ouExcluded(ou, excluded) {
   return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
@@ -1290,6 +1292,7 @@ async function getDirectorySyncPreview(url, auth, env) {
   let excludedCount = 0;
   const newCands = [];
   const changed = [];
+  const baseline = [];
   const deptNameById = new Map(depts.map(d => [d.id, d.name]));
   const empById = new Map(emps.map(e => [e.id, e]));
 
@@ -1320,7 +1323,15 @@ async function getDirectorySyncPreview(url, auth, env) {
     const gMgr = gMgrRaw && gMgrRaw.status !== 'exited' ? gMgrRaw : null;
     const mgrDiffers = !!gMgr && gMgr.id !== emp.manager_id && gMgr.id !== emp.id;
 
-    if (!ouMoved && !deptDiffers && !mgrDiffers) return;
+    if (!ouMoved && !deptDiffers && !mgrDiffers) {
+      // Nothing for a human to decide — but if we have never recorded this person's OU we
+      // must record it now, or their FIRST real move can never be recognised as a move
+      // (prevOu NULL ⇒ ouMoved false ⇒ it lands in the low-confidence `differs` tier).
+      // Someone who simply agrees with Google never enters `changed`, so this is the only
+      // place their baseline can be written. Also self-heals people added via New Person.
+      if (prevOu !== liveOu) baseline.push({ id: emp.id, org_unit: liveOu });
+      return;
+    }
 
     const reasons = [];
     if (ouMoved) reasons.push(`Google OU changed: ${prevOu || '—'} → ${liveOu || '—'}`);
@@ -1389,6 +1400,7 @@ async function getDirectorySyncPreview(url, auth, env) {
     new_candidates: newCands.sort((a, b) => a.full_name.localeCompare(b.full_name)),
     departed,
     changed,
+    baseline,
     departments: depts,
     managers: emps.filter(e => e.status === 'active').map(e => ({ id: e.id, full_name: e.full_name }))
                   .sort((a, b) => a.full_name.localeCompare(b.full_name)),
@@ -1396,6 +1408,7 @@ async function getDirectorySyncPreview(url, auth, env) {
       google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length,
       moved: changed.filter(c => c.tier === 'moved').length,
       differs: changed.filter(c => c.tier === 'differs').length,
+      baseline: baseline.length,
     },
   });
 }
@@ -1414,9 +1427,12 @@ async function importDirectoryCandidates(body, auth, env) {
   // picked it in the modal (RULE-PODIUM-007, amended).
   const update = Array.isArray(d.update) ? d.update : [];  // [{id, department_id, manager_id, org_unit}]
   const dismiss = Array.isArray(d.dismiss) ? d.dismiss : []; // [{id, org_unit}]
+  // Bookkeeping only — the OU observed for people with nothing to review (see below).
+  const baselineIn = Array.isArray(d.baseline) ? d.baseline : []; // [{id, org_unit}]
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
   if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
-  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], errors: [] };
+  if (baselineIn.length > 2000) return err('baseline list too large', 400);
+  const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], baselined: 0, errors: [] };
 
   for (const u of update) {
     if (!u || !u.id) { result.errors.push('update: missing employee id'); continue; }
@@ -1432,6 +1448,31 @@ async function importDirectoryCandidates(body, auth, env) {
       { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch) });
     if (r.ok && r.data?.length) result.updated.push({ id: u.id, full_name: r.data[0].full_name });
     else result.errors.push(`update ${u.id}: ${JSON.stringify(r.data)}`);
+  }
+
+  // Baseline: record the OU we just observed for people with nothing to review. Writes
+  // `google_org_unit` and NOTHING else — no department, no manager — so it can never move
+  // anyone. Grouped by OU so ~59 people cost ~15 subrequests, not 59.
+  // ⚠️ ids come from the client, so they are UUID-shape-validated before going into a
+  // PostgREST `in.()` filter.
+  if (baselineIn.length) {
+    const byOu = new Map();
+    for (const b of baselineIn) {
+      if (!b || !UUID_RE.test(String(b.id || '')) || typeof b.org_unit !== 'string') continue;
+      if (!byOu.has(b.org_unit)) byOu.set(b.org_unit, []);
+      byOu.get(b.org_unit).push(b.id);
+    }
+    for (const [ou, ids] of byOu) {
+      for (let i = 0; i < ids.length; i += 100) {
+        const slice = ids.slice(i, i + 100);
+        // `select=id` + return=representation so the reported count is rows ACTUALLY written,
+        // not rows attempted — the `status=neq.exited` filter can legitimately match fewer.
+        const r = await sb(`/rest/v1/employees?id=in.(${slice.join(',')})&status=neq.exited&select=id`, env,
+          { method: 'PATCH', body: JSON.stringify({ google_org_unit: ou, updated_at: nowIso() }) });
+        if (r.ok) result.baselined += Array.isArray(r.data) ? r.data.length : 0;
+        else result.errors.push(`baseline ${ou}: ${JSON.stringify(r.data)}`);
+      }
+    }
   }
 
   for (const x of dismiss) {
