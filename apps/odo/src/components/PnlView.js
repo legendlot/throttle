@@ -216,6 +216,12 @@ export default function PnlView({ scope }) {
                 ? <strong style={{ color: 'var(--amber)' }}>SG&amp;A source could not be determined — treat this line as unverified.</strong>
                 : <><strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid</>}
               {data.sga_meta.eligible ? <> · covering <strong>{data.sga_meta.counted} of {data.sga_meta.eligible}</strong> employees in {data.sga_meta.month}</> : null}
+              {data.sga_meta.coverage_unavailable && (
+                <div style={{ color: 'var(--amber)', marginTop: 4 }}>
+                  ⚠ Coverage could not be read, so it is unknown whether anyone is missing a
+                  compensation record. Treat this figure as a floor, not a total.
+                </div>
+              )}
               {data.sga_meta.missing_ctc > 0 && (
                 <div style={{ color: 'var(--amber)', marginTop: 4 }}>
                   ⚠ {data.sga_meta.missing_ctc} employee{data.sga_meta.missing_ctc === 1 ? ' has' : 's have'} no

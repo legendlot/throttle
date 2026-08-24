@@ -4976,22 +4976,34 @@ export default {
             let sga_meta = { source: 'unknown' };
             try {
               const srcR = await sbSales('/rest/v1/settings?key=eq.pnl_sga_source&select=value&limit=1');
-              const source = (srcR.ok && srcR.data && srcR.data[0]) ? String(srcR.data[0].value) : 'manual';
-              sga_meta = { source };
-              if (source === 'podium' && months.length) {
-                // Coverage of the LAST month in range — the one the headline tiles read.
-                const last = months[months.length - 1];
-                const covR = await rpcSales('f_podium_salary_coverage', { p_month: last });
-                const c = (covR.ok && covR.data && covR.data[0]) ? covR.data[0] : null;
-                if (c) sga_meta = {
-                  source, month: last,
-                  counted: Number(c.counted) || 0,
-                  eligible: Number(c.eligible) || 0,
-                  missing_ctc: Number(c.missing_ctc) || 0,
+              if (!srcR.ok) {
+                // ⚠️ A FAILED READ IS NOT 'manual'. sbSales signals failure by RETURNING !ok, it does
+                // not throw — so guarding only the catch (as the first version of this did) left the
+                // likely failure path resolving to the reassuring value. An absent ROW is different
+                // and legitimately means manual: f_pnl_sga's SQL COALESCEs the missing key to
+                // 'manual' too, so the worker agrees with the calculation rather than guessing.
+                sga_meta = { source: 'unknown' };
+              } else {
+                const source = (srcR.data && srcR.data[0]) ? String(srcR.data[0].value) : 'manual';
+                sga_meta = { source };
+                if (source === 'podium' && months.length) {
+                  // Coverage of the LAST month in range — the one the headline tiles read.
+                  const last = months[months.length - 1];
+                  const covR = await rpcSales('f_podium_salary_coverage', { p_month: last });
+                  const c = (covR.ok && covR.data && covR.data[0]) ? covR.data[0] : null;
                   // ACCRUAL ON PLAN (CTC/12), not cash paid — named explicitly because an SG&A line
                   // that quietly changes basis between accrual and cash gets noticed a quarter later.
-                  basis: 'accrual_ctc',
-                };
+                  sga_meta = c
+                    ? { source, month: last, basis: 'accrual_ctc',
+                        counted: Number(c.counted) || 0,
+                        eligible: Number(c.eligible) || 0,
+                        missing_ctc: Number(c.missing_ctc) || 0 }
+                    // ⚠️ Coverage unresolved must be its OWN state. Falling through with just
+                    // {source:'podium'} rendered a confident banner asserting the basis with no
+                    // coverage and NO warning — because `undefined > 0` is false — on a number that
+                    // may be understated. Unknown coverage is not zero missing.
+                    : { source, month: last, basis: 'accrual_ctc', coverage_unavailable: true };
+                }
               }
             } catch (_) { sga_meta = { source: 'unknown' }; /* never fail the P&L over provenance — but never claim 'manual' either */ }
             return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta });
