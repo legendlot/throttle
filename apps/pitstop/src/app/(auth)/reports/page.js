@@ -150,7 +150,7 @@ export default function ReportsPage() {
     lines.push('Assigned/Handled/Resolved/Closed counted on,The day the activity happened');
     lines.push('Queries/Open/Answered/rates/averages counted on,The day the conversation was raised');
     lines.push('');
-    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Resolution rate %,Resolve rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
+    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
     for (const r of agentData.by_agent) {
       lines.push([r.name, r.assigned, r.handled, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
         r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
@@ -324,14 +324,20 @@ function AgentsPanel({ data }) {
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
-        <KpiCard label="Queries"        value={t.queries.toLocaleString()}   sub="customer-initiated" tone="var(--accent)"  size={25} />
-        <KpiCard label="Answered"       value={t.answered.toLocaleString()}  sub={t.answer_rate != null ? `${t.answer_rate}% of queries` : ''} tone="var(--ok-fg)" size={25} />
-        <KpiCard label="Never answered" value={t.unanswered.toLocaleString()} sub="no agent reply"    tone={t.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
-        <KpiCard label="Avg first reply" value={dur(t.avg_frt_min)}          sub={data.range?.business_hours ? 'business hours' : '24×7'} tone="var(--warn-fg)" size={25} />
+        <div title={TIPS.queries}><KpiCard label="Queries"        value={t.queries.toLocaleString()}   sub="customer-initiated" tone="var(--accent)"  size={25} /></div>
+        <div title={TIPS.answered}><KpiCard label="Answered"       value={t.answered.toLocaleString()}  sub={t.answer_rate != null ? `${t.answer_rate}% of queries` : ''} tone="var(--ok-fg)" size={25} /></div>
+        <div title={TIPS.never_answered}><KpiCard label="Never answered" value={t.unanswered.toLocaleString()} sub="no agent reply"    tone={t.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} /></div>
+        <div title={TIPS.avg_first_reply}><KpiCard label="Avg first reply" value={dur(t.avg_frt_min)}          sub={data.range?.business_hours ? 'business hours' : '24×7'} tone="var(--warn-fg)" size={25} /></div>
         {/* sub must NOT quote t.closed: since 2026-08-19 that is closure-dated while the
             rate is cohort-dated, so the two are different populations and pairing them
             reads as "92% of 5,743". The rate's own denominator is the honest caption. */}
-        <KpiCard label="Resolution rate" value={t.resolution_rate != null ? `${t.resolution_rate}%` : '—'} sub={`of ${t.queries.toLocaleString()} queries raised`} tone="var(--info-fg)" size={25} />
+        {/* resolve_rate (Resolved ÷ Queries), NOT resolution_rate (Closed ÷ Queries) — Pruthvi's
+            call, 2026-08-24 13:20 IST: the closed-based number counted spam/duplicate closures as
+            resolutions and read 88.8% where the honest figure was 36.9%. The closed-based rate
+            still ships in the CSV as "Closed rate %" for anyone tracking the old series. */}
+        <div title={TIPS.resolution}>
+          <KpiCard label="Resolution rate" value={t.resolve_rate != null ? `${t.resolve_rate}%` : '—'} sub={`of ${t.queries.toLocaleString()} queries raised`} tone="var(--info-fg)" size={25} />
+        </div>
       </div>
 
       {/* The cohort note is not decoration. Only ~a third of threads in a typical
@@ -399,20 +405,20 @@ function AgentsPanel({ data }) {
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <Th>Agent</Th>
-                <Th align="right">Assigned</Th>
-                <Th align="right">Handled</Th>
-                <Th align="right">Queries</Th>
-                <Th align="right">Open</Th>
-                <Th align="right">Resolved</Th>
-                <Th align="right">Closed (ops)</Th>
-                <Th align="right">Closed</Th>
-                <Th align="right">Resolution</Th>
-                <Th align="right">Answered</Th>
-                <Th align="right">Never ans.</Th>
-                <Th align="right">Avg 1st reply</Th>
-                <Th align="right">Avg reply</Th>
-                <Th align="right">Avg to close</Th>
-                <Th align="right">On us</Th>
+                <Th align="right" tip={TIPS.assigned}>Assigned</Th>
+                <Th align="right" tip={TIPS.handled}>Handled</Th>
+                <Th align="right" tip={TIPS.queries}>Queries</Th>
+                <Th align="right" tip={TIPS.open}>Open</Th>
+                <Th align="right" tip={TIPS.resolved}>Resolved</Th>
+                <Th align="right" tip={TIPS.closed_ops}>Closed (ops)</Th>
+                <Th align="right" tip={TIPS.closed}>Closed</Th>
+                <Th align="right" tip={TIPS.resolution}>Resolution</Th>
+                <Th align="right" tip={TIPS.answered}>Answered</Th>
+                <Th align="right" tip={TIPS.never_answered}>Never ans.</Th>
+                <Th align="right" tip={TIPS.avg_first_reply}>Avg 1st reply</Th>
+                <Th align="right" tip={TIPS.avg_reply}>Avg reply</Th>
+                <Th align="right" tip={TIPS.avg_to_close}>Avg to close</Th>
+                <Th align="right" tip={TIPS.on_us}>On us</Th>
               </tr>
             </thead>
             <tbody>
@@ -426,7 +432,7 @@ function AgentsPanel({ data }) {
                   <Td mono align="right" color={r.resolved > 0 ? 'var(--ok-fg)' : 'var(--t3)'}>{(r.resolved ?? 0).toLocaleString()}</Td>
                   <Td mono align="right">{(r.closed_ops ?? 0).toLocaleString()}</Td>
                   <Td mono align="right">{r.closed.toLocaleString()}</Td>
-                  <Td mono align="right">{r.resolution_rate != null ? `${r.resolution_rate}%` : '—'}</Td>
+                  <Td mono align="right">{r.resolve_rate != null ? `${r.resolve_rate}%` : '—'}</Td>
                   <Td mono align="right">{r.answered.toLocaleString()}</Td>
                   <Td mono align="right" color={r.unanswered > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.unanswered.toLocaleString()}</Td>
                   <Td mono align="right">{dur(r.avg_frt_min)}</Td>
@@ -692,7 +698,36 @@ function BreakdownTable({ rows, variant }) {
   );
 }
 
-function Th({ children, align = 'left' }) {
+// The 13 metric definitions, agreed with Pruthvi (#bugs thread ts 1787166011.976599,
+// wording finalised 2026-08-24): his drafts, with the four corrections he accepted.
+const TIPS = {
+  assigned: 'Conversations assigned to this agent within the selected date range (counted on the day they were assigned).',
+  handled: "Conversations this agent personally replied to in the range — credits whoever actually sent the reply, even when covering a colleague's chat.",
+  queries: 'Customer-initiated conversations raised in the range and attributed to this agent.',
+  open: 'Of those queries, still open right now.',
+  resolved: "Conversations closed as 'resolved' in the range — the customer's issue was addressed (counted on the day closed).",
+  closed_ops: 'Closed for administrative reasons (spam, duplicates, wrong number…) rather than issue resolution.',
+  closed: 'Everything closed in the range — Resolved + Closed (ops) + closed without a recorded reason.',
+  resolution: 'Resolved ÷ Queries: conversations genuinely resolved, as a share of queries raised in the range.',
+  answered: 'Queries that received at least one agent reply.',
+  never_answered: 'Queries with no agent reply yet — the priority pile.',
+  avg_first_reply: "Average time from the customer's first message to the agent's first reply.",
+  avg_reply: 'Average agent response time across every customer message in the conversation.',
+  avg_to_close: 'Average time from a query being raised to it being closed.',
+  on_us: "Open queries where the last message is the customer's — waiting on an agent.",
+};
+
+function Th({ children, align = 'left', tip }) {
+  if (tip) {
+    return (
+      <th title={tip} style={{ padding: '7px 10px', textAlign: align, color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase', cursor: 'help' }}>
+        <span style={{ borderBottom: '1px dotted var(--t3)' }}>{children}</span>
+      </th>
+    );
+  }
+  return ThPlain({ children, align });
+}
+function ThPlain({ children, align = 'left' }) {
   return <th style={{ padding: '7px 10px', textAlign: align, color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase' }}>{children}</th>;
 }
 
