@@ -118,7 +118,12 @@ export function makeSoftphone({ env, sb, ok, err }) {
     }
 
     // 3) Roster → usermappings. AppUserId = email (the SDK userId).
-    const agentsRes = await sb('/rest/v1/cs_telephony_agents?is_active=eq.true&sip_id=not.is.null&select=user_id,sip_id,agent_phone', env);
+    // device_preference=sip is part of the roster definition, not just the token gate:
+    // Afshaan is is_active (keeps click-to-call) but tel-preference by his own call
+    // (2026-08-24, "I'm not an agent") — a setup re-run must not re-enrol him. Exotel's
+    // usermapping DELETE is deprecated (endpoint_deprecated, verified live), so an existing
+    // mapping cannot be removed — the token gate is what keeps it inert.
+    const agentsRes = await sb('/rest/v1/cs_telephony_agents?is_active=eq.true&sip_id=not.is.null&device_preference=eq.sip&select=user_id,sip_id,agent_phone', env);
     const agents = agentsRes.data || [];
     const ids = agents.map((a) => `"${a.user_id}"`).join(',');
     const profRes = ids ? await sb(`/rest/v1/users_profile?id=in.(${ids})&select=id,full_name`, env) : { data: [] };
