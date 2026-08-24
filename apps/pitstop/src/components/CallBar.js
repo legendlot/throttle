@@ -34,6 +34,11 @@ export default function CallBar() {
   const [dialOpen, setDialOpen] = useState(false);
   const [dialNum, setDialNum] = useState('');
   const [tick, setTick] = useState(0);          // re-render driver for the call timer
+  // ⚠️ HOOKS STAY ABOVE THE EARLY RETURN. This ref briefly lived below `if (phase…) return null`
+  // and took the whole app down with React #310 the moment an agent's bar left 'boot'
+  // (the layout mounts this component, so the crash was every page). Same class as the
+  // S303 rules-of-hooks findings in relay/snorkel ui.js.
+  const lastToggle = useRef(0);
 
   const [attempt, setAttempt] = useState(0);   // Retry drives re-init
   useEffect(() => {
@@ -120,7 +125,6 @@ export default function CallBar() {
   // NOT also flip state — that double-flip is exactly the "mute and hold are not working"
   // bug Pruthvi reported on launch day (state flipped twice, icon never moved). Debounce
   // mirrors Exotel's own sample app, which carries the same guard for the same reason.
-  const lastToggle = useRef(0);
   const debounced = (fn) => { const n = Date.now(); if (n - lastToggle.current < 350) return; lastToggle.current = n; fn(); };
   const toggleMute = () => debounced(() => webPhone.current?.ToggleMute());
   const toggleHold = () => debounced(() => webPhone.current?.ToggleHold());
