@@ -2,10 +2,12 @@
 // Org chart (Pit Wall v2) — restyled to the prototype layout:
 //   root (CEO / founder) card(s) → vertical connector → responsive grid of
 //   manager cards, each listing its direct reports as mini avatar rows.
-// Lossless for deep orgs: every non-root node that has reports gets its own
-// card, so reporting lines at any depth are represented (a manager who also
-// reports to someone appears both as a mini-row under their manager and as
-// their own card). Individual contributors appear only as mini-rows.
+// Lossless for deep orgs: every node that has reports — roots included — gets
+// its own card, so reporting lines at any depth are represented (a manager who
+// also reports to someone appears both as a mini-row under their manager and as
+// their own card; a root appears as the hero card AND as a card listing its
+// directs — otherwise a root's IC reports appear nowhere). Individual
+// contributors appear only as mini-rows.
 import { useMemo } from 'react';
 import { buildOrgForest } from '../lib/orgTree.js';
 import { Avatar } from './ui.js';
@@ -16,11 +18,13 @@ export default function OrgChart({ nodes, onSelect }) {
   const { roots, managers } = useMemo(() => {
     const forest = buildOrgForest(nodes || []);
     const mgrs = [];
-    const walk = (n, isRoot) => {
-      if (!isRoot && n.children.length) mgrs.push(n);
-      n.children.forEach(c => walk(c, false));
+    // Roots included: a root's IC reports have no other card to appear in — without
+    // the root's own manager card they vanish from the chart entirely.
+    const walk = (n) => {
+      if (n.children.length) mgrs.push(n);
+      n.children.forEach(c => walk(c));
     };
-    forest.forEach(r => walk(r, true));
+    forest.forEach(r => walk(r));
     return { roots: forest, managers: mgrs };
   }, [nodes]);
 

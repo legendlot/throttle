@@ -110,12 +110,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                           <td style={{ ...td, fontSize: 11, color: 'var(--text-3)' }}>{r.org_unit || '—'}</td>
                           <td style={td}>
                             <Combobox value={r.department_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { department_id: v })}
-                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…"
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
                               options={(data.departments || []).map(d => ({ value: d.id, label: d.name }))} />
                           </td>
                           <td style={td}>
                             <Combobox value={r.manager_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { manager_id: v })}
-                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…"
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…" portal
                               options={(data.managers || []).map(m => ({ value: m.id, label: m.full_name }))} />
                           </td>
                           <td style={{ ...td, fontSize: 11 }}>{r.has_login ? <span style={{ color: 'var(--state-success-fg)' }}>linked</span> : <span style={{ color: 'var(--text-3)' }}>none</span>}</td>
