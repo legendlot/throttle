@@ -35,6 +35,7 @@ export default function CallBar() {
   const [dialNum, setDialNum] = useState('');
   const [tick, setTick] = useState(0);          // re-render driver for the call timer
 
+  const [attempt, setAttempt] = useState(0);   // Retry drives re-init
   useEffect(() => {
     if (!userId) return;
     let alive = true;
@@ -48,6 +49,19 @@ export default function CallBar() {
         return;
       }
       if (!alive) return;
+      // Ask for the microphone BEFORE the SDK registers — a softphone without audio
+      // fails registration in ways the SDK reports poorly. Denied mic = offline, with
+      // Retry re-prompting after the agent fixes the browser permission.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());   // permission was the point, not the stream
+      } catch (e) {
+        console.warn('[callbar] microphone not granted', e?.name || e);
+        if (alive) setPhase('offline');
+        return;
+      }
+      if (!alive) return;
+      setPhase('registering');
       const { default: ExotelCRMWebSDK } = await import('@exotel-npm-dev/exotel-ip-calling-crm-websdk');
       if (!alive) return;
 
@@ -88,7 +102,7 @@ export default function CallBar() {
       try { webPhone.current?.UnRegisterDevice?.(); } catch { /* best-effort */ }
       webPhone.current = null;
     };
-  }, [userId]);
+  }, [userId, attempt]);
 
   // 1s heartbeat while a call is active — drives the timer only.
   useEffect(() => {
@@ -150,11 +164,18 @@ export default function CallBar() {
       {!call && (
         <div style={row}>
           <span style={{ width: 8, height: 8, borderRadius: 999, flex: '0 0 auto',
-            background: phase === 'online' ? 'var(--ok-fg)' : 'var(--danger-fg)' }} />
-          <span style={{ fontSize: 12, opacity: 0.75 }}>{phase === 'online' ? 'Softphone ready' : 'Softphone offline'}</span>
+            background: phase === 'online' ? 'var(--ok-fg)' : phase === 'registering' ? 'var(--warn-fg)' : 'var(--danger-fg)' }} />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {phase === 'online' ? 'Softphone ready' : phase === 'registering' ? 'Softphone connecting…' : 'Softphone offline'}
+          </span>
           {phase === 'online' && (
             <button onClick={() => setDialOpen((o) => !o)} style={iconBtn} aria-label="Dialpad" title="Dial a number">
               {dialOpen ? <X size={14} /> : <Phone size={14} />}
+            </button>
+          )}
+          {phase === 'offline' && (
+            <button onClick={() => { setPhase('boot'); setAttempt((n) => n + 1); }} style={{ ...iconBtn, width: 'auto', padding: '0 8px', fontSize: 12 }}>
+              Retry
             </button>
           )}
         </div>
