@@ -105,7 +105,19 @@ export function makeSoftphone({ env, sb, ok, err }) {
 
     const tok = await appToken(cfg);
 
-    // 2) Roster → usermappings. AppUserId = email (the SDK userId).
+    // 2) Ensure at least one app_setting EXISTS. The SDK's loadSettings() hard-fails on a
+    // 404 here (its own TODO admits the setting should be optional), which left every agent
+    // "Softphone offline" until this was found on 2026-08-24 — the missing setting was the
+    // whole Phase 6 launch bug. record=true also matches Phase 3's recording player.
+    const setGet = await icore('/app_setting', { token: tok });
+    if (setGet.status === 404) {
+      const setPost = await icore('/app_setting', { method: 'POST', token: tok, body: { Key: 'record', Value: 'true' } });
+      summary.app_setting = setPost.httpOk ? 'created (record=true)' : `create failed: ${setPost.status}`;
+    } else {
+      summary.app_setting = 'existing';
+    }
+
+    // 3) Roster → usermappings. AppUserId = email (the SDK userId).
     const agentsRes = await sb('/rest/v1/cs_telephony_agents?is_active=eq.true&sip_id=not.is.null&select=user_id,sip_id,agent_phone', env);
     const agents = agentsRes.data || [];
     const ids = agents.map((a) => `"${a.user_id}"`).join(',');
