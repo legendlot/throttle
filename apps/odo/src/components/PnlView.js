@@ -209,10 +209,12 @@ export default function PnlView({ scope }) {
               there is nothing to qualify. An incomplete salary run UNDERSTATES SG&A and therefore
               OVERSTATES EBITDA, so the coverage has to travel with the number rather than live in a
               doc nobody opens. */}
-          {isOverall && data?.sga_meta?.source === 'podium' && (
+          {isOverall && data?.sga_meta && data.sga_meta.source !== 'manual' && (
             <div className="so-card" style={{ fontFamily: 'var(--ui)', fontSize: 12, lineHeight: 1.6,
                  borderColor: data.sga_meta.missing_ctc > 0 ? 'var(--amber)' : undefined }}>
-              <strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid
+              {data.sga_meta.source === 'unknown'
+                ? <strong style={{ color: 'var(--amber)' }}>SG&amp;A source could not be determined — treat this line as unverified.</strong>
+                : <><strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid</>}
               {data.sga_meta.eligible ? <> · covering <strong>{data.sga_meta.counted} of {data.sga_meta.eligible}</strong> employees in {data.sga_meta.month}</> : null}
               {data.sga_meta.missing_ctc > 0 && (
                 <div style={{ color: 'var(--amber)', marginTop: 4 }}>

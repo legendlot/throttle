@@ -4969,7 +4969,11 @@ export default {
             // with no denominator is unfalsifiable — several employees still have no comp record, so
             // a Podium-sourced SG&A UNDERSTATES and a bare total would never say so. Shipped with the
             // figure rather than as a separate call so the two can't drift apart on screen.
-            let sga_meta = { source: 'manual' };
+            // Starts 'unknown', NOT 'manual'. Defaulting a failed provenance lookup to the
+            // reassuring value is how a warning banner silently disappears off a Podium-sourced
+            // number — f_pnl_sga reads the setting in SQL independently, so the figure can be
+            // salary-derived while this says "manual" and the UI stays quiet.
+            let sga_meta = { source: 'unknown' };
             try {
               const srcR = await sbSales('/rest/v1/settings?key=eq.pnl_sga_source&select=value&limit=1');
               const source = (srcR.ok && srcR.data && srcR.data[0]) ? String(srcR.data[0].value) : 'manual';
@@ -4989,7 +4993,7 @@ export default {
                   basis: 'accrual_ctc',
                 };
               }
-            } catch (_) { /* provenance is additive — never fail the P&L over it */ }
+            } catch (_) { sga_meta = { source: 'unknown' }; /* never fail the P&L over provenance — but never claim 'manual' either */ }
             return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta });
           }
           case 'getPnlByProduct': {   // S189 — per-product P&L (through GM), all channels
