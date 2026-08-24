@@ -4965,7 +4965,32 @@ export default {
               return row;
             });
             const channels = {}; for (const f of famResults) channels[f.key] = f.rows;
-            return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })) });
+            // SG&A provenance + coverage. The salary run returns ONE number per month and a number
+            // with no denominator is unfalsifiable — several employees still have no comp record, so
+            // a Podium-sourced SG&A UNDERSTATES and a bare total would never say so. Shipped with the
+            // figure rather than as a separate call so the two can't drift apart on screen.
+            let sga_meta = { source: 'manual' };
+            try {
+              const srcR = await sbSales('/rest/v1/settings?key=eq.pnl_sga_source&select=value&limit=1');
+              const source = (srcR.ok && srcR.data && srcR.data[0]) ? String(srcR.data[0].value) : 'manual';
+              sga_meta = { source };
+              if (source === 'podium' && months.length) {
+                // Coverage of the LAST month in range — the one the headline tiles read.
+                const last = months[months.length - 1];
+                const covR = await rpcSales('f_podium_salary_coverage', { p_month: last });
+                const c = (covR.ok && covR.data && covR.data[0]) ? covR.data[0] : null;
+                if (c) sga_meta = {
+                  source, month: last,
+                  counted: Number(c.counted) || 0,
+                  eligible: Number(c.eligible) || 0,
+                  missing_ctc: Number(c.missing_ctc) || 0,
+                  // ACCRUAL ON PLAN (CTC/12), not cash paid — named explicitly because an SG&A line
+                  // that quietly changes basis between accrual and cash gets noticed a quarter later.
+                  basis: 'accrual_ctc',
+                };
+              }
+            } catch (_) { /* provenance is additive — never fail the P&L over it */ }
+            return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta });
           }
           case 'getPnlByProduct': {   // S189 — per-product P&L (through GM), all channels
             if (!canSuperAdmin(P)) return err('No permission', 403);

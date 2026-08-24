@@ -202,9 +202,28 @@ export default function PnlView({ scope }) {
               editable={editable} autoLines={autoLines} session={session} isAdmin={isAdmin} onSaved={load} mode={mode} />
           </div>
 
+          {/* SG&A provenance. Only rendered once the source is actually Podium — while it is manual
+              there is nothing to qualify. An incomplete salary run UNDERSTATES SG&A and therefore
+              OVERSTATES EBITDA, so the coverage has to travel with the number rather than live in a
+              doc nobody opens. */}
+          {isOverall && data?.sga_meta?.source === 'podium' && (
+            <div className="so-card" style={{ fontFamily: 'var(--ui)', fontSize: 12, lineHeight: 1.6,
+                 borderColor: data.sga_meta.missing_ctc > 0 ? 'var(--amber)' : undefined }}>
+              <strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid
+              {data.sga_meta.eligible ? <> · covering <strong>{data.sga_meta.counted} of {data.sga_meta.eligible}</strong> employees in {data.sga_meta.month}</> : null}
+              {data.sga_meta.missing_ctc > 0 && (
+                <div style={{ color: 'var(--amber)', marginTop: 4 }}>
+                  ⚠ {data.sga_meta.missing_ctc} employee{data.sga_meta.missing_ctc === 1 ? ' has' : 's have'} no
+                  compensation record, so SG&amp;A is understated and EBITDA correspondingly overstated.
+                  Fix in Podium → Compensation; this figure corrects itself once the records exist.
+                </div>
+              )}
+            </div>
+          )}
+
           {isOverall ? (
             <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, lineHeight: 1.6, color: 'var(--t3)', maxWidth: 1100 }}>
-              GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. Amazon RTO + Platform Fee + Logistics auto-feed from settlement; other channels manual until connectors. RTO/Logistics/Platform here are channel rollups — edit them on each channel's P&L page. Brand Marketing = manual; SG&A wired to Podium salaries (0 until live). Odo-captured channels only.
+              GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. Amazon RTO + Platform Fee + Logistics auto-feed from settlement; other channels manual until connectors. RTO/Logistics/Platform here are channel rollups — edit them on each channel's P&L page. Brand Marketing = manual; SG&A = Podium salary run (non-factory CTC ÷ 12) when switched on, manual otherwise. Odo-captured channels only.
             </div>
           ) : (
             <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, lineHeight: 1.6, color: 'var(--t3)', maxWidth: 1100 }}>
