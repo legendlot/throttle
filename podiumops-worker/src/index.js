@@ -681,6 +681,19 @@ async function reassignReportsOnExit(exitingId, auth, env) {
   const exiting = byId.get(exitingId);
   if (!exiting) { out.errors.push('reassign: exiting employee not found'); return out; }
 
+  // ⚠️ The audit write MUST be checked. These reassignments move people silently; an unchecked
+  // insert means a stale PostgREST schema cache (or a lost grant) would leave the org changed with
+  // NO trace and no error — the same unchecked-result class RULE-STOCK-002 records. Surfaced as a
+  // loud error rather than swallowed, because "reassigned but unlogged" is the state we must never
+  // reach quietly.
+  async function audit(rows) {
+    if (!rows.length) return;
+    const ar = await sb(`/rest/v1/manager_reassignments`, env, {
+      method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows),
+    });
+    if (!ar.ok) out.errors.push(`AUDIT WRITE FAILED (reporting lines were changed WITHOUT a log): ${JSON.stringify(ar.data)}`);
+  }
+
   const reports = all.filter(e => e.manager_id === exitingId && e.status !== 'exited');
   const dotted = all.filter(e => e.secondary_manager_id === exitingId && e.status !== 'exited');
   if (!reports.length && !dotted.length) return out;
@@ -717,25 +730,19 @@ async function reassignReportsOnExit(exitingId, auth, env) {
       else {
         out.to_manager = { id: heir.id, full_name: heir.full_name };
         out.escalated = movable.map(e => ({ id: e.id, full_name: e.full_name }));
-        await sb(`/rest/v1/manager_reassignments`, env, {
-          method: 'POST', prefer: 'return=minimal',
-          body: JSON.stringify(movable.map(e => ({
-            exited_employee_id: exitingId, report_employee_id: e.id,
-            from_manager_id: exitingId, to_manager_id: heir.id,
-            line: 'solid', reason: 'escalated', created_by: auth?.userId || null,
-          }))),
-        });
+        await audit(movable.map(e => ({
+          exited_employee_id: exitingId, report_employee_id: e.id,
+          from_manager_id: exitingId, to_manager_id: heir.id,
+          line: 'solid', reason: 'escalated', created_by: auth?.userId || null,
+        })));
       }
     }
     if (out.unassigned.length) {
-      await sb(`/rest/v1/manager_reassignments`, env, {
-        method: 'POST', prefer: 'return=minimal',
-        body: JSON.stringify(out.unassigned.map(e => ({
-          exited_employee_id: exitingId, report_employee_id: e.id,
-          from_manager_id: exitingId, to_manager_id: null,
-          line: 'solid', reason: 'left_unassigned', created_by: auth?.userId || null,
-        }))),
-      });
+      await audit(out.unassigned.map(e => ({
+        exited_employee_id: exitingId, report_employee_id: e.id,
+        from_manager_id: exitingId, to_manager_id: null,
+        line: 'solid', reason: 'left_unassigned', created_by: auth?.userId || null,
+      })));
     }
   }
 
@@ -749,14 +756,11 @@ async function reassignReportsOnExit(exitingId, auth, env) {
     if (!dr.ok) out.errors.push(`reassign dotted: ${JSON.stringify(dr.data)}`);
     else {
       out.dotted_cleared = Array.isArray(dr.data) ? dr.data.length : 0;
-      await sb(`/rest/v1/manager_reassignments`, env, {
-        method: 'POST', prefer: 'return=minimal',
-        body: JSON.stringify(dotted.map(e => ({
-          exited_employee_id: exitingId, report_employee_id: e.id,
-          from_manager_id: exitingId, to_manager_id: null,
-          line: 'dotted', reason: 'cleared_dotted', created_by: auth?.userId || null,
-        }))),
-      });
+      await audit(dotted.map(e => ({
+        exited_employee_id: exitingId, report_employee_id: e.id,
+        from_manager_id: exitingId, to_manager_id: null,
+        line: 'dotted', reason: 'cleared_dotted', created_by: auth?.userId || null,
+      })));
     }
   }
   return out;
