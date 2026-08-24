@@ -31,7 +31,10 @@ const drrFmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFraction
 const TOT_BD = '1px solid #2a2d35';
 
 export default function ProductsPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
+  // P&L is super-admin-only (Afshaan, 2026-08-24). odoops refuses the data regardless; hiding the
+  // tab keeps a non-super-admin from clicking through to a screen that can only 403.
+  const canPnl = !!(perms && perms.salesops_super_admin);
   const router = useRouter();
   const presets = rangePresets();
   const mtd = presets.find(p => p.key === 'mtd');
@@ -134,7 +137,7 @@ export default function ProductsPage() {
           children — links and bookmarks are unaffected. */}
       <div className="so-scopebar">
         <ScopeTab on label="Cross-channel" onClick={() => {}} />
-        <ScopeTab label="P&L by product" onClick={() => router.push('/products/pnl')} />
+        {canPnl && <ScopeTab label="P&L by product" onClick={() => router.push('/products/pnl')} />}
       </div>
 
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />

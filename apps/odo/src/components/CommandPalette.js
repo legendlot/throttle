@@ -38,7 +38,10 @@ export function paletteEntries(navGroups) {
   // Channels families and the P&L scopes, so nothing is reachable by URL alone.
   if (canSee('/products')) {
     out.push({ id: 'prod-drr', label: 'Products · Cross-channel', group: 'Products', route: '/products/drr' });
-    out.push({ id: 'prod-pnl', label: 'Products · P&L by product', group: 'Products', route: '/products/pnl' });
+    // Gated on /pnl, NOT /products: per-product P&L is P&L data (margin through GM), so it follows
+    // the super-admin gate even though it lives under the Products route. Products itself stays
+    // open to analysts.
+    if (canSee('/pnl')) out.push({ id: 'prod-pnl', label: 'Products · P&L by product', group: 'Products', route: '/products/pnl' });
   }
   if (canSee('/pnl')) {
     out.push({ id: 'pnl-overall', label: 'Company P&L', group: 'P&L', route: '/pnl/overall' });

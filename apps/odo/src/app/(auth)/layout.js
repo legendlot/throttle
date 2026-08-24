@@ -32,7 +32,7 @@ const NAV = [
   ] },
   { label: 'Catalog', items: [
     { route: '/products',    label: 'Products',    icon: Package,         perm: 'sales_view', to: '/products/drr' },
-    { route: '/pnl',         label: 'P&L',         icon: Landmark,        perm: 'sales_view', to: '/pnl/overall' },
+    { route: '/pnl',         label: 'P&L',         icon: Landmark,        perm: 'salesops_super_admin', exact: true, to: '/pnl/overall' },
     { route: '/inventory',   label: 'Inventory',   icon: Boxes,           perm: 'sales_view' },
   ] },
   { label: 'Pipeline', items: [
@@ -77,7 +77,16 @@ function Shell({ children }) {
   });
 
   const P = perms || {};
-  const can = (item) => !!P[item.perm] || !!P.salesops_admin || (item.adminAlt && !!P[item.adminAlt]);
+  // `exact` opts an item OUT of the blanket `salesops_admin` fallback below. Without it an admin
+  // sees every rail item whatever its `perm` says, which is fine for ordinary screens but wrong for
+  // one that is deliberately narrower than admin — P&L is gated to super admins ONLY (Afshaan,
+  // 2026-08-24: "so that the data is not available to everybody in the org"), and it is about to
+  // carry salary-derived SG&A from Podium. NB this is a nav-visibility filter, not the gate; the
+  // real one is canSuperAdmin() in odoops. Both are required — a hidden route with an open handler
+  // is not a gate, and an open route with a closed handler is just a broken screen.
+  const can = (item) => item.exact
+    ? !!P[item.perm]
+    : (!!P[item.perm] || !!P.salesops_admin || (item.adminAlt && !!P[item.adminAlt]));
   // Groups whose every item is gated out disappear entirely (no orphan header).
   const groups = NAV.map(g => ({ ...g, items: g.items.filter(can) })).filter(g => g.items.length);
 

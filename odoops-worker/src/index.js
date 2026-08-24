@@ -4939,7 +4939,7 @@ export default {
             return ok({ rows: r.data || [] });
           }
           case 'getPnl': {   // S189 — channel-wise P&L: master (all channels) + per-channel-family tables
-            if (!canView(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const from = qp('from') || todayISO(), to = qp('to') || todayISO();
             const chans = await getChannels();   // is_sale channels {id,name}
             const byFam = {};
@@ -4968,13 +4968,13 @@ export default {
             return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })) });
           }
           case 'getPnlByProduct': {   // S189 — per-product P&L (through GM), all channels
-            if (!canView(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const r = await rpcSales('f_pnl_by_product', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
             if (!r.ok) return err('Product P&L failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
           case 'getProductCosts': {   // S189 — active SKUs + latest standard COGS (for the /pnl cost editor)
-            if (!canView(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const [pm, pc] = await Promise.all([
               sbPublic('/rest/v1/product_master?is_active=eq.true&component_type=neq.remote&select=product_code,product,model,color&order=product.asc,model.asc,color.asc'),
               sbSales('/rest/v1/product_cost?select=product_code,cogs_inr,effective_from&order=effective_from.desc'),
@@ -4985,7 +4985,7 @@ export default {
             return ok({ rows });
           }
           case 'getPnlManual': {   // S189 — manual P&L lines in range (for the /pnl editable cells)
-            if (!canView(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             let q = '/rest/v1/pnl_manual?select=month,line_key,amount_inr,note&order=month.asc';
             if (qp('from')) q += `&month=gte.${qp('from')}`;
             if (qp('to')) q += `&month=lte.${qp('to')}`;
@@ -5580,7 +5580,7 @@ export default {
             return ok({ product_code: code, cogs_inr: cost, effective_from: eff });
           }
           case 'setPnlManual': {   // S189 — upsert a manual P&L line for a month × channel
-            if (!canAdmin(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const MANUAL_KEYS = ['rto', 'logistics', 'platform_fee', 'brand_marketing', 'sga'];
             const FAM_KEYS = ['all', 'website', 'amazon', 'flipkart', 'quickcom', 'gtmt', 'longtail', 'other'];
             const month = String(d.month || '').slice(0, 7);
