@@ -560,7 +560,10 @@ async function getEngagement(url, auth, env) {
   if (!id && !eno) return err('id or engagement_no required', 400);
   const filter = id ? `id=eq.${id}` : `engagement_no=eq.${encodeURIComponent(eno)}`;
   const r = await sb(
-    `/rest/v1/engagements?${filter}&select=*,influencer:influencer_id(*)&limit=1`,
+    // campaign is embedded (S309) so the deal page can SHOW which campaign a deal is
+    // on without fetching the whole campaign list just to resolve one name. The picker
+    // still loads the active list, but only when the card is opened for editing.
+    `/rest/v1/engagements?${filter}&select=*,influencer:influencer_id(*),campaign:campaign_id(id,name)&limit=1`,
     env,
   );
   if (!r.ok) return err('db_error', 500);

@@ -11,6 +11,7 @@ import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
 import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS } from '../../../../lib/metrics.js';
+import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 
 export default function EngagementDetailPage() {
   const sp = useSearchParams();
@@ -164,26 +165,7 @@ export default function EngagementDetailPage() {
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-        <Card title="Deal Terms">
-          <KV label="Type" value={e.engagement_type === 'ugc' ? 'UGC' : 'Video'} />
-          <KV label="Deal type" value={e.deal_type} />
-          <KV label="Payment terms" value={e.payment_terms || '—'} />
-          <KV label="Payment amount" value={`₹${Number(e.payment_amount || 0).toLocaleString()}`} />
-          {(() => {
-            const agreed = Number(e.payment_amount || 0);
-            const paid = Number(data.paid_total || 0);
-            const done = agreed > 0 && paid >= agreed;
-            return (
-              <KV label="Paid" value={
-                <span style={{ color: done ? '#27c93f' : paid > 0 ? '#F2CD1A' : 'var(--text-3)', fontWeight: 600 }}>
-                  ₹{paid.toLocaleString()} of ₹{agreed.toLocaleString()}{done ? ' ✓' : ''}
-                </span>
-              } />
-            );
-          })()}
-          {e.affiliate_pct != null && <KV label="Affiliate %" value={`${e.affiliate_pct}%`} />}
-          {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
-        </Card>
+        <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} session={session} onSaved={reload} />
 
         <ProductsCard
           products={data.products || []}
@@ -377,6 +359,140 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
 
 // Costs card. Goodies + shipping roll up from the product lines (edit those in the
 // Products card); return cost + ad spend are engagement-level and editable here (⑦).
+// Deal Terms — editable since S309 (Reann, #bugs 2026-08-18 batch, items 2 + 3).
+//
+// Both gaps were UI-only; the worker already accepted every field here. `deal_type`,
+// `payment_terms`, `payment_amount`, `affiliate_pct`, `commission_amount` AND
+// `campaign_id` are all in ENGAGEMENT_FIELDS, so this saves in ONE updateEngagement
+// call rather than a PATCH plus a separate assignEngagementToCampaign. That also
+// matters for correctness, not just tidiness: updateEngagement calls recomputeCpm,
+// and payment_amount feeds total_cost feeds CPM. Assigning the campaign through the
+// dedicated endpoint would skip that.
+//
+// Campaign could always be set at deal CREATION, and removed/added from the campaign
+// side at /campaigns/detail — but never from the deal itself, which is where Reann
+// works. 295 of 335 deals carried no campaign when this shipped (measured 2026-08-25).
+function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
+  const [f, setF] = useState({});
+
+  // The picker's list loads ONLY when the card is opened for editing — the read view
+  // does not need it, because getEngagement embeds `campaign:campaign_id(id,name)`.
+  // Without that embed this would show "—" on every deal that HAS a campaign until
+  // someone pressed Edit.
+  useEffect(() => {
+    if (!editing || !session) return;
+    ignitionopsGet('getCampaigns', { status: 'active' }, session)
+      .then(r => setCampaigns(r.campaigns || []))
+      .catch(() => setCampaigns([]));
+  }, [editing, session]);
+
+  const campaignName = e.campaign?.name || campaigns.find(c => c.id === e.campaign_id)?.name || null;
+
+  function startEdit() {
+    setF({
+      deal_type: e.deal_type || 'paid',
+      // NOT defaulted to 'n_a'. payment_terms is NULL on 238 of 335 deals (measured
+      // 2026-08-25) and NULL means "never recorded", which is not the same statement
+      // as "N/A". Defaulting here would stamp a definite N_A onto every one of those
+      // the first time someone opened this card to change something else entirely.
+      payment_terms: e.payment_terms || '',
+      payment_amount: e.payment_amount ?? '',
+      affiliate_pct: e.affiliate_pct ?? '',
+      commission_amount: e.commission_amount ?? '',
+      campaign_id: e.campaign_id || '',
+    });
+    setEditing(true);
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+      await ignitionopsPost('updateEngagement', {
+        engagement_id: e.id,
+        deal_type: f.deal_type,
+        payment_terms: f.payment_terms || null,
+        payment_amount: numOrNull(f.payment_amount),
+        affiliate_pct: numOrNull(f.affiliate_pct),
+        commission_amount: numOrNull(f.commission_amount),
+        // '' means "no campaign" — send null so the worker detaches rather than
+        // failing the FK on an empty string.
+        campaign_id: f.campaign_id || null,
+      }, session);
+      toast('Deal terms updated', 'success');
+      setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const agreed = Number(e.payment_amount || 0);
+  const paid = Number(paidTotal || 0);
+  const done = agreed > 0 && paid >= agreed;
+
+  return (
+    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Deal Terms</h2>
+        {canEdit && !editing && (
+          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+        )}
+      </div>
+
+      {/* Engagement type stays read-only: video vs UGC drives a different pipeline
+          (ugc_briefs, the /ugc board), so flipping it here would strand a deal. */}
+      <KV label="Type" value={e.engagement_type === 'ugc' ? 'UGC' : 'Video'} />
+
+      {editing ? (
+        <>
+          <SelectEdit label="Deal type" value={f.deal_type} onChange={v => setF(x => ({ ...x, deal_type: v }))}
+            options={DEAL_TYPE_VALUES.map(v => ({ value: v, label: DEAL_TYPE_LABELS[v] }))} />
+          <SelectEdit label="Payment terms" value={f.payment_terms} onChange={v => setF(x => ({ ...x, payment_terms: v }))}
+            options={[{ value: '', label: '— Not set —' }, ...PAYMENT_TERMS.map(v => ({ value: v, label: PAYMENT_TERMS_LABELS[v] }))]} />
+          <CostEdit label="Payment ₹" value={f.payment_amount} onChange={v => setF(x => ({ ...x, payment_amount: v }))} />
+          <CostEdit label="Affiliate %" value={f.affiliate_pct} onChange={v => setF(x => ({ ...x, affiliate_pct: v }))} />
+          <CostEdit label="Commission ₹" value={f.commission_amount} onChange={v => setF(x => ({ ...x, commission_amount: v }))} />
+          <SelectEdit label="Campaign" value={f.campaign_id} onChange={v => setF(x => ({ ...x, campaign_id: v }))}
+            options={[{ value: '', label: '— No campaign —' }, ...campaigns.map(c => ({ value: c.id, label: c.name }))]} />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <KV label="Deal type" value={DEAL_TYPE_LABELS[e.deal_type] || e.deal_type} />
+          <KV label="Payment terms" value={PAYMENT_TERMS_LABELS[e.payment_terms] || e.payment_terms || '—'} />
+          <KV label="Payment amount" value={`₹${agreed.toLocaleString()}`} />
+          <KV label="Paid" value={
+            <span style={{ color: done ? '#27c93f' : paid > 0 ? '#F2CD1A' : 'var(--text-3)', fontWeight: 600 }}>
+              ₹{paid.toLocaleString()} of ₹{agreed.toLocaleString()}{done ? ' ✓' : ''}
+            </span>
+          } />
+          {e.affiliate_pct != null && <KV label="Affiliate %" value={`${e.affiliate_pct}%`} />}
+          {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
+          <KV label="Campaign" value={campaignName || <span style={{ color: 'var(--text-3)' }}>—</span>} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function SelectEdit({ label, value, onChange, options }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center' }}>
+      <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <select value={value} onChange={ev => onChange(ev.target.value)}
+        style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13, width: '100%', boxSizing: 'border-box' }}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function CostsCard({ e, canEdit, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
