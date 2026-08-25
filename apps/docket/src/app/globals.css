@@ -1004,7 +1004,12 @@ button { cursor: pointer; background: none; border: none; }
 .tk-head .tk-headmain { flex: 1; min-width: 240px; }
 .tk-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .tk-note { border-radius: var(--r-sm); padding: 9px 13px; font-size: 12.5px; color: var(--text-2); margin-top: 14px; background: var(--st-abandon-bg); border: 1px solid var(--st-abandon); }
-.tk-input { width: 100%; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; transition: border-color var(--fast) var(--ease); }
+/* min-width:0 is load-bearing, not tidiness: an <input> carries an intrinsic
+   min-content width (~176px), so inside a flex row `flex: 1` CANNOT shrink it
+   and the row overflows its panel instead. That was live on the Documents row
+   in both the drawer and the full page — two inputs plus a button needing
+   ~460px inside a 344px column. */
+.tk-input { width: 100%; min-width: 0; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; transition: border-color var(--fast) var(--ease); }
 .tk-input:focus { border-color: var(--accent-line); }
 textarea.tk-input { resize: vertical; line-height: 1.55; }
 .tk-lbl { display: block; font-family: var(--f-display); font-weight: 600; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 6px; }

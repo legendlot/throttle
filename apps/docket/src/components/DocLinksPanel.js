@@ -38,9 +38,9 @@ export function DocLinksPanel({ task, session, canEdit, onChange }) {
           </div>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Label (optional)" style={{ ...input, flex: 1 }} disabled={busy} />
-        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…" style={{ ...input, flex: 2 }} disabled={busy} />
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Label (optional)" style={{ ...input, flex: '1 1 110px', minWidth: 0 }} disabled={busy} />
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…" style={{ ...input, flex: '2 1 140px', minWidth: 0 }} disabled={busy} />
         <button style={{ ...btn, opacity: busy || !validUrl ? 0.6 : 1 }} onClick={add} disabled={busy || !validUrl}>Add link</button>
       </div>
     </div>
