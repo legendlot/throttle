@@ -1022,6 +1022,19 @@ export default function DispatchShipmentsPage() {
                               STALE {s.idle_days}d
                             </span>
                           )}
+                          {/* Carton-raid nudge (S308). Pulling a car from a packed carton for
+                              a single-unit order is routine and is NOT blocked — but it drops
+                              packed_qty with no replacement scanned, so the manifest goes short
+                              silently. DSO-0381 lost 23 units in 3 days; DSO-0236 shipped 71/72
+                              for the same reason. Needs BOTH short and post-pack removals —
+                              short-but-never-packed is normal and must not flag. */}
+                          {s.raided && (
+                            <span title={`Short by ${fmt(s.short_units)} unit(s) · ${fmt(s.removed_after_pack)} taken back out after packing. Open the shipment and check "Removed after packing" — if a replacement went in physically, it was never scanned.`}
+                              style={{ fontSize: 9, fontWeight: 700, color: 'var(--bad-fg)', border: '1px solid var(--bad-bd)',
+                                background: 'var(--bad-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                              SHORT {fmt(s.short_units)}
+                            </span>
+                          )}
                           {s.tracking_number && (
                             <span title={`Tracked${s.courier_partner ? ` · ${s.courier_partner}` : ''}: ${s.tracking_number}`}
                               style={{ display: 'inline-flex', color: 'var(--blue-bright)', flexShrink: 0 }}>
