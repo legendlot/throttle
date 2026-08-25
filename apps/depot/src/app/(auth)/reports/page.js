@@ -571,7 +571,12 @@ export default function ReportsPage() {
             <div style={{ marginBottom: 18 }}>
               <div style={sectionHead}>DOUT scan compliance</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
-                <KpiCard label="Compliance" value={`${Number(data.dout_compliance.compliance_pct ?? 0).toFixed(1)}%`} />
+                {/* ⚠️ `?? 0` here would print "0.0%" for a period with NO boxes at all, which
+                    reads as total non-compliance rather than "nothing happened". The RPC returns
+                    NULL when the denominator is empty; show a dash. (Hostile review, S308.) */}
+                <KpiCard label="Compliance"
+                  value={data.dout_compliance.compliance_pct == null
+                    ? '—' : `${Number(data.dout_compliance.compliance_pct).toFixed(1)}%`} />
                 <KpiCard label="Boxes scanned out" value={nf(data.dout_compliance.boxes_scanned)} />
                 <KpiCard label="Closed without scanning" value={nf(data.dout_compliance.boxes_button)} />
                 <KpiCard label="Unexplained" value={nf(data.dout_compliance.boxes_unexplained)} />
