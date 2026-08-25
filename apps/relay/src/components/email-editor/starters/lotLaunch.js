@@ -245,8 +245,9 @@ export const LOT_LAUNCH_MJML = `<mjml>
           <a href="https://legendoftoys.com" style="color:#8A8A8A;text-decoration:underline;">Visit the store</a>
         </mj-text>
         <mj-text color="#3E3E3E" font-size="11px" line-height="18px" align="center" padding="0">
-          Fraternitas Ventures Private Limited &middot; No 938, 3rd Cross, 1st Block, HRBR Layout,
-          Kalyanagar, Bangalore, Karnataka 560043, India
+          Fraternitas Ventures Private Limited &middot; 1st Floor, Site No. 34, 35, 39 &amp; 40,
+          Social Coworking Spaces - Community #3, Banaswadi Ring Road, Horamavu Main Road,
+          Bengaluru, Karnataka 560043, India
         </mj-text>
       </mj-column>
     </mj-section>

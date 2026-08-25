@@ -46,6 +46,12 @@ function PrintInner() {
   const id = params.get('id');
   const { session } = useAuth();
   const [data, setData] = useState(null);
+  // Letterhead address. Read from company_addresses (is_registered_office) — NEVER
+  // hardcode it: this block held the pre-2026-08 Kalyanagar address for months after
+  // the GST principal place of business moved, so every printed challan carried a
+  // stale letterhead while the body block below (from the challan's own stored
+  // from_address) was correct. Two addresses, one document, one of them wrong.
+  const [company, setCompany] = useState(null);
   const [loading, setLoading] = useState(true);
   const printed = useRef(false);
 
@@ -53,8 +59,13 @@ function PrintInner() {
     if (!id || !session) return;
     setLoading(true);
     try {
-      const r = await garageFetch('getDeliveryChallan', { id }, session);
+      const [r, addrs] = await Promise.all([
+        garageFetch('getDeliveryChallan', { id }, session),
+        garageFetch('getCompanyAddresses', {}, session).catch(() => []),
+      ]);
       setData(r);
+      const list = Array.isArray(addrs) ? addrs : [];
+      setCompany(list.find((a) => a.is_registered_office) || null);
     } catch (e) {
       // surface in console; print won't proceed
       console.error(e);
@@ -129,11 +140,12 @@ function PrintInner() {
             <Logo />
           </div>
           <div style={{ textAlign: 'right', fontSize: 11, lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 600 }}>Fraternitas Ventures Private Limited</div>
-            <div>No 938, 3rd Cross, 1st Block, HRBR Layout,</div>
-            <div>Kalyanagar, Bangalore - 560043</div>
-            <div>+91 98809 62323</div>
-            <div>carecrew@legendoftoys.com</div>
+            <div style={{ fontWeight: 600 }}>{company?.legal_name || 'Fraternitas Ventures Private Limited'}</div>
+            {company?.line1 && <div>{company.line1}</div>}
+            {company?.line2 && <div>{company.line2}</div>}
+            {company && <div>{[company.city, company.state].filter(Boolean).join(', ')}{company.pincode ? ` - ${company.pincode}` : ''}</div>}
+            {company?.phone && <div>{company.phone}</div>}
+            {company?.email && <div>{company.email}</div>}
           </div>
         </div>
 
