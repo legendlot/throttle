@@ -46,7 +46,9 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     .filter(p => p.product_code)
     .map(p => {
       const label = [p.name, p.model, p.color].filter(Boolean).join(' · ');
-      return { value: label, label, product_code: p.product_code };
+      // sku rides along for the list-price lookup (S309) — product_prices is
+      // sku-keyed, while COGS is product_code-keyed. getCatalogs returns both.
+      return { value: label, label, product_code: p.product_code, sku: p.sku || null };
     })
     .filter((o, i, a) => a.findIndex(x => x.value === o.value) === i);
 
@@ -69,14 +71,34 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   // `opt` is the picked option (carrying the real product_code) or null for a typed-in product.
   async function onProductPicked(i, label, opt) {
     const code = opt?.product_code || null;
-    setRow(i, { product_code: label, product_ref: code, cogs_inr: null });
-    if (!code || !session) return;
-    try {
-      const r = await ignitionopsGet('getProductCogs', { product_code: code }, session);
-      const cogs = r?.cogs_inr;
-      if (cogs == null) return;   // uncosted variant — leave the field manual rather than write 0
-      onChangeRef.current(linesRef.current.map((l, idx) => (idx === i ? { ...l, goodies_cost: cogs, cogs_inr: cogs } : l)));
-    } catch { /* leave goodies as manual */ }
+    const sku = opt?.sku || null;
+    setRow(i, { product_code: label, product_ref: code, cogs_inr: null, list_price_inr: null });
+    if (!session || (!code && !sku)) return;
+    // COGS and list price are fetched together but do NOT play the same role.
+    //
+    // ⚠️ COGS is the cost basis and the ONLY thing that auto-fills goodies_cost
+    // (S273, Reann #2). List price is shown as REFERENCE and never written
+    // automatically. They are different numbers by the whole gross margin — a
+    // silent fallback to list price on an uncosted variant would leave one column
+    // holding some rows at cost and some at retail, which is how a spend metric
+    // quietly stops meaning anything. Where COGS is unknown the user is offered
+    // the list price explicitly and chooses.
+    const [cogsRes, priceRes] = await Promise.all([
+      code ? ignitionopsGet('getProductCogs', { product_code: code }, session).catch(() => null) : null,
+      sku ? ignitionopsGet('getProductPrice', { sku }, session).catch(() => null) : null,
+    ]);
+    const cogs = cogsRes?.cogs_inr;
+    // A ₹0 list price is a real answer for creatorshipment-*/prize SKUs, but it is
+    // not a useful reference, so treat it as unknown rather than showing "List ₹0".
+    const listRaw = priceRes?.price?.price;
+    const list = (listRaw == null || Number(listRaw) <= 0) ? null : Number(listRaw);
+    onChangeRef.current(linesRef.current.map((l, idx) => {
+      if (idx !== i) return l;
+      const next = { ...l, list_price_inr: list };
+      // uncosted variant — leave the field manual rather than write 0
+      if (cogs != null) { next.goodies_cost = cogs; next.cogs_inr = cogs; }
+      return next;
+    }));
   }
 
   function addRow() { onChange([...lines, emptyLine()]); }
@@ -124,6 +146,18 @@ export default function ProductLinesEditor({ value, onChange, session }) {
             {i === 0 && <div style={lbl}>Goodies ₹</div>}
             <input type="number" min="0" value={l.goodies_cost ?? ''}
               onChange={e => setRow(i, { goodies_cost: e.target.value })} placeholder="0" style={inp} />
+            {/* Reference only (S309). Shows what the product retails for so nobody has
+                to go and look it up, which is what Reann was doing by hand. "Use" is a
+                deliberate click, never automatic — see onProductPicked for why. */}
+            {l.list_price_inr != null && (
+              <div style={hint}>
+                List ₹{Number(l.list_price_inr).toLocaleString('en-IN')}
+                {Number(l.goodies_cost) !== Number(l.list_price_inr) && (
+                  <button type="button" style={hintBtn}
+                    onClick={() => setRow(i, { goodies_cost: l.list_price_inr })}>use</button>
+                )}
+              </div>
+            )}
           </div>
           <div>
             {i === 0 && <div style={lbl}>Shipping ₹</div>}
@@ -157,6 +191,8 @@ export function linesToPayload(lines) {
     }));
 }
 
+const hint = { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' };
+const hintBtn = { background: 'transparent', border: 'none', padding: 0, color: 'var(--state-info-fg, #6aa9ff)', fontFamily: 'var(--font-mono)', fontSize: 10.5, textDecoration: 'underline', cursor: 'pointer' };
 const lbl = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
 const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
 const removeBtn = { padding: '6px 10px', background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 16, lineHeight: 1, cursor: 'pointer' };
