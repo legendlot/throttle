@@ -557,6 +557,34 @@ export default function ReportsPage() {
             <KpiCard label="Challan value" value={inr(ch?.value)} />
             <KpiCard label="Fulfilment requests" value={nf(fr?.total)} />
           </div>
+
+          {/* ── DOUT scan compliance (S308) ────────────────────────────────
+              ⚠️ Measured over BOXES, never units. The old unit-weighted ratio
+              read ~50% and was an artefact of carton size, not a floor miss:
+              markShipmentShipped legitimately closes a shipment's remaining
+              boxes with no scan, and those are bulk cartons (~14 units each)
+              against ~1.3 for scanner-closed ones.
+              "Closed without scanning" is EXCLUDED from the rate — it is a
+              sanctioned admin path, not non-compliance. "Unexplained" is shown
+              even at zero so a new one cannot hide. */}
+          {data.dout_compliance && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={sectionHead}>DOUT scan compliance</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+                <KpiCard label="Compliance" value={`${Number(data.dout_compliance.compliance_pct ?? 0).toFixed(1)}%`} />
+                <KpiCard label="Boxes scanned out" value={nf(data.dout_compliance.boxes_scanned)} />
+                <KpiCard label="Closed without scanning" value={nf(data.dout_compliance.boxes_button)} />
+                <KpiCard label="Unexplained" value={nf(data.dout_compliance.boxes_unexplained)} />
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 8, lineHeight: 1.5 }}>
+                Counted in boxes, not units. <strong>Closed without scanning</strong> is the
+                Mark&nbsp;shipped button on a shipment — a normal path, so it is left out of the
+                percentage rather than counted against the floor.{' '}
+                <strong>Unexplained</strong> is a box that shipped with no scan and no shipment
+                behind it; that should stay at zero.
+              </div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 14 }}>
             <RankChart title="Units dispatched by channel" data={(data.shipped_by_channel || []).map(r => ({ channel: r.channel_name || r.channel || '—', count: Number(r.units ?? r.count ?? r.qty ?? 0) }))} labelKey="channel" />
             <RankChart title="Shipments by channel" data={(sh?.by_channel || []).map(r => ({ channel: r.channel, count: r.shipments }))} labelKey="channel" />
