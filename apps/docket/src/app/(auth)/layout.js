@@ -60,13 +60,21 @@ function AuthLayoutInner({ children }) {
     }).catch(() => {});
   }, [session]);
   useEffect(() => { loadMe(); }, [loadMe]);
+  // `counts-changed` fires from docketopsPost on EVERY successful task write, so it
+  // arrives in bursts (a bulk update, or the drawer saving several fields). Debounced
+  // to one trailing getMe per burst — without it a 40-task bulk action would fire 40.
+  // spaces/programs-changed share the debounce: they also just re-run getMe.
   useEffect(() => {
-    const h = () => loadMe();
+    let t = null;
+    const h = () => { if (t) clearTimeout(t); t = setTimeout(loadMe, 400); };
     window.addEventListener('docket:spaces-changed', h);
     window.addEventListener('docket:programs-changed', h);
+    window.addEventListener('docket:counts-changed', h);
     return () => {
+      if (t) clearTimeout(t);
       window.removeEventListener('docket:spaces-changed', h);
       window.removeEventListener('docket:programs-changed', h);
+      window.removeEventListener('docket:counts-changed', h);
     };
   }, [loadMe]);
 
@@ -222,11 +230,17 @@ function MobileSheet({ activeKey, spaces, programs, canViewDashboard, isAdmin, o
       <div className="dkm-sheet-grid">{items}</div>
     </div>
   );
-  const item = (key, label, Icon, dot) => (
+  // `count` mirrors the rail's badge (S309). The sheet is the rail's mobile twin, so
+  // a badge that exists on one and not the other is a divergence — Programs already
+  // had counts on the rail and none here. Undefined/0 renders nothing, same rule as
+  // the rail: the worker omits task_count for a space with no open work, and a "0"
+  // badge reads as a broken counter rather than an empty space.
+  const item = (key, label, Icon, dot, count) => (
     <button key={key} className={`dkm-sheet-item${activeKey === key ? ' active' : ''}`} onClick={() => onGo(key)}>
       {Icon ? <Icon size={17} strokeWidth={1.75} style={{ flexShrink: 0 }} />
         : <span style={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: dot || 'var(--border-strong)' }} />}
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      {count ? <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5, color: 'var(--t3)', flexShrink: 0 }}>{count}</span> : null}
     </button>
   );
   return (
@@ -255,8 +269,8 @@ function MobileSheet({ activeKey, spaces, programs, canViewDashboard, isAdmin, o
         </div>
 
         {section('Docket', fixed.map((f) => item(f.key, f.label, f.icon)))}
-        {section('Programs', (programs || []).map((p) => item(`/tasks?program=${p.id}`, p.name, null, p.color || personColor(p.id))))}
-        {section('Spaces', privates.map((s) => item(`/tasks?space=${s.id}`, s.name, null, personColor(s.id))))}
+        {section('Programs', (programs || []).map((p) => item(`/tasks?program=${p.id}`, p.name, null, p.color || personColor(p.id), p.task_count)))}
+        {section('Spaces', privates.map((s) => item(`/tasks?space=${s.id}`, s.name, null, personColor(s.id), s.task_count)))}
       </div>
     </div>
   );

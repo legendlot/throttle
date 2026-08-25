@@ -47,6 +47,10 @@ export function DocketSidebar({
   const privates = (spaces || []).filter(s => s.is_private);
   const mySpaces = privates.filter(s => s.is_owner);
   const otherSpaces = privates.filter(s => !s.is_owner);
+  // General is the non-private (default) space. It carries a badge like any other
+  // (S309); the worker omits task_count entirely when a space has no open work, so
+  // `count` stays undefined and NavItem renders nothing rather than a "0".
+  const general = (spaces || []).find(s => !s.is_private);
   const go = (route) => () => onSelect(route);
   const isAdminActive = activeKey.startsWith('/admin');
   const startsWith = (p) => activeKey === p || activeKey.startsWith(p + '/');
@@ -106,12 +110,12 @@ export function DocketSidebar({
             returned by the worker when no space_id is set), then the caller's own private
             spaces, then private spaces others added them to. */}
         <div className="sb-group-label">Common</div>
-        <NavItem sub dot="var(--text-4)" label="General" collapsed={collapsed} active={activeKey === '/tasks'} onClick={go('/tasks')} />
+        <NavItem sub dot="var(--text-4)" label="General" count={general?.task_count} collapsed={collapsed} active={activeKey === '/tasks'} onClick={go('/tasks')} />
 
         <GroupLabel label="My spaces" collapsed={collapsed} open={groupOpen('mySpaces', mySpaceActive)} onToggle={() => toggleGroup('mySpaces')} />
         {groupOpen('mySpaces', mySpaceActive) && <>
           {mySpaces.map(s => (
-            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} collapsed={collapsed}
+            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} count={s.task_count} collapsed={collapsed}
               active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
           ))}
           <NavItem sub dashed label="New space" collapsed={collapsed} active={false} onClick={go('/tasks?space=new')} />
@@ -120,7 +124,7 @@ export function DocketSidebar({
         {otherSpaces.length > 0 && <>
           <GroupLabel label="By others" collapsed={collapsed} open={groupOpen('otherSpaces', otherSpaceActive)} onToggle={() => toggleGroup('otherSpaces')} />
           {groupOpen('otherSpaces', otherSpaceActive) && otherSpaces.map(s => (
-            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} collapsed={collapsed}
+            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} count={s.task_count} collapsed={collapsed}
               active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
           ))}
         </>}

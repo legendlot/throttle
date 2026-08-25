@@ -405,11 +405,22 @@ async function getMe(url, auth, env) {
   // Programs sidebar (cross-space): only programs the caller has >=1 visible task in, with counts.
   const memberSpaceIds = spaces.filter(s => s.is_private).map(s => s.id);
   const defaultId = (spaces.find(s => !s.is_private) || {}).id || await defaultSpaceId(env);
-  const programs = await programsForUser(auth, memberSpaceIds, defaultId, env);
+  // Space badges (S309) run alongside the programs call, not after it — both are
+  // independent reads and getMe is on the app-load path.
+  const [programs, spaceCounts] = await Promise.all([
+    programsForUser(auth, memberSpaceIds, defaultId, env),
+    spaceCountsForUser(auth, spaces.map(s => s.id), env),
+  ]);
+  // A space with no open work is ABSENT from the RPC result and is left without a
+  // task_count entirely, so the sidebar renders no badge rather than a "0" — a zero
+  // badge reads as a broken counter, not as an empty space.
+  const countBySpace = Object.create(null);
+  for (const c of spaceCounts) countBySpace[c.space_id] = Number(c.task_count) || 0;
   return ok({
     id: auth.userId, email: auth.email, role: auth.role, full_name: auth.fullName,
     permissions: auth.permissions || {}, employee_id: auth.employeeId, department_id: auth.departmentId,
-    spaces, programs, can_view_dashboard,
+    spaces: spaces.map(s => (countBySpace[s.id] ? { ...s, task_count: countBySpace[s.id] } : s)),
+    programs, can_view_dashboard,
   });
 }
 // Cross-space program scope: the caller's accessible private spaces (owned+member) + General id.
@@ -423,6 +434,20 @@ async function programsForUser(auth, memberSpaceIds, defaultId, env) {
   const r = await sbDocket(`/rest/v1/rpc/programs_for_user`, env, { method: 'POST', body: JSON.stringify({
     p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
     p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
+  }) });
+  return (r.ok && r.data) || [];
+}
+// Sidebar space badges (S309). Counts OPEN, non-recurring, TOP-LEVEL tasks only —
+// see migration 0011 for why, and note it deliberately will NOT equal the row count
+// on the board you land on (the board applies no status filter and nests sub-tasks).
+// Visibility inside the RPC mirrors list_tasks, so General is narrowed to the
+// caller's own relation unless they hold view-all; passing the space ids alone
+// would otherwise leak the SIZE of everyone's work in General.
+async function spaceCountsForUser(auth, spaceIds, env) {
+  if (!spaceIds.length) return [];
+  const r = await sbDocket(`/rest/v1/rpc/space_counts_for_user`, env, { method: 'POST', body: JSON.stringify({
+    p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
+    p_view_all: canViewAll(auth), p_space_ids: spaceIds,
   }) });
   return (r.ok && r.data) || [];
 }
