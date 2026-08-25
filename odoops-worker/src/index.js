@@ -4229,6 +4229,67 @@ async function sendConnectorAlerts(env) {
   return { sent: fresh.length, stale: stale.length };
 }
 
+// ── Fulfilment alerts: a parcel stranded at `manifested` (S308) ─────────────────────────────
+// A parcel handed to Delhivery and never collected. Every OTHER lifecycle either progresses or
+// is terminal, so `manifested` can absorb parcels forever — one sat 20 days and was found by
+// accident during an unrelated audit.
+//
+// ⚠️ Lives in public.fulfilment_alert_outbox, NOT sales.connector_alert_outbox. That table is
+// connector HEALTH (channel_id + adapter_kind); a stranded parcel is a fulfilment fact and does
+// not fit its schema or its name. Detection is set-based in the DB with a 20h cooldown; this
+// only drains. odoops runs it because it already owns ecom_shipments, the webhook and the cron —
+// courierops has the cron but no Slack webhook.
+//
+// ⚠️ ONE row carrying a COUNT, never one per parcel: a backlog day would otherwise fire hundreds.
+// ⚠️ Threshold is 4 days, not 48h — Delhivery re-scans daily between manifest and pickup, so a
+// 48h rule pages on ordinary weekend lag.
+function fulfilmentAlertText(rows) {
+  const lines = ['*Parcels stuck with the courier*'];
+  for (const r of rows) {
+    const d = r.detail || {};
+    const sample = (d.sample || []).map(x => `${x.order || x.awb}`).join(', ');
+    lines.push(
+      `• *${d.parcels}* parcel(s) manifested with Delhivery and not collected for ${d.stall_days}+ days` +
+      (d.cod_parcels ? ` — ${d.cod_parcels} COD worth ₹${Number(d.cod_value || 0).toLocaleString('en-IN')}` : '') +
+      (d.oldest_days ? ` · oldest ${d.oldest_days}d` : '') +
+      (sample ? `\n   e.g. ${sample}` : ''));
+  }
+  lines.push('_Check whether they are physically in the warehouse, then chase pickup or refund._');
+  return lines.join('\n');
+}
+
+async function sendFulfilmentAlerts(env) {
+  try { await sbPublic('/rest/v1/rpc/detect_manifested_stalls', {
+          method: 'POST', body: JSON.stringify({ p_stall_days: 4 }) }); }
+  catch (e) { console.error('[Slack:ops] detect_manifested_stalls failed:', e?.message || e); }
+
+  const pend = await sbPublic('/rest/v1/fulfilment_alert_outbox?status=eq.pending&order=detected_at.asc&limit=50');
+  const rows = (pend.ok && Array.isArray(pend.data)) ? pend.data : [];
+  if (!rows.length) return { sent: 0 };
+
+  // Fail OPEN, same convention as the connector drainer: with no webhook the rows stay pending
+  // rather than being marked sent, so nothing is silently swallowed.
+  if (!env.SLACK_WEBHOOK_OPS) {
+    console.log('[Slack:ops] no SLACK_WEBHOOK_OPS —', rows.length, 'fulfilment alert(s) held pending');
+    return { sent: 0, held: rows.length };
+  }
+
+  let posted = false;
+  try {
+    const r = await fetch(env.SLACK_WEBHOOK_OPS, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: fulfilmentAlertText(rows) }) });
+    posted = r.ok; if (!r.ok) console.error('[Slack:ops] fulfilment webhook', r.status);
+  } catch (e) { console.error('[Slack:ops] fulfilment post failed:', e?.message || e); }
+
+  // Marked sent ONLY on a confirmed 200 — a failed post retries next tick rather than vanishing.
+  if (!posted) return { sent: 0, held: rows.length, error: 'post failed' };
+  await sbPublic(`/rest/v1/fulfilment_alert_outbox?id=in.(${rows.map(r => r.id).join(',')})`, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ status: 'sent', sent_at: new Date().toISOString() }) });
+  return { sent: rows.length };
+}
+
 // The ShopifyQL for daily online-store sessions. Kept as a one-liner so it's trivial to adjust if
 // the live probe shows a different keyword works (day vs date, SINCE window form, metric name).
 const SHOPIFYQL_SESSIONS = (lookbackDays) =>
@@ -4397,6 +4458,15 @@ export default {
       const c = await sendConnectorAlerts(env);
       if (c?.sent || c?.held) console.log('odoops cron: connector alerts', JSON.stringify(c));
     } catch (e) { console.error('odoops cron (connector alerts) failed:', e?.message || e); }
+    // Stranded-parcel check runs ONCE a day (19:00 UTC = 00:30 IST), not hourly: the population
+    // changes on a courier's daily rhythm, and the DB cooldown would suppress the other 23 ticks
+    // anyway. Best-effort; never disturbs the rest of the cron.
+    try {
+      if (new Date().getUTCHours() === 19) {
+        const f = await sendFulfilmentAlerts(env);
+        if (f?.sent || f?.held) console.log('odoops cron: fulfilment alerts', JSON.stringify(f));
+      }
+    } catch (e) { console.error('odoops cron (fulfilment alerts) failed:', e?.message || e); }
     // Hourly readings are pruned to the retention window ONCE a day (not every tick) — 19:00 UTC
     // = 00:30 IST, just after the IST date rolls. Best-effort.
     try {
