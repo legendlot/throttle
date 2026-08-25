@@ -100,7 +100,13 @@ function NewChallanInner() {
   const [toAddress, setToAddress] = useState('');
   const [toGstin, setToGstin]     = useState('');
 
-  const [purpose, setPurpose] = useState('Material transfer');
+  // ⚠️ Starts EMPTY on purpose (S308). It used to default to 'Material transfer', and the
+  // default did the choosing: 128 of 128 challans since 2026-06-02 carry it and `Job work` has
+  // never once been selected — so job-work challans cannot be filtered for ITC-04 even though
+  // ~62 of them demonstrably went to job-work vendors. Fixed at the source form rather than by
+  // inferring the purpose from the vendor, because those same vendors also receive genuine
+  // material transfers ([[feedback_fix_trivial_input_errors_at_source]]).
+  const [purpose, setPurpose] = useState('');
   const [notes, setNotes]     = useState('');
 
   const [transportMode, setTransportMode]       = useState('Road');
@@ -160,7 +166,7 @@ function NewChallanInner() {
         setFromId('');
         setFromName(h.from_name || ''); setFromAddress(h.from_address || ''); setFromGstin(h.from_gstin || '');
         setToName(h.to_name || ''); setToAddress(h.to_address || ''); setToGstin(h.to_gstin || '');
-        setPurpose(h.purpose || 'Material transfer'); setNotes(h.notes || '');
+        setPurpose(h.purpose || ''); setNotes(h.notes || '');
         setTransportMode(h.transport_mode || 'Road'); setVehicleNumber(h.vehicle_number || ''); setTransporterName(h.transporter_name || '');
         setEwbNumber(h.ewb_number || ''); setEwbDate(h.ewb_date ? String(h.ewb_date).slice(0, 10) : '');
         setGstRate(Number(h.gst_rate) || 18);
@@ -209,6 +215,7 @@ function NewChallanInner() {
     if (!fromAddress.trim()) errors.push('From address required');
     if (!toName.trim())      errors.push('To name required');
     if (!toAddress.trim())   errors.push('To address required');
+    if (!purpose)            errors.push('Purpose required — pick Job work for anything going to a job-work vendor, so it can be filed for ITC-04');
     const validLines = lines.filter(l => l.description.trim() && Number(l.quantity) > 0);
     if (validLines.length === 0) errors.push('At least one line with description + quantity required');
     return errors;
@@ -342,8 +349,9 @@ function NewChallanInner() {
             <input type="date" value={challanDate} onChange={(e) => setChallanDate(e.target.value)} style={inp} />
           </div>
           <div>
-            <span style={lbl}>Purpose</span>
+            <span style={lbl}>Purpose *</span>
             <select value={purpose} onChange={(e) => setPurpose(e.target.value)} style={inp}>
+              <option value="">Select a purpose…</option>
               {PURPOSES.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
