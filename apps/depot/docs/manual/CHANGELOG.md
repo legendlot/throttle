@@ -1,5 +1,13 @@
 # Changelog — Depot Operations Manual
 
+## 1.5.1 — 2026-08-25 (Session 308)
+House-style sweep: removed every em dash from the chapter copy (Reports, Unit Restock,
+Dispatch Scan Stations), replacing them with commas, colons, semicolons or parentheses as the
+sentence needed. Three UI section names in Reports now use the middot the screen actually
+shows ("Activity · Scans & floor operations"), so the manual matches the app rather than
+restyling it. The two dashes in Overview Dashboard are kept deliberately: they name the dash
+glyph the screen displays, which house style allows.
+
 ## 1.5.0 — 2026-08-25 (Session 308)
 **Scanner / Dispatch Scan Stations:** packing now takes two scans. Added a
 **Scanning the courier label at Pack** section covering the courier (AWB) scan alongside the box
