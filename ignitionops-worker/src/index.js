@@ -3075,9 +3075,13 @@ export default {
     // only be settled by asking the live installation, never by reading either doc.
     // ignitionops authenticates as the PITSTOP CS-lookup app, not the Odo app
     // (PATTERN-084), so this also confirms WHICH app a release must target.
-    // Gated on the existing IGNITION_BRIDGE_TOKEN; no new secret.
+    // Gated on its OWN token, deliberately NOT IGNITION_BRIDGE_TOKEN: that one is
+    // shared with csops (which validates it at /bridge/ignition), so anything that
+    // would ever force a rotation of it drags a second worker along in lockstep —
+    // the WA_SYNC_TOKEN/INGEST_TOKEN trap in reference/integrations.md. A diagnostic
+    // endpoint should not be able to do that.
     if (url.pathname === '/internal/shopify-app-info' && request.method === 'POST') {
-      const want = env.IGNITION_BRIDGE_TOKEN;
+      const want = env.IGNITION_PROBE_TOKEN;
       const a = request.headers.get('Authorization') || '';
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return err('unauthorised', 401);
