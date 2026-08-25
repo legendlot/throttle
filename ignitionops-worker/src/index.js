@@ -1244,19 +1244,35 @@ async function getLocations(url, auth, env) {
 
 async function getCatalogs(url, auth, env) {
   // Static enums + product list from store schema.
-  const productsRes = await sbStore(
-    // product_code added S273 (Reann #2) — without it the picker cannot record a real product
-    // reference, which is what made COGS unlookupable. Inactive rows excluded: a discontinued
-    // variant should not be pickable on a new deal.
+  // ⛔ FIXED S309: this used sbStore(), i.e. Accept-Profile 'store' — but product_master
+  // lives in PUBLIC and has no `store` counterpart. Every call returned PostgREST
+  // PGRST205 "Could not find the table 'store.product_master' in the schema cache",
+  // the frontend's `Array.isArray(r?.products) ? … : []` turned that error object into
+  // an EMPTY catalogue, and the product picker silently offered zero options — so every
+  // product on every deal was typed free-hand. That is precisely Reann's "we still have
+  // to enter the product name and price manually" (#bugs 2026-08-18), and it also killed
+  // the whole S273 COGS chain in the field: with nothing to pick, `opt` was always null,
+  // so product_ref was never recorded and getProductCogs was never called.
+  // Cross-schema READ with a per-call profile override, same as getProductCogs.
+  // product_code added S273 (Reann #2) — without it the picker cannot record a real product
+  // reference, which is what made COGS unlookupable. Inactive rows excluded: a discontinued
+  // variant should not be pickable on a new deal.
+  const productsRes = await sb(
     `/rest/v1/product_master?select=name:product,sku,product_code,model,color&is_active=eq.true&order=product`,
     env,
-  ).catch(() => ({ data: [] }));
+    { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
+  ).catch(() => ({ ok: false, data: [] }));
   // Managed category options (both axes) — admin-extendable via addCategoryOption.
   const catOptsRes = await sb(
     `/rest/v1/category_options?active=is.true&select=axis,label,sort_order&order=axis,sort_order,label`,
     env,
   ).catch(() => ({ data: [] }));
   const catOpts = catOptsRes.data || [];
+  // Never hand the client an error object under `products`: the picker does
+  // `Array.isArray(r?.products) ? … : []`, so a failed read degrades to an empty
+  // catalogue that looks exactly like a real one. Log it and send a real array.
+  const products = Array.isArray(productsRes.data) ? productsRes.data : [];
+  if (!products.length) console.error('[getCatalogs] product_master read returned no rows', JSON.stringify(productsRes.data));
   return ok({
     influencer_types: ['nano','micro','macro','brand','store'],
     deal_types: ['paid','barter','affiliate','paid_plus_affiliate'],
@@ -1267,7 +1283,7 @@ async function getCatalogs(url, auth, env) {
     list_statuses: ['master','b_list','archived'],
     quality_ratings: ['green','yellow','red','unrated'],
     directed_to: ['website','amazon','flipkart'],
-    products: productsRes.data || [],
+    products,
     category_options: {
       format: catOpts.filter(o => o.axis === 'format').map(o => o.label),
       niche:  catOpts.filter(o => o.axis === 'niche').map(o => o.label),
