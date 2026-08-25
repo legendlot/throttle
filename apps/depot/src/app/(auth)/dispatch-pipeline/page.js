@@ -82,6 +82,10 @@ export default function DispatchPipelinePage() {
     with_production:    products.reduce((s, p) => s + (p.totals?.with_production    || 0), 0),
     unallocated_retail: products.reduce((s, p) => s + (p.totals?.unallocated_retail || 0), 0),
     unallocated_ecom:   products.reduce((s, p) => s + (p.totals?.unallocated_ecom   || 0), 0),
+    // Legacy held units with no packing scan. Were silently counted as Retail until
+    // 2026-08-25; they are genuinely unknown, so they get their own column. ⚠️ Must stay
+    // inside every Unalloc TOTAL below or the pipeline quietly loses 112 units.
+    unallocated_unknown: products.reduce((s, p) => s + (p.totals?.unallocated_unknown || 0), 0),
     channels: channels.reduce((acc, ch) => {
       acc[ch] = products.reduce((s, p) => s + (p.totals?.channels?.[ch] || 0), 0);
       return acc;
@@ -139,6 +143,7 @@ export default function DispatchPipelinePage() {
                   <th className="eyebrow" style={numTh}>With Production</th>
                   <th className="eyebrow" style={numTh}>Unalloc (R)</th>
                   <th className="eyebrow" style={numTh}>Unalloc (E)</th>
+                  <th className="eyebrow" style={numTh} title="Legacy returns/RTO units with no packing scan — channel genuinely unknown, not Retail.">Unalloc (?)</th>
                   <th className="eyebrow" style={numTh}>Unalloc (Total)</th>
                   <th className="eyebrow" style={numTh}>Total Allocated</th>
                   {channels.map(ch => (
@@ -155,7 +160,8 @@ export default function DispatchPipelinePage() {
                   <td className="num" style={{ ...numTd(totals.with_production, 'var(--t1)', true), ...totalsSticky }}>{fmtCell(totals.with_production)}</td>
                   <td className="num" style={{ ...numTd(totals.unallocated_retail, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail)}</td>
                   <td className="num" style={{ ...numTd(totals.unallocated_ecom, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_ecom)}</td>
-                  <td className="num" style={{ ...numTd(totals.unallocated_retail + totals.unallocated_ecom, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail + totals.unallocated_ecom)}</td>
+                  <td className="num" style={{ ...numTd(totals.unallocated_unknown, 'var(--t3)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_unknown)}</td>
+                  <td className="num" style={{ ...numTd(totals.unallocated_retail + totals.unallocated_ecom + totals.unallocated_unknown, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail + totals.unallocated_ecom + totals.unallocated_unknown)}</td>
                   <td className="num" style={{ ...numTd(grandAlloc, 'var(--ok-fg)', true), ...totalsSticky }}>{fmtCell(grandAlloc)}</td>
                   {channels.map(ch => (
                     <td key={ch} className="num" style={{ ...numTd(totals.channels[ch], 'var(--info-fg)', true), ...totalsSticky }}>{fmtCell(totals.channels[ch])}</td>
@@ -187,7 +193,8 @@ export default function DispatchPipelinePage() {
                         <td className="num" style={numTd(p.totals?.with_production, 'var(--t1)')}>{fmtCell(p.totals?.with_production)}</td>
                         <td className="num" style={numTd(p.totals?.unallocated_retail, 'var(--yellow)')}>{fmtCell(p.totals?.unallocated_retail)}</td>
                         <td className="num" style={numTd(p.totals?.unallocated_ecom, 'var(--yellow)')}>{fmtCell(p.totals?.unallocated_ecom)}</td>
-                        <td className="num" style={numTd((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0), 'var(--yellow)')}>{fmtCell((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0))}</td>
+                        <td className="num" style={numTd(p.totals?.unallocated_unknown, 'var(--t3)')}>{fmtCell(p.totals?.unallocated_unknown)}</td>
+                        <td className="num" style={numTd((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0) + (p.totals?.unallocated_unknown || 0), 'var(--yellow)')}>{fmtCell((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0) + (p.totals?.unallocated_unknown || 0))}</td>
                         <td className="num" style={numTd(totalAlloc, 'var(--ok-fg)')}>{fmtCell(totalAlloc)}</td>
                         {channels.map(ch => (
                           <td key={ch} className="num" style={numTd(p.totals?.channels?.[ch], 'var(--info-fg)')}>{fmtCell(p.totals?.channels?.[ch])}</td>
@@ -204,7 +211,8 @@ export default function DispatchPipelinePage() {
                             <td className="num" style={numTd(v.with_production, 'var(--t1)')}>{fmtCell(v.with_production)}</td>
                             <td className="num" style={numTd(v.unallocated_retail, 'var(--yellow)')}>{fmtCell(v.unallocated_retail)}</td>
                             <td className="num" style={numTd(v.unallocated_ecom, 'var(--yellow)')}>{fmtCell(v.unallocated_ecom)}</td>
-                            <td className="num" style={numTd((v.unallocated_retail || 0) + (v.unallocated_ecom || 0), 'var(--yellow)')}>{fmtCell((v.unallocated_retail || 0) + (v.unallocated_ecom || 0))}</td>
+                            <td className="num" style={numTd(v.unallocated_unknown, 'var(--t3)')}>{fmtCell(v.unallocated_unknown)}</td>
+                            <td className="num" style={numTd((v.unallocated_retail || 0) + (v.unallocated_ecom || 0) + (v.unallocated_unknown || 0), 'var(--yellow)')}>{fmtCell((v.unallocated_retail || 0) + (v.unallocated_ecom || 0) + (v.unallocated_unknown || 0))}</td>
                             <td className="num" style={numTd(vTotal, 'var(--ok-fg)')}>{fmtCell(vTotal)}</td>
                             {channels.map(ch => (
                               <td key={ch} className="num" style={numTd(v.channels?.[ch], 'var(--info-fg)')}>{fmtCell(v.channels?.[ch])}</td>

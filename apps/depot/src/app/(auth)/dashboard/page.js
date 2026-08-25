@@ -270,7 +270,10 @@ export default function DepotOverview() {
   // On-hand finished goods by product (RTD + with-dispatch), allocated separate
   const stockRows = (stock || []).map(p => {
     const t = p.totals || {};
-    const withDispatch = (t.unallocated_retail || 0) + (t.unallocated_ecom || 0);
+    // Includes unallocated_unknown (S308): legacy held units with no packing scan used to
+    // be counted as Retail. They are still WITH DISPATCH — only their channel is unknown —
+    // so omitting them here would drop 112 units off this tile.
+    const withDispatch = (t.unallocated_retail || 0) + (t.unallocated_ecom || 0) + (t.unallocated_unknown || 0);
     const allocated = Object.values(t.channels || {}).reduce((s, n) => s + n, 0);
     const onHand = (t.with_production || 0) + withDispatch;
     return { product: p.product, rtd: t.with_production || 0, withDispatch, allocated, onHand };
