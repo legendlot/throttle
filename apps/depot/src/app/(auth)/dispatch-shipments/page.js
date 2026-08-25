@@ -676,7 +676,12 @@ export default function DispatchShipmentsPage() {
     ['ready', 'Ready'], ['shipped', 'Shipped'], ['cancelled', 'Cancelled'],
   ];
 
-  const cols = '150px 1.3fr 1fr 104px 120px 96px 96px 220px';
+  // REF track widened 150 → 214px (S308): it can now carry the shipment no + the SO
+  // badge + a nudge badge at once. At 150px a second badge overflowed the track and
+  // printed on top of the title (DSO-0381 with SO-0401 + PULLED 23). The cell also
+  // clips, so an unforeseen third badge fails inside its own column, never over a
+  // neighbour's. Taken out of the title (1.3fr), which already ellipsises.
+  const cols = '214px 1.3fr 1fr 104px 120px 96px 96px 220px';
 
   // Client-side search across shipment number, title, and channel name.
   const q = query.trim().toLowerCase();
@@ -999,12 +1004,12 @@ export default function DispatchShipmentsPage() {
                         onMouseEnter={(e) => { if (!isOpen) e.currentTarget.style.background = 'var(--surface-2)'; }}
                         onMouseLeave={(e) => { if (!isOpen) e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                          <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{s.shipment_no}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+                          <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap', flexShrink: 0 }}>{s.shipment_no}</span>
                           {s.sales_order_no && (
                             <span className="num" title={`Offline sales order ${s.sales_order_no}`}
                               style={{ fontSize: 9, fontWeight: 700, color: 'var(--info-fg)', border: '1px solid var(--info-bd)',
-                                background: 'var(--info-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                                background: 'var(--info-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                               {s.sales_order_no}
                             </span>
                           )}
@@ -1018,7 +1023,7 @@ export default function DispatchShipmentsPage() {
                           {s.stale_draft && (
                             <span title={`Draft, untouched for ${s.idle_days} days · ${fmt(s.draft_units_packed)} unit(s) sitting in ${s.draft_boxes} box(es). Dispatch it out or cancel it.`}
                               style={{ fontSize: 9, fontWeight: 700, color: 'var(--warn-fg)', border: '1px solid var(--warn-bd)',
-                                background: 'var(--warn-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                                background: 'var(--warn-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                               STALE {s.idle_days}d
                             </span>
                           )}
@@ -1035,7 +1040,7 @@ export default function DispatchShipmentsPage() {
                           {s.raided && (
                             <span title={`${fmt(s.removed_after_pack)} unit(s) taken back out after packing · shipment is short by ${fmt(s.short_units)}. Open it and check "Removed after packing" — if a replacement went in physically, it was never scanned.`}
                               style={{ fontSize: 9, fontWeight: 700, color: 'var(--bad-fg)', border: '1px solid var(--bad-bd)',
-                                background: 'var(--bad-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                                background: 'var(--bad-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                               PULLED {fmt(s.removed_after_pack)}
                             </span>
                           )}
