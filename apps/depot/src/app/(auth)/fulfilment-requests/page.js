@@ -26,6 +26,26 @@ function StatusPill({ status }) {
       color: c, border: `1px solid ${c}`, borderRadius: 4, padding: '2px 8px' }}>{status}</span>
   );
 }
+// ── Dates ───────────────────────────────────────────────────
+// All pinned to IST. A DATE column (order_date) is formatted from its
+// own parts and never routed through `new Date()`: a bare 'YYYY-MM-DD'
+// parses as UTC midnight, which renders a day early in any zone behind
+// UTC and would silently misdate an SLA on a non-IST browser.
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatDateOnly(dateStr) {
+  if (!dateStr) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+  if (!m) return '—';
+  return `${m[3]}-${MON[Number(m[2]) - 1]}-${m[1].slice(2)}`;
+}
+function formatDateTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const date = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' }).replace(/ /g, '-');
+  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+  return `${date} ${time}`;
+}
+
 const th = { padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 600 };
 const td = { padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', color: 'var(--t1)', whiteSpace: 'nowrap' };
 const lineKey = (l) => `${l.product || ''}|${l.model || ''}|${l.color || ''}`;
@@ -158,7 +178,9 @@ export default function FulfilmentRequestsPage() {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                <th style={th}>Request</th><th style={th}>Sales Order</th><th style={th}>Warehouse</th>
+                <th style={th}>Request</th><th style={th}>Sales Order</th>
+                <th style={th}>Order date</th><th style={th}>Accepted</th>
+                <th style={th}>Warehouse</th>
                 <th style={th}>Platform PO</th><th style={{ ...th, textAlign: 'right' }}>Units</th>
                 <th style={th}>Status</th><th style={th}>Mode</th>
               </tr></thead>
@@ -168,6 +190,8 @@ export default function FulfilmentRequestsPage() {
                     style={{ cursor: 'pointer', background: sel?.request?.id === r.id ? 'var(--surface2)' : 'transparent' }}>
                     <td style={{ ...td, color: 'var(--t1)', fontWeight: 700 }}>{r.request_no}</td>
                     <td style={td}>{r.sales_order_no}</td>
+                    <td style={td}>{formatDateOnly(r.so_order_date)}</td>
+                    <td style={{ ...td, color: r.accepted_at ? 'var(--t1)' : 'var(--t3)' }}>{formatDateTime(r.accepted_at)}</td>
                     <td style={td}>{r.destination_warehouse || '—'}</td>
                     <td style={td}>{r.partner_po_ref || '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{fmt(r.requested_units)}</td>
@@ -198,6 +222,30 @@ export default function FulfilmentRequestsPage() {
                 <button disabled={busy} onClick={() => { setRejectReason(''); setRejectOpen(true); }} style={{ ...btnGhost, color: 'var(--red)', borderColor: 'var(--red)' }}>Reject</button>
               </div>
             )}
+          </div>
+
+          {/* ── SLA timeline ──────────────────────────────────
+              The four moments an offline SO passes through. Kept as
+              four separate stamps on purpose: "order date" is the
+              customer's date and is routinely backdated at punch time,
+              so it is NOT the same as when Snorkel received it. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0, marginBottom: 16,
+            border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+            {[
+              ['Order date',   formatDateOnly(sel.request.so_order_date),   'customer order'],
+              ['Raised',       formatDateTime(sel.request.so_created_at),   'punched in Snorkel'],
+              ['Confirmed',    formatDateTime(sel.request.so_confirmed_at), 'sent to Depot'],
+              ['Accepted',     formatDateTime(sel.request.accepted_at),     'taken by dispatch'],
+            ].map(([label, value, hint], i) => (
+              <div key={label} style={{ flex: '1 1 150px', padding: '10px 14px',
+                borderLeft: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em',
+                  textTransform: 'uppercase', color: 'var(--t3)' }}>{label}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 13,
+                  color: value === '—' ? 'var(--t3)' : 'var(--t1)', marginTop: 3 }}>{value}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{hint}</div>
+              </div>
+            ))}
           </div>
 
           {/* requested lines */}
