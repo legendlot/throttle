@@ -101,6 +101,8 @@ export default function IssueQueuePage() {
   const [pickStatus, setPickStatus]           = useState(null);
   const [pickStatusLoading, setPickStatusLoading] = useState(false);
   const [voidModal, setVoidModal]             = useState(null); // line being voided, or null
+  const [vendorModal, setVendorModal]         = useState(null); // run being sent to the vendor
+  const [vendorChallan, setVendorChallan]     = useState('');
   const [voidReason, setVoidReason]           = useState('');
   const [voidSubmitting, setVoidSubmitting]   = useState(false);
   // Outsourced vendor round-trip — store steps folded into the queue (run-request consolidation)
@@ -626,12 +628,22 @@ export default function IssueQueuePage() {
   }
 
   // Outsourced vendor round-trip — store steps (build issued → send to vendor → receive built units).
-  async function handleSendToVendor(run) {
-    if (!window.confirm(`Send ${run.run_no} to ${run.vendor?.vendor_name || 'the vendor'}? The issued build materials are handed off and the run moves to In Progress.`)) return;
+  // Opens the send-to-vendor step. Replaced a bare window.confirm (S308) so the delivery
+  // challan number can be captured at the one moment someone is holding the paperwork —
+  // without it, materials-out and units-in only reconcile by hand for ITC-04.
+  function handleSendToVendor(run) { setVendorChallan(''); setVendorModal(run); }
+
+  async function confirmSendToVendor() {
+    const run = vendorModal;
+    if (!run) return;
     setVendorBusy(run.run_no);
     try {
-      await workerFetch('markRunSentOut', { data: { run_no: run.run_no } }, session);
+      // Challan is OPTIONAL — it is raised in Depot, so the store may not have the number yet.
+      // Never block the physical handoff on a reference field.
+      await workerFetch('markRunSentOut',
+        { data: { run_no: run.run_no, challan_no: vendorChallan.trim() || null } }, session);
       showToast(`${run.run_no} sent to vendor`, 'success');
+      setVendorModal(null);
       loadQueue();
     } catch (e) {
       showToast(e.message || 'Send to vendor failed', 'error');
@@ -1261,6 +1273,43 @@ export default function IssueQueuePage() {
       </Modal>
 
       {/* FEAT-020 — void pick line modal */}
+      {/* Send-to-vendor (S308). Was a bare window.confirm; now captures the delivery challan
+          number at the moment the store is holding the paperwork, so an outsourced run and the
+          materials that went out on it share one key for ITC-04. */}
+      <Modal
+        open={!!vendorModal}
+        onClose={() => { if (!vendorBusy) { setVendorModal(null); setVendorChallan(''); } }}
+        title="Send to vendor"
+        confirmLabel="Send"
+        onConfirm={confirmSendToVendor}
+        loading={!!vendorBusy}
+      >
+        {vendorModal && (
+          <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 10px' }}>
+              Send <strong style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{vendorModal.run_no}</strong>
+              {' '}to <strong>{vendorModal.vendor?.vendor_name || 'the vendor'}</strong>? The issued build
+              materials are handed off and the run moves to In Progress.
+            </p>
+            <label style={{ display: 'block', fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>
+              Delivery challan number (optional)
+            </label>
+            <input
+              value={vendorChallan}
+              onChange={(e) => setVendorChallan(e.target.value)}
+              placeholder="e.g. LOT/DC/26-27/0123"
+              style={{ width: '100%', padding: '7px 9px', fontFamily: 'var(--mono)', fontSize: 12,
+                background: 'var(--surface-2)', color: 'var(--t1)',
+                border: '1px solid var(--border)', borderRadius: 4 }}
+            />
+            <p style={{ margin: '8px 0 0', color: 'var(--t3)', fontSize: 11 }}>
+              Ties this run to the challan the materials left on. Leave it blank if the challan
+              has not been raised yet, it can be added later and it will not hold up the handoff.
+            </p>
+          </div>
+        )}
+      </Modal>
+
       <Modal
         open={!!voidModal}
         onClose={() => { if (!voidSubmitting) { setVoidModal(null); setVoidReason(''); } }}
