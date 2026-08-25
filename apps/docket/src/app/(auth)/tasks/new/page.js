@@ -60,13 +60,13 @@ function NewTaskInner() {
   }
 
   return (
-    <div style={{ maxWidth: 760 }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12 }}>
-        <div>
-          <h1 style={h1}>{parentTask ? 'New Sub-task' : 'New Task'}</h1>
-          <p style={sub}>Set the owner, team and deadline. The deadline is locked once created; later changes are tracked as revisions.</p>
+    <div className="tk-page" style={{ maxWidth: 760 }}>
+      <div className="tk-head" style={{ marginBottom: 16, alignItems: 'flex-end' }}>
+        <div className="tk-headmain">
+          <div className="dr-title" style={{ fontSize: 21 }}>{parentTask ? 'New Sub-task' : 'New Task'}</div>
+          <p className="dr-desc" style={{ marginTop: 5, maxWidth: 560 }}>Set the owner, team and deadline. The deadline is locked once created; later changes are tracked as revisions.</p>
         </div>
-        <button style={btnSecondary} onClick={() => router.back()}><ArrowLeft size={14} /> Back</button>
+        <button className="btn btn-ghost" onClick={() => router.back()}><ArrowLeft size={13} /> Back</button>
       </div>
       {loading ? <Spinner /> : (
         <TaskForm departments={departments} employees={employees} programs={programs} parentTask={parentTask} onCreateProgram={createProgram} onSubmit={submit} saving={saving} />
@@ -78,7 +78,3 @@ function NewTaskInner() {
 export default function NewTaskPage() {
   return <Suspense fallback={<Spinner />}><NewTaskInner /></Suspense>;
 }
-
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4, maxWidth: 560, lineHeight: 1.5 };
-const btnSecondary = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };

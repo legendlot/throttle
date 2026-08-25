@@ -149,153 +149,159 @@ function DetailInner() {
   const spaceOpts = spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' (open)') }));
 
   return (
-    <div style={{ maxWidth: 1040 }}>
-      <button style={btnGhost} onClick={() => router.push('/tasks')}><ArrowLeft size={14} /> All tasks</button>
+    <div className="tk-page">
+      <button className="tk-back" onClick={() => router.push('/tasks')}><ArrowLeft size={13} /> All tasks</button>
 
       {/* header */}
-      <div style={{ ...card, marginTop: 12, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{task.task_no}</span>
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <div className="tk-head">
+          <div className="tk-headmain">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--text-4)' }}>{task.task_no}</span>
               <StatusBadge status={task.status} />
               <PriorityBadge priority={task.priority} />
             </div>
             {task.parent && (
-              <div style={{ marginBottom: 6 }}>
-                <button style={parentLink} onClick={() => router.push(`/tasks/detail/?id=${task.parent.id}`)}>
+              <div>
+                <button className="tk-parent" onClick={() => router.push(`/tasks/detail/?id=${task.parent.id}`)}>
                   <ArrowUp size={12} /> {task.parent.task_no} · {task.parent.title}
                 </button>
               </div>
             )}
             {editing
-              ? <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} style={{ ...input, fontSize: 18 }} />
-              : <h1 style={h1}>{task.title}</h1>}
+              ? <input className="tk-input" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} style={{ fontSize: 19, fontWeight: 600 }} />
+              : <div className="dr-title">{task.title}</div>}
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {canEdit && !editing && task.status !== 'abandoned' && <button style={btnSecondary} onClick={startEdit}>Edit</button>}
+          <div className="tk-actions">
+            {canEdit && !editing && task.status !== 'abandoned' && <button className="btn btn-ghost" onClick={startEdit}>Edit</button>}
             {editing && <>
-              <button style={btnPrimary} onClick={saveEdit} disabled={busy}>Save</button>
-              <button style={btnGhost} onClick={() => setEditing(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveEdit} disabled={busy}>Save</button>
+              <button className="btn btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
             </>}
           </div>
         </div>
 
         {editing ? (
-          <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-            rows={3} placeholder="Description" style={{ ...input, marginTop: 10, resize: 'vertical' }} />
-        ) : (task.description && <p style={{ marginTop: 10, fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{task.description}</p>)}
+          <textarea className="tk-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            rows={3} placeholder="Description" style={{ marginTop: 12 }} />
+        ) : (task.description && <p className="dr-desc" style={{ marginTop: 12 }}>{task.description}</p>)}
 
-        {/* status controls */}
+        {/* Status row — same .st-btn pills as the drawer, including the per-status
+            colour each button adopts when it is the active one. */}
         {canEdit && task.status !== 'abandoned' && (
-          <div style={{ display: 'flex', gap: 6, marginTop: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 4 }}>Status</span>
-            {SETTABLE_STATUSES.map(s => (
-              <button key={s.key} onClick={() => setStatus(s.key)} disabled={busy || task.status === s.key}
-                style={statusBtn(task.status === s.key)}>{s.label}</button>
-            ))}
-            <button onClick={() => { setModal('abandon'); setReason(''); }} style={{ ...statusBtn(false), color: 'var(--state-error-fg)', borderColor: 'var(--state-error)' }}>Abandon</button>
+          <div className="dr-statusrow">
+            {SETTABLE_STATUSES.map(s => {
+              const on = task.status === s.key;
+              return (
+                <button key={s.key} className={'st-btn' + (on ? ' on' : '')} onClick={() => setStatus(s.key)} disabled={busy || on}
+                  style={on ? { background: s.bg, borderColor: s.color, color: s.color } : {}}>
+                  <span className="si" style={{ background: s.color }} />{s.label}
+                </button>
+              );
+            })}
+            <button className="st-btn" style={{ color: 'var(--st-abandon)', borderColor: 'var(--st-abandon)' }}
+              onClick={() => { setModal('abandon'); setReason(''); }}>Abandon</button>
           </div>
         )}
         {task.status === 'abandoned' && (
-          <div style={{ ...noteErr, marginTop: 14 }}>
+          <div className="tk-note">
             Abandoned {task.abandoned_at ? `on ${fmtDate(task.abandoned_at)}` : ''}{task.abandon_reason ? `: “${task.abandon_reason}”` : ''}.
-            {canEdit && <button style={{ ...btnGhost, marginLeft: 10 }} onClick={() => setStatus('not_started')} disabled={busy}>Reactivate</button>}
+            {canEdit && <button className="btn btn-ghost" style={{ marginLeft: 10 }} onClick={() => setStatus('not_started')} disabled={busy}>Reactivate</button>}
           </div>
         )}
       </div>
 
       {/* two-column body */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="tk-grid">
         {/* left: details + deadline + collaborators */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <section style={card}>
-            <div style={sectionTitle}>Details</div>
+        <div className="tk-col">
+          <section className="panel">
+            <div className="panel-h">Details</div>
             <Field label="Team">
               {editing
-                ? <Combobox value={form.department_id || ''} options={deptOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, department_id: v })); }} placeholder="Team…" style={input} />
+                ? <Combobox value={form.department_id || ''} options={deptOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, department_id: v })); }} placeholder="Team…" style={comboStyle} />
                 : (task.department_name || '—')}
             </Field>
             <Field label="Owner">
               {editing
-                ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, owner_employee_id: v })); }} placeholder="Owner…" style={input} />
+                ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, owner_employee_id: v })); }} placeholder="Owner…" style={comboStyle} />
                 : (task.owner_name || '—')}
             </Field>
             <Field label="Priority">
               {editing
-                ? <Combobox value={form.priority} options={prioOpts} onChange={(v) => setForm(f => ({ ...f, priority: v || 'P2' }))} placeholder="Priority…" allowClear={false} style={input} />
+                ? <Combobox value={form.priority} options={prioOpts} onChange={(v) => setForm(f => ({ ...f, priority: v || 'P2' }))} placeholder="Priority…" allowClear={false} style={comboStyle} />
                 : <PriorityBadge priority={task.priority} />}
             </Field>
             <Field label="Program">
               {editing
-                ? <Combobox value={form.program_id || ''} options={programCellOpts} allowClear={false} placeholder="Set program…" style={input}
+                ? <Combobox value={form.program_id || ''} options={programCellOpts} allowClear={false} placeholder="Set program…" style={comboStyle}
                     onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, program_id: opt.value || null })); }}
                     onCreateOption={createProgramInline} />
                 : (task.program?.name || '—')}
             </Field>
             <Field label="Space">
               {canEdit && spaceOpts.length > 1
-                ? <Combobox value={task.space_id || ''} options={spaceOpts} onChange={moveToSpace} allowClear={false} placeholder="Move to space…" style={input} />
+                ? <Combobox value={task.space_id || ''} options={spaceOpts} onChange={moveToSpace} allowClear={false} placeholder="Move to space…" style={comboStyle} />
                 : (task.space?.name || 'General')}
             </Field>
           </section>
 
-          <section style={card}>
-            <div style={sectionTitle}>Timeline</div>
+          <section className="panel">
+            <div className="panel-h">Timeline</div>
             <Field label="Created">{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</Field>
             <Field label="Original deadline">{fmtDateTime(task.deadline)} <span style={lock}>locked</span></Field>
             <Field label="Current deadline">
-              <span style={{ color: od ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: od ? 600 : 400 }}>
+              <span style={{ color: od ? 'var(--overdue)' : 'var(--text-1)', fontWeight: od ? 600 : 400 }}>
                 {fmtDateTime(effectiveDeadline(task))}
               </span>
-              {task.revised_deadline && <span style={revFlag}>revised</span>}
+              {task.revised_deadline && <span className="rev-flag" style={{ marginLeft: 8 }}>revised</span>}
             </Field>
             {task.completed_at && <Field label="Completed">{fmtDateTime(task.completed_at)}</Field>}
             {canEdit && task.status !== 'abandoned' && (
-              <button style={{ ...btnSecondary, marginTop: 8 }} onClick={() => { setModal('revise'); setReason(''); setNewDeadline(effectiveDeadline(task)); }}>
+              <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => { setModal('revise'); setReason(''); setNewDeadline(effectiveDeadline(task)); }}>
                 Revise deadline
               </button>
             )}
           </section>
 
-          <section style={card}>
-            <div style={sectionTitle}>Collaborators</div>
+          <section className="panel">
+            <div className="panel-h">Collaborators</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: canEdit ? 10 : 0 }}>
-              {(task.collaborators || []).length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>None</span>}
+              {(task.collaborators || []).length === 0 && <span style={{ fontSize: 12.5, color: 'var(--text-4)' }}>None</span>}
               {(task.collaborators || []).map(c => (
-                <span key={c.employee_id} style={chip}>
+                <span key={c.employee_id} className="chip-rm">
                   {c.full_name || c.employee_id}
-                  {canEdit && <X size={12} style={{ cursor: 'pointer' }} onClick={() => removeCollab(c.employee_id)} />}
+                  {canEdit && <span className="x" onClick={() => removeCollab(c.employee_id)}><X size={12} /></span>}
                 </span>
               ))}
             </div>
             {canEdit && (
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add collaborator…" allowClear style={input} /></div>
-                <button style={btnSecondary} onClick={addCollab} disabled={busy || !collabPick}><Plus size={13} /></button>
+                <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add collaborator…" allowClear style={comboStyle} /></div>
+                <button className="btn btn-ghost" onClick={addCollab} disabled={busy || !collabPick}><Plus size={13} /></button>
               </div>
             )}
           </section>
         </div>
 
         {/* right: subtasks + docs */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <section style={card}>
-            <div style={sectionTitle}>Sub-tasks</div>
+        <div className="tk-col">
+          <section className="panel">
+            <div className="panel-h">Sub-tasks</div>
             <SubtaskPanel task={task} session={session} canEdit={canEdit} onChange={load} />
           </section>
-          <section style={card}>
-            <div style={sectionTitle}>Documents</div>
+          <section className="panel">
+            <div className="panel-h">Documents</div>
             <DocLinksPanel task={task} session={session} canEdit={canEdit} onChange={load} />
           </section>
         </div>
       </div>
 
       {/* comments / history tabs */}
-      <div style={{ ...card, marginTop: 14 }}>
-        <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
+      <div className="panel" style={{ marginTop: 14 }}>
+        <div className="dr-tabs" style={{ marginTop: 0 }}>
           {['comments', 'history'].map(t => (
-            <button key={t} onClick={() => setTab(t)} style={tabBtn(tab === t)}>{t === 'comments' ? 'Comments' : 'History'}</button>
+            <button key={t} className={'dr-tab' + (tab === t ? ' on' : '')} onClick={() => setTab(t)}>{t === 'comments' ? 'Comments' : 'History'}</button>
           ))}
         </div>
         {tab === 'comments'
@@ -305,22 +311,22 @@ function DetailInner() {
 
       {/* modals */}
       {modal && (
-        <div style={overlay} onClick={() => setModal(null)}>
-          <div style={modalCard} onClick={e => e.stopPropagation()}>
-            <div style={sectionTitle}>{modal === 'revise' ? 'Revise deadline' : 'Abandon task'}</div>
+        <div className="backdrop" onMouseDown={() => setModal(null)}>
+          <div className="panel" style={{ width: 440, maxWidth: '100%', margin: 'auto' }} onMouseDown={e => e.stopPropagation()}>
+            <div className="panel-h">{modal === 'revise' ? 'Revise deadline' : 'Abandon task'}</div>
             {modal === 'revise' && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={lbl}>New deadline</label>
+              <div style={{ marginBottom: 14 }}>
+                <label className="tk-lbl">New deadline</label>
                 <DatePicker value={newDeadline} onChange={setNewDeadline} autoFocus />
               </div>
             )}
-            <div style={{ marginBottom: 12 }}>
-              <label style={lbl}>Reason (required, logged to history)</label>
-              <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} style={{ ...input, resize: 'vertical' }} />
+            <div style={{ marginBottom: 14 }}>
+              <label className="tk-lbl">Reason (required, logged to history)</label>
+              <textarea className="tk-input" value={reason} onChange={e => setReason(e.target.value)} rows={3} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-              <button style={btnGhost} onClick={() => setModal(null)}>Cancel</button>
-              <button style={btnPrimary} onClick={modal === 'revise' ? doRevise : doAbandon} disabled={busy}>
+              <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+              <button className={'btn ' + (modal === 'revise' ? 'btn-primary' : 'btn-danger')} onClick={modal === 'revise' ? doRevise : doAbandon} disabled={busy}>
                 {modal === 'revise' ? 'Revise' : 'Abandon'}
               </button>
             </div>
@@ -331,11 +337,14 @@ function DetailInner() {
   );
 }
 
+// The drawer's own property row, reused verbatim so a task reads identically in
+// the drawer and on the full page. `.tk-page .dr-prop` only widens the label
+// column — a 110px label is right in a 440px drawer and cramped at 1040px.
 function Field({ label, children }) {
   return (
-    <div style={{ display: 'flex', gap: 10, padding: '6px 0', alignItems: 'center' }}>
-      <span style={{ width: 130, flexShrink: 0, fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
-      <span style={{ fontSize: 13, color: 'var(--text-1)', flex: 1 }}>{children}</span>
+    <div className="dr-prop">
+      <span className="k">{label}</span>
+      <span className="v">{children}</span>
     </div>
   );
 }
@@ -344,25 +353,12 @@ export default function DetailPage() {
   return <Suspense fallback={<Spinner />}><DetailInner /></Suspense>;
 }
 
-const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '16px 18px' };
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.02em', color: 'var(--text-1)' };
-const sectionTitle = { fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 };
-const input = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
-const lbl = { display: 'block', fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, fontWeight: 700 };
-const chip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '3px 10px', fontSize: 12, color: 'var(--text-1)' };
-const lock = { marginLeft: 6, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-4)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
-const revFlag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
-const parentLink = { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '3px 9px', fontSize: 11, color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'var(--font-mono)' };
-const noteErr = { background: 'var(--state-error-bg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: 12, color: 'var(--text-2)' };
-const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 };
-const modalCard = { background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '18px 20px', width: 440, maxWidth: '100%' };
-const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
-const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
-const btnGhost = { ...btnBase, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)' };
-function statusBtn(on) {
-  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? 'var(--accent-fg)' : 'var(--text-2)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '5px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: on ? 'default' : 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-}
-function tabBtn(on) {
-  return { background: 'none', border: 'none', borderBottom: `2px solid ${on ? 'var(--docket-accent)' : 'transparent'}`, color: on ? 'var(--text-1)' : 'var(--text-3)', padding: '8px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
-}
+// Only three inline objects survive the S309 restyle. Everything else this file
+// used to declare (card / h1 / sectionTitle / btn* / statusBtn / tabBtn / overlay
+// / modalCard / chip / parentLink / noteErr / lbl / input) is now a shared class
+// in globals.css — .panel, .panel-h, .dr-title, .dr-prop, .dr-statusrow, .st-btn,
+// .dr-tabs, .btn*, .backdrop, .chip-rm, .tk-*. Add to those, not back to here.
+//
+// comboStyle stays inline because Combobox takes a style prop, not a className.
+const comboStyle = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
+const lock = { marginLeft: 6, fontFamily: 'var(--f-mono)', fontSize: 9, color: 'var(--text-4)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };

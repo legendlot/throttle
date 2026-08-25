@@ -984,3 +984,56 @@ button { cursor: pointer; background: none; border: none; }
   .dk-canvas input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
   .dk-canvas select, .dk-canvas textarea { font-size: 16px !important; }
 }
+
+/* ============================================================
+   Task full-page surfaces (S309) — /tasks/detail and /tasks/new.
+   These two pages were the last of the Session-113 redesign's
+   "untouched surfaces": they rendered through per-file inline
+   style objects on the LEGACY aliased tokens, so they were never
+   broken, just visibly from the old design. They now use the
+   drawer's own vocabulary (.dr-*, .panel, .btn, .chip-rm) so the
+   full page reads as the drawer's larger sibling — same task,
+   same language.
+   ============================================================ */
+.tk-page { max-width: 1040px; }
+.tk-back { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-4); padding: 4px 0; margin-bottom: 12px; transition: color var(--fast) var(--ease); }
+.tk-back:hover { color: var(--text-2); }
+.tk-parent { display: inline-flex; align-items: center; gap: 5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 3px 9px; font-family: var(--f-mono); font-size: 11px; color: var(--text-3); margin-bottom: 8px; transition: color var(--fast) var(--ease); }
+.tk-parent:hover { color: var(--accent); }
+.tk-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.tk-head .tk-headmain { flex: 1; min-width: 240px; }
+.tk-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.tk-note { border-radius: var(--r-sm); padding: 9px 13px; font-size: 12.5px; color: var(--text-2); margin-top: 14px; background: var(--st-abandon-bg); border: 1px solid var(--st-abandon); }
+.tk-input { width: 100%; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; transition: border-color var(--fast) var(--ease); }
+.tk-input:focus { border-color: var(--accent-line); }
+textarea.tk-input { resize: vertical; line-height: 1.55; }
+.tk-lbl { display: block; font-family: var(--f-display); font-weight: 600; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 6px; }
+
+/* Two-column body. ⚠️ This is a CLASS, so the S304 mobile rule that stacks form
+   pairs — `.dk-canvas [style*="columns: 1fr 1fr"]` — CANNOT reach it: that
+   selector only matches an INLINE style string. The grid used to be inline here,
+   which is the only reason it stacked before. Moving it into a class without the
+   media rule below would have silently un-stacked both columns on mobile. */
+.tk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.tk-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* The drawer's prop rows are 110px-label + value on one line, which is right in a
+   ~440px drawer and cramped on a full page; give the label room and the value the
+   rest. Same class names so the two surfaces stay visually identical otherwise. */
+.tk-page .dr-prop { min-height: 36px; gap: 12px; }
+.tk-page .dr-prop .k { width: 132px; }
+
+@media (max-width: 767px) {
+  .tk-grid { grid-template-columns: minmax(0, 1fr); }
+  /* .dash-grid is the same class-not-inline trap and was already live: S304's
+     stacking sweep fixed inline grids only, so the Dashboard's two columns never
+     stacked and sat side-by-side at 375px. Fixed here with the sibling it matches. */
+  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .tk-page .dr-prop { align-items: flex-start; }
+  .tk-page .dr-prop .k { width: 104px; }
+}
+
+/* TaskForm's paired fields. Same class-not-inline caveat as .tk-grid above: this
+   replaced an inline `1fr 1fr`, which was the only thing making it stack. */
+.tk-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+@media (max-width: 767px) { .tk-form-grid { grid-template-columns: minmax(0, 1fr); } }

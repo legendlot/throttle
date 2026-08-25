@@ -65,63 +65,62 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
   }
 
   return (
-    <form onSubmit={submit} style={card}>
+    <form onSubmit={submit} className="panel" style={{ maxWidth: 720 }}>
       {parentTask && (
-        <div style={{ ...note, marginBottom: 14 }}>
+        <div className="tk-note" style={{ marginTop: 0, marginBottom: 14, background: 'var(--accent-soft)', borderColor: 'var(--accent-line)' }}>
           Sub-task of <strong>{parentTask.task_no}</strong> · {parentTask.title}
         </div>
       )}
       <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Title *</label>
-        <input value={title} onChange={e => setTitle(e.target.value)} style={input} disabled={saving} autoFocus />
+        <label className="tk-lbl">Title *</label>
+        <input value={title} onChange={e => setTitle(e.target.value)} className="tk-input" disabled={saving} autoFocus />
       </div>
       <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Description</label>
-        <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
-          style={{ ...input, resize: 'vertical' }} disabled={saving} />
+        <label className="tk-lbl">Description</label>
+        <textarea className="tk-input" value={description} onChange={e => setDescription(e.target.value)} rows={3} disabled={saving} />
       </div>
 
-      <div style={grid2}>
+      <div className="tk-form-grid">
         <div>
-          <label style={lbl}>Department (Team) *</label>
-          <Combobox value={departmentId} options={deptOpts} onChange={(v) => setDepartmentId(v)} placeholder="Select team…" disabled={saving} style={input} />
+          <label className="tk-lbl">Department (Team) *</label>
+          <Combobox value={departmentId} options={deptOpts} onChange={(v) => setDepartmentId(v)} placeholder="Select team…" disabled={saving} style={comboStyle} />
         </div>
         <div>
-          <label style={lbl}>Priority</label>
-          <Combobox value={priority} options={prioOpts} onChange={(v) => setPriority(v || 'P2')} placeholder="Priority…" allowClear={false} disabled={saving} style={input} />
+          <label className="tk-lbl">Priority</label>
+          <Combobox value={priority} options={prioOpts} onChange={(v) => setPriority(v || 'P2')} placeholder="Priority…" allowClear={false} disabled={saving} style={comboStyle} />
         </div>
       </div>
 
-      <div style={grid2}>
+      <div className="tk-form-grid">
         <div>
-          <label style={lbl}>Owner *</label>
-          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
+          <label className="tk-lbl">Owner *</label>
+          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={comboStyle} />
         </div>
         <div>
-          <label style={lbl}>Program</label>
+          <label className="tk-lbl">Program</label>
           <Combobox value={programId} options={programOpts} onChange={pickProgram}
             onCreateOption={onCreateProgram ? createProgram : undefined}
-            placeholder={onCreateProgram ? 'Pick or type to create…' : 'Select program…'} allowClear={false} disabled={saving} style={input} />
+            placeholder={onCreateProgram ? 'Pick or type to create…' : 'Select program…'} allowClear={false} disabled={saving} style={comboStyle} />
         </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Deadline * (cannot be changed after creation; revisions are tracked separately)</label>
+        <label className="tk-lbl">Deadline * (cannot be changed after creation; revisions are tracked separately)</label>
         <DatePicker value={deadline || null} onChange={setDeadline} />
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Collaborators</label>
+        <label className="tk-lbl">Collaborators</label>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add a collaborator…" allowClear disabled={saving} style={input} /></div>
-          <button type="button" style={btnSecondary} onClick={addCollab} disabled={saving || !collabPick}>Add</button>
+          <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add a collaborator…" allowClear disabled={saving} style={comboStyle} /></div>
+          <button type="button" className="btn btn-ghost" onClick={addCollab} disabled={saving || !collabPick}>Add</button>
         </div>
         {collaborators.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
             {collaborators.map(id => (
-              <span key={id} style={chip}>
+              <span key={id} className="chip-rm">
                 {empName[id] || id}
-                <X size={12} style={{ cursor: 'pointer' }} onClick={() => setCollaborators(c => c.filter(x => x !== id))} />
+                <span className="x" onClick={() => setCollaborators(c => c.filter(x => x !== id))}><X size={12} /></span>
               </span>
             ))}
           </div>
@@ -129,11 +128,11 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
       </div>
 
       <div style={{ marginBottom: 16 }}>
-        <label style={lbl}>Document links</label>
+        <label className="tk-lbl">Document links</label>
         <div style={{ display: 'flex', gap: 6 }}>
-          <input value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="Label (optional)" style={{ ...input, flex: 1 }} disabled={saving} />
-          <input value={docUrl} onChange={e => setDocUrl(e.target.value)} placeholder="https://…" style={{ ...input, flex: 2 }} disabled={saving} />
-          <button type="button" style={btnSecondary} onClick={addDoc} disabled={saving || !/^https?:\/\//i.test(docUrl.trim())}>Add</button>
+          <input value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="Label (optional)" className="tk-input" style={{ flex: 1 }} disabled={saving} />
+          <input value={docUrl} onChange={e => setDocUrl(e.target.value)} placeholder="https://…" className="tk-input" style={{ flex: 2 }} disabled={saving} />
+          <button type="button" className="btn btn-ghost" onClick={addDoc} disabled={saving || !/^https?:\/\//i.test(docUrl.trim())}>Add</button>
         </div>
         {docs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
@@ -150,7 +149,7 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }} disabled={saving}>
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Creating…' : 'Create Task'}
         </button>
       </div>
@@ -158,13 +157,8 @@ export function TaskForm({ departments, employees, programs = [], parentTask, on
   );
 }
 
-const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '18px 20px', maxWidth: 720 };
-const grid2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 };
-const lbl = { display: 'block', fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, fontWeight: 700 };
-const input = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
-const note = { background: 'var(--accent-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: 12, color: 'var(--text-2)' };
-const chip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '3px 10px', fontSize: 12, color: 'var(--text-1)' };
-const docRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' };
-const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
-const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
+// S309: card / grid2 / lbl / input / note / chip / btn* moved to shared classes in
+// globals.css (.panel, .tk-form-grid, .tk-lbl, .tk-input, .tk-note, .chip-rm, .btn*).
+// comboStyle and docRow stay inline — Combobox takes a style prop, not a className.
+const comboStyle = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
+const docRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '6px 10px' };
