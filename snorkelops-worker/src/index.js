@@ -473,8 +473,14 @@ function deriveFulfilment(request, shipments) {
 // Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
 // New orders link via a fulfilment request; legacy (pre-cutover) orders link via the single
 // sales_orders.dispatch_shipment_id — both paths resolved here so historical orders keep their dates/status.
+// Accepts order OBJECTS (the normal case) or bare id strings.
+// ⚠️ A bare string used to map to `undefined`, so `ids` came back empty and the whole
+// helper silently returned {} — no error, no log, indistinguishable from "this order has
+// no fulfilment request". That is exactly how cancelOrder's fulfilment-cancellation AND
+// its already-dispatched guard sat dead (S308). Normalise here so the class cannot recur
+// at a future call site; object callers are unchanged.
 async function loadFulfilment(orders) {
-  const list = (orders || []).filter(Boolean);
+  const list = (orders || []).filter(Boolean).map(o => (typeof o === 'string' ? { id: o } : o));
   if (!list.length) return {};
   const ids = [...new Set(list.map(o => o.id).filter(Boolean))];
   const reqR = await queryPublic('dispatch_fulfilment_requests',
@@ -2713,7 +2719,7 @@ export default {
                   { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
             }
             // New fulfilment-flow orders: cancel the request + its non-shipped child shipments.
-            const fr = (await loadFulfilment([d.id]))[d.id];
+            const fr = (await loadFulfilment([{ id: d.id, dispatch_shipment_id: o.dispatch_shipment_id }]))[d.id];
             if (fr?.request) {
               if ((fr.shipments || []).some(s => s.status === 'shipped'))
                 return err('Goods already dispatched — handle as a return, not a cancel', 422);
