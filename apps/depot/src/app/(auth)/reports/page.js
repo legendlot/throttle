@@ -590,6 +590,56 @@ export default function ReportsPage() {
             <RankChart title="Shipments by channel" data={(sh?.by_channel || []).map(r => ({ channel: r.channel, count: r.shipments }))} labelKey="channel" />
             <SeriesChart title="Shipments by day (IST)" data={(sh?.by_day || []).map(d => ({ day: d.day.slice(5), count: d.count }))} labelKey="day" />
           </div>
+          {/* ── Offline-SO SLA (S308) ──────────────────────────────────────
+              Anchored to the CUSTOMER'S ORDER DATE, not the punch date
+              (reference/decisions.md §S308b). ⚠️ This reads worse than the old
+              view on purpose: offline orders are routinely backdated at entry,
+              so the honest total is large. The stage columns exist so a long
+              total can be attributed — "punched late" is not dispatch's to
+              answer for. Do NOT re-anchor to the punch date to flatter it. */}
+          {(data.fulfilment_sla || []).length > 0 && (() => {
+            const rows = data.fulfilment_sla;
+            const done = rows.filter(r => r.total_days != null);
+            const avg  = (k, src) => { const v = src.map(r => Number(r[k])).filter(n => !Number.isNaN(n));
+                                       return v.length ? (v.reduce((a,b)=>a+b,0)/v.length) : null; };
+            const med  = (() => { const v = done.map(r => Number(r.total_days)).sort((a,b)=>a-b);
+                                  return v.length ? v[Math.floor(v.length/2)] : null; })();
+            const d1 = n => n == null ? '—' : `${Number(n).toFixed(1)}d`;
+            return (
+              <div style={{ marginBottom: 18 }}>
+                <div style={sectionHead}>Offline order SLA &middot; from the customer&rsquo;s order date</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, marginBottom: 12 }}>
+                  <KpiCard label="Median, order to dispatch" value={d1(med)} />
+                  <KpiCard label="Average" value={d1(avg('total_days', done))} />
+                  <KpiCard label="Punched late (not dispatch)" value={d1(avg('punch_days', rows))} />
+                  <KpiCard label="Depot accept" value={d1(avg('accept_days', rows))} />
+                  <KpiCard label="Accept to dispatch" value={d1(avg('dispatch_days', rows))} />
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 12, lineHeight: 1.5 }}>
+                  Measured from the date the customer placed the order, which is what they actually waited.
+                  Offline orders are often entered days later, so <strong>Punched late</strong> is time gone
+                  before Snorkel ever saw it. {done.length} of {rows.length} shipped so far.
+                </div>
+                <Table
+                  title="By order"
+                  rows={rows}
+                  columns={[
+                    { key: 'request_no',     label: 'Request' },
+                    { key: 'sales_order_no', label: 'Sales order' },
+                    { key: 'partner_name',   label: 'Partner' },
+                    { key: 'order_date',     label: 'Order date' },
+                    { key: 'status',         label: 'Status' },
+                    { key: 'punch_days',     label: 'Punch lag', num: true, fmt: d1 },
+                    { key: 'accept_days',    label: 'Accept',    num: true, fmt: d1 },
+                    { key: 'dispatch_days',  label: 'Dispatch',  num: true, fmt: d1 },
+                    { key: 'total_days',     label: 'Total',     num: true, fmt: d1 },
+                  ]}
+                  csvName={`offline-order-sla-${from||'all'}_${to||'today'}.csv`}
+                />
+              </div>
+            );
+          })()}
+
           <Table
             title="Shipments"
             rows={sh?.rows}
