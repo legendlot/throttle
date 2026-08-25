@@ -1,0 +1,868 @@
+<title>LOT Production Relay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+/* ══════════════════════════════════════════════════════════════
+   LOT Production Relay
+   Palette, surfaces and type tiers are lifted verbatim from the
+   live LOT app fleet (redline/src/app/globals.css) so this chart
+   reads as native when embedded in Garage / Redline / Depot.
+   Deliberately single-theme dark: every LOT app is dark-only.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#1b1b1e; --bg-2:#151517;
+  --surface:#242428; --surface-2:#2e2e34; --surface-3:#3a3a42;
+  --border:#34343b; --border-2:#45454e; --border-3:#56565f;
+  --t1:#f5f5f6; --t2:#b6b6be; --t3:#8c8c96;
+  --accent:#F2CD1A; --accent-fg:#1a1a1a; --accent-dim:rgba(242,205,26,.12);
+
+  /* lane identity — kept low-saturation so the accent stays boldest */
+  --snorkel:#7dd3fc; --garage:#a78bfa; --redline:#fb7185;
+  --depot:#5eead4;  --scanner:#F2CD1A; --shared:#8c8c96;
+
+  --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --cond:"Barlow Condensed","Barlow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,sans-serif;
+
+  --maxw:1080px;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--t1);
+  font-family:var(--body); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4{font-family:var(--cond); text-wrap:balance; margin:0; line-height:1.1}
+code,.mono{font-family:var(--mono)}
+a{color:var(--accent)}
+
+.wrap{max-width:var(--maxw); margin:0 auto; padding:0 24px}
+
+/* ── eyebrow ───────────────────────────────────────────────── */
+.eyebrow{
+  font-family:var(--cond); font-size:12px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--t3);
+}
+
+/* ── masthead ──────────────────────────────────────────────── */
+.mast{
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,var(--bg-2),var(--bg));
+  padding:56px 0 40px;
+}
+.mast .rule{
+  height:4px; width:64px; background:var(--accent);
+  margin-bottom:22px; border-radius:2px;
+}
+.mast h1{
+  font-size:clamp(38px,6.4vw,68px); font-weight:700;
+  letter-spacing:-.01em; text-transform:uppercase;
+}
+.mast h1 .thin{color:var(--t3); font-weight:500}
+.mast p{
+  color:var(--t2); max-width:62ch; margin:18px 0 0; font-size:17px;
+}
+.mast .meta{
+  margin-top:26px; display:flex; flex-wrap:wrap; gap:8px 10px;
+  font-family:var(--mono); font-size:11px; color:var(--t3);
+}
+.mast .meta span{
+  border:1px solid var(--border-2); border-radius:3px; padding:3px 8px;
+}
+
+/* ── sticky nav ────────────────────────────────────────────── */
+nav{
+  position:sticky; top:0; z-index:40;
+  background:rgba(21,21,23,.94); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+nav .wrap{display:flex; gap:4px; overflow-x:auto; padding-top:0; padding-bottom:0}
+nav a{
+  font-family:var(--cond); font-size:14px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase;
+  color:var(--t3); text-decoration:none; white-space:nowrap;
+  padding:14px 12px; border-bottom:2px solid transparent;
+}
+nav a:hover{color:var(--t1)}
+nav a:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+
+section{padding:64px 0; border-bottom:1px solid var(--border)}
+section > .wrap > .eyebrow{margin-bottom:10px}
+section h2{font-size:clamp(26px,3.6vw,38px); font-weight:700; text-transform:uppercase; letter-spacing:-.005em}
+section .intro{color:var(--t2); max-width:64ch; margin:14px 0 0}
+
+/* ── legend / mechanism types ──────────────────────────────── */
+.mechgrid{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(228px,1fr));
+  gap:14px; margin-top:32px;
+}
+.mech{
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:6px; padding:18px;
+}
+.mech .tag{margin-bottom:12px}
+.mech h4{font-size:17px; font-weight:600; margin-bottom:6px; letter-spacing:.01em}
+.mech p{margin:0; font-size:14px; color:var(--t2); line-height:1.55}
+
+/* mechanism tag — the core visual vocabulary of the whole page */
+.tag{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--mono); font-size:10px; font-weight:700;
+  letter-spacing:.1em; text-transform:uppercase;
+  padding:3px 8px; border-radius:3px; white-space:nowrap;
+}
+.tag.scan{background:var(--accent); color:var(--accent-fg)}
+.tag.screen{background:transparent; color:var(--t1); border:1px dashed var(--border-3)}
+.tag.auto{background:transparent; color:var(--t3); border:1px dotted var(--border-3)}
+.tag.hand{background:var(--surface-3); color:var(--t2); border:1px solid var(--border-3)}
+
+/* ── fleet map ─────────────────────────────────────────────── */
+.fleetgroup{margin-top:36px}
+.fleetgroup > h3{
+  font-size:14px; font-weight:600; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--t3);
+  padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:16px;
+}
+.fleet{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:12px}
+.sys{
+  background:var(--surface); border:1px solid var(--border);
+  border-left:3px solid var(--lane,var(--shared));
+  border-radius:5px; padding:14px 15px;
+}
+.sys.core{background:var(--surface-2); border-color:var(--border-2)}
+.sys h4{font-size:18px; font-weight:600; letter-spacing:.01em}
+.sys .desc{font-size:13.5px; color:var(--t2); margin:5px 0 9px; line-height:1.45}
+.sys .wk{
+  font-family:var(--mono); font-size:10.5px; color:var(--t3);
+  display:block; padding-top:8px; border-top:1px solid var(--border);
+}
+
+/* ── the relay ─────────────────────────────────────────────── */
+.controls{
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  margin-top:30px; padding-bottom:24px; border-bottom:1px solid var(--border);
+}
+.controls .lbl{
+  font-family:var(--cond); font-size:12px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--t3);
+  margin-right:4px;
+}
+button.chip{
+  font-family:var(--cond); font-size:13px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase;
+  background:var(--surface); color:var(--t2);
+  border:1px solid var(--border-2); border-radius:4px;
+  padding:7px 13px; cursor:pointer; transition:.14s;
+}
+button.chip:hover{color:var(--t1); border-color:var(--border-3)}
+button.chip[aria-pressed="true"]{background:var(--accent); color:var(--accent-fg); border-color:var(--accent)}
+button.chip:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.relay{margin-top:8px}
+
+.leg{
+  position:relative; padding-left:30px; padding-top:30px;
+}
+/* the rail — its colour is which app holds the baton */
+.leg::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:var(--lane); border-radius:2px;
+}
+.leg:last-child::before{bottom:auto; height:74px}
+.leg.dim{opacity:.28}
+.leg.dim .body{display:none !important}
+
+.leghead{
+  display:flex; align-items:flex-start; gap:14px;
+  width:100%; text-align:left; cursor:pointer;
+  background:transparent; border:0; padding:0; color:inherit;
+  font-family:inherit;
+}
+.leghead:focus-visible{outline:2px solid var(--accent); outline-offset:6px; border-radius:4px}
+.num{
+  flex:none; width:34px; height:34px; margin-top:2px;
+  display:grid; place-items:center; border-radius:50%;
+  background:var(--lane); color:#151517;
+  font-family:var(--mono); font-size:13px; font-weight:700;
+}
+.legtitle{flex:1; min-width:0}
+.legtitle h3{
+  font-size:clamp(21px,2.6vw,27px); font-weight:700;
+  text-transform:uppercase; letter-spacing:-.005em;
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+}
+.owner{
+  font-family:var(--mono); font-size:11px; font-weight:500;
+  letter-spacing:.08em; color:var(--lane); text-transform:uppercase;
+  border:1px solid var(--lane); border-radius:3px; padding:2px 7px;
+  position:relative; top:-2px;
+}
+.legtitle .sub{color:var(--t2); font-size:15px; margin-top:7px; max-width:66ch}
+.caret{
+  flex:none; color:var(--t3); font-family:var(--mono); font-size:12px;
+  margin-top:9px; transition:transform .18s;
+}
+.leg.open .caret{transform:rotate(90deg)}
+
+.body{margin-top:22px; display:none}
+.leg.open .body{display:block}
+
+/* the steps inside a leg */
+.steps{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px}
+.steps li{
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:5px; padding:13px 15px;
+  display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start;
+}
+.steps li .txt{min-width:0}
+.steps li .txt strong{font-weight:600; color:var(--t1)}
+.steps li .txt .where{
+  display:block; font-family:var(--mono); font-size:11px;
+  color:var(--t3); margin-top:5px;
+}
+.steps li p{margin:5px 0 0; font-size:14.5px; color:var(--t2); line-height:1.55}
+
+/* handoff — the baton passing to the next app */
+.handoff{
+  margin-top:20px; padding:15px 17px;
+  background:var(--accent-dim); border:1px solid rgba(242,205,26,.3);
+  border-radius:5px;
+}
+.handoff .eyebrow{color:var(--accent); margin-bottom:7px; display:block}
+.handoff p{margin:0; font-size:15px; color:var(--t1); line-height:1.55}
+.handoff p .to{font-weight:600}
+
+/* rule callout */
+.rule-note{
+  margin-top:16px; padding:14px 16px; border-radius:5px;
+  background:var(--surface-2); border:1px solid var(--border-2);
+  border-left:3px solid var(--warn);
+  font-size:14.5px; color:var(--t2); line-height:1.55;
+}
+.rule-note strong{color:var(--t1); font-weight:600}
+.rule-note .rid{font-family:var(--mono); font-size:11px; color:var(--warn)}
+
+/* ── state machine table ───────────────────────────────────── */
+.tblwrap{overflow-x:auto; margin-top:32px; border:1px solid var(--border); border-radius:6px}
+table{border-collapse:collapse; width:100%; min-width:660px; font-size:14.5px}
+thead th{
+  font-family:var(--cond); font-size:12px; font-weight:600;
+  letter-spacing:.13em; text-transform:uppercase; color:var(--t3);
+  text-align:left; padding:13px 16px; background:var(--bg-2);
+  border-bottom:1px solid var(--border-2); white-space:nowrap;
+}
+tbody td{padding:12px 16px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--t2)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--surface)}
+td.state code{
+  font-family:var(--mono); font-size:12.5px; font-weight:500;
+  color:var(--t1); background:var(--surface-2);
+  border:1px solid var(--border-2); border-radius:3px; padding:2px 7px;
+  white-space:nowrap;
+}
+td.st{white-space:nowrap}
+td.term code{color:var(--t3)}
+
+/* ── role cards ────────────────────────────────────────────── */
+.roles{display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr)); gap:14px; margin-top:32px}
+.role{
+  background:var(--surface); border:1px solid var(--border);
+  border-top:3px solid var(--lane); border-radius:6px; padding:20px;
+}
+.role h4{font-size:20px; font-weight:700; text-transform:uppercase; letter-spacing:.01em}
+.role .q{color:var(--lane); font-size:14px; font-style:italic; margin:7px 0 15px}
+.role ol{margin:0; padding-left:19px; display:flex; flex-direction:column; gap:9px}
+.role li{font-size:14.5px; color:var(--t2); line-height:1.5}
+.role li strong{color:var(--t1); font-weight:600}
+.role li code{
+  font-family:var(--mono); font-size:11.5px; color:var(--accent);
+  background:var(--accent-dim); border-radius:3px; padding:1px 5px;
+}
+
+/* ── footer ────────────────────────────────────────────────── */
+footer{padding:44px 0 64px; color:var(--t3); font-size:14px}
+footer .wrap{display:flex; flex-wrap:wrap; gap:20px; justify-content:space-between}
+footer p{margin:0; max-width:60ch; line-height:1.6}
+footer .src{font-family:var(--mono); font-size:11px; line-height:1.9}
+
+@media (max-width:640px){
+  .wrap{padding:0 18px}
+  section{padding:48px 0}
+  .leg{padding-left:22px}
+  .num{width:29px; height:29px; font-size:12px}
+  .steps li{grid-template-columns:1fr; gap:9px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important; animation:none !important}
+}
+</style>
+
+<header class="mast">
+  <div class="wrap">
+    <div class="rule"></div>
+    <h1>Production<br><span class="thin">Relay</span></h1>
+    <p>How a part becomes a car, and a car becomes a parcel — across Snorkel, Garage,
+       Redline, Depot and the floor scanner. Every leg on this chart names the app that
+       owns it and the exact mechanism that carries the baton to the next one.</p>
+    <div class="meta">
+      <span>5 SYSTEMS</span><span>27 SCAN STATIONS</span><span>9 LEGS</span>
+      <span>18 UNIT STATES</span><span>DRAFT v0.1 · 2026-08-25</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <a href="#read">How to read it</a>
+    <a href="#fleet">The fleet</a>
+    <a href="#relay">The relay</a>
+    <a href="#states">Unit states</a>
+    <a href="#start">Start here</a>
+  </div>
+</nav>
+
+<!-- ══ HOW TO READ IT ══════════════════════════════════════ -->
+<section id="read">
+  <div class="wrap">
+    <span class="eyebrow">01 — How to read it</span>
+    <h2>Four kinds of movement</h2>
+    <p class="intro">Every arrow in this system is one of four things. Knowing which one
+      you are looking at tells you whether <em>you</em> have to do something, or whether
+      it has already happened on its own. This is the single most useful thing on the page.</p>
+
+    <div class="mechgrid">
+      <div class="mech">
+        <span class="tag scan">Scan</span>
+        <h4>A physical scan</h4>
+        <p>Someone stands at a station with the scanner and scans a real label. Nothing
+           moves in the system until the barcode is read. This is the only mechanism that
+           proves a physical thing actually happened.</p>
+      </div>
+      <div class="mech">
+        <span class="tag screen">Screen</span>
+        <h4>Someone clicks in an app</h4>
+        <p>A human opens a screen and makes a decision — issues, approves, accepts, rejects,
+           dispositions. If nobody opens the screen, the work waits there indefinitely.</p>
+      </div>
+      <div class="mech">
+        <span class="tag auto">Auto</span>
+        <h4>The system does it</h4>
+        <p>A consequence of the step before it. Nobody actions this — it simply appears
+           somewhere else. Most "who was supposed to tell me?" confusion is an Auto leg
+           that someone was waiting to be handed manually.</p>
+      </div>
+      <div class="mech">
+        <span class="tag hand">Handoff</span>
+        <h4>Goods physically move</h4>
+        <p>Material changes hands outside the system — to a vendor, to a courier, from
+           store to floor. The system records it either side, but the middle is trolleys
+           and trucks.</p>
+      </div>
+    </div>
+
+    <div class="rule-note" style="margin-top:26px">
+      <strong>The rail colour is the baton.</strong> Each leg below has a coloured rail down
+      its left edge showing which app owns that stretch of work. When the colour changes,
+      responsibility has changed hands — and the yellow band at the end of each leg tells you
+      exactly what carries it across.
+    </div>
+  </div>
+</section>
+
+<!-- ══ THE FLEET ═══════════════════════════════════════════ -->
+<section id="fleet">
+  <div class="wrap">
+    <span class="eyebrow">02 — The estate</span>
+    <h2>Twelve systems, one production core</h2>
+    <p class="intro">LOT runs twelve apps. Five of them make the physical product move;
+      the rest sell it, support it or run the company. Only the production core is mapped
+      in detail on this page.</p>
+
+    <div class="fleetgroup">
+      <h3>Production core — mapped below</h3>
+      <div class="fleet">
+        <div class="sys core" style="--lane:var(--snorkel)">
+          <h4>Snorkel</h4>
+          <div class="desc">Buys everything and sells the offline channels. Purchase orders,
+            vendors, reorders, assets — plus GT/MT sales orders and collections.</div>
+          <span class="wk">snorkelops · snorkel.legendoftoys.com</span>
+        </div>
+        <div class="sys core" style="--lane:var(--garage)">
+          <h4>Garage</h4>
+          <div class="desc">The store. Receives goods, books stock, issues parts to
+            production, takes returns back in and dispositions them.</div>
+          <span class="wk">lotopsproxy · garage.legendoftoys.com</span>
+        </div>
+        <div class="sys core" style="--lane:var(--redline)">
+          <h4>Redline</h4>
+          <div class="desc">The production floor. Requests every run, designs and staffs the
+            lines, watches live output, runs QC and repairs.</div>
+          <span class="wk">lotopsproxy · redline.legendoftoys.com</span>
+        </div>
+        <div class="sys core" style="--lane:var(--depot)">
+          <h4>Depot</h4>
+          <div class="desc">Dispatch back-office. Accepts fulfilment requests, builds
+            shipments, allocates to channels, runs stock audits and repacks.</div>
+          <span class="wk">lotopsproxy · depot.legendoftoys.com</span>
+        </div>
+        <div class="sys core" style="--lane:var(--scanner)">
+          <h4>Scanner</h4>
+          <div class="desc">The floor PWA. 27 stations. Every physical movement of a real
+            unit is a scan here — this is where the other four get their truth.</div>
+          <span class="wk">lotopsproxy · single-file PWA</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="fleetgroup">
+      <h3>Commerce &amp; customer</h3>
+      <div class="fleet">
+        <div class="sys"><h4>Odo</h4><div class="desc">Consolidated cross-channel sales, marketing and inventory.</div><span class="wk">odoops</span></div>
+        <div class="sys"><h4>Relay</h4><div class="desc">Customer comms — email, SMS, WhatsApp, RCS.</div><span class="wk">commsops</span></div>
+        <div class="sys"><h4>Pitstop</h4><div class="desc">Customer success — tickets, calls, conversations.</div><span class="wk">csops</span></div>
+        <div class="sys"><h4>Ignition</h4><div class="desc">Influencer marketing CRM.</div><span class="wk">ignitionops</span></div>
+      </div>
+    </div>
+
+    <div class="fleetgroup">
+      <h3>Running the company</h3>
+      <div class="fleet">
+        <div class="sys"><h4>Podium</h4><div class="desc">People &amp; performance, payroll inputs, factory cost.</div><span class="wk">podiumops</span></div>
+        <div class="sys"><h4>Docket</h4><div class="desc">Org task manager and role checklists.</div><span class="wk">docketops</span></div>
+        <div class="sys"><h4>Throttle</h4><div class="desc">Brand team work OS — tasks, sprints, social.</div><span class="wk">throttleops</span></div>
+        <div class="sys"><h4>Manifest</h4><div class="desc">China imports, LOT ↔ SF running account.</div><span class="wk">manifestops</span></div>
+      </div>
+    </div>
+
+    <div class="rule-note" style="margin-top:30px">
+      <strong>Garage, Redline, Depot and the Scanner are one machine wearing four faces.</strong>
+      They all talk to the same API (<code class="mono">lotopsproxy</code>) and the same
+      database tables. That is why a scan on the floor changes a number in Garage a second
+      later with nobody sending anything. Snorkel runs on its own API and reaches the shared
+      tables only at defined points — receiving, and fulfilment requests.
+    </div>
+  </div>
+</section>
+
+<!-- ══ THE RELAY ═══════════════════════════════════════════ -->
+<section id="relay">
+  <div class="wrap">
+    <span class="eyebrow">03 — The relay</span>
+    <h2>Nine legs, cradle to parcel</h2>
+    <p class="intro">Read top to bottom. Each leg opens to show its steps, who does them,
+      and where. The band at the foot of each leg is the handoff — the mechanism that moves
+      the work to the next team.</p>
+
+    <div class="controls">
+      <span class="lbl">Show</span>
+      <button class="chip" data-role="all" aria-pressed="true">Everything</button>
+      <button class="chip" data-role="store" aria-pressed="false">Store</button>
+      <button class="chip" data-role="production" aria-pressed="false">Production</button>
+      <button class="chip" data-role="dispatch" aria-pressed="false">Dispatch</button>
+      <button class="chip" data-role="procurement" aria-pressed="false">Procurement</button>
+      <button class="chip" id="toggleAll" aria-pressed="false" style="margin-left:auto">Expand all</button>
+    </div>
+
+    <div class="relay" id="relayLegs"></div>
+  </div>
+</section>
+
+<!-- ══ UNIT STATES ═════════════════════════════════════════ -->
+<section id="states">
+  <div class="wrap">
+    <span class="eyebrow">04 — The unit's life</span>
+    <h2>Eighteen states, and what moves between them</h2>
+    <p class="intro">Every car and every remote carries one state at a time. This table is
+      the whole state machine: what the unit is, and the exact scan or action that put it
+      there. If you ever need to know where a unit physically is, this is the answer.</p>
+
+    <div class="tblwrap">
+      <table>
+        <thead>
+          <tr><th>State</th><th>What it means physically</th><th>Put there by</th><th>Station</th></tr>
+        </thead>
+        <tbody id="stateBody"></tbody>
+      </table>
+    </div>
+
+    <div class="rule-note" style="margin-top:22px">
+      <strong>You cannot skip a step.</strong> Each dispatch station only accepts a unit that
+      is already at the correct earlier stage. Dispatch In rejects anything that has not been
+      through production's final pack; Allocate rejects a unit not yet at Dispatch In. The
+      refusal is the system working, not a fault.
+    </div>
+    <div class="rule-note">
+      <span class="rid">TERMINAL STATES</span> &nbsp;<code class="mono">shipped</code>,
+      <code class="mono">scrapped</code>, <code class="mono">scrapped_repair</code> and
+      <code class="mono">lost</code> are ends of the line — a unit is meant to stop there and
+      is deliberately excluded from stalled-unit alerting.
+    </div>
+  </div>
+</section>
+
+<!-- ══ START HERE ══════════════════════════════════════════ -->
+<section id="start">
+  <div class="wrap">
+    <span class="eyebrow">05 — First day</span>
+    <h2>You just walked in. Start here.</h2>
+    <p class="intro">Four entry points, one per team. Each is the shortest honest answer to
+      "what do I actually do?" — then follow the matching leg above for the detail.</p>
+
+    <div class="roles">
+      <div class="role" style="--lane:var(--redline)">
+        <h4>Production</h4>
+        <p class="q">"How do I start a production run?"</p>
+        <ol>
+          <li>Open <strong>Redline → New Run / Request</strong>. This is the only door. Nothing gets built without a request from here.</li>
+          <li>Pick the run type: <strong>Fresh</strong> (normal build), <strong>Outsourced</strong>, <strong>Repair</strong> or <strong>Repack</strong>.</li>
+          <li>Set product, line, shift, and quantities split by <strong>E-Comm</strong> and <strong>Retail</strong>.</li>
+          <li>Choose the <strong>format</strong> — <code>CKD</code> loose parts, <code>SKD</code> part-built bundles, or <code>FBU</code> fully built cars. This is your call, not the store's, and it decides exactly what they issue you.</li>
+          <li>Submit. It lands in the store's Issue Queue automatically. Now wait for parts.</li>
+        </ol>
+      </div>
+
+      <div class="role" style="--lane:var(--garage)">
+        <h4>Store</h4>
+        <p class="q">"What do I owe anyone right now?"</p>
+        <ol>
+          <li>Open <strong>Garage → Issue Queue</strong>. Everything production has asked for is here, colour-coded by type.</li>
+          <li>Click <strong>Issue</strong> to open the pick list. Print it and go pick.</li>
+          <li>Optionally scan each bag at the <code>STORE_ISSUE</code> station as you pick — it double-checks you against the BOM.</li>
+          <li>Enter what you <em>physically</em> picked, tick the confirmation box, <strong>Confirm Issue</strong>. Stock comes down.</li>
+          <li>Can't fulfil it? <strong>Reject with a reason.</strong> Do not improvise a substitute.</li>
+        </ol>
+      </div>
+
+      <div class="role" style="--lane:var(--depot)">
+        <h4>Dispatch</h4>
+        <p class="q">"What am I shipping today?"</p>
+        <ol>
+          <li>Open <strong>Depot → Overview</strong>. A red tile shows fulfilment requests waiting on you.</li>
+          <li>Accept each one <strong>Full</strong> or <strong>Split</strong>. Nothing ships until you accept.</li>
+          <li>On the floor, work the four stations in order: <code>DTK</code> → <code>ALLOC</code> → <code>PACK</code> → <code>DOUT</code>.</li>
+          <li>At <strong>Pack</strong>, always scan the courier label too — that is the only thing that later tells us which customer got which car.</li>
+          <li>Check <strong>Pipeline</strong> to see what is built but not yet shipped.</li>
+        </ol>
+      </div>
+
+      <div class="role" style="--lane:var(--snorkel)">
+        <h4>Anyone / Procurement</h4>
+        <p class="q">"I need the company to buy something."</p>
+        <ol>
+          <li>Open <strong>Snorkel → New Request</strong>. You need no vendor, no price, no part number.</li>
+          <li>Write a clear <strong>title</strong> and <strong>description</strong>. Those are the two things procurement reads first.</li>
+          <li>Submit. You get a <code>PR-NNNN</code> number and procurement takes it from there.</li>
+          <li>Procurement turns good requests into a PO, which then runs the approval relay: <strong>Accept → Final Approve → Route payment → Mark Paid</strong>.</li>
+          <li>Running low on a known part instead? Use <strong>Reorders</strong> — it is lighter than a full request.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Draft v0.1 — built for training and demonstration. Every station code, unit state and
+       transition on this page was read from the live source, not from memory. Legs are
+       accurate as of 25 August 2026; the detail behind each screen lives in that app's own
+       System Manual.</p>
+    <p class="src">
+      SOURCES<br>
+      02_scanner/index.html · STATION_DEFS<br>
+      01_worker/worker.js · SCANNER_ACTIONS<br>
+      apps/{garage,redline,depot,snorkel}/docs/manual<br>
+      BUSINESS_RULES.md · CORE.md
+    </p>
+  </div>
+</footer>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   Content model. Kept as data so a leg can be corrected in one
+   place — and so this could later be generated from the repo.
+   ══════════════════════════════════════════════════════════════ */
+const LEGS = [
+  {
+    n:"01", id:"buy", lane:"snorkel", owner:"Snorkel", roles:["procurement"],
+    title:"Buy it",
+    sub:"Somebody needs something. It becomes a purchase order and walks an approval relay until it is paid.",
+    steps:[
+      {m:"screen", t:"Anyone files a request", w:"Snorkel → New Request",
+       d:"Deliberately free-form — a title and a description are the only required fields. No vendor, no price, no part number needed. Comes out as PR-NNNN."},
+      {m:"screen", t:"Or procurement raises a reorder", w:"Snorkel → Reorders",
+       d:"Lighter than a full request, for a specific part or product running low. Shows current stock next to the part so you can size the order sensibly."},
+      {m:"screen", t:"Procurement raises the PO", w:"Snorkel → Purchase Orders → New",
+       d:"A reorder converts straight into a linked PO. INR POs must carry HSN code and GST% on every line."},
+      {m:"screen", t:"Accept → Final Approve → Route payment → Mark Paid", w:"Snorkel → PO detail",
+       d:"Four stages, four different roles. At each stage only the right button appears, and only for someone holding that role — the screen enforces who can do what."}
+    ],
+    rule:{id:"RULE-PO-001", t:"The approval chain is a relay, and it is role-gated. Procurement accepts, an Approver gives the senior yes, Finance routes and marks paid. One person cannot walk a PO through alone."},
+    handoff:{m:"hand", to:"Garage", t:"The goods physically arrive at the store. The PO number is the thread — a pending PO appears in Garage → Receiving under Upcoming Shipments, and one click turns it into a receivable shipment."}
+  },
+  {
+    n:"02", id:"receive", lane:"garage", owner:"Garage", roles:["store","procurement"],
+    title:"Receive it",
+    sub:"A consignment is counted box by box, reconciled against what was expected, and booked into stock as a GRN.",
+    steps:[
+      {m:"screen", t:"Log the shipment", w:"Garage → Receiving → New Shipment",
+       d:"Supplier, optional PO reference, arrival date, expected boxes — and the receive format: Parts/CKD or FBU Units. FBU reveals a box to link an outsourced run, for vendor-built cars coming back."},
+      {m:"screen", t:"Register the boxes", w:"Garage → Receiving",
+       d:"Add shipping marks one at a time or as a numbered range, e.g. BOX-1 to BOX-30, skipping any missing."},
+      {m:"screen", t:"Count each box", w:"Garage → Receiving → open a box",
+       d:"For every expected line, how many arrived OK versus damaged. Anything not on the list goes under Unexpected Items."},
+      {m:"screen", t:"Reconcile", w:"Garage → Receiving → Reconciliation",
+       d:"Expected versus counted per line, each marked Matched, Short, Over, Has Damage, Pending or GRN Raised."},
+      {m:"screen", t:"Raise the GRN — stock goes up", w:"Garage → GRN Entry",
+       d:"Three modes: Bulk (BOM) expands a product's bill of materials into a parts table; FBU Units records a unit count only; Parts is ad hoc. A GRN number is created and the stock ledger rises."},
+      {m:"screen", t:"Print bag labels", w:"Garage → Bag Stickers",
+       d:"Each bag gets a BAG- QR. These are what the store scans later when picking against a run."}
+    ],
+    rule:{id:"RULE-RCV-001", t:"GRN is partial and incremental — it books only the un-GRN'd delta. Boxes arriving in waves each get their own GRN rather than waiting for the full consignment."},
+    handoff:{m:"auto", to:"the stock ledger", t:"Parts are now stock and visible everywhere. Nothing moves again until production asks for it — the store never issues on its own initiative."}
+  },
+  {
+    n:"03", id:"request", lane:"redline", owner:"Redline", roles:["production"],
+    title:"Ask for it",
+    sub:"The single door into production. Every build, repair and repack starts as a request raised here — and it is the answer to “how do I start production?”",
+    steps:[
+      {m:"screen", t:"Open New Run / Request", w:"Redline → New Run / Request",
+       d:"Four run types on tabs — Fresh, Outsourced, Repair, Repack — plus Ad Hoc Parts for one-off needs. Whatever you raise lands in one consistent list of what the store owes."},
+      {m:"screen", t:"Set product, line, shift and quantities", w:"Redline → New Run / Request",
+       d:"Quantities are split by variant across E-Comm and Retail, because the two are packed into different boxes."},
+      {m:"screen", t:"Declare the format — CKD, SKD or FBU", w:"Redline → New Run / Request",
+       d:"CKD: loose parts, the floor assembles. SKD: part-built bundles plus a finishing kit. FBU: fully built cars issued whole plus the finishing kit. If the product has built units in stock the form says so and defaults to FBU, so those are finished first."},
+      {m:"auto", t:"It appears in the store's queue", w:"Garage → Issue Queue",
+       d:"No message is sent and nobody is notified in person. The request simply shows up, colour-coded by type."}
+    ],
+    rule:{id:"THE RULE THAT TRIPS PEOPLE UP", t:"Production owns every run request. The store never issues stock on its own — it only fills a request that lands in its queue. And the format is production's declaration: the store issues exactly that, or rejects the run. There is no CKD/FBU toggle on the store side any more."},
+    handoff:{m:"auto", to:"Garage", t:"The request itself is the baton. It is now sitting in the Issue Queue waiting for a human in the store to open it."}
+  },
+  {
+    n:"04", id:"issue", lane:"garage", owner:"Garage + Scanner", roles:["store","production"],
+    title:"Issue it",
+    sub:"The store picks the parts, records what was physically picked, and stock comes down. This is where material leaves the store for the floor.",
+    steps:[
+      {m:"screen", t:"Read the queue", w:"Garage → Issue Queue",
+       d:"Colour-coded by type: PROD RUN, PICKING, OUTSOURCED, SHORT ISSUE, REWORK, AD HOC, REPACK PKG, UDR. Two are scan-only and have no desk issue button — UDR and repack."},
+      {m:"scan", t:"Optionally scan-pick each bag", w:"Scanner → STORE_ISSUE",
+       d:"Select the run, then scan each BAG- QR as you pick it. A live pick panel appears on the Issue Queue; amber means the picked quantity differs from the BOM. The station is optional — a supervisor can issue straight from the desk."},
+      {m:"screen", t:"Set actual quantities and confirm", w:"Garage → Issue Queue → Issue",
+       d:"Enter what was physically picked, not what was planned. The confirmation tick is required and the button stays disabled until you tick it. An Issue number is created and stock comes down."},
+      {m:"screen", t:"Or reject with a reason", w:"Garage → Issue Queue",
+       d:"If the run asks for built cars that are not in stock, reject it and ask production to raise it again to match reality."},
+      {m:"hand", t:"Parts go to the line", w:"Store → factory floor",
+       d:"Physical movement. The pick sheet travels with the material."}
+    ],
+    rule:{id:"RULE-STOCK-002", t:"An issue may never take a part below what the ledger holds. The refusal is all-or-nothing — one short part refuses the whole issue, naming every short part with its on-hand and needed quantity. A half-issued run is worse than a refused one."},
+    handoff:{m:"hand", to:"Redline + the Scanner", t:"Material is on the line. From this point every movement of a real unit is a barcode scan, and nothing else counts."}
+  },
+  {
+    n:"05", id:"build", lane:"scanner", owner:"Scanner → watched in Redline", roles:["production"],
+    title:"Build it",
+    sub:"Six stations turn parts into a packed, dispatch-ready unit. Every one is a physical scan on the floor PWA.",
+    steps:[
+      {m:"scan", t:"Assembly — the unit is born", w:"Station INW · scan LOT UPC",
+       d:"Scanning the LOT UPC brings the unit into existence as inwarded. A cross-product guard blocks scanning a car of a different product on a line that already has a run assigned."},
+      {m:"scan", t:"QC Pass — car first, then remote", w:"Station QC_PASS",
+       d:"Both go to qc_pass, and the scan is what pairs the car to its remote. That pairing is how a customer's car and remote stay together."},
+      {m:"scan", t:"QC Fail — defect select follows", w:"Station QC_FAIL",
+       d:"The unit goes to qc_fail and you choose the defect. It is not lost — it routes to the workshop."},
+      {m:"scan", t:"Workshop — in and out", w:"Station WKS",
+       d:"In as in_repair; out as either repaired (rejoins the flow) or scrapped (written off)."},
+      {m:"scan", t:"Packaging — the batch label is minted", w:"Station PKG · scan car UPC first",
+       d:"Car and remote go into their box and the system mints the batch label, LOT-XXXXXXXX-E for E-Comm or -R for Retail. That label is the unit's identity for the rest of its life."},
+      {m:"scan", t:"PKG Out — production is finished with it", w:"Station PKG_OUT · scan batch label",
+       d:"The unit becomes rtd, ready to dispatch. This scan is the exact moment a unit leaves production's hands."}
+    ],
+    rule:{id:"THE RETURN LEG — LINE FLUSH", t:"Leftover material goes back. Production raises a flush in Redline → Line Flush, splitting each part across Unused, Damaged, QC Rejected, Partial Assembly or Wrong Issue. The store then counts, dispositions and verifies it in Garage → Flush Verify. Raising is production's job; verifying is the store's."},
+    handoff:{m:"scan", to:"Depot + the dispatch floor", t:"PKG_OUT is the handoff. A unit at rtd is the only thing Dispatch In will accept — which is why skipping the pack step blocks the whole chain downstream."}
+  },
+  {
+    n:"06", id:"dispatch", lane:"depot", owner:"Scanner → watched in Depot", roles:["dispatch"],
+    title:"Ship it",
+    sub:"Four stations walk a finished unit out of the door, in strict order. Each one refuses a unit that has not cleared the station before it.",
+    steps:[
+      {m:"scan", t:"Dispatch In", w:"Station DTK · scan batch label",
+       d:"Takes a packed unit into the dispatch area as handed_over. Rejects anything that has not come through production's final pack step."},
+      {m:"scan", t:"Allocate", w:"Station ALLOC · pick channel, then scan",
+       d:"Commits the unit to a sales channel — it becomes allocated. Re-allocating to a different channel is free and costs nothing. Rejects a unit not yet at Dispatch In, or already shipped."},
+      {m:"scan", t:"Pack", w:"Station PACK · scan courier label, then each unit",
+       d:"Pick the shipment, scan the courier AWB label, then every unit's box label. If the box has a capacity set it fills, closes and moves you to the next. Scanning the courier label is the only thing that later tells us which customer received a given car."},
+      {m:"scan", t:"Dispatch Out", w:"Station DOUT · scan box or batch label",
+       d:"The unit is shipped. It leaves the open-inventory pipeline for good."},
+      {m:"screen", t:"Watch what is left", w:"Depot → Pipeline",
+       d:"Every built-but-unshipped unit in one table, split into With Production, Unallocated (R), Unallocated (E) and Allocated per channel. A shrinking pipeline through the day is healthy; a growing one means you are building faster than you are shipping."}
+    ],
+    rule:{id:"ORDER IS ENFORCED", t:"Each station only accepts a unit at the right earlier stage, so you cannot skip a step. A refusal at Dispatch In almost always means production never scanned PKG Out — fix it there, not here."},
+    handoff:{m:"auto", to:"the customer, and Odo", t:"A shipped unit leaves the dispatch pipeline and the sale flows through to the consolidated sales system."}
+  },
+  {
+    n:"07", id:"sell", lane:"snorkel", owner:"Snorkel → Depot", roles:["procurement","dispatch"],
+    title:"Sell it offline",
+    sub:"General Trade and Modern Trade orders are punched in Snorkel and handed to Dispatch automatically. This is the one leg where Snorkel and the production core meet mid-flow.",
+    steps:[
+      {m:"screen", t:"Sales raise the order", w:"Snorkel → Sales Orders",
+       d:"Captured as a Draft and freely editable. Dispatch cannot see it yet."},
+      {m:"screen", t:"Confirm it", w:"Snorkel → Sales Orders",
+       d:"Confirming locks the order and hands it to dispatch. It can now be invoiced."},
+      {m:"auto", t:"A fulfilment request appears in Depot", w:"Depot → Fulfilment Requests",
+       d:"On confirm, an FR-NNNN is raised for dispatch with status Pending. A red tile on the Depot Overview shows how many are waiting. Nobody sends a message — it simply lands."},
+      {m:"screen", t:"Dispatch accepts Full or Split — or rejects", w:"Depot → Fulfilment Requests",
+       d:"Accept Full creates a single shipment for the whole quantity. Accept Split opens a builder where each shipment gets its own dispatch date and quantities. Rejecting sends the sales order to Cancelled."},
+      {m:"screen", t:"Invoice and collect", w:"Snorkel → Sales Orders / Collections",
+       d:"Back on the Snorkel side. The fulfilment label on the order is read live from the dispatch side, so sales can see progress without dispatch access."}
+    ],
+    rule:{id:"RULE-SNORKEL-004", t:"A confirm raises a fulfilment request, not a shipment. Dispatch decides how it ships. Nothing leaves the building until someone in Depot accepts."},
+    handoff:{m:"scan", to:"the dispatch floor", t:"Once accepted, the shipment exists and units are packed against it at the PACK station — rejoining leg 06."}
+  },
+  {
+    n:"08", id:"return", lane:"garage", owner:"Scanner + Garage", roles:["store"],
+    title:"Take it back",
+    sub:"Returns come in as a pile, get scanned in against a shipment, and each unit is given a disposition that decides its next life.",
+    steps:[
+      {m:"scan", t:"Returns Intake", w:"Station RET_IN · select shipment, scan each unit",
+       d:"Select the open RS-NNN return shipment, then scan every unit. Each becomes rto_in and appears in Garage within a few seconds, with no reload."},
+      {m:"screen", t:"Disposition every unit", w:"Garage → Process / Disposition",
+       d:"UDR — undamaged, box sealed. CXR — customer return, needs work. BRV — bulk or vendor return, needs work. Loss — switcheroo, wrong item or not received, and it requires a note of what physically arrived."},
+      {m:"scan", t:"UDR goes straight back out", w:"Station UDR_ISSUE → then PKG_OUT",
+       d:"An undamaged sealed unit is issued by scan and needs only one scan at PKG Out to rejoin dispatch. There is no desk issue button for UDR — it is scan-only by design."},
+      {m:"scan", t:"CXR and BRV go to a repair run", w:"Station REPAIR_ISSUE → REPAIR",
+       d:"Issued into a repair run, scanned as in_repair_run, and come out either repaired or scrapped_repair."},
+      {m:"screen", t:"Losses are written off", w:"Garage → Losses",
+       d:"Recorded with what actually arrived in the box."}
+    ],
+    rule:{id:"RULE-RET-001", t:"Cars and remotes are independent. Choosing CXR, BRV or Loss breaks the car↔remote pairing — kept as history, never erased — and a fresh pairing is made later. The store freely chooses the disposition; there is no enforced rule."},
+    handoff:{m:"auto", to:"back into the flow", t:"UDR rejoins dispatch, repaired units rejoin dispatch, scrapped and lost units stop here."}
+  },
+  {
+    n:"09", id:"repack", lane:"depot", owner:"Depot + Scanner", roles:["dispatch"],
+    title:"Repack and restock",
+    sub:"Two corrective loops that put units back where they should be — changing a unit's channel packaging, or pulling one back out of a box.",
+    steps:[
+      {m:"screen", t:"Raise a repack run", w:"Redline → Repack Runs / Depot → Repack",
+       d:"Moves finished units from one channel format to the other — an E-Comm box becoming Retail or vice versa. The to-channel packaging is issued from the store as a normal REPACK PKG parts issue."},
+      {m:"scan", t:"Release, in, out", w:"Stations REPACK_RELEASE → REPACK_IN → REPACK_OUT",
+       d:"Release marks boxes released_repack, scanning in returns them to a pre-pack state, and repack out sends them to pending_rtd ready to re-enter dispatch."},
+      {m:"scan", t:"Restock a unit out of a box", w:"Station RESTOCK · pick reason, scan",
+       d:"Removes a unit from a shipment box and puts it back to handed_over in the dispatch pool. Used when a unit is packed in error or a shipment shrinks."},
+      {m:"scan", t:"Count what is really there", w:"Station STOCK_AUDIT",
+       d:"Open an audit in Depot, then scan every car label you physically hold. Re-scans are ignored. Variances surface against the system count for review."}
+    ],
+    rule:{id:"WHY THIS EXISTS", t:"Physical reality and the system drift apart — a unit gets boxed for the wrong channel, or a shipment changes after packing. These loops are the sanctioned way to correct it, so nobody edits a number by hand."},
+    handoff:{m:"auto", to:"leg 06", t:"A repacked or restocked unit re-enters the dispatch flow at the right stage and ships normally."}
+  }
+];
+
+const STATES = [
+  {s:"inwarded",        m:"Assembled and scanned in on the line. The unit now exists.", by:"Assembly scan", st:"INW / EXT_INW"},
+  {s:"qc_pass",         m:"Passed quality check. Car and remote are now paired.", by:"QC Pass scan", st:"QC_PASS"},
+  {s:"qc_fail",         m:"Failed quality check, defect recorded. Heading to the workshop.", by:"QC Fail scan", st:"QC_FAIL"},
+  {s:"in_repair",       m:"On the workshop bench being fixed.", by:"Workshop scan", st:"WKS"},
+  {s:"repaired",        m:"Fixed and back in the flow.", by:"Workshop out scan", st:"WKS"},
+  {s:"rtd",             m:"Packed and ready to dispatch. Production is finished with it.", by:"PKG Out scan", st:"PKG_OUT"},
+  {s:"handed_over",     m:"In the dispatch area, waiting for a channel.", by:"Dispatch In scan / Restock", st:"DTK / RESTOCK"},
+  {s:"allocated",       m:"Committed to a sales channel, waiting to be packed.", by:"Allocate scan", st:"ALLOC"},
+  {s:"packed_dispatch", m:"Inside a shipment box against a courier label.", by:"Pack scan", st:"PACK"},
+  {s:"shipped",         m:"Out of the door and on its way to the customer.", by:"Dispatch Out scan", st:"DOUT", term:true},
+  {s:"rto_in",          m:"Come back to us. Awaiting a disposition in the store.", by:"Returns Intake scan", st:"RET_IN"},
+  {s:"in_repair_run",   m:"Issued into a repair run after a CXR or BRV disposition.", by:"Repair scan", st:"REPAIR"},
+  {s:"released_repack", m:"Released from its box to be repacked into the other channel format.", by:"Repack Release scan", st:"REPACK_RELEASE"},
+  {s:"pending_rtd",     m:"Repacked and waiting to re-enter dispatch.", by:"Repack Out scan", st:"REPACK_OUT"},
+  {s:"direct_issued",   m:"Issued straight out of the store against a DI sticker, bypassing dispatch.", by:"Direct Issue scan", st:"DSP_ISSUE"},
+  {s:"scrapped",        m:"Written off at the workshop. End of the line.", by:"Workshop out scan", st:"WKS", term:true},
+  {s:"scrapped_repair", m:"Written off in a repair run. End of the line.", by:"Repair scan", st:"REPAIR", term:true},
+  {s:"lost",            m:"Not received, wrong item, or a switcheroo. Written off.", by:"Loss disposition", st:"Garage screen", term:true}
+];
+
+/* ── render the relay ─────────────────────────────────────── */
+const MECH_LABEL = {scan:"Scan", screen:"Screen", auto:"Auto", hand:"Handoff"};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+document.getElementById('relayLegs').innerHTML = LEGS.map(L => `
+  <article class="leg" id="leg-${L.id}" data-roles="${L.roles.join(' ')}" style="--lane:var(--${L.lane})">
+    <button class="leghead" aria-expanded="false" aria-controls="body-${L.id}">
+      <span class="num">${L.n}</span>
+      <span class="legtitle">
+        <h3>${esc(L.title)} <span class="owner">${esc(L.owner)}</span></h3>
+        <span class="sub">${esc(L.sub)}</span>
+      </span>
+      <span class="caret" aria-hidden="true">&#9656;</span>
+    </button>
+    <div class="body" id="body-${L.id}">
+      <ul class="steps">
+        ${L.steps.map(s => `
+          <li>
+            <span class="tag ${s.m}">${MECH_LABEL[s.m]}</span>
+            <span class="txt">
+              <strong>${esc(s.t)}</strong>
+              <span class="where">${esc(s.w)}</span>
+              <p>${esc(s.d)}</p>
+            </span>
+          </li>`).join('')}
+      </ul>
+      ${L.rule ? `<div class="rule-note"><span class="rid">${esc(L.rule.id)}</span><br>${esc(L.rule.t)}</div>` : ''}
+      <div class="handoff">
+        <span class="eyebrow">Baton passes to ${esc(L.handoff.to)}</span>
+        <p><span class="tag ${L.handoff.m}">${MECH_LABEL[L.handoff.m]}</span>&nbsp; ${esc(L.handoff.t)}</p>
+      </div>
+    </div>
+  </article>`).join('');
+
+document.getElementById('stateBody').innerHTML = STATES.map(s => `
+  <tr>
+    <td class="state${s.term?' term':''}"><code>${esc(s.s)}</code></td>
+    <td>${esc(s.m)}</td>
+    <td class="st">${esc(s.by)}</td>
+    <td class="st"><code class="mono" style="font-size:11.5px;color:var(--t3)">${esc(s.st)}</code></td>
+  </tr>`).join('');
+
+/* ── expand / collapse ────────────────────────────────────── */
+function setLeg(leg, open){
+  leg.classList.toggle('open', open);
+  leg.querySelector('.leghead').setAttribute('aria-expanded', String(open));
+}
+document.querySelectorAll('.leghead').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const leg = btn.closest('.leg');
+    setLeg(leg, !leg.classList.contains('open'));
+    syncToggleAll();
+  });
+});
+
+const toggleAll = document.getElementById('toggleAll');
+function syncToggleAll(){
+  const legs = [...document.querySelectorAll('.leg:not(.dim)')];
+  const allOpen = legs.length > 0 && legs.every(l => l.classList.contains('open'));
+  toggleAll.setAttribute('aria-pressed', String(allOpen));
+  toggleAll.textContent = allOpen ? 'Collapse all' : 'Expand all';
+}
+toggleAll.addEventListener('click', () => {
+  const open = toggleAll.getAttribute('aria-pressed') !== 'true';
+  document.querySelectorAll('.leg:not(.dim)').forEach(l => setLeg(l, open));
+  syncToggleAll();
+});
+
+/* ── role filter ──────────────────────────────────────────── */
+document.querySelectorAll('.chip[data-role]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const role = chip.dataset.role;
+    document.querySelectorAll('.chip[data-role]').forEach(c =>
+      c.setAttribute('aria-pressed', String(c === chip)));
+    document.querySelectorAll('.leg').forEach(leg => {
+      const match = role === 'all' || leg.dataset.roles.split(' ').includes(role);
+      leg.classList.toggle('dim', !match);
+      if (!match) setLeg(leg, false);
+    });
+    syncToggleAll();
+  });
+});
+
+/* open the first leg so the page never reads as an inert list */
+setLeg(document.querySelector('.leg'), true);
+syncToggleAll();
+</script>
