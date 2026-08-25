@@ -1,5 +1,14 @@
 # Changelog — Depot Operations Manual
 
+## 1.5.0 — 2026-08-25 (Session 308)
+**Scanner / Dispatch Scan Stations:** packing now takes two scans. Added a
+**Scanning the courier label at Pack** section covering the courier (AWB) scan alongside the box
+label, that either order works, that a courier-label scan alone never packs anything, and that
+missing it blocks nothing. Documents the one refusal the floor can hit: a second, different
+courier label on a box that already carries one. The Pack row in the flow table was updated to
+match. Explains why it exists: a single-unit dispatch previously recorded the channel but not
+which order it filled, so "which customer got this car?" had no answer.
+
 ## 1.1.0 — 2026-06-23 (Session 164)
 Added the **Fulfilment Requests** chapter (Outbound, first), covering the new Snorkel-to-Depot
 sales-order fulfilment flow: how a confirmed order arrives as a pending request (and surfaces on

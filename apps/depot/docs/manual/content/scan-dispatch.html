@@ -29,9 +29,9 @@
     </tr>
     <tr>
       <td><strong>Pack</strong> (PACK)</td>
-      <td>Pick the shipment, then each unit&rsquo;s box label into it.</td>
-      <td>Builds the physical shipment box. The dropdown lists all open shipments, so you can pack ahead. If the box has a capacity set, it fills to that number then closes and moves you to the next box.</td>
-      <td>A unit that does not belong to that shipment&rsquo;s channel or stage, or a box that is already full.</td>
+      <td>Pick the shipment, then the courier label and each unit&rsquo;s box label.</td>
+      <td>Builds the physical shipment box. The dropdown lists all open shipments, so you can pack ahead. If the box has a capacity set, it fills to that number then closes and moves you to the next box. Scanning the courier label as well is what lets us say later which customer received a given car.</td>
+      <td>A unit that does not belong to that shipment&rsquo;s channel or stage, a box that is already full, or a second courier label on a box that already has one.</td>
     </tr>
     <tr>
       <td><strong>Dispatch Out</strong> (DOUT)</td>
@@ -71,6 +71,32 @@
     </tr>
   </tbody>
 </table>
+
+<h2 class="sec">Scanning the courier label at Pack</h2>
+
+<p>Packing takes two scans, not one. Scan the courier label on the parcel, the long number on the Delhivery sticker that the customer tracks, and scan the unit&rsquo;s box label as usual. Either order works. The scanner tells them apart by their shape, so there is nothing to switch and no extra box to type into.</p>
+
+<div class="steps">
+  <div class="step"><strong>Scan the courier label.</strong> The scanner holds it and shows &ldquo;AWB &hellip; now scan the box label&rdquo;, with a beep. On its own it never packs anything, so a stray scan cannot pack the wrong car.</div>
+  <div class="step"><strong>Scan the box label.</strong> Exactly as before. The unit goes into the box and the courier number is saved against that box.</div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Why it matters</div>
+  <p>A bulk shipment already carries its own paperwork, so we can always trace it. A single unit going out on its own did not: until now the system knew the channel it went to but not which order it filled, so &ldquo;which customer got this car?&rdquo; had no answer. The courier number is what closes that, and it also brings the parcel&rsquo;s delivery tracking down to the individual unit.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A second courier label is refused</div>
+  <p>If a box already carries one courier number and a different one is scanned, the scanner refuses it and names the number already on the box. That is deliberate: two courier labels on one carton would send the wrong parcels to the wrong people. Check you have the right box rather than working around it.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Missing it does not block anything</div>
+  <p>The courier scan is optional. A pack with no courier label goes through exactly as it always did, and nothing is lost. Never hold up a shipment for it.</p>
+</div>
+
+
 
 <h2 class="sec">Repack Release, the controlled hand-over</h2>
 <p>When production raises a repack run, the units it needs show up as a release list. Select the run, then scan each unit&rsquo;s box label to release it. Releasing locks the unit out of the normal dispatch flow and lets production scan it in to be re-boxed.</p>
