@@ -1028,11 +1028,15 @@ export default function DispatchShipmentsPage() {
                               silently. DSO-0381 lost 23 units in 3 days; DSO-0236 shipped 71/72
                               for the same reason. Needs BOTH short and post-pack removals —
                               short-but-never-packed is normal and must not flag. */}
+                          {/* ⚠️ The badge counts REMOVALS, not the shortfall. A shipment can be
+                              short mostly because it was never packed (DSO-0280: 84 short, 1
+                              pulled) — labelling that "SHORT 84" would blame the wrong thing.
+                              The removal count is the actual anomaly and scales with it. */}
                           {s.raided && (
-                            <span title={`Short by ${fmt(s.short_units)} unit(s) · ${fmt(s.removed_after_pack)} taken back out after packing. Open the shipment and check "Removed after packing" — if a replacement went in physically, it was never scanned.`}
+                            <span title={`${fmt(s.removed_after_pack)} unit(s) taken back out after packing · shipment is short by ${fmt(s.short_units)}. Open it and check "Removed after packing" — if a replacement went in physically, it was never scanned.`}
                               style={{ fontSize: 9, fontWeight: 700, color: 'var(--bad-fg)', border: '1px solid var(--bad-bd)',
                                 background: 'var(--bad-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
-                              SHORT {fmt(s.short_units)}
+                              PULLED {fmt(s.removed_after_pack)}
                             </span>
                           )}
                           {s.tracking_number && (
