@@ -472,10 +472,95 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
                   </table>
                 </div>
               )}
+              <ProvenancePanel auditNo={auditNo} session={session} />
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Variance provenance (S308) ───────────────────────────────────────────────
+// Afshaan's 2026-07-18 ask: for each missing/extra line, what was the LAST thing
+// that happened to that unit before the count, and what does that make it?
+// ⚠️ Loaded ON DEMAND behind a button, never with the audit. The RPC walks
+// public.scans (100k+ rows a month) and submit/review already run against a
+// subrequest budget.
+const CAUSE_COPY = {
+  'stale-pre-dispatch':       'Allocated or packed, then never moved',
+  'never-reached-dispatch':   'Left production but never reached dispatch',
+  'already-dispatched':       'Already scanned out before the count',
+  'already-written-off':      'Was already written off before this count',
+  'restocked-then-vanished':  'Restocked into dispatch, then gone',
+  'ghost-shipped':            'System says shipped, unit is here',
+  'status-ahead-of-floor':    'Status ran ahead of the floor',
+  'resurrected-loss':         'Written off earlier, turned up again',
+  'return-not-intaked':       'Came back but was never booked in',
+  'present-not-expected':     'Here, but not expected here',
+  'relabelled-without-repack':'Relabelled without a repack',
+  'no-history':               'No scan history at all',
+  'unclassified':             'Not classified',
+};
+
+function ProvenancePanel({ auditNo, session }) {
+  const [state, setState] = useState('idle');
+  const [prov, setProv]   = useState(null);
+
+  async function run() {
+    setState('loading');
+    try {
+      setProv(await garageFetch('getAuditProvenance', { audit_no: auditNo }, session));
+      setState('done');
+    } catch (e) { setState('error'); toast(e.message || 'Could not work out the causes', 'error'); }
+  }
+
+  if (state === 'idle') {
+    return (
+      <div style={{ marginTop: 6 }}>
+        <button onClick={run} style={btnS}>Why are these missing or extra?</button>
+        <Muted>Looks up the last thing that happened to each unit before the count. Takes a moment on a big audit.</Muted>
+      </div>
+    );
+  }
+  if (state === 'loading') return <Muted>Working through the scan history&hellip;</Muted>;
+  if (state === 'error')   return <Muted>Could not work out the causes. Try again.</Muted>;
+
+  const summary = prov?.summary || [];
+  const total   = summary.reduce((a, b) => a + b.lines, 0);
+  if (!total) return <Muted>No missing or extra lines to explain.</Muted>;
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={th}>Most likely reason</th>
+            <th style={{ ...th, textAlign: 'right' }}>Units</th>
+            <th style={{ ...th, textAlign: 'right' }}>Missing</th>
+            <th style={{ ...th, textAlign: 'right' }}>Extra</th>
+            <th style={{ ...th, textAlign: 'right' }}>Last seen</th>
+          </tr></thead>
+          <tbody>
+            {summary.map(r => (
+              <tr key={r.root_cause}>
+                <td style={td}>
+                  {CAUSE_COPY[r.root_cause] || r.root_cause}
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t3)' }}>{r.root_cause}</div>
+                </td>
+                <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{r.lines}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{r.missing || '—'}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{r.extra || '—'}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{r.avg_days == null ? '—' : `${r.avg_days}d before`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Muted>
+        Grouped by what each unit was doing when it was last scanned, up to the moment this count was opened.
+        Corrections made by this audit itself are not counted as a reason.
+      </Muted>
     </div>
   );
 }
