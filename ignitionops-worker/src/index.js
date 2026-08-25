@@ -3067,6 +3067,30 @@ export default {
       return ok({ service: 'ignitionops', time: nowIso() });
     }
 
+    // Which Shopify app do OUR creds belong to, and what is it actually granted?
+    // Read-only, mirrors commsops /internal/shopify-app-info (S232). Added S309
+    // because the knowledge layer disagreed with itself about the scope state —
+    // BACKLOG said write_discounts + read_products were both missing while
+    // integrations.md recorded both as released in S214 — and a scope question can
+    // only be settled by asking the live installation, never by reading either doc.
+    // ignitionops authenticates as the PITSTOP CS-lookup app, not the Odo app
+    // (PATTERN-084), so this also confirms WHICH app a release must target.
+    // Gated on the existing IGNITION_BRIDGE_TOKEN; no new secret.
+    if (url.pathname === '/internal/shopify-app-info' && request.method === 'POST') {
+      const want = env.IGNITION_BRIDGE_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      const r = await shopifyGraphql(env,
+        `{ currentAppInstallation { app { title handle apiKey } accessScopes { handle } } }`, {});
+      if (!r.ok) return err(r.error || 'shopify_error', 502);
+      const inst = r.data?.currentAppInstallation || {};
+      return ok({
+        app: inst.app || null,
+        scopes: (inst.accessScopes || []).map(s => s.handle).sort(),
+      });
+    }
+
     if (request.method === 'GET')  return handleGet(url, request, env);
     if (request.method === 'POST') return handlePost(request, env);
     return err('method_not_allowed', 405);
