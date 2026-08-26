@@ -93,7 +93,14 @@ export default function InvoiceUpload({ files, onChange, disabled }) {
             2. a synthetic .click() — several Android Chrome/WebView builds honour `capture` only on
                a NATIVE activation. A <label> wrapping the input gives exactly that: the tap lands
                on the label and the browser activates the control itself, no JS in the path.
-          Do not "tidy" either of these back. */}
+          Do not "tidy" either of these back.
+          ✅ VERIFIED ON REAL DEVICES 2026-08-26: the camera opens on iPhone Safari and on Android
+          Chrome. ⛔ It does NOT open in **Comet** (Perplexity's Android browser) — that is a
+          BROWSER limitation, not a bug here: third-party Android browsers routinely route every
+          file input through their own document picker and ignore `capture` entirely. Afshaan's
+          call: leave it, revisit only if someone reports it. Do not re-engineer this component
+          against Comet. (Whether the pre-fix version would also have worked in Chrome was never
+          tested and is not worth determining.) */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <label className="btn btn-primary"
                style={{ cursor: disabled || working ? 'default' : 'pointer',
