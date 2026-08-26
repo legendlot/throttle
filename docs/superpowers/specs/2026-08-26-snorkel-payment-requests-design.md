@@ -68,8 +68,10 @@ as the PO-side mirror (§6).
 
 | Question | Answer |
 |---|---|
-| Approval | **Yes, above a value threshold.** Default **₹1,00,000**, **editable in a Snorkel admin panel** |
+| Approval | **Yes, above a value threshold.** Default **₹1,00,000**, editable — **by a SUPER ADMIN only** (§2a) |
 | Approver | **Vinay Jaisingh** (EMP-002, Founder's Office) by default; **the approver list is editable** so Afshaan can add himself. Needs a **pending-approvals page with single AND bulk approve** |
+| Category overrides | **None.** Meta invoices are always large — **the threshold holds the line**; no category approves regardless of amount (Afshaan, 2026-08-26) |
+| Currency | **Editable per request. INR is the default everywhere unless changed** |
 | PO gate | **Required for goods/material categories only**, driven by the category |
 | Payee + bank | **New payee master**; **bank details finance-only** |
 | Part-payment | Request carries **invoice total + amount-to-pay-now** |
@@ -79,6 +81,43 @@ as the PO-side mirror (§6).
 | Slack channel | **Retired** once this is streamlined |
 | Scope | **Credit notes / debit notes are their own request type** |
 
+## 2a. Snorkel has no super-admin tier yet — one must be added
+
+Afshaan: *"Threshold should only be super admin editable… if Vinay is not, make him super admin."*
+
+**Measured 2026-08-26:** Snorkel's only admin key is `snorkel_admin`, and **6 people hold it** —
+adnan, afshaan, joseph, mohit, shashwat, **vinay**. So Vinay is already a Snorkel admin, but "admin"
+is a wider circle than Afshaan means for a money threshold.
+
+**Add `snorkel_super_admin`**, following the **Manifest precedent** (`manifest_super_admin`,
+RULE-MANIFEST-006 — governance separated from operational admin). Seed: **Afshaan + Vinay Jaisingh**.
+Only this key may edit the threshold, the category list and the approver list. `snorkel_admin` keeps
+everything it does today and gains nothing.
+
+⚠️ **Two Vinays exist — this is Vinay Jaisingh, EMP-002, `vinay@legendoftoys.com`, Founder's Office.**
+NOT Vinay Ram (EMP-065, `ram@legendoftoys.com`, Offline), who holds `sales_manager` and is the
+"Vinayram" referenced elsewhere in systems/snorkel.md.
+
+## 2b. ⛔ The biggest rollout risk: 13 of 20 requesters cannot log into Snorkel
+
+The channel is to be retired. **Measured 2026-08-26 against `store.snorkel_user_roles`:**
+
+- **7 of the 20 observed requesters have a Snorkel role** — akshay, joseph, mahesh, piyush, priya,
+  siddhant, siddhanth.
+- **13 do NOT** — akshara, himani, karan, kaushik, kirti, kishan, mishica, nandeswari, naveen,
+  padmajit, pruthvi, reann, sejal.
+
+Several of the 13 are among the **heaviest** requesters (Padmajit, Himani, Reann, Pruthvi). Retiring
+`#payments` before they are onboarded leaves two-thirds of the requesters with nowhere to raise a
+payment — the feature would fail on day one for reasons that have nothing to do with its design.
+
+**Therefore: granting a `payment_request` role to all ~20 requesters is a shipping prerequisite, not
+a follow-up.** It also means the new role must be genuinely minimal — these people need *only*
+payment requests, not procurement, sales or collections. Note `store.snorkel_user_roles` carries one
+role per user, so a requester-only role must be a distinct role_key (e.g. `payment_requester`), and
+anyone who already holds a Snorkel role needs `payment_request` added to **that** role's permissions
+rather than being reassigned.
+
 ## 3. The standard template
 
 One form, phone-first. This *is* the deliverable — it replaces "please make the payment".
@@ -87,8 +126,8 @@ One form, phone-first. This *is* the deliverable — it replaces "please make th
 - **Payee** — picker from the payee master, with inline **“+ New payee”**
 - **Category** — picker; drives the PO gate (§5)
 - **Purpose** — one line, required (“Acrylic sheets for Shadow tooling”)
-- **Document(s)** — at least one; camera capture or file. WhatsApp photos are the norm, so the
-  capture path must be as good as the upload path
+- **Document(s)** — at least one. **Two equally-prominent buttons: "Take photo" and "Upload file"**
+  (§3a). WhatsApp photos are the norm, so capture must be as good as upload, not a fallback
 - **Invoice number** + **invoice date**
 - **Invoice total (₹)**
 - **Amount to pay now (₹)** — defaults to the invoice total; a lower value is a part-payment
@@ -107,6 +146,46 @@ One form, phone-first. This *is* the deliverable — it replaces "please make th
 
 **Request types:** `payment` · `credit_note` · `debit_note`. CN/DN carry the same shape minus
 *amount to pay now* (they offset rather than disburse) and never enter the paid state.
+
+**Currency:** every amount field carries a currency selector defaulting to **INR**. The default
+applies everywhere it is not explicitly changed; the chosen currency is stored on the request and
+displayed with every amount, so a non-INR request can never be read as rupees.
+
+## 3a. Invoice capture — frictionless is the requirement, and there are two traps
+
+Afshaan: *"make it absolutely frictionless to capture invoices… there should be a camera capture
+option/button also on upload."*
+
+**Two buttons, equal weight, never a menu:**
+- **Take photo** → `<input type="file" accept="image/*" capture="environment">` — opens the rear
+  camera directly on Android/iOS.
+- **Upload file** → `<input type="file" accept="image/*,application/pdf" multiple>` — gallery, Files,
+  or desktop drag-and-drop.
+
+⚠️ **Nothing in the entire fleet uses `capture=` today** (swept all 12 apps + `packages/`,
+2026-08-26 — zero hits). This is a genuinely new control, so it needs a real device smoke, not a
+desktop one: `capture` is silently ignored on desktop browsers, so it will look fine and prove
+nothing.
+
+⚠️ **TRAP 1 — the S305 fleet-wide file-picker bug. Do not reintroduce it.** Four call sites held
+`e.target.files` and then set `e.target.value = ''` *before consuming it*. `input.files` returns the
+**same live FileList object** on every access, so clearing `value` empties the reference already
+held; consumers then hit `if (!files.length) return` and do nothing — **no error, no toast, no
+console output**. It cost Garage gate-pass every attachment for two days (42.5% of passes carried
+documents before the regression; **0 of 25 after**).
+**The rule: lift the File objects out first — `const picked = Array.from(e.target.files || [])` —
+and only then clear `value`. Never pair a functional state updater (`setFiles(prev => …)`) with an
+eager clear**, because React defers the updater to the render phase and the clear always wins.
+
+⚠️ **TRAP 2 — phone photos are large.** The `#payments` WhatsApp images run 130–370 KB, but a direct
+rear-camera capture is typically **3–8 MB**. Client-side downscale (long edge ~2000px, JPEG ~0.8)
+before upload, or the first request raised on a weak factory connection will hang and the requester
+will go back to Slack. Keep the original aspect ratio; never crop.
+
+**Also required for frictionlessness:** multiple documents per request (Siddhanth routinely attaches
+3–5 invoices, and one Vitboj request carried 10 WhatsApp photos); a visible thumbnail + filename per
+attachment with a remove control; and upload progress, because a stalled silent upload is
+indistinguishable from a broken one.
 
 ## 4. Data model
 
@@ -223,11 +302,34 @@ See `2026-08-26-snorkel-tally-connect-design.md`.
 | `payment_execute` | Mahesh Jain | mark paid, record UTR, upload proof |
 | `payment_bank_view` | finance | read unmasked bank details |
 | `payment_payee_manage` | finance + requesters (create only) | create/edit payees |
-| `payment_admin` | Afshaan | threshold, categories, approver list |
+| **`snorkel_super_admin`** | **Afshaan + Vinay Jaisingh** | **threshold, categories, approver list** (§2a) |
 
-## 9. Screens (mobile-first — Snorkel already has the S304 shell)
+⚠️ `payment_admin` was folded into `snorkel_super_admin` — Afshaan's call is that the threshold is
+super-admin-only, and a second near-identical key would just be a way to widen that circle by
+accident. `snorkel_admin` (6 holders today) is deliberately **not** enough to move the threshold.
 
-1. **New Request** — the §3 form. Must be completable one-handed on a phone with a camera photo.
+## 9. Screens (mobile-first — the S304 shell is real, verified in the CSS)
+
+**Snorkel's mobile shell exists and was confirmed in code, not assumed** (`apps/snorkel/src/app/redesign.css`:
+`.sn-tabbar` fixed bottom tab bar + full-nav sheet under `@media (max-width: 767px)`, S304). So the
+app shell is already phone-ready and this feature inherits it — what still has to be designed for the
+phone is the **form itself**: single-column, large tap targets, numeric keypads on amount fields, a
+native date picker for needed-by, and no horizontal scroll.
+
+✅ **The mobile tab is already there, and it points at the feature this replaces.** Checked in
+`(auth)/layout.js`: `MOBILE_TABS` = Requests · POs · Sales · **Payments** (`/payments`) · More. And
+`/payments` is the **"Payment Queue — Approved POs. Route to Finance or the requester, then mark
+paid"** screen — i.e. exactly the `routePayment`/`markPaid` surface used on 2 of 373 POs (§1).
+
+**So this feature should TAKE OVER `/payments` rather than sit beside it.** The dead PO queue becomes
+one filtered view inside the new module (requests carrying a `linked_po_number`), not a second
+destination. That gives requesters a phone tab on day one with no nav change, avoids two things
+called "Payments", and retires the unused screen instead of leaving it to confuse people.
+⚠️ Its current permission gate must be re-checked when the route is repurposed — today it is reachable
+by whoever holds the PO-payment permission, which is a narrower set than the ~20 people who need to
+raise requests.
+
+1. **New Request** — the §3 form. Must be completable one-handed on a phone, including capture (§3a).
 2. **My Requests** — status list, newest first; the requester's answer to "is it done?".
 3. **Approvals** (`payment_approve`) — pending queue, **single and bulk approve**, each row showing
    payee, amount, category, PO, requester, needed-by, and any duplicate/split flag.
@@ -238,22 +340,35 @@ See `2026-08-26-snorkel-tally-connect-design.md`.
 
 ## 10. Build order
 
-1. Migration: 6 tables + 2 sequences + `payment-docs` private bucket + perm keys + category/settings seed.
-2. Worker: payee CRUD (bank-gated reads), request create/list/detail, approve (single + bulk), mark-paid, document upload URLs.
+1. Migration: 6 tables + 2 sequences + `payment-docs` private bucket + perm keys (incl.
+   `snorkel_super_admin`) + category/settings seed.
+2. Worker: payee CRUD (bank-gated reads), request create/list/detail, approve (single + bulk),
+   mark-paid, document upload URLs.
 3. Screens 1–4 (the loop that lets the channel retire), then 5–6.
-4. Backfill the payee master from the vendors already known + the payees seen in `#payments`.
-5. Run in parallel with the channel for a short period, then retire it.
+4. **Onboard the 13 requesters who have no Snorkel role (§2b)** — must land before any cutover.
+5. Backfill the payee master from the vendors already known + the payees seen in `#payments`.
+6. Run in parallel with the channel for a short period, then retire it.
+
+**Smoke checklist that cannot be done on desktop:** camera capture opens the rear camera on a real
+Android and a real iPhone; a captured photo actually attaches (the S305 trap); a multi-MB capture
+uploads over a factory-grade connection; the form is completable one-handed.
 
 ## 11. Open — needs Afshaan before or during build
 
-1. **Confirm the `po_required` column** in the §4 category table.
+1. **Confirm the `po_required` column** in the §4 category table. *(Only remaining design question.)*
 2. **Notifications.** The channel is being retired, so requesters lose their ambient feed. In-app only
    matches the S314 Pitstop posture — but ⚠️ **that decision is explicitly Pitstop-scoped**, so it
    should not be assumed to generalise. Recommendation: in-app for v1 (Mahesh works a queue; the
    requester has My Requests), and decide on email/Slack once adoption is real.
-3. **Should approval be required regardless of amount for any category?** (e.g. ad spend, where a
-   single Meta invoice was ₹21L but a credit-line top-up may be routine.)
-4. **Priya Bhadulkar has no login** (`auth_user_id` is null). If she ever needs the finance queue, an
-   account must be created first.
-5. **Foreign-currency payments** — air freight and some vendors may not be INR. v1 assumes INR;
-   confirm before that assumption is baked into the amount fields.
+3. **Onboarding the 13 requesters without Snorkel access** (§2b) — a shipping prerequisite, and a
+   people task rather than a build one.
+
+### Answered 2026-08-26 — closed, do not re-raise
+
+- ~~Always-approve categories?~~ **No.** Meta invoices are always large; the threshold holds the line.
+- ~~Priya has no login?~~ **Wrong — my error.** She has an auth user (created 2026-06-16, last
+  sign-in 2026-08-14) **and** the Snorkel `finance_manager` role. What is actually null is the link
+  from her Podium employee record (EMP-060) to that auth user, which affects Podium only and is
+  irrelevant here because approval routes on a Snorkel permission, not the Podium manager chain.
+  Logged separately as a small Podium data gap.
+- ~~Foreign currency?~~ **Editable per request, INR the default everywhere** (§3).
