@@ -659,6 +659,15 @@ export default {
     if (url.pathname === '/webhooks/relay-wa' && request.method === 'POST') {
       return handleRelayWaWebhook(request, env);
     }
+    // Web-bot turns forwarded from commsops (S312). Same token as relay-wa. Thread is
+    // find-or-create on relay_web_session_id; every bot/customer line lands in
+    // cs_wa_messages so the inbox transcript is THE transcript (one transcript rule).
+    if (url.pathname === '/webhooks/relay-web' && request.method === 'POST') {
+      if (!verifyRelayWaAuth(request, env)) return err('unauthorised', 401);
+      const b = await request.json().catch(() => ({}));
+      if (!b.session_id || !Array.isArray(b.messages)) return err('bad_request', 400);
+      return handleRelayWebForward(b, env);
+    }
     // BiteSpeed history backfill (S245) — token-gated, before the JWT gate like the webhooks
     // so it can be driven without a Google login. Time-boxed: only works while the vendor
     // token still authenticates.
@@ -3026,27 +3035,43 @@ async function approveTicketClosure(body, auth, env) {
   const { ticket_id } = body || {};
   if (!ticket_id) return err('ticket_id required');
   const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`
-    + `&select=id,ticket_no,closure_requested_at,closure_request_reason,closure_requested_by_name&limit=1`, env);
+    + `&select=id,ticket_no,stage,closure_requested_at,closure_request_reason,closure_requested_by_name&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
   if (!t.closure_requested_at) return err('No closure request is pending on this ticket', 409);
 
-  // ⚠️ Clear the request BEFORE closing. advanceStage writes its own history and the two
-  // must not race into a state where the ticket is closed and still shows as awaiting
-  // approval — which would sit in the admin worklist forever with nothing to act on.
-  await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
-    method: 'PATCH', body: JSON.stringify(CLOSURE_FIELDS_CLEARED),
+  // ⚠️ Do NOT route this through advanceStage. Found by the S311 hostile review: that path
+  // enforces PIPELINE ORDER via allowedTransitions, and `closed` is not a SIDE_EXIT — it is
+  // reachable only from the single stage immediately preceding it. Measured over 60 days,
+  // 8,447 of ~9,000 closes came from `intake`, which advanceStage would refuse with a 422.
+  // An approved closure is an explicit administrative decision that deliberately overrides
+  // pipeline order, exactly like updateTicket's fast-close, so it writes the same four
+  // fields that path writes.
+  //
+  // ⚠️ And close FIRST, clear the request SECOND. The original order cleared the request
+  // before attempting the close, so a refused close destroyed the agent's request and left
+  // the ticket open with nothing to re-approve. Clearing after means the worst case is a
+  // request that survives a failure — recoverable, and visible.
+  const now = new Date().toISOString();
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH',
+    prefer: 'return=representation',
+    body: JSON.stringify({
+      stage: 'closed',
+      stage_changed_at: now,
+      closed_at: now,
+      closed_by_user_id: auth.userId,
+      closed_reason: t.closure_request_reason || 'resolved',
+      ...CLOSURE_FIELDS_CLEARED,
+    }),
   });
-  await insertHistory(ticket_id, 'closure_approved', t.closure_requested_by_name || null,
-    t.closure_request_reason || null, `approved by ${auth.fullName || auth.email || 'admin'}`, auth, env);
+  if (!upd.ok || !(upd.data || []).length) return err('Failed to close the ticket', upd.status || 500);
 
-  // Reuse the ONE close path rather than writing a second one. Everything it does — the
-  // gate checks, closed_at/closed_by, the reason fallback, the history row — has to happen
-  // here too, and a parallel implementation is how the two drift.
-  return advanceStage(
-    { ticket_id, target_stage: 'closed', patch: { closed_reason: t.closure_request_reason || 'resolved' } },
-    auth, env, new Request('https://x'),
-  );
+  await insertHistory(ticket_id, 'stage', t.stage, 'closed',
+    `closure approved by ${auth.fullName || auth.email || 'admin'}`, auth, env);
+  await insertHistory(ticket_id, 'closure_approved', t.closure_requested_by_name || null,
+    t.closure_request_reason || null, null, auth, env);
+  return ok({ approved: true, ticket_no: t.ticket_no, closed_reason: t.closure_request_reason || 'resolved' });
 }
 
 async function rejectTicketClosure(body, auth, env) {
@@ -5673,7 +5698,8 @@ function waTransport(env) {
 // one. Testing only for a missing provider ref would also capture a BiteSpeed thread whose refs
 // had not landed yet and wrongly answer it through Relay.
 function isRelayThread(thread, env) {
-  if ((thread?.channel || 'whatsapp') !== 'whatsapp') return false;   // web stays on Chatwoot
+  if (thread?.relay_web) return true;   // web-bot thread (S312): replies go to commsops, NEVER Chatwoot
+  if ((thread?.channel || 'whatsapp') !== 'whatsapp') return false;   // legacy web stays on (dead) Chatwoot
   return waTransport(env) === 'relay' || !!(thread?.waba_phone_number_id && !thread?.provider_thread_ref);
 }
 
@@ -5731,6 +5757,49 @@ function relayWaKind(type) {
 //                                            one and agents would lose all visible history.
 //   3. otherwise                           — a genuinely new conversation for this number
 // A thread already carrying a DIFFERENT non-null number is never re-pointed — that is the flip.
+// Web-bot forward (S312): find-or-create the thread on relay_web_session_id, append the
+// turn's lines to cs_wa_messages. NB the widget conversation has no Chatwoot, no WABA
+// number and no 24h window — the ONLY columns that make it a thread are channel='web' +
+// the relay_web marker pair.
+async function handleRelayWebForward(b, env) {
+  let thread = (await sb(
+    `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone&limit=1`, env
+  )).data?.[0];
+  // Identity lands AFTER the thread exists (collect runs on turn 2) — patch it in the
+  // first time it arrives, else every web thread shows no phone forever.
+  if (thread && !thread.customer_phone && b.identity?.phone) {
+    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH',
+      body: JSON.stringify({ customer_phone: `+91${b.identity.phone}` }) }).catch(() => {});
+  }
+  if (!thread) {
+    const ins = await sb('/rest/v1/cs_wa_threads', env, {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'web', relay_web: true, relay_web_session_id: b.session_id,
+        customer_phone: b.identity?.phone ? `+91${b.identity.phone}` : null,
+        customer_handle: b.identity?.email || 'Web visitor',
+      }),
+    });
+    thread = ins.data?.[0];
+    if (!thread) return err('thread_create_failed', 500);
+  }
+  const now = new Date().toISOString();
+  const rows = b.messages.map((m) => ({
+    thread_id: thread.id, direction: m.direction, kind: 'text', body: m.text,
+    is_internal: false, sent_by_user_id: null,
+    sent_by_name: m.direction === 'outbound' ? 'Relay (bot)' : null,
+    ...(m.direction === 'outbound' ? { sent_at: now } : {}),
+  }));
+  if (rows.length)
+    await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
+  const threadPatch = { last_message_at: now };
+  if (b.messages.some((m) => m.direction === 'inbound')) threadPatch.last_inbound_at = now;
+  // A handoff must surface in the active inbox even if the thread had been closed.
+  if (b.handoff && thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+  return ok({ thread_id: thread.id });
+}
+
 async function relayWaFindOrCreateThread(phone, phoneNumberId, env, name) {
   if (!phone) return null;
   const clean = name && String(name).trim() ? String(name).trim().slice(0, 120) : null;

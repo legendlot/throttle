@@ -34,7 +34,7 @@ export default function CallPop() {
   const { session, userId } = useAuth();
   const router = useRouter();
   const [state, setState] = useState(null);      // { call, context }
-  const [dismissed, setDismissed] = useState(null); // call id the agent closed
+  const [dismissed, setDismissed] = useState(null); // { id, phone } the agent closed — see the match below
   const alive = useRef(true);
   const notifiedCallRef = useRef(null);   // last call id we raised a desktop notification for
 
@@ -128,10 +128,15 @@ export default function CallPop() {
   }, [userId]);
 
   if (!state?.active) return null;
-  // Keyed by call id when we have one, else by the number — a null id must not make a
-  // dismissed SDK pop suppress every later call (null === null).
-  const popKey = state.call?.id || (state.call?.phone ? `phone:${state.call.phone}` : null);
-  if (dismissed && popKey && dismissed === popKey) return null;
+  // Dismissal is matched on EITHER identifier, and that is not belt-and-braces.
+  // Found by the S311 hostile review: the SDK pop has no call id, so it can only be
+  // dismissed by phone — and ~seconds later the poll finds the real row, the key becomes
+  // that row's id, and the card the agent just closed comes straight back mid-call.
+  // Recording both and matching either is what makes one dismissal stick across the
+  // hand-off from the SDK card to the row-backed one.
+  const popId = state.call?.id || null;
+  const popPhone = state.call?.phone || null;
+  if (dismissed && ((popId && dismissed.id === popId) || (popPhone && dismissed.phone === popPhone))) return null;
 
   const { call, context } = state;
   const c = context || {};
@@ -154,7 +159,7 @@ export default function CallPop() {
             {c.customer?.name || 'Unknown caller'}
           </strong>
         </span>
-        <button onClick={() => setDismissed(popKey)} style={xBtn} aria-label="Dismiss">
+        <button onClick={() => setDismissed({ id: popId, phone: popPhone })} style={xBtn} aria-label="Dismiss">
           <X size={14} />
         </button>
       </div>
