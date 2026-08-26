@@ -243,7 +243,7 @@ const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
   : BITESPEED_BASE;
 
 export default function InboxPage() {
-  const { session, user, perms } = useAuth();
+  const { session, userId, user, perms } = useAuth();
   const { setTopbarBadge } = useRefreshState();
   const canManage = !!perms?.cs_ticket_manage;
   const canReassign = !!(perms?.cs_ticket_reassign || perms?.cs_ticket_admin);
