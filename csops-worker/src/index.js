@@ -850,6 +850,7 @@ async function handleGet(action, params, auth, env) {
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
     case 'getMessagingStats':   return getMessagingStats(params, auth, env);
+    case 'getClosureRequests':  return getClosureRequests(params, auth, env);
     case 'getAgentInboxCounts': return getAgentInboxCounts(params, auth, env);
     case 'getEmailAttachment':  return getEmailAttachment(params, auth, env);
     case 'searchShopifyCustomer':
@@ -874,6 +875,9 @@ async function handlePost(action, body, auth, env, request) {
     case 'cancelTicket':     return cancelTicket(body, auth, env);
     case 'escalateTicket':   return escalateTicket(body, auth, env);
     case 'closeTicket':      return closeTicket(body, auth, env);
+    case 'requestTicketClosure': return requestTicketClosure(body, auth, env);
+    case 'approveTicketClosure': return approveTicketClosure(body, auth, env);
+    case 'rejectTicketClosure':  return rejectTicketClosure(body, auth, env);
     case 'placeCall':        return placeCall(body, auth, env);
     case 'softphoneSetup': {
       const g = require('cs_ticket_admin', auth); if (g) return g;
@@ -2966,6 +2970,114 @@ async function escalateTicket(body, auth, env) {
   // Doesn't change stage; just flags via history. UI surfaces it.
   await insertHistory(ticket_id, 'escalated', null, 'true', note || null, auth, env);
   return ok({ escalated: true });
+}
+
+// ── Ticket closure approval (Pruthvi, 2026-08-18) ────────────────────────────
+//
+// An agent asks to close with a reason and a note; an admin decides. The ticket does NOT
+// move while a request is pending — see the migration for why this is an annotation rather
+// than a new `stage`.
+//
+// ⚠️ closeTicket() is deliberately UNCHANGED and still works for admins. This is an extra
+// route for people who cannot close, not a gate bolted in front of the existing one: a
+// terminal-stage close by someone with cs_ticket_manage is a normal, sanctioned action and
+// making everyone queue behind an admin would be a worse system than the one being fixed.
+async function requestTicketClosure(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { ticket_id, reason, note } = body || {};
+  if (!ticket_id) return err('ticket_id required');
+  if (!ALLOWED_CLOSED_REASONS.includes(reason)) {
+    return err(`reason required (one of: ${ALLOWED_CLOSED_REASONS.join(', ')})`, 422);
+  }
+  // Pruthvi asked for the note to be mandatory, and that is the point of the whole feature:
+  // the reason is a dropdown anyone can click, the note is what an approver actually reads.
+  if (!String(note || '').trim()) return err('a note is required when requesting closure', 422);
+
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`
+    + `&select=id,ticket_no,stage,closure_requested_at&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (['closed', 'cancelled', 'rejected'].includes(t.stage)) return err('Ticket is already closed', 422);
+  if (t.closure_requested_at) return err('A closure request is already pending on this ticket', 409);
+
+  const r = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      closure_requested_at: new Date().toISOString(),
+      closure_requested_by_user_id: auth.userId,
+      closure_requested_by_name: auth.fullName || auth.name || auth.email || null,
+      closure_request_reason: reason,
+      closure_request_note: String(note).trim(),
+    }),
+  });
+  if (!r.ok) return err('Failed to request closure', r.status || 500);
+  await insertHistory(ticket_id, 'closure_requested', null, reason, String(note).trim(), auth, env);
+  return ok({ requested: true, ticket_no: t.ticket_no });
+}
+
+const CLOSURE_FIELDS_CLEARED = {
+  closure_requested_at: null, closure_requested_by_user_id: null,
+  closure_requested_by_name: null, closure_request_reason: null, closure_request_note: null,
+};
+
+async function approveTicketClosure(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { ticket_id } = body || {};
+  if (!ticket_id) return err('ticket_id required');
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`
+    + `&select=id,ticket_no,closure_requested_at,closure_request_reason,closure_requested_by_name&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (!t.closure_requested_at) return err('No closure request is pending on this ticket', 409);
+
+  // ⚠️ Clear the request BEFORE closing. advanceStage writes its own history and the two
+  // must not race into a state where the ticket is closed and still shows as awaiting
+  // approval — which would sit in the admin worklist forever with nothing to act on.
+  await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(CLOSURE_FIELDS_CLEARED),
+  });
+  await insertHistory(ticket_id, 'closure_approved', t.closure_requested_by_name || null,
+    t.closure_request_reason || null, `approved by ${auth.fullName || auth.email || 'admin'}`, auth, env);
+
+  // Reuse the ONE close path rather than writing a second one. Everything it does — the
+  // gate checks, closed_at/closed_by, the reason fallback, the history row — has to happen
+  // here too, and a parallel implementation is how the two drift.
+  return advanceStage(
+    { ticket_id, target_stage: 'closed', patch: { closed_reason: t.closure_request_reason || 'resolved' } },
+    auth, env, new Request('https://x'),
+  );
+}
+
+async function rejectTicketClosure(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { ticket_id, note } = body || {};
+  if (!ticket_id) return err('ticket_id required');
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`
+    + `&select=id,ticket_no,closure_requested_at,closure_request_reason&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (!t.closure_requested_at) return err('No closure request is pending on this ticket', 409);
+
+  const r = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(CLOSURE_FIELDS_CLEARED),
+  });
+  if (!r.ok) return err('Failed to reject closure', r.status || 500);
+  // The ticket is left exactly where it was, still open and still assigned — a rejected
+  // request is a "keep working on it", not a state change.
+  await insertHistory(ticket_id, 'closure_rejected', t.closure_request_reason || null, null,
+    String(note || '').trim() || null, auth, env);
+  return ok({ rejected: true, ticket_no: t.ticket_no });
+}
+
+// The admin worklist. Visible to admins only, since only they can act on it.
+async function getClosureRequests(params, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const r = await sb(`/rest/v1/cs_tickets?closure_requested_at=not.is.null`
+    + `&select=id,ticket_no,customer_name,customer_phone,stage,disposition,assigned_agent_name,`
+    + `closure_requested_at,closure_requested_by_name,closure_request_reason,closure_request_note`
+    + `&order=closure_requested_at.asc&limit=200`, env);
+  if (!r.ok) return err('Failed to load closure requests', 500);
+  return ok({ requests: r.data || [] });
 }
 
 async function closeTicket(body, auth, env) {
