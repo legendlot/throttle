@@ -6203,6 +6203,20 @@ function metaSendError(d, status) {
       + 'sent from here until it is renewed. This is not a problem with your message. '
       + 'Tell Afshaan; replying from the Instagram app still works meanwhile.', status);
   }
+  // 200 = "Permissions error". This is NOT the past-24h block (code 10) and NOT an expired
+  // token (code 190) — it arrives on threads whose window is demonstrably open, while every
+  // other Instagram reply that day sends fine (measured 2026-08-26: 114 sent that morning),
+  // and every thread is on one provider_account_id. So it is refused per RECIPIENT.
+  // ⚠️ We have NOT yet measured which recipient-side condition Meta means — run the
+  // diagIgRecipient probe on a live instance of this before claiming one. The wording below
+  // is therefore deliberately about what the agent should DO, not about the cause: the last
+  // time an unread Meta error was paraphrased from documentation rather than measured, the
+  // copy told agents a send would work while it was failing (S262/S263).
+  if (Number(e.code) === 200) {
+    return err('Instagram refused this reply for this chat. It is not your message, and it is '
+      + 'not the 24-hour limit — other chats are sending normally. Try replying once from the '
+      + 'Instagram app; if that also fails, send Afshaan this customer\'s name.', status);
+  }
   return err(`Meta send failed: ${JSON.stringify(Object.keys(e).length ? e : d)}`, status);
 }
 
@@ -6503,7 +6517,24 @@ async function sendMetaMessage(body, auth, env) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) return metaSendError(d, r.status);
+  if (!r.ok) {
+    // Persist the failure. Until now a refused Meta send wrote NOTHING, so it existed only as
+    // a banner the agent saw once — which is exactly why the 2026-08-26 report could not be
+    // diagnosed after the fact (no row, no error, nothing to query). WhatsApp already uses
+    // status='failed' and the inbox already renders it as a red "failed" marker beside the
+    // timestamp, so this reuses a path the UI understands and cannot read as delivered.
+    await sb(`/rest/v1/cs_wa_messages`, env, {
+      method: 'POST',
+      body: JSON.stringify({
+        thread_id: thread.id, channel: thread.channel, direction: 'outbound', kind: 'text',
+        body: text, status: 'failed',
+        status_error: JSON.stringify((d && d.error) || d || {}).slice(0, 1000),
+        sent_by_user_id: auth.userId, sent_by_name: auth.fullName || auth.name || auth.email || null,
+        sent_at: new Date().toISOString(),
+      }),
+    }).catch(() => {});   // never let logging turn a refusal into a 500
+    return metaSendError(d, r.status);
+  }
 
   const mid = d?.message_id || null;
   await sb(`/rest/v1/cs_wa_messages`, env, {
