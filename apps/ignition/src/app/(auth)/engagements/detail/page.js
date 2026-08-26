@@ -28,6 +28,7 @@ export default function EngagementDetailPage() {
   const [delOpen, setDelOpen] = useState(false);
   const [approving, setApproving] = useState(false);
   const canManage = !!perms?.ignition_manage;
+  const canApprove = !!perms?.ignition_approve;   // S313 — final approval, admin tier only
 
   function reload() {
     if (!session || (!id && !eno)) return;
@@ -143,18 +144,27 @@ export default function EngagementDetailPage() {
       <Card title="Pipeline">
         <StageStepper stage={e.stage} />
         {/* Reann #5 — hard approval gate. A proposed deal cannot move on until someone with
-            ignition_manage approves it; rejecting (drop/ghost) stays available without approval. */}
+            ignition_APPROVE approves it (S313 — final approval is Reann's; his team keeps
+            ignition_manage and can still create and advance deals, they just cannot sign one
+            off). Rejecting (drop/ghost) stays available without approval, deliberately: you
+            must be able to turn a proposal down without first approving it. */}
         {e.stage === 'proposed' && !e.approved_at && (
           <div style={{ marginTop: 12, padding: 12, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: 240, fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
               <strong>Waiting for approval.</strong> This deal cannot move past Proposed until it is
               approved. It can still be dropped or ghosted if you are turning it down.
             </div>
-            {canManage && (
+            {canApprove ? (
               <button onClick={doApprove} disabled={approving}
                 style={{ padding: '6px 14px', background: '#27c93f', color: '#04140a', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: approving ? 'not-allowed' : 'pointer', opacity: approving ? 0.6 : 1 }}>
                 {approving ? 'Approving…' : 'Approve'}
               </button>
+            ) : (
+              // Say who CAN, rather than hiding the control and leaving people guessing why a
+              // deal will not move. Nothing here is a permission check — the worker is.
+              <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                Approval is with Reann
+              </span>
             )}
           </div>
         )}

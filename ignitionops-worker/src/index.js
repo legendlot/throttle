@@ -1692,7 +1692,16 @@ async function getQualityFlags(url, auth, env) {
 // an actor and a time, it belongs in engagement_history, and keeping approved_at out of
 // ENGAGEMENT_FIELDS means no ordinary patch can forge it.
 async function approveEngagement(body, auth, env) {
-  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  // ⚠️ Gated on `ignition_approve`, NOT `ignition_manage` (changed 2026-08-26, S313, Afshaan:
+  // "final approval will be with Reann, his team loses access to final approvals").
+  //
+  // ⚠️ `ignition_approve` was a DEAD PERMISSION until this line: it existed in the role table and
+  // was described in the manual as the thing that gates approval, but nothing anywhere read it —
+  // approval ran on `ignition_manage`, which every role but viewer holds. That is why 26 people
+  // could approve while the docs said Lead-and-Admin, and how two `ignition_manager` users
+  // (a role with no approve permission at all) approved 15 deals between them.
+  // Removing the key from a role would therefore have changed NOTHING. Wiring it is the fix.
+  const gate = requirePerm('ignition_approve', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   const cur = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,approved_at&limit=1`, env);
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
