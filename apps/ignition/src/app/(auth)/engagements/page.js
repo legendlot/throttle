@@ -43,21 +43,27 @@ export default function EngagementsPage() {
 
     // Reann, 2026-08-18: "I can only see around 95 videos, but I should have close to 200."
     // This asked for ONE page of 100 and stopped, so everything past the 100th row was
-    // invisible with nothing on screen to say so — there were 233. The worker caps a page at
-    // 200 and returns no total, so "a short page is the last page" is the only end signal
-    // available; walk the pages until one comes back short.
+    // invisible with nothing on screen to say so — there were 233. Walk the pages until one
+    // comes back short; `total` (S313) now also lets us ASSERT we got everything rather than
+    // infer it from a short page, so an incomplete list reports itself instead of looking whole.
     (async () => {
       const PAGE = 200;
       const MAX_PAGES = 25;   // 5,000-row backstop against a runaway loop, not an expected ceiling
       const all = [];
+      let total = null;
       for (let p = 0; p < MAX_PAGES; p++) {
         const r = await ignitionopsGet('getEngagements', { ...base, limit: PAGE, offset: p * PAGE }, session);
         if (cancelled) return;
         const batch = r.engagements || [];
         all.push(...batch);
+        if (typeof r.total === 'number') total = r.total;
         if (batch.length < PAGE) break;
       }
-      if (!cancelled) setRows(all);
+      if (cancelled) return;
+      if (total != null && all.length < total) {
+        toast(`Showing ${all.length} of ${total} — the list is incomplete, please report this`, 'error');
+      }
+      setRows(all);
     })()
       // Paging widens the window in which the filters can change mid-flight, so every state
       // write is guarded — otherwise page 2 of the previous query lands on top of page 1 of

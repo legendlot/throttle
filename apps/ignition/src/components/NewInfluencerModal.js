@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal, useToast } from '@throttle/ui';
 import { ignitionopsPost } from '../lib/ignitionopsFetch.js';
+import { channelLinkError, normalizeChannelLink } from '../lib/channelLink.js';
 
 const PLATFORMS = ['instagram', 'youtube', 'facebook', 'twitter', 'other'];
 const TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
@@ -28,9 +29,15 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
 
   async function submit() {
     if (!form.channel_name.trim()) { setErr('Channel / handle name is required'); return; }
+    // Refuse a pasted tab title here rather than storing it — see lib/channelLink.js.
+    const linkErr = channelLinkError(form.channel_link);
+    if (linkErr) { setErr(linkErr); return; }
     setBusy(true); setErr(null);
     try {
-      const payload = { ...form, channel_name: form.channel_name.trim(), list_status: 'master' };
+      const payload = {
+        ...form, channel_name: form.channel_name.trim(), list_status: 'master',
+        channel_link: normalizeChannelLink(form.channel_link) || null,
+      };
       payload.reach = form.reach === '' ? null : Number(form.reach);
       payload.follower_count = form.follower_count === '' ? null : Number(form.follower_count);
       // worker derives the legacy single channel_platform from channel_platforms[0]

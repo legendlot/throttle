@@ -38,6 +38,35 @@ export default function ProductLinesEditor({ value, onChange, session }) {
       .catch(() => setCatalog([]));
   }, [session]);
 
+  // Resolve the list-price hint for rows that ALREADY have a product reference. `list_price_inr`
+  // is display-only and deliberately not persisted, so before this it appeared on PICK and then
+  // vanished the moment the deal was reopened — fine for entry, wrong for review, which is when
+  // someone is actually checking whether a goodies figure looks right.
+  // Keyed on the refs present, so it re-runs when a row gains one; rows without a ref are skipped.
+  const refsKey = lines.map(l => l.product_ref || '').join(',');
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const wanted = [...new Set(lines.filter(l => l.product_ref && l.list_price_inr == null).map(l => l.product_ref))];
+    if (!wanted.length) return;
+    Promise.all(wanted.map(code =>
+      ignitionopsGet('getProductPrice', { sku: '', product_code: code }, session)
+        .then(r => [code, r?.price?.price])
+        .catch(() => [code, null])
+    )).then(pairs => {
+      if (cancelled) return;
+      const priced = new Map(pairs.filter(([, p]) => p != null && Number(p) > 0).map(([c, p]) => [c, Number(p)]));
+      if (!priced.size) return;
+      onChangeRef.current(linesRef.current.map(l => (
+        l.product_ref && priced.has(l.product_ref) && l.list_price_inr == null
+          ? { ...l, list_price_inr: priced.get(l.product_ref) }
+          : l
+      )));
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, refsKey]);
+
   // One option PER VARIANT, because sales.product_cost is keyed on product_code and a product
   // name alone is ambiguous (Bumble has 5 variants at different costs). Legacy rows hold a bare
   // typed name that matches no option — creatable mode keeps them as free text rather than

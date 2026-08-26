@@ -52,7 +52,17 @@ async function sb(path, env, opts = {}) {
   const text = await res.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  return { ok: res.ok, status: res.status, data };
+  // `range` carries PostgREST's Content-Range (e.g. "0-49/233"), which is the ONLY way to learn
+  // the true total for a paged read — and a page with no total is how "100 of 233" shipped as a
+  // complete-looking answer (S297). Populated always; only meaningful with Prefer: count=exact.
+  return { ok: res.ok, status: res.status, data, range: res.headers.get('content-range') };
+}
+
+// Total row count out of a Content-Range header. "0-49/233" -> 233. Returns null when the caller
+// did not ask for a count, which must stay distinguishable from a genuine zero.
+function rangeTotal(range) {
+  const m = /\/(\d+)$/.exec(range || '');
+  return m ? Number(m[1]) : null;
 }
 
 async function sbStore(path, env, opts = {}) {
@@ -501,6 +511,11 @@ async function getInfluencer(url, auth, env) {
   return ok({ influencer: inf, engagements: er.data || [] });
 }
 
+// Ceiling for the two search reads. Comfortably above the whole table today (346 rows) so a
+// search is complete by construction; if the table ever outgrows it the overflow is LOGGED, never
+// silently dropped — the failure mode this replaced.
+const SEARCH_SCAN_MAX = 2000;
+
 async function getEngagements(url, auth, env) {
   const type = url.searchParams.get('type');
   const stage = url.searchParams.get('stage');
@@ -525,33 +540,64 @@ async function getEngagements(url, auth, env) {
   if (dealType) filters.push(`deal_type=eq.${encodeURIComponent(dealType)}`);
   if (dateFrom) filters.push(`post_date=gte.${dateFrom}`);
   if (dateTo)   filters.push(`post_date=lte.${dateTo}`);
+  const SELECT = '*,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)';
+
+  // ── Search: two reads merged, deliberately NOT one OR ────────────────────────────────────────
+  // This used to pre-resolve matching influencer ids and fold them into the OR, capped at
+  // `limit=200`. Two things were wrong with that, and the cap was the smaller one: a search for
+  // "a" matches 1,028 of 1,480 influencers (measured 2026-08-26), so 80% were dropped with no
+  // signal — and folding 1,028 UUIDs into a query string is ~38 KB of URL, which would fail
+  // outright. Raising the cap could not work.
+  //
+  // Instead: one read matching the engagement's own fields, one matching THROUGH the influencer
+  // (`!inner` filters the embedded resource, which is the thing an OR cannot express), then merge
+  // by id in the worker. Whole-table reads are safe here precisely because the table is small —
+  // 346 engagements (measured 2026-08-26) — and BOTH reads carry an exact count so a future size
+  // change surfaces as a logged truncation rather than a quietly short answer.
   if (search) {
     const s = encodeURIComponent(search);
-    const ors = [
-      `engagement_no.ilike.*${s}*`,
-      `video_link.ilike.*${s}*`,
-      `tracking_id.ilike.*${s}*`,
-      `shipping_order_id.ilike.*${s}*`,
-    ];
-    // Also match by the influencer's name / handle. PostgREST can't filter an
-    // embedded resource inside or=, so pre-resolve matching influencer ids and
-    // fold them into the OR (lets "homelyshark" find its engagement by handle).
-    const infr = await sb(
-      `/rest/v1/influencers?or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)&select=id&limit=200`,
-      env,
-    );
-    const infIds = (infr.ok && Array.isArray(infr.data)) ? infr.data.map(x => x.id) : [];
-    if (infIds.length) ors.push(`influencer_id.in.(${infIds.join(',')})`);
-    filters.push(`or=(${ors.join(',')})`);
+    const own = `or=(engagement_no.ilike.*${s}*,video_link.ilike.*${s}*,tracking_id.ilike.*${s}*,shipping_order_id.ilike.*${s}*)`;
+    const viaInf = `influencer.or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`;
+    const base = qsFrom(filters);
+    const [a, b] = await Promise.all([
+      sb(`/rest/v1/engagements?${base}${own}&select=${SELECT}&order=updated_at.desc&limit=${SEARCH_SCAN_MAX}`, env,
+        { prefer: 'return=representation,count=exact' }),
+      sb(`/rest/v1/engagements?${base}${viaInf}&select=*,influencer:influencer_id!inner(influencer_code,channel_name,person_name,influencer_type)&order=updated_at.desc&limit=${SEARCH_SCAN_MAX}`, env,
+        { prefer: 'return=representation,count=exact' }),
+    ]);
+    if (!a.ok) return err(`db_error: ${JSON.stringify(a.data)}`, 500);
+    if (!b.ok) return err(`db_error: ${JSON.stringify(b.data)}`, 500);
+    // Never truncate in silence (CORE): if either side filled the scan window there may be more.
+    for (const [side, res] of [['own', a], ['influencer', b]]) {
+      const t = rangeTotal(res.range);
+      if (t != null && t > SEARCH_SCAN_MAX) {
+        console.error(`[getEngagements] search scan truncated on ${side}: ${t} matches > ${SEARCH_SCAN_MAX}`);
+      }
+    }
+    const byId = new Map();
+    for (const row of [...(a.data || []), ...(b.data || [])]) if (row && row.id) byId.set(row.id, row);
+    const merged = [...byId.values()]
+      .sort((x, y) => String(y.updated_at || '').localeCompare(String(x.updated_at || '')));
+    return ok({
+      engagements: merged.slice(offset, offset + limit),
+      offset, limit, total: merged.length,
+    });
   }
 
-  const qs = filters.join('&');
   const r = await sb(
-    `/rest/v1/engagements?${qs}&select=*,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=updated_at.desc&limit=${limit}&offset=${offset}`,
+    `/rest/v1/engagements?${qsFrom(filters)}select=${SELECT}&order=updated_at.desc&limit=${limit}&offset=${offset}`,
     env,
+    // count=exact so a caller can tell a page from the whole list. Scoped to this read — an exact
+    // count is a full scan, and it is only worth paying for where something pages.
+    { prefer: 'return=representation,count=exact' },
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({ engagements: r.data || [], offset, limit });
+  return ok({ engagements: r.data || [], offset, limit, total: rangeTotal(r.range) });
+}
+
+// Filters joined for direct concatenation with the next query param — '' or 'a=1&b=2&'.
+function qsFrom(filters) {
+  return filters.length ? `${filters.join('&')}&` : '';
 }
 
 async function getEngagement(url, auth, env) {
@@ -2179,11 +2225,17 @@ async function refreshProductPrices(body, auth, env) {
   // the product page instead of the site root. Minted links never expire and the mint seam
   // cannot repoint them, so the target has to be right at mint time.
   const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ sku price product{ title handle } } } pageInfo{ hasNextPage } } }`;
-  const seen = []; let cursor = null;
-  for (let p = 0; p < 8; p++) {
+  // Page until Shopify says there is no next page. This was `p < 8` — a hard 800-variant ceiling
+  // that would have truncated silently once the catalogue outgrew it (266 today, so it had not
+  // bitten yet). PAGE_MAX is a runaway guard, not a budget: hitting it is logged and reported, so
+  // a short sweep can never again read as a complete one. The subrequest ceiling is 10,000.
+  const PAGE_MAX = 200;
+  const seen = []; let cursor = null; let truncated = false; let pages = 0;
+  for (let p = 0; p < PAGE_MAX; p++) {
     const r = await shopifyGraphql(env, query, { cursor });
     if (!r.ok) return err(r.error || 'shopify_error', 502);
     const conn = r.data?.productVariants;
+    pages++;
     for (const e of (conn?.edges || [])) {
       const n = e.node; cursor = e.cursor;
       const sku = (n.sku || '').trim();
@@ -2191,13 +2243,17 @@ async function refreshProductPrices(body, auth, env) {
       seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
     }
     if (!conn?.pageInfo?.hasNextPage) break;
+    if (p === PAGE_MAX - 1) truncated = true;
   }
+  if (truncated) console.error(`[refreshProductPrices] stopped at the ${PAGE_MAX}-page guard with more pages available — ${seen.length} variants read`);
+  // A sweep that upserts nothing is the six-week silent failure repeating. Say so out loud.
+  if (!seen.length) console.error('[refreshProductPrices] read ZERO variants — check the Shopify grant (read_products)');
   for (let i = 0; i < seen.length; i += 200) {
     await sb(`/rest/v1/product_prices?on_conflict=sku`, env, {
       method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(seen.slice(i, i + 200)),
     });
   }
-  return ok({ upserted: seen.length });
+  return ok({ upserted: seen.length, pages, truncated });
 }
 
 async function getProductPrice(url, auth, env) {

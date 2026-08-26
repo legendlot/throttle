@@ -827,6 +827,7 @@ function CodesCard({ engagementId, canManage, session }) {
   const { showToast: toast } = useToast();
   const [coupons, setCoupons] = useState(null);
   const [pct, setPct] = useState('');
+  const [couponName, setCouponName] = useState('');   // optional affiliate vanity name (S313)
   const [busy, setBusy] = useState(false);
 
   function load() {
@@ -845,11 +846,20 @@ function CodesCard({ engagementId, canManage, session }) {
         const p = Number(pct);
         if (!p || p <= 0 || p > 100) { toast('Enter a discount % (1–100)', 'error'); setBusy(false); return; }
         body.discount_pct = p;
+        // Optional vanity name, AFFILIATE ONLY. The worker already accepted `code` for affiliate
+        // and always ignores it for gift; nothing here ever offers it on the gift path, because a
+        // guessable gift code is a 100%-off order anyone can fluke (S217). Left blank, the worker
+        // mints the name as before.
+        const custom = couponName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (custom) {
+          if (custom.length < 3) { toast('A code name needs at least 3 letters or digits', 'error'); setBusy(false); return; }
+          body.code = custom;
+        }
       }
       const res = await ignitionopsPost('issueCoupon', body, session);
       if (res.shopify === 'created') toast(`Code ${res.coupon.code} created on Shopify`, 'success');
       else toast(`Code ${res.coupon.code} reserved — Shopify pending (${res.note || 'add write_discounts'})`, 'info');
-      setPct(''); load();
+      setPct(""); setCouponName(""); load();
     } catch (e) { toast(e.message, 'error'); }
     finally { setBusy(false); }
   }
@@ -884,8 +894,11 @@ function CodesCard({ engagementId, canManage, session }) {
               ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>None yet.</div>
               : aff.map(c => <CodeRow key={c.id} c={c} canManage={canManage} onRetire={retire} onSync={sync} onRetry={retry} big />)}
             {canManage && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                 <input type="number" min="1" max="100" placeholder="% off" value={pct} onChange={e => setPct(e.target.value)} style={pctInp} />
+                <input value={couponName} onChange={e => setCouponName(e.target.value)}
+                  placeholder="Code name (optional)" title="Letters and numbers only. Leave blank to generate one."
+                  style={{ ...pctInp, width: 190, textTransform: 'uppercase' }} />
                 <button onClick={() => issue('affiliate')} disabled={busy} style={issueBtn}>Issue affiliate code</button>
               </div>
             )}

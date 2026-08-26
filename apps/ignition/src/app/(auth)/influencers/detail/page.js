@@ -5,6 +5,7 @@ import { ArrowLeft, ExternalLink, Trash2, Plus } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import { channelLinkError, normalizeChannelLink } from '../../../../lib/channelLink.js';
 import { NewDealModal } from '../../../../components/NewDealModal.js';
 import RatingBadge from '../../../../components/RatingBadge.js';
 import StageBadge from '../../../../components/StageBadge.js';
@@ -102,6 +103,9 @@ export default function InfluencerDetailPage() {
   }
   function setF(k, v) { setForm(s => ({ ...s, [k]: v })); }
   async function saveEdit() {
+    // Refuse a pasted tab title at the form rather than storing it — see lib/channelLink.js.
+    const linkErr = channelLinkError(form.channel_link);
+    if (linkErr) { toast(linkErr, 'error'); return; }
     setSaving(true);
     try {
       const rn = Number(form.reach);
@@ -110,7 +114,7 @@ export default function InfluencerDetailPage() {
         influencer_id: data.influencer.id,
         channel_name: form.channel_name.trim() || null,
         person_name: form.person_name.trim() || null,
-        channel_link: form.channel_link.trim() || null,
+        channel_link: normalizeChannelLink(form.channel_link) || null,
         channel_platforms: form.channel_platforms,   // worker derives channel_platform from [0]
         influencer_type: form.influencer_type || null,
         categories: form.categories || [],
