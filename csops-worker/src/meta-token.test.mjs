@@ -82,9 +82,13 @@ function stubSb(row, { patchReturns } = {}) {
   };
   return { sb, calls };
 }
-const okFetch = (token, expiresIn = 5184000) => async () => ({
-  ok: true, status: 200, json: async () => ({ access_token: token, token_type: 'bearer', expires_in: expiresIn }),
-});
+// Answers BOTH calls the refresh now makes: the refresh itself, then the /me probe that
+// proves the new token can actually be used before it is installed.
+const okFetch = (token, expiresIn = 5184000) => async (url) => (
+  String(url).includes('/me')
+    ? { ok: true, status: 200, json: async () => ({ id: '17841469573167166', username: 'legendoftoys' }) }
+    : { ok: true, status: 200, json: async () => ({ access_token: token, token_type: 'bearer', expires_in: expiresIn }) }
+);
 
 test('a successful refresh PERSISTS the new token', async () => {
   const row = { id: 1, ig_access_token: 'old', ig_token_expires_at: iso(NOW + days(3)),
@@ -147,4 +151,39 @@ test('the gate short-circuits before any network call', async () => {
   assert.equal(called, false, 'Meta must not be called for a healthy token');
   assert.equal(r.ok, true);
   assert.match(r.skipped, /healthy/);
+});
+
+test('⭐ a new token that cannot be USED is never installed — the old one survives', async () => {
+  const row = { id: 1, ig_access_token: 'still-works', ig_token_expires_at: iso(NOW + days(3)),
+                ig_refreshed_at: iso(NOW - days(30)), ig_refresh_count: 4 };
+  const { sb, calls } = stubSb(row);
+  // Meta hands back a token, but that token cannot introspect its own account.
+  const fetchImpl = async (url) => (String(url).includes('/me')
+    ? { ok: false, status: 400, json: async () => ({ error: { message: 'Invalid OAuth access token' } }) }
+    : { ok: true, status: 200, json: async () => ({ access_token: 'dud', expires_in: 5184000 }) });
+
+  const r = await refreshIgToken({}, sb, { fetchImpl, now: NOW });
+  assert.equal(r.ok, false);
+  assert.equal(r.kept_existing_token, true);
+  const patch = calls.find(c => c.method === 'PATCH');
+  assert.equal(patch.body.ig_access_token, undefined, 'the dud must NOT be installed');
+  assert.match(patch.body.ig_last_error, /failed validation/);
+});
+
+test('the validation probe uses the NEW token, not the old one', async () => {
+  const row = { id: 1, ig_access_token: 'old-token', ig_token_expires_at: iso(NOW + days(3)),
+                ig_refreshed_at: iso(NOW - days(30)), ig_refresh_count: 0 };
+  const { sb } = stubSb(row);
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(String(url));
+    return String(url).includes('/me')
+      ? { ok: true, status: 200, json: async () => ({ id: '1', username: 'x' }) }
+      : { ok: true, status: 200, json: async () => ({ access_token: 'the-new-one', expires_in: 5184000 }) };
+  };
+  const r = await refreshIgToken({}, sb, { fetchImpl, now: NOW });
+  assert.equal(r.ok, true);
+  const probe = seen.find(u => u.includes('/me'));
+  assert.ok(probe.includes('the-new-one'), 'probing with the old token would prove nothing');
+  assert.ok(!probe.includes('old-token'));
 });

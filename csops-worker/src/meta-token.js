@@ -150,8 +150,41 @@ export async function refreshIgToken(env, sb, { fetchImpl = fetch, now = Date.no
     return { ok: false, error: patch.ig_last_error, bootstrapped };
   }
 
-  // ⭐ The whole point: PERSIST it. A cron that refreshes and drops the result looks
-  // healthy in the logs and changes nothing.
+  // ⭐ PROVE THE NEW TOKEN WORKS BEFORE INSTALLING IT.
+  //
+  // Meta returning a token is not the same as that token being able to send, and the
+  // moment we persist it, every Instagram reply in the business depends on it. So do
+  // the cheapest possible real call with it first. If it cannot introspect its own
+  // account it certainly cannot message a customer — keep the existing token, which is
+  // still valid, and record why. A refresh that installs a dud is worse than no refresh:
+  // the old token still had weeks left.
+  try {
+    const probe = await fetchImpl(`${IG_GRAPH}/me?fields=id,username`
+      + `&access_token=${encodeURIComponent(newToken)}`);
+    if (!probe.ok) {
+      const detail = await probe.json().catch(() => ({}));
+      const msg = `new token failed validation (${probe.status}): `
+        + JSON.stringify(detail?.error || detail).slice(0, 300);
+      await sb(CONFIG_PATH, env, { method: 'PATCH', body: JSON.stringify({
+        ig_last_error: msg,
+        ig_last_attempt_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        ...(bootstrapped ? { ig_access_token: current } : {}),
+      }) }).catch(() => {});
+      return { ok: false, error: msg, kept_existing_token: true };
+    }
+  } catch (e) {
+    const msg = `new token validation threw: ${e?.message || e}`.slice(0, 300);
+    await sb(CONFIG_PATH, env, { method: 'PATCH', body: JSON.stringify({
+      ig_last_error: msg,
+      ig_last_attempt_at: new Date(now).toISOString(),
+      updated_at: new Date(now).toISOString(),
+    }) }).catch(() => {});
+    return { ok: false, error: msg, kept_existing_token: true };
+  }
+
+  // Now persist it. A cron that refreshes and drops the result looks healthy in the
+  // logs and changes nothing.
   const expiresAt = new Date(now + (Number.isFinite(expiresIn) ? expiresIn * 1000 : 60 * 86400000));
   const w = await sb(CONFIG_PATH, env, {
     method: 'PATCH',
