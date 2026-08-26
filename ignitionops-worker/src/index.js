@@ -2245,14 +2245,24 @@ async function getProductPrice(url, auth, env) {
 // repoint one, and the influencer may already have posted it — so an existing utm_link is
 // returned as-is unless the caller explicitly forces a new slug. (`utm_link` is overwritable
 // by a human, never auto-overwritten — design doc §B3.)
-const LOT_STORE_URL = 'https://legendoftoys.com';
+// `www` is the canonical storefront host — the apex 301s to it. Matches commsops'
+// STOREFRONT_BASE. The apex works (the redirect does preserve the query string, verified
+// 2026-08-26, so UTM survives it), but a link that is going to be printed or posted should
+// not spend a hop getting to the host it will end on anyway.
+const LOT_STORE_URL = 'https://www.legendoftoys.com';
 
 // Slug must satisfy commsops' SLUG_RE: ^[a-z0-9][a-z0-9-]{1,30}$ — lower-case, no dots or
 // underscores, because a slug has to survive being read off printed artwork and typed by hand.
+//
+// ⚠️ The digits MUST include the year. `store.sequences` runs a counter PER YEAR
+// (`ignition_eng_2025` reached 288, `ignition_eng_2026` is at 538), so the number alone repeats
+// annually: IGN-2025-00288 and IGN-2026-00288 both exist. A last-5-digits slug therefore collides
+// for any creator who gets the same number in two different years — no such pair exists today
+// (checked 2026-08-26), which is exactly what makes it a latent one rather than a visible one.
 function trackingSlug(influencerCode, engagementNo) {
-  const seq = String(engagementNo || '').replace(/[^0-9]/g, '').slice(-5) || '00000';
-  const who = String(influencerCode || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return (who ? `${who}-${seq}` : `ign-${seq}`).slice(0, 31);
+  const digits = String(engagementNo || '').replace(/[^0-9]/g, '').slice(-9) || '000000000';
+  const who = String(influencerCode || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
+  return (who ? `${who}-${digits}` : `ign-${digits}`).slice(0, 31);
 }
 
 // Target resolution, best-known-first. A homepage link still attributes correctly but converts
@@ -2325,23 +2335,32 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   const targetUrl = await resolveLinkTarget(env, engagementId, target);
   let slug = trackingSlug(code, eng.engagement_no);
 
+  // The title is the ONLY deal-specific thing on the stored link, which is what makes it the
+  // right identity test on a 409 — see below.
+  const title = `Ignition ${eng.engagement_no}`;
   const call = (s) => env.COMMSOPS.fetch(new Request('https://commsops/internal/campaign-link', {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.COMMSOPS_LINK_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ slug: s, target_url: targetUrl, title: `Ignition ${eng.engagement_no}`, utm }),
+    body: JSON.stringify({ slug: s, target_url: targetUrl, title, utm }),
   })).then(async (res) => ({ status: res.status, body: await res.json().catch(() => ({})) }));
 
   let res = await call(slug);
   // 409 = the slug is taken. The seam deliberately does NOT auto-reuse: adopting a stranger's
   // link would point this influencer's traffic at another campaign AND credit their clicks to
-  // it. Only adopt when it is provably OUR link — same target — which is the retry-after-
-  // timeout case. Otherwise suffix and try once more rather than fail the deal.
+  // it. Only adopt when the existing link is provably THIS DEAL's — the retry-after-timeout
+  // case. Otherwise suffix and try once more rather than fail the deal.
+  //
+  // ⚠️ Identity is the TITLE, not the target. Comparing targets looks equivalent and is not:
+  // every deal with no `product_ref` targets the bare store root, so a target match would be
+  // true for two *unrelated* deals and would silently merge their links and their clicks —
+  // reintroducing precisely the failure the seam's 409 exists to prevent. `product_ref` is
+  // null on every pre-S313 deal, so that is the common case, not the exotic one.
   if (res.status === 409) {
     const existing = res.body?.existing;
-    if (existing && existing.target_url === targetUrl) {
+    if (existing && existing.title === title) {
       res = { status: 200, body: { ok: true, data: { link: existing, url: res.body.url } } };
     } else {
-      slug = `${slug}-${Math.random().toString(36).slice(2, 5)}`.slice(0, 31);
+      slug = `${slug.slice(0, 27)}-${Math.random().toString(36).slice(2, 5)}`;
       res = await call(slug);
     }
   }
@@ -3277,6 +3296,19 @@ export default {
         app: inst.app || null,
         scopes: (inst.accessScopes || []).map(s => s.handle).sort(),
       });
+    }
+
+    // Run the Shopify price+handle sweep on demand (S313). The sweep otherwise runs ONLY on
+    // the Monday cron with no trigger anywhere, which is exactly how it failed silently for six
+    // weeks behind a missing scope and nobody saw. Its own token, for the reason spelled out
+    // above /internal/shopify-app-info: a maintenance trigger must not be able to force the
+    // rotation of a secret another worker also validates.
+    if (url.pathname === '/internal/refresh-prices' && request.method === 'POST') {
+      const want = env.IGNITION_MAINT_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      return refreshProductPrices({}, { userId: 'maint', permissions: { ignition_manage: true } }, env);
     }
 
     if (request.method === 'GET')  return handleGet(url, request, env);
