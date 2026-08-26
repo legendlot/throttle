@@ -2610,15 +2610,19 @@ function suggestChannelLink(inf) {
 }
 
 async function getBrokenChannelLinks(url, auth, env) {
-  // Same predicate as the item's pass condition: no dot-domain and no scheme = not a URL.
+  // ⚠️ The "is it a URL" test is applied HERE, in code, not as three stacked negated PostgREST
+  // filters. Chaining `not.is.null` + two `not.like.*…*` on the same column returned an empty set
+  // rather than an error — a filter that silently matches nothing looks exactly like clean data,
+  // which is the failure this codebase keeps paying for. One coarse filter that is obviously
+  // right, then the precise predicate in JS where it can be read and reasoned about.
   const r = await sb(
     '/rest/v1/influencers?select=id,influencer_code,channel_name,person_name,channel_platform,channel_platforms,channel_link'
-    + '&channel_link=not.is.null&channel_link=not.like.*.com/*&channel_link=not.like.*http*'
-    + '&order=influencer_code&limit=500',
+    + '&channel_link=not.is.null&order=influencer_code&limit=2000',
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const rows = (r.data || []).map(i => {
+  const isUrl = (v) => /https?:\/\//i.test(v) || /\.[a-z]{2,}\//i.test(v);
+  const rows = (r.data || []).filter(i => !isUrl(String(i.channel_link || ''))).map(i => {
     const current = String(i.channel_link || '');
     return {
       id: i.id,
