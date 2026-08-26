@@ -866,6 +866,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'startEmailConversation':   return startEmailConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'diagIgPageRoute':          return diagIgPageRoute(body, auth, env);   // TEMPORARY — remove after the S263 human_agent test
+    case 'diagIgRecipient':          return diagIgRecipient(body, auth, env);   // read-only: why does Meta refuse THIS recipient
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
@@ -6424,6 +6425,48 @@ async function diagIgPageRoute(body, auth, env) {
     recipient: thread.external_user_id,
     window_shut: !(thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now()),
     meta_response: d,
+  });
+}
+
+// READ-ONLY probe for the recurring "Meta send failed ... code 200 Permissions error" report
+// (Pruthvi 2026-08-26). That code is NOT the past-24h human_agent block (code 10) and NOT an
+// expired token (code 190) — both of which metaSendError already names. It arrives on a thread
+// whose window is demonstrably OPEN while every other Instagram reply that day sends fine, so
+// the cause is per-RECIPIENT, not per-account. Nothing about a failed send is persisted
+// (sendMetaMessage writes no row when Meta refuses), so after the fact there is nothing to read
+// — hence this probe. Sends NOTHING; two GETs against the same token+host the real send uses.
+async function diagIgRecipient(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { thread_id } = body || {};
+  if (!thread_id) return err('thread_id required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
+  const token = metaToken(thread.channel, env);
+  if (!token) return err('Meta send not configured (no token for this channel)', 503);
+  const base = metaGraphBase(thread.channel);
+
+  const get = async (path) => {
+    const r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`);
+    const d = await r.json().catch(() => ({}));
+    return { http_status: r.status, ok: r.ok, body: d };
+  };
+  const [me, recipient] = await Promise.all([
+    get('/me?fields=id,username'),
+    get(`/${encodeURIComponent(thread.external_user_id)}?fields=id,username,name,is_verified_user,follower_count`),
+  ]);
+
+  return ok({
+    thread_id,
+    channel: thread.channel,
+    graph_base: base,
+    token_source: thread.channel === 'instagram' ? (env.META_IG_TOKEN ? 'META_IG_TOKEN' : 'META_PAGE_TOKEN(fallback)') : 'META_PAGE_TOKEN',
+    provider_account_id: thread.provider_account_id,
+    recipient_id: thread.external_user_id,
+    window_open: !!(thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now()),
+    customer_window_until: thread.customer_window_until,
+    me,
+    recipient,
   });
 }
 
