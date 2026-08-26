@@ -2644,6 +2644,68 @@ export default {
     }
 
     // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
+    // ── Web bot (S312) — PUBLIC by nature (storefront widget). CORS-scoped, capped, tiny.
+    if (url.pathname.startsWith('/web/')) {
+      const origin = request.headers.get('Origin') || '';
+      const cors = BW.corsHeaders(origin);
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+      const withCors = (resp) => { for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v); return resp; };
+
+      if (url.pathname === '/web/session' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const bot = (await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(b.botId || '')}&status=eq.active&select=id,active_version,config&limit=1`, env)
+          .catch(() => ({ ok: false }))).data?.[0];
+        if (!bot || !bot.active_version) return withCors(err('bot_unavailable', 503));
+        const def = await BW.loadDefinition(env, bot.id, bot.active_version);
+        if (!def) return withCors(err('bot_unavailable', 503));
+        const ins = await A.sbComms('/rest/v1/bot_sessions', env, { method: 'POST',
+          body: JSON.stringify({ bot_id: bot.id, bot_version: bot.active_version, visitor_key: crypto.randomUUID() }) });
+        const session = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+        if (!ins.ok || !session) return withCors(err('session_failed', 500));
+        const out = await BW.runTurn(env, session, def, { kind: 'open' }, null);
+        return withCors(ok({ session_id: session.id, replies: out.replies, status: out.state.status }));
+      }
+
+      if (url.pathname === '/web/message' && request.method === 'POST') {
+        const b = await request.json().catch(() => ({}));
+        const text = String(b.text || '').slice(0, BW.MAX_TEXT);
+        const session = await BW.loadSession(env, b.session_id || '');
+        if (!session) return withCors(err('no_session', 404));
+        if (!(await BW.floodCheck(env, session.id))) return withCors(err('too_many_messages', 429));
+        const def = await BW.loadDefinition(env, session.bot_id, session.bot_version);
+        if (!def) return withCors(err('bot_unavailable', 503));
+        const input = b.buttonId ? { kind: 'button', buttonId: b.buttonId, text } : { kind: 'text', text };
+        const out = await BW.runTurn(env, session, def, input, text);
+        return withCors(ok({ replies: out.replies, status: out.state.status }));
+      }
+
+      if (url.pathname === '/web/poll' && request.method === 'GET') {
+        const sid = url.searchParams.get('session_id') || '';
+        const after = Number(url.searchParams.get('after') || 0);
+        const session = await BW.loadSession(env, sid);
+        if (!session) return withCors(err('no_session', 404));
+        const r = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(sid)}&step_type=eq.agent_reply&id=gt.${after}&select=id,result&order=id.asc&limit=50`, env);
+        return withCors(ok({ messages: (r.ok ? r.data : []).map((x) => ({ id: x.id, text: x.result?.text, agent_name: x.result?.agent_name })), status: session.status }));
+      }
+      return withCors(err('not_found', 404));
+    }
+
+    // Agent reply from Pitstop -> widget (S312). INGEST_TOKEN like its /internal siblings.
+    if (url.pathname === '/internal/web-reply' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : '';
+      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      const b = await request.json().catch(() => ({}));
+      const session = await BW.loadSession(env, b.session_id || '');
+      if (!session) return err('no_session', 404);
+      // Agent supremacy: the first agent word flips the session; the bot never speaks again.
+      if (session.status === 'active')
+        await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(session.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'handed_off' }) });
+      const w = await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal',
+        body: JSON.stringify({ session_id: session.id, step_id: 'agent', step_type: 'agent_reply', result: { text: String(b.text || ''), agent_name: b.agent_name || 'LOT Support' } }) });
+      return w.ok ? ok({}) : err('write_failed', 500);
+    }
+
     // ── Phase-B first-party redirect. PUBLIC by nature — a customer taps this from a WhatsApp
     //    button, so it must stay ABOVE the JWT block with the other public routes.
     //
