@@ -48,6 +48,18 @@ const ATT_SKIP_REASON = {
   error: 'Couldn’t be retrieved — open the email in Gmail',
   aged_out: 'Kept for 6 months, then removed — the original is still in Gmail',
 };
+// Provider body limits, per channel. Meta refuses an Instagram/Messenger message over
+// 2,000 characters with code 100 ("Length of param message[text] must be less than or
+// equal to 2000") — 3 of the 8 failed IG sends on 2026-08-26 were exactly this, one
+// agent retrying three times in 20 seconds because nothing on screen said why.
+//
+// ⚠️ PER-CHANNEL on purpose, and deliberately NOT enforced on the worker instead: the
+// limits genuinely differ (WhatsApp allows 4,096, email is unbounded for our purposes),
+// so a single global cap would either under-serve email or wrongly truncate WhatsApp.
+// A channel absent from this map has no client-side cap.
+//
+// ⚠️ Internal NOTES are exempt — they never reach a provider. Note mode skips this.
+const CHANNEL_TEXT_LIMIT = { instagram: 2000, messenger: 2000, whatsapp: 4096 };
 // Live preview of an approved WhatsApp template body (S245). Substitutes each {{pos}} with what
 // the agent has typed, or a braced label while empty, so the composer shows the real message
 // rather than a template name. `auto` slots (first_name, resolved from the customer profile
@@ -896,6 +908,14 @@ export default function InboxPage() {
     }
     // Email may send attachments with no body text; every other path needs text.
     if (!t && !(mode === 'reply' && chNow === 'email' && hasFiles)) return;
+    // Refuse an over-length body before it reaches the provider. The button is already
+    // disabled, so this only catches Enter-to-send and a paste that lands mid-keystroke.
+    // Notes are exempt — they never leave Pitstop.
+    const lim = mode === 'note' ? null : (CHANNEL_TEXT_LIMIT[chNow] || null);
+    if (lim && t.length > lim) {
+      setErr(`This message is ${t.length.toLocaleString()} characters. ${chNow === 'whatsapp' ? 'WhatsApp' : 'Instagram and Messenger'} allow ${lim.toLocaleString()} — shorten it or send it in two.`);
+      return;
+    }
     setSending(true); setErr(null);
     try {
       if (mode === 'note') {
@@ -1211,6 +1231,10 @@ export default function InboxPage() {
   const isWa = thread?.channel === 'whatsapp';
   const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
+  // Character cap for the channel being replied on. Notes are exempt (they never reach a
+  // provider), and a channel with no entry has no cap.
+  const textLimit = noteMode ? null : (CHANNEL_TEXT_LIMIT[thread?.channel] || null);
+  const overLimit = !!textLimit && text.length > textLimit;
   // Meta's human-agent allowance: on Instagram/Messenger a reply still sends for 7 DAYS after
   // the customer's last message, which is what sendMetaMessage already does (MESSAGE_TAG +
   // HUMAN_AGENT). WhatsApp has no equivalent — there, past 24h is a real wall. Measured from
@@ -2016,13 +2040,24 @@ export default function InboxPage() {
                       disabled={!canManage || sending || waReplyBlocked} rows={2}
                       style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)',
                         background: noteMode ? 'var(--surface)' : inputStyle.background }} />
-                    <button onClick={send} disabled={!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFiles.length)}
-                      style={{ ...btnPrimary, opacity: (!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFiles.length)) ? 0.5 : 1,
+                    <button onClick={send} disabled={!canManage || sending || waReplyBlocked || overLimit || (!text.trim() && !pendingFiles.length)}
+                      title={overLimit ? `${text.length.toLocaleString()} of ${textLimit.toLocaleString()} characters — too long to send` : undefined}
+                      style={{ ...btnPrimary, opacity: (!canManage || sending || waReplyBlocked || overLimit || (!text.trim() && !pendingFiles.length)) ? 0.5 : 1,
                         background: noteMode ? 'var(--warn-fg)' : btnPrimary.background }}>
                       {noteMode ? <StickyNote size={13} /> : pendingFiles.length ? <Paperclip size={13} /> : <Send size={13} />}
                       {sending ? 'Sending' : noteMode ? 'Save note' : 'Send'}
                     </button>
                   </div>
+                  {/* Character counter — appears only in the last 10% before the cap, so it is
+                      a warning rather than permanent furniture. Over the cap it states the limit
+                      outright, because the agent's next move is to shorten or split. */}
+                  {!!textLimit && text.length > textLimit * 0.9 && (
+                    <div style={{ marginTop: 4, fontSize: 11, textAlign: 'right',
+                      color: overLimit ? 'var(--bad-fg)' : 'var(--warn-fg)' }}>
+                      {text.length.toLocaleString()} / {textLimit.toLocaleString()}
+                      {overLimit && ` — too long for ${thread?.channel === 'whatsapp' ? 'WhatsApp' : thread?.channel === 'messenger' ? 'Messenger' : 'Instagram'}. Shorten it or send in two.`}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ borderTop: '1px solid var(--border)', padding: 12, display: 'flex',
