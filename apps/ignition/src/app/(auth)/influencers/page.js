@@ -2,9 +2,10 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav } from '@throttle/ui';
+import { Spinner, Chip, useListNav, useToast } from '@throttle/ui';
 import { Plus, ChevronDown } from 'lucide-react';
-import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
+import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
+import { channelLinkError, normalizeChannelLink } from '../../../lib/channelLink.js';
 import RatingBadge from '../../../components/RatingBadge.js';
 import { NewInfluencerModal } from '../../../components/NewInfluencerModal.js';
 import { NewDealModal } from '../../../components/NewDealModal.js';
@@ -159,6 +160,8 @@ export default function InfluencersPage() {
           )}
         </div>
       </header>
+
+      <BrokenLinksPanel session={session} />
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
         {TABS.map(t => (
@@ -346,4 +349,89 @@ function inputStyle(w) {
     padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13,
     width: w,
   };
+}
+
+// Broken profile links worklist (S313, Reann approved 2026-08-26). `channel_link` had been
+// collecting browser tab titles pasted instead of URLs — "(9) Instagram". The source forms now
+// reject those, so this clears what is already stored.
+//
+// ⚠️ A suggestion is proposed, never applied automatically. instagram.com/<handle> derived from a
+// display name could be a completely different person, and in an influencer CRM a link to a
+// stranger is worse than a blank one. Every row needs a human click.
+function BrokenLinksPanel({ session }) {
+  const { showToast: toast } = useToast();
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const [drafts, setDrafts] = useState({});
+
+  function load() {
+    if (!session) return;
+    ignitionopsGet('getBrokenChannelLinks', {}, session).then(setData).catch(() => setData(null));
+  }
+  useEffect(load, [session]);
+
+  async function save(row, value) {
+    const err = channelLinkError(value);
+    if (err) { toast(err, 'error'); return; }
+    setBusy(row.id);
+    try {
+      await ignitionopsPost('updateInfluencer', {
+        influencer_id: row.id, channel_link: normalizeChannelLink(value) || null,
+      }, session);
+      toast(`${row.influencer_code} updated`, 'success');
+      setData(d => d ? { ...d, rows: d.rows.filter(r => r.id !== row.id), count: d.count - 1 } : d);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setBusy(null); }
+  }
+
+  if (!data || !data.count) return null;
+  return (
+    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
+        <span style={{ color: '#FF6B00', fontWeight: 700 }}>{data.count}</span>
+        <span>profiles have no usable channel link</span>
+        <span style={{ color: 'var(--text-3)' }}>
+          · {data.suggestable} can be confirmed in one click{data.manual ? ` · ${data.manual} need typing` : ''}
+        </span>
+        <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{open ? 'hide' : 'fix these'}</span>
+      </button>
+      {open && (
+        <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto' }}>
+          {data.rows.map(r => (
+            <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, flexWrap: 'wrap' }}>
+              <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)', minWidth: 62 }}>{r.influencer_code}</span>
+              <span style={{ color: 'var(--text-1)', minWidth: 140 }}>{r.channel_name || r.person_name || '—'}</span>
+              <span style={{ color: 'var(--text-3)', minWidth: 70 }}>{r.platform || '—'}</span>
+              <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }} title="What is stored now">
+                {r.blank ? '(blank)' : `“${r.current}”`}
+              </span>
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+                {r.suggested ? (
+                  <>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{r.suggested.replace('https://', '')}</span>
+                    <button disabled={busy === r.id} onClick={() => save(r, r.suggested)}
+                      style={{ padding: '3px 9px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                      {busy === r.id ? '…' : 'Use'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input placeholder="paste the profile URL"
+                      value={drafts[r.id] || ''} onChange={e => setDrafts(d => ({ ...d, [r.id]: e.target.value }))}
+                      style={{ width: 230, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }} />
+                    <button disabled={busy === r.id || !(drafts[r.id] || '').trim()} onClick={() => save(r, drafts[r.id])}
+                      style={{ padding: '3px 9px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>
+                      {busy === r.id ? '…' : 'Save'}
+                    </button>
+                  </>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

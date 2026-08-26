@@ -2585,6 +2585,63 @@ async function getPostReminderDue(url, auth, env) {
   });
 }
 
+// ── Broken profile links (S313, Reann approved 2026-08-26) ──────────────────────────────────
+//
+// `channel_link` has been collecting BROWSER TAB TITLES pasted instead of URLs — "(9) Instagram",
+// "(14) Tamu Toys - YouTube". They break link matching and make people look like duplicates. The
+// source forms now reject them, so the set is closed; this is the worklist for clearing what is
+// already stored.
+//
+// ⚠️ A suggestion is NEVER auto-applied, and that restraint is the point. `instagram.com/Beebom`
+// or `/Cassy` may well be somebody else — in an influencer CRM a link pointing at a stranger is
+// worse than a blank one. The person confirms; the machine only proposes.
+// ⚠️ Only INSTAGRAM handles are derivable. A YouTube tab title carries the channel's display name
+// ("Tamu Toys"), not its handle, and `youtube.com/@TamuToys` is a guess with nothing behind it —
+// so those get no suggestion and are left for a human.
+const HANDLE_RE = /^[A-Za-z0-9._]{2,30}$/;
+
+function suggestChannelLink(inf) {
+  const platforms = Array.isArray(inf.channel_platforms) ? inf.channel_platforms : [];
+  const isIg = inf.channel_platform === 'instagram' || platforms.includes('instagram');
+  const name = String(inf.channel_name || '').trim();
+  if (!isIg || !HANDLE_RE.test(name)) return null;
+  // A leading @ is how people write handles; the URL does not take one.
+  return `https://instagram.com/${name.replace(/^@+/, '')}`;
+}
+
+async function getBrokenChannelLinks(url, auth, env) {
+  // Same predicate as the item's pass condition: no dot-domain and no scheme = not a URL.
+  const r = await sb(
+    '/rest/v1/influencers?select=id,influencer_code,channel_name,person_name,channel_platform,channel_platforms,channel_link'
+    + '&channel_link=not.is.null&channel_link=not.like.*.com/*&channel_link=not.like.*http*'
+    + '&order=influencer_code&limit=500',
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const rows = (r.data || []).map(i => {
+    const current = String(i.channel_link || '');
+    return {
+      id: i.id,
+      influencer_code: i.influencer_code,
+      channel_name: i.channel_name,
+      person_name: i.person_name,
+      platform: i.channel_platform || (Array.isArray(i.channel_platforms) ? i.channel_platforms[0] : null),
+      current,
+      // An empty string is not a pasted tab title — it is simply blank, and wants clearing to
+      // NULL rather than "fixing". Kept visible so the count in the UI matches the pass condition.
+      blank: current.trim() === '',
+      suggested: suggestChannelLink(i),
+    };
+  });
+  return ok({
+    rows,
+    count: rows.length,
+    suggestable: rows.filter(x => x.suggested).length,
+    manual: rows.filter(x => !x.suggested && !x.blank).length,
+    blank: rows.filter(x => x.blank).length,
+  });
+}
+
 async function getCouponsForEngagement(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
@@ -3392,6 +3449,7 @@ const GET_ACTIONS = {
   getQualityFlags,
   getDealBriefPreview,
   getPostReminderDue,
+  getBrokenChannelLinks,
 };
 
 const POST_ACTIONS = {
