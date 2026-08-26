@@ -2145,7 +2145,33 @@ async function setThreadState(body, auth, env) {
     method: 'PATCH', body: JSON.stringify(patch),
   });
   if (!r.ok) return err('failed to set thread state', 500);
-  return ok({ thread_state: state, closed_reason: patch.closed_reason ?? null });
+
+  // Auto-claim on Resolve/Close (Pruthvi, #bugs 2026-08-26). Closing an UNCLAIMED
+  // conversation left no record of who actioned it — `closed_by_user_id` is set, but the
+  // reports and the inbox both read `assigned_agent_id`, so the work showed against
+  // "— unassigned —". This is the same rule replying already applies (auto-claim on first
+  // reply, D4/S162), extended to the two buttons that also end a conversation.
+  //
+  // ⚠️ Scoped `assigned_agent_id=is.null` so the PATCH is the test — never read-then-write.
+  // A conversation already assigned to someone else must keep its owner: the closer is not
+  // necessarily the person who did the work, and stealing the name would corrupt exactly the
+  // attribution this is meant to record.
+  let claimed = false;
+  if (state === 'closed') {
+    const c = await sb(
+      `/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&assigned_agent_id=is.null`,
+      env,
+      { method: 'PATCH',
+        prefer: 'return=representation',
+        body: JSON.stringify({
+          assigned_agent_id: auth.userId,
+          assigned_agent_name: auth.fullName || auth.name || auth.email || null,
+          assigned_at: new Date().toISOString(),
+        }) },
+    ).catch(() => null);                       // a failed claim must never fail the close
+    claimed = !!(c && c.ok && Array.isArray(c.data) && c.data.length);
+  }
+  return ok({ thread_state: state, closed_reason: patch.closed_reason ?? null, auto_claimed: claimed });
 }
 
 // Dismiss the collab pre-flag — "not a collab, stop showing this". Sticky: the
@@ -2741,6 +2767,23 @@ async function advanceStage(body, auth, env, request) {
     body: JSON.stringify(update),
   });
   if (!upd.ok) return err(`Advance failed: ${JSON.stringify(upd.data)}`, upd.status);
+
+  // Auto-claim an UNASSIGNED ticket on close (Pruthvi, #bugs 2026-08-26) — the ticket half of
+  // the same gap setThreadState now covers for conversations. `closed_by_user_id` was already
+  // stamped, but every agent-facing surface reads `assigned_agent_name`, so a ticket closed by
+  // someone who never claimed it reported against nobody.
+  // ⚠️ Only on the three terminal stages, and only via the `assigned_agent_id=is.null` filter so
+  // the PATCH itself is the test. A ticket already owned keeps its owner — the closer is not
+  // necessarily who did the work.
+  if (['closed', 'cancelled', 'rejected'].includes(target_stage)) {
+    await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&assigned_agent_id=is.null`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        assigned_agent_id: auth.userId,
+        assigned_agent_name: auth.fullName || auth.name || auth.email || null,
+      }),
+    }).catch(() => {});                    // a failed claim must never fail the close
+  }
 
   // History: stage row + any field changes
   await insertHistory(ticket_id, 'stage', t.stage, target_stage, null, auth, env);
