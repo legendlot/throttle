@@ -32,7 +32,9 @@ export const NAV_GROUPS = [
       { id: 'payments-new',       label: 'New Payment Request', route: '/payments/new',       icon: FileText, accent: 'orange', requires: 'payment_request' },
       { id: 'payments',           label: 'My Requests',         route: '/payments',           icon: Wallet,   requires: 'payment_request' },
       { id: 'payments-approvals', label: 'Approvals',           route: '/payments/approvals', icon: Shield,   requires: 'payment_approve' },
-      { id: 'payments-finance',   label: 'Finance Queue',       route: '/payments/finance',   icon: HandCoins, requires: 'payment_execute' },
+      // requiresAny, not requires: the worker lets payment_super_admin read this too, and a page
+      // reachable by URL but missing from the menu is the invisible-surface trap.
+      { id: 'payments-finance',   label: 'Finance Queue',       route: '/payments/finance',   icon: HandCoins, requiresAny: ['payment_execute', 'payment_super_admin'] },
       { id: 'payments-notifications', label: 'Notifications',   route: '/payments/notifications', icon: Inbox, requires: 'payment_request' },
       { id: 'payments-payees',    label: 'Payees',              route: '/payments/payees',    icon: Building, requires: 'payment_request' },
       { id: 'payments-po-queue',  label: 'PO Payment Queue',    route: '/payments/po-queue',  icon: ReceiptText, requires: 'payment_route' },
@@ -82,7 +84,10 @@ export function filterNavByPerms(groups, perms) {
   return groups
     .map(g => g.flat ? g : ({
       ...g,
-      items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
+      items: (g.items || []).filter(it => {
+        if (it.requiresAny) return it.requiresAny.some(k => perms?.[k]);
+        return !it.requires || perms?.[it.requires];
+      }),
     }))
     .filter(g => g.flat || (g.items && g.items.length > 0));
 }
