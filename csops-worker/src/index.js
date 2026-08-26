@@ -1768,8 +1768,23 @@ async function getCallReports(params, auth, env) {
     if (c.duration_seconds && c.duration_seconds > 0) { byDepartment[dk].total_dur += c.duration_seconds; byDepartment[dk].dur_count++; }
 
     const agentName = c.agent_name || '— unassigned —';
-    byAgent[agentName] = byAgent[agentName] || { name: agentName, answered_calls: 0, missed_returned: 0, total_dur: 0, dur_count: 0, tickets_opened: 0 };
+    // ⚠️ `answered_calls` counts answered calls in BOTH directions and is deliberately left
+    // that way — other readers and the sort below depend on it. It is also exactly why
+    // Pruthvi could not see outgoing activity (#bugs 2026-08-26): an agent's "Answered"
+    // silently blended calls they took with calls they placed, so the two could never be
+    // told apart. The three fields below split it explicitly; the UI reads those.
+    // Measured 2026-08-26: 1,704 outgoing calls in 30 days were invisible on this table.
+    byAgent[agentName] = byAgent[agentName] || {
+      name: agentName, answered_calls: 0, missed_returned: 0, total_dur: 0, dur_count: 0, tickets_opened: 0,
+      incoming_answered: 0, outgoing_total: 0, outgoing_answered: 0,
+    };
     if (c.status === 'answered') byAgent[agentName].answered_calls++;
+    if (c.direction === 'incoming') {
+      if (c.status === 'answered') byAgent[agentName].incoming_answered++;
+    } else if (c.direction === 'outgoing') {
+      byAgent[agentName].outgoing_total++;
+      if (c.status === 'answered') byAgent[agentName].outgoing_answered++;
+    }
     if (c.status === 'missed' && c.called_back_at) byAgent[agentName].missed_returned++;
     if (c.duration_seconds && c.duration_seconds > 0) { byAgent[agentName].total_dur += c.duration_seconds; byAgent[agentName].dur_count++; }
     if (c.ticket_id) byAgent[agentName].tickets_opened++;

@@ -508,14 +508,21 @@ function CallsBreakdown({ rows, variant }) {
   if (variant === 'agent') {
     return (
       <table style={{ width:'100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        {/* "Answered" used to be answered calls in BOTH directions, so an agent's outbound
+            calling was invisible here — the whole of Pruthvi's 2026-08-26 report. It is now
+            split: Answered is inbound only, Outgoing is calls they placed, Connected is how
+            many of those were picked up. ⚠️ Answered will read LOWER than before for anyone
+            who makes outbound calls; that is the correction, not a regression. */}
         <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
-          <CTh>Agent</CTh><CTh>Answered</CTh><CTh>Missed → returned</CTh><CTh>Avg handle</CTh><CTh>Tickets opened</CTh>
+          <CTh>Agent</CTh><CTh>Answered (in)</CTh><CTh>Outgoing</CTh><CTh>Connected</CTh><CTh>Missed → returned</CTh><CTh>Avg handle</CTh><CTh>Tickets opened</CTh>
         </tr></thead>
         <tbody>
           {rows.map(r => (
             <tr key={r.name} style={{ borderTop: '1px solid var(--border)' }}>
               <CTd>{r.name}</CTd>
-              <CTd><code style={callMono}>{r.answered_calls}</code></CTd>
+              <CTd><code style={callMono}>{r.incoming_answered ?? r.answered_calls}</code></CTd>
+              <CTd><code style={callMono}>{r.outgoing_total ?? 0}</code></CTd>
+              <CTd><code style={callMono}>{r.outgoing_answered ?? 0}</code></CTd>
               <CTd><code style={callMono}>{r.missed_returned}</code></CTd>
               <CTd><code style={callMono}>{r.avg_handle_seconds == null ? '—' : `${Math.floor(r.avg_handle_seconds/60)}:${String(r.avg_handle_seconds%60).padStart(2,'0')}`}</code></CTd>
               <CTd><code style={callMono}>{r.tickets_opened}</code></CTd>
