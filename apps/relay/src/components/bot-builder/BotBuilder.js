@@ -113,10 +113,18 @@ export default function BotBuilder() {
   const [selected, setSelected] = useState(null);
   const [publishErrors, setPublishErrors] = useState(null);
 
+  const [stats, setStats] = useState({});   // bot_id -> {sessions,handled,handoffs,conversions} (7d)
   const load = useCallback(async () => {
     setLoading(true);
-    try { const r = await garageFetch('listBots', {}, session); setRows(r?.bots || []); }
-    finally { setLoading(false); }
+    try {
+      const r = await garageFetch('listBots', {}, session);
+      const bots = r?.bots || [];
+      setRows(bots);
+      // few bots by construction — one parallel stats read each, not an N+1 concern
+      const pairs = await Promise.all(bots.map((b) =>
+        garageFetch('botStats', { id: b.id }, session).then((x) => [b.id, x?.stats || null]).catch(() => [b.id, null])));
+      setStats(Object.fromEntries(pairs));
+    } finally { setLoading(false); }
   }, [session]);
   useEffect(() => { if (session) load(); }, [session, load]);
 
@@ -193,17 +201,23 @@ export default function BotBuilder() {
         {rows.length === 0 ? (
           <EmptyState title="No bots yet" hint="A bot is a scripted conversation — menus, order status, agent handoff — that runs on the website chat widget." />
         ) : (
-          <table className="tbl"><thead><tr><th>Name</th><th>Status</th><th>Channel</th><th>Version</th><th /></tr></thead>
+          <table className="tbl"><thead><tr><th>Name</th><th>Status</th><th>Channel</th><th>Version</th><th>Last 7 days</th><th /></tr></thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.name}</td>
-                  <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
-                  <td className="mono">{r.channel}</td>
-                  <td className="mono">{r.active_version ? `v${r.active_version}` : '—'}</td>
-                  <td><Btn onClick={() => openById(r.id)}>Open</Btn></td>
-                </tr>
-              ))}
+              {rows.map((r) => {
+                const st = stats[r.id];
+                return (
+                  <tr key={r.id}>
+                    <td>{r.name}</td>
+                    <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
+                    <td className="mono">{r.channel}</td>
+                    <td className="mono">{r.active_version ? `v${r.active_version}` : '—'}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>
+                      {st ? `${st.sessions} chats · ${st.handled} handled · ${st.handoffs} to agents · ${st.conversions} converted` : '—'}
+                    </td>
+                    <td><Btn onClick={() => openById(r.id)}>Open</Btn></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -623,6 +623,13 @@ async function handleGet(url, auth, env) {
       const r = await BOTS.getBot(env, url.searchParams.get('id'));
       return r.ok ? ok(r) : err(r.error, 404);
     }
+    case 'botStats': {   // sessions/handled/handoffs/dropoffs/conversions — SQL-side, no raw rows
+      const r = await A.sbComms('/rest/v1/rpc/bot_stats', env, { method: 'POST',
+        body: JSON.stringify({ p_bot_id: url.searchParams.get('id'),
+          p_from: url.searchParams.get('from') || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10),
+          p_to: url.searchParams.get('to') || new Date().toISOString().slice(0, 10) }) });
+      return r.ok ? ok({ stats: r.data?.[0] || null }) : err('stats_failed', 500);
+    }
 
     // ── M8: analytics — thin RPC passthroughs (relay_view already gated blanket-wide
     //    in fetch() before handleGet). SQL-side aggregation only; no raw rows to client.
