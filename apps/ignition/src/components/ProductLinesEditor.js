@@ -86,8 +86,17 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     // product name and the Variant field is left alone.
     const name = opt ? (opt.name || label) : label;
     const variant = opt ? [opt.model, opt.color].filter(Boolean).join(' ') : null;
+    // Switching product must not carry the PREVIOUS product's COGS into the new row.
+    // Where the new product is uncosted nothing overwrites the field, so the old
+    // number just sits there looking like this product's cost — which is what "the
+    // COGS aren't updating" on a crest actually was (crests have no cost row, and the
+    // field still showed the Shadow figure). Only a value we auto-filled ourselves is
+    // cleared; a hand-typed one (≠ the recorded cogs_inr) is never touched.
+    const prev = lines[i] || {};
+    const wasAutoFilled = prev.cogs_inr != null && Number(prev.goodies_cost) === Number(prev.cogs_inr);
     setRow(i, {
       product_code: name, product_ref: code, cogs_inr: null, list_price_inr: null,
+      ...(wasAutoFilled ? { goodies_cost: '' } : {}),
       ...(opt && variant ? { product_variant: variant } : {}),
     });
     if (!session || (!code && !sku)) return;
