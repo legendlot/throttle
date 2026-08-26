@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { csopsGet } from '../lib/csopsFetch.js';
 import { notify } from '../lib/notify.js';
+import { publishCallEvent } from '../lib/callEvents.js';
 
 /**
  * CallBar — the Phase 6 browser softphone (S305).
@@ -73,14 +74,20 @@ export default function CallBar() {
       const handleCallEvents = (eventType, ...args) => {
         const c = args?.[0] || {};
         if (eventType === 'incoming') {
-          setCall({ state: 'incoming', number: c.remoteId || c.callFromNumber || '', startedAt: null });
+          const number = c.remoteId || c.callFromNumber || '';
+          setCall({ state: 'incoming', number, startedAt: null });
           // The phone ringing is the primary alert; this covers the agent on another tab.
           notify('📞 Incoming call', { body: c.remoteId || undefined, tag: `softphone:${c.callSid || 'incoming'}` });
+          // Tell the screen-pop directly. It used to wait for Exotel's flow-side webhook
+          // to create a call row, and that webhook misses ~30% of answered calls — see
+          // lib/callEvents.js. This event rang THIS browser, so it cannot be missed.
+          publishCallEvent({ type: 'incoming', number });
         } else if (eventType === 'connected') {
           setCall((prev) => ({ state: 'active', number: prev?.number || c.remoteId || '', startedAt: Date.now() }));
           setMuted(false); setHeld(false);
         } else if (eventType === 'callEnded') {
           setCall(null); setMuted(false); setHeld(false);
+          publishCallEvent({ type: 'ended' });
         }
         // ⚠️ mutetoggle/holdtoggle echoes are deliberately IGNORED. The SDK fires them on the
         // COMMAND, not on the audio actually changing (ToggleHold echoes even with no call), so

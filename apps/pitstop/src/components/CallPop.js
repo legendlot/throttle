@@ -8,6 +8,7 @@ import {
   AlertTriangle, MessageSquare, Clock, UserRound,
 } from 'lucide-react';
 import { csopsGet } from '../lib/csopsFetch.js';
+import { subscribeCallEvents } from '../lib/callEvents.js';
 import { fmtIstDayMonth } from '../lib/datetime.js';
 
 /**
@@ -42,6 +43,10 @@ export default function CallPop() {
   // poll mid-call. The token is read inside the callback instead.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // The SDK subscriber is registered once per userId; it reads current state through
+  // this ref rather than closing over `state`, which would pin it to the first render.
+  const stateRef = useRef(null);
+  stateRef.current = state;
 
   useEffect(() => {
     if (!userId) return;
@@ -50,7 +55,12 @@ export default function CallPop() {
       try {
         const r = await csopsGet('getCallContext', { mine: 'true' }, sessionRef.current);
         if (!alive.current) return;
-        setState(r?.active ? r : null);
+        // ⚠️ Do NOT let an empty poll clear a pop the SDK raised. The two paths exist
+        // precisely because the poll cannot see ~30% of live calls — clobbering the SDK
+        // card with `null` here would have made the fix invisible within 5 seconds, and
+        // looked like the SDK event never fired.
+        if (r?.active) setState(r);
+        else if (!stateRef.current?.fromSdk) setState(null);
         // Desktop notification for an incoming call, ONCE per call.
         //
         // ⚠️ This is the case the in-app pop cannot cover. The pop is only visible if Pitstop is
@@ -83,11 +93,45 @@ export default function CallPop() {
     }
     tick();
     const iv = setInterval(tick, POLL_MS);
-    return () => { alive.current = false; clearInterval(iv); };
+
+    // ── The SDK path ────────────────────────────────────────────────────────
+    // The poll above can only see a call once Exotel's flow-side webhook has written
+    // a row, and that webhook misses ~30% of answered calls (104 in the week to
+    // 2026-08-26 — measured, see lib/callEvents.js). On those the agent got NO pop at
+    // all, because `mine=true` had no in-flight row to match.
+    //
+    // The softphone rang THIS browser, so its event cannot be missed, and it carries
+    // the caller's number — which is all `getCallContext?phone=` needs, since that
+    // path assembles live and never touches a call row.
+    //
+    // ⚠️ Assembled state is marked `fromSdk` and is only ever used as a FALLBACK: the
+    // next poll that finds the real row overwrites it, because the row carries the
+    // call id and ticket link that "Open call" needs and this path cannot know.
+    const unsub = subscribeCallEvents(async (e) => {
+      if (e?.type === 'ended') { setState((p) => (p?.fromSdk ? null : p)); return; }
+      if (e?.type !== 'incoming' || !e.number) return;
+      // Already popped from the real row — that one is strictly better, leave it.
+      if (stateRef.current?.active && !stateRef.current?.fromSdk) return;
+      try {
+        const ctx = await csopsGet('getCallContext', { phone: e.number }, sessionRef.current);
+        if (!alive.current) return;
+        if (stateRef.current?.active && !stateRef.current?.fromSdk) return;   // a poll won the race
+        setState({
+          active: true, fromSdk: true,
+          call: { id: null, phone: e.number, direction: 'incoming', started_at: new Date().toISOString(), ticket_id: null },
+          context: ctx || null,
+        });
+      } catch { /* a failed assemble must never surface an error over a live call */ }
+    });
+
+    return () => { alive.current = false; clearInterval(iv); unsub(); };
   }, [userId]);
 
   if (!state?.active) return null;
-  if (dismissed && dismissed === state.call?.id) return null;
+  // Keyed by call id when we have one, else by the number — a null id must not make a
+  // dismissed SDK pop suppress every later call (null === null).
+  const popKey = state.call?.id || (state.call?.phone ? `phone:${state.call.phone}` : null);
+  if (dismissed && popKey && dismissed === popKey) return null;
 
   const { call, context } = state;
   const c = context || {};
@@ -110,7 +154,7 @@ export default function CallPop() {
             {c.customer?.name || 'Unknown caller'}
           </strong>
         </span>
-        <button onClick={() => setDismissed(call.id)} style={xBtn} aria-label="Dismiss">
+        <button onClick={() => setDismissed(popKey)} style={xBtn} aria-label="Dismiss">
           <X size={14} />
         </button>
       </div>
