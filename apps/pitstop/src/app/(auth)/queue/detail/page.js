@@ -255,12 +255,58 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
       handed_to_production:   'Hand to Production →',
       repaired_ready:         'Mark Repaired Ready →',
       repair_dispatched:      'Mark Repair Dispatched →',
-      closed:                 'Close Ticket →',
+      closed:                 'Close Ticket →',   // relabelled below when the user cannot close
     };
+    if (nextStage === 'closed' && !isAdmin) return 'Request Closure →';
     return map[nextStage] || `Advance → ${nextStage}`;
-  }, [nextStage]);
+  }, [nextStage, isAdmin]);
+
+  // Closure approval banner. Shown to everyone so the requester can see their own request
+  // is still waiting rather than wondering whether the click registered; only an admin gets
+  // the buttons.
+  const [closureBusy, setClosureBusy] = useState(false);
+  async function actOnClosure(action) {
+    setClosureBusy(true);
+    try { await csopsPost(action, { ticket_id: t.id }, session); onRefresh(); }
+    catch (e) { alert(e.message); }
+    finally { setClosureBusy(false); }
+  }
 
   return (
+    <>
+    {t.closure_requested_at && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        padding: '12px 16px', marginBottom: 'var(--space-3)',
+        background: 'var(--warn-bg)', border: '1px solid var(--warn-fg)',
+        borderRadius: 'var(--radius-lg)' }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--t1)' }}>
+            Closure requested by {t.closure_requested_by_name || 'an agent'}
+            {t.closure_request_reason ? ` — ${(TICKET_CLOSE_OUTCOMES.find(o => o[0] === t.closure_request_reason) || [, t.closure_request_reason])[1]}` : ''}
+          </div>
+          {t.closure_request_note && (
+            <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 3 }}>{t.closure_request_note}</div>
+          )}
+          {!isAdmin && (
+            <div style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 3 }}>Waiting for an admin to approve.</div>
+          )}
+        </div>
+        {isAdmin && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => actOnClosure('approveTicketClosure')} disabled={closureBusy}
+              style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--ok-fg)',
+                background: 'var(--ok-fg)', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              Approve &amp; close
+            </button>
+            <button onClick={() => actOnClosure('rejectTicketClosure')} disabled={closureBusy}
+              style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-2)',
+                background: 'transparent', color: 'var(--t2)', fontSize: 12, cursor: 'pointer' }}>
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+    )}
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: 'var(--space-4)',
       padding: '16px 18px',
@@ -365,10 +411,13 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
         )}
       </div>
     </div>
+    </>
   );
 }
 
 function AdvanceButton({ label, ticket, nextStage, session, onAdvanced }) {
+  const { perms: abPerms } = useAuth();
+  const abIsAdmin = !!abPerms?.cs_ticket_admin;
   const [modalOpen, setModalOpen] = useState(false);
   return (
     <>
@@ -382,6 +431,7 @@ function AdvanceButton({ label, ticket, nextStage, session, onAdvanced }) {
         targetStage={nextStage}
         session={session}
         onAdvanced={() => { setModalOpen(false); onAdvanced(); }}
+        isAdmin={abIsAdmin}
       />
     </>
   );
@@ -402,7 +452,12 @@ const TICKET_CLOSE_OUTCOMES = [
   ['other',        'Other (add a note)'],
 ];
 
-function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced }) {
+function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced, isAdmin }) {
+  // Closure approval (Pruthvi, 2026-08-18). An admin still closes directly — this is an
+  // extra route for people who cannot, not a queue everyone joins. Same modal either way,
+  // so nobody has to learn a second screen; only the note requirement, the button and the
+  // action differ.
+  const needsApproval = targetStage === 'closed' && !isAdmin;
   const [form, setForm] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -443,11 +498,16 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
       case 'closed':                 return [
         { name: 'closed_reason', label: 'Outcome', required: true, type: 'select',
           options: TICKET_CLOSE_OUTCOMES },
-        { name: 'closed_note', label: 'Note (optional)', multiline: true },
+        // The note is MANDATORY on a request and optional on a direct close. The reason is
+        // a dropdown anyone can click; the note is the only thing an approver can actually
+        // weigh, so a request without one gives them nothing to decide on.
+        needsApproval
+          ? { name: 'closed_note', label: 'Why should this be closed?', required: true, multiline: true }
+          : { name: 'closed_note', label: 'Note (optional)', multiline: true },
       ];
       default: return [];
     }
-  }, [targetStage]);
+  }, [targetStage, needsApproval]);
 
   async function submit() {
     // Required fields are enforced here, not just server-side: advanceStage falls back
@@ -465,11 +525,19 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
           patch[f.name] = f.type === 'number' ? Number(v) : v;
         }
       }
-      await csopsPost('advanceStage', {
-        ticket_id: ticket.id,
-        target_stage: targetStage,
-        patch,
-      }, session);
+      if (needsApproval) {
+        await csopsPost('requestTicketClosure', {
+          ticket_id: ticket.id,
+          reason: patch.closed_reason,
+          note: patch.closed_note,
+        }, session);
+      } else {
+        await csopsPost('advanceStage', {
+          ticket_id: ticket.id,
+          target_stage: targetStage,
+          patch,
+        }, session);
+      }
       onAdvanced();
     } catch (e) {
       setError(e.message);
