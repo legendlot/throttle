@@ -487,6 +487,13 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
   html, body { height: auto !important; overflow: visible !important; }
   /* .cb covers the AppLauncher waffle too — it renders inside the context bar. */
   .sb, .cb, .gs-backdrop, .gs-panel { display: none !important; }
+  /* ⚠️ The S304 mobile shell below is FIXED-POSITION, so it paints over the SAME
+     strip of every printed page and silently eats whatever line lands there — it
+     is not merely cosmetic. Reported by Prarthi 2026-08-26: SO-0401's invoice
+     dropped item 15 (Wisp Base Black) entirely, page 1 ending mid-row and page 2
+     resuming at 16. This block predates the tab bar and was never extended, the
+     same class as PATTERN-218. Any NEW fixed chrome must be added here too. */
+  .sn-tabbar, .sn-sheetwrap { display: none !important; }
   .app { display: block !important; height: auto !important; overflow: visible !important; }
   .main-wrap { display: block !important; overflow: visible !important; }
   .main { overflow: visible !important; padding: 0 !important; height: auto !important; flex: none !important; }

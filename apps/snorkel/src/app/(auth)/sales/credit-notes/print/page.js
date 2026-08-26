@@ -62,6 +62,12 @@ function CreditNoteInner() {
         .num { text-align:right; font-variant-numeric: tabular-nums; }
         .totline { display:flex; justify-content:space-between; padding:2px 0; }
         .print-hint { text-align:center; margin:16px 0; }
+        /* A financial document must never lose a line to a page boundary. break-inside
+           on the row keeps a line whole (it moves to the next page instead of splitting);
+           table-header-group repeats the column headings on every page. Added 2026-08-26
+           after SO-0401 printed without item 15. */
+        table.inv-lines tr { break-inside: avoid; page-break-inside: avoid; }
+        table.inv-lines thead { display: table-header-group; }
         @media print { .print-hint { display:none; } .invoice-root { padding:0; } @page { margin: 12mm; } }
       `}</style>
 
