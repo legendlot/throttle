@@ -1,6 +1,5 @@
 'use client';
-import { useRef, useState, useCallback } from 'react';
-import { Btn } from '@/components/ui.js';
+import { useState, useCallback } from 'react';
 
 // Invoice capture. Two equally-weighted entry points — "Take photo" opens the rear camera
 // directly, "Upload file" is gallery/Files/desktop. Capture is not a fallback: in #payments the
@@ -18,6 +17,13 @@ import { Btn } from '@/components/ui.js';
 const MAX_EDGE = 2000;   // long edge after downscale
 const JPEG_Q   = 0.8;
 const MAX_BYTES = 25 * 1024 * 1024;
+
+// Visually hidden but STILL RENDERED and still hit-testable. `display:none` / `visibility:hidden`
+// are what break `capture` on Android — the input must remain a real, laid-out control.
+const HIDDEN_INPUT = {
+  position: 'absolute', inset: 0, width: '100%', height: '100%',
+  opacity: 0, cursor: 'inherit', fontSize: 0,
+};
 
 // A raw rear-camera capture is typically 3–8 MB against the 130–370 KB WhatsApp images seen in
 // #payments. Un-downscaled, the first request raised on the factory connection stalls and the
@@ -43,8 +49,6 @@ async function downscaleImage(file) {
 }
 
 export default function InvoiceUpload({ files, onChange, disabled }) {
-  const cameraRef = useRef(null);
-  const fileRef   = useRef(null);
   const [working, setWorking] = useState(false);
 
   const accept = useCallback(async (e) => {
@@ -80,23 +84,33 @@ export default function InvoiceUpload({ files, onChange, disabled }) {
 
   return (
     <div>
+      {/* ⚠️ The input MUST be inside a <label> and MUST stay rendered.
+          v1 used a hidden input + a programmatic cameraRef.click(), and on Android that opened the
+          document picker (Files / Gallery / Drive) instead of the camera — reported live 2026-08-26.
+          Two independent reasons, both fixed here:
+            1. `display:none` — Android drops `capture` on an input that is not rendered, so it is
+               visually hidden with opacity/size instead and stays in the layout.
+            2. a synthetic .click() — several Android Chrome/WebView builds honour `capture` only on
+               a NATIVE activation. A <label> wrapping the input gives exactly that: the tap lands
+               on the label and the browser activates the control itself, no JS in the path.
+          Do not "tidy" either of these back. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Btn kind="primary" type="button" onClick={() => cameraRef.current?.click()} disabled={disabled || working}>
+        <label className="btn btn-primary"
+               style={{ cursor: disabled || working ? 'default' : 'pointer',
+                        opacity: disabled || working ? 0.6 : 1, position: 'relative' }}>
           📷 Take photo
-        </Btn>
-        <Btn type="button" kind="ghost" onClick={() => fileRef.current?.click()} disabled={disabled || working}>
+          <input type="file" accept="image/*" capture="environment"
+                 onChange={accept} disabled={disabled || working} style={HIDDEN_INPUT} />
+        </label>
+        <label className="btn btn-ghost"
+               style={{ cursor: disabled || working ? 'default' : 'pointer',
+                        opacity: disabled || working ? 0.6 : 1, position: 'relative' }}>
           Upload file
-        </Btn>
+          <input type="file" multiple accept="image/*,application/pdf"
+                 onChange={accept} disabled={disabled || working} style={HIDDEN_INPUT} />
+        </label>
         {working && <span style={{ alignSelf: 'center', fontSize: 13, color: 'var(--t2)' }}>Processing…</span>}
       </div>
-
-      {/* capture="environment" opens the rear camera on Android/iOS. It is SILENTLY IGNORED on
-          desktop, which is why this needs a real-device smoke — on a laptop it degrades to a
-          normal file dialog and will look like it works while proving nothing. */}
-      <input ref={cameraRef} type="file" accept="image/*" capture="environment"
-             onChange={accept} style={{ display: 'none' }} />
-      <input ref={fileRef} type="file" multiple accept="image/*,application/pdf"
-             onChange={accept} style={{ display: 'none' }} />
 
       {files.length > 0 && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
