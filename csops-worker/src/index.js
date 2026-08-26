@@ -8285,14 +8285,23 @@ async function getMessagingStats(params, auth, env) {
     // It also shrinks the pre-existing ordering caveat: `order=created_at.desc` is global, so a
     // long-idle but still-open thread could fall outside a single page and be under-counted.
     // Scoping each page to 200 threads makes that far less likely (a full RPC is the exact fix).
+    // ⚠️ Chunks run in PARALLEL (S314). They were sequential, and this function is the
+    // slowest call in Pitstop — measured median 1,231ms — on a path that runs after EVERY
+    // tag/claim/close/send AND every 30s, which is most of the "Pitstop feels slower than
+    // BiteSpeed" report. Safe to parallelise because each chunk covers a DISJOINT set of
+    // thread_ids: the "first wins" rule below depends on `order=created_at.desc` WITHIN a
+    // chunk, never on the order the chunks come back in.
+    // ⚠️ The chunking itself is a correctness fix, not an optimisation — do not undo it. See
+    // the note above: one oversized `in.(…)` URL fails SILENTLY and every tile reports 0.
     const CHUNK = 200;
     const lastDir = {};
+    const chunkUrls = [];
     for (let i = 0; i < tw.length; i += CHUNK) {
       const ids = tw.slice(i, i + CHUNK).map((t) => t.id).join(',');
-      const mRes = await sb(
-        `/rest/v1/cs_wa_messages?thread_id=in.(${ids})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=2000`,
-        env,
-      );
+      chunkUrls.push(`/rest/v1/cs_wa_messages?thread_id=in.(${ids})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=2000`);
+    }
+    const chunkRes = await Promise.all(chunkUrls.map((u) => sb(u, env)));
+    for (const mRes of chunkRes) {
       for (const m of (mRes.data || [])) if (!(m.thread_id in lastDir)) lastDir[m.thread_id] = m.direction;
     }
     for (const [tid, dir] of Object.entries(lastDir)) {
@@ -8305,25 +8314,42 @@ async function getMessagingStats(params, auth, env) {
   // "count says N, Unassigned tab shows none" (Pruthvi, S184, email channel). Closed
   // conversations are reachable via the Closed/All state filter, not the work-queue tiles.
   const ACTIVE = `&thread_state=in.(open,snoozed)`;
-  // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
-  // All counts exclude Ignition-transferred threads (S177).
-  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
-  // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
-  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
-  // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
-  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
-  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
-  // Closed (resolved) count per channel — shown on each channel tile so the team has
-  // quick visibility into resolved volume per channel (Pruthvi, S185). Excludes
-  // Ignition-transferred threads, consistent with the active counts above.
-  for (const ch of ['instagram', 'messenger', 'whatsapp', 'email', 'web']) {
-    stats[ch].closed = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false&thread_state=eq.closed${NONEMPTY}&select=id`, env);
-  }
+  // ⚠️ These fourteen counts run in ONE PARALLEL WAVE (S314). They were fourteen sequential
+  // awaits, and at ~65ms each that alone was ~900ms of the measured 1,231ms median — on the
+  // call that fires after every tag/claim/close/send and every 30s. They are entirely
+  // independent of each other and of everything above, so nothing here may be re-serialised.
+  // ⚠️ The QUERIES are unchanged, deliberately: every filter below carries a correctness
+  // history (ACTIVE matches the default list, NONEMPTY matches getMessagingThreads, and
+  // ignition_connect excludes transferred threads). This change is scheduling only.
+  const base = (ch, extra = '') =>
+    `/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false${extra}&select=id`;
+  const CH_ALL = ['instagram', 'messenger', 'whatsapp', 'email', 'web'];
+  const [waTotal, waMine, waUnassigned,
+         emTotal, emMine, emUnassigned,
+         webTotal, webMine, webUnassigned,
+         ...closedCounts] = await Promise.all([
+    // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
+    // All counts exclude Ignition-transferred threads (S177).
+    sbCount(base('whatsapp', `${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('whatsapp', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('whatsapp', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
+    // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
+    sbCount(base('email', `${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('email', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('email', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
+    // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
+    sbCount(base('web', `${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('web', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
+    sbCount(base('web', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
+    // Closed (resolved) count per channel — shown on each channel tile so the team has
+    // quick visibility into resolved volume per channel (Pruthvi, S185). Excludes
+    // Ignition-transferred threads, consistent with the active counts above.
+    ...CH_ALL.map((ch) => sbCount(base(ch, `&thread_state=eq.closed${NONEMPTY}`), env)),
+  ]);
+  stats.whatsapp.total = waTotal;  stats.whatsapp.mine = waMine;  stats.whatsapp.unassigned = waUnassigned;
+  stats.email.total    = emTotal;  stats.email.mine    = emMine;  stats.email.unassigned    = emUnassigned;
+  stats.web.total      = webTotal; stats.web.mine      = webMine; stats.web.unassigned      = webUnassigned;
+  CH_ALL.forEach((ch, i) => { stats[ch].closed = closedCounts[i]; });
   // Per-channel UNREAD count (S222, Pruthvi) — active threads with a customer message
   // that arrived after the thread was last opened. One set-based RPC over the generated
   // `has_unread_inbound` flag (open+snoozed, non-Ignition) → team-global unread badges.

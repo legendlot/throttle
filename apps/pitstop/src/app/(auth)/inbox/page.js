@@ -435,18 +435,19 @@ export default function InboxPage() {
 
   const loadStats = useCallback(async () => {
     if (!session) return;
-    try {
-      const d = await csopsGet('getMessagingStats', {}, session);
-      if (d?.stats) { setStats(d.stats); setStatsReady(true); }
-    } catch { /* tiles are best-effort */ }
-    // Channel-health banner (S314). Rides the existing 30s stats poll rather than adding a
-    // second timer — the alarm updates 4×/day, so its own poll would be pure overhead.
-    // ⚠️ Alerts are IN-APP ONLY, never Slack (Afshaan 2026-08-26). Failing quietly is right:
-    // a health banner must never be the reason the inbox degrades.
-    try {
-      const a = await csopsGet('getChannelAlerts', {}, session);
-      setChannelAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
-    } catch { /* banner is best-effort */ }
+    // Channel-health banner (S314) rides this poll rather than adding a second timer — the
+    // alarm only updates 4×/day, so its own interval would be pure overhead.
+    // ⚠️ Alerts are IN-APP ONLY, never Slack (Afshaan 2026-08-26).
+    // ⚠️ PARALLEL, not sequential. `loadStats` is called after EVERY mutation (tag, claim,
+    // close, send), and "Pitstop feels slower than BiteSpeed" is an open report — awaiting
+    // these one after the other would have added a whole round-trip to that path for a
+    // banner nobody is waiting on. They are independent; nothing here may serialise.
+    const [d, a] = await Promise.all([
+      csopsGet('getMessagingStats', {}, session).catch(() => null),   // tiles are best-effort
+      csopsGet('getChannelAlerts', {}, session).catch(() => null),    // banner is best-effort
+    ]);
+    if (d?.stats) { setStats(d.stats); setStatsReady(true); }
+    if (a) setChannelAlerts(Array.isArray(a.alerts) ? a.alerts : []);
   }, [session]);
 
   // Export what is ON SCREEN (Pruthvi, 2026-08-18 — "respecting the filters and date range
