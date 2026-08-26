@@ -37,7 +37,7 @@ jobs:
       - name: Deploy to legendlot/podium
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_PODIUM }}
           external_repository: legendlot/podium
           publish_branch: gh-pages
           publish_dir: apps/podium/out

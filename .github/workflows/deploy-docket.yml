@@ -37,7 +37,7 @@ jobs:
       - name: Deploy to legendlot/docket
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_DOCKET }}
           external_repository: legendlot/docket
           publish_branch: gh-pages
           publish_dir: apps/docket/out

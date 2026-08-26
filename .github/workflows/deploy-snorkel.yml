@@ -37,7 +37,7 @@ jobs:
       - name: Deploy to legendlot/snorkel
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_SNORKEL }}
           external_repository: legendlot/snorkel
           publish_branch: gh-pages
           publish_dir: apps/snorkel/out

@@ -38,7 +38,7 @@ jobs:
       - name: Deploy to legendlot/ignition
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_IGNITION }}
           external_repository: legendlot/ignition
           publish_branch: gh-pages
           publish_dir: apps/ignition/out

@@ -41,7 +41,7 @@ jobs:
       - name: Deploy to legendlot/odo
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_ODO }}
           external_repository: legendlot/odo
           publish_branch: gh-pages
           publish_dir: apps/odo/out

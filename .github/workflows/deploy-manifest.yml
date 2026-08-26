@@ -41,7 +41,7 @@ jobs:
       - name: Deploy to legendlot/manifest
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_MANIFEST }}
           external_repository: legendlot/manifest
           publish_branch: gh-pages
           publish_dir: apps/manifest/out

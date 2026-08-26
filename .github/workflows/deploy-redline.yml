@@ -36,7 +36,7 @@ jobs:
       - name: Deploy to legendlot/dashboard
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_REDLINE }}
           external_repository: legendlot/dashboard
           publish_branch: gh-pages
           publish_dir: apps/redline/out

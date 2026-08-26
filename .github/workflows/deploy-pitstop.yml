@@ -37,7 +37,7 @@ jobs:
       - name: Deploy to legendlot/pitstop
         uses: peaceiris/actions-gh-pages@v3
         with:
-          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.DEPLOY_KEY_PITSTOP }}
           external_repository: legendlot/pitstop
           publish_branch: gh-pages
           publish_dir: apps/pitstop/out
