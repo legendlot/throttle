@@ -53,6 +53,10 @@ assert.equal(o.state.current_step, 'status1');
 assert.deepEqual(o.effects[0], { type: 'order_lookup', orderNumber: '#12345', identity: { phone: '9876543210' } });
 assert.equal(o.replies.length, 0);
 
+// real LOT order names are alphanumeric (#LOT48622) — and lowercase input canonicalises
+let oa = E.advance(DEF, { current_step: 'collect_order', status: 'active', context: { identity: { phone: '9876543210' } } }, { kind: 'text', text: 'lot48622' });
+assert.equal(oa.effects[0].orderNumber, '#LOT48622');
+
 // action_result found -> renders status text, walks to end
 let f = E.advance(DEF, o.state, { kind: 'action_result', ok: true, data: { statusText: 'Out for delivery' } });
 assert.equal(f.state.status, 'ended');

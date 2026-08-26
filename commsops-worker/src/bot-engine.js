@@ -9,7 +9,9 @@ const MAX_ORDER_ATTEMPTS = 5;  // enumeration guard: sequential order numbers, p
 
 const PHONE_RE = /(?:\+?91[\s-]?)?([0-9][\s-]?){10}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const ORDER_RE = /^#?\d{3,10}$/;
+// Real LOT order names are ALPHANUMERIC (#LOT48622) — found live in the S312 smoke;
+// a digits-only pattern rejected every real order number. Letters prefix + digits.
+const ORDER_RE = /^#?[A-Za-z]{0,6}\d{3,10}$/;
 
 function normPhone(s) { const d = String(s).replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : null; }
 
@@ -64,8 +66,9 @@ function advance(def, prev, input) {
       if (!phone && !email) { replies.push({ text: 'Please share a valid phone number or email so we can help.' }); return { state, replies, effects }; }
       state.context.identity = phone ? { phone } : { email };
     } else if (step.field === 'order_number') {
-      if (!ORDER_RE.test(raw)) { replies.push({ text: 'That does not look like an order number — it is on your confirmation, like #12345.' }); return { state, replies, effects }; }
-      state.context.order_number = raw.startsWith('#') ? raw : `#${raw}`;
+      if (!ORDER_RE.test(raw)) { replies.push({ text: 'That does not look like an order number — it is on your confirmation, like #LOT48622.' }); return { state, replies, effects }; }
+      const canon = raw.replace(/^#/, '').toUpperCase();
+      state.context.order_number = `#${canon}`;
     } else { state.context[step.field] = raw; }
     return walk(def, state, G.resolveTarget(step, 'next'), replies, effects);
   }
