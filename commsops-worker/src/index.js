@@ -23,6 +23,9 @@ const CFWH = require('./cashfree-webhooks.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
+const BOTS = require('./bots.js');
+const BE = require('./bot-engine.js');
+const BW = require('./bot-web.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
@@ -610,6 +613,16 @@ async function handleGet(url, auth, env) {
     case 'getJourney':
       return ok(await J.getJourney(env, url.searchParams.get('id')));
 
+    // ── Bots (S312) — relay_view gated blanket-wide in fetch(), same as journeys above.
+    case 'listBots': {
+      const r = await BOTS.listBots(env);
+      return r.ok ? ok(r) : err(r.error, 500);
+    }
+    case 'getBot': {
+      const r = await BOTS.getBot(env, url.searchParams.get('id'));
+      return r.ok ? ok(r) : err(r.error, 404);
+    }
+
     // ── M8: analytics — thin RPC passthroughs (relay_view already gated blanket-wide
     //    in fetch() before handleGet). SQL-side aggregation only; no raw rows to client.
     case 'getSendsOverview': {
@@ -995,6 +1008,29 @@ async function handlePost(body, auth, env) {
       });
       if (!r.ok) return err(r.error, r.error === 'not_found' ? 404 : 400);
       return ok(r.link);
+    }
+
+    // ── Bots (S312) — gated like campaign assets: build to author, activate to publish.
+    case 'saveBot': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const r = await BOTS.saveBot(env, body, auth.userId);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    case 'publishBot': {
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      const r = await BOTS.publishBot(env, body.id, auth.userId);
+      return r.ok ? ok(r) : err(r.error, r.error === 'invalid_definition' ? 422 : 400, r.errors ? { errors: r.errors } : undefined);
+    }
+    case 'pauseBot': case 'resumeBot': {
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      const r = await BOTS.setBotStatus(env, body.id, body.action === 'pauseBot' ? 'paused' : 'active');
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    case 'testBotTurn': {   // canvas Test panel: draft definition, NO effects executed, no rows written
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const g = await BOTS.getBot(env, body.id);
+      if (!g.ok) return err('not_found', 404);
+      return ok(BE.advance(body.definition || g.bot.draft_definition, body.state || { current_step: null, status: 'active', context: {} }, body.input || { kind: 'open' }));
     }
 
     case 'saveRole': {                 // create/clone/edit a custom role (M2)
