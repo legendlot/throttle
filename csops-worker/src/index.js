@@ -773,6 +773,21 @@ export default {
       ));
     }
 
+    // Channel health alarm (S314). Four times a day — 05:00 / 11:00 / 17:00 / 23:00 IST —
+    // which bounds "a channel died and nobody noticed" to ~6h. Replayed against the real
+    // Instagram outage it first trips at 21 Aug 23:00 IST; that outage took two days to
+    // surface via a human. The */2 cron means each :30 lands exactly once.
+    {
+      const d = new Date(event?.scheduledTime || Date.now());
+      const h = d.getUTCHours(), m = d.getUTCMinutes();
+      if (m === 30 && (h === 23 || h === 5 || h === 11 || h === 17)) {
+        ctx.waitUntil(runChannelHealthCheck(env).then(
+          r => console.log('[cs-health] cron check', JSON.stringify(r)),
+          e => console.error('[cs-health] cron check error', e),
+        ));
+      }
+    }
+
     // Email-attachment ageing (6-month retention, Afshaan 2026-08-16). Once a day at
     // 03:00 IST (21:30 UTC — the */2 cron fires on even minutes, so :30 hits exactly
     // once). Expected 0 until the first cohort ages ~2026-12-26; see the function.
@@ -946,6 +961,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
     case 'backfillEmailAttachments': return backfillEmailAttachments(body, auth, env);
     case 'ageEmailAttachments':      return ageEmailAttachments(body, auth, env);
+    case 'checkChannelHealth':       return checkChannelHealth(body, auth, env);   // dry-run by default; `as_of` replays history
     case 'backfillPurchaseDates':    return backfillPurchaseDates(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
@@ -6490,6 +6506,105 @@ async function getWaConversationLocal(thread, env) {
 // there — they are files customers sent us). The inbox bubble renders `media_url`, so mint a
 // short-lived signed URL per read rather than persisting one: a stored URL would expire and
 // leave the same dead chip this exists to prevent. Batched into ONE storage call.
+// ── Channel health alarm ─────────────────────────────────────────────────────
+// The 20–24 Aug 2026 Instagram outage reached us as a Slack message from Pruthvi, two days
+// late. This is the check that would have caught it the first night, unaided.
+//
+// ⚠️ READ THIS BEFORE CHANGING THE SIGNAL. The obvious detector — "channel volume fell to
+// zero" — is the one the backlog item asked for, and measured against the real outage it
+// stays SILENT. Instagram's total outbound on 21 and 22 Aug was 406 and 654, the highest of
+// the fortnight, because AUTOMATED sends (journeys, the transactional redirect) kept flowing
+// on a path that never touched the broken credential. What went to zero was AGENT sends:
+// 0 on 21/22/23 Aug against 129 the day before. Automation masked the outage completely.
+// The signal is agent-attributed sends against live inbound demand. Never the channel total.
+//
+// Detection is in SQL (store.cs_detect_silent_channels) so it can be replayed against any
+// past timestamp — it was validated by calling it across 15–24 Aug before being wired up.
+// It first trips at 21 Aug 23:00 IST with "405 inbound, 0 agent replies".
+const SLACK_ALERT_REPEAT_HOURS = 12;   // re-nag at most twice a day while an outage persists
+
+// Fail-open Slack post. Mirrors commsops/src/alerts.js and the throttleops SLACK_WEBHOOK_<CH>
+// convention. A misconfigured webhook must never fail the cron that carries it.
+async function slackAlert(env, text) {
+  if (!env.SLACK_WEBHOOK_ALERTS) { console.log('[Slack:cs-alerts]', text); return false; }
+  try {
+    const r = await fetch(env.SLACK_WEBHOOK_ALERTS, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) console.log('cs_alert_delivery_failed', r.status);   // a dead webhook must not be silent
+    return r.ok;
+  } catch (e) { console.error('[Slack:cs-alerts] failed:', e.message); return false; }
+}
+
+const CH_LABEL = { instagram: 'Instagram', whatsapp: 'WhatsApp', email: 'Email',
+                   messenger: 'Messenger', web: 'Web' };
+
+// Run the detector, diff against stored state, post only on change (or every 12h while it
+// persists), and post a recovery line when a channel comes back.
+async function runChannelHealthCheck(env) {
+  const d = await sb('/rest/v1/rpc/cs_detect_silent_channels', env, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  if (!d.ok) { console.error('[cs-health] detector failed', JSON.stringify(d.data)?.slice(0, 200)); return { ok: false }; }
+  const res = d.data || {};
+  const alerts = Array.isArray(res.alerts) ? res.alerts : [];
+
+  const st = await sb('/rest/v1/cs_channel_alert_state?select=*', env);
+  const prev = new Map((st.data || []).map(r => [r.channel, r]));
+  const now = new Date().toISOString();
+  let posted = 0;
+
+  for (const a of alerts) {
+    const p = prev.get(a.channel);
+    const changed = !p || p.verdict !== a.verdict;
+    const stale = p && (Date.now() - new Date(p.last_alert_at).getTime()) > SLACK_ALERT_REPEAT_HOURS * 3600 * 1000;
+    if (changed || stale) {
+      const label = CH_LABEL[a.channel] || a.channel;
+      const msg = a.verdict === 'silent'
+        ? `:rotating_light: *${label} — no agent replies in 24h.* ${a.inbound} customer messages came in and not one was answered by an agent (normal for this channel: ~${a.baseline_median}/day). Automated sends may still be flowing, so the channel can look healthy from outside. Check the send path and the credential.`
+        : `:warning: *${label} — agent sends are failing.* ${a.agent_failed} of ${a.agent_failed + (a.agent_sends - a.agent_failed)} agent sends in the last 24h were refused by the provider. Check Pitstop → the affected conversations for the provider error.`;
+      if (await slackAlert(env, msg)) posted++;
+      await sb(`/rest/v1/cs_channel_alert_state?on_conflict=channel`, env, {
+        method: 'POST',
+        prefer: 'resolution=merge-duplicates',
+        body: JSON.stringify({
+          channel: a.channel, verdict: a.verdict, last_alert_at: now, last_payload: a,
+          ...(p ? { alert_count: (p.alert_count || 1) + 1 } : { first_seen_at: now, alert_count: 1 }),
+        }),
+      }).catch(e => console.error('[cs-health] state upsert failed', e.message));
+    }
+    prev.delete(a.channel);
+  }
+
+  // Anything still in `prev` was alerting and no longer is — post the recovery and clear it.
+  for (const [channel, p] of prev) {
+    const label = CH_LABEL[channel] || channel;
+    const mins = Math.round((Date.now() - new Date(p.first_seen_at).getTime()) / 60000);
+    const dur = mins >= 1440 ? `${(mins / 1440).toFixed(1)} days` : `${Math.round(mins / 60)}h`;
+    await slackAlert(env, `:white_check_mark: *${label} is answering again* — agents are replying normally. It was silent for about ${dur}.`);
+    await sb(`/rest/v1/cs_channel_alert_state?channel=eq.${encodeURIComponent(channel)}`, env, { method: 'DELETE' })
+      .catch(e => console.error('[cs-health] state clear failed', e.message));
+  }
+
+  return { ok: true, team_active: !!res.team_active, alerts: alerts.length, posted,
+           recovered: prev.size, channels: (res.channels || []).length };
+}
+
+// Admin action — run the check on demand, or replay it against a past timestamp to see what
+// it WOULD have said (`as_of`). `dry_run` defaults true so inspecting it never posts to Slack.
+async function checkChannelHealth(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const dryRun = body?.dry_run !== false;
+  if (!dryRun) return ok(await runChannelHealthCheck(env));
+  const d = await sb('/rest/v1/rpc/cs_detect_silent_channels', env, {
+    method: 'POST',
+    body: JSON.stringify(body?.as_of ? { p_now: body.as_of } : {}),
+  });
+  if (!d.ok) return err(`detector failed: ${JSON.stringify(d.data)?.slice(0, 200)}`, 502);
+  return ok({ dry_run: true, ...(d.data || {}) });
+}
+
 const WA_MEDIA_SIGN_TTL = 3600;   // 1h — comfortably longer than an agent reads a thread
 
 async function signInboundWaMedia(messages, env) {
