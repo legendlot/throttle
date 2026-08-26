@@ -641,6 +641,16 @@ export default {
     if (url.pathname === '/internal/wa-history-backfill' && request.method === 'POST') {
       return handleWaHistoryBackfill(request, env);
     }
+    // Read-only Instagram sendability probe, token-gated and placed before the JWT gate
+    // for the same reason the webhooks are: diagnosing why Meta refuses ONE recipient must
+    // not require a Google login and an agent session. Sends nothing. See diagIgRecipient.
+    if (url.pathname === '/internal/ig-recipient-probe' && request.method === 'POST') {
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!env.WA_SYNC_TOKEN || bearer !== env.WA_SYNC_TOKEN) return err('unauthorised', 401);
+      let pb = {}; try { pb = await request.json(); } catch { /* ignore */ }
+      return diagIgRecipient(pb, { permissions: { cs_ticket_admin: true } }, env);
+    }
     // Meta (Instagram + Facebook Messenger DMs) — GET verify handshake + POST events.
     if (url.pathname === '/webhooks/meta') {
       if (request.method === 'GET')  return handleMetaVerify(url, env);
