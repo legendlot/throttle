@@ -200,6 +200,7 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
   const [advancing, setAdvancing] = useState(false);
   const [dispositionBusy, setDispositionBusy] = useState(false);
   const [switchBusy, setSwitchBusy] = useState(false);
+  const { showToast } = useToast();
 
   // Disposition triage lock: only admin can change once past intake/awaiting_evidence
   const isAdmin = !!(perms?.cs_ticket_admin);
