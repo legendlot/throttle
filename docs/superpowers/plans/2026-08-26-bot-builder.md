@@ -220,9 +220,14 @@ let f = E.advance(DEF, o.state, { kind: 'action_result', ok: true, data: { statu
 assert.equal(f.state.status, 'ended');
 assert.deepEqual(f.replies.map(x => x.text), ['Out for delivery', 'Bye!']);
 
-// action_result not ok -> not_found branch -> handoff
-let nf = E.advance(DEF, { current_step: 'status1', status: 'active', context: { order_attempts: 4 } }, { kind: 'action_result', ok: false });
+// action_result not ok -> not_found branch -> handoff (attempts below the cap)
+let nf = E.advance(DEF, { current_step: 'status1', status: 'active', context: { order_attempts: 0 } }, { kind: 'action_result', ok: false });
 assert.equal(nf.state.current_step, 'handoff1');
+
+// the 5th failure hits MAX_ORDER_ATTEMPTS: session ENDS with the support copy, no handoff walk
+let cap = E.advance(DEF, { current_step: 'status1', status: 'active', context: { order_attempts: 4 } }, { kind: 'action_result', ok: false });
+assert.equal(cap.state.status, 'ended');
+assert.match(cap.replies[0].text, /could not verify/i);
 
 // handed_off session: bot NEVER replies (agent supremacy)
 let h = E.advance(DEF, { current_step: 'menu1', status: 'handed_off', context: {} }, { kind: 'text', text: 'hello?' });
@@ -234,6 +239,17 @@ assert.deepEqual(E.validateBotDef(DEF), []);
 const badDef = { entry: 'a', steps: { a: { type: 'menu', text: 'x', buttons: [{ id: 'b1', label: 'One' }], outcomes: { b1: 'ghost' } } } };
 const errs = E.validateBotDef(badDef).map(e => e.code).sort();
 assert.deepEqual(errs, ['dangling_target', 'fallback_unwired']);
+
+// an unwired menu BUTTON is a lint error (tap -> silence otherwise)
+const unwired = { entry: 'a', steps: { a: { type: 'menu', text: 'x', buttons: [{ id: 'b1', label: 'One' }], outcomes: { fallback: 'z' } }, z: { type: 'end', outcomes: {} } } };
+assert.ok(E.validateBotDef(unwired).some(e => e.code === 'button_unwired'));
+
+// an authored message-cycle emits each message ONCE per turn, never 50
+const loopDef = { entry: 'a', steps: {
+  a: { type: 'message', text: 'A', outcomes: { next: 'b' } },
+  b: { type: 'message', text: 'B', outcomes: { next: 'a' } } } };
+const lr = E.advance(loopDef, fresh(), { kind: 'open' });
+assert.deepEqual(lr.replies.map(x => x.text), ['A', 'B']);
 
 console.log('bot-engine tests OK');
 ```
@@ -267,7 +283,13 @@ function renderStep(step) {
 // action pending I/O, handoff/end terminal). Returns {state, replies, effects}.
 function walk(def, state, stepId, replies, effects) {
   let id = stepId;
+  const seen = new Set();
   for (let hops = 0; hops < 50 && id; hops++) {          // hop cap: authoring loops end the walk, never the worker
+    // Revisiting a step within ONE walk is an authored message-cycle (lint can't see it —
+    // every target exists). Without this a cycle emits 50 replies per turn into the widget
+    // AND the inbox transcript. Break after the first lap: each message said once.
+    if (seen.has(id)) break;
+    seen.add(id);
     const step = def.steps[id];
     if (!step) break;
     state.current_step = id;
@@ -355,12 +377,15 @@ function validateBotDef(def) {
       : ['next'];
     for (const h of handles) {
       const t = G.resolveTarget(step, h);
-      if (!t && (step.type !== 'menu' || h === 'fallback')) {
+      if (!t) {
+        // EVERY handle must be wired. An unwired menu button is a customer tapping a button
+        // and getting silence — walk(null) emits nothing — so it is a lint error, not a style choice.
         if (step.type === 'menu' && h === 'fallback') errs.push({ code: 'fallback_unwired', stepId: id });
-        else if (handles.length) errs.push({ code: 'dangling_target', stepId: id });
+        else if (step.type === 'menu') errs.push({ code: 'button_unwired', stepId: id, handle: h });
+        else errs.push({ code: 'dangling_target', stepId: id });
         continue;
       }
-      if (t && !def.steps[t]) errs.push({ code: 'dangling_target', stepId: id });
+      if (!def.steps[t]) errs.push({ code: 'dangling_target', stepId: id });
     }
     if (step.type === 'menu' && !(step.buttons || []).length) errs.push({ code: 'menu_no_buttons', stepId: id });
   }
@@ -496,7 +521,9 @@ module.exports = { lookupOrderStatus, statusTextFor, identityMatches };
 
 - [ ] **Step 4: Run tests** — `node test/bot-order-status.test.js` → OK.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Verify the live grant, don't assume it (S309 rule: a scope claim in a doc is a memory of a release, not a reading of the grant).** commsops has its own probe: `POST /internal/shopify-app-info` (`WA_SYNC_TOKEN`, `index.js:2785`). Confirm `read_orders` is in the returned scopes, AND run one real order query (via `testBotTurn` in Task 7's panel, or a temporary probe) confirming `email`/`phone` come back non-null on an order that has them — `shopify.js:76` records the GraphQL import path returning these fields at 4.8%/10.7% fill, so reads work on this app, but prove it on THIS query shape. **Fallback if either fails:** match identity against our own substrate instead — the profile resolved from the collected phone/email must own an `order_placed` event in `comms.events` whose `properties` carry that order name. Same fail-closed posture either way.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add commsops-worker/src/bot-order-status.js commsops-worker/test/bot-order-status.test.js && git commit -m "S312 [relay]: verified order-status lookup — identity must match, not_found never confirms existence"
@@ -567,14 +594,16 @@ module.exports = { listBots, getBot, saveBot, publishBot, setBotStatus };
 
 - [ ] **Step 2: Wire actions into `index.js`.** Add `const BOTS = require('./bots.js');` beside the other requires. In `handleGet`'s switch add:
 
+`handleGet(url, auth, env)` dispatches on `url.searchParams.get('action')`, and `relay_view`
+is already gated blanket-wide in `fetch()` before it (stated in the file's own comment at the
+M8 cases) — so GET cases carry NO per-case permission check, matching `getJourney` (`:610`):
+
 ```js
     case 'listBots': {
-      if (!A.canView(auth.permissions)) return err('forbidden', 403);
       const r = await BOTS.listBots(env);
       return r.ok ? ok(r) : err(r.error, 500);
     }
     case 'getBot': {
-      if (!A.canView(auth.permissions)) return err('forbidden', 403);
       const r = await BOTS.getBot(env, url.searchParams.get('id'));
       return r.ok ? ok(r) : err(r.error, 404);
     }
@@ -664,7 +693,13 @@ And near `relayWaFindOrCreateThread` (`~:5620`) add:
 
 ```js
 async function handleRelayWebForward(b, env) {
-  let thread = (await sb(`/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,status&limit=1`, env)).data?.[0];
+  let thread = (await sb(`/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,status,customer_phone&limit=1`, env)).data?.[0];
+  // Identity lands AFTER the thread exists (collect runs on turn 2) — patch it in the
+  // first time it arrives, else every web thread shows no phone forever.
+  if (thread && !thread.customer_phone && b.identity?.phone) {
+    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ customer_phone: `+91${b.identity.phone}` }) });
+  }
   if (!thread) {
     const ins = await sb('/rest/v1/cs_wa_threads', env, { method: 'POST', prefer: 'return=representation',
       body: JSON.stringify({
@@ -701,8 +736,11 @@ Then find the agent-reply send site that `isRelayThread` gates (grep `isRelayThr
 
 ```js
       if (thread.relay_web) {
-        // Web-bot thread: no WhatsApp send. Hand the reply to commsops for the widget poll;
-        // commsops also flips the session handed_off (agent supremacy) if the bot still held it.
+        // Web-bot thread: NO WhatsApp send may run for this thread — this branch is
+        // SELF-CONTAINED and RETURNS. Hand the reply to commsops for the widget poll
+        // (commsops flips the session handed_off — agent supremacy), record the outbound
+        // row ourselves, and exit. Falling through to the WA send would attempt a
+        // template send to a null number.
         const resp = await callWorker(env.COMMSOPS, env, '/internal/web-reply', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
@@ -710,11 +748,14 @@ Then find the agent-reply send site that `isRelayThread` gates (grep `isRelayThr
         });
         const d = await resp.json().catch(() => ({}));
         if (!resp.ok || d.ok === false) return err(`web_reply_failed:${d.error || resp.status}`, 502);
-        // fall through to the existing cs_wa_messages outbound insert so the transcript records it
+        await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal',
+          body: JSON.stringify({ thread_id: thread.id, direction: 'outbound', kind: 'text', body: text,
+            is_internal: false, sent_by_user_id: userId || null, sent_by_name: agentName || null }) });
+        return ok({ sent: 'web' });
       }
 ```
 
-⚠️ The reply handler's local variable names (`text`, `agentName`) must be read from the actual function — adjust to what is in scope there. Ensure the thread select feeding that handler includes `relay_web, relay_web_session_id` (grep the `select=` list it uses and extend it).
+⚠️ The reply handler's local variable names (`text`, `agentName`, `userId`) must be read from the actual function — adjust to what is in scope there, and mirror the exact outbound-insert column set the WhatsApp branch uses (e.g. `status`, `last_message_at` stamping on the thread). Ensure the thread select feeding that handler includes `relay_web, relay_web_session_id` (grep the `select=` list it uses and extend it).
 
 - [ ] **Step 4: Verify csops tests/existing behaviour** — `cd csops-worker && cp src/index.js /tmp/cs.mjs && node --check /tmp/cs.mjs && rm /tmp/cs.mjs`. Grep proof that no existing branch changed: `git diff` shows only additions + the one `isRelayThread` guard line prepended.
 
@@ -776,13 +817,16 @@ async function persist(env, session, out, stepRows) {
 
 // Forward the turn's lines to the csops thread (fire-and-forget shape but awaited: the
 // inbox transcript IS the transcript). Mirrors wa-webhooks.js's CSOPS binding call.
-async function forwardToCsops(env, session, inboundText, replies, handoff) {
+// ⚠️ identity comes from the POST-turn state, never the stale session row: the thread is
+// created on turn 1 (before collect has run), so if this sent session.context the phone
+// collected THIS turn would never reach the inbox thread — csops PATCHes it in on arrival.
+async function forwardToCsops(env, session, identity, inboundText, replies, handoff) {
   if (!env.CSOPS || !env.CSOPS_WA_FORWARD_TOKEN) return;
   const messages = [];
   if (inboundText) messages.push({ direction: 'inbound', text: inboundText });
   for (const r of replies) messages.push({ direction: 'outbound', text: r.text + (r.buttons ? '\n' + r.buttons.map((b, i) => `${i + 1}. ${b.label}`).join('\n') : '') });
   const init = { method: 'POST', headers: { Authorization: `Bearer ${env.CSOPS_WA_FORWARD_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: session.id, identity: session.context?.identity || {}, messages, handoff: !!handoff }) };
+    body: JSON.stringify({ session_id: session.id, identity: identity || {}, messages, handoff: !!handoff }) };
   await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-web', init)).catch((e) => console.log('web_forward_error', String(e?.message || e)));
 }
 
@@ -817,7 +861,7 @@ async function runTurn(env, session, def, input, inboundText) {
     if (rp.ok && rp.data) out.state.context.profile_id = rp.data.profile_id || rp.data;
   }
   await persist(env, session, out, stepRows);
-  await forwardToCsops(env, session, inboundText, out.replies, handoff);
+  await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, handoff);
   return out;
 }
 
@@ -973,7 +1017,7 @@ if (!/[?&]lotchat=1/.test(location.search) && localStorage.getItem('lot_chat_sta
 else { if (/[?&]lotchat=1/.test(location.search)) try { localStorage.setItem('lot_chat_staff', '1'); } catch {} /* ...render... */ }
 ```
 
-Route: `GET /web/widget.js` returns `new Response(widgetJs(url.searchParams.get('bot'), 'https://commsops.afshaan.workers.dev'), { headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=300' } })` — public block, no auth (it is a script tag).
+Route: `GET /web/widget.js` returns `new Response(widgetJs(url.searchParams.get('bot'), 'https://commsops.afshaan.workers.dev'), { headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=300' } })` — no auth (it is a script tag). ⚠️ **This route MUST go INSIDE Task 6's `/web/` block, ABOVE its closing `return withCors(err('not_found', 404))`** — that catch-all swallows every unrouted `/web/*` path, so a route added after the block is unreachable and the widget 404s.
 
 - [ ] **Step 2: Commit, push, deploy commsops.**
 
@@ -1035,7 +1079,7 @@ GRANT EXECUTE ON FUNCTION comms.bot_stats(uuid, date, date) TO service_role;
 NOTIFY pgrst, 'reload schema';
 ```
 
-⚠️ Before applying, verify the events columns: `SELECT column_name FROM information_schema.columns WHERE table_schema='comms' AND table_name='events' AND column_name IN ('profile_id','name','occurred_at');` — adjust names to what is live (db-schema.md may lag).
+⚠️ Before applying, verify the events columns: `SELECT column_name FROM information_schema.columns WHERE table_schema='comms' AND table_name='events' AND column_name IN ('profile_id','name','occurred_at');` — adjust names to what is live (db-schema.md may lag). ⚠️ The conversion join filters `comms.events` by `profile_id + name + occurred_at`; check an index covers that access path (`\d` the existing events indexes) — `comms.events` is large and the statement timeout is 8s (S293 precedent). If none fits, add `events (profile_id, name, occurred_at)` partial on `name='order_placed'` in this migration, CONCURRENTLY.
 
 - [ ] **Step 2: Worker action** (GET switch, canView): call the RPC via `A.sbComms('/rest/v1/rpc/bot_stats', env, { method: 'POST', body: JSON.stringify({ p_bot_id: id, p_from: from, p_to: to }) })`, return `{ stats: r.data?.[0] }`.
 
@@ -1063,6 +1107,17 @@ git add commsops-worker/migrations apps/relay/src commsops-worker/src/index.js &
 - [ ] **Step 7: Run `/hostile-review`** over the session's diff before wrap (session shipped code + DB DDL — the skill's own trigger condition).
 
 ---
+
+## Hostile review (2026-08-26, pre-execution — 6 defects found in the plan, all fixed in place)
+
+1. **Test/engine contradiction:** the `not_found` test seeded `order_attempts: 4`, making the failure under test the 5th — the cap fires (`ended`), but the test asserted `handoff1`. An executor would have "fixed" the engine to pass the wrong test, deleting the enumeration cap. Test corrected + explicit cap assertion added.
+2. **Lint hole:** an unwired menu button passed `validateBotDef` and produced runtime silence on tap (`walk(null)` emits nothing). Now `button_unwired`, publish-blocking; test added.
+3. **Message-cycle flood:** a lint-clean message cycle emitted 50 replies per turn into the widget and the inbox transcript. `walk` now breaks on revisiting a step within one walk; test added.
+4. **Ambiguous fall-through:** the csops agent-reply web branch relied on a prose comment; left un-returned it would continue into the WhatsApp template send with a null number. Branch is now self-contained and returns.
+5. **Unreachable widget route:** Task 6's `/web/` block ends in a catch-all 404, and Task 8 didn't say the widget route must go inside it, above that line. Now explicit.
+6. **Identity never reached the inbox thread:** `forwardToCsops` read the stale pre-turn session row, and csops only set `customer_phone` at creation (turn 1, before collect) — every web thread would have shown no phone forever. Forward now carries post-turn identity; csops PATCHes it in on first arrival.
+
+Also verified against live code during the review: `handleGet(url, auth, env)` + blanket `relay_view` gate (GET cases carry no per-case check — snippets corrected to house style); csops `ok()` helper exists (`:50`); Shopify GraphQL reads of order `email`/`phone` work on this app (`shopify.js:76` fill-rate comment), with a Task 3 step added to prove it on this query shape and a substrate fallback named. Fresh-eyes re-trace of the riskiest piece (runTurn chained-effects loop): resolves `order_lookup → not_found → handoff` in ≤3 guard iterations by construction.
 
 ## Self-review notes (done at write time)
 
