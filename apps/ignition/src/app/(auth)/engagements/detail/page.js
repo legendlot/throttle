@@ -572,6 +572,57 @@ function CostEdit({ label, value, onChange }) {
   );
 }
 
+// The influencer's tracking link. Shown in FULL and copyable, not as an "open" affordance:
+// the whole point is that someone hands this string to a creator to put in their bio. It is
+// minted automatically when a deal reaches Shipped; the button covers deals that predate that
+// (utm_link is null on all 335 as of 2026-08-26) and any mint that failed at the time.
+function TrackingLinkRow({ e, canEdit, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function mint() {
+    setBusy(true);
+    try {
+      const r = await ignitionopsPost('mintTrackingLink', { engagement_id: e.id }, session);
+      toast(r?.already ? 'This deal already has a link' : 'Tracking link created', 'success');
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(e.utm_link);
+      setCopied(true); setTimeout(() => setCopied(false), 1500);
+    } catch { toast('Could not copy — select the link and copy it manually', 'error'); }
+  }
+
+  if (!e.utm_link) {
+    return (
+      <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center' }}>
+        <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tracking link</span>
+        {canEdit ? (
+          <button onClick={mint} disabled={busy} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>
+            {busy ? 'Creating…' : 'Create tracking link'}
+          </button>
+        ) : <span style={{ color: 'var(--text-3)', fontSize: 13 }}>—</span>}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'baseline' }}>
+      <span style={{ width: 130, flexShrink: 0, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tracking link</span>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <a href={e.utm_link} target="_blank" rel="noreferrer"
+          style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-all' }}>{e.utm_link}</a>
+        <button onClick={copy} style={{ background: 'transparent', border: 'none', padding: 0, color: copied ? '#4ade80' : 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, textDecoration: 'underline', cursor: 'pointer' }}>
+          {copied ? 'copied' : 'copy'}
+        </button>
+      </span>
+    </div>
+  );
+}
+
 // Post-live card — the actual posting date is editable so already-live deals whose
 // post_date was never captured can be back-dated; getMonthlyTargets attributes a
 // video's views to its post_date month, so setting it makes those views count
@@ -619,7 +670,7 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
         <KV label="Actual post" value={e.post_date || '—'} />
       )}
       <KV label="Video link" value={e.video_link ? <a href={e.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{e.video_link.slice(0, 40)}…</a> : '—'} />
-      <KV label="UTM link" value={e.utm_link ? <a href={e.utm_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>open</a> : '—'} />
+      <TrackingLinkRow e={e} canEdit={canEdit} session={session} onSaved={onSaved} />
       {editing && (
         <>
           <div style={{ fontSize: 10, color: 'var(--text-3)', margin: '8px 0 2px', lineHeight: 1.4 }}>

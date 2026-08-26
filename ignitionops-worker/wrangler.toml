@@ -14,6 +14,14 @@ CSOPS_URL = "https://csops.afshaan.workers.dev"
 binding = "CSOPS"
 service = "csops"
 
+# Service binding to commsops — the campaign-link seam (POST /internal/campaign-link,
+# S313). Same reason as CSOPS above: a public workers.dev fetch between two workers on
+# the same zone is blocked by Cloudflare error 1042 (surfaces as a 404). Auth still
+# travels on the request (COMMSOPS_LINK_TOKEN) — the binding is transport, not trust.
+[[services]]
+binding = "COMMSOPS"
+service = "commsops"
+
 # Cron triggers (handler branches on event.cron — each tick is its own subrequest budget):
 #   20 2 * * *  (07:50 IST daily) — UGC Meta ad-metrics pull (Batch C2, S177). Per-ad-id
 #               only (scoped to meta_ad_id on UGC deals), never an account sweep (that's Odo).

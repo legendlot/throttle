@@ -1779,7 +1779,21 @@ async function advanceStage(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
 
   await writeHistory(env, body.engagement_id, 'advance_stage', from, body.to_stage, body.note || null, auth.userId);
-  return ok({ stage: body.to_stage, allowed_next: allowedTransitions(body.to_stage) });
+
+  // Reann's "mandatory tracking link at Shipped" (B-theme ①). Auto-mint on arrival at shipped,
+  // and ONLY if the deal has none — mintTrackingLinkFor is idempotent on utm_link.
+  // ⚠️ Deliberately non-fatal: the goods have shipped either way, and failing the stage move
+  // because a link service was briefly unreachable would leave the pipeline lying about where
+  // the deal is. A miss is recoverable — the deal page has an explicit mint button.
+  let tracking_link = null;
+  if (body.to_stage === 'shipped') {
+    try {
+      const lr = await mintTrackingLinkFor(env, body.engagement_id, {});
+      if (lr.ok) tracking_link = lr.data.url;
+      else console.error('[advanceStage] tracking link mint failed', body.engagement_id, lr.error);
+    } catch (e) { console.error('[advanceStage] tracking link mint threw', String(e?.message || e)); }
+  }
+  return ok({ stage: body.to_stage, allowed_next: allowedTransitions(body.to_stage), tracking_link });
 }
 
 async function closeEngagement(body, auth, env) {
@@ -2161,7 +2175,10 @@ async function getProductCogs(url, auth, env) {
 async function refreshProductPrices(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!shopifyConfigured(env)) return err('shopify_not_configured', 503);
-  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ sku price product{ title } } } pageInfo{ hasNextPage } } }`;
+  // `handle` (S313) is the storefront path segment — it is what lets a tracking link point at
+  // the product page instead of the site root. Minted links never expire and the mint seam
+  // cannot repoint them, so the target has to be right at mint time.
+  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ sku price product{ title handle } } } pageInfo{ hasNextPage } } }`;
   const seen = []; let cursor = null;
   for (let p = 0; p < 8; p++) {
     const r = await shopifyGraphql(env, query, { cursor });
@@ -2171,7 +2188,7 @@ async function refreshProductPrices(body, auth, env) {
       const n = e.node; cursor = e.cursor;
       const sku = (n.sku || '').trim();
       if (!sku) continue;
-      seen.push({ sku, title: n.product?.title || null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
+      seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
     }
     if (!conn?.pageInfo?.hasNextPage) break;
   }
@@ -2212,6 +2229,132 @@ async function getProductPrice(url, auth, env) {
     }
   }
   return ok({ price: null });
+}
+
+// ── Influencer tracking links (B3 UTM auto-gen + the S312 campaign-link seam) ─────────────────
+//
+// One campaign link per deal, minted through commsops `POST /internal/campaign-link`. The UTM
+// shape is fixed by the Ignition↔Relay design doc (2026-08-17 §B3) and is what makes per-deal
+// GA4 attribution possible at all:
+//   utm_source   = influencer_code   → WHO promoted it
+//   utm_medium   = 'influencer'      → a fixed namespace, so Odo can filter all influencer
+//                                      traffic in one predicate rather than enumerating people
+//   utm_campaign = engagement_no     → WHICH DEAL, so two deals with one creator stay separable
+//
+// ⚠️ MINT ONLY, and never silently re-mint. A campaign link never expires, the seam cannot
+// repoint one, and the influencer may already have posted it — so an existing utm_link is
+// returned as-is unless the caller explicitly forces a new slug. (`utm_link` is overwritable
+// by a human, never auto-overwritten — design doc §B3.)
+const LOT_STORE_URL = 'https://legendoftoys.com';
+
+// Slug must satisfy commsops' SLUG_RE: ^[a-z0-9][a-z0-9-]{1,30}$ — lower-case, no dots or
+// underscores, because a slug has to survive being read off printed artwork and typed by hand.
+function trackingSlug(influencerCode, engagementNo) {
+  const seq = String(engagementNo || '').replace(/[^0-9]/g, '').slice(-5) || '00000';
+  const who = String(influencerCode || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (who ? `${who}-${seq}` : `ign-${seq}`).slice(0, 31);
+}
+
+// Target resolution, best-known-first. A homepage link still attributes correctly but converts
+// worse, so prefer the product page whenever the handle cache has one.
+async function resolveLinkTarget(env, engagementId, explicit) {
+  if (explicit && /^https?:\/\//i.test(explicit)) return String(explicit);
+  const pr = await sb(
+    `/rest/v1/engagement_products?engagement_id=eq.${engagementId}&select=product_ref,sort_order&order=sort_order.asc&limit=1`,
+    env,
+  ).catch(() => ({ data: [] }));
+  const code = pr.data?.[0]?.product_ref;
+  if (!code) return LOT_STORE_URL;
+  // product_master.sku can be stale vs the live Shopify sku (the HP crest case), so try the
+  // channel aliases too — same fallback the price lookup uses.
+  const pm = await sb(
+    `/rest/v1/product_master?product_code=eq.${encodeURIComponent(code)}&select=sku&limit=1`, env,
+    { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
+  ).catch(() => ({ data: [] }));
+  const aliases = await sb(
+    `/rest/v1/sku_map?product_code=eq.${encodeURIComponent(code)}&select=channel_sku&limit=20`, env,
+    { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
+  ).catch(() => ({ data: [] }));
+  const skus = [...new Set([pm.data?.[0]?.sku, ...(aliases.data || []).map(a => a.channel_sku)]
+    .map(s => (s || '').trim()).filter(Boolean))];
+  if (!skus.length) return LOT_STORE_URL;
+  const inList = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+  const pp = await sb(
+    `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=handle&limit=1`, env,
+  ).catch(() => ({ data: [] }));
+  const handle = pp.data?.[0]?.handle;
+  return handle ? `${LOT_STORE_URL}/products/${handle}` : LOT_STORE_URL;
+}
+
+async function mintTrackingLink(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const r = await mintTrackingLinkFor(env, body.engagement_id, {
+    target: body.target_url, force: body.force === true,
+  });
+  if (!r.ok) return err(r.error, r.status || 400);
+  return ok(r.data);
+}
+
+// Shared by the explicit action and the auto-mint on Shipped. Returns a plain result rather
+// than a Response so the stage handler can ignore a failure without failing the stage move.
+async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
+  if (!env.COMMSOPS || !env.COMMSOPS_LINK_TOKEN) return { ok: false, error: 'link_seam_not_configured', status: 503 };
+  const er = await sb(
+    `/rest/v1/engagements?id=eq.${engagementId}&select=engagement_no,utm_link,utm_source,utm_medium,utm_campaign,influencer_id&limit=1`,
+    env,
+  );
+  const eng = er.ok ? er.data?.[0] : null;
+  if (!eng) return { ok: false, error: 'not_found', status: 404 };
+  // Already has one — hand it back untouched. Re-minting would strand a link the influencer
+  // may already have posted, and the click history with it.
+  if (eng.utm_link && !force) {
+    return { ok: true, data: { url: eng.utm_link, already: true,
+      utm: { utm_source: eng.utm_source, utm_medium: eng.utm_medium, utm_campaign: eng.utm_campaign } } };
+  }
+
+  const ir = eng.influencer_id
+    ? await sb(`/rest/v1/influencers?id=eq.${eng.influencer_id}&select=influencer_code&limit=1`, env)
+    : { data: [] };
+  const code = ir.data?.[0]?.influencer_code || null;
+  const utm = {
+    utm_source: (code || 'ignition').toLowerCase(),
+    utm_medium: 'influencer',
+    utm_campaign: String(eng.engagement_no || '').toLowerCase(),
+  };
+  const targetUrl = await resolveLinkTarget(env, engagementId, target);
+  let slug = trackingSlug(code, eng.engagement_no);
+
+  const call = (s) => env.COMMSOPS.fetch(new Request('https://commsops/internal/campaign-link', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.COMMSOPS_LINK_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug: s, target_url: targetUrl, title: `Ignition ${eng.engagement_no}`, utm }),
+  })).then(async (res) => ({ status: res.status, body: await res.json().catch(() => ({})) }));
+
+  let res = await call(slug);
+  // 409 = the slug is taken. The seam deliberately does NOT auto-reuse: adopting a stranger's
+  // link would point this influencer's traffic at another campaign AND credit their clicks to
+  // it. Only adopt when it is provably OUR link — same target — which is the retry-after-
+  // timeout case. Otherwise suffix and try once more rather than fail the deal.
+  if (res.status === 409) {
+    const existing = res.body?.existing;
+    if (existing && existing.target_url === targetUrl) {
+      res = { status: 200, body: { ok: true, data: { link: existing, url: res.body.url } } };
+    } else {
+      slug = `${slug}-${Math.random().toString(36).slice(2, 5)}`.slice(0, 31);
+      res = await call(slug);
+    }
+  }
+  if (res.status !== 200 || !res.body?.data?.url) {
+    return { ok: false, error: `link_mint_failed: ${res.body?.error || res.status}`, status: 502 };
+  }
+
+  const url = res.body.data.url;
+  await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ utm_link: url, ...utm, updated_at: nowIso() }),
+  });
+  return { ok: true, data: { url, slug, target_url: targetUrl, utm, already: false } };
 }
 
 async function getCouponsForEngagement(url, auth, env) {
@@ -3044,6 +3187,7 @@ const POST_ACTIONS = {
   retireCoupon,
   syncCouponRedemptions,
   refreshProductPrices,
+  mintTrackingLink,
   markGiftedNoPost,
   openPitstopTicket,
   createCampaign,
