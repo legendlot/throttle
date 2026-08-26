@@ -82,7 +82,13 @@ async function runTurn(env, session, def, input, inboundText) {
     if (rp.ok && rp.data) out.state.context.profile_id = rp.data;   // RPC returns the uuid scalar
   }
   await persist(env, session, out, stepRows);
-  await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, handoff);
+  // Forward only once a HUMAN has said something (or a handoff fires). The open turn used to
+  // forward too, which meant an unauthenticated POST /web/session minted a Pitstop inbox
+  // thread by itself — an inbox-spam vector, and 2 of the 5 S312 smoke sessions were exactly
+  // that noise (open-only "Web visitor" threads with no customer line). The constant greeting
+  // is all the transcript loses; per-IP limiting on /web/* stays a WAF-config residual.
+  if (inboundText || handoff)
+    await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, handoff);
   return out;
 }
 
