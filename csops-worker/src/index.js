@@ -3002,10 +3002,28 @@ async function escalateTicket(body, auth, env) {
 // move while a request is pending — see the migration for why this is an annotation rather
 // than a new `stage`.
 //
-// ⚠️ closeTicket() is deliberately UNCHANGED and still works for admins. This is an extra
-// route for people who cannot close, not a gate bolted in front of the existing one: a
-// terminal-stage close by someone with cs_ticket_manage is a normal, sanctioned action and
-// making everyone queue behind an admin would be a worse system than the one being fixed.
+// ⚠️ closeTicket() is deliberately UNCHANGED. This is an extra route for people who cannot
+// close, not a gate bolted in front of the existing one: a terminal-stage close by someone
+// with cs_ticket_manage is a normal, sanctioned action and making everyone queue behind an
+// admin would be a worse system than the one being fixed.
+//
+// ⚠️ CORRECTION to my own earlier wording here ("still works for admins" — half-true, and
+// the half that is false is the interesting one). Confirmed 2026-08-26 by the Pitstop lane:
+// closeTicket's MID-FLIGHT branch — the one gated on cs_ticket_admin + a reason, written
+// precisely for closing a ticket that is NOT terminal — 422s for every stage it exists to
+// serve, because it ends by delegating to advanceStage and `closed` is reachable only from
+// the single preceding stage. Its terminalReady branch works by coincidence. It has ZERO
+// callers today, so nothing is failing; the risk is that `closeTicket` is the obvious name
+// to reach for when someone wires a close button. Logged [pitstop] [bug]; fix shape is
+// approveTicketClosure below — write the four fields directly.
+//
+// ⚠️ And it is wrong in the OPPOSITE direction too, which the bug entry does not cover:
+// `terminalReady` omits `inspected`, but for a disposition with no branch stages
+// (query/no_action/pending/awaiting_info) `inspected` IS the stage preceding `closed`, so
+// advanceStage would permit it. That case needlessly demands admin + a reason for a
+// transition that is already legal. Whoever fixes this must reconcile terminalReady with
+// allowedTransitions — the two lists disagree about `inspected` — not just swap the close
+// mechanism.
 async function requestTicketClosure(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { ticket_id, reason, note } = body || {};
