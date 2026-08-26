@@ -8298,9 +8298,15 @@ async function bridgeReturnConnect(body, env) {
 }
 
 // ── Canned responses (S162) — agent-managed quick replies for the composer ───
-async function getCannedResponses(_params, auth, env) {
+async function getCannedResponses(params, auth, env) {
   const g = require('cs_ticket_view', auth); if (g) return g;
-  const r = await sb(`/rest/v1/cs_canned_responses?is_active=eq.true&select=*&order=sort_order.asc,title.asc`, env);
+  // `all=1` includes archived rows — the Setup screen needs them to un-archive, while the
+  // composer must keep seeing only live ones. Same shape as getTags. Deleting is soft
+  // (is_active=false), so without this an archived response is unreachable forever.
+  const all = params?.get?.('all') === '1';
+  const r = await sb(
+    `/rest/v1/cs_canned_responses?${all ? '' : 'is_active=eq.true&'}select=*&order=sort_order.asc,title.asc`,
+    env);
   if (!r.ok) return err('failed to load canned responses', 500);
   return ok(r.data || []);
 }

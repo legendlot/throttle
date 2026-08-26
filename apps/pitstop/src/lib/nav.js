@@ -24,6 +24,7 @@ export const NAV_SETUP = [
   { id: 'telephony',   label: 'Telephony',     route: '/admin/telephony',    icon: 'phone', requires: 'cs_ticket_admin' },
   { id: 'wa',          label: 'WA Templates',  route: '/admin/wa-templates', icon: 'msg',   requires: 'cs_ticket_admin' },
   { id: 'tags',        label: 'Tags',          route: '/admin/tags',         icon: 'list',  requires: 'cs_ticket_admin' },
+  { id: 'canned',      label: 'Canned Responses', route: '/admin/canned',  icon: 'msg',   requires: 'cs_ticket_manage' },
 ];
 
 export const NAV_MANUAL = { id: 'manual', label: 'System Manual', route: '/manual', icon: 'book' };
@@ -52,6 +53,7 @@ const CRUMBS = {
   '/admin/telephony':     { crumb: 'Setup · Admin',    title: 'Telephony' },
   '/admin/wa-templates':  { crumb: 'Setup · Admin',    title: 'WhatsApp Templates' },
   '/admin/tags':          { crumb: 'Setup · Admin',    title: 'Tags' },
+  '/admin/canned':        { crumb: 'Setup · Admin',    title: 'Canned Responses' },
   '/manual':              { crumb: 'Help',             title: 'System Manual' },
 };
 
