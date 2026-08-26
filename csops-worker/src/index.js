@@ -6256,7 +6256,51 @@ async function handleRelayWaWebhook(request, env) {
 // TEST MODE). Window is checked from the local authoritative customer_window_until
 // (Relay writes it on every inbound). We insert the outbound row ourselves (there is
 // no Chatwoot mirror-back on this transport).
+// Agent reply on a WEB-BOT thread (S312). SELF-CONTAINED AND RETURNS — it must never fall
+// into the WhatsApp send below (that would attempt a template send to a null number). No
+// 24h window either: the widget has no such rule. commsops flips the session handed_off
+// on the first agent word (agent supremacy) and queues the text for the widget's poll.
+async function sendWebReplyViaRelay(thread, text, auth, env) {
+  let resp, data;
+  try {
+    resp = await callWorker(env.COMMSOPS, env, '/internal/web-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        session_id: thread.relay_web_session_id, text: String(text),
+        agent_name: auth.fullName || auth.name || auth.email || 'LOT Support',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) { return err(`Web reply failed: ${e.message}`, 502); }
+  if (!resp.ok || data?.ok === false)
+    return err(`Web reply failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status || 502);
+
+  const now = new Date().toISOString();
+  const senderName = auth.fullName || auth.name || auth.email || null;
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, direction: 'outbound', kind: 'text', body: String(text),
+      status: 'sent', is_internal: false,
+      sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
+    }),
+  }).catch((e) => console.error('[relay-web] outbound insert failed', e?.message));
+
+  return ok({ message: { direction: 'outbound', body: String(text), status: 'sent' }, via: 'relay_web' });
+}
+
 async function sendWaReplyViaRelay(thread, text, auth, env) {
+  if (thread.relay_web) return sendWebReplyViaRelay(thread, text, auth, env);
   const until = thread.customer_window_until ? new Date(thread.customer_window_until).getTime() : 0;
   if (!(until > Date.now()))
     return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
