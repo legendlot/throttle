@@ -15,6 +15,18 @@
   <div class="a-row"><div class="a-key">Version</div><div class="a-val"><p>A frozen copy of the steps. An enrolment stays on the version it started on, so editing a journey never rewrites the path someone is already walking.</p></div></div>
 </div>
 
+<h2 class="sec">Saving: what gets checked</h2>
+<p>Relay checks the whole graph every time you save, and it refuses to save a journey that could not run. This is deliberate: a journey that saves with a hole in it can be switched on later by someone who did not build it, and the hole only shows up as customers silently not receiving messages. The checks you are most likely to meet:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Send step with nothing to send</div><div class="a-val"><p>Every send step needs <em>either</em> a saved template <em>or</em> message text typed on the step itself. With neither, the step has no message and every send from it would fail. Shown as <code>send_no_template_or_body</code> against the step name.</p></div></div>
+  <div class="a-row"><div class="a-key">A branch that goes nowhere</div><div class="a-val"><p>Every outcome on a step has to point at another step. A condition needs both its yes and no branches wired, and a reply-button step needs each button wired.</p></div></div>
+  <div class="a-row"><div class="a-key">Template not active</div><div class="a-val"><p>A send step pointing at a draft or archived template will not save. Get the template approved and active first.</p></div></div>
+  <div class="a-row"><div class="a-key">A wait you cannot read</div><div class="a-val"><p>Wait durations are read as plain text, so <code>3 days</code> works and a typo like <code>3 dayz</code> is refused rather than quietly treated as zero.</p></div></div>
+</div>
+<p>Failures appear above the canvas as <strong>Validation errors</strong>, naming the step so you can go straight to it. Fix the step and save again.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Free-text steps are allowed and are not a mistake. A step with typed message text and no template is exactly how the reply parts of the COD confirmation flow work. The check is only that a step has one of the two, never that it must use a template.</p></div>
+
 <h2 class="sec">Trigger filters</h2>
 <p>A filter narrows the trigger to certain property values, with <code>=</code> or <code>&ne;</code>. The <code>&ne;</code> option exists for a reason worth understanding: excluding a category by saying &ldquo;equals everything else&rdquo; silently drops every event where the property is missing altogether, and on some events that is a large share. If you mean &ldquo;not this one&rdquo;, say <code>&ne;</code>.</p>
 
