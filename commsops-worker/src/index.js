@@ -2534,6 +2534,60 @@ export default {
       return r.ok ? ok(r) : err(r.error, 400);
     }
 
+    // ── Internal campaign-link mint (S312) — the service seam Ignition needs to give each
+    //    influencer deal its own tracking link. `createCampaignLink` already did exactly the
+    //    right thing (chosen slug, never expires, target editable, 302s with UTM appended,
+    //    counts clicks); it was simply unreachable by a worker, because its only caller is the
+    //    `createLink` ACTION, which sits behind the user JWT + canBuild. This is that same
+    //    function on a service token.
+    //
+    //    ⚠️ MINT ONLY, and that boundary is the point. `updateCampaignLink` stays JWT-only
+    //    forever: repointing a campaign link changes where ALREADY-PRINTED artwork sends
+    //    customers, and every target change is audited to comms.link_changes against a named
+    //    person. A service token has no person behind it, so it must not be able to do that.
+    //
+    //    ⚠️ Fails CLOSED when link_base_url is unset. That column is the link feature's off
+    //    switch; minting against it would hand Ignition a slug it would store on the deal and
+    //    print for the influencer, for a link that resolves nowhere. That is the S273
+    //    `target_base` shape exactly — a dead link whose mint, storage and display all report
+    //    success — and it is worth a 503 the caller can see instead.
+    if (url.pathname === '/internal/campaign-link' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
+      // A SECOND accepted token rather than a rotation — same reasoning as ODOOPS_INGEST_TOKEN
+      // on /ingest. INGEST_TOKEN is held by callers we cannot enumerate, so rotating it to admit
+      // ignitionops would risk silently breaking event ingestion fleet-wide. Setting
+      // IGNITIONOPS_INGEST_TOKEN later scopes Ignition to this route without a code change.
+      if (!tok || !((env.INGEST_TOKEN && tok === env.INGEST_TOKEN)
+                 || (env.IGNITIONOPS_INGEST_TOKEN && tok === env.IGNITIONOPS_INGEST_TOKEN)))
+        return err('unauthorised', 401);
+      const b = await request.json().catch(() => ({}));
+      const base = await LINKS.getLinkBaseUrl(env);
+      if (!base) return err('link_host_unconfigured', 503);
+      const r = await LINKS.createCampaignLink(env, {
+        slug: b.slug, target: b.target_url, title: b.title || null, utm: b.utm || null,
+        userId: null,                       // no person behind a service call — never invent one
+      });
+      if (r.ok) return ok({ link: r.link, url: `${base}/r/${r.link.code}` });
+      // ⚠️ A taken slug returns the EXISTING row but is still a 409 — it deliberately does NOT
+      // auto-reuse. A retry after a timeout must be able to recognise its own link and carry on,
+      // but silently handing back a link somebody else minted would point the influencer's
+      // traffic at another campaign's target AND credit their clicks to it. The caller compares
+      // `existing.target_url` with what it asked for; only it knows whether they are the same deal.
+      if (r.error === 'slug_taken') {
+        const code = LINKS.normalizeSlug(b.slug);
+        const cur = await A.sbComms(
+          `/rest/v1/links?code=eq.${encodeURIComponent(code || '')}` +
+          `&select=code,kind,target_url,title,utm,active,created_at&limit=1`, env
+        ).catch(() => ({ ok: false }));
+        const row = (cur.ok && cur.data?.[0]) || null;
+        // Read directly, not via resolveLink: that returns null for a RETIRED link, which would
+        // report a slug that is genuinely occupied as free and send the caller into a retry loop.
+        return err('slug_taken', 409, { existing: row, url: row ? `${base}/r/${row.code}` : null });
+      }
+      return err(r.error, 400);
+    }
+
     // Internal one-off: seed the last_order_at backfill (winback prerequisite). Token-gated
     // (INGEST_TOKEN), public so it's triggerable without a Google-login JWT — mirrors
     // /internal/wa-templates. Only seeds the queue; the pull runs in the queue consumer.
