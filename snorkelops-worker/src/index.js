@@ -2541,7 +2541,13 @@ export default {
             // never retroactively reinterpret a request that has already been decided.
             const st = await query('payment_settings', '?id=eq.1&limit=1&select=approval_threshold_inr');
             const threshold = Number(st.ok && st.data[0]?.approval_threshold_inr) || 100000;
-            const needsApproval = type === 'payment' && amount >= threshold;
+            // ⚠️ The threshold is `approval_threshold_inr` — an INR figure. Comparing a foreign
+            // amount against it silently under-reads: USD 2,000 (~Rs1.7L) would score 2000 < 100000
+            // and auto-approve. There is no FX rate in this schema for arbitrary currencies and
+            // inventing one would be worse, so a NON-INR request ALWAYS goes for approval.
+            // Do not "optimise" this into a conversion without a real rate source.
+            const isInr = (d.currency || 'INR').toUpperCase() === 'INR';
+            const needsApproval = type === 'payment' && (!isInr || amount >= threshold);
 
             const request_no = await nextSeq4('pay_request', 'PAY-');
             const now = new Date().toISOString();
@@ -2668,12 +2674,13 @@ export default {
             if (!r.ok) return err('Mark paid failed: ' + JSON.stringify(r.data));
             const moved = Array.isArray(r.data) ? r.data : [];
             // Keep the PO-side mirror truthful so procurement's own screens agree.
-            for (const row of moved) {
-              if (row.linked_po_number) {
-                await update('purchase_orders', {
-                  payment_status: 'paid', paid_by: postRole, paid_at: now, updated_at: now,
-                }, `po_number=eq.${encodeURIComponent(row.linked_po_number)}`);
-              }
+            // ONE batched write — never a loop of awaits per row (CORE.md global invariant).
+            const poNumbers = [...new Set(moved.map(x => x.linked_po_number).filter(Boolean))];
+            if (poNumbers.length) {
+              const inList = poNumbers.map(n => `"${String(n).replace(/"/g, '""')}"`).join(',');
+              await update('purchase_orders', {
+                payment_status: 'paid', paid_by: postRole, paid_at: now, updated_at: now,
+              }, `po_number=in.(${encodeURIComponent(inList)})`);
             }
             await notify(moved.map(row => ({
               user_id: row.requested_by_user_id, request_id: row.id, kind: 'paid',

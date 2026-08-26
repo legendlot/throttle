@@ -58,7 +58,12 @@ export default function NewPaymentRequestPage() {
 
   const threshold = Number(boot?.settings?.approval_threshold_inr) || 100000;
   const amt = Number(f.amount_to_pay || 0);
-  const willNeedApproval = f.request_type === 'payment' && amt >= threshold && f.currency === 'INR';
+  // The threshold is an INR figure. A foreign amount cannot be compared against it without an FX
+  // rate, so a non-INR request always goes for approval — and the form must SAY so. The first
+  // version hid the banner for non-INR, which was exactly backwards: it made the silent
+  // auto-approval look deliberate.
+  const isInr = f.currency === 'INR';
+  const willNeedApproval = f.request_type === 'payment' && (!isInr || amt >= threshold);
 
   const balance = useMemo(() => {
     const total = Number(f.invoice_total || 0), pay = Number(f.amount_to_pay || 0);
@@ -247,8 +252,11 @@ export default function NewPaymentRequestPage() {
           {willNeedApproval && (
             <div style={{ ...row, padding: '10px 12px', borderRadius: 8,
                           background: 'var(--accent-soft)', border: '1px solid var(--accent-bd)', fontSize: 13 }}>
-              This is at or above the ₹{threshold.toLocaleString('en-IN')} approval threshold, so it goes
-              for approval before Finance sees it.
+              {isInr
+                ? <>This is at or above the ₹{threshold.toLocaleString('en-IN')} approval threshold, so it
+                   goes for approval before Finance sees it.</>
+                : <>Payments in {f.currency} always go for approval — the ₹{threshold.toLocaleString('en-IN')}
+                   threshold is a rupee figure and cannot be applied to another currency.</>}
             </div>
           )}
 

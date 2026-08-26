@@ -2,8 +2,8 @@
   "title": "Snorkel",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to procurement at Legend of Toys: requests, purchase orders, vendors, payments, sales orders and the asset register.",
-  "version": "1.4.2",
-  "date": "2026-08-17",
+  "version": "1.5.0",
+  "date": "2026-08-26",
   "app_url": "snorkel.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -211,12 +211,70 @@
     },
     {
       "part": "Payments",
-      "subtitle": "Getting approved purchase orders paid.",
+      "subtitle": "Asking Finance to pay someone, approving it, and paying it.",
       "chapters": [
         {
+          "id": "pay-new",
+          "title": "Raising a Payment Request",
+          "route": "/payments/new",
+          "file": "pay-request-new.html",
+          "roles": [
+            "req",
+            "proc",
+            "fin",
+            "appr",
+            "adm"
+          ]
+        },
+        {
+          "id": "pay-approvals",
+          "title": "Approvals",
+          "route": "/payments/approvals",
+          "file": "pay-approvals.html",
+          "roles": [
+            "appr",
+            "adm"
+          ]
+        },
+        {
+          "id": "pay-finance",
+          "title": "Finance Queue",
+          "route": "/payments/finance",
+          "file": "pay-finance.html",
+          "roles": [
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "pay-payees",
+          "title": "Payees",
+          "route": "/payments/payees",
+          "file": "pay-payees.html",
+          "roles": [
+            "req",
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "pay-notifications",
+          "title": "Notifications",
+          "route": "/payments/notifications",
+          "file": "pay-notifications.html",
+          "roles": [
+            "req",
+            "proc",
+            "fin",
+            "appr",
+            "adm"
+          ]
+        },
+        {
           "id": "payments",
-          "title": "Payment Queue",
-          "route": "/payments",
+          "title": "PO Payment Queue (superseded)",
+          "route": "/payments/po-queue",
           "file": "pay-queue.html",
           "roles": [
             "fin",

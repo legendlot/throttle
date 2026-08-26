@@ -2,8 +2,8 @@
 "title":"Snorkel",
 "title_accent":"Operations Manual",
 "subtitle":"The self-serve guide to procurement at Legend of Toys: requests, purchase orders, vendors, payments, sales orders and the asset register.",
-"version":"1.4.2",
-"date":"2026-08-17",
+"version":"1.5.0",
+"date":"2026-08-26",
 "app_url":"snorkel.legendoftoys.com",
 "owner":"Legend of Toys",
 "pdf":"/manual/Snorkel-Operations-Manual.pdf",
@@ -215,18 +215,76 @@
 },
 {
 "part":"Payments",
-"subtitle":"Getting approved purchase orders paid.",
+"subtitle":"Asking Finance to pay someone, approving it, and paying it.",
 "chapters":[
 {
+"id":"pay-new",
+"title":"Raising a Payment Request",
+"route":"/payments/new",
+"roles":[
+"req",
+"proc",
+"fin",
+"appr",
+"adm"
+],
+"html":"<p class=\"lead\">Raising a payment request is how you ask Finance to pay someone. It replaces posting\nin the <strong>#payments</strong> Slack channel &mdash; and unlike a chat message, you can see what\nhappened to it afterwards without asking anyone.</p>\n\n<div class=\"glance\">\n  <div><strong>What it&rsquo;s for</strong><span>Asking Finance to pay a vendor, influencer, ad platform, landlord or anyone else.</span></div>\n  <div><strong>Read or act?</strong><span>Act: raise the request.</span></div>\n  <div><strong>Who</strong><span>Everyone at LOT.</span></div>\n  <div><strong>Works on a phone</strong><span>Yes &mdash; including photographing the invoice.</span></div>\n</div>\n\n<h3>Filling it in</h3>\n<ol class=\"steps\">\n  <li><strong>Payee</strong> &mdash; search for who is being paid. Vendors are already here.\n      If they are missing, tap <strong>+ New</strong> and add them once; nobody has to paste\n      bank details into a chat again. Use the name on the invoice, not the person you deal with.</li>\n  <li><strong>Category</strong> &mdash; what kind of spend it is. Some categories need a PO\n      (see below).</li>\n  <li><strong>What is this for</strong> &mdash; one line, in plain words. &ldquo;Acrylic sheets for\n      Shadow tooling&rdquo;, not &ldquo;payment&rdquo;.</li>\n  <li><strong>Invoice</strong> &mdash; tap <strong>Take photo</strong> to shoot it there and then,\n      or <strong>Upload file</strong> for a PDF or something in your gallery. Attach as many as you\n      need.</li>\n  <li><strong>Amounts</strong> &mdash; the invoice total, then what to pay <em>now</em>. If you pay\n      less than the total, the rest is shown as the balance left on that invoice, and a later\n      request against the same invoice number will say what has already been asked for.</li>\n  <li><strong>Needed by</strong> &mdash; a real date. This is what Finance sorts the queue by.</li>\n</ol>\n\n<div class=\"callout\">\n  <strong>Some categories need a PO.</strong> Material, Packaging, Outsourcing and Equipment all\n  require a purchase order number, because the PO is what makes the spend traceable. If you do not\n  have one, raise it under <strong>Procurement &rarr; Purchase Orders</strong> or ask the procurement\n  team, then come back. The form will tell you this rather than just refusing.\n</div>\n\n<h3>What happens next</h3>\n<p>Requests at or above the approval threshold go to an approver first. Below it, they go straight\nto Finance. Payments in a currency other than rupees always go for approval, because the threshold\nis a rupee figure and cannot be applied to another currency.</p>\n<p>You can follow it under <strong>My Requests</strong>, and you will be told when it is approved,\nrejected or paid &mdash; a rejection always carries the reason, and a payment carries the UTR.</p>\n\n<div class=\"callout\">\n  <strong>Raised something by mistake?</strong> Open it from My Requests and cancel it. Anything not\n  yet paid can be cancelled by whoever raised it.\n</div>\n"
+},
+{
+"id":"pay-approvals",
+"title":"Approvals",
+"route":"/payments/approvals",
+"roles":[
+"appr",
+"adm"
+],
+"html":"<p class=\"lead\">Approvals is where payment requests at or above the threshold wait for a decision.\nNothing below the threshold appears here &mdash; those go straight to Finance.</p>\n\n<div class=\"glance\">\n  <div><strong>What it&rsquo;s for</strong><span>Approving or rejecting larger payments.</span></div>\n  <div><strong>Read or act?</strong><span>Act: approve or reject.</span></div>\n  <div><strong>Who</strong><span>Named approvers only.</span></div>\n</div>\n\n<h3>Working the queue</h3>\n<p>Each row shows the payee, the amount, what it is for, who raised it, when it is needed, and the\nPO if the category requires one. Tick several and approve them together, or open one to see the\ninvoice before deciding.</p>\n\n<div class=\"callout\">\n  <strong>A rejection needs a reason, and the reason is the message.</strong> Whoever raised the\n  request sees exactly what you write, so say what would make it approvable. &ldquo;Rejected&rdquo;\n  on its own sends them back to chat to ask why, which is the thing this system exists to stop.\n</div>\n\n<div class=\"callout\">\n  <strong>Approving is not paying.</strong> An approved request moves to the Finance queue; the money\n  does not leave until Finance marks it paid and records the UTR.\n</div>\n"
+},
+{
+"id":"pay-finance",
+"title":"Finance Queue",
+"route":"/payments/finance",
+"roles":[
+"fin",
+"adm"
+],
+"html":"<p class=\"lead\">The Finance Queue is the worklist for actually paying. Everything approved and unpaid\nis here, most urgent first, with the payee&rsquo;s bank details on the card so you do not have to go\nlooking for them.</p>\n\n<div class=\"glance\">\n  <div><strong>What it&rsquo;s for</strong><span>Making the payments and recording them.</span></div>\n  <div><strong>Read or act?</strong><span>Act: mark paid, record the UTR.</span></div>\n  <div><strong>Who</strong><span>Finance.</span></div>\n  <div><strong>Order</strong><span>Urgent first, then by needed-by date.</span></div>\n</div>\n\n<h3>Each card carries</h3>\n<ul>\n  <li>The amount, what it is for, and who asked.</li>\n  <li>The <strong>bank account</strong> &mdash; account number, IFSC, bank and UPI where held, each\n      with a copy button.</li>\n  <li>The invoice, openable in one tap.</li>\n  <li>Whether it was approved by someone, or fell below the threshold.</li>\n</ul>\n\n<h3>Paying</h3>\n<ol class=\"steps\">\n  <li>Make the payment in your bank.</li>\n  <li>Put the UTR or reference in the box on the card.</li>\n  <li>Tap <strong>Mark paid</strong>.</li>\n</ol>\n<p>The person who raised it is told immediately, with the UTR. That is what stops the\n&ldquo;is it done?&rdquo; messages.</p>\n\n<div class=\"callout\">\n  <strong>No bank account on file?</strong> The card says so instead of letting you pay blind. Add\n  the account under <strong>Payees</strong> &mdash; once &mdash; rather than chasing it in chat.\n  Bank details are visible to Finance only.\n</div>\n"
+},
+{
+"id":"pay-payees",
+"title":"Payees",
+"route":"/payments/payees",
+"roles":[
+"req",
+"proc",
+"fin",
+"adm"
+],
+"html":"<p class=\"lead\">Payees are everyone LOT pays: vendors, influencers, ad platforms, landlords, event\norganisers, professional services. It is deliberately wider than the vendor list.</p>\n\n<div class=\"glance\">\n  <div><strong>What it&rsquo;s for</strong><span>One record per person or company we pay.</span></div>\n  <div><strong>Read or act?</strong><span>Both: look up, and add new ones.</span></div>\n  <div><strong>Who</strong><span>Anyone can add a payee; only Finance can read bank details back.</span></div>\n</div>\n\n<div class=\"callout\">\n  <strong>Vendors arrive here on their own.</strong> Every procurement vendor is already a payee, and\n  a new or renamed vendor updates automatically. You never need to add a vendor here by hand.\n</div>\n\n<div class=\"callout\">\n  <strong>Everyone else has to be added once.</strong> Influencers, ad platforms, utilities and event\n  organisers have no vendor record, so the first time you pay one, add them from the request form\n  with <strong>+ New</strong>. After that they are in the list for everybody.\n</div>\n\n<h3>Bank details</h3>\n<p>You can enter an account when you add a payee &mdash; you usually have it in front of you. You\ncannot read one back unless you are Finance; everyone else sees only the last four digits. That is\ndeliberate: it means bank details stop travelling through chat without putting them on general view.</p>\n"
+},
+{
+"id":"pay-notifications",
+"title":"Notifications",
+"route":"/payments/notifications",
+"roles":[
+"req",
+"proc",
+"fin",
+"appr",
+"adm"
+],
+"html":"<p class=\"lead\">Notifications tell you when something involving you has moved, so you do not have to\ngo and check.</p>\n\n<div class=\"glance\">\n  <div><strong>What it&rsquo;s for</strong><span>Knowing what happened without asking.</span></div>\n  <div><strong>Read or act?</strong><span>Read; tap through to the request.</span></div>\n  <div><strong>Who</strong><span>Everyone.</span></div>\n</div>\n\n<h3>What you will be told</h3>\n<ul>\n  <li><strong>If you raised it</strong> &mdash; when it is approved, rejected (with the reason) or\n      paid (with the UTR).</li>\n  <li><strong>If you approve</strong> &mdash; when something needs your approval.</li>\n  <li><strong>If you are Finance</strong> &mdash; when something is ready to pay.</li>\n</ul>\n<p>Unread items are marked with a dot. Tapping one opens the request and marks it read.</p>\n"
+},
+{
 "id":"payments",
-"title":"Payment Queue",
-"route":"/payments",
+"title":"PO Payment Queue (superseded)",
+"route":"/payments/po-queue",
 "roles":[
 "fin",
 "proc",
 "adm"
 ],
-"html":"<p class=\"lead\">The Payment Queue is the finance worklist: every approved purchase order, grouped by how far along its payment is. From here you decide who pays a PO and record when it is done. It is the last step in the buying chain.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Getting approved POs paid.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Act: route and mark paid.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role fin\">Finance</span> <span class=\"role proc\">Procurement</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tabs</div><div class=\"g-val\">To Route, Requested, Paid, All.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading the queue</h2>\n<p>Tabs split the approved POs by payment state, each with a count:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Tab</th><th>What it holds</th></tr></thead>\n  <tbody>\n    <tr><td><strong>To Route</strong></td><td>Approved POs whose payment has not been requested from anyone yet.</td></tr>\n    <tr><td><strong>Requested</strong></td><td>Payment has been routed (to Finance or the requester) and is awaiting the money.</td></tr>\n    <tr><td><strong>Paid</strong></td><td>Done, showing who marked it paid and when.</td></tr>\n    <tr><td><strong>All</strong></td><td>Everything together.</td></tr>\n  </tbody>\n</table>\n<p>Each row shows the PO, vendor, value, when it was approved, and the payment state. Click the PO number to open the full PO.</p>\n\n<h2 class=\"sec\">Working a payment</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">On a To-Route PO, choose who pays:</span> <strong>&rarr; Finance</strong> (the finance team pays) or <strong>&rarr; Requester</strong> (the person who asked pays and claims it back). The PO moves to Requested.</li>\n  <li><span class=\"s-title\">When the money has gone out, click Mark Paid.</span> The PO moves to Paid and is stamped with your name and the date.</li>\n</ol>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; The same buttons live on the PO too</div>\n  <p>You can route and mark-paid from a PO&rsquo;s own detail screen as well; this queue just gathers them all in one place so finance can work down the list. Only POs that have been fully <strong>Approved</strong> appear here, never drafts or accepted-but-not-approved ones.</p>\n</div>\n"
+"html":"<p class=\"lead\">The PO Payment Queue covers purchase orders that were already routed for payment the old way. It is <strong>superseded by Payment Requests</strong> &mdash; raise new payments there, and use the Finance Queue to pay them. This page is kept only for POs already in flight.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Getting approved POs paid.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Act: route and mark paid.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role fin\">Finance</span> <span class=\"role proc\">Procurement</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tabs</div><div class=\"g-val\">To Route, Requested, Paid, All.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading the queue</h2>\n<p>Tabs split the approved POs by payment state, each with a count:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Tab</th><th>What it holds</th></tr></thead>\n  <tbody>\n    <tr><td><strong>To Route</strong></td><td>Approved POs whose payment has not been requested from anyone yet.</td></tr>\n    <tr><td><strong>Requested</strong></td><td>Payment has been routed (to Finance or the requester) and is awaiting the money.</td></tr>\n    <tr><td><strong>Paid</strong></td><td>Done, showing who marked it paid and when.</td></tr>\n    <tr><td><strong>All</strong></td><td>Everything together.</td></tr>\n  </tbody>\n</table>\n<p>Each row shows the PO, vendor, value, when it was approved, and the payment state. Click the PO number to open the full PO.</p>\n\n<h2 class=\"sec\">Working a payment</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">On a To-Route PO, choose who pays:</span> <strong>&rarr; Finance</strong> (the finance team pays) or <strong>&rarr; Requester</strong> (the person who asked pays and claims it back). The PO moves to Requested.</li>\n  <li><span class=\"s-title\">When the money has gone out, click Mark Paid.</span> The PO moves to Paid and is stamped with your name and the date.</li>\n</ol>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; The same buttons live on the PO too</div>\n  <p>You can route and mark-paid from a PO&rsquo;s own detail screen as well; this queue just gathers them all in one place so finance can work down the list. Only POs that have been fully <strong>Approved</strong> appear here, never drafts or accepted-but-not-approved ones.</p>\n</div>\n"
 }
 ]
 },
