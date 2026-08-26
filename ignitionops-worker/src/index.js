@@ -2473,11 +2473,14 @@ function composeDealBrief(eng, products, coupons) {
   if (code) {
     lines.push(`Your discount code for your audience: ${code.code}`, '');
   }
+  // The checklist only asks for things this deal actually has. Telling a creator to "put the
+  // tracking link in your caption" on a deal with no link is an instruction they cannot follow,
+  // and it is the kind of detail that makes a brief look automated.
+  lines.push('A few things to include:');
+  if (code) lines.push('· mention the discount code out loud, not only on screen');
+  lines.push('· show the car actually moving for 15–20 seconds');
+  if (eng.utm_link) lines.push('· put the tracking link in your caption or bio');
   lines.push(
-    'A few things to include:',
-    '· mention the discount code out loud, not only on screen',
-    '· show the car actually moving for 15–20 seconds',
-    '· put the tracking link in your caption or bio',
     '',
     'Anything unclear, just reply to this email.',
     '',
