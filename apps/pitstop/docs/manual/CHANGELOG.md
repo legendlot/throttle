@@ -3,6 +3,32 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.8.0] - 2026-08-26
+### Added
+- The Inbox: new "If a whole channel goes quiet" section for the channel-health banner.
+  Explains what the red banner means, why it cannot be dismissed (it clears itself when
+  replies resume), and what to do first. Names the August 2026 Instagram outage as the
+  case it exists for, and the reason it is easy to miss: automatic messages kept flowing
+  the whole time, so the channel looked healthy from outside while agent replies failed.
+  States honestly that it is checked four times a day, so it confirms a problem rather
+  than being the first warning.
+- The Inbox: message-length callout. Instagram and Messenger stop at 2,000 characters,
+  WhatsApp at 4,096; a counter appears as you approach and Send greys out past the limit.
+  Notes that before this existed the send just failed silently, which is what agents were
+  hitting when a long reply had to be retried.
+- The Inbox: inbound email attachments are kept for six months and then removed, after
+  which the chip says so. Every original stays on the email in Gmail.
+
+## [1.7.0] - 2026-08-24
+> Reconstructed 2026-08-26 (S314) from commit `302cd965`: `manual.json` was bumped to 1.7.0
+> but no entry was written here, so the file skipped from 1.6.0 to 1.8.0. Contents below are
+> taken from that commit's own description, not re-derived from the chapters.
+### Added
+- Calls: softphone chapter (`work-calls`).
+- Reports: Resolution metric-change warning and the Agents tab (`analyze-reports`), including
+  the corrected export callout.
+- Telephony: setup button (`admin-telephony`).
+
 ## [1.6.0] - 2026-08-21
 ### Added
 - The Inbox: new "Alerts: badge, chime and desktop notifications" section. What

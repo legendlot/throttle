@@ -27,6 +27,15 @@
 <p>Replying to a customer claims the chat for you, and also assigns the linked ticket (if there is one) to you, so whoever answers owns the case.</p>
 <p>To move several chats at once, tick the checkbox on each row (or the <strong>Select</strong> box at the top of the list to take them all), then pick a person from the <strong>Assign to&hellip;</strong> dropdown and press Apply. You can claim them for yourself, hand them to another agent (leads and admins), or release them back to the pool, all in one go.</p>
 
+<h2 class="sec">If a whole channel goes quiet</h2>
+<p>A red banner can appear across the top of the Inbox saying, for example, <em>&ldquo;Instagram: nobody is replying&rdquo;</em>, with the number of customer messages that arrived in the last 24 hours and how long it has been flagged. It means Pitstop checked and found that customers are writing in on that channel while no agent reply has gone out at all.</p>
+<p>This is worth reading carefully, because it catches a problem you cannot see from your own screen. In August 2026 Instagram replies failed for three days and it only came to light when someone mentioned it in Slack. Automatic messages kept going out the whole time, so from the outside the channel looked busy and healthy; it was only the agents&rsquo; own replies that were being refused. This banner watches for exactly that.</p>
+<div class="callout info">
+  <div class="c-title">&#9432; What to do, and why you cannot dismiss it</div>
+  <p>There is no close button, on purpose: it clears by itself once replies start going out again, so it cannot be waved away and forgotten while customers are still waiting. If you see it, first try sending one reply on that channel. If your reply fails, report it straight away and say which channel; if your reply works, the banner will disappear on its own within a few minutes.</p>
+  <p>It is checked four times a day rather than continuously, so a channel that has just broken may take a few hours to be flagged. Treat the banner as confirmation, never as your only warning.</p>
+</div>
+
 <h2 class="sec">Alerts: badge, chime and desktop notifications</h2>
 <p>Three things tell you a new customer message has arrived, and they are deliberately different so that at least one reaches you wherever you are.</p>
 <ul class="steps">
@@ -54,10 +63,16 @@
 <h2 class="sec">Replying</h2>
 <p>Every channel is two-way: type in the composer and send. The toolbar has an <strong>emoji</strong> picker, <strong>canned responses</strong> (or type <span class="kbd">/</span> in the box to search them), and, on Instagram and Messenger, a <strong>paperclip</strong> to attach an image or PDF. WhatsApp replies are text only for now. Switch to <strong>Private note</strong> to record an internal handover note (amber, never sent to the customer); notes support <strong>bold</strong> and <em>italic</em>. When you are finished, <strong>Done</strong> closes the chat; it <strong>reopens</strong> by itself if the customer writes again.</p>
 <p>On an <strong>email</strong> conversation the composer adds the header fields you expect: <strong>To</strong> (pre-filled with the customer, editable) and a <strong>Subject</strong> (pre-filled from the thread, editable), plus a <strong>+ Cc / Bcc</strong> link that opens those two fields when you need to copy a colleague or vendor. Put more than one address in any field separated by commas. The reply sends from the care mailbox and stays on the same email thread.</p>
+<p>Files a customer emails you appear as chips under their message; click one to open it. A chip that will not open always explains itself when you hover: it may be too large, or beyond the ten-file limit, or simply not fetched yet. <strong>Attachments are kept in Pitstop for six months and then removed</strong>, after which the chip reads &ldquo;Kept for 6 months, then removed&rdquo;. Nothing is actually lost when that happens: every original is still on the email itself in Gmail, which is where to look for anything older.</p>
 
 <div class="callout info">
   <div class="c-title">&#9432; WhatsApp: reply inside the 24-hour window</div>
   <p>You can now reply to WhatsApp chats right here. The customer&rsquo;s messages are pulled in live, so you see both sides of the conversation, not just ours, and the full chat history scrolls back, not only the most recent messages. Free-text replies work while the 24-hour window is open (the header shows whether it is). Once that window closes the composer is disabled until the customer writes again; pre-approved templates to reopen a closed chat are coming next. Attachments on WhatsApp are not supported yet.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">Message length: Instagram and Messenger stop at 2,000 characters</div>
+  <p>Instagram and Messenger refuse anything longer than 2,000 characters, and WhatsApp stops at 4,096. As you approach the limit a counter appears under the composer, in amber; go past it and the counter turns red and <strong>Send</strong> greys out until you shorten the message or split it in two. Private notes have no limit, because they never leave Pitstop. Before this counter existed the send simply failed with no explanation, so if you remember retrying a long reply several times, that is what was happening.</p>
 </div>
 
 <div class="callout warn">
