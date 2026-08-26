@@ -22,15 +22,46 @@ function bytesToB64(bytes) {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
+// Constant-time string compare. `===` on a signature short-circuits at the first differing
+// byte, so its timing leaks a prefix-match length and a signature can in principle be built
+// one byte at a time. Length is compared first and NOT constant-time, which is fine here:
+// the expected value is always a 44-char base64 SHA-256, so its length is public anyway.
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// svix's own tolerance is 5 minutes either side. Without it, `svix-timestamp` is fed into the
+// signed payload but never checked against the clock, so ANY captured request stays replayable
+// forever — the signature over it never stops being valid. Future skew is allowed too because
+// a sender's clock can run ahead.
+const SVIX_TOLERANCE_S = 5 * 60;
+
 async function verifySvix(secret, headers, rawBody) {
   const id = headers.get('svix-id'); const ts = headers.get('svix-timestamp'); const sig = headers.get('svix-signature');
   if (!id || !ts || !sig) return false;
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return false;
+  const skew = Date.now() / 1000 - tsNum;
+  if (Math.abs(skew) > SVIX_TOLERANCE_S) {
+    // Logged, never silent. This is the ONE way the tolerance could cost us real data: it
+    // assumes svix re-signs each retry with a fresh timestamp (its own libraries default to
+    // exactly this 5-minute window, so it must). If that assumption is ever wrong, a retry
+    // would 401 and we would quietly stop recording delivery/bounce status — so make it
+    // visible instead. A burst of these means widen the tolerance, not "webhooks are broken".
+    console.log('svix_stale_timestamp', JSON.stringify({ id, skew_s: Math.round(skew), tolerance_s: SVIX_TOLERANCE_S }));
+    return false;
+  }
   const signed = `${id}.${ts}.${rawBody}`;
   const keyBytes = b64ToBytes(secret.replace(/^whsec_/, ''));
   const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signed));
   const expected = bytesToB64(new Uint8Array(mac));
-  return sig.split(' ').some((p) => p.split(',')[1] === expected);
+  // `.some()` still short-circuits across the LIST of signatures, which is intentional and
+  // harmless — that only reveals how many signatures were supplied, not their content.
+  return sig.split(' ').some((p) => timingSafeEqual(p.split(',')[1], expected));
 }
 
 // POST /webhooks/resend — normalize status → update messages + emit engagement event (+ suppress on bounce/complaint)
@@ -357,4 +388,8 @@ async function handleTrustsignalRcs(env, body) {
   }
 }
 
-module.exports = { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs };
+// verifySvix + timingSafeEqual are exported for tests only — they are not part of the route
+// surface. Replay tolerance and constant-time comparison are exactly the properties that
+// cannot be checked from the outside, so they get direct coverage.
+module.exports = { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs,
+                   verifySvix, timingSafeEqual, SVIX_TOLERANCE_S };

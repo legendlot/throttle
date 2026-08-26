@@ -16,7 +16,10 @@ const { compile } = require('../src/journeys.js');
     w: { type: 'wait', duration: '1 hours', outcomes: { next: 'c' } },
     c: { type: 'condition', check: { kind: 'event_since_enrol', event: 'x' },
          outcomes: { if_true: 's', if_false: 'e' } },
-    s: { type: 'send', channel: 'email', outcomes: { next: 'e' } },
+    // `text` present because a send step must resolve to something sendable — see the
+    // send_no_template_or_body cases at the bottom of this file. This fixture is about the
+    // outcomes GRAPH shape, so the cheapest valid send body keeps it on that subject.
+    s: { type: 'send', channel: 'email', text: 'hi', outcomes: { next: 'e' } },
     e: { type: 'exit', outcome: 'completed' } } };
   assert.deepEqual((await compile({}, fresh)).errors, []);
 
@@ -162,7 +165,7 @@ const { compile } = require('../src/journeys.js');
   // interactive send — valid (buttons + within + all handles wired)
   {
     const def = { entry: 's', steps: {
-      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours',
+      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours', text: 'q',
            buttons: [{ id: 'pay', label: 'Pay' }, { id: 'cancel', label: 'Cancel' }],
            outcomes: { pay: 'ex', cancel: 'ex', no_reply: 'ex' } },
       ex: { type: 'exit', outcome: 'completed' } } };
@@ -174,7 +177,7 @@ const { compile } = require('../src/journeys.js');
   // rather than falling through to no_reply (which would tag a No-Response we never earned).
   {
     const def = { entry: 's', steps: {
-      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours',
+      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours', text: 'q',
            buttons: [{ id: 'pay', label: 'Pay' }],
            outcomes: { pay: 'ex', no_reply: 'ex', send_failed: 'ex' } },
       ex: { type: 'exit', outcome: 'completed' } } };
@@ -214,6 +217,47 @@ const { compile } = require('../src/journeys.js');
     assert.ok(r.ok, 'valid wait duration should compile: ' + JSON.stringify(r.errors));
   }
   console.log('compile H14 wait-duration-validation ok');
+
+  // S315 — a send step must resolve to SOMETHING sendable. Before this guard, a send node
+  // with neither `templateId` nor `text`/`body` compiled CLEAN (the template-status check
+  // filters on `s.templateId`, so a null one is skipped) and then failed every send at
+  // runtime with `template_not_found`, because journey-workflow only attaches an inline
+  // template when `text || body` is present. `Review Request`.send1 is exactly that shape.
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('send_no_template_or_body:s'), JSON.stringify(r.errors));
+  }
+  // whitespace-only body is not a body
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', text: '   ', outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('send_no_template_or_body:s'), JSON.stringify(r.errors));
+  }
+  // ⚠️ The inline-body shape MUST still pass — C2P's 16 free-text session replies are
+  // template-less by design (16 send nodes on a live journey, measured 2026-08-26).
+  // Tightening this guard to "templateId required" would break the whole COD→prepaid flow.
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', text: 'Thanks — your order is confirmed.',
+           outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.ok, 'inline-body send must compile: ' + JSON.stringify(r.errors));
+  }
+  // `body` is accepted as well as `text` (journey-workflow reads `s.text || s.body`)
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', body: 'hello', outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.ok, 'inline `body` send must compile: ' + JSON.stringify(r.errors));
+  }
+  console.log('compile S315 send-must-be-sendable ok');
 
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

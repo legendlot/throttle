@@ -52,6 +52,18 @@ async function compile(env, definition, journey) {
       // every outcome handle the kind declares must route somewhere (no dangling branch)
       for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`action_handle_missing:${id}:${h}`);
     }
+    // A send step must resolve to SOMETHING sendable. Two legitimate shapes: a stored
+    // `templateId`, or an inline body (`text`/`body`) that journey-workflow turns into an
+    // ad-hoc template — the latter is how C2P's 8 free-text session replies work, so this
+    // must NOT be tightened to "templateId required". With NEITHER, the step passes compile
+    // today (the template check below filters on `s.templateId`, so a null one is simply
+    // skipped) and then fails EVERY send at runtime with `template_not_found`, because
+    // journey-workflow only attaches an inline template when `text || body` is present.
+    // A silent pass at activation followed by live per-send failures is a worse shape than
+    // a compile error — this turns it back into one. `Review Request`'s `send1` is exactly
+    // this: templateId null, no text, no body, and it would have activated cleanly.
+    if (s.type === 'send' && !s.templateId
+        && !String(s.text || s.body || '').trim()) errors.push(`send_no_template_or_body:${id}`);
     if (s.type === 'send' && s.interactive) {
       const btns = Array.isArray(s.buttons) ? s.buttons.filter((b) => b && b.id) : [];
       if (!btns.length) errors.push(`interactive_send_no_buttons:${id}`);

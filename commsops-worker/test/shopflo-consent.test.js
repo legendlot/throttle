@@ -68,6 +68,11 @@ const orig = A.sbComms;
       if (path.includes('resolve_identity')) return { ok: true, data: 'P1' };
       if (path.startsWith('/rest/v1/events')) return { ok: true, data: [] }; // deduped: ignore-duplicates -> []
       if (path.startsWith('/rest/v1/consent')) {
+        // ⚠️ Count the WRITE only. applyOptOut also GETs /rest/v1/consent first (the
+        // _latestConsentRaw guard added 2026-07-22) and a GET has no body, so parsing
+        // unconditionally threw `"undefined" is not valid JSON` — that drift, not a
+        // behaviour change, is why this assertion was failing.
+        if (!opts.body) return { ok: true, data: [] };
         consentAttempts++;
         assert.equal(JSON.parse(opts.body).state, 'opted_out');
         return { ok: true, data: [{}] };

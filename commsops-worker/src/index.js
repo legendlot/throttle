@@ -3096,8 +3096,17 @@ export default {
       for (const msg of batch.messages) {
         const b = msg.body || {};
         try {
-          await A.sbComms('/rest/v1/queue_failures', env, { method: 'POST',
+          // ⚠️ sbComms RESOLVES on a non-2xx (it returns {ok:false}), it does not throw — so
+          // without this check a failed insert skips the catch entirely and the alert below
+          // still says "Recorded in comms.queue_failures for review" while the row does not
+          // exist and the ack destroys the only copy. Same failure-reads-as-success class as
+          // the S309 sweep list. When the durable write fails, the alert carries the payload
+          // itself so a human still has it; the ack stays, because a DLQ message that loops
+          // forever is worse than one recorded only in Slack.
+          const rec = await A.sbComms('/rest/v1/queue_failures', env, { method: 'POST',
             body: JSON.stringify({ kind: b.kind || 'campaign', body: b, error: 'max_retries_exhausted' }) });
+          const recorded = !!rec?.ok;
+          if (!recorded) console.log('dlq_write_failed', JSON.stringify({ kind: b.kind || 'campaign', status: rec?.status || null }));
           // A dead build chunk or fan-out page STALLS its campaign visibly (roster §9.15). This
           // closes the hole the 15 Aug send fell into: the chain died and the campaign read
           // `sending` for 41 minutes with no signal anywhere. Conditional inside stallCampaign on
@@ -3110,7 +3119,11 @@ export default {
               + `a ${b.kind === 'build_roster' ? 'roster-build chunk' : 'fan-out chain'} died after all retries. `
               + `Press "Resume" on it to continue; nothing further sends until then.`;
           }
-          await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\nRecorded in comms.queue_failures for review.${stalledNote}`);
+          await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\n`
+            + (recorded
+                ? 'Recorded in comms.queue_failures for review.'
+                : `⚠️ COULD NOT record it in comms.queue_failures — this alert is the ONLY copy. Payload:\n\`\`\`${JSON.stringify(b).slice(0, 1500)}\`\`\``)
+            + stalledNote);
         } catch (e) { console.log('dlq_write_error', e?.message || String(e)); }
         msg.ack();   // DLQ is terminal — always ack so it can't loop
       }

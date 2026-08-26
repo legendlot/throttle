@@ -66,8 +66,11 @@ function stubFetch(handler) {
       profile_id: 'p1', channel: 'whatsapp', state: 'opted_out',
       source: 'whatsapp_inbound_keyword', evidence: { keyword: 'STOP' },
     });
-    const consent = calls.find((c) => c.url.includes('/rest/v1/consent'));
-    const event = calls.find((c) => c.url.includes('/rest/v1/events'));
+    // ⚠️ Must match the POST specifically. `applyOptOut` also does a GET on /rest/v1/consent
+    // first (the _latestConsentRaw guard added 2026-07-22), and a GET carries no body — so a
+    // bare url match finds the READ and its null body. That drift is why this file was failing.
+    const consent = calls.find((c) => c.url.includes('/rest/v1/consent') && c.method === 'POST');
+    const event = calls.find((c) => c.url.includes('/rest/v1/events') && c.method === 'POST');
     assert.ok(consent, 'must POST a consent row');
     assert.equal(consent.body.purpose, 'marketing');
     assert.equal(consent.body.state, 'opted_out');
@@ -88,7 +91,7 @@ function stubFetch(handler) {
     const calls = stubFetch();
     await applyOptOut(ENV, { profile_id: 'p1', channel: 'email', state: 'opted_out',
       source: 'unsubscribe_link', unsubscribe_token: 'tok-1' });
-    const consent = calls.find((c) => c.url.includes('/rest/v1/consent'));
+    const consent = calls.find((c) => c.url.includes('/rest/v1/consent') && c.method === 'POST');
     assert.equal(consent.body.unsubscribe_token, 'tok-1', 'token must survive — unsubscribeUrl keys off it');
   });
 
