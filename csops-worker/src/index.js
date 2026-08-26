@@ -23,6 +23,7 @@ import { exotelConfigured, makeExotelClient } from './telephony/exotel-client.js
 import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
+import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -750,6 +751,19 @@ export default {
     // The window is 30 min against a 2-min tick: the overlap is free (the upsert is
     // idempotent on (provider, provider_call_sid)) and it means one failed tick
     // self-heals on the next rather than leaving a permanent hole.
+    // Instagram token refresh (S311). An IGAA token caps at 60 days and nothing renewed
+    // it — Instagram replies were dead 20–24 Aug 2026 and surfaced only as a Slack
+    // message. refreshIgToken() is safe to call every tick: its own decision function
+    // gates on the expiry window (14 days out) AND a 6h floor between attempts, so the
+    // */2 cron does not become 720 Meta calls a day. Gated to `mins % 10` as well, purely
+    // to keep the tick cheap. Inert when the row is missing.
+    if (mins % 10 === 0) {
+      ctx.waitUntil(refreshIgToken(env, sb).then(
+        r => { if (!r?.skipped) console.log('[meta-token] ig refresh', JSON.stringify(r)); },
+        e => console.error('[meta-token] ig refresh error', e),
+      ));
+    }
+
     if (exotelConfigured(env)) {
       const pipe = callPipeline(env);
       ctx.waitUntil(reconcileExotelCalls(env, pipe).then(
@@ -6251,8 +6265,14 @@ async function signInboundWaMedia(messages, env) {
 const META_GRAPH = 'https://graph.facebook.com/v21.0';
 // Token per channel: Instagram (IG-login path) uses its own user token; FB
 // Messenger uses the Page token. IG falls back to the page token if linked.
-function metaToken(channel, env) {
-  return channel === 'instagram' ? (env.META_IG_TOKEN || env.META_PAGE_TOKEN) : env.META_PAGE_TOKEN;
+// ⚠️ ASYNC as of S311. The Instagram token now lives in store.cs_meta_token_config so a
+// cron can REFRESH it — an IGAA token caps at 60 days, nothing renewed it, and it died
+// once already (Instagram down 20–24 Aug 2026). `igAccessToken` reads the stored token
+// and falls back to the secret, so this keeps working if the row is empty or the DB
+// blips. Messenger is unaffected: META_PAGE_TOKEN is a different credential that does
+// not expire this way.
+async function metaToken(channel, env) {
+  return channel === 'instagram' ? await igAccessToken(env, sb) : env.META_PAGE_TOKEN;
 }
 
 // Instagram-Login (IGAA) tokens only work against graph.instagram.com; Messenger
@@ -6364,7 +6384,7 @@ async function metaFindOrCreateThread(channel, extUserId, accountId, env) {
 
 // Best-effort IG-username / FB-name lookup for a scoped sender id (needs a token).
 async function resolveMetaHandle(extUserId, channel, env) {
-  const token = metaToken(channel, env);
+  const token = await metaToken(channel, env);
   if (!token) return null;
   try {
     const r = await fetch(`${metaGraphBase(channel)}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${token}`);
@@ -6547,7 +6567,7 @@ async function diagIgRecipient(body, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
-  const token = metaToken(thread.channel, env);
+  const token = await metaToken(thread.channel, env);
   if (!token) return err('Meta send not configured (no token for this channel)', 503);
   const base = metaGraphBase(thread.channel);
 
@@ -6584,7 +6604,7 @@ async function sendMetaMessage(body, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
-  const token = metaToken(thread.channel, env);
+  const token = await metaToken(thread.channel, env);
   if (!token) return err('Meta send not configured (no token for this channel)', 503);
 
   const withinWindow = thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now();
@@ -6948,7 +6968,7 @@ async function sendMetaAttachment(body, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
-  const token = metaToken(thread.channel, env);
+  const token = await metaToken(thread.channel, env);
   if (!token) return err('Meta send not configured (no token for this channel)', 503);
 
   // 1. Upload to the public bucket (service_role, bypasses RLS).
