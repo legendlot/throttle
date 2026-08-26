@@ -427,6 +427,39 @@ export default function InboxPage() {
     } catch { /* tiles are best-effort */ }
   }, [session]);
 
+  // Export what is ON SCREEN (Pruthvi, 2026-08-18 — "respecting the filters and date range
+  // applied"). `threads` is already the filtered, sorted, paged list, so exporting it is
+  // exactly what the operator is looking at — no second query that could disagree with it.
+  //
+  // ⚠️ Phone numbers are masked, same as the Queue export and the Queue list. A CSV leaves
+  // the building; an inbox row does not.
+  //
+  // ⚠️ It exports the LOADED window, not the whole filter. "Load more" widens it. Said on
+  // the button so nobody reconciles a 60-row file against a 400-thread filter.
+  function exportChatsCsv() {
+    const mask = (v) => { const t = String(v || ''); return !t ? '' : (t.length < 4 ? t : t.slice(0, -3) + '***'); };
+    const rows = [
+      ['channel', 'customer', 'handle', 'phone', 'state', 'priority', 'assigned_agent',
+       'created_at', 'last_message_at', 'last_inbound_at', 'closed_at', 'closed_reason'],
+      ...threads.map(t => [
+        t.channel || '', t.customer_handle || '', t.customer_handle || '', mask(t.customer_phone),
+        t.thread_state || '', t.priority || '', t.assigned_agent_name || '',
+        t.created_at || '', t.last_message_at || '', t.last_inbound_at || '',
+        t.closed_at || '', t.closed_reason || '',
+      ]),
+    ];
+    const csv = rows.map(r => r.map(v => {
+      const x = String(v == null ? '' : v);
+      return /[,"\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pitstop-chats-${channel || 'all'}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
   // Counts for the agent currently filtered to, shown beside the filter. The channel
   // segment counts stay whole-channel on purpose (see getAgentInboxCounts) — this is an
   // extra read, not a redefinition of those.
@@ -1217,6 +1250,7 @@ export default function InboxPage() {
         allTags={allTags} agents={agents}
         filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
         filtersDirty={filtersDirty} clearFilters={clearFilters} miniSelect={miniSelect}
+        onExportCsv={exportChatsCsv} exportCount={threads.length}
         canManage={canManage} canReassign={canReassign}
         selectMode={selectMode}
         onToggleSelect={() => { if (selectMode) exitSelectMode(); else setSelectMode(true); }}
@@ -2336,7 +2370,7 @@ function InboxCommandBar(props) {
     sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
     agentFilter, setAgentFilter, allTags, agents, agentCounts,
     wabaFilter, setWabaFilter, waNumbers,
-    filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect,
+    filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect, onExportCsv, exportCount,
     canManage, canReassign, selectMode, onToggleSelect, onCompose,
     listCollapsed, toggleListCollapse,
   } = props;
@@ -2593,6 +2627,15 @@ function InboxCommandBar(props) {
                 style={{ ...btnGhost, width: '100%', justifyContent: 'center', padding: '6px 0', fontSize: 11.5,
                   opacity: filtersDirty ? 1 : 0.45, cursor: filtersDirty ? 'pointer' : 'default' }}>
                 Clear filters
+              </button>
+              {/* Export lives in the popover, not the 40px bar — the bar already sheds
+                  controls when it runs out of room. It exports the LOADED rows, which is
+                  what the label says so nobody reconciles the file against a wider filter. */}
+              <button onClick={onExportCsv} disabled={!exportCount}
+                title="Download the conversations currently loaded, with the filters you have applied"
+                style={{ ...btnGhost, width: '100%', justifyContent: 'center', padding: '6px 0', fontSize: 11.5,
+                  opacity: exportCount ? 1 : 0.45, cursor: exportCount ? 'pointer' : 'default' }}>
+                Export {exportCount || 0} loaded to CSV
               </button>
             </div>
           </Popover>
