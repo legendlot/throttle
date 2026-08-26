@@ -9,23 +9,32 @@
 const TRIGGER_ID = '__trigger';
 const LEGACY_HANDLES = ['next', 'if_true', 'if_false'];
 
-// outcome handles each step type declares (spec §3 palette; wait_response added J1)
+// outcome handles each step type declares (spec §3 palette; wait_response added J1;
+// message/collect/handoff/end are BOT-mode steps — S312, same handle discipline)
 const HANDLES = {
   send: ['next'], wait: ['next'], condition: ['if_true', 'if_false'], exit: [],
   wait_response: ['responded', 'timeout'],
+  message: ['next'], collect: ['next'], handoff: [], end: [],
 };
 
 // J3: an `action` node's handles are DYNAMIC by kind. Mirrors the worker's
-// journey-graph.handlesFor so canvas lint + edge validation match the engine.
+// journey-graph.handlesFor (and bot-engine.validateBotDef for bot kinds) so canvas
+// lint + edge validation match the engine.
 function handlesFor(cfg) {
   if (!cfg) return [];
   if (cfg.type === 'send' && cfg.interactive) {
     const ids = Array.isArray(cfg.buttons) ? cfg.buttons.map((b) => b && b.id).filter(Boolean) : [];
     return [...ids, 'no_reply'];
   }
+  // Bot-mode menu (S312): one handle per button + fallback (2 misses -> fallback path).
+  if (cfg.type === 'menu') {
+    const ids = Array.isArray(cfg.buttons) ? cfg.buttons.map((b) => b && b.id).filter(Boolean) : [];
+    return [...ids, 'fallback'];
+  }
   if (cfg.type === 'action') {
     if (cfg.kind === 'payment_link') return ['next', 'failed'];
     if (cfg.kind === 'order_modify') return ['done', 'not_done'];
+    if (cfg.kind === 'order_status') return ['found', 'not_found'];   // bot mode (S312)
     return ['next'];
   }
   return HANDLES[cfg.type] || [];
@@ -112,11 +121,17 @@ function toDefinition(nodes, edges) {
 
 // Cheap client-side lint (spec §3 canvas UX) — compile() on the worker stays the
 // authority; this catches the obvious while the author drags things around.
-function localLint(nodes, edges) {
+// mode 'bot' (S312): the terminal requirement is a handoff/end node, not an exit,
+// and the entry anchor reads as "chat start" — same TRIGGER_ID mechanism.
+function localLint(nodes, edges, mode = 'journey') {
   const out = [];
-  if (!edges.some((e) => e.source === TRIGGER_ID)) out.push('trigger is not connected to an entry step');
+  if (!edges.some((e) => e.source === TRIGGER_ID))
+    out.push(mode === 'bot' ? 'chat start is not connected to a first step' : 'trigger is not connected to an entry step');
   const stepNodes = nodes.filter((n) => n.id !== TRIGGER_ID);
-  if (!stepNodes.some((n) => n.data?.config?.type === 'exit')) out.push('no exit node — every journey needs at least one');
+  if (mode === 'bot') {
+    if (!stepNodes.some((n) => ['handoff', 'end'].includes(n.data?.config?.type)))
+      out.push('no way out — every bot needs a Hand to agent or End chat node');
+  } else if (!stepNodes.some((n) => n.data?.config?.type === 'exit')) out.push('no exit node — every journey needs at least one');
   for (const n of stepNodes) {
     const declared = handlesFor(n.data?.config);
     for (const h of declared)

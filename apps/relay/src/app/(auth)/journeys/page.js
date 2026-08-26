@@ -15,6 +15,7 @@ import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
+import BotBuilder from '@/components/bot-builder/BotBuilder.js';
 
 // React Flow touches window — client-only.
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -84,6 +85,24 @@ function emptyJourney() {
 // gate (S242). Adding a trigger key now breaks journeyTrigger.test.js until it is
 // round-tripped, which is the point — the previous guard was a comment, and it did not hold.
 
+// Journey (default) | Bot segmented toggle (S312, Afshaan's call) — one builder surface,
+// two palettes. Persisted in the URL (?mode=bot) so refresh keeps the mode.
+function ModeToggle({ mode, onSwitch }) {
+  const seg = (m, label) => (
+    <button type="button" className="btn" onClick={() => onSwitch(m)}
+      style={{ fontWeight: mode === m ? 700 : 400,
+        background: mode === m ? 'var(--accent, #F2CD1A)' : undefined,
+        borderRadius: m === 'journey' ? '8px 0 0 8px' : '0 8px 8px 0' }}>
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: 'inline-flex', marginBottom: 12 }}>
+      {seg('journey', 'Journeys')}{seg('bot', 'Bots')}
+    </div>
+  );
+}
+
 export default function JourneysPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
@@ -97,6 +116,20 @@ export default function JourneysPage() {
   const [eventDefs, setEventDefs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
+  // Builder mode (S312): journey by default; ?mode=bot survives refresh. Read once on
+  // mount from the real URL (static export — no useSearchParams/Suspense dance needed).
+  const [mode, setMode] = useState('journey');
+  useEffect(() => {
+    try { if (new URLSearchParams(window.location.search).get('mode') === 'bot') setMode('bot'); } catch {}
+  }, []);
+  const switchMode = (m) => {
+    setMode(m);
+    try {
+      const u = new URL(window.location.href);
+      if (m === 'bot') u.searchParams.set('mode', 'bot'); else u.searchParams.delete('mode');
+      window.history.replaceState({}, '', u);
+    } catch {}
+  };
   const [j, setJ] = useState(emptyJourney());
   const [busy, setBusy] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
@@ -862,10 +895,22 @@ export default function JourneysPage() {
     );
   }
 
+  // Bot mode replaces the whole list surface (S312) — same page, different builder half.
+  if (mode === 'bot') {
+    return (
+      <div className="pg">
+        <PageHead title="Builder" sub="Bots are scripted conversations on the website chat widget — menus, order status, agent handoff." />
+        <ModeToggle mode={mode} onSwitch={switchMode} />
+        <BotBuilder />
+      </div>
+    );
+  }
+
   return (
     <div className="pg">
       <PageHead title="Journeys" sub="Multi-step automated flows triggered by customer events."
         actions={canBuild ? <Btn kind="primary" onClick={startNew}><Plus size={14} /> New journey</Btn> : null} />
+      <ModeToggle mode={mode} onSwitch={switchMode} />
       {gateBanner}
       {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : rows.length === 0

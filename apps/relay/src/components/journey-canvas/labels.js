@@ -19,6 +19,12 @@ const STEP_TYPE_LABEL = {
   condition: 'Condition',
   exit: 'Exit',
   action: 'Action',
+  // Bot mode (S312)
+  message: 'Message',
+  menu: 'Menu',
+  collect: 'Ask for input',
+  handoff: 'Hand to agent',
+  end: 'End chat',
 };
 
 // Outcomes are the branch handles a step can leave by. These are the ones the
@@ -26,6 +32,10 @@ const STEP_TYPE_LABEL = {
 const OUTCOME_LABEL = {
   sent: 'Sent',
   failed: 'Failed',
+  // Bot mode (S312)
+  fallback: 'Not understood',
+  found: 'Order found',
+  not_found: 'Not found / no match',
   skipped: 'Skipped',
   responded: 'Replied',
   no_reply: 'No reply',

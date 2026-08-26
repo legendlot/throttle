@@ -24,6 +24,13 @@ const STEP_META = {
   set_attr:       { label: 'Set attribute',     icon: Tag,        color: '#c07ad6' },
   order_modify:   { label: 'Modify order',      icon: ShoppingBag, color: '#c07ad6' },
   interactive_send: { label: 'WA buttons',      icon: MessageCircle, color: 'var(--accent, #F2CD1A)' },
+  // Bot mode (S312) — same node renderer, different palette.
+  message:        { label: 'Message',           icon: MessageCircle, color: 'var(--accent, #F2CD1A)' },
+  menu:           { label: 'Menu',              icon: GitBranch,  color: '#e8b93c' },
+  collect:        { label: 'Ask for input',     icon: Tag,        color: '#7aa7ff' },
+  order_status:   { label: 'Order status',      icon: ShoppingBag, color: '#c07ad6' },
+  handoff:        { label: 'Hand to agent',     icon: LogOut,     color: '#57b56b' },
+  end:            { label: 'End chat',          icon: LogOut,     color: '#9aa0a6' },
 };
 
 const nodeBox = (selected, color) => ({
@@ -34,6 +41,19 @@ const nodeBox = (selected, color) => ({
 
 function TriggerNode({ data, selected }) {
   const t = data.trigger || {};
+  // Bot mode (S312): the same entry-anchor node, worn as "Chat start" — a bot's trigger
+  // is the customer opening the widget, not an event.
+  if (data.botMode) {
+    return (
+      <div style={nodeBox(selected, '#DE2A2A')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#DE2A2A' }}>
+          <Zap size={14} /> Chat start
+        </div>
+        <div className="mono" style={{ marginTop: 4, color: 'var(--text-2, #555)' }}>customer opens the widget</div>
+        <Handle type="source" position={Position.Right} id="entry" />
+      </div>
+    );
+  }
   return (
     <div style={nodeBox(selected, '#DE2A2A')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#DE2A2A' }}>
@@ -82,7 +102,14 @@ function StepNode({ data, selected }) {
           : c.check?.kind ? `${c.check.kind}${c.check.event ? `: ${c.check.event}` : ''}` : 'check not set')
     : isAction ? (c.kind === 'payment_link' ? (c.purpose || 'Cashfree pay-link')
         : c.kind === 'order_modify' ? (c.op || 'convert_to_prepaid')
+        : c.kind === 'order_status' ? 'verified lookup'
         : `set ${c.attr || 'attr'} = ${c.value ?? ''}`)
+    // Bot mode (S312)
+    : c.type === 'message' ? (c.text ? c.text.slice(0, 40) : 'text not set')
+    : c.type === 'menu' ? `${(c.buttons || []).length} options`
+    : c.type === 'collect' ? (c.field === 'order_number' ? 'order number' : 'phone or email')
+    : c.type === 'handoff' ? 'to the Pitstop inbox'
+    : c.type === 'end' ? (c.text ? c.text.slice(0, 40) : 'closes the chat')
     : (c.outcome || 'completed');
   return (
     <div style={nodeBox(selected, meta.color)}>
@@ -105,7 +132,8 @@ function StepNode({ data, selected }) {
             <div key={h} style={{ position: 'relative', display: 'flex', justifyContent: 'flex-end',
               alignItems: 'center', height: 18, paddingRight: 4 }}>
               <span style={{ fontSize: 10.5, color: 'var(--text-3, #888)', whiteSpace: 'nowrap' }}>
-                {humanOutcome(h)}
+                {/* menu handles are BUTTON ids — label them with the button's own text (S312) */}
+                {(c.type === 'menu' && (c.buttons || []).find((b) => b.id === h)?.label) || humanOutcome(h)}
               </span>
               <Handle type="source" position={Position.Right} id={h}
                 style={{ position: 'absolute', right: -12, top: '50%', transform: 'translateY(-50%)' }} />
@@ -135,10 +163,21 @@ const NEW_STEP = {
     buttons: [{ id: 'make_payment', label: 'Make Payment' }] },
 };
 
+// Bot-mode palette (S312) — Afshaan's v1 scope: order status + handoff only, identity at
+// chat start. Same NEW_STEP shape so addStep() works unchanged.
+const BOT_NEW_STEP = {
+  message: { type: 'message', text: '' },
+  menu:    { type: 'menu', text: '', buttons: [{ id: 'b_opt1', label: 'Option 1' }] },
+  collect: { type: 'collect', field: 'phone_or_email', prompt: '' },
+  order_status: { type: 'action', kind: 'order_status' },
+  handoff: { type: 'handoff' },
+  end:     { type: 'end', text: '' },
+};
+
 let seq = 0;
 const newId = (t) => `${t}_${Date.now().toString(36)}${(seq++).toString(36)}`;
 
-export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSelect, readOnly }) {
+export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSelect, readOnly, mode = 'journey' }) {
   // FIT WHEN THE GRAPH ARRIVES, not when the component mounts. React Flow's `fitView`
   // prop runs once at init, and the page loads a journey asynchronously — so at mount
   // there are zero nodes, the fit is a no-op, and the graph then renders at default
@@ -174,24 +213,26 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
   const onConnect = useCallback((conn) => setEdges((es) =>
     addEdge(conn, es.filter((e) => !(e.source === conn.source && e.sourceHandle === conn.sourceHandle)))), [setEdges]);
 
+  const PALETTE = mode === 'bot' ? BOT_NEW_STEP : NEW_STEP;
   const addStep = (t) => setNodes((ns) => [...ns, {
     id: newId(t), type: 'step',
     position: { x: 120 + Math.random() * 80, y: 60 + Math.random() * 60 },
     data: { config: {
-      ...NEW_STEP[t],
+      ...PALETTE[t],
       ...(t === 'condition' ? { check: { ...NEW_STEP.condition.check } } : {}),
       ...(t === 'wait_response' ? { awaited: [...NEW_STEP.wait_response.awaited] } : {}),
       ...(t === 'interactive_send' ? { buttons: NEW_STEP.interactive_send.buttons.map((b) => ({ ...b })) } : {}),
+      ...(t === 'menu' ? { buttons: BOT_NEW_STEP.menu.buttons.map((b) => ({ ...b })) } : {}),
     } },
   }]);
 
-  const lint = localLint(nodes, edges);
+  const lint = localLint(nodes, edges, mode);
 
   return (
     <div>
       {!readOnly && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-          {Object.keys(NEW_STEP).map((t) => (
+          {Object.keys(PALETTE).map((t) => (
             <button key={t} className="btn" type="button" onClick={() => addStep(t)}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <Plus size={12} /> {STEP_META[t].label}
