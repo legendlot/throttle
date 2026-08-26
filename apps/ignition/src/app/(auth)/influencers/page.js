@@ -380,7 +380,20 @@ function BrokenLinksPanel({ session }) {
         influencer_id: row.id, channel_link: normalizeChannelLink(value) || null,
       }, session);
       toast(`${row.influencer_code} updated`, 'success');
-      setData(d => d ? { ...d, rows: d.rows.filter(r => r.id !== row.id), count: d.count - 1 } : d);
+      // Recompute every count from the remaining rows. Decrementing only the headline left the
+      // breakdown summing to the OLD total ("31 … 24 + 8"), which is a number contradicting the
+      // number beside it — the same class of quietly-wrong figure this panel exists to clear.
+      setData(d => {
+        if (!d) return d;
+        const rows = d.rows.filter(r => r.id !== row.id);
+        return {
+          ...d, rows,
+          count: rows.length,
+          suggestable: rows.filter(x => x.suggested).length,
+          manual: rows.filter(x => !x.suggested && !x.blank).length,
+          blank: rows.filter(x => x.blank).length,
+        };
+      });
     } catch (e) { toast(e.message, 'error'); }
     finally { setBusy(null); }
   }
