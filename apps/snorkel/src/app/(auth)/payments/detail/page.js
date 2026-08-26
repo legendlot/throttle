@@ -112,8 +112,8 @@ export default function PaymentRequestDetail() {
     <>
       <PageHead title={`${r.request_no} — ${r.purpose}`}
         sub={<>
-          <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
-          {r.is_urgent && <Badge tone="red" style={{ marginLeft: 6 }}>Urgent</Badge>}
+          <Badge tone={STATUS_TONE[r.status]} label={STATUS_LABEL[r.status]} />{' '}
+          {r.is_urgent && <Badge tone="red" label="Urgent" />}
         </>} />
 
       <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0,1fr)' }}>
@@ -155,7 +155,7 @@ export default function PaymentRequestDetail() {
               {d.related.map(x => (
                 <div key={x.request_no} style={{ padding: '4px 0' }}>
                   {x.request_no} · {money(x.amount_to_pay, r.currency)} · {x.requested_by_name || '—'} ·{' '}
-                  <Badge tone={STATUS_TONE[x.status]}>{STATUS_LABEL[x.status]}</Badge>
+                  <Badge tone={STATUS_TONE[x.status]} label={STATUS_LABEL[x.status]} />
                 </div>
               ))}
             </div>

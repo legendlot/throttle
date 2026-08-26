@@ -55,7 +55,7 @@ export default function PayeesPage() {
                       <td>{p.name}</td>
                       <td>{String(p.payee_type || '').replace(/_/g, ' ')}</td>
                       <td>{p.gstin || '—'}</td>
-                      <td><Badge tone={p.is_active ? 'green' : 'gray'}>{p.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      <td><Badge tone={p.is_active ? 'green' : 'gray'} label={p.is_active ? 'Active' : 'Inactive'} /></td>
                     </tr>
                   ))}
                 </tbody>

@@ -148,12 +148,10 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                         </td>
                       )}
                       <td>
-                        <b>{r.request_no}</b>
-                        {r.is_urgent && <Badge tone="red" style={{ marginLeft: 6 }}>Urgent</Badge>}
+                        <b>{r.request_no}</b>{' '}
+                        {r.is_urgent && <Badge tone="red" label="Urgent" />}{' '}
                         {r.request_type !== 'payment' &&
-                          <Badge tone="gray" style={{ marginLeft: 6 }}>
-                            {r.request_type === 'credit_note' ? 'CN' : 'DN'}
-                          </Badge>}
+                          <Badge tone="gray" label={r.request_type === 'credit_note' ? 'CN' : 'DN'} />}
                         <div style={{ fontSize: 11, color: 'var(--t2)' }}>{r.requested_by_name}</div>
                       </td>
                       <td>{r.payee?.name || '—'}</td>
@@ -161,7 +159,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                       <td style={{ textAlign: 'right' }}>{money(r.amount_to_pay, r.currency)}</td>
                       <td>{r.needed_by ? fmtDateShort(r.needed_by) : '—'}</td>
                       <td>
-                        <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+                        <Badge tone={STATUS_TONE[r.status]} label={STATUS_LABEL[r.status]} />
                         {r.auto_approved && r.status === 'approved' &&
                           <div style={{ fontSize: 10, color: 'var(--t2)' }}>below threshold</div>}
                       </td>

@@ -109,8 +109,8 @@ export default function PaymentsAdminPage() {
                 {(d.categories || []).map(c => (
                   <tr key={c.category_key}>
                     <td><b>{c.label}</b><div style={{ fontSize: 11, color: 'var(--t2)' }}>{c.category_key}</div></td>
-                    <td><Badge tone={c.po_required ? 'yellow' : 'gray'}>{c.po_required ? 'Yes' : 'No'}</Badge></td>
-                    <td><Badge tone={c.is_active ? 'green' : 'gray'}>{c.is_active ? 'Active' : 'Off'}</Badge></td>
+                    <td><Badge tone={c.po_required ? 'yellow' : 'gray'} label={c.po_required ? 'Yes' : 'No'} /></td>
+                    <td><Badge tone={c.is_active ? 'green' : 'gray'} label={c.is_active ? 'Active' : 'Off'} /></td>
                     <td><Btn disabled={busy} onClick={() => toggleCat(c)}>
                       {c.po_required ? 'Make PO optional' : 'Require a PO'}</Btn></td>
                   </tr>
@@ -139,7 +139,7 @@ export default function PaymentsAdminPage() {
                       <tr key={`${g.user_id}-${g.grant_key}`}>
                         <td><b>{g.full_name || g.user_id}</b></td>
                         <td>{GRANT_LABEL[g.grant_key] || g.grant_key}</td>
-                        <td><Badge tone={g.active ? 'green' : 'gray'}>{g.active ? 'Active' : 'Revoked'}</Badge></td>
+                        <td><Badge tone={g.active ? 'green' : 'gray'} label={g.active ? 'Active' : 'Revoked'} /></td>
                         <td><Btn disabled={busy} onClick={() => toggleGrant(g)}>
                           {g.active ? 'Revoke' : 'Restore'}</Btn></td>
                       </tr>
