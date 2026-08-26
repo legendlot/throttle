@@ -773,6 +773,19 @@ export default {
       ));
     }
 
+    // Email-attachment ageing (6-month retention, Afshaan 2026-08-16). Once a day at
+    // 03:00 IST (21:30 UTC — the */2 cron fires on even minutes, so :30 hits exactly
+    // once). Expected 0 until the first cohort ages ~2026-12-26; see the function.
+    {
+      const d = new Date(event?.scheduledTime || Date.now());
+      if (d.getUTCHours() === 21 && d.getUTCMinutes() === 30) {
+        ctx.waitUntil(ageOutEmailAttachments(env, { limit: 200 }).then(
+          r => console.log('[email-age] cron sweep', JSON.stringify(r)),
+          e => console.error('[email-age] cron sweep error', e),
+        ));
+      }
+    }
+
     if (exotelConfigured(env)) {
       const pipe = callPipeline(env);
       ctx.waitUntil(reconcileExotelCalls(env, pipe).then(
@@ -932,6 +945,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
     case 'backfillEmailAttachments': return backfillEmailAttachments(body, auth, env);
+    case 'ageEmailAttachments':      return ageEmailAttachments(body, auth, env);
     case 'backfillPurchaseDates':    return backfillPurchaseDates(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
@@ -7114,6 +7128,82 @@ async function patchStoredAttachments(env, row, stored) {
   const r = await sb(`/rest/v1/cs_wa_messages?id=eq.${row.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) })
     .catch(e => { console.error('[email] attachment meta patch failed', String(e?.message || e)); return { ok: false }; });
   return { ok: !!r?.ok, stored: withBytes.length, total: stored.length };
+}
+
+// Age out stored inbound-email attachments at 6 MONTHS (decided by Afshaan 2026-08-16).
+// The bucket was growing unbounded (~751 MB/month measured S234); Gmail retains every
+// original, so nothing is truly lost — the chip reverts to an "open it in Gmail"
+// tooltip (skipped: 'aged_out', mapped in the app's ATT_SKIP_REASON).
+//
+// Order matters: objects are DELETED first, the row is patched second. A failed patch
+// leaves the row matching the filter, so the next run re-deletes (a 404 delete is a
+// no-op) and retries the patch — self-healing. The reverse order would leak bytes
+// invisibly forever. A row whose deletes all fail is left unstamped for the same reason.
+//
+// ⚠️ Also stamps `attachments_backfilled_at` — backfillEmailAttachments selects on that
+// being null and would otherwise re-fetch an aged message's bytes from Gmail and undo
+// the ageing. "Walked and decided" is what the stamp means; ageing IS a decision.
+//
+// NB the first cohort ages ~2026-12-26 (oldest stored attachment is 2026-06-26), so
+// this is expected to report 0 until then. Selection + cutoff were proven by dry-run
+// against the live table on 2026-08-26; the delete path is the fleet's standard
+// per-object DELETE (ignitionops/snorkelops/podiumops).
+const EMAIL_ATT_RETENTION_DAYS = 183;
+async function ageOutEmailAttachments(env, { days = EMAIL_ATT_RETENTION_DAYS, limit = 40, dryRun = false } = {}) {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const FILTER = `channel=eq.email&direction=eq.inbound&received_at=lt.${encodeURIComponent(cutoff)}` +
+    `&raw_meta->attachments=not.is.null&raw_meta->>attachments=neq.${encodeURIComponent('[]')}` +
+    `&raw_meta->>attachments_aged_at=is.null`;
+  const cRes = await sb(
+    `/rest/v1/cs_wa_messages?${FILTER}&select=id,raw_meta,received_at&order=received_at.asc&limit=${limit}`, env);
+  if (!cRes.ok) return { ok: false, error: `candidate query failed: ${JSON.stringify(cRes.data)?.slice(0, 160)}` };
+  const rows = cRes.data || [];
+  if (dryRun) {
+    const objects = rows.reduce((n, r) => n + (r.raw_meta?.attachments || []).filter(a => a.storage_path).length, 0);
+    return { ok: true, dry_run: true, cutoff, candidates: rows.length, objects,
+             oldest: rows[0]?.received_at || null, sample: rows.slice(0, 3).map(r => r.id) };
+  }
+  let aged = 0, deleted = 0, failures = 0;
+  for (const row of rows) {
+    const atts = Array.isArray(row.raw_meta?.attachments) ? row.raw_meta.attachments : [];
+    let rowOk = true;
+    for (const a of atts) {
+      if (!a.storage_path) continue;
+      const seg = String(a.storage_path).split('/').map(encodeURIComponent).join('/');
+      const dr = await csStorageFetch(`/object/${EMAIL_INBOUND_BUCKET}/${seg}`, env, { method: 'DELETE' });
+      if (dr.ok || dr.status === 404) deleted++;          // 404 = already gone (a prior run's retry)
+      else { rowOk = false; failures++; console.error('[email-age] delete failed', a.storage_path, dr.status); }
+    }
+    if (!rowOk) continue;   // retry whole row next run
+    const stamped = new Date().toISOString();
+    const patch = {
+      raw_meta: {
+        ...row.raw_meta,
+        attachments: atts.map(a => a.storage_path
+          ? (({ storage_path, ...rest }) => ({ ...rest, skipped: 'aged_out' }))(a)
+          : a),
+        attachments_aged_at: stamped,
+        ...(row.raw_meta?.attachments_backfilled_at ? {} : { attachments_backfilled_at: stamped }),
+      },
+    };
+    const pr = await sb(`/rest/v1/cs_wa_messages?id=eq.${row.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) })
+      .catch(() => ({ ok: false }));
+    if (pr?.ok) aged++; else failures++;
+  }
+  return { ok: true, cutoff, scanned: rows.length, aged_messages: aged, deleted_objects: deleted, failures };
+}
+
+// Admin action — run or dry-run the ageing on demand. The destructive path clamps
+// `days` to the decided retention floor (never below 180); dry_run may shorten it to
+// preview selection, since it deletes nothing.
+async function ageEmailAttachments(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const dryRun = body?.dry_run !== false;   // default TRUE — deleting is the explicit call
+  let days = Number(body?.days) || EMAIL_ATT_RETENTION_DAYS;
+  if (!dryRun) days = Math.max(days, 180);
+  const limit = Math.min(Math.max(Number(body?.limit) || 40, 1), 200);
+  const r = await ageOutEmailAttachments(env, { days, limit, dryRun });
+  return r.ok ? ok(r) : err(r.error, 502);
 }
 
 // Backfill the attachments of emails ingested BEFORE this feature existed (the ingest

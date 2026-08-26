@@ -46,6 +46,7 @@ const ATT_SKIP_REASON = {
   upload_failed: 'Couldn’t be saved — open the email in Gmail',
   run_budget: 'Not fetched yet — it will appear shortly',
   error: 'Couldn’t be retrieved — open the email in Gmail',
+  aged_out: 'Kept for 6 months, then removed — the original is still in Gmail',
 };
 // Live preview of an approved WhatsApp template body (S245). Substitutes each {{pos}} with what
 // the agent has typed, or a braced label while empty, so the composer shows the real message
