@@ -33,6 +33,7 @@ export const NAV_GROUPS = [
       { id: 'payments',           label: 'My Requests',         route: '/payments',           icon: Wallet,   requires: 'payment_request' },
       { id: 'payments-approvals', label: 'Approvals',           route: '/payments/approvals', icon: Shield,   requires: 'payment_approve' },
       { id: 'payments-finance',   label: 'Finance Queue',       route: '/payments/finance',   icon: HandCoins, requires: 'payment_execute' },
+      { id: 'payments-notifications', label: 'Notifications',   route: '/payments/notifications', icon: Inbox, requires: 'payment_request' },
       { id: 'payments-payees',    label: 'Payees',              route: '/payments/payees',    icon: Building, requires: 'payment_request' },
       { id: 'payments-po-queue',  label: 'PO Payment Queue',    route: '/payments/po-queue',  icon: ReceiptText, requires: 'payment_route' },
     ],
