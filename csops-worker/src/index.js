@@ -6797,6 +6797,11 @@ async function diagIgRecipient(body, auth, env) {
   const token = await metaToken(thread.channel, env);
   if (!token) return err('Meta send not configured (no token for this channel)', 503);
   const base = metaGraphBase(thread.channel);
+  // Read the row directly (not via igAccessToken) so the probe reports the stored token's
+  // PRESENCE without depending on the 60s cache that the send path uses.
+  const cfg = await sb('/rest/v1/cs_meta_token_config?id=eq.1&select=ig_access_token&limit=1', env)
+    .catch(() => null);
+  const storedIgToken = !!cfg?.data?.[0]?.ig_access_token;
 
   const get = async (path) => {
     const r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`);
@@ -6812,7 +6817,15 @@ async function diagIgRecipient(body, auth, env) {
     thread_id,
     channel: thread.channel,
     graph_base: base,
-    token_source: thread.channel === 'instagram' ? (env.META_IG_TOKEN ? 'META_IG_TOKEN' : 'META_PAGE_TOKEN(fallback)') : 'META_PAGE_TOKEN',
+    // ⚠️ Report what was ACTUALLY used, not what the environment happens to hold. Since
+    // S311 the Instagram token is read from store.cs_meta_token_config first and only falls
+    // back to the secret, so keying this off env.META_IG_TOKEN made the probe name the wrong
+    // credential — in a diagnostic whose entire job is to say which credential is in play.
+    // Found by that session's own hostile review, as a leftover of making metaToken async.
+    token_source: thread.channel !== 'instagram'
+      ? 'META_PAGE_TOKEN'
+      : (storedIgToken ? 'cs_meta_token_config.ig_access_token'
+        : env.META_IG_TOKEN ? 'META_IG_TOKEN (secret fallback)' : 'META_PAGE_TOKEN (last-resort fallback)'),
     provider_account_id: thread.provider_account_id,
     recipient_id: thread.external_user_id,
     window_open: !!(thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now()),
