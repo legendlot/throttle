@@ -2524,30 +2524,57 @@ async function getPostReminderDue(url, auth, env) {
   // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
   // posted, and nobody has already written the deal off.
   const r = await sb(
-    '/rest/v1/engagements?select=engagement_no,stage,post_date,delivered_date,shipping_date,utm_link,gifted_no_post,'
+    '/rest/v1/engagements?select=id,engagement_no,stage,post_date,delivered_date,shipping_date,utm_link,gifted_no_post,'
     + 'influencer:influencer_id(influencer_code,channel_name,person_name,email,do_not_ship)'
     + '&post_date=is.null&gifted_no_post=not.is.true'
     + '&stage=in.(shipped,delivered,scheduled,draft,posting,delayed)'
-    + '&order=delivered_date.asc&limit=500',
+    + '&limit=500',
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const due = (r.data || [])
+  const rows = r.data || [];
+
+  // ⚠️ `delivered_date` / `shipping_date` are NULL on EVERY engagement (346 of 346, measured
+  // 2026-08-26) — nobody has ever filled them in. The B5 spec dates the nudge from those two
+  // columns, so as specified this reminder could never fire: it would run daily, find nothing,
+  // and look perfectly healthy while 139 deals sat unposted. Same silent-success shape as the
+  // price sweep that failed for six weeks.
+  // So fall back to WHEN THE DEAL ENTERED shipped/delivered, which `engagement_history` records
+  // for all 139 of them. One batched read — never a query per row.
+  const needAnchor = rows.filter(e => !e.delivered_date && !e.shipping_date).map(e => e.id);
+  const entered = new Map();
+  if (needAnchor.length) {
+    const hr = await sb(
+      `/rest/v1/engagement_history?engagement_id=in.(${needAnchor.join(',')})`
+      + '&stage_to=in.(shipped,delivered)&select=engagement_id,created_at&order=created_at.desc&limit=2000',
+      env,
+    );
+    // Keep the LATEST transition per deal: a deal that went shipped → delivered should age from
+    // the delivery, and one bounced back and re-shipped should age from the re-ship, not the first.
+    for (const h of (hr.data || [])) if (!entered.has(h.engagement_id)) entered.set(h.engagement_id, h.created_at);
+  }
+
+  const due = rows
     .map(e => {
-      const anchor = e.delivered_date || e.shipping_date || null;
-      if (!anchor || anchor > cutoff) return null;
       if (e.influencer?.do_not_ship) return null;
-      const ageDays = Math.floor((Date.now() - new Date(anchor).getTime()) / 86400000);
+      const explicit = e.delivered_date || e.shipping_date || null;
+      const anchorRaw = explicit || entered.get(e.id) || null;
+      if (!anchorRaw) return null;
+      const anchorDay = String(anchorRaw).slice(0, 10);
+      if (anchorDay > cutoff) return null;
       return {
         engagement_no: e.engagement_no, stage: e.stage,
         influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code,
         email: e.influencer?.email || null,
-        trigger: e.delivered_date ? 'delivered' : 'shipped (no delivery date recorded)',
-        days_since: ageDays,
+        trigger: e.delivered_date ? 'delivered'
+          : e.shipping_date ? 'shipped'
+            : `reached ${e.stage} (no delivery date recorded)`,
+        days_since: Math.floor((Date.now() - new Date(anchorRaw).getTime()) / 86400000),
         has_tracking_link: !!e.utm_link,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((a, b) => b.days_since - a.days_since);
   return ok({
     days, due, count: due.length,
     unreachable: due.filter(d => !d.email).length,
