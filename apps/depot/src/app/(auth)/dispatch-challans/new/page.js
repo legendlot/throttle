@@ -108,6 +108,9 @@ function NewChallanInner() {
   // material transfers ([[feedback_fix_trivial_input_errors_at_source]]).
   const [purpose, setPurpose] = useState('');
   const [notes, setNotes]     = useState('');
+  // Keyed by the field name each validation error reports, so a failed submit can put the
+  // offending input on screen instead of only naming it in a toast.
+  const fieldRefs = useRef({});
 
   const [transportMode, setTransportMode]       = useState('Road');
   const [vehicleNumber, setVehicleNumber]       = useState('');
@@ -208,22 +211,42 @@ function NewChallanInner() {
   const ewbRequired = totalAmount >= 50000;
   const ewbApproaching = !ewbRequired && totalAmount >= 40000;
 
-  // Validation
-  const validation = useMemo(() => {
+  // Validation.
+  //
+  // ⚠️ Deliberately NOT memoised. It was a useMemo whose dependency list
+  // (`[fromName, fromAddress, toName, toAddress, lines]`) omitted `purpose`, which the body
+  // reads — so once S308 made Purpose mandatory, SELECTING a purpose did not recompute the
+  // errors. The operator picked one, pressed Issue Challan, and got "Purpose required"
+  // anyway; the only way through was to go back and touch a line, which nothing on screen
+  // suggests. Reported by Piyush 2026-08-26 (#bugs 1787729006.405699).
+  //
+  // The list is six string checks over a handful of lines — memoising it never bought
+  // anything, and a stale dep list on a SUBMIT GATE fails in the one direction that blocks
+  // real work. Compute it every render; there is then no dep list to get wrong again.
+  const validation = (() => {
     const errors = [];
-    if (!fromName.trim())    errors.push('From name required');
-    if (!fromAddress.trim()) errors.push('From address required');
-    if (!toName.trim())      errors.push('To name required');
-    if (!toAddress.trim())   errors.push('To address required');
-    if (!purpose)            errors.push('Purpose required — pick Job work for anything going to a job-work vendor, so it can be filed for ITC-04');
+    if (!fromName.trim())    errors.push(['fromName', 'From name required']);
+    if (!fromAddress.trim()) errors.push(['fromAddress', 'From address required']);
+    if (!toName.trim())      errors.push(['toName', 'To name required']);
+    if (!toAddress.trim())   errors.push(['toAddress', 'To address required']);
+    if (!purpose)            errors.push(['purpose', 'Purpose required — pick Job work for anything going to a job-work vendor, so it can be filed for ITC-04']);
     const validLines = lines.filter(l => l.description.trim() && Number(l.quantity) > 0);
-    if (validLines.length === 0) errors.push('At least one line with description + quantity required');
+    if (validLines.length === 0) errors.push(['lines', 'At least one line with description + quantity required']);
     return errors;
-  }, [fromName, fromAddress, toName, toAddress, lines]);
+  })();
 
   async function save({ andIssue }) {
     if (validation.length) {
-      showToast(validation[0], 'error');
+      const [field, message] = validation[0];
+      showToast(message, 'error');
+      // The Challan Details panel is above the fold once the goods and transport sections are
+      // filled in, so the operator reads "Purpose required" with the Purpose field scrolled off
+      // screen. Put the offending field in front of them rather than making them hunt for it.
+      const el = fieldRefs.current[field];
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => { try { el.focus({ preventScroll: true }); } catch { /* not focusable */ } }, 250);
+      }
       return;
     }
     setSaving(true);
@@ -350,7 +373,8 @@ function NewChallanInner() {
           </div>
           <div>
             <span style={lbl}>Purpose *</span>
-            <select value={purpose} onChange={(e) => setPurpose(e.target.value)} style={inp}>
+            <select ref={(el) => { fieldRefs.current.purpose = el; }}
+                    value={purpose} onChange={(e) => setPurpose(e.target.value)} style={inp}>
               <option value="">Select a purpose…</option>
               {PURPOSES.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
@@ -385,11 +409,11 @@ function NewChallanInner() {
           </div>
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Legal Name *</span>
-            <input type="text" value={fromName} onChange={(e) => setFromName(e.target.value)} style={inp} />
+            <input ref={(el) => { fieldRefs.current.fromName = el; }} type="text" value={fromName} onChange={(e) => setFromName(e.target.value)} style={inp} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Address *</span>
-            <textarea value={fromAddress} onChange={(e) => setFromAddress(e.target.value)}
+            <textarea ref={(el) => { fieldRefs.current.fromAddress = el; }} value={fromAddress} onChange={(e) => setFromAddress(e.target.value)}
                       rows={3} style={{ ...inp, resize: 'vertical', minHeight: 70 }} />
           </div>
           <div>
@@ -402,12 +426,12 @@ function NewChallanInner() {
         <Panel header="Dispatched To">
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Recipient Name *</span>
-            <input type="text" value={toName} onChange={(e) => setToName(e.target.value)}
+            <input ref={(el) => { fieldRefs.current.toName = el; }} type="text" value={toName} onChange={(e) => setToName(e.target.value)}
                    placeholder="e.g. Sundar Logistics Pvt Ltd" style={inp} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Address *</span>
-            <textarea value={toAddress} onChange={(e) => setToAddress(e.target.value)}
+            <textarea ref={(el) => { fieldRefs.current.toAddress = el; }} value={toAddress} onChange={(e) => setToAddress(e.target.value)}
                       rows={3} placeholder="Full delivery address with PIN"
                       style={{ ...inp, resize: 'vertical', minHeight: 70 }} />
           </div>
