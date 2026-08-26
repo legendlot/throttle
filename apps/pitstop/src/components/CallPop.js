@@ -28,7 +28,27 @@ import { fmtIstDayMonth } from '../lib/datetime.js';
  * fires an incoming-call event and this poll retires. Until then it is the only way the
  * browser learns a call is ringing. 4 agents x 1 request/5s is negligible.
  */
-const POLL_MS = 5000;
+// ⚠️ THE POLL CANNOT SIMPLY BE DELETED, and the backlog item that proposed deleting it
+// ("the SDK's incoming event replaces the ring signal") was wrong on two counts — both
+// found by reading this file in S314, before writing any code:
+//
+//   ① It is the UPGRADE path, not just a ring signal. An SDK-raised card carries no call
+//      id and no ticket link (see the `fromSdk` block below), so its "Open call" button
+//      cannot exist until a poll finds the real row. Delete the poll and every
+//      softphone-raised pop loses that button permanently.
+//   ② It is the ONLY pop path for an agent whose softphone is not registered in THIS
+//      browser — mic denied, "Softphone offline", or working from the Exotel side. The
+//      SDK event cannot fire there, so those agents would silently stop getting pops.
+//
+// So it stays, but it no longer runs at full rate while nothing is happening. Measured
+// 2026-08-26: 49 `getCallContext` requests in a single IDLE session at ~254ms each, purely
+// to learn that nothing is ringing. ACTIVE cadence is unchanged (5s) — that is the window
+// where the upgrade and the end-of-call clear matter and must not be slowed.
+const POLL_MS = 5000;          // a call is live, or the SDK just signalled one
+const POLL_IDLE_MS = 30000;    // nothing showing and no recent SDK event
+// How long after an SDK 'incoming' we stay at the fast cadence waiting for the webhook to
+// write the row we can upgrade to. Generous on purpose: the row is what carries "Open call".
+const SDK_FAST_WINDOW_MS = 90000;
 
 export default function CallPop() {
   const { session, userId } = useAuth();
@@ -47,6 +67,10 @@ export default function CallPop() {
   // this ref rather than closing over `state`, which would pin it to the first render.
   const stateRef = useRef(null);
   stateRef.current = state;
+  // When the SDK last told us a call was ringing in THIS browser. Holds the poll at the
+  // fast cadence for a window afterwards so the row-upgrade (which carries "Open call")
+  // is picked up promptly. Epoch 0 = never, so the first idle scheduling is correct.
+  const sdkSeenRef = useRef(0);
 
   useEffect(() => {
     if (!userId) return;
@@ -92,7 +116,19 @@ export default function CallPop() {
       } catch { /* a failed poll must never surface an error over a live call */ }
     }
     tick();
-    const iv = setInterval(tick, POLL_MS);
+    // Adaptive cadence via a self-rescheduling timeout rather than a fixed interval: the
+    // decision is re-taken after every tick, so a call arriving on the SDK path speeds the
+    // loop up immediately instead of waiting out an idle period.
+    // ⚠️ Reads `stateRef`/`sdkSeenRef`, never `state` — closing over state would pin this
+    // to the first render and freeze the cadence at whatever it was then.
+    let timer = null;
+    const schedule = () => {
+      if (!alive.current) return;
+      const busy = !!stateRef.current?.active
+        || (Date.now() - sdkSeenRef.current) < SDK_FAST_WINDOW_MS;
+      timer = setTimeout(async () => { await tick(); schedule(); }, busy ? POLL_MS : POLL_IDLE_MS);
+    };
+    schedule();
 
     // ── The SDK path ────────────────────────────────────────────────────────
     // The poll above can only see a call once Exotel's flow-side webhook has written
@@ -110,6 +146,10 @@ export default function CallPop() {
     const unsub = subscribeCallEvents(async (e) => {
       if (e?.type === 'ended') { setState((p) => (p?.fromSdk ? null : p)); return; }
       if (e?.type !== 'incoming' || !e.number) return;
+      // Stamp BEFORE the awaits below: this is what holds the poll at the fast cadence, and
+      // it must apply even when the assemble that follows fails or is skipped as a loser of
+      // the race — the row still needs upgrading either way.
+      sdkSeenRef.current = Date.now();
       // Already popped from the real row — that one is strictly better, leave it.
       if (stateRef.current?.active && !stateRef.current?.fromSdk) return;
       try {
@@ -124,7 +164,7 @@ export default function CallPop() {
       } catch { /* a failed assemble must never surface an error over a live call */ }
     });
 
-    return () => { alive.current = false; clearInterval(iv); unsub(); };
+    return () => { alive.current = false; if (timer) clearTimeout(timer); unsub(); };
   }, [userId]);
 
   if (!state?.active) return null;
