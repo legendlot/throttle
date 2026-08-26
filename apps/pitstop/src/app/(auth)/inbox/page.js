@@ -99,6 +99,11 @@ const CHANNELS = {
   web:       { label: 'Web',       color: '#F59E0B', Glyph: Globe, sendable: true, hasWindow: false },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
+// The agent dropdown renders full_name || email; the strip beside it must say the same.
+const agentName = (agents, id) => {
+  const a = (agents || []).find(x => x.id === id);
+  return a ? (a.full_name || a.email || 'Agent') : 'Agent';
+};
 
 // Conversation priority (S164, Pruthvi) — Urgent/High/Normal/Low, default Normal.
 const PRIORITIES = {
@@ -254,6 +259,7 @@ export default function InboxPage() {
   const [tagFilter, setTagFilter] = useState('');           // tag facet (S163)
   const [priorityFilter, setPriorityFilter] = useState(''); // '' | urgent|high|normal|low (S164)
   const [agentFilter, setAgentFilter] = useState('');       // '' | assigned-agent id — managers (S164)
+  const [agentCounts, setAgentCounts] = useState(null);     // { active, closed } for the filtered agent
   const [sort, setSort] = useState('recent');               // recent | oldest | priority (S164)
   // Which LOT WhatsApp number the customer wrote to (S262, Pruthvi) — lets the
   // transactional/marketing traffic be isolated and cleared without a second inbox.
@@ -420,6 +426,22 @@ export default function InboxPage() {
       if (d?.stats) { setStats(d.stats); setStatsReady(true); }
     } catch { /* tiles are best-effort */ }
   }, [session]);
+
+  // Counts for the agent currently filtered to, shown beside the filter. The channel
+  // segment counts stay whole-channel on purpose (see getAgentInboxCounts) — this is an
+  // extra read, not a redefinition of those.
+  useEffect(() => {
+    if (!session || !agentFilter) { setAgentCounts(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const d = await csopsGet('getAgentInboxCounts', { agent: agentFilter, channel }, session);
+        if (alive) setAgentCounts(d && typeof d.active === 'number' ? d : null);
+      } catch { if (alive) setAgentCounts(null); }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentFilter, channel, userId]);
 
   const loadConvo = useCallback(async (id) => {
     if (!session || !id) return;
@@ -1190,6 +1212,7 @@ export default function InboxPage() {
         priorityFilter={priorityFilter} setPriorityFilter={setPriorityFilter}
         tagFilter={tagFilter} setTagFilter={setTagFilter}
         agentFilter={agentFilter} setAgentFilter={setAgentFilter}
+        agentCounts={agentCounts}
         wabaFilter={wabaFilter} setWabaFilter={setWabaFilter} waNumbers={waNumbers}
         allTags={allTags} agents={agents}
         filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
@@ -2311,7 +2334,7 @@ function InboxCommandBar(props) {
     ignitionScope, onToggleIgnition, soundOn, onToggleSound, notifOn, notifPermission, onToggleNotif,
     searchInput, setSearchInput,
     sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
-    agentFilter, setAgentFilter, allTags, agents,
+    agentFilter, setAgentFilter, allTags, agents, agentCounts,
     wabaFilter, setWabaFilter, waNumbers,
     filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect,
     canManage, canReassign, selectMode, onToggleSelect, onCompose,
@@ -2389,6 +2412,31 @@ function InboxCommandBar(props) {
           );
         })}
       </div>
+
+      {/* Agent-scoped counts, shown only while an agent filter is on (Pruthvi 2026-08-26).
+          The segment counts to the left stay whole-channel by design; this answers "how
+          much of this is theirs" without redefining them. */}
+      {agentFilter && agentCounts && (
+        <>
+          <BarDivider />
+          <div title={`${agentName(agents, agentFilter)} — ${agentCounts.active} active, ${agentCounts.closed} closed${agentCounts.channel && agentCounts.channel !== 'all' ? ` on ${agentCounts.channel}` : ''}`}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, padding: '3px 8px',
+              border: '1px solid var(--accent-bd)', borderRadius: 'var(--radius-sm)',
+              background: 'var(--accent-bg)', whiteSpace: 'nowrap' }}>
+            <Users size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <span style={{ fontFamily: 'var(--f-ui)', fontSize: 12, fontWeight: 600, color: 'var(--t1)',
+              maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {agentName(agents, agentFilter)}
+            </span>
+            <span style={{ fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--t2)' }}>
+              {agentCounts.active} active
+            </span>
+            <span style={{ fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--t4)' }}>
+              {agentCounts.closed} closed
+            </span>
+          </div>
+        </>
+      )}
 
       <BarDivider />
 

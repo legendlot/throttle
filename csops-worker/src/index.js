@@ -850,6 +850,7 @@ async function handleGet(action, params, auth, env) {
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
     case 'getMessagingStats':   return getMessagingStats(params, auth, env);
+    case 'getAgentInboxCounts': return getAgentInboxCounts(params, auth, env);
     case 'getEmailAttachment':  return getEmailAttachment(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
@@ -7732,6 +7733,33 @@ async function getMessagingThreads(params, auth, env) {
 // message inbound). Awaiting is computed only for the two-way channels
 // (instagram/messenger — low volume, replied to HERE); WhatsApp is a read-only
 // BiteSpeed mirror (replies happen there) so it gets an exact total only.
+// Counts for ONE agent, shown beside the agent filter (Pruthvi, #bugs 2026-08-26).
+//
+// She asked for the channel counts to follow the agent filter; they deliberately do not
+// (every facet leaves the segment counts whole-channel, and three incidents are on record
+// from the counts and the list disagreeing — S184/S229/S245). Her own answer avoided the
+// problem entirely: *"show the agent's name right next to the active on the left side and
+// then show how many chats are active under the agent and how many are closed"*. So this
+// is an ADDITIONAL, agent-scoped read — the segment counts are untouched.
+//
+// Scoped to the channel in view so it agrees with what the operator is looking at.
+async function getAgentInboxCounts(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const agent = params.get('agent');
+  if (!agent) return err('agent required');
+  const channel = params.get('channel');
+  const chan = channel && channel !== 'all' ? `&channel=eq.${encodeURIComponent(channel)}` : '';
+  // Same two qualifiers the list uses, so the numbers cannot disagree with it: exclude
+  // Ignition-transferred threads and guaranteed-empty ones.
+  const base = `&ignition_connect=is.false&and=(or(last_message_at.not.is.null,provider_thread_ref.not.is.null))`;
+  const who = `&assigned_agent_id=eq.${encodeURIComponent(agent)}`;
+  const [active, closed] = await Promise.all([
+    sbCount(`/rest/v1/cs_wa_threads?thread_state=in.(open,snoozed)${who}${chan}${base}&select=id`, env),
+    sbCount(`/rest/v1/cs_wa_threads?thread_state=eq.closed${who}${chan}${base}&select=id`, env),
+  ]);
+  return ok({ agent_id: agent, channel: channel || 'all', active, closed });
+}
+
 async function getMessagingStats(params, auth, env) {
   const stats = {
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
