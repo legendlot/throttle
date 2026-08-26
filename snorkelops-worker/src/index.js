@@ -338,7 +338,7 @@ function hsnGaps(lines, master) {
   for (const l of (lines || [])) {
     if (!l.product) continue;
     const m = master.get(l.product);
-    if (!m || !m.hsn) gaps.add(l.product);
+    if (!m || !m.hsn || m.gst == null) gaps.add(l.product);
   }
   return [...gaps];
 }
@@ -2825,9 +2825,9 @@ export default {
             // is the form's 18% default wearing the costume of a real rate. Blocking here
             // would freeze ordering for every SKU still awaiting a code from finance, so
             // the gap is surfaced loudly instead and generateInvoice stays the hard gate.
-            const hsnMasterC = await hsnMasterAll();
-            return ok({ confirmed: d.id, request_no: frRes.data[0].request_no,
-                        hsn_gaps: hsnGaps(lines, hsnMasterC) });
+            let confirmGaps = [];
+            try { confirmGaps = hsnGaps(lines, await hsnMasterAll()); } catch (_) { /* warning only — the confirm already landed */ }
+            return ok({ confirmed: d.id, request_no: frRes.data[0].request_no, hsn_gaps: confirmGaps });
           }
 
           case 'generateInvoice': {
