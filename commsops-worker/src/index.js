@@ -2498,6 +2498,44 @@ async function checkJourneySendHealth(env) {
     { method: 'PATCH', body: JSON.stringify({ journey_alert_at: nowIso() }) });
 }
 
+// Redact a dead-lettered queue payload before it goes into a Slack alert.
+//
+// TODAY this is belt-and-braces: every queue body is ids and cursors —
+// {kind, campaignId, journeyId, profileId, eventId, shard, shardCount, after} — and a
+// profile_id is a pseudonymous internal uuid, not a name, email or phone. So nothing
+// currently leaks. The redaction exists because the alert prints whatever a FUTURE queue
+// message happens to carry: the moment someone enqueues a body holding a recipient address,
+// it would start posting customer PII into Slack with no code change and no review. That is
+// the S289 "customer address reachable in a log" class, and it is cheaper to close now than
+// to notice later.
+// ⚠️ Redaction is BY KEY, plus two strict value patterns — deliberately NOT a loose
+// phone-shaped regex over the serialised JSON. The first cut did exactly that and mangled
+// every uuid in the payload (`ddb9c4b1-6789-4512-819b` -> `ddb9c4b[phone-redacted]b`),
+// destroying the campaign/journey ids that are the entire reason for printing it. A digits-
+// and-dashes pattern cannot tell a phone number from a uuid; a key name can.
+const PII_KEY = /(phone|mobile|msisdn|email|to_address|recipient|address|full_?name|display_?name)/i;
+const EMAIL_VAL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const E164_VAL = /^\+\d{8,15}$/;
+function redactForAlert(body) {
+  const seen = new WeakSet();
+  const walk = (v, key) => {
+    if (v === null || v === undefined) return v;
+    if (typeof v === 'string') {
+      if (key && PII_KEY.test(key)) return '[redacted]';
+      if (EMAIL_VAL.test(v)) return '[email-redacted]';
+      if (E164_VAL.test(v)) return '[phone-redacted]';
+      return v;
+    }
+    if (typeof v !== 'object') return v;
+    if (seen.has(v)) return '[circular]';        // a cyclic body must not hang the alert
+    seen.add(v);
+    if (Array.isArray(v)) return v.map((x) => walk(x, key));
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]));
+  };
+  try { return JSON.stringify(walk(body, null)).slice(0, 1500); }
+  catch { return '(unserialisable payload)'; }
+}
+
 export default {
   // `ctx` is used by webhook routes that must ack 200 immediately and finish the work after
   // the response (ctx.waitUntil). It was absent until 2026-08-03 — the ctx.waitUntil further
@@ -3122,7 +3160,7 @@ export default {
           await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\n`
             + (recorded
                 ? 'Recorded in comms.queue_failures for review.'
-                : `⚠️ COULD NOT record it in comms.queue_failures — this alert is the ONLY copy. Payload:\n\`\`\`${JSON.stringify(b).slice(0, 1500)}\`\`\``)
+                : `⚠️ COULD NOT record it in comms.queue_failures — this alert is the ONLY copy. Payload:\n\`\`\`${redactForAlert(b)}\`\`\``)
             + stalledNote);
         } catch (e) { console.log('dlq_write_error', e?.message || String(e)); }
         msg.ack();   // DLQ is terminal — always ack so it can't loop
