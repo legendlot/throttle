@@ -2698,11 +2698,15 @@ export default {
       return withCors(err('not_found', 404));
     }
 
-    // Agent reply from Pitstop -> widget (S312). INGEST_TOKEN like its /internal siblings.
+    // Agent reply from Pitstop -> widget (S312). Accepts CSOPS_INGEST_TOKEN alongside
+    // INGEST_TOKEN for EXACTLY the /send reason above (S245): csops sends its own
+    // env.INGEST_TOKEN whose VALUE drifted from commsops' years of secrets ago — the
+    // single-token version of this route 401'd every live agent reply in the S312 smoke.
     if (url.pathname === '/internal/web-reply' && request.method === 'POST') {
       const hdr = request.headers.get('Authorization') || '';
       const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : '';
-      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      if (!tok || !((env.INGEST_TOKEN && tok === env.INGEST_TOKEN)
+                 || (env.CSOPS_INGEST_TOKEN && tok === env.CSOPS_INGEST_TOKEN))) return err('unauthorised', 401);
       const b = await request.json().catch(() => ({}));
       const session = await BW.loadSession(env, b.session_id || '');
       if (!session) return err('no_session', 404);
