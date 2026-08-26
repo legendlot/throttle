@@ -32,7 +32,9 @@ export default function NewOrderPage() {
     try {
       const res = await workerFetch('createSalesOrder', { data }, session);
       if (!res.ok) throw new Error(res.error || 'Create failed');
-      showToast(`Order ${res.data.order_no} created`, 'success');
+      const gaps = res.data?.hsn_gaps || [];
+      if (gaps.length) showToast(`Order ${res.data.order_no} created — but no HSN on file for ${gaps.join(', ')}; the GST shown is the form default, not a looked-up rate. Fix the catalogue before invoicing.`, 'error');
+      else showToast(`Order ${res.data.order_no} created`, 'success');
       router.push(`/sales/orders/detail?id=${encodeURIComponent(res.data.id)}`);
     } catch (e) {
       showToast(e.message || 'Create failed', 'error');

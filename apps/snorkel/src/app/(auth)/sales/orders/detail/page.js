@@ -115,7 +115,9 @@ function OrderDetailInner() {
 
   async function confirm() {
     if (!window.confirm('Confirm this order? It will be handed off to the dispatch team (a shipment is created) and lines lock for editing.')) return;
-    await act('confirmOrder', { data: { id } }, 'Order confirmed — sent to dispatch');
+    const res = await act('confirmOrder', { data: { id } }, 'Order confirmed — sent to dispatch');
+    const gaps = res?.data?.hsn_gaps || [];
+    if (gaps.length) showToast(`No HSN on file for ${gaps.join(', ')} — the GST shown is the form default, not a looked-up rate. Get the HSN added to the catalogue before invoicing.`, 'error');
   }
   async function genInvoice() {
     if (!window.confirm('Generate the GST tax invoice? The invoice number is permanent.')) return;
@@ -170,7 +172,9 @@ function OrderDetailInner() {
       const res = await workerFetch('updateSalesOrder', { data: { id, lines: lineEdit } }, session);
       if (!res.ok) throw new Error(res.error || 'Update failed');
       const hs = res.data?.hsn_synced || [];
-      showToast(hs.length ? `Items updated — HSN ${hs[0].to} saved to ${hs.map(h => h.product).join(', ')} for future orders`
+      const gaps = res.data?.hsn_gaps || [];
+      if (gaps.length) showToast(`Items updated — but no HSN on file for ${gaps.join(', ')}; the GST shown is the form default. Fix the catalogue before invoicing.`, 'error');
+      else showToast(hs.length ? `Items updated — HSN ${hs[0].to} saved to ${hs.map(h => h.product).join(', ')} for future orders`
               : res.data?.manifest_synced ? 'Items updated — dispatch manifest updated too'
               : res.data?.dispatch_synced ? 'Items updated — dispatch request updated too'
               : 'Items updated', 'success');

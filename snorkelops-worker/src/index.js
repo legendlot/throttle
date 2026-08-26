@@ -329,6 +329,36 @@ function applyHsnDefaults(lines, master) {
   });
 }
 
+// Products the HSN master cannot answer for. applyHsnDefaults silently no-ops on
+// these, so the line keeps the form's 18% default — indistinguishable from a real
+// 18% rate. SO-0431 (2026-08-22) invoiced a 5% product at 18% exactly this way.
+// Never guess the rate here; name the gap so the caller can surface it loudly.
+function hsnGaps(lines, master) {
+  const gaps = new Set();
+  for (const l of (lines || [])) {
+    if (!l.product) continue;
+    const m = master.get(l.product);
+    if (!m || !m.hsn) gaps.add(l.product);
+  }
+  return [...gaps];
+}
+
+// One PO line per mould, enforced at every line-write. Receiving explodes each
+// mould line into the mould's FULL part list, so a second line for the same mould
+// tells the store to expect every part twice — the SHP-219/221 double-count
+// (2026-08-24). The two-lines-for-two-rates workaround is exactly the harmful
+// case; split-colour pricing is the pending shot-group change, not a second line.
+function duplicateMould(lines, existing) {
+  const seen = new Set((existing || []).map(l => String(l.mould_no || '').trim()).filter(Boolean));
+  for (const l of (lines || [])) {
+    const m = String(l.mould_no || '').trim();
+    if (!m) continue;
+    if (seen.has(m)) return m;
+    seen.add(m);
+  }
+  return null;
+}
+
 // Push corrected codes back onto every active variant of the family. Guarded so a
 // blank or a typo can never wipe/corrupt the master, and every write is logged.
 async function syncHsnToMaster(lines, master, actor, actorRole, orderNo) {
@@ -1728,6 +1758,8 @@ export default {
                 `?vendor_name=ilike.${encodeURIComponent(d.vendor_name)}&select=vendor_code&limit=1`);
               if (vR.ok && vR.data?.[0]?.vendor_code) vendorCode = vR.data[0].vendor_code;
             }
+            const dupMouldC = duplicateMould(d.lines);
+            if (dupMouldC) return err('Mould ' + dupMouldC + ' is on more than one line — one PO line per mould. Each mould line brings its full part list into receiving, so a second line doubles every expected quantity (the SHP-219/221 incident). For split-colour rates, use one line at the blended rate until per-shot pricing is built.', 422);
             const r = await insert('purchase_orders', {
               po_number: poNumber, revision: 0, status: isSoft ? 'Soft' : 'Draft',
               source: d.source, order_type: d.order_type, vendor_name: d.vendor_name,
@@ -1903,6 +1935,8 @@ export default {
               if (received) {
                 return err('This PO already has received quantities — a full line replace would rewrite that history. Use Add Line to append instead.', 409);
               }
+              const dupMouldA = duplicateMould(d.lines);
+              if (dupMouldA) return err('Mould ' + dupMouldA + ' is on more than one line — one PO line per mould (a second line doubles every expected receiving quantity).', 422);
               await sb(`/rest/v1/po_lines?po_number=eq.${encodeURIComponent(d.po_number)}`, { method: 'DELETE' });
               const partHsnMasterA = await partHsnMasterAll();
               const aLines = applyPartHsnDefaults(d.lines, partHsnMasterA);
@@ -1958,6 +1992,8 @@ export default {
             const curR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
             const curLines = curR.data || [];
             // Snapshot the PRE-amendment state against the OLD revision (same shape as amendPO).
+            const dupMouldL = duplicateMould(newLines, curLines);
+            if (dupMouldL) return err('Mould ' + dupMouldL + ' is already on this PO — one line per mould (a second line doubles every expected receiving quantity). Amend the existing line instead.', 422);
             const newRev = po.revision + 1;
             await insert('po_revisions', {
               po_number: d.po_number, revision: po.revision, changed_by: postRole,
@@ -2525,7 +2561,7 @@ export default {
             if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
             const hsnSynced = await syncHsnToMaster(lines, hsnMaster,
               authResult?.fullName || postRole, postRole, order_no);
-            return ok({ id: order.id, order_no, hsn_synced: hsnSynced });
+            return ok({ id: order.id, order_no, hsn_synced: hsnSynced, hsn_gaps: hsnGaps(lines, hsnMaster) });
           }
 
           case 'updateSalesOrder': {
@@ -2697,7 +2733,8 @@ export default {
                   authResult?.fullName || postRole, postRole, null)
               : [];
             return ok({ updated: d.id, dispatch_synced: !!frToSync,
-                        manifest_synced: !!shipmentToSync, hsn_synced: hsnSyncedU });
+                        manifest_synced: !!shipmentToSync, hsn_synced: hsnSyncedU,
+                        hsn_gaps: hsnSyncedOnEdit ? hsnGaps(mergedLines, hsnSyncedOnEdit.master) : [] });
           }
 
           case 'cancelOrder': {
@@ -2784,7 +2821,13 @@ export default {
             if (ch?.collection_type === 'auto' && ch.collection_period_days != null)
               confUpdates.credit_days = Math.round(Number(ch.collection_period_days));
             await update('sales_orders', confUpdates, `id=eq.${encodeURIComponent(d.id)}`);
-            return ok({ confirmed: d.id, request_no: frRes.data[0].request_no });
+            // Warn (not block) on products the HSN master cannot answer for — their GST
+            // is the form's 18% default wearing the costume of a real rate. Blocking here
+            // would freeze ordering for every SKU still awaiting a code from finance, so
+            // the gap is surfaced loudly instead and generateInvoice stays the hard gate.
+            const hsnMasterC = await hsnMasterAll();
+            return ok({ confirmed: d.id, request_no: frRes.data[0].request_no,
+                        hsn_gaps: hsnGaps(lines, hsnMasterC) });
           }
 
           case 'generateInvoice': {
