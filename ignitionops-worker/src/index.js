@@ -2185,9 +2185,33 @@ async function refreshProductPrices(body, auth, env) {
 
 async function getProductPrice(url, auth, env) {
   const sku = (url.searchParams.get('sku') || '').trim();
-  if (!sku) return err('sku required', 400);
-  const r = await sb(`/rest/v1/product_prices?sku=eq.${encodeURIComponent(sku)}&select=sku,title,price,currency,synced_at&limit=1`, env);
-  return ok({ price: r.data?.[0] || null });
+  // Optional: lets the sku_map fallback below run when the direct sku misses.
+  const productCode = (url.searchParams.get('product_code') || '').trim();
+  if (!sku && !productCode) return err('sku required', 400);
+  if (sku) {
+    const r = await sb(`/rest/v1/product_prices?sku=eq.${encodeURIComponent(sku)}&select=sku,title,price,currency,synced_at&limit=1`, env);
+    if (r.data?.[0]) return ok({ price: r.data[0] });
+  }
+  // ⚠️ product_master.sku is STALE for some rows — the HP crest sells on Shopify as
+  // `lotbuild-housecrest-*` while product_master still says `hp-desk-standee-house-crest-*`,
+  // so the direct lookup can never hit (Himani, #bugs 2026-08-26). Odo's sku_map already
+  // holds the live channel sku → product_code mapping, so resolve through it: aliases for
+  // this product_code, tried against the synced price cache. Cross-schema READ only, same
+  // pattern as getProductCogs reading sales.product_cost.
+  if (productCode) {
+    const aliases = await sb(
+      `/rest/v1/sku_map?product_code=eq.${encodeURIComponent(productCode)}&select=channel_sku&limit=20`,
+      env,
+      { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
+    ).catch(() => ({ data: [] }));
+    const skus = [...new Set((aliases.data || []).map(a => (a.channel_sku || '').trim()).filter(s => s && s !== sku))];
+    if (skus.length) {
+      const inList = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+      const r2 = await sb(`/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&select=sku,title,price,currency,synced_at&order=synced_at.desc&limit=1`, env);
+      if (r2.data?.[0]) return ok({ price: r2.data[0] });
+    }
+  }
+  return ok({ price: null });
 }
 
 async function getCouponsForEngagement(url, auth, env) {

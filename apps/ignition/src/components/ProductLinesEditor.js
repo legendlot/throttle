@@ -48,7 +48,12 @@ export default function ProductLinesEditor({ value, onChange, session }) {
       const label = [p.name, p.model, p.color].filter(Boolean).join(' · ');
       // sku rides along for the list-price lookup (S309) — product_prices is
       // sku-keyed, while COGS is product_code-keyed. getCatalogs returns both.
-      return { value: label, label, product_code: p.product_code, sku: p.sku || null };
+      // name/model/color ride along so a pick can SPLIT into the two fields
+      // (product name → Product, model+colour → Variant) — see onProductPicked.
+      return {
+        value: label, label, product_code: p.product_code, sku: p.sku || null,
+        name: p.name || '', model: p.model || '', color: p.color || '',
+      };
     })
     .filter((o, i, a) => a.findIndex(x => x.value === o.value) === i);
 
@@ -72,7 +77,19 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   async function onProductPicked(i, label, opt) {
     const code = opt?.product_code || null;
     const sku = opt?.sku || null;
-    setRow(i, { product_code: label, product_ref: code, cogs_inr: null, list_price_inr: null });
+    // A catalog pick SPLITS into the two fields: product name into Product,
+    // model + colour into Variant / colour. Stuffing the whole "Shadow · Tarmac ·
+    // Black" label into the (narrow) product box left the Variant field empty and
+    // read as "the variant isn't displayed" (Himani, #bugs 2026-08-26) — users then
+    // re-typed a short name over the pick, which is how product_ref kept getting
+    // wiped. Free-typed text (opt null) keeps the old behaviour: the text is the
+    // product name and the Variant field is left alone.
+    const name = opt ? (opt.name || label) : label;
+    const variant = opt ? [opt.model, opt.color].filter(Boolean).join(' ') : null;
+    setRow(i, {
+      product_code: name, product_ref: code, cogs_inr: null, list_price_inr: null,
+      ...(opt && variant ? { product_variant: variant } : {}),
+    });
     if (!session || (!code && !sku)) return;
     // COGS and list price are fetched together but do NOT play the same role.
     //
@@ -85,7 +102,9 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     // the list price explicitly and chooses.
     const [cogsRes, priceRes] = await Promise.all([
       code ? ignitionopsGet('getProductCogs', { product_code: code }, session).catch(() => null) : null,
-      sku ? ignitionopsGet('getProductPrice', { sku }, session).catch(() => null) : null,
+      // product_code rides along so the worker can fall back through Odo's sku_map when
+      // product_master.sku is stale vs the live Shopify sku (the HP crest case).
+      (sku || code) ? ignitionopsGet('getProductPrice', { sku: sku || '', product_code: code || '' }, session).catch(() => null) : null,
     ]);
     const cogs = cogsRes?.cogs_inr;
     // A ₹0 list price is a real answer for creatorshipment-*/prize SKUs, but it is
@@ -94,6 +113,11 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     const list = (listRaw == null || Number(listRaw) <= 0) ? null : Number(listRaw);
     onChangeRef.current(linesRef.current.map((l, idx) => {
       if (idx !== i) return l;
+      // Stale-merge guard: only apply if the row still holds THIS pick. Without it,
+      // clearing or re-typing the product while the fetch was in flight produced a
+      // free-text row wearing the previous pick's COGS (the "SHA" row, ref null but
+      // cogs_inr 523.15 — IGN-2026-00530, 2026-08-26).
+      if (l.product_ref !== code) return l;
       const next = { ...l, list_price_inr: list };
       // uncosted variant — leave the field manual rather than write 0
       if (cogs != null) { next.goodies_cost = cogs; next.cogs_inr = cogs; }

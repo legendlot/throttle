@@ -299,7 +299,13 @@ export function Combobox({
       // restore the selected label so the input doesn't look like a free-text box.
       if (selectedOption && query !== selectedOption.label) {
         setQuery(selectedOption.label);
-      } else if (!selectedOption && query) {
+      } else if (!selectedOption && query && trimmedQuery !== String(value ?? '')) {
+        // Blur is a NO-OP when the text equals the committed value — the user focused
+        // and left without changing anything. Without this guard, a free-text value
+        // that happens to equal some option's label was silently re-resolved to THAT
+        // option on every blur (Ignition: a picked "Shadow · Tarmac · Black" stores
+        // value "Shadow", which exactly matches the remote SHXXR's bare label — so
+        // clicking in and out of the field swapped the car for its remote).
         // Exact-match auto-resolve on blur (helps when user pastes a label).
         const exact = options.find(
           (o) => (o.label || '').toLowerCase() === query.trim().toLowerCase()
@@ -309,7 +315,7 @@ export function Combobox({
         // value, so discarding it on blur is data loss, not caution — and tabbing to the
         // next field is the normal way to leave an input, not an unusual one. Still never
         // fires for a plain creatable picker, where blur must not create a record.
-        else if (freeTextValue && onCreateOption && trimmedQuery && trimmedQuery !== String(value ?? '')) {
+        else if (freeTextValue && onCreateOption && trimmedQuery) {
           onCreateOption(trimmedQuery);
         }
       }

@@ -250,6 +250,8 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
   function startEdit() {
     setLines((products || []).map(p => ({
       product_code: p.product_code || '', product_variant: p.product_variant || '',
+      // product_ref/cogs_inr must survive the editor round-trip — see engagements/detail.
+      product_ref: p.product_ref || null, cogs_inr: p.cogs_inr ?? null,
       quantity: p.quantity ?? 1, goodies_cost: p.goodies_cost ?? '', shipping_cost: p.shipping_cost ?? '',
     })));
     setEditing(true);

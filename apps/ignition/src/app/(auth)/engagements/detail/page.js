@@ -295,6 +295,11 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
   function startEdit() {
     setLines((products || []).map(p => ({
       product_code: p.product_code || '',
+      // Carry the real reference + COGS snapshot through the editor — omitting them
+      // here meant every edit-save silently wiped product_ref/cogs_inr on rows that
+      // had them (linesToPayload nulls what the line object lacks).
+      product_ref: p.product_ref || null,
+      cogs_inr: p.cogs_inr ?? null,
       product_variant: p.product_variant || '',
       quantity: p.quantity ?? 1,
       goodies_cost: p.goodies_cost ?? '',
