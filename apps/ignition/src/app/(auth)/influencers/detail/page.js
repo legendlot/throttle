@@ -318,8 +318,17 @@ export default function InfluencerDetailPage() {
   );
 }
 
-// Business driven (theme ②) — Σ net attributed revenue + commission across all this
-// creator's affiliate codes. The "how much has this creator sent us" number.
+// Business driven (theme ②) — Σ net attributed revenue across all this creator's affiliate
+// codes. The "how much has this creator sent us" number.
+//
+// ⚠️ COMMISSION IS DELIBERATELY NOT SHOWN (Afshaan, 2026-08-26). LOT's affiliate codes are
+// TRACKING-ONLY: they attribute revenue, they do not earn the creator a cut. The card used to
+// render a commission line that was ₹0.00 on every one of the 65 active codes against
+// ₹2,26,161.81 of attributed revenue — which reads as an unpaid debt rather than as "this
+// concept does not apply here". Do NOT restore it, and do NOT "fix" the zero by backfilling
+// affiliate_pct: the rate is absent because no such rate was ever agreed.
+// UGC creator commission (engagements.commission_earned/_paid) is a SEPARATE, real thing —
+// leave that alone. See reference/decisions.md.
 function AttributionCard({ inf, session }) {
   const [att, setAtt] = useState(null);
   useEffect(() => {
@@ -332,7 +341,6 @@ function AttributionCard({ inf, session }) {
     <Card title="Business driven">
       <KV label="Net revenue" value={<strong style={{ color: '#FF6B00' }}>₹{Number(att.net_revenue || 0).toLocaleString()}</strong>} />
       <KV label="Redemptions" value={(att.redemptions || 0).toLocaleString()} />
-      <KV label="Commission" value={`₹${Number(att.commission || 0).toLocaleString()}`} />
       <KV label="Affiliate codes" value={att.codes || 0} />
     </Card>
   );

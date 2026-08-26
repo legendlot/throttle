@@ -2432,6 +2432,129 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   return { ok: true, data: { url, slug, target_url: targetUrl, utm, already: false } };
 }
 
+// ── Batch B ① — deal brief + post reminder, DRAFT AND INERT (S313) ──────────────────────────
+//
+// ⚠️ NOTHING HERE SENDS ANYTHING, and that is the decision, not an omission (Afshaan
+// 2026-08-26: "build a draft first, ship inert, Reann edits real content before anything is
+// armed"). These endpoints COMPOSE and RETURN text. Wiring them to commsops `/send` is a
+// separate phase with two hard prerequisites that do not exist yet:
+//   · `/send` resolves a Relay TEMPLATE (`template_not_found` without one) — the brief has to
+//     become a real template, authored by whoever owns the words;
+//   · influencers are not `comms.profiles` yet, so there is no profile/consent record to send
+//     against, and the send gate is what makes suppressions work.
+// Building the send first would mean inventing the copy AND the consent story. Compose first,
+// let Reann edit, then arm.
+//
+// Wording note: this draft is deliberately plain and slightly under-written. It is meant to be
+// argued with, not shipped as-is.
+function composeDealBrief(eng, products, coupons) {
+  const inf = eng.influencer || {};
+  const who = inf.person_name || inf.channel_name || 'there';
+  const items = (products || [])
+    .map(p => `· ${[p.product_code, p.product_variant].filter(Boolean).join(' ')}${Number(p.quantity) > 1 ? ` ×${p.quantity}` : ''}`)
+    .join('\n') || '· (product to be confirmed)';
+  const code = (coupons || []).find(c => c.kind === 'affiliate' && c.status === 'active');
+  const lines = [
+    `Hi ${who},`,
+    '',
+    `Here are the details for your collaboration with Legend of Toys (${eng.engagement_no}).`,
+    '',
+    'What we are sending you:',
+    items,
+    '',
+  ];
+  if (eng.expected_post_date) lines.push(`When we would like it live: ${eng.expected_post_date}`, '');
+  if (eng.utm_link) {
+    lines.push(
+      'Your tracking link — please use this one, it is how your results are credited to you:',
+      eng.utm_link, '',
+    );
+  }
+  if (code) {
+    lines.push(`Your discount code for your audience: ${code.code}`, '');
+  }
+  lines.push(
+    'A few things to include:',
+    '· mention the discount code out loud, not only on screen',
+    '· show the car actually moving for 15–20 seconds',
+    '· put the tracking link in your caption or bio',
+    '',
+    'Anything unclear, just reply to this email.',
+    '',
+    'Thanks,',
+    'Legend of Toys',
+  );
+  // Gaps worth seeing BEFORE the thing is sent, rather than discovering them in a creator's inbox.
+  const warnings = [];
+  if (!inf.email) warnings.push('This influencer has no email address on record — there is nowhere to send this.');
+  if (!eng.utm_link) warnings.push('No tracking link on this deal yet — the brief will not carry one.');
+  if (!code) warnings.push('No active affiliate code on this deal — the brief will not carry one.');
+  if (!eng.expected_post_date) warnings.push('No expected post date set, so the brief does not ask for one.');
+  return {
+    to: inf.email || null,
+    subject: `Your Legend of Toys collaboration — ${eng.engagement_no}`,
+    body: lines.join('\n'),
+    warnings,
+  };
+}
+
+async function getDealBriefPreview(url, auth, env) {
+  const id = url.searchParams.get('engagement_id');
+  if (!id) return err('engagement_id required', 400);
+  const r = await sb(`/rest/v1/engagements?id=eq.${id}&select=*,influencer:influencer_id(*)&limit=1`, env);
+  const eng = r.ok ? r.data?.[0] : null;
+  if (!eng) return err('not_found', 404);
+  const [pr, cr] = await Promise.all([
+    sb(`/rest/v1/engagement_products?engagement_id=eq.${id}&select=*&order=sort_order.asc`, env),
+    sb(`/rest/v1/coupon_codes?engagement_id=eq.${id}&select=code,kind,status`, env),
+  ]);
+  const draft = composeDealBrief(eng, pr.data || [], cr.data || []);
+  // `armed:false` is load-bearing in the response: the UI must be able to say plainly that this
+  // is a preview of something that cannot currently be sent, rather than implying a Send button
+  // is one click away.
+  return ok({ ...draft, armed: false });
+}
+
+// Who would be nudged today, and why. Merges B5 (10 days after delivery, no post) with Reann's
+// separate "(3) Delhivery status → follow-up reminder" request — they are the same nudge with
+// two triggers, and building them separately would let both fire at one creator.
+async function getPostReminderDue(url, auth, env) {
+  const days = Math.max(Number(url.searchParams.get('days') || 10), 1);
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
+  // posted, and nobody has already written the deal off.
+  const r = await sb(
+    '/rest/v1/engagements?select=engagement_no,stage,post_date,delivered_date,shipping_date,utm_link,gifted_no_post,'
+    + 'influencer:influencer_id(influencer_code,channel_name,person_name,email,do_not_ship)'
+    + '&post_date=is.null&gifted_no_post=not.is.true'
+    + '&stage=in.(shipped,delivered,scheduled,draft,posting,delayed)'
+    + '&order=delivered_date.asc&limit=500',
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const due = (r.data || [])
+    .map(e => {
+      const anchor = e.delivered_date || e.shipping_date || null;
+      if (!anchor || anchor > cutoff) return null;
+      if (e.influencer?.do_not_ship) return null;
+      const ageDays = Math.floor((Date.now() - new Date(anchor).getTime()) / 86400000);
+      return {
+        engagement_no: e.engagement_no, stage: e.stage,
+        influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code,
+        email: e.influencer?.email || null,
+        trigger: e.delivered_date ? 'delivered' : 'shipped (no delivery date recorded)',
+        days_since: ageDays,
+        has_tracking_link: !!e.utm_link,
+      };
+    })
+    .filter(Boolean);
+  return ok({
+    days, due, count: due.length,
+    unreachable: due.filter(d => !d.email).length,
+    armed: false,
+  });
+}
+
 async function getCouponsForEngagement(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
@@ -3237,6 +3360,8 @@ const GET_ACTIONS = {
   getProductPrice,
   getInfluencerAttribution,
   getQualityFlags,
+  getDealBriefPreview,
+  getPostReminderDue,
 };
 
 const POST_ACTIONS = {

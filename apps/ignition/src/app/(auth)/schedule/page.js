@@ -80,6 +80,8 @@ export default function SchedulePage() {
         <span style={{ marginLeft: 'auto', color: 'var(--text-2)' }}>{rows.length} in {MONTHS[m]}</span>
       </div>
 
+      <ChasingList session={session} router={router} />
+
       {loading ? <Spinner /> : view === 'calendar' ? (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
@@ -152,3 +154,48 @@ function dot(bg, planned) {
 const navBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 28, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontFamily: 'var(--font-mono)' };
 const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
 const td = { padding: '10px 12px' };
+
+// "Who is overdue to post" — the chasing list (S313). Merges Reann's two separate asks: the
+// 10-day-no-post reminder (Batch B5) and the Delhivery-delivered follow-up. They are one nudge
+// with two triggers, and keeping them separate would let both land on the same creator.
+//
+// ⚠️ It LISTS, it does not send. Nothing in Ignition can email a creator yet — the send path
+// needs a Relay template and an influencer comms profile. Until then this is the worklist
+// someone works by hand, which is strictly better than the nothing that was here before.
+function ChasingList({ session, router }) {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getPostReminderDue', { days: 10 }, session).then(setData).catch(() => setData(null));
+  }, [session]);
+  if (!data || !data.count) return null;
+  return (
+    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
+        <span style={{ color: '#FF6B00', fontWeight: 700 }}>{data.count}</span>
+        <span>waiting to post 10+ days after delivery</span>
+        {data.unreachable > 0 && (
+          <span style={{ color: 'var(--text-3)' }}>· {data.unreachable} with no email on record</span>
+        )}
+        <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{open ? 'hide' : 'show'}</span>
+      </button>
+      {open && (
+        <div style={{ borderTop: '1px solid var(--border)', maxHeight: 320, overflowY: 'auto' }}>
+          {data.due.map(d => (
+            <div key={d.engagement_no}
+              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
+              <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
+              <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
+              <span style={{ color: 'var(--text-3)' }}>{d.days_since}d</span>
+              {!d.email && <span style={{ color: 'var(--state-error-fg)' }}>no email</span>}
+              {!d.has_tracking_link && <span style={{ color: 'var(--text-3)' }}>no link</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
