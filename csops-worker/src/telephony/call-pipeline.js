@@ -25,6 +25,57 @@
 // interaction. Every call is still its own cs_calls row — this de-duplicates TICKETS.
 export const COALESCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+// ── Out-of-hours attribution (Pruthvi, #bugs 2026-08-26) ─────────────────────
+//
+// Exotel rings an agent's phone whether or not their shift has started, and we then
+// handed them the ticket. Measured over the 30 days to 2026-08-26 on incoming calls:
+// 75 ABANDONED calls that arrived outside the agent's shift were assigned to an agent
+// who never spoke to anyone — 08:52–10:22 against a 10:30 shift start, in one morning
+// alone. Those tickets belong in the unassigned queue, not on someone's name.
+//
+// ⚠️ The rule is deliberately NOT "outside hours → unassigned". The same measurement
+// found 26 incoming calls that an agent ANSWERED outside their own shift. They did the
+// work, so they keep the ticket; stripping those would take credit for real early
+// starts and is the mirror-image error. The gate therefore needs BOTH conditions:
+// outside the shift AND never answered.
+//
+// Shift resolution mirrors cs_agent_conversation_report's COALESCE chain exactly —
+// agent shift → department shift → 10:00-19:00 Mon-Sat — so "office hours" means one
+// thing across the reports and this gate. Minutes are IST minutes-of-day; ISO weekday
+// (Mon=1..Sun=7) matches working_days as stored.
+export const DEFAULT_SHIFT = { start_min: 600, end_min: 1140, days: [1, 2, 3, 4, 5, 6] };
+
+export function istMinutesAndDow(startedAt) {
+  const d = startedAt instanceof Date ? startedAt : new Date(startedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  // +05:30, computed from the epoch so it is DST- and locale-proof.
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+  const dow = ist.getUTCDay() === 0 ? 7 : ist.getUTCDay();   // ISO: Mon=1..Sun=7
+  return { minutes: ist.getUTCHours() * 60 + ist.getUTCMinutes(), dow };
+}
+
+export function withinShift(startedAt, shift) {
+  const t = istMinutesAndDow(startedAt);
+  if (!t) return true;            // unparseable time → never withhold attribution
+  const s = shift || DEFAULT_SHIFT;
+  const days = Array.isArray(s.days) && s.days.length ? s.days : DEFAULT_SHIFT.days;
+  if (!days.includes(t.dow)) return false;
+  return t.minutes >= s.start_min && t.minutes <= s.end_min;
+}
+
+/**
+ * Should this call hand its ticket to the agent whose phone rang?
+ * Incoming + never answered + outside their shift → no. Everything else → yes.
+ * Outgoing calls are untouched: the agent placed them, so hours are irrelevant.
+ */
+export function shouldAssignTicket(norm, shift) {
+  if (norm?.direction !== 'incoming') return true;
+  const answered = Number(norm?.talk_duration_seconds) > 0;
+  if (answered) return true;
+  return withinShift(norm?.started_at, shift);
+}
+
+
 // Who the audit trail credits an automated write to. Keeping 'MyOperator (auto)'
 // byte-identical matters: it is what ~17,700 existing cs_ticket_history rows say,
 // and the ticket timeline groups on it.
@@ -130,6 +181,23 @@ export function makeCallPipeline(deps) {
   const {
     env, sb, toE164, shopifyLookup, resolveAgentByEmail, inferOrderLink, SLA_DAYS,
   } = deps;
+
+  // Agent shift → department shift → DEFAULT_SHIFT. Same chain as the reports RPC.
+  async function shiftForAgent(agentId) {
+    if (!agentId) return DEFAULT_SHIFT;
+    const a = await sb(`/rest/v1/cs_agent_shifts?user_id=eq.${agentId}&is_active=is.true`
+      + `&select=start_min,end_min,working_days&limit=1`, env).catch(() => null);
+    const ag = a?.data?.[0];
+    if (ag) return { start_min: ag.start_min, end_min: ag.end_min, days: ag.working_days };
+    const up = await sb(`/rest/v1/users_profile?id=eq.${agentId}&select=cs_department_id&limit=1`, env)
+      .catch(() => null);
+    const deptId = up?.data?.[0]?.cs_department_id;
+    if (!deptId) return DEFAULT_SHIFT;
+    const d = await sb(`/rest/v1/cs_shifts?cs_department_id=eq.${deptId}&is_active=is.true`
+      + `&select=start_min,end_min,working_days&limit=1`, env).catch(() => null);
+    const ds = d?.data?.[0];
+    return ds ? { start_min: ds.start_min, end_min: ds.end_min, days: ds.working_days } : DEFAULT_SHIFT;
+  }
 
   async function insertHistorySystem(ticket_id, field_name, old_value, new_value, note, provider) {
     await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
@@ -262,7 +330,12 @@ export function makeCallPipeline(deps) {
       // so this costs no extra API call.
       ...(inferOrderLink(shop) || {}),
       due_at: new Date(Date.now() + (SLA_DAYS['pending'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
-      assigned_agent_id: agent.id, assigned_agent_name: agent.name,
+      // Same out-of-hours gate as attributeAgent. Usually a no-op here — `agent` is
+      // normally null on the first event and the summary assigns later — but a ticket
+      // created straight from an already-abandoned call would otherwise slip past it.
+      ...(shouldAssignTicket(norm, await shiftForAgent(agent.id))
+        ? { assigned_agent_id: agent.id, assigned_agent_name: agent.name }
+        : {}),
       stage: 'intake',
     }) });
     if (!ins.ok) return { ok: false, error: `insert failed: ${JSON.stringify(ins.data)}`, status: ins.status };
@@ -317,7 +390,17 @@ export function makeCallPipeline(deps) {
       const callRow = await sb(`/rest/v1/cs_calls?${idq}&select=ticket_id`, env);
       ticketId = callRow.data?.[0]?.ticket_id || null;
     }
+    // The cs_calls attribution above is left ALONE on purpose: Exotel really did ring
+    // this agent, and that is a true record worth keeping in the call log. What is
+    // withheld below is only OWNERSHIP of the ticket.
     if (ticketId) {
+      const shift = await shiftForAgent(agent.id);
+      if (!shouldAssignTicket(norm, shift)) {
+        await insertHistorySystem(ticketId, 'assigned_agent_name', null, null,
+          `left unassigned — ${agent.name}'s phone rang outside their shift and the call `
+          + 'was not answered', norm.provider);
+        return { ok: true, assigned: null, withheld: 'out_of_hours_unanswered', ticket_id: ticketId };
+      }
       await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}`, env, {
         method: 'PATCH',
         body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }),

@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   makeCallPipeline, pickConnectedLeg, normaliseDirection, agentEmailFromLegs,
-  COALESCE_WINDOW_MS,
+  COALESCE_WINDOW_MS, shouldAssignTicket, withinShift, istMinutesAndDow,
 } from './call-pipeline.js';
 
 // ── stub harness ─────────────────────────────────────────────────────────────
@@ -296,4 +296,61 @@ test('out-of-order: call.end before call.answered still stamps started_at', asyn
   const stamped = calls.filter(c => c.body && 'started_at' in c.body);
   assert.equal(stamped.length, 1, 'started_at must be written on the out-of-order path');
   assert.equal(stamped[0].body.raw_meta.last_event, 'answered');
+});
+
+// ── out-of-hours attribution (Pruthvi, #bugs 2026-08-26) ─────────────────────
+//
+// The gate needs BOTH conditions, and the second one is the whole point: 26 incoming
+// calls in the measured month were ANSWERED outside the agent's shift, so a naive
+// "outside hours → unassigned" rule would have taken the ticket off agents who did
+// the work. These tests pin both directions.
+
+const SHIFT = { start_min: 630, end_min: 1140, days: [1, 2, 3, 4, 5, 6] };   // 10:30–19:00 Mon–Sat
+
+// 2026-08-26 is a Wednesday. IST = UTC+5:30.
+const istAt = (h, m) => new Date(Date.UTC(2026, 7, 26, h, m) - 5.5 * 60 * 60 * 1000).toISOString();
+
+test('shouldAssignTicket: incoming, unanswered, before shift → withheld', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', talk_duration_seconds: 0, started_at: istAt(8, 52) }, SHIFT), false);
+});
+
+test('shouldAssignTicket: incoming, ANSWERED before shift → still assigned', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', talk_duration_seconds: 47, started_at: istAt(8, 52) }, SHIFT), true);
+});
+
+test('shouldAssignTicket: incoming, unanswered, inside shift → assigned', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', talk_duration_seconds: 0, started_at: istAt(11, 0) }, SHIFT), true);
+});
+
+test('shouldAssignTicket: outgoing is never withheld', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'outgoing', talk_duration_seconds: 0, started_at: istAt(3, 0) }, SHIFT), true);
+});
+
+test('shouldAssignTicket: non-working day is outside hours', () => {
+  // 2026-08-30 is a Sunday; SHIFT works Mon–Sat.
+  const sunday = new Date(Date.UTC(2026, 7, 30, 12, 0) - 5.5 * 60 * 60 * 1000).toISOString();
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', talk_duration_seconds: 0, started_at: sunday }, SHIFT), false);
+});
+
+test('shouldAssignTicket: unparseable time never withholds attribution', () => {
+  assert.equal(shouldAssignTicket(
+    { direction: 'incoming', talk_duration_seconds: 0, started_at: 'not-a-date' }, SHIFT), true);
+});
+
+test('istMinutesAndDow: IST conversion is epoch-based, not locale-based', () => {
+  const t = istMinutesAndDow(istAt(10, 30));
+  assert.equal(t.minutes, 630);
+  assert.equal(t.dow, 3);   // Wednesday
+});
+
+test('withinShift: boundary minutes are inclusive at both ends', () => {
+  assert.equal(withinShift(istAt(10, 30), SHIFT), true);
+  assert.equal(withinShift(istAt(19, 0), SHIFT), true);
+  assert.equal(withinShift(istAt(10, 29), SHIFT), false);
+  assert.equal(withinShift(istAt(19, 1), SHIFT), false);
 });
