@@ -342,6 +342,7 @@ export default function InboxPage() {
   // timestamp, so a NEW message on an already-notified thread does notify again.
   const notifiedRef = useRef(new Set());
   const [statsReady, setStatsReady] = useState(false);   // first successful stats load — see the chime effect
+  const [channelAlerts, setChannelAlerts] = useState([]);   // channel-health banner (S314, in-app only)
   const prevAwaitingRef = useRef(null);
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
@@ -438,6 +439,14 @@ export default function InboxPage() {
       const d = await csopsGet('getMessagingStats', {}, session);
       if (d?.stats) { setStats(d.stats); setStatsReady(true); }
     } catch { /* tiles are best-effort */ }
+    // Channel-health banner (S314). Rides the existing 30s stats poll rather than adding a
+    // second timer — the alarm updates 4×/day, so its own poll would be pure overhead.
+    // ⚠️ Alerts are IN-APP ONLY, never Slack (Afshaan 2026-08-26). Failing quietly is right:
+    // a health banner must never be the reason the inbox degrades.
+    try {
+      const a = await csopsGet('getChannelAlerts', {}, session);
+      setChannelAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
+    } catch { /* banner is best-effort */ }
   }, [session]);
 
   // Export what is ON SCREEN (Pruthvi, 2026-08-18 — "respecting the filters and date range
@@ -1406,6 +1415,35 @@ export default function InboxPage() {
         <div style={{ flexShrink: 0, fontSize: 12, color: 'var(--bad-fg)', background: 'var(--bad-bg)',
           borderBottom: '1px solid var(--bad-bd)', padding: '8px 16px' }}>{err}</div>
       )}
+
+      {/* Channel-health banner (S314). The 20–24 Aug Instagram outage was invisible from inside
+          Pitstop — agents saw a send fail, nobody saw that EVERY send was failing — and it
+          surfaced two days late as a Slack message. This is that signal, put where the people
+          working the channel already are.
+
+          ⚠️ IN-APP ONLY, never Slack (Afshaan 2026-08-26). It is not dismissible on purpose:
+          it clears when the channel actually recovers, and a dismissed outage banner is how an
+          outage gets forgotten. It is driven by cs_channel_alert_state, which the csops cron
+          reconciles 4×/day, so it costs one cheap read on the existing 30s stats poll. */}
+      {channelAlerts.length > 0 && channelAlerts.map(a => {
+        const hrs = a.since ? Math.max(1, Math.round((Date.now() - new Date(a.since).getTime()) / 3600000)) : null;
+        return (
+          <div key={a.channel} style={{ flexShrink: 0, fontSize: 12, display: 'flex', gap: 8,
+            alignItems: 'baseline', color: 'var(--bad-fg)', background: 'var(--bad-bg)',
+            borderBottom: '1px solid var(--bad-bd)', padding: '8px 16px' }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0, alignSelf: 'center' }} />
+            <span>
+              <strong>{a.label}: {a.verdict === 'silent' ? 'nobody is replying' : 'replies are being refused'}</strong>
+              {' — '}
+              {a.verdict === 'silent'
+                ? <>{a.inbound != null ? `${a.inbound.toLocaleString()} customer messages` : 'customers have written in'} over the last 24h and no agent reply has gone out{a.baseline_median ? ` (normally ~${Math.round(a.baseline_median)}/day)` : ''}.
+                    Automated replies may still be sending, so the channel can look fine from outside.</>
+                : <>{a.agent_failed != null ? `${a.agent_failed} agent replies` : 'Agent replies'} were refused by the provider in the last 24h. Open one of those conversations to see the reason.</>}
+              {hrs ? ` Flagged ${hrs}h ago.` : ''}
+            </span>
+          </div>
+        );
+      })}
 
       {/* Two-pane via grid: list shrinks 320→200, conversation holds a 340px floor so
           it never collapses to a sliver in narrow/zoomed desktop windows (was a fixed

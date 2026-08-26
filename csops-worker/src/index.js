@@ -887,6 +887,7 @@ async function handleGet(action, params, auth, env) {
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'getWaConversation':   return getWaConversation(params, auth, env);
     case 'getMessagingStats':   return getMessagingStats(params, auth, env);
+    case 'getChannelAlerts':    return getChannelAlerts(params, auth, env);   // in-app channel-health banner (no Slack — Afshaan 2026-08-26)
     case 'getClosureRequests':  return getClosureRequests(params, auth, env);
     case 'getAgentInboxCounts': return getAgentInboxCounts(params, auth, env);
     case 'getEmailAttachment':  return getEmailAttachment(params, auth, env);
@@ -6521,27 +6522,25 @@ async function getWaConversationLocal(thread, env) {
 // Detection is in SQL (store.cs_detect_silent_channels) so it can be replayed against any
 // past timestamp — it was validated by calling it across 15–24 Aug before being wired up.
 // It first trips at 21 Aug 23:00 IST with "405 inbound, 0 agent replies".
-const SLACK_ALERT_REPEAT_HOURS = 12;   // re-nag at most twice a day while an outage persists
-
-// Fail-open Slack post. Mirrors commsops/src/alerts.js and the throttleops SLACK_WEBHOOK_<CH>
-// convention. A misconfigured webhook must never fail the cron that carries it.
-async function slackAlert(env, text) {
-  if (!env.SLACK_WEBHOOK_ALERTS) { console.log('[Slack:cs-alerts]', text); return false; }
-  try {
-    const r = await fetch(env.SLACK_WEBHOOK_ALERTS, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!r.ok) console.log('cs_alert_delivery_failed', r.status);   // a dead webhook must not be silent
-    return r.ok;
-  } catch (e) { console.error('[Slack:cs-alerts] failed:', e.message); return false; }
-}
-
+// ⚠️ IN-APP ONLY — NO SLACK. Standing instruction from Afshaan 2026-08-26: Pitstop alerts are
+// surfaced inside the app, never posted to Slack. If Pruthvi ever asks for a Slack alert
+// specifically, confirm with Afshaan that it is actually wanted BEFORE building it; do not
+// add a webhook here on a team request alone. (The first cut of this alarm did post to Slack
+// and was reworked the same day — the detector was fine, the delivery channel was wrong.)
+//
+// The cron therefore only maintains `store.cs_channel_alert_state`; the app reads it and
+// renders the banner. That also makes the alert durable rather than a message that scrolls
+// away — an outage stays visible on screen until it actually recovers.
 const CH_LABEL = { instagram: 'Instagram', whatsapp: 'WhatsApp', email: 'Email',
                    messenger: 'Messenger', web: 'Web' };
 
-// Run the detector, diff against stored state, post only on change (or every 12h while it
-// persists), and post a recovery line when a channel comes back.
+// Run the detector and reconcile `cs_channel_alert_state` with it. Nothing is "sent" anywhere —
+// the state table IS the alert, and Pitstop renders it (getChannelAlerts → the inbox banner).
+//
+// A recovering channel is DELETED rather than marked resolved: the banner should disappear the
+// moment the channel answers again, and nobody needs a history of alarms that cleared. The
+// duration is folded into the row while it is live so the banner can say how long it has been
+// down without a second query.
 async function runChannelHealthCheck(env) {
   const d = await sb('/rest/v1/rpc/cs_detect_silent_channels', env, {
     method: 'POST', body: JSON.stringify({}),
@@ -6553,46 +6552,57 @@ async function runChannelHealthCheck(env) {
   const st = await sb('/rest/v1/cs_channel_alert_state?select=*', env);
   const prev = new Map((st.data || []).map(r => [r.channel, r]));
   const now = new Date().toISOString();
-  let posted = 0;
+  let raised = 0;
 
   for (const a of alerts) {
     const p = prev.get(a.channel);
-    const changed = !p || p.verdict !== a.verdict;
-    const stale = p && (Date.now() - new Date(p.last_alert_at).getTime()) > SLACK_ALERT_REPEAT_HOURS * 3600 * 1000;
-    if (changed || stale) {
-      const label = CH_LABEL[a.channel] || a.channel;
-      const msg = a.verdict === 'silent'
-        ? `:rotating_light: *${label} — no agent replies in 24h.* ${a.inbound} customer messages came in and not one was answered by an agent (normal for this channel: ~${a.baseline_median}/day). Automated sends may still be flowing, so the channel can look healthy from outside. Check the send path and the credential.`
-        : `:warning: *${label} — agent sends are failing.* ${a.agent_failed} of ${a.agent_failed + (a.agent_sends - a.agent_failed)} agent sends in the last 24h were refused by the provider. Check Pitstop → the affected conversations for the provider error.`;
-      if (await slackAlert(env, msg)) posted++;
-      await sb(`/rest/v1/cs_channel_alert_state?on_conflict=channel`, env, {
-        method: 'POST',
-        prefer: 'resolution=merge-duplicates',
-        body: JSON.stringify({
-          channel: a.channel, verdict: a.verdict, last_alert_at: now, last_payload: a,
-          ...(p ? { alert_count: (p.alert_count || 1) + 1 } : { first_seen_at: now, alert_count: 1 }),
-        }),
-      }).catch(e => console.error('[cs-health] state upsert failed', e.message));
-    }
+    // Upsert on every tick: the banner shows live counts, so a stale payload would understate
+    // an outage that is still growing. `first_seen_at` is preserved so "down for 6h" is real.
+    if (!p) raised++;
+    await sb(`/rest/v1/cs_channel_alert_state?on_conflict=channel`, env, {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates',
+      body: JSON.stringify({
+        channel: a.channel, verdict: a.verdict, last_alert_at: now, last_payload: a,
+        ...(p ? { alert_count: (p.alert_count || 1) + 1 } : { first_seen_at: now, alert_count: 1 }),
+      }),
+    }).catch(e => console.error('[cs-health] state upsert failed', e.message));
     prev.delete(a.channel);
   }
 
-  // Anything still in `prev` was alerting and no longer is — post the recovery and clear it.
-  for (const [channel, p] of prev) {
-    const label = CH_LABEL[channel] || channel;
-    const mins = Math.round((Date.now() - new Date(p.first_seen_at).getTime()) / 60000);
-    const dur = mins >= 1440 ? `${(mins / 1440).toFixed(1)} days` : `${Math.round(mins / 60)}h`;
-    await slackAlert(env, `:white_check_mark: *${label} is answering again* — agents are replying normally. It was silent for about ${dur}.`);
+  // Anything still in `prev` was alerting and no longer is — clear it so the banner drops.
+  for (const [channel] of prev) {
     await sb(`/rest/v1/cs_channel_alert_state?channel=eq.${encodeURIComponent(channel)}`, env, { method: 'DELETE' })
       .catch(e => console.error('[cs-health] state clear failed', e.message));
   }
 
-  return { ok: true, team_active: !!res.team_active, alerts: alerts.length, posted,
+  return { ok: true, team_active: !!res.team_active, alerts: alerts.length, raised,
            recovered: prev.size, channels: (res.channels || []).length };
 }
 
+// What the Pitstop banner reads. Deliberately on the WIDE gate (cs_ticket_view, same as the
+// inbox itself): a channel nobody is answering is operational information for every agent, not
+// an admin secret, and the agent on that channel is the person best placed to notice it is
+// wrong. Cheap — at most one row per channel, and usually zero.
+async function getChannelAlerts(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb('/rest/v1/cs_channel_alert_state?select=channel,verdict,first_seen_at,last_payload&order=channel.asc', env);
+  if (!r.ok) return ok({ alerts: [] });   // best-effort: a banner must never break the inbox
+  return ok({
+    alerts: (r.data || []).map(row => ({
+      channel: row.channel,
+      label: CH_LABEL[row.channel] || row.channel,
+      verdict: row.verdict,
+      since: row.first_seen_at,
+      inbound: row.last_payload?.inbound ?? null,
+      agent_failed: row.last_payload?.agent_failed ?? null,
+      baseline_median: row.last_payload?.baseline_median ?? null,
+    })),
+  });
+}
+
 // Admin action — run the check on demand, or replay it against a past timestamp to see what
-// it WOULD have said (`as_of`). `dry_run` defaults true so inspecting it never posts to Slack.
+// it WOULD have said (`as_of`). `dry_run` defaults true so inspecting it never writes state.
 async function checkChannelHealth(body, auth, env) {
   const g = require('cs_ticket_admin', auth); if (g) return g;
   const dryRun = body?.dry_run !== false;
