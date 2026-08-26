@@ -930,6 +930,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'transferThreadToIgnition': return transferThreadToIgnition(body, auth, env);
     case 'bulkAssignThreads':        return bulkAssignThreads(body, auth, env);
     case 'bulkSetThreadState':      return bulkSetThreadState(body, auth, env);
+    case 'bulkTransferToIgnition':  return bulkTransferToIgnition(body, auth, env);
     case 'setThreadPriority':        return setThreadPriority(body, auth, env);
     case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
@@ -8057,6 +8058,73 @@ async function assignThread(body, auth, env) {
 // assigning to another agent = cs_ticket_reassign/admin. A plain agent
 // releasing (agent_id null) only ever clears their OWN threads (scoped filter).
 // One subrequest regardless of count, so no Cloudflare subrequest-limit risk.
+// Bulk hand-off to the Influencer team (Pruthvi, #bugs 2026-08-24). The single-thread
+// path already existed; this is the same action over a selection, matching bulk assign
+// and bulk resolve in the same band.
+//
+// ⚠️ The per-thread ownership rule from transferThreadToIgnition is enforced PER THREAD,
+// not once for the batch. Without cs_ticket_reassign an agent may only transfer
+// conversations that are their own or unassigned — a bulk action must not become the way
+// round a permission the single action enforces.
+//
+// ⚠️ Threads already with Ignition are SKIPPED, not failed. A selection of 40 that
+// happens to include 2 already-transferred ones should move the other 38, not refuse the
+// lot — and the caller is told exactly what happened to each group.
+async function bulkTransferToIgnition(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_ids, note } = body || {};
+  if (!Array.isArray(thread_ids) || thread_ids.length === 0) return err('thread_ids[] required');
+  if (thread_ids.length > 200) return err('too many conversations in one action (max 200)');
+
+  const idList = thread_ids.map(id => encodeURIComponent(id)).join(',');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=in.(${idList})`
+    + `&select=id,channel,assigned_agent_id,ignition_connect`, env);
+  if (!tRes.ok) return err('Failed to load conversations', 500);
+  const threads = tRes.data || [];
+
+  const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+  const eligible = [], already = [], forbidden = [];
+  for (const t of threads) {
+    if (t.ignition_connect) { already.push(t.id); continue; }
+    const ownsOrFree = !t.assigned_agent_id || t.assigned_agent_id === auth.userId;
+    if (!canReassign && !ownsOrFree) { forbidden.push(t.id); continue; }
+    eligible.push(t);
+  }
+  if (!eligible.length) {
+    return ok({ transferred: 0, already_with_ignition: already.length, not_yours: forbidden.length });
+  }
+
+  const now = new Date().toISOString();
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=in.(${eligible.map(t => encodeURIComponent(t.id)).join(',')})`, env, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      ignition_connect: true, ignition_transferred_at: now, ignition_transferred_by: auth.userId,
+      assigned_agent_id: null, assigned_agent_name: null, assigned_at: null, updated_at: now,
+    }),
+  });
+  if (!upd.ok) return err('Bulk transfer failed', upd.status || 500);
+
+  // One handoff note per thread, same text as the single path — it is what the Influencer
+  // team reads on arrival and the CS audit line. ONE array insert, not a loop of awaits.
+  const fromName = auth.fullName || auth.name || auth.email || 'Agent';
+  const noteText = (note && String(note).trim()) ? `: ${String(note).trim()}` : '';
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify(eligible.map(t => ({
+      thread_id: t.id, channel: t.channel || 'whatsapp', direction: 'outbound',
+      kind: 'note', is_internal: true, body: `↪ Transferred to Influencer team (Ignition)${noteText}`,
+      status: null, sent_by_user_id: auth.userId, sent_by_name: fromName, sent_at: now,
+    }))),
+  }).catch(() => {});   // the transfer is done; a missing note must not fail it
+
+  return ok({
+    transferred: (upd.data || []).length,
+    already_with_ignition: already.length,
+    not_yours: forbidden.length,
+  });
+}
+
 async function bulkAssignThreads(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_ids, agent_id } = body;

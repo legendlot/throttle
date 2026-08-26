@@ -1082,6 +1082,33 @@ export default function InboxPage() {
     finally { setBulkBusy(false); }
   }
 
+  // Bulk transfer to the Influencer team (Pruthvi, 2026-08-24). Confirms first, like bulk
+  // resolve: it un-assigns every conversation and moves it out of the CS inbox entirely,
+  // and undoing it is one-at-a-time.
+  //
+  // The worker skips conversations already with Ignition and, for an agent without
+  // cs_ticket_reassign, ones belonging to somebody else — so the result is reported back
+  // rather than assumed. A silent "40 selected, 38 moved" is how people stop trusting it.
+  async function bulkTransferIgnition() {
+    if (selectedIds.size === 0) return;
+    const n = selectedIds.size;
+    if (!window.confirm(`Transfer ${n} conversation${n === 1 ? '' : 's'} to the Influencer team? They leave the CS inbox.`)) return;
+    setErr(null); setBulkBusy(true);
+    try {
+      const r = await csopsPost('bulkTransferToIgnition', { thread_ids: [...selectedIds] }, session);
+      const skipped = (r?.already_with_ignition || 0) + (r?.not_yours || 0);
+      if (skipped) {
+        const bits = [];
+        if (r.already_with_ignition) bits.push(`${r.already_with_ignition} already there`);
+        if (r.not_yours) bits.push(`${r.not_yours} assigned to someone else`);
+        setErr(`Transferred ${r.transferred || 0} of ${n} — ${bits.join(', ')}.`);
+      }
+      exitSelectMode();
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+    finally { setBulkBusy(false); }
+  }
+
   // Work-queue toggle (S163), split into Resolve vs Close 2026-07-28 (Pruthvi).
   // Resolve = the issue was actually addressed. Close = shut for an operational
   // reason, which must be picked. Reopen clears whichever it was.
@@ -1322,6 +1349,20 @@ export default function InboxPage() {
                         cursor: (!bulkReason || bulkNoteMissing || bulkBusy) ? 'default' : 'pointer',
                         opacity: (!bulkReason || bulkNoteMissing || bulkBusy) ? 0.5 : 1 }}>
                       {bulkBusy ? '…' : `Resolve ${selectedIds.size}`}
+                    </button>
+                  </>
+                )}
+                {/* Bulk hand-off to Ignition — the same action the per-conversation menu
+                    already has, over a selection. Gated on canManage like that one. */}
+                {canManage && (
+                  <>
+                    <span style={{ width: 1, alignSelf: 'stretch', margin: '6px 2px', background: 'var(--border)' }} />
+                    <button onClick={bulkTransferIgnition} disabled={bulkBusy}
+                      title="Hand these conversations to the Influencer team — they leave the CS inbox"
+                      style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-2)', background: 'transparent', color: 'var(--t2)',
+                        cursor: bulkBusy ? 'default' : 'pointer', opacity: bulkBusy ? 0.5 : 1 }}>
+                      {bulkBusy ? '…' : `Transfer ${selectedIds.size} to Ignition`}
                     </button>
                   </>
                 )}
