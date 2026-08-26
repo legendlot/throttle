@@ -5816,14 +5816,20 @@ async function handleRelayWebForward(b, env) {
     if (!thread) return err('thread_create_failed', 500);
   }
   const now = new Date().toISOString();
+  // ⚠️ EVERY row must carry the SAME key set: PostgREST rejects a bulk insert whose rows
+  // have different keys (PGRST102), and it did so SILENTLY here — every turn that mixed an
+  // inbound line with bot replies lost its messages while single-direction turns landed,
+  // which made the transcript look mysteriously threadbare (found live, S312 smoke).
   const rows = b.messages.map((m) => ({
     thread_id: thread.id, direction: m.direction, kind: 'text', body: m.text,
     is_internal: false, sent_by_user_id: null,
     sent_by_name: m.direction === 'outbound' ? 'Relay (bot)' : null,
-    ...(m.direction === 'outbound' ? { sent_at: now } : {}),
+    sent_at: m.direction === 'outbound' ? now : null,
   }));
-  if (rows.length)
-    await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
+  if (rows.length) {
+    const ins = await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
+    if (!ins.ok) console.error('[relay-web] message insert failed', JSON.stringify(ins.data).slice(0, 200));
+  }
   const threadPatch = { last_message_at: now };
   if (b.messages.some((m) => m.direction === 'inbound')) threadPatch.last_inbound_at = now;
   // A handoff must surface in the active inbox even if the thread had been closed.
