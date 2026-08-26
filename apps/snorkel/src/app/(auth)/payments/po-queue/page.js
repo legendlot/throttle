@@ -69,7 +69,7 @@ export default function PaymentsPage() {
 
   return (
     <div className="pg">
-      <PageHead title="Payment Queue" sub="Approved POs. Route to Finance or the requester, then mark paid." />
+      <PageHead title="PO Payment Queue" sub="Approved POs routed for payment. Superseded by Payment Requests — kept for POs already in flight." />
 
       <div className="kpi-row kpi-3">
         <Kpi label="To route" value={kpi.toRoute} sub={`${count('none')} POs waiting`} tone="yellow" format={(v) => inrCompact(v)} />
