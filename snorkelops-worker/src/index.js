@@ -66,6 +66,19 @@ const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
 // Bank details are read-gated. A requester may WRITE them when creating a payee (they already
 // paste them into Slack today) but may never read one back — everyone without payment_bank_view
 // sees the account masked to the last 4. Gate at the query, never in the UI.
+// In-app notification fan-out. Deliberately best-effort: a notification that fails to write must
+// never fail the payment action that caused it — the money workflow is the product, the bell is not.
+async function notify(rows) {
+  const list = (rows || []).filter(r => r && r.user_id);
+  if (!list.length) return;
+  try { await insert('payment_notifications', list); } catch { /* never block the caller */ }
+}
+// Everyone currently holding a live payment grant of a given kind.
+async function grantHolders(grantKey) {
+  const r = await sb(`/rest/v1/payment_grants?grant_key=eq.${grantKey}&active=is.true&select=user_id`);
+  return (r.ok ? r.data : []).map(x => x.user_id);
+}
+
 function maskBank(row, allowed) {
   if (!row) return row;
   if (allowed) return row;
@@ -790,6 +803,50 @@ export default {
               banks: (banks.ok ? banks.data : []).map(b => maskBank(b, canPayBankView(P))),
               related,
             });
+          }
+
+          // The finance worklist. Deliberately ONE call that carries everything needed to actually
+          // pay: amount, payee, the default bank account, and the invoice doc ids. Without the bank
+          // details on screen, finance has to open every request one at a time, which is the
+          // Slack workflow again with extra steps.
+          case 'getFinanceQueue': {
+            if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission', 403);
+            const r = await query('payment_requests',
+              '?status=eq.approved&select=*,payee:payment_payees(id,payee_code,name,payee_type)' +
+              '&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=300');
+            if (!r.ok) return err(r.data);
+            const rows = r.data || [];
+            if (!rows.length) return ok({ requests: [], banks: {}, documents: {} });
+
+            const payeeIds = [...new Set(rows.map(x => x.payee_id).filter(Boolean))];
+            const reqIds   = rows.map(x => x.id);
+            // batched, never a lookup per row
+            const [bk, dz] = await Promise.all([
+              payeeIds.length
+                ? query('payment_payee_banks',
+                    `?payee_id=in.(${payeeIds.join(',')})&is_active=is.true&select=*`)
+                : { ok: true, data: [] },
+              query('payment_request_documents',
+                `?request_id=in.(${reqIds.join(',')})&select=id,request_id,doc_kind,file_name`),
+            ]);
+            const banks = {};
+            if (bk.ok) for (const b of bk.data) {
+              // default first, so the UI can take banks[payee][0] safely
+              (banks[b.payee_id] ||= []).push(maskBank(b, canPayBankView(P) || canPayExecute(P)));
+              banks[b.payee_id].sort((x, y) => (y.is_default === true) - (x.is_default === true));
+            }
+            const documents = {};
+            if (dz.ok) for (const d of dz.data) (documents[d.request_id] ||= []).push(d);
+            return ok({ requests: rows, banks, documents });
+          }
+
+          case 'getPaymentNotifications': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const r = await query('payment_notifications',
+              `?user_id=eq.${userId}&order=created_at.desc&limit=50&select=*`);
+            if (!r.ok) return err(r.data);
+            const rows = r.data || [];
+            return ok({ notifications: rows, unread: rows.filter(n => !n.read_at).length });
           }
 
           case 'getPaymentPayees': {
@@ -2517,6 +2574,18 @@ export default {
                 `&status=neq.rejected&id=neq.${created?.id}&select=request_no,amount_to_pay,requested_by_name,requested_at&limit=5`);
               if (dup.ok && dup.data.length) duplicate_of = dup.data;
             }
+            // tell whoever it now sits with — approvers if it needs approval, finance if not
+            const payeeRow = await query('payment_payees', `?id=eq.${d.payee_id}&select=name&limit=1`);
+            const payeeName = (payeeRow.ok && payeeRow.data[0]?.name) || 'a payee';
+            const who = await grantHolders(needsApproval ? 'approve' : 'execute');
+            await notify(who.map(uid => ({
+              user_id: uid, request_id: created?.id,
+              kind: needsApproval ? 'approval_needed' : 'payment_needed',
+              title: needsApproval
+                ? `${request_no} needs your approval`
+                : `${request_no} is ready to pay`,
+              body: `${payeeName} — ${d.currency || 'INR'} ${amount.toLocaleString('en-IN')} · ${d.purpose}`,
+            })));
             await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_REQUESTED', 'Payment',
               request_no, `${request_no} — ${d.purpose}`, { amount, needs_approval: needsApproval });
             return ok({
@@ -2538,7 +2607,21 @@ export default {
               approved_by_name: authResult?.fullName || null, approved_at: now, updated_at: now,
             }, `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.pending_approval`);
             if (!r.ok) return err('Approve failed: ' + JSON.stringify(r.data));
-            const moved = Array.isArray(r.data) ? r.data.length : 0;
+            const movedRows = Array.isArray(r.data) ? r.data : [];
+            const moved = movedRows.length;
+            const financeIds = moved ? await grantHolders('execute') : [];
+            await notify([
+              ...movedRows.map(row => ({
+                user_id: row.requested_by_user_id, request_id: row.id, kind: 'approved',
+                title: `${row.request_no} approved`,
+                body: `Approved by ${authResult?.fullName || 'an approver'} — now with Finance.`,
+              })),
+              ...movedRows.flatMap(row => financeIds.map(uid => ({
+                user_id: uid, request_id: row.id, kind: 'payment_needed',
+                title: `${row.request_no} is ready to pay`,
+                body: `${row.currency || 'INR'} ${Number(row.amount_to_pay || 0).toLocaleString('en-IN')} · ${row.purpose}`,
+              }))),
+            ]);
             await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_APPROVED', 'Payment',
               ids.join(','), `${moved} request(s) approved`, {});
             return ok({ approved: moved, requested: ids.length });
@@ -2556,6 +2639,12 @@ export default {
               rejection_note: d.rejection_note, updated_at: now,
             }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved)`);
             if (!r.ok) return err('Reject failed: ' + JSON.stringify(r.data));
+            const rej = (Array.isArray(r.data) ? r.data : [])[0];
+            if (rej) await notify([{
+              user_id: rej.requested_by_user_id, request_id: rej.id, kind: 'rejected',
+              title: `${rej.request_no} was rejected`,
+              body: d.rejection_note,   // the reason IS the notification; a bare "rejected" is useless
+            }]);
             return ok({ rejected: d.id });
           }
 
@@ -2586,6 +2675,12 @@ export default {
                 }, `po_number=eq.${encodeURIComponent(row.linked_po_number)}`);
               }
             }
+            await notify(moved.map(row => ({
+              user_id: row.requested_by_user_id, request_id: row.id, kind: 'paid',
+              title: `${row.request_no} has been paid`,
+              body: [`${row.currency || 'INR'} ${Number(row.paid_amount ?? row.amount_to_pay ?? 0).toLocaleString('en-IN')}`,
+                     row.payment_ref ? `UTR ${row.payment_ref}` : null].filter(Boolean).join(' · '),
+            })));
             await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_PAID', 'Payment',
               ids.join(','), `${moved.length} payment(s) marked paid`, { ref: d.payment_ref || null });
             return ok({ paid: moved.length, requested: ids.length });
@@ -2604,6 +2699,19 @@ export default {
             await update('payment_requests', { status: 'cancelled', updated_at: now },
               `id=eq.${encodeURIComponent(d.id)}`);
             return ok({ cancelled: d.id });
+          }
+
+          case 'markPaymentNotificationsRead': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const d = body.data || {};
+            // scoped to the caller's own rows — a stray id can never clear someone else's bell
+            let filter = `user_id=eq.${userId}&read_at=is.null`;
+            if (Array.isArray(d.ids) && d.ids.length) {
+              filter += `&id=in.(${d.ids.map(encodeURIComponent).join(',')})`;
+            }
+            const r = await update('payment_notifications', { read_at: new Date().toISOString() }, filter);
+            if (!r.ok) return err('Failed: ' + JSON.stringify(r.data));
+            return ok({ marked: Array.isArray(r.data) ? r.data.length : 0 });
           }
 
           case 'createPaymentDocUploadUrl': {
