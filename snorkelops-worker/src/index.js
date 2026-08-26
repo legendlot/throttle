@@ -53,6 +53,31 @@ const canSalesConfirm = p => !!p.sales_order_confirm;  // confirm → auto-creat
 const canSalesPayment = p => !!p.sales_payment_manage; // record/delete collection receipts
 const canSalesPartner = p => !!p.sales_partner_manage; // partner master + sales channels
 const canSalesCreditNote = p => !!p.sales_credit_note; // raise/edit/issue/cancel credit notes
+// Payment Requests (replaces the #payments Slack channel). `payment_request` is broad — every
+// human role carries it. The other three are named-individual authority over money and arrive
+// from store.payment_grants, not from the role.
+const canPayRequest    = p => !!p.payment_request;
+const canPayApprove    = p => !!p.payment_approve;
+const canPayExecute    = p => !!p.payment_execute;
+const canPaySuperAdmin = p => !!p.payment_super_admin;
+const canPayBankView   = p => !!p.payment_bank_view;
+const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
+
+// Bank details are read-gated. A requester may WRITE them when creating a payee (they already
+// paste them into Slack today) but may never read one back — everyone without payment_bank_view
+// sees the account masked to the last 4. Gate at the query, never in the UI.
+function maskBank(row, allowed) {
+  if (!row) return row;
+  if (allowed) return row;
+  const acc = String(row.account_number || '');
+  return {
+    ...row,
+    account_number: acc ? '••••' + acc.slice(-4) : null,
+    ifsc: row.ifsc ? String(row.ifsc).slice(0, 4) + '••••' : null,
+    upi_id: row.upi_id ? '••••' : null,
+    masked: true,
+  };
+}
 
 // Strip financial fields from a China PO read when caller lacks po_china.
 function stripChinaPOHeader(row) {
@@ -71,11 +96,23 @@ function stripChinaPOLine(line) {
 // snorkel_roles.permissions. Returns {} when the user has no Snorkel role (they can
 // still file requests — request creation needs no permission key).
 async function getSnorkelPerms(userId) {
-  const ur = await sb(`/rest/v1/snorkel_user_roles?user_id=eq.${userId}&select=role_key&limit=1`);
-  if (!ur.ok || !ur.data[0]) return { __role: null, perms: {} };
+  const [ur, gr] = await Promise.all([
+    sb(`/rest/v1/snorkel_user_roles?user_id=eq.${userId}&select=role_key&limit=1`),
+    // Named money authority. NOT a role permission: snorkel_user_roles is PK(user_id) — one
+    // role per user — so an approver cannot also be an admin, and putting payment_approve on
+    // the `admin` role would hand it to every admin holder. See store.payment_grants.
+    sb(`/rest/v1/payment_grants?user_id=eq.${userId}&active=is.true&select=grant_key`),
+  ]);
+  const grants = {};
+  if (gr.ok) for (const g of gr.data || []) {
+    if (g.grant_key === 'approve')     grants.payment_approve     = true;
+    if (g.grant_key === 'execute')     grants.payment_execute     = true;
+    if (g.grant_key === 'super_admin') grants.payment_super_admin = true;
+  }
+  if (!ur.ok || !ur.data[0]) return { __role: null, perms: { ...grants } };
   const roleKey = ur.data[0].role_key;
   const r = await sb(`/rest/v1/snorkel_roles?role_key=eq.${encodeURIComponent(roleKey)}&select=permissions&limit=1`);
-  return { __role: roleKey, perms: (r.ok && r.data[0]?.permissions) || {} };
+  return { __role: roleKey, perms: { ...((r.ok && r.data[0]?.permissions) || {}), ...grants } };
 }
 
 async function verifyJWT(authHeader) {
@@ -599,6 +636,7 @@ async function recomputeSalesPayment(orderId) {
 // ── Storage REST (private bucket snorkel-asset-docs). service_role only. ──
 // Same auth posture as sb(): the sb_secret key sent as apikey + Bearer.
 const ASSET_BUCKET = 'snorkel-asset-docs';
+const PAYMENT_BUCKET = 'payment-docs';
 async function storageFetch(path, opts = {}) {
   const res = await fetch(`${SUPABASE_URL}/storage/v1${path}`, {
     ...opts,
@@ -684,6 +722,131 @@ export default {
               must_change_password: authResult.mustChangePwd,
               permissions: authResult.permissions,
             });
+
+          // ══════════════════════════════════════════════════
+          // PAYMENT REQUESTS
+          // ══════════════════════════════════════════════════
+          case 'getPaymentBootstrap': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const [cats, settings, payees] = await Promise.all([
+              query('payment_categories', '?is_active=is.true&order=sort_order.asc&select=*'),
+              query('payment_settings', '?id=eq.1&limit=1&select=*'),
+              query('payment_payees', '?is_active=is.true&order=name.asc&select=id,payee_code,name,payee_type,gstin,linked_vendor_code'),
+            ]);
+            return ok({
+              categories: cats.ok ? cats.data : [],
+              settings:   settings.ok ? (settings.data[0] || null) : null,
+              payees:     payees.ok ? payees.data : [],
+              can: {
+                request: canPayRequest(P), approve: canPayApprove(P), execute: canPayExecute(P),
+                super_admin: canPaySuperAdmin(P), bank_view: canPayBankView(P),
+                payee_manage: canPayPayeeManage(P),
+              },
+            });
+          }
+
+          case 'getPaymentRequests': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const scope  = url.searchParams.get('scope') || 'mine';
+            const status = url.searchParams.get('status') || '';
+            let q = '?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=400';
+            // A plain requester sees only their own. Approver/executor/super-admin see the queues.
+            const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
+            if (scope === 'mine' || !privileged) q += `&requested_by_user_id=eq.${userId}`;
+            if (scope === 'approvals') q += '&status=eq.pending_approval';
+            if (scope === 'finance')   q += '&status=eq.approved';
+            if (status) q += `&status=eq.${encodeURIComponent(status)}`;
+            const r = await query('payment_requests', q);
+            if (!r.ok) return err(r.data);
+            return ok({ requests: r.data, scope, privileged });
+          }
+
+          case 'getPaymentRequest': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('payment_requests',
+              `?id=eq.${encodeURIComponent(id)}&select=*,payee:payment_payees(*)&limit=1`);
+            if (!r.ok || !r.data[0]) return err('Not found', 404);
+            const req = r.data[0];
+            const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
+            if (req.requested_by_user_id !== userId && !privileged) return err('Not found', 404);
+            const [docs, banks] = await Promise.all([
+              query('payment_request_documents', `?request_id=eq.${encodeURIComponent(id)}&order=uploaded_at.asc&select=*`),
+              query('payment_payee_banks', `?payee_id=eq.${req.payee_id}&is_active=is.true&select=*`),
+            ]);
+            // Running total already requested against this (payee, invoice_no) — drives the
+            // part-payment balance line and the duplicate warning.
+            let related = [];
+            if (req.invoice_no) {
+              const rel = await query('payment_requests',
+                `?payee_id=eq.${req.payee_id}&invoice_no=eq.${encodeURIComponent(req.invoice_no)}` +
+                `&status=neq.rejected&id=neq.${encodeURIComponent(id)}&select=request_no,status,amount_to_pay,requested_at,requested_by_name`);
+              if (rel.ok) related = rel.data;
+            }
+            return ok({
+              request: req,
+              documents: docs.ok ? docs.data : [],
+              banks: (banks.ok ? banks.data : []).map(b => maskBank(b, canPayBankView(P))),
+              related,
+            });
+          }
+
+          case 'getPaymentPayees': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const r = await query('payment_payees', '?order=name.asc&select=*');
+            if (!r.ok) return err(r.data);
+            return ok({ payees: r.data });
+          }
+
+          case 'getPaymentPayeeBanks': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const pid = url.searchParams.get('payee_id');
+            if (!pid) return err('payee_id required');
+            const r = await query('payment_payee_banks',
+              `?payee_id=eq.${encodeURIComponent(pid)}&is_active=is.true&order=is_default.desc&select=*`);
+            if (!r.ok) return err(r.data);
+            return ok({ banks: r.data.map(b => maskBank(b, canPayBankView(P))) });
+          }
+
+          case 'getPaymentDocUrl': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const docId = url.searchParams.get('doc_id');
+            if (!docId) return err('doc_id required');
+            const d = await query('payment_request_documents', `?id=eq.${encodeURIComponent(docId)}&select=*&limit=1`);
+            if (!d.ok || !d.data[0]) return err('Not found', 404);
+            const doc = d.data[0];
+            const req = await query('payment_requests', `?id=eq.${doc.request_id}&select=requested_by_user_id&limit=1`);
+            const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
+            if (!req.ok || !req.data[0]) return err('Not found', 404);
+            if (req.data[0].requested_by_user_id !== userId && !privileged) return err('Not found', 404);
+            const sr = await storageFetch(`/object/sign/${PAYMENT_BUCKET}/${doc.file_path}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ expiresIn: 3600 }),
+            });
+            if (!sr.ok || !sr.data?.signedURL) return err('sign_failed', 502);
+            return ok({ url: `${SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: doc.file_name, mime: doc.mime });
+          }
+
+          case 'getPaymentAdmin': {
+            if (!canPaySuperAdmin(P)) return err('Super admin only', 403);
+            const [settings, cats, grants] = await Promise.all([
+              query('payment_settings', '?id=eq.1&limit=1&select=*'),
+              query('payment_categories', '?order=sort_order.asc&select=*'),
+              query('payment_grants', '?order=grant_key.asc&select=*'),
+            ]);
+            const ids = [...new Set((grants.ok ? grants.data : []).map(g => g.user_id))];
+            let names = {};
+            if (ids.length) {
+              const up = await query('users_profile', `?id=in.(${ids.join(',')})&select=id,full_name`);
+              if (up.ok) up.data.forEach(u => { names[u.id] = u.full_name; });
+            }
+            return ok({
+              settings: settings.ok ? (settings.data[0] || null) : null,
+              categories: cats.ok ? cats.data : [],
+              grants: (grants.ok ? grants.data : []).map(g => ({ ...g, full_name: names[g.user_id] || null })),
+            });
+          }
 
           // ── Shared masters Snorkel consumes (owned by Garage/Redline) ──
           case 'getStock': {
@@ -2239,6 +2402,294 @@ export default {
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_REQUEST_REJECTED', 'po_request', d.request_no,
               `PO request ${d.request_no} rejected`, { note: d.rejection_note });
             return ok({ request_no: d.request_no, status: 'rejected' });
+          }
+
+          // ══════════════════════════════════════════════════
+          // PAYMENT REQUESTS (replaces the #payments Slack channel)
+          // ══════════════════════════════════════════════════
+          case 'createPaymentPayee': {
+            if (!canPayPayeeManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.name) return err('name required');
+            const payee_code = await nextSeq4('payee', 'PAY-');
+            const r = await insert('payment_payees', {
+              payee_code, name: String(d.name).trim(), payee_type: d.payee_type || 'other',
+              linked_vendor_code: d.linked_vendor_code || null, gstin: d.gstin || null,
+              pan: d.pan || null, email: d.email || null, phone: d.phone || null,
+              notes: d.notes || null, created_by: userId,
+            });
+            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
+            const payee = Array.isArray(r.data) ? r.data[0] : r.data;
+            // A requester MAY submit bank details on create (they have them; that is what they
+            // paste into Slack today). They can never read them back — see maskBank().
+            if (payee && (d.account_number || d.upi_id)) {
+              await insert('payment_payee_banks', {
+                payee_id: payee.id, account_name: d.account_name || d.name,
+                account_number: d.account_number || null, ifsc: d.ifsc || null,
+                bank_name: d.bank_name || null, branch: d.branch || null,
+                upi_id: d.upi_id || null, is_default: true, created_by: userId,
+              });
+            }
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYEE_CREATED', 'Payee',
+              payee_code, `Payee ${payee_code} — ${d.name}`, {});
+            return ok({ id: payee?.id, payee_code });
+          }
+
+          case 'addPaymentPayeeBank': {
+            if (!canPayPayeeManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.payee_id) return err('payee_id required');
+            if (!d.account_number && !d.upi_id) return err('account_number or upi_id required');
+            if (d.is_default) {
+              await update('payment_payee_banks', { is_default: false },
+                `payee_id=eq.${encodeURIComponent(d.payee_id)}`);
+            }
+            const r = await insert('payment_payee_banks', {
+              payee_id: d.payee_id, account_name: d.account_name || null,
+              account_number: d.account_number || null, ifsc: d.ifsc || null,
+              bank_name: d.bank_name || null, branch: d.branch || null,
+              upi_id: d.upi_id || null, is_default: !!d.is_default, created_by: userId,
+            });
+            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
+            return ok({ added: true });
+          }
+
+          case 'createPaymentRequest': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.payee_id)  return err('payee_id required');
+            if (!d.purpose)   return err('purpose required');
+            if (!d.category_key) return err('category_key required');
+            const type = d.request_type || 'payment';
+            if (!['payment','credit_note','debit_note'].includes(type)) return err('bad request_type');
+
+            const amount = type === 'payment' ? Number(d.amount_to_pay || 0) : Number(d.invoice_total || 0);
+            if (type === 'payment' && !(amount > 0)) return err('amount_to_pay must be greater than zero');
+
+            // PO gate — category-driven (Piyush's escalation, closed by construction rather than
+            // by reminder). Only categories flagged po_required demand one.
+            const cat = await query('payment_categories',
+              `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1&select=*`);
+            if (!cat.ok || !cat.data[0]) return err('Unknown category');
+            if (cat.data[0].po_required && type === 'payment') {
+              if (!d.linked_po_number) {
+                return err(`A PO is required for ${cat.data[0].label}. Raise one under Procurement → POs, or pick a different category.`);
+              }
+              const po = await query('purchase_orders',
+                `?po_number=eq.${encodeURIComponent(d.linked_po_number)}&select=po_number&limit=1`);
+              if (!po.ok || !po.data[0]) return err(`PO ${d.linked_po_number} not found`);
+            }
+
+            // Threshold IN FORCE AT SUBMIT, stamped on the row. Editing the threshold later must
+            // never retroactively reinterpret a request that has already been decided.
+            const st = await query('payment_settings', '?id=eq.1&limit=1&select=approval_threshold_inr');
+            const threshold = Number(st.ok && st.data[0]?.approval_threshold_inr) || 100000;
+            const needsApproval = type === 'payment' && amount >= threshold;
+
+            const request_no = await nextSeq4('pay_request', 'PAY-');
+            const now = new Date().toISOString();
+            const r = await insert('payment_requests', {
+              request_no, request_type: type, category_key: d.category_key,
+              payee_id: d.payee_id, purpose: String(d.purpose).trim(),
+              invoice_no: d.invoice_no || null, invoice_date: d.invoice_date || null,
+              invoice_total: d.invoice_total != null ? Number(d.invoice_total) : null,
+              amount_to_pay: type === 'payment' ? amount : null,
+              currency: d.currency || 'INR',
+              needed_by: d.needed_by || null,
+              is_urgent: !!d.is_urgent, urgency_reason: d.urgency_reason || null,
+              linked_po_number: d.linked_po_number || null,
+              status: needsApproval ? 'pending_approval' : (type === 'payment' ? 'approved' : 'submitted'),
+              threshold_at_submit: threshold,
+              // never stamp a real approver on something nobody looked at
+              auto_approved: type === 'payment' && !needsApproval,
+              requested_by_user_id: userId, requested_by_name: authResult?.fullName || null,
+              requested_at: now,
+            });
+            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
+            const created = Array.isArray(r.data) ? r.data[0] : r.data;
+
+            // Duplicate warning — never a block. Genuine re-bills and part-payments legitimately
+            // share an invoice number (evidence: `invoice 100.pdf` submitted twice in #payments).
+            let duplicate_of = null;
+            if (d.invoice_no) {
+              const dup = await query('payment_requests',
+                `?payee_id=eq.${d.payee_id}&invoice_no=eq.${encodeURIComponent(d.invoice_no)}` +
+                `&status=neq.rejected&id=neq.${created?.id}&select=request_no,amount_to_pay,requested_by_name,requested_at&limit=5`);
+              if (dup.ok && dup.data.length) duplicate_of = dup.data;
+            }
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_REQUESTED', 'Payment',
+              request_no, `${request_no} — ${d.purpose}`, { amount, needs_approval: needsApproval });
+            return ok({
+              id: created?.id, request_no, status: created?.status,
+              needs_approval: needsApproval, threshold, duplicate_of,
+            });
+          }
+
+          case 'approvePaymentRequests': {
+            if (!canPayApprove(P)) return err('No permission to approve', 403);
+            const d = body.data || {};
+            const ids = Array.isArray(d.ids) ? d.ids : (d.id ? [d.id] : []);
+            if (!ids.length) return err('ids required');
+            const now = new Date().toISOString();
+            // Only pending_approval may move — an already-approved or paid row must not be
+            // re-stamped by a bulk action that swept it up.
+            const r = await update('payment_requests', {
+              status: 'approved', approved_by_user_id: userId,
+              approved_by_name: authResult?.fullName || null, approved_at: now, updated_at: now,
+            }, `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.pending_approval`);
+            if (!r.ok) return err('Approve failed: ' + JSON.stringify(r.data));
+            const moved = Array.isArray(r.data) ? r.data.length : 0;
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_APPROVED', 'Payment',
+              ids.join(','), `${moved} request(s) approved`, {});
+            return ok({ approved: moved, requested: ids.length });
+          }
+
+          case 'rejectPaymentRequest': {
+            if (!canPayApprove(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            if (!d.rejection_note) return err('A reason is required to reject');
+            const now = new Date().toISOString();
+            const r = await update('payment_requests', {
+              status: 'rejected', rejected_by_user_id: userId,
+              rejected_by_name: authResult?.fullName || null, rejected_at: now,
+              rejection_note: d.rejection_note, updated_at: now,
+            }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved)`);
+            if (!r.ok) return err('Reject failed: ' + JSON.stringify(r.data));
+            return ok({ rejected: d.id });
+          }
+
+          case 'markPaymentPaid': {
+            if (!canPayExecute(P)) return err('No permission to mark paid', 403);
+            const d = body.data || {};
+            const ids = Array.isArray(d.ids) ? d.ids : (d.id ? [d.id] : []);
+            if (!ids.length) return err('ids required');
+            const now = new Date().toISOString();
+            const patch = {
+              status: 'paid', paid_by_user_id: userId, paid_by_name: authResult?.fullName || null,
+              paid_at: now, updated_at: now,
+            };
+            if (d.payment_ref)   patch.payment_ref   = d.payment_ref;
+            if (d.payment_mode)  patch.payment_mode  = d.payment_mode;
+            if (d.payment_note)  patch.payment_note  = d.payment_note;
+            if (d.paid_amount != null) patch.paid_amount = Number(d.paid_amount);
+            if (d.payee_bank_id) patch.payee_bank_id = d.payee_bank_id;
+            const r = await update('payment_requests', patch,
+              `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.approved`);
+            if (!r.ok) return err('Mark paid failed: ' + JSON.stringify(r.data));
+            const moved = Array.isArray(r.data) ? r.data : [];
+            // Keep the PO-side mirror truthful so procurement's own screens agree.
+            for (const row of moved) {
+              if (row.linked_po_number) {
+                await update('purchase_orders', {
+                  payment_status: 'paid', paid_by: postRole, paid_at: now, updated_at: now,
+                }, `po_number=eq.${encodeURIComponent(row.linked_po_number)}`);
+              }
+            }
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_PAID', 'Payment',
+              ids.join(','), `${moved.length} payment(s) marked paid`, { ref: d.payment_ref || null });
+            return ok({ paid: moved.length, requested: ids.length });
+          }
+
+          case 'cancelPaymentRequest': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const ex = await query('payment_requests', `?id=eq.${encodeURIComponent(d.id)}&select=requested_by_user_id,status&limit=1`);
+            if (!ex.ok || !ex.data[0]) return err('Not found', 404);
+            if (ex.data[0].requested_by_user_id !== userId && !canPaySuperAdmin(P))
+              return err('Only the requester can cancel this', 403);
+            if (ex.data[0].status === 'paid') return err('A paid request cannot be cancelled');
+            const now = new Date().toISOString();
+            await update('payment_requests', { status: 'cancelled', updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            return ok({ cancelled: d.id });
+          }
+
+          case 'createPaymentDocUploadUrl': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.file_name) return err('file_name required');
+            const kind = d.doc_kind || 'invoice';
+            if (kind === 'payment_proof' && !canPayExecute(P)) return err('No permission', 403);
+            const bucketDir = d.request_id ? String(d.request_id) : `draft/${userId}`;
+            const path = `${assetSafeSeg(bucketDir)}/${assetSafeSeg(kind)}/${Date.now()}_${assetSafeSeg(d.file_name)}`;
+            const sr = await storageFetch(`/object/upload/sign/${PAYMENT_BUCKET}/${path}`, { method: 'POST' });
+            if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+            const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+            return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, signed_url: sr.data.url });
+          }
+
+          case 'recordPaymentDocument': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.request_id)   return err('request_id required');
+            if (!d.storage_path) return err('storage_path required');
+            const kind = d.doc_kind || 'invoice';
+            if (kind === 'payment_proof' && !canPayExecute(P)) return err('No permission', 403);
+            const r = await insert('payment_request_documents', {
+              request_id: d.request_id, doc_kind: kind, file_path: d.storage_path,
+              file_name: d.file_name || null, mime: d.mime || null,
+              size_bytes: d.size_bytes != null ? Number(d.size_bytes) : null, uploaded_by: userId,
+            });
+            if (!r.ok) return err('Record failed: ' + JSON.stringify(r.data));
+            return ok({ recorded: true });
+          }
+
+          // ── admin (super admin only) ──
+          case 'updatePaymentSettings': {
+            if (!canPaySuperAdmin(P)) return err('Super admin only', 403);
+            const d = body.data || {};
+            const patch = { updated_by: userId, updated_at: new Date().toISOString() };
+            if (d.approval_threshold_inr != null) {
+              const t = Number(d.approval_threshold_inr);
+              if (!(t >= 0)) return err('threshold must be zero or more');
+              patch.approval_threshold_inr = t;
+            }
+            if (d.default_currency) patch.default_currency = String(d.default_currency).toUpperCase();
+            const r = await update('payment_settings', patch, 'id=eq.1');
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_SETTINGS_UPDATED',
+              'Payment', 'settings', `threshold → ${patch.approval_threshold_inr ?? '(unchanged)'}`, {});
+            return ok({ updated: true });
+          }
+
+          case 'upsertPaymentCategory': {
+            if (!canPaySuperAdmin(P)) return err('Super admin only', 403);
+            const d = body.data || {};
+            if (!d.category_key) return err('category_key required');
+            const patch = { updated_at: new Date().toISOString() };
+            if (d.label != null)       patch.label = d.label;
+            if (d.po_required != null) patch.po_required = !!d.po_required;
+            if (d.is_active != null)   patch.is_active = !!d.is_active;
+            if (d.sort_order != null)  patch.sort_order = Number(d.sort_order);
+            const ex = await query('payment_categories', `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1`);
+            if (ex.ok && ex.data[0]) {
+              await update('payment_categories', patch, `category_key=eq.${encodeURIComponent(d.category_key)}`);
+            } else {
+              if (!d.label) return err('label required for a new category');
+              await insert('payment_categories', { category_key: d.category_key, ...patch });
+            }
+            return ok({ category_key: d.category_key });
+          }
+
+          case 'setPaymentGrant': {
+            if (!canPaySuperAdmin(P)) return err('Super admin only', 403);
+            const d = body.data || {};
+            if (!d.user_id || !d.grant_key) return err('user_id and grant_key required');
+            if (!['approve','execute','super_admin'].includes(d.grant_key)) return err('bad grant_key');
+            const active = d.active !== false;
+            const ex = await query('payment_grants',
+              `?user_id=eq.${encodeURIComponent(d.user_id)}&grant_key=eq.${encodeURIComponent(d.grant_key)}&limit=1`);
+            if (ex.ok && ex.data[0]) {
+              await update('payment_grants', { active },
+                `user_id=eq.${encodeURIComponent(d.user_id)}&grant_key=eq.${encodeURIComponent(d.grant_key)}`);
+            } else {
+              await insert('payment_grants', { user_id: d.user_id, grant_key: d.grant_key, active, granted_by: userId });
+            }
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_GRANT_SET', 'Payment',
+              d.grant_key, `${d.grant_key} ${active ? 'granted to' : 'revoked from'} ${d.user_id}`, {});
+            return ok({ user_id: d.user_id, grant_key: d.grant_key, active });
           }
 
           // ══════════════════════════════════════════════════
