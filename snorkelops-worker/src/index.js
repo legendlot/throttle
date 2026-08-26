@@ -1748,6 +1748,8 @@ export default {
             if (isChina && !canRaiseChinaPO(P)) return err('China POs require po_china permission', 403);
             if (isSoft && !isChina) return err("Soft status is only valid for China POs", 400);
             if (isSoft && !canRaiseChinaPO(P)) return err('Soft POs require po_china permission', 403);
+            const dupMouldC = duplicateMould(d.lines);
+            if (dupMouldC) return err('Mould ' + dupMouldC + ' is on more than one line — one PO line per mould. Each mould line brings its full part list into receiving, so a second line doubles every expected quantity (the SHP-219/221 incident). For split-colour rates, use one line at the blended rate until per-shot pricing is built.', 422);
             const srcCode  = countryToISO(d.source||'Other');
             const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
             const seq      = await nextSeq('po','');
@@ -1758,8 +1760,6 @@ export default {
                 `?vendor_name=ilike.${encodeURIComponent(d.vendor_name)}&select=vendor_code&limit=1`);
               if (vR.ok && vR.data?.[0]?.vendor_code) vendorCode = vR.data[0].vendor_code;
             }
-            const dupMouldC = duplicateMould(d.lines);
-            if (dupMouldC) return err('Mould ' + dupMouldC + ' is on more than one line — one PO line per mould. Each mould line brings its full part list into receiving, so a second line doubles every expected quantity (the SHP-219/221 incident). For split-colour rates, use one line at the blended rate until per-shot pricing is built.', 422);
             const r = await insert('purchase_orders', {
               po_number: poNumber, revision: 0, status: isSoft ? 'Soft' : 'Draft',
               source: d.source, order_type: d.order_type, vendor_name: d.vendor_name,
