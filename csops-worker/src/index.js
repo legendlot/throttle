@@ -470,10 +470,33 @@ async function resolveDeptFilter(slugParam, auth, env) {
 }
 
 // PostgREST filter fragment for a resolved dept filter ('' when unfiltered).
+// ⚠️ NULL-TOLERANT BY DESIGN. A row with NO department belongs to no department, so an
+// `eq`/`in` filter — which never matches NULL in Postgres — hid it from EVERYONE rather
+// than from the wrong people. That is strictly worse than showing it to everyone, and it
+// was not theoretical (found 2026-08-26, S311):
+//
+// Nothing has stamped `cs_department_id` on a call since the Exotel cutover on 19 Aug —
+// `exotelToNormalised` accepts a `departmentId` option and `reconcileExotelCalls(env, pipe)`
+// never passes one — so EVERY Exotel call, and every ticket auto-created from one, carries
+// NULL. The four `cs_agent`s are department-scoped; Afshaan, Pruthvi and Sunitha are admins
+// and are not. Result:
+//   · 445 calls flagged `needs_callback`, ZERO ever cleared, invisible to every agent who
+//     would make the call — the "Needs callback" tab and its KPI both read empty for them.
+//   · 313 phone tickets since 20 Aug, of which 306 (97.8%) are STILL OPEN, against 50% for
+//     the handful that did get a department. That gap is the proof: they are not being
+//     ignored, they cannot be seen.
+//
+// Nested as `and=(or(...))` rather than a top-level `or=` on purpose: visibilityFilters
+// already pushes a top-level `or=` for operator self-scope, and two `or=` params on one
+// query collide.
+//
+// ⚠️ This widens visibility, it does NOT fix attribution — the calls still have no
+// department, so per-department reporting stays wrong until an exophone→department mapping
+// exists. That needs Pruthvi (one exophone today, 08044656833). See BACKLOG.
 function buildDeptFilter(df) {
   if (!df) return '';
-  if (df.mode === 'id') return `cs_department_id=eq.${df.id}`;
-  if (df.mode === 'ids') return `cs_department_id=in.(${df.ids.join(',')})`;
+  if (df.mode === 'id') return `and=(or(cs_department_id.eq.${df.id},cs_department_id.is.null))`;
+  if (df.mode === 'ids') return `and=(or(cs_department_id.in.(${df.ids.join(',')}),cs_department_id.is.null))`;
   return '';
 }
 
