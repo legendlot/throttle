@@ -2530,6 +2530,8 @@ async function getDealBriefPreview(url, auth, env) {
 // Who would be nudged today, and why. Merges B5 (10 days after delivery, no post) with Reann's
 // separate "(3) Delhivery status → follow-up reminder" request — they are the same nudge with
 // two triggers, and building them separately would let both fire at one creator.
+const CHASE_SCAN_MAX = 500;
+
 async function getPostReminderDue(url, auth, env) {
   const days = Math.max(Number(url.searchParams.get('days') || 10), 1);
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
@@ -2540,10 +2542,17 @@ async function getPostReminderDue(url, auth, env) {
     + 'influencer:influencer_id(influencer_code,channel_name,person_name,email,do_not_ship)'
     + '&post_date=is.null&gifted_no_post=not.is.true'
     + '&stage=in.(shipped,delivered,scheduled,draft,posting,delayed)'
-    + '&limit=500',
+    + `&limit=${CHASE_SCAN_MAX}`,
     env,
+    // Same reason as the broken-link scan: a chasing list that quietly stops at the cap reads as
+    // "fewer creators are overdue", which is the opposite of what it is for. 139 candidates today.
+    { prefer: 'return=representation,count=exact' },
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const scanTotal = rangeTotal(r.range);
+  if (scanTotal != null && scanTotal > CHASE_SCAN_MAX) {
+    console.error(`[getPostReminderDue] scan truncated: ${scanTotal} candidates > ${CHASE_SCAN_MAX} — the chasing list is INCOMPLETE`);
+  }
   const rows = r.data || [];
 
   // ⚠️ `delivered_date` / `shipping_date` are NULL on EVERY engagement (346 of 346, measured
@@ -2624,12 +2633,21 @@ async function getBrokenChannelLinks(url, auth, env) {
   // rather than an error — a filter that silently matches nothing looks exactly like clean data,
   // which is the failure this codebase keeps paying for. One coarse filter that is obviously
   // right, then the precise predicate in JS where it can be read and reasoned about.
+  // ⚠️ count=exact + the overflow log below, because a bare `limit` here would be the very
+  // defect this panel exists to clear: 1,480 influencers today against a 2,000 ceiling, and a
+  // truncated worklist reads as "fewer broken links" rather than as a truncated worklist.
+  const SCAN_MAX = 2000;
   const r = await sb(
     '/rest/v1/influencers?select=id,influencer_code,channel_name,person_name,channel_platform,channel_platforms,channel_link'
-    + '&channel_link=not.is.null&order=influencer_code&limit=2000',
+    + `&channel_link=not.is.null&order=influencer_code&limit=${SCAN_MAX}`,
     env,
+    { prefer: 'return=representation,count=exact' },
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const scanTotal = rangeTotal(r.range);
+  if (scanTotal != null && scanTotal > SCAN_MAX) {
+    console.error(`[getBrokenChannelLinks] scan truncated: ${scanTotal} influencers with a link > ${SCAN_MAX} — the list is INCOMPLETE`);
+  }
   const isUrl = (v) => /https?:\/\//i.test(v) || /\.[a-z]{2,}\//i.test(v);
   const rows = (r.data || []).filter(i => !isUrl(String(i.channel_link || ''))).map(i => {
     const current = String(i.channel_link || '');
