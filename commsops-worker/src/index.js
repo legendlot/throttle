@@ -26,6 +26,7 @@ const OPTOUT = require('./optout.js');
 const BOTS = require('./bots.js');
 const BE = require('./bot-engine.js');
 const BW = require('./bot-web.js');
+const WIDGET = require('./bot-widget.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
@@ -2677,6 +2678,13 @@ export default {
         const input = b.buttonId ? { kind: 'button', buttonId: b.buttonId, text } : { kind: 'text', text };
         const out = await BW.runTurn(env, session, def, input, text);
         return withCors(ok({ replies: out.replies, status: out.state.status }));
+      }
+
+      // The widget script itself — a plain script tag target, no auth, cacheable.
+      // MUST stay inside this /web/ block, above the closing 404.
+      if (url.pathname === '/web/widget.js' && request.method === 'GET') {
+        return new Response(WIDGET.widgetJs(url.searchParams.get('bot'), `https://${url.hostname}`),
+          { headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=300' } });
       }
 
       if (url.pathname === '/web/poll' && request.method === 'GET') {
