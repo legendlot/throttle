@@ -59,7 +59,7 @@ function widgetJs(botId, workerBase) {
     buttons.forEach(function (bt) {
       var el = document.createElement('button');
       el.type = 'button'; el.textContent = bt.label;
-      el.style.cssText = 'border:1.5px solid #111;background:#fff;border-radius:16px;padding:6px 12px;font-size:13px;cursor:pointer;';
+      el.style.cssText = 'border:1.5px solid #111;background:#fff;color:#111;border-radius:16px;padding:6px 12px;font-size:13px;cursor:pointer;';   // explicit color: the storefront theme is white-on-dark and the chips inherited it (S312 smoke)
       el.onclick = function () { if (!busy) { disableChips(); send({ buttonId: bt.id, text: bt.label }); } };
       wrap.appendChild(el);
     });

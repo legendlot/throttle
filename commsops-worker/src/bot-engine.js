@@ -41,7 +41,13 @@ function walk(def, state, stepId, replies, effects) {
       effects.push({ type: 'order_lookup', orderNumber: state.context.order_number, identity: state.context.identity || {} });
       return { state, replies, effects };                 // wait for action_result
     }
-    if (step.type === 'handoff') { state.status = 'handed_off'; effects.push({ type: 'handoff' }); return { state, replies, effects }; }
+    if (step.type === 'handoff') {
+      // NEVER silent (spec guard 3, violated live in the S312 smoke: identity_mismatch ->
+      // handoff said nothing and the customer just saw the chat stop). Authorable copy,
+      // honest default. Business-hours-aware wording is a csops-side residual.
+      replies.push({ text: step.text || 'Let me connect you to our support team — a human will reply right here as soon as one is available.' });
+      state.status = 'handed_off'; effects.push({ type: 'handoff' }); return { state, replies, effects };
+    }
     if (step.type === 'end')     { if (step.text) replies.push({ text: step.text }); state.status = 'ended'; return { state, replies, effects }; }
     break;
   }

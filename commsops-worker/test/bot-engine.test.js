@@ -39,6 +39,8 @@ let mi = E.advance(DEF, { current_step: 'menu1', status: 'active', context: {} }
 assert.equal(mi.state.current_step, 'handoff1');
 assert.equal(mi.effects[0].type, 'handoff');
 assert.equal(mi.state.status, 'handed_off');
+// handoff is NEVER silent — the customer is told a human is coming
+assert.match(mi.replies[mi.replies.length - 1].text, /support team|human/i);
 
 // menu: miss re-shows menu; second miss fires fallback (MAX_MENU_MISSES = 2)
 let x1 = E.advance(DEF, { current_step: 'menu1', status: 'active', context: {} }, { kind: 'text', text: 'weather?' });
