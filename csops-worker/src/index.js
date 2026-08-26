@@ -8239,126 +8239,29 @@ async function getAgentInboxCounts(params, auth, env) {
 }
 
 async function getMessagingStats(params, auth, env) {
-  const stats = {
-    instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
-    messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
-    // whatsapp.awaiting starts at 0, not null, so it accumulates below (S245 — it is a real
-    // two-way channel now). email/web stay null: no per-thread awaiting is computed for them.
-    whatsapp:  { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
-    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
-    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
-  };
-  // Two-way channels: small volume → fetch threads + last-message direction.
-  // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
-  // NONEMPTY (S229): tile counts must match the list, which hides guaranteed-empty
-  // threads (never messaged + no provider ref) — see getMessagingThreads.
-  const NONEMPTY = `&and=(or(last_message_at.not.is.null,provider_thread_ref.not.is.null))`;
-  // WhatsApp joined this set in S245. It was excluded as a "read-only BiteSpeed mirror" whose
-  // awaiting was tracked in BiteSpeed — true until the Relay cutover, after which inbound lands
-  // in cs_wa_messages and WhatsApp is fully two-way. Leaving it out meant the busiest channel
-  // contributed NOTHING to "awaiting reply", so an agent had no signal that a customer was
-  // waiting — the one number that matters on the night the inbox becomes the only place
-  // customer messages exist.
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger,whatsapp)&ignition_connect=is.false&thread_state=in.(open,snoozed)${NONEMPTY}&select=id,channel,assigned_agent_id&limit=1500`, env);
-  const tw = twRes.data || [];
-  const chById = {};
-  for (const t of tw) {
-    chById[t.id] = t.channel;
-    // WhatsApp's total/mine/unassigned come from the exact sbCount() calls further down;
-    // incrementing them here as well would double every WhatsApp tile.
-    if (t.channel === 'whatsapp') continue;
-    const s = stats[t.channel];
-    if (!s) continue;
-    s.total += 1;
-    if (t.assigned_agent_id === auth.userId) s.mine += 1;
-    if (!t.assigned_agent_id) s.unassigned += 1;
-  }
-  if (tw.length) {
-    // Exclude internal notes — "awaiting reply" means the customer's last message is unanswered.
-    // CHUNKED, and that is not an optimisation — it is a correctness fix (S245). All the ids used
-    // to go into ONE `thread_id=in.(…)` URL: at 571 open threads that is a ~21KB URL, and it grows
-    // with the open-thread count. When such a request is refused the failure is SILENT — `data` is
-    // empty, every `awaiting` computes 0, and the tile reports "nothing waiting", which is the
-    // exact inverse of the truth on the channel agents now rely on. Chunking bounds each URL to
-    // ~7KB regardless of volume.
-    //
-    // It also shrinks the pre-existing ordering caveat: `order=created_at.desc` is global, so a
-    // long-idle but still-open thread could fall outside a single page and be under-counted.
-    // Scoping each page to 200 threads makes that far less likely (a full RPC is the exact fix).
-    // ⚠️ Chunks run in PARALLEL (S314). They were sequential, and this function is the
-    // slowest call in Pitstop — measured median 1,231ms — on a path that runs after EVERY
-    // tag/claim/close/send AND every 30s, which is most of the "Pitstop feels slower than
-    // BiteSpeed" report. Safe to parallelise because each chunk covers a DISJOINT set of
-    // thread_ids: the "first wins" rule below depends on `order=created_at.desc` WITHIN a
-    // chunk, never on the order the chunks come back in.
-    // ⚠️ The chunking itself is a correctness fix, not an optimisation — do not undo it. See
-    // the note above: one oversized `in.(…)` URL fails SILENTLY and every tile reports 0.
-    const CHUNK = 200;
-    const lastDir = {};
-    const chunkUrls = [];
-    for (let i = 0; i < tw.length; i += CHUNK) {
-      const ids = tw.slice(i, i + CHUNK).map((t) => t.id).join(',');
-      chunkUrls.push(`/rest/v1/cs_wa_messages?thread_id=in.(${ids})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=2000`);
-    }
-    const chunkRes = await Promise.all(chunkUrls.map((u) => sb(u, env)));
-    for (const mRes of chunkRes) {
-      for (const m of (mRes.data || [])) if (!(m.thread_id in lastDir)) lastDir[m.thread_id] = m.direction;
-    }
-    for (const [tid, dir] of Object.entries(lastDir)) {
-      if (dir === 'inbound' && stats[chById[tid]]) stats[chById[tid]].awaiting += 1;
-    }
-  }
-  // Header tiles count the ACTIVE work-queue (open+snoozed) so they MATCH the default
-  // inbox list, which filters state=active (getMessagingThreads). Without this, a CLOSED
-  // unassigned thread inflated the "unassigned" tile but never appeared in the list →
-  // "count says N, Unassigned tab shows none" (Pruthvi, S184, email channel). Closed
-  // conversations are reachable via the Closed/All state filter, not the work-queue tiles.
-  const ACTIVE = `&thread_state=in.(open,snoozed)`;
-  // ⚠️ These fourteen counts run in ONE PARALLEL WAVE (S314). They were fourteen sequential
-  // awaits, and at ~65ms each that alone was ~900ms of the measured 1,231ms median — on the
-  // call that fires after every tag/claim/close/send and every 30s. They are entirely
-  // independent of each other and of everything above, so nothing here may be re-serialised.
-  // ⚠️ The QUERIES are unchanged, deliberately: every filter below carries a correctness
-  // history (ACTIVE matches the default list, NONEMPTY matches getMessagingThreads, and
-  // ignition_connect excludes transferred threads). This change is scheduling only.
-  const base = (ch, extra = '') =>
-    `/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false${extra}&select=id`;
-  const CH_ALL = ['instagram', 'messenger', 'whatsapp', 'email', 'web'];
-  const [waTotal, waMine, waUnassigned,
-         emTotal, emMine, emUnassigned,
-         webTotal, webMine, webUnassigned,
-         ...closedCounts] = await Promise.all([
-    // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
-    // All counts exclude Ignition-transferred threads (S177).
-    sbCount(base('whatsapp', `${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('whatsapp', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('whatsapp', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
-    // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
-    sbCount(base('email', `${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('email', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('email', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
-    // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
-    sbCount(base('web', `${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('web', `&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}`), env),
-    sbCount(base('web', `&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}`), env),
-    // Closed (resolved) count per channel — shown on each channel tile so the team has
-    // quick visibility into resolved volume per channel (Pruthvi, S185). Excludes
-    // Ignition-transferred threads, consistent with the active counts above.
-    ...CH_ALL.map((ch) => sbCount(base(ch, `&thread_state=eq.closed${NONEMPTY}`), env)),
-  ]);
-  stats.whatsapp.total = waTotal;  stats.whatsapp.mine = waMine;  stats.whatsapp.unassigned = waUnassigned;
-  stats.email.total    = emTotal;  stats.email.mine    = emMine;  stats.email.unassigned    = emUnassigned;
-  stats.web.total      = webTotal; stats.web.mine      = webMine; stats.web.unassigned      = webUnassigned;
-  CH_ALL.forEach((ch, i) => { stats[ch].closed = closedCounts[i]; });
-  // Per-channel UNREAD count (S222, Pruthvi) — active threads with a customer message
-  // that arrived after the thread was last opened. One set-based RPC over the generated
-  // `has_unread_inbound` flag (open+snoozed, non-Ignition) → team-global unread badges.
-  for (const ch of Object.keys(stats)) stats[ch].unread = 0;
-  const uRes = await sb(`/rest/v1/rpc/cs_unread_counts_by_channel`, env, { method: 'POST', body: '{}' });
-  for (const row of (uRes.data || [])) {
-    if (stats[row.channel]) stats[row.channel].unread = Number(row.cnt) || 0;
-  }
-  return ok({ stats });
+  // ONE set-based RPC (S314). This was ~18 sequential PostgREST round-trips — a <=1,500-row
+  // thread fetch, N chunked last-message queries, then 14 independent counts awaited one
+  // after another. Measured median 1,231ms, the slowest call in Pitstop, on the path that
+  // runs after every tag/claim/close/send AND every 30s ("Pitstop feels slower than
+  // BiteSpeed", Dhiraj). Parallelising took it to 722ms; moving the whole computation into
+  // Postgres is the fix the old code's own comment named.
+  //
+  // ⚠️ The tile semantics live in store.cs_messaging_stats now — READ ITS HEADER before
+  // changing anything here. Every filter it applies (ignition_connect, NONEMPTY, ACTIVE,
+  // awaiting NULL for email/web) encodes a past incident, and it also removes a latent
+  // truncation this version could not avoid: the old chunked read capped at 2,000 messages
+  // per 200 threads, against a measured 13.6 messages per active thread, so the longest-
+  // neglected threads could silently drop out of `awaiting` — exactly the ones it exists
+  // to surface.
+  //
+  // ⚠️ Fail CLOSED to the previous shape rather than to zeros: a tile reading 0 is
+  // indistinguishable from "nothing waiting", which is the inverse of the truth and is the
+  // failure this whole area has been bitten by before (S245). An error surfaces as an error.
+  const r = await sb('/rest/v1/rpc/cs_messaging_stats', env, {
+    method: 'POST', body: JSON.stringify({ p_user_id: auth.userId }),
+  });
+  if (!r.ok || !r.data) return err('Failed to load messaging stats', r.status || 500);
+  return ok({ stats: r.data });
 }
 
 async function getMessagingThread(params, auth, env) {
