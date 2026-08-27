@@ -18,6 +18,34 @@
 </div>
 <p>Set the From and To dates at the top; changing either refetches immediately.</p>
 
+<h3>What the resolution time is made of</h3>
+<p>On the <strong>Agents</strong> tab, the panel <strong>What the resolution time is made of</strong> breaks &ldquo;Avg to close&rdquo; into the parts it is actually built from. It answers the common objection that the figure is unfair because it counts time nobody was working.</p>
+<table class="tbl">
+  <thead><tr><th>Figure</th><th>What it counts</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Total to close</strong></td><td>The full wall clock from the conversation being raised to it being closed. <strong>This has not changed</strong> &mdash; it is the same number as &ldquo;Avg to close&rdquo; in the table below.</td></tr>
+    <tr><td><strong>&minus; Waiting on customer</strong></td><td>Every stretch where we had replied last and the next move was theirs.</td></tr>
+    <tr><td><strong>&minus; Waiting to be closed</strong></td><td>Time after the <em>final</em> message in the conversation &mdash; how long it sat finished before someone pressed Close.</td></tr>
+    <tr><td><strong>= Active handling</strong></td><td>What is left: the part that reflects how fast the conversation was actually worked.</td></tr>
+  </tbody>
+</table>
+<p>The same two figures appear per agent in the table as <strong>&mdash; on customer</strong> and <strong>&mdash; unclosed</strong>, and in the CSV export.</p>
+
+<div class="callout">
+  <div class="c-title">The clock is never paused &mdash; that is deliberate</div>
+  <p>Waiting on the customer is <em>not</em> deducted from the headline. The real total stays the real total, and the waits are shown beside it so you can subtract them yourself when that is the fairer comparison. Quote whichever you mean, and say which one it is.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Closing discipline is usually the bigger half</div>
+  <p>Measured across 1,780 conversations closed in the week to 25 August 2026: of <strong>42.7 hours</strong> to close, only <strong>4.3 hours (10%)</strong> was waiting on the customer, while <strong>28.1 hours (66%)</strong> was waiting to be closed. So a long &ldquo;time to close&rdquo; is usually not customers being slow &mdash; it is conversations finishing and staying open. Closing promptly is what moves this number.</p>
+</div>
+
+<div class="callout">
+  <div class="c-title">If the panel is missing</div>
+  <p>It is calculated separately from the rest of the page, so on a very wide date range it can appear a moment after the tables. If it does not appear at all, the figures did not reconcile with the main report and it hides itself rather than show numbers that disagree &mdash; the rest of the report is unaffected.</p>
+</div>
+
 <div class="callout warn">
   <div class="c-title">&#9888; Export is tickets only</div>
   <p>The <strong>Export CSV</strong> button exports the <em>ticket</em> figures (product, platform, agent and a cost summary) from the Tickets and Calls tabs &mdash; there is no separate calls CSV. The <strong>Agents</strong> tab is the exception: there the button exports the agent conversation report, including both &ldquo;Closed rate %&rdquo; and &ldquo;Resolution rate %&rdquo;. In the agent call table, &ldquo;missed to returned&rdquo; counts missed calls that were later called back, not still-missed ones. This screen needs the reports permission.</p>
