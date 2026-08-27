@@ -166,7 +166,15 @@ export default function MetaDiagnosticsPage() {
                                      background: tone.bg, border: `1px solid ${tone.bd}`, color: tone.fg }}>
                         {f.error_code ?? '?'} · {info.label}
                       </span>
-                      <div style={{ fontSize: 11.5, color: 'var(--text2,#8a8a8a)', marginTop: 3, maxWidth: 380 }}>{f.error_message}</div>
+                      {/* A refusal with no recorded reason is still a refusal, and it is the
+                          hardest kind to diagnose — say so plainly rather than leaving the cell
+                          blank, which reads as "nothing to see here". WhatsApp only began
+                          recording reasons on 2026-08-27; everything before that lands here. */}
+                      <div style={{ fontSize: 11.5, marginTop: 3, maxWidth: 380,
+                                    color: f.error_message ? 'var(--text2,#8a8a8a)' : '#d9a441',
+                                    fontStyle: f.error_message ? 'normal' : 'italic' }}>
+                        {f.error_message || 'no reason recorded — this send path did not store one'}
+                      </div>
                     </td>
                     <td style={{ padding: '8px', fontSize: 12 }}>
                       {f.window_open_at_attempt

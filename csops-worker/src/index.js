@@ -6761,14 +6761,19 @@ async function retroAssignUnownedThreads(env) {
   // Sequential, not Promise.all: the RPC picks the LEAST-LOADED agent, and concurrent calls all
   // read the same pre-assignment load and pile onto the same person. Ten serial calls is a
   // rounding error against a 10-minute tick, and it keeps the balancing honest.
-  let assigned = 0, skipped = 0;
+  let owned = 0, skipped = 0;
   for (const t of threads) {
     const a = await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
       method: 'POST', body: JSON.stringify({ p_thread_id: t.id }),
     }).catch(() => null);
-    if (a?.ok && a.data) assigned += 1; else skipped += 1;
+    if (a?.ok && a.data) owned += 1; else skipped += 1;
   }
-  return { ok: true, candidates: threads.length, assigned, skipped };
+  // ⚠️ `owned_after`, not `assigned`. cs_autoassign_thread returns the EXISTING assignee when a
+  // thread is already owned (`IF v_assigned IS NOT NULL THEN RETURN v_assigned`), so a thread an
+  // agent claimed between this sweep's SELECT and its RPC call comes back as a uuid the sweep did
+  // not hand out. Calling that "assigned" would over-report the sweep's own effect by the number
+  // of human claims in the window. The count is honest about what it measures instead.
+  return { ok: true, candidates: threads.length, owned_after: owned, skipped };
 }
 
 // ── Relay sending-pipeline watchdog (S318) ───────────────────────────────────
@@ -7207,8 +7212,13 @@ async function getMetaSendFailures(params, auth, env) {
   const g = require('cs_ticket_admin', auth); if (g) return g;
   const days = Math.min(Math.max(Number(params.get('days')) || 14, 1), 90);
   const sinceISO = new Date(Date.now() - days * 86400000).toISOString();
+  // ⚠️ Do NOT re-add a `status_error=not.is.null` filter here. It was in the first version and
+  // it hid 36 of the 36 WhatsApp failures in the preceding fortnight — including every refusal
+  // from the 2026-08-27 outage — because that path did not record a reason at the time. The
+  // screen exists to surface refused sends, and a refusal with NO reason is the hardest one to
+  // diagnose, not the least important. Rows without a reason now render as "(no reason recorded)".
   const r = await sb(`/rest/v1/cs_wa_messages`
-    + `?status=eq.failed&status_error=not.is.null&created_at=gte.${encodeURIComponent(sinceISO)}`
+    + `?status=eq.failed&created_at=gte.${encodeURIComponent(sinceISO)}`
     + `&select=thread_id,created_at,status_error,body,sent_by_name`
     + `&order=created_at.desc&limit=500`, env);
   // ⚠️ `sb()` returns the PARSED BODY on failure, which for PostgREST is an ERROR OBJECT, not an
@@ -7225,15 +7235,26 @@ async function getMetaSendFailures(params, auth, env) {
   if (!rows.length) return ok({ failures: [], days });
 
   // One batched read for the threads — never a lookup per row (CORE.md global invariant).
+  // ⚠️ CHUNKED, and it matters precisely when this screen matters most. A real outage produces
+  // hundreds of failed rows; 500 uuids in one `in.()` is ~18KB of URL, past the request-line
+  // limit, so the lookup would 414 exactly during the incident it exists to explain. Batched, not
+  // per-row (CORE.md global invariant) — 100 ids is ~3.7KB, comfortably inside.
   const ids = [...new Set(rows.map(m => m.thread_id).filter(Boolean))];
-  const tRes = await sb(`/rest/v1/cs_wa_threads?id=in.(${ids.join(',')})`
-    + `&select=id,channel,customer_handle,customer_phone,external_user_id,customer_window_until,thread_state`, env);
+  const CHUNK = 100;
+  const threadRowsAll = [];
+  let enrichFailed = null;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const tRes = await sb(`/rest/v1/cs_wa_threads?id=in.(${slice.join(',')})`
+      + `&select=id,channel,customer_handle,customer_phone,external_user_id,customer_window_until,thread_state`, env);
+    if (Array.isArray(tRes.data)) threadRowsAll.push(...tRes.data);
+    else enrichFailed = enrichFailed || (JSON.stringify(tRes.data)?.slice(0, 300) || 'unknown');
+  }
   // Thread detail is ENRICHMENT — the refusals and their raw Meta errors are the actual payload,
   // and they are still readable without a handle. So a failed enrichment degrades and says so,
   // rather than taking down the one screen built to diagnose failures.
-  const threadRows = Array.isArray(tRes.data) ? tRes.data : [];
-  const enrichmentError = Array.isArray(tRes.data) ? null : (JSON.stringify(tRes.data)?.slice(0, 300) || 'unknown');
-  const byId = Object.fromEntries(threadRows.map(t => [t.id, t]));
+  const enrichmentError = enrichFailed;
+  const byId = Object.fromEntries(threadRowsAll.map(t => [t.id, t]));
 
   const grouped = new Map();
   for (const m of rows) {
@@ -7264,7 +7285,11 @@ async function getMetaSendFailures(params, auth, env) {
         && new Date(t.customer_window_until).getTime() > new Date(m.created_at).getTime()),
       customer_window_until: t.customer_window_until || null,
       error_code: code,
-      error_message: parsed?.message || (parsed ? null : String(m.status_error).slice(0, 300)),
+      // Three cases, and the third is the one the first version got wrong: Meta JSON (has
+      // .message) · a Relay plain string (is its own message) · NO reason recorded at all,
+      // which must read as such rather than as the literal string "null".
+      error_message: parsed?.message
+        || (m.status_error == null ? null : (parsed ? null : String(m.status_error).slice(0, 300))),
       error_raw: m.status_error,
       last_body_snippet: (m.body || '').slice(0, 140),
       sent_by_name: m.sent_by_name || null,
