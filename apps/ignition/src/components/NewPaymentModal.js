@@ -8,7 +8,13 @@ const PROOF_BUCKET = 'ignition-payment-proofs';
 
 // Record a payment against a deal. Flow: search influencer → pick one of their
 // deals → kind (advance/final/other) + amount + date. Kept deliberately small.
-export function NewPaymentModal({ open, onClose, session, onSaved }) {
+/**
+ * `presetInfluencer` + `presetEngagementId` (Reann #7, 2026-08-27) let the deal page open this
+ * with both already chosen, so recording a payment from the deal skips searching for the
+ * influencer you are already looking at. Omitted everywhere else — the Payments page still
+ * starts from the search, because there you genuinely do not know the deal yet.
+ */
+export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluencer, presetEngagementId, presetEngagementNo }) {
   const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -21,10 +27,13 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   function reset() {
-    setSearch(''); setResults([]); setInfluencer(null); setEngagements([]);
-    setForm({ engagement_id: '', kind: 'advance', amount: '', paid_on: '', note: '' }); setProofFile(null); setErr(null);
+    setSearch(''); setResults([]); setInfluencer(presetInfluencer || null); setEngagements([]);
+    setForm({
+      engagement_id: presetEngagementId || '', kind: 'advance', amount: '', paid_on: '', note: '',
+    });
+    setProofFile(null); setErr(null);
   }
-  useEffect(() => { if (open) reset(); }, [open]);
+  useEffect(() => { if (open) reset(); }, [open, presetInfluencer, presetEngagementId]);
 
   useEffect(() => {
     if (!session || search.length < 2) { setResults([]); return; }
@@ -84,7 +93,10 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
         {influencer ? (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 10, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)' }}>
             <span><span style={{ color: '#FF6B00', fontWeight: 700 }}>{influencer.influencer_code}</span> {influencer.channel_name || influencer.person_name}</span>
-            <button type="button" onClick={() => { setInfluencer(null); setEngagements([]); setField('engagement_id', ''); }} style={ghost}>Change</button>
+            {/* No "Change" when the modal was opened from a deal — the influencer is the deal's. */}
+            {!presetInfluencer && (
+              <button type="button" onClick={() => { setInfluencer(null); setEngagements([]); setField('engagement_id', ''); }} style={ghost}>Change</button>
+            )}
           </div>
         ) : (
           <>
@@ -106,7 +118,13 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
       {influencer && (
         <div style={{ marginBottom: 14 }}>
           <div style={lbl}>Deal *</div>
-          {engagements.length === 0 ? (
+          {presetEngagementId ? (
+            // Opened from the deal page — the deal is not a choice here, and offering a picker
+            // would let someone file the payment against a different deal by accident.
+            <div style={{ padding: 10, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+              {presetEngagementNo || 'This deal'}
+            </div>
+          ) : engagements.length === 0 ? (
             <div style={{ color: 'var(--text-3)', fontSize: 13 }}>This influencer has no deals yet — create one first.</div>
           ) : (
             <select value={form.engagement_id} onChange={e => setField('engagement_id', e.target.value)} style={inp}>
