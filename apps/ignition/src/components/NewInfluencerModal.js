@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation';
 import { Modal, useToast } from '@throttle/ui';
 import { ignitionopsPost } from '../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../lib/channelLink.js';
+import LocationInput from './LocationInput.js';
+import { canonicalLocation } from '../lib/locations.js';
 
 const PLATFORMS = ['instagram', 'youtube', 'facebook', 'twitter', 'other'];
 const TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
@@ -37,6 +39,9 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
       const payload = {
         ...form, channel_name: form.channel_name.trim(), list_status: 'master',
         channel_link: normalizeChannelLink(form.channel_link) || null,
+        // Canonicalise here too, not only on blur: submitting straight from the field with
+        // Enter never fires blur, and that is exactly the fast path a repeat user takes.
+        location: canonicalLocation(form.location) || null,
       };
       payload.reach = form.reach === '' ? null : Number(form.reach);
       payload.follower_count = form.follower_count === '' ? null : Number(form.follower_count);
@@ -86,7 +91,7 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
           <input type="number" value={form.follower_count} onChange={e => setField('follower_count', e.target.value)} placeholder="e.g. 48000" style={inp} />
         </Field>
         <Field label="Location">
-          <input value={form.location} onChange={e => setField('location', e.target.value)} placeholder="e.g. Karnataka" style={inp} />
+          <LocationInput value={form.location} onChange={v => setField('location', v)} style={inp} />
         </Field>
         <Field label="Phone">
           <input value={form.contact_number} onChange={e => setField('contact_number', e.target.value)} placeholder="+91…" style={inp} />

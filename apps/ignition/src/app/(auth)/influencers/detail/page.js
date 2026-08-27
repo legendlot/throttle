@@ -7,6 +7,8 @@ import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../../../../lib/channelLink.js';
 import { NewDealModal } from '../../../../components/NewDealModal.js';
+import LocationInput from '../../../../components/LocationInput.js';
+import { canonicalLocation } from '../../../../lib/locations.js';
 import RatingBadge from '../../../../components/RatingBadge.js';
 import StageBadge from '../../../../components/StageBadge.js';
 import DealTypeBadge from '../../../../components/DealTypeBadge.js';
@@ -124,7 +126,7 @@ export default function InfluencerDetailPage() {
         reach: (form.reach === '' || isNaN(rn)) ? null : Math.round(rn),
         follower_count: (form.follower_count === '' || isNaN(fc)) ? null : Math.round(fc),
         audience: form.audience.trim() || null,
-        location: form.location.trim() || null,
+        location: canonicalLocation(form.location) || null,
         contact_poc_type: form.contact_poc_type || null,
         contact_poc_name: form.contact_poc_name.trim() || null,
         contact_number: form.contact_number.trim() || null,
@@ -222,7 +224,7 @@ export default function InfluencerDetailPage() {
                 <Field label="Audience notes"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} placeholder="free-form notes" /></Field>
                 <Field label="Audience age"><select style={editInput} value={form.age_range} onChange={e => setF('age_range', e.target.value)}><option value="">—</option>{(catalogs?.age_ranges || []).map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
                 <Field label="Gender majority"><select style={editInput} value={form.gender_majority} onChange={e => setF('gender_majority', e.target.value)}><option value="">—</option>{(catalogs?.gender_majorities || []).map(o => <option key={o} value={o}>{GENDER_LABELS[o] || o}</option>)}</select></Field>
-                <Field label="Location"><input style={editInput} value={form.location} onChange={e => setF('location', e.target.value)} /></Field>
+                <Field label="Location"><LocationInput style={editInput} value={form.location} onChange={v => setF('location', v)} /></Field>
               </>
             ) : (
               <>

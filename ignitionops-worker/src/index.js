@@ -309,6 +309,24 @@ function allowedTransitions(stage) {
 
 // ── Util ────────────────────────────────────────────────────────────────────
 
+/**
+ * Display casing for a free-text product name. Mirror of `titleish` in
+ * apps/ignition/src/lib/productLabel.js — kept in step by hand because the worker and the app
+ * are separate deploy units and share no package.
+ *
+ * Only re-cases a string that is uniformly upper or lower case; anything already mixed-case is
+ * returned untouched, so "McCloud" does not become "Mccloud".
+ */
+function productDisplay(raw) {
+  const s = String(raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!s) return '';
+  const letters = s.replace(/[^A-Za-z]/g, '');
+  if (!letters) return s;
+  const uniform = letters === letters.toUpperCase() || letters === letters.toLowerCase();
+  if (!uniform) return s;
+  return s.replace(/[A-Za-z][A-Za-z']*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
+}
+
 function pickPatch(body, allowed) {
   if (!body) return {};
   // Accept BOTH shapes: an explicit { patch: {...} } wrapper (updateCampaign) OR
@@ -1235,8 +1253,16 @@ async function getReports(url, auth, env) {
       const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
       m.spend += spend; m.orders += orders; m.views += views; m.deals += 1;
     }
-    const prod = e.product_code || '—';
-    const p = byProductMap[prod] || (byProductMap[prod] = { name: prod, deals: 0, spend: 0, orders: 0, views: 0 });
+    // ⚠️ Keyed CASE-INSENSITIVELY (2026-08-27). `product_code` holds free text — 44 distinct
+    // spellings for 22 products, measured the same day — and this map keyed on the raw string,
+    // so "CREST", "Crest" and "crest" were three separate bars in the spend-by-product chart,
+    // each holding a third of the real spend. Nothing on the report said so. The stored values
+    // were cleaned in the same session, but new free text keeps arriving, so the fix belongs
+    // here as well as in the data. Mirrors apps/ignition/src/lib/productLabel.js.
+    const prodRaw = String(e.product_code || '').trim().replace(/\s+/g, ' ') || '—';
+    const prodKey = prodRaw.toLowerCase();
+    const p = byProductMap[prodKey]
+      || (byProductMap[prodKey] = { name: productDisplay(prodRaw), deals: 0, spend: 0, orders: 0, views: 0 });
     p.deals += 1; p.spend += spend; p.orders += orders; p.views += views;
 
     if (e.cpm != null) { const c = num(e.cpm); cpmSum += c; cpmN++; cpmDist[bucketOf(CPM_BUCKETS, c)]++; }
