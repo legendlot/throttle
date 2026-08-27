@@ -25,6 +25,7 @@ export default function BagStickersPage() {
   const [busy, setBusy]         = useState(false);
   const [lastBatch, setLastBatch] = useState(null); // { bags, label }
   const [dupPrompt, setDupPrompt] = useState(null); // { bags, minutesAgo, message, requestId, snap }
+  const [evidence, setEvidence]   = useState(null); // { catalogue, observed, observed_count, suggested }
   // `busy` is React state, so it does NOT stop a second onClick fired in the SAME tick —
   // the button's disabled attribute only updates on the next render. The fastest duplicate
   // in the live data was 1 SECOND apart (MC-PB-04), which is too quick to be a human
@@ -64,12 +65,39 @@ export default function BagStickersPage() {
   function selectPart(code) {
     setDupPrompt(null);
     setPartCode(code);
-    const p = partMap[code];
-    if (p && p.bag_size && !bagSize) setBagSize(String(p.bag_size));
+    setEvidence(null);
+    // ⚠️ Deliberately NOT pre-filling from material_master.bag_size any more. That column
+    // is not a real per-part size — it is 50 on 1,961 of 2,474 parts and 25 on 506 — so it
+    // pre-filled a plausible-looking wrong number and the operator typed over it with a
+    // guess. Ask the worker what the part is ACTUALLY bagged as instead.
+    if (!code) return;
+    (async () => {
+      try {
+        const res = await workerFetch('getBagSizeEvidence', { data: { part_code: code } }, session);
+        const ev = res?.data || null;
+        setEvidence(ev);
+        if (ev?.suggested) setBagSize(String(ev.suggested));
+        else {
+          const p = partMap[code];
+          if (p && p.bag_size) setBagSize(String(p.bag_size));   // last-resort default
+        }
+      } catch {
+        const p = partMap[code];
+        if (p && p.bag_size) setBagSize(String(p.bag_size));
+      }
+    })();
   }
 
   const sz = parseInt(bagSize) || 0;
   const tq = parseInt(totalQty) || 0;
+  // Advisory mismatch: the typed bag size disagrees with what this part is actually bagged
+  // as. NOT a block — the store legitimately consolidates loose stock into a bigger bag and
+  // labels it. It exists because a label asserting the wrong size is what over-picked
+  // RUN-387 (a 200 label on a part receiving in 50s credited 200 pcs to a run needing 100).
+  // The worker decides what counts as evidence (physical receiving bags first, catalogue as
+  // fallback, and neither if the sample is too thin to accuse anyone off).
+  const expectedSz = evidence?.expected ?? null;
+  const szMismatch = !!(expectedSz && sz >= 1 && sz !== expectedSz);
   const nb = sz >= 1 && tq >= 1 ? Math.ceil(tq / sz) : 0; // auto-derived bag count
   const remainder = sz >= 1 && tq >= 1 ? (tq % sz) : 0;
   const canPrint = !!partCode && sz >= 1 && tq >= 1 && nb <= 500 && !busy;
@@ -194,6 +222,28 @@ export default function BagStickersPage() {
                 <input style={input} type="number" min="1" value={totalQty} onChange={e => { setDupPrompt(null); setTotalQty(e.target.value); }} placeholder="e.g. 1000" />
               </div>
             </div>
+            {szMismatch && (
+              <div style={{ border: '1px solid #d9a441', background: 'rgba(217,164,65,0.08)', borderRadius: 4, padding: '10px 12px', marginBottom: 14 }}>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#d9a441', marginBottom: 5 }}>
+                  Bag size looks off
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--t2)', lineHeight: 1.5 }}>
+                  {partCode} is normally bagged as <strong style={{ color: 'var(--t1)' }}>{expectedSz}</strong> per bag
+                  {evidence?.expected_basis === 'receiving'
+                    ? ` (${evidence?.observed_count} of the last ${evidence?.sampled} bags from receiving)`
+                    : ' (the set bag size for this part)'}
+                  , but you&rsquo;ve entered <strong style={{ color: 'var(--t1)' }}>{sz}</strong>.
+                  {' '}Only carry on if the physical bags really hold {sz} — a label that overstates its bag
+                  lets a run pick more than it needs.
+                  {evidence?.disagrees && (
+                    <> {' '}<span style={{ color: 'var(--t3)' }}>
+                      (Worth knowing: the set bag size for this part says {evidence.catalogue}, which
+                      does not match what receiving actually bags — the catalogue may be out of date.)
+                    </span></>
+                  )}
+                </div>
+              </div>
+            )}
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 14 }}>
               {nb > 0
                 ? <>Will print <strong style={{ color: 'var(--t1)' }}>{nb}</strong> bag{nb === 1 ? '' : 's'} — {remainder > 0 ? <>{nb - 1} × {sz} + 1 × {remainder}</> : <>{nb} × {sz}</>} = <strong style={{ color: 'var(--t1)' }}>{tq}</strong> pcs</>
