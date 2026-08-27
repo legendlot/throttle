@@ -145,16 +145,24 @@ export default function ReportsPage() {
     lines.push(`Handled in range,${t.handled ?? ''}`);
     lines.push(`Closed in range,${t.closed ?? ''}`);
     lines.push('');
+    // The decomposition travels with the file for the same reason Basis does: "avg to
+    // close" is the FULL wall clock, and a reader a week later must be able to see how
+    // much of it was waiting rather than working, without re-running the report.
+    lines.push(`Avg to close (min) — full wall clock,${t.avg_resolution_min ?? ''}`);
+    lines.push(`  of which waiting on customer (min),${t.avg_customer_wait_min ?? ''}`);
+    lines.push(`  of which waiting to be closed (min),${t.avg_close_lag_min ?? ''}`);
+    lines.push('');
     // The date basis travels WITH the file, same reason as Basis/Channel above: a CSV
     // read next week must not leave anyone guessing which day a closure landed on.
     lines.push('Assigned/Handled/Resolved/Closed counted on,The day the activity happened');
     lines.push('Queries/Open/Answered/rates/averages counted on,The day the conversation was raised');
     lines.push('');
-    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Waiting on us,Waiting on customer');
+    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Avg waiting on customer (min),Avg waiting to be closed (min),Waiting on us,Waiting on customer');
     for (const r of agentData.by_agent) {
       lines.push([r.name, r.assigned, r.handled, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
         r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
         r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
+        r.avg_customer_wait_min, r.avg_close_lag_min,
         r.waiting_agent, r.waiting_customer].map(esc).join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -321,6 +329,11 @@ function AgentsPanel({ data }) {
     return <EmptyState icon={Users} title="No conversations in range" message="Adjust the date range or filters." />;
   }
   const rows = data.by_agent || [];
+  // Clamped at 0: the three components are each population means over the same threads,
+  // so the arithmetic holds in aggregate, but a filtered slice could in principle round
+  // its way negative — and a negative "active handling" would read as a bug, not a number.
+  const activeHandling = t.avg_resolution_min == null ? null
+    : Math.max(0, Number(t.avg_resolution_min) - Number(t.avg_customer_wait_min ?? 0) - Number(t.avg_close_lag_min ?? 0));
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
@@ -383,6 +396,39 @@ function AgentsPanel({ data }) {
         </div>
       )}
 
+      {/* Afshaan 2026-08-27: keep the REAL resolution time (the full wall clock, customer
+          wait included) and expose the waits beside it, so anyone can subtract by hand
+          rather than the metric being silently redefined underneath them. Deliberately NOT
+          a customer-wait pause on the clock — that was the alternative and it was declined.
+          Every figure here is a population mean over exactly the same threads as
+          "Avg to close", so the subtraction is valid. */}
+      {t.avg_resolution_min != null && (
+        <Panel title="What the resolution time is made of">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', padding: 12 }}>
+            <div title={TIPS.avg_to_close}>
+              <KpiCard label="Total to close" value={dur(t.avg_resolution_min)} sub="raised → closed, unchanged" tone="var(--t1)" size={22} />
+            </div>
+            <div title={TIPS.customer_wait}>
+              <KpiCard label="− Waiting on customer" value={dur(t.avg_customer_wait_min)} sub="ball in their court" tone="var(--t3)" size={22} />
+            </div>
+            <div title={TIPS.close_lag}>
+              <KpiCard label="− Waiting to be closed" value={dur(t.avg_close_lag_min)} sub="after the last message" tone="var(--warn-fg)" size={22} />
+            </div>
+            <div title={TIPS.active_handling}>
+              <KpiCard label="= Active handling" value={dur(activeHandling)} sub="what the team actually spent" tone="var(--accent)" size={22} />
+            </div>
+          </div>
+          <div style={{ padding: '0 12px 12px', fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--t2)' }}>Total to close is the real number and has not changed</strong> — the two
+            middle figures are carved out of it so they can be removed by hand when that is the fairer read.
+            {' '}<strong style={{ color: 'var(--t2)' }}>Waiting to be closed</strong> is time after the final message in the
+            conversation, i.e. how long it took someone to press Close — it is closing discipline, not resolution.
+            {' '}All four are on the {data.range?.business_hours ? 'business-hours' : '24×7'} basis; switching that
+            moves every one of them.
+          </div>
+        </Panel>
+      )}
+
       <Panel title="Waiting now">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--gap)', padding: 12 }}>
           <KpiCard label="Waiting on us"       value={t.waiting_agent.toLocaleString()}    sub="customer replied last" tone={t.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={22} />
@@ -401,7 +447,7 @@ function AgentsPanel({ data }) {
 
       <Panel title="By agent">
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: 1080, borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', minWidth: 1240, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <Th>Agent</Th>
@@ -418,6 +464,8 @@ function AgentsPanel({ data }) {
                 <Th align="right" tip={TIPS.avg_first_reply}>Avg 1st reply</Th>
                 <Th align="right" tip={TIPS.avg_reply}>Avg reply</Th>
                 <Th align="right" tip={TIPS.avg_to_close}>Avg to close</Th>
+                <Th align="right" tip={TIPS.customer_wait}>— on customer</Th>
+                <Th align="right" tip={TIPS.close_lag}>— unclosed</Th>
                 <Th align="right" tip={TIPS.on_us}>On us</Th>
               </tr>
             </thead>
@@ -438,6 +486,8 @@ function AgentsPanel({ data }) {
                   <Td mono align="right">{dur(r.avg_frt_min)}</Td>
                   <Td mono align="right">{dur(r.avg_response_min)}</Td>
                   <Td mono align="right">{dur(r.avg_resolution_min)}</Td>
+                  <Td mono align="right" color="var(--t3)">{dur(r.avg_customer_wait_min)}</Td>
+                  <Td mono align="right" color={(r.avg_close_lag_min ?? 0) > 0 ? 'var(--warn-fg)' : 'var(--t3)'}>{dur(r.avg_close_lag_min)}</Td>
                   <Td mono align="right" color={r.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.waiting_agent.toLocaleString()}</Td>
                 </tr>
               ))}
@@ -720,7 +770,10 @@ const TIPS = {
   never_answered: 'Queries with no agent reply yet — the priority pile.',
   avg_first_reply: "Average time from the customer's first message to the agent's first reply.",
   avg_reply: 'Average agent response time across every customer message in the conversation.',
-  avg_to_close: 'Average time from a query being raised to it being closed.',
+  avg_to_close: 'Average time from a query being raised to it being closed. This is the FULL wall clock — it includes time spent waiting on the customer and time the conversation sat finished but unclosed. Neither is paused; both are shown separately so you can subtract them.',
+  customer_wait: 'Of the time to close, how much was spent waiting on the customer — every stretch where we had replied last and the next move was theirs. Subtract it from Total to close to get our own time.',
+  close_lag: 'Of the time to close, how much fell AFTER the last message in the conversation — nobody was talking, it simply had not been closed yet. This is closing discipline rather than resolution speed, and it is usually the largest slice.',
+  active_handling: 'Total to close, minus waiting on the customer, minus waiting to be closed — the part that reflects how fast the conversation was actually worked.',
   on_us: "Open queries where the last message is the customer's — waiting on an agent.",
 };
 
