@@ -89,6 +89,24 @@ it should be locked to that one device."*
   cannot be flagged even by a direct write.
 - `clockIn` / `clockOut` / `recordAttendance` / `recordBreak` require a valid signature **AND**
   `device.is_attendance_device = true`. Every other device → 403, logged.
+
+> 🔴 **BLOCKER FOUND BY HOSTILE REVIEW OF THIS OWN SPEC (2026-08-27, S319) — read before Phase 3.**
+> **Attendance calls carry NO `device_code` today, so this rule as drafted would refuse 100% of
+> them.** Phase 1 proved it within minutes of going live: `recordAttendance` and
+> `getOperatorByCode` both logged with an **empty** device code at 19:01 IST. That is not a bug —
+> RULE-SCAN-001 makes attendance deliberately **deviceless** (`needsOperator()` excludes it because
+> the operator gate requires a `device_code`), which is precisely *why* any phone can reach it.
+>
+> The design above silently assumed a `device_code` was present to compare against
+> `is_attendance_device`. It is not. **Enforcing Phase 3 without fixing this stops every operator
+> clocking in — the exact floor-stopping outcome the phased rollout exists to prevent.**
+>
+> **Required before the attendance flip:** the scanner's attendance path must be given a device
+> identity and must send `X-LOT-Device` + the signature headers explicitly. Attendance is currently
+> the ONE station with no device setup step, so this is new work, not a config change — budget for
+> it. ⚠️ Do NOT "solve" this by falling back to `body.data.device_code` for attendance: the field
+> is absent, so the fallback resolves to empty and the gate would pass for everyone, which is worse
+> than failing closed.
 - Toggled from the Garage `/users` super-admin card that already holds Scanner PINs.
 
 ⚠️ **This is a real floor change, not just a lock.** Attendance is currently **deviceless** by
