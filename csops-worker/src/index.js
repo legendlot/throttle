@@ -3026,23 +3026,16 @@ async function escalateTicket(body, auth, env) {
 // with cs_ticket_manage is a normal, sanctioned action and making everyone queue behind an
 // admin would be a worse system than the one being fixed.
 //
-// ⚠️ CORRECTION to my own earlier wording here ("still works for admins" — half-true, and
-// the half that is false is the interesting one). Confirmed 2026-08-26 by the Pitstop lane:
-// closeTicket's MID-FLIGHT branch — the one gated on cs_ticket_admin + a reason, written
-// precisely for closing a ticket that is NOT terminal — 422s for every stage it exists to
-// serve, because it ends by delegating to advanceStage and `closed` is reachable only from
-// the single preceding stage. Its terminalReady branch works by coincidence. It has ZERO
-// callers today, so nothing is failing; the risk is that `closeTicket` is the obvious name
-// to reach for when someone wires a close button. Logged [pitstop] [bug]; fix shape is
-// approveTicketClosure below — write the four fields directly.
+// ✅ RESOLVED 2026-08-27 (S318) — the paragraphs that used to sit here described closeTicket
+// as broken in both directions (mid-flight branch 422ing for every stage it served; a
+// hardcoded `terminalReady` that omitted `inspected`). Both are fixed at closeTicket itself:
+// it now writes the close fields directly instead of delegating to advanceStage, and it
+// DERIVES the no-admin-needed case from `allowedTransitions` rather than restating it, so the
+// two lists can no longer drift apart. See the note on closeTicket below.
 //
-// ⚠️ And it is wrong in the OPPOSITE direction too, which the bug entry does not cover:
-// `terminalReady` omits `inspected`, but for a disposition with no branch stages
-// (query/no_action/pending/awaiting_info) `inspected` IS the stage preceding `closed`, so
-// advanceStage would permit it. That case needlessly demands admin + a reason for a
-// transition that is already legal. Whoever fixes this must reconcile terminalReady with
-// allowedTransitions — the two lists disagree about `inspected` — not just swap the close
-// mechanism.
+// ⚠️ Still true, and the reason requestTicketClosure exists at all: closeTicket is an ADMIN
+// power. This route is the one for people who cannot use it — an agent asks, an admin
+// approves — and it must stay a separate route, not a gate bolted in front of closeTicket.
 async function requestTicketClosure(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { ticket_id, reason, note } = body || {};
@@ -3157,25 +3150,86 @@ async function getClosureRequests(params, auth, env) {
   return ok({ requests: r.data || [] });
 }
 
+// The unilateral admin force-close. FIXED 2026-08-27 (S318) — it was broken in BOTH
+// directions and had never worked for the case it was written for.
+//
+// ① It used to end by delegating to `advanceStage`, which enforces pipeline order via
+//    `allowedTransitions`; `closed` is not a SIDE_EXIT, so it is reachable only from the
+//    single stage immediately preceding it. The mid-flight branch — the whole point of this
+//    function — therefore 422'd for every stage it exists to serve. Now it writes the four
+//    close fields directly, exactly as `approveTicketClosure` does and for the same stated
+//    reason: an administrative close is a deliberate override of pipeline order.
+// ② `terminalReady` was a hardcoded list that had drifted from `allowedTransitions`: it
+//    omitted `inspected`, which for a branch-less disposition (query/no_action/pending/
+//    awaiting_info) IS the stage before `closed`, so an already-legal transition was being
+//    charged admin + a reason. It also silently mis-handled a mismatched stage/disposition
+//    pair, since a stage terminal for one disposition is mid-flight for another.
+//
+// ⚠️ The fix for ② is to DERIVE the list rather than restate it. `allowedTransitions` is the
+// single source of truth for what the pipeline permits, so asking it directly means the two
+// can never disagree again — which is the actual defect class here, not the missing string.
+//
+// ⚠️ This is NOT redundant with the other close paths, so do not delete it in a tidy-up:
+// `updateTicket`'s fast-close only fires when the DISPOSITION CHANGES to query/no_action and
+// forces closed_reason to resolved/no_action — i.e. an agent can only close mid-flight by
+// rewriting what the ticket was about — and `approveTicketClosure` requires an agent to have
+// requested closure first. This is the only way to close a ticket mid-flight, unilaterally,
+// with an honest reason and its disposition intact.
 async function closeTicket(body, auth, env) {
-  const { ticket_id, reason } = body;
+  const { ticket_id, reason, note } = body || {};
   if (!ticket_id) return err('ticket_id required');
 
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=stage,disposition&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`
+    + `&select=id,ticket_no,stage,disposition,closure_requested_at&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
+  // Closing a closed ticket is a no-op that would otherwise overwrite the original closer,
+  // reason and timestamp — losing who actually resolved it.
+  if (t.stage === 'closed') return err('Ticket is already closed', 409);
 
-  // Terminal stages can be closed by anyone with manage
-  const terminalReady = ['replacement_dispatched', 'refund_completed', 'repair_dispatched'];
-  if (!terminalReady.includes(t.stage)) {
-    // Mid-flight close requires admin perm + reason
-    const g = require('cs_ticket_admin', auth); if (g) return g;
-    if (!reason) return err(`reason required for mid-flight close (one of: ${ALLOWED_CLOSED_REASONS.join(', ')})`);
-  } else {
+  // Derived, never restated: whatever the pipeline already permits needs no admin.
+  const pipelineAllowsClose = allowedTransitions(t.stage, t.disposition).includes('closed');
+
+  if (pipelineAllowsClose) {
     const g = require('cs_ticket_manage', auth); if (g) return g;
+  } else {
+    const g = require('cs_ticket_admin', auth); if (g) return g;
+    if (!reason) return err(`reason required for mid-flight close (one of: ${ALLOWED_CLOSED_REASONS.join(', ')})`, 422);
   }
 
-  return advanceStage({ ticket_id, target_stage: 'closed', patch: { closed_reason: reason || 'resolved' } }, auth, env, new Request('https://x'));
+  // ⚠️ Validate against the enum rather than letting the DB CHECK reject it. Free text here
+  // hits `cs_tickets_closed_reason_check` and surfaces as an opaque 400 about a constraint,
+  // which tells the caller nothing about which values are legal.
+  const closedReason = reason || 'resolved';
+  if (!ALLOWED_CLOSED_REASONS.includes(closedReason)) {
+    return err(`invalid reason (one of: ${ALLOWED_CLOSED_REASONS.join(', ')})`, 422);
+  }
+
+  const now = new Date().toISOString();
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH',
+    prefer: 'return=representation',
+    body: JSON.stringify({
+      stage: 'closed',
+      stage_changed_at: now,
+      closed_at: now,
+      closed_by_user_id: auth.userId,
+      closed_reason: closedReason,
+      // A pending closure request is moot once an admin closes the ticket outright; leaving
+      // it set would keep the ticket on the admin worklist forever with nothing to approve.
+      ...CLOSURE_FIELDS_CLEARED,
+    }),
+  });
+  if (!upd.ok || !(upd.data || []).length) {
+    return err(`Failed to close the ticket: ${JSON.stringify(upd.data)?.slice(0, 200)}`, upd.status || 500);
+  }
+
+  await insertHistory(ticket_id, 'stage', t.stage, 'closed',
+    (pipelineAllowsClose ? 'closed' : 'force-closed mid-flight')
+      + ` by ${auth.fullName || auth.email || 'user'}${String(note || '').trim() ? ` — ${String(note).trim()}` : ''}`,
+    auth, env);
+  return ok({ closed: true, ticket_no: t.ticket_no, closed_reason: closedReason,
+              was_mid_flight: !pipelineAllowsClose, from_stage: t.stage });
 }
 
 // ── Telephony pipeline binding ───────────────────────────────────────────────
