@@ -773,6 +773,18 @@ export default {
       ));
     }
 
+    // Retro-assignment sweep (S318). Every 10 minutes. Gives an owner to conversations that
+    // arrived when nobody was routable — the second chance the arrival-time assignment never had.
+    // Logs EVERY run, including the no-ops, for the same reason as the watchdog below: a sweep
+    // whose healthy state is silence cannot be told apart from one that stopped running, and
+    // "nothing got assigned" is exactly what a broken sweep and a quiet inbox both look like.
+    if (mins % 10 === 0) {
+      ctx.waitUntil(retroAssignUnownedThreads(env).then(
+        r => console.log('[retro-assign]', JSON.stringify(r)),
+        e => console.error('[retro-assign] error', e),
+      ));
+    }
+
     // Relay sending watchdog (S318). Every 5 minutes, NOT four times a day like the channel
     // alarm below: a sending outage blocks every agent immediately, so a ~6h detection window
     // would be useless for it. Cheap — one row read, and a write only when the state changes.
@@ -6682,6 +6694,69 @@ const CH_LABEL = { instagram: 'Instagram', whatsapp: 'WhatsApp', email: 'Email',
                    // Not a channel — a pseudo-row for the Relay sending pipeline, so that a
                    // sending outage reuses the banner agents already watch (S318).
                    relay_sending: 'Outgoing messages' };
+
+// ── Retro-assignment sweep (S318) ────────────────────────────────────────────
+// Auto-assign fires ONCE, at the instant a message arrives. Anything that arrives while no agent
+// is eligible gets no owner — and nothing has ever revisited it. That is how 927 open Instagram
+// conversations came to be unowned, 201 of them older than 30 days.
+//
+// This sweep is the missing second chance: it re-runs the SAME `store.cs_autoassign_thread` RPC
+// over open, unowned threads. It deliberately reuses that function rather than reimplementing
+// eligibility, so shift windows, presence, per-channel rosters and the least-loaded pick can
+// never drift between the arrival path and this one.
+//
+// ⚠️ ORDER OF OPERATIONS MATTERS: this is only useful BECAUSE the presence gate was loosened in
+// the same session. With 3 of 12 agents ever eligible, this sweep would have mostly no-op'd.
+//
+// ⚠️ AGE CAP 7 DAYS (Afshaan, 2026-08-27), measured on `coalesce(last_message_at, created_at)`,
+// NOT on created_at alone: a thread opened three weeks ago whose customer wrote yesterday is
+// live, and a thread created yesterday with no activity since is not. The coalesce is load-
+// bearing — **50 Instagram threads carry real messages with a NULL `last_message_at`** (a
+// separate data bug, logged), and on a bare `last_message_at` predicate NULL comparisons are
+// false, so those would be silently skipped forever.
+// ⚠️ The cap is also what keeps **1,728 empty WhatsApp thread stubs** (zero messages, created
+// 29 Jun–22 Jul) out of the queue. Do not relax it to `created_at` without re-checking those.
+//
+// ⚠️ RATE LIMITED ON PURPOSE. 359 threads currently qualify against ~4 eligible agents. Assigning
+// them at once is ~90 each and would be read as the system dumping its backlog on the team, which
+// is how a good mechanism gets switched off. 10 per run every 10 minutes drains the current
+// backlog over roughly one working day.
+// ⚠️ NEWEST FIRST. A customer who wrote an hour ago is still in the conversation; one from six
+// days ago mostly is not. Starvation of the tail is bounded by the 7-day cap and, at this volume,
+// does not arise — the whole window drains well inside a day.
+// ⚠️ No out-of-hours guard is needed and none should be added: `cs_autoassign_thread` already
+// requires an in-shift, present agent, so outside shift hours every call simply returns null.
+const RETRO_ASSIGN_PER_RUN = 10;
+const RETRO_ASSIGN_MAX_AGE_DAYS = 7;
+
+async function retroAssignUnownedThreads(env) {
+  const cutoff = new Date(Date.now() - RETRO_ASSIGN_MAX_AGE_DAYS * 86400000).toISOString();
+  const q = `/rest/v1/cs_wa_threads`
+    + `?thread_state=eq.open&assigned_agent_id=is.null`
+    + `&or=(last_message_at.gte.${encodeURIComponent(cutoff)},`
+    + `and(last_message_at.is.null,created_at.gte.${encodeURIComponent(cutoff)}))`
+    + `&select=id,channel,last_message_at,created_at`
+    + `&order=last_message_at.desc.nullslast,created_at.desc`
+    + `&limit=${RETRO_ASSIGN_PER_RUN}`;
+  const r = await sb(q, env);
+  if (!r.ok || !Array.isArray(r.data)) {
+    return { ok: false, reason: JSON.stringify(r.data)?.slice(0, 200) };
+  }
+  const threads = r.data;
+  if (!threads.length) return { ok: true, candidates: 0, assigned: 0 };
+
+  // Sequential, not Promise.all: the RPC picks the LEAST-LOADED agent, and concurrent calls all
+  // read the same pre-assignment load and pile onto the same person. Ten serial calls is a
+  // rounding error against a 10-minute tick, and it keeps the balancing honest.
+  let assigned = 0, skipped = 0;
+  for (const t of threads) {
+    const a = await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
+      method: 'POST', body: JSON.stringify({ p_thread_id: t.id }),
+    }).catch(() => null);
+    if (a?.ok && a.data) assigned += 1; else skipped += 1;
+  }
+  return { ok: true, candidates: threads.length, assigned, skipped };
+}
 
 // ── Relay sending-pipeline watchdog (S318) ───────────────────────────────────
 // On 2026-08-27 WhatsApp replies were dead for 52 minutes and NOTHING noticed — an agent
