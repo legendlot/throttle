@@ -1006,6 +1006,7 @@ async function getTickets(params, auth, env) {
   else if (tab === 'logistics')    filters.push(`stage=in.(pickup_scheduled,picked_up,at_warehouse)`, `closed_at=is.null`);
   else if (tab === 'inspection')   filters.push(`stage=eq.inspected`, `closed_at=is.null`);
   else if (tab === 'resolution')   filters.push(`stage=in.(replacement_dispatched,refund_initiated,refund_completed,handed_to_production,repaired_ready,repair_dispatched)`, `closed_at=is.null`);
+  else if (tab === 'closure')      filters.push(`closure_requested_at=not.is.null`, `closed_at=is.null`);
   else if (tab === 'closed')       filters.push(`closed_at=not.is.null`);
   else if (tab === 'escalated')    filters.push(`stage=eq.escalated`);
 
@@ -1049,7 +1050,7 @@ async function getTickets(params, auth, env) {
     updated: 'stage_changed_at.desc.nullslast',
   };
   const orderClause = `order=${ORDERS[sort] || ORDERS.newest}`;
-  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
+  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created,closure_requested_at,closure_requested_by_name,closure_request_reason&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
 
   const res = await sb(path, env, {
     headers: { Prefer: 'count=exact' },
@@ -1283,6 +1284,7 @@ async function getQueueCounts(params, auth, env) {
     logistics:  `?stage=in.(pickup_scheduled,picked_up,at_warehouse)&closed_at=is.null&select=id`,
     inspection: `?stage=eq.inspected&closed_at=is.null&select=id`,
     resolution: `?stage=in.(replacement_dispatched,refund_initiated,refund_completed,handed_to_production,repaired_ready,repair_dispatched)&closed_at=is.null&select=id`,
+    closure:    `?closure_requested_at=not.is.null&closed_at=is.null&select=id`,
     closed:     `?closed_at=not.is.null&select=id`,
   };
   const results = {};

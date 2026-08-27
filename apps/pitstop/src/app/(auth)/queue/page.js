@@ -21,6 +21,7 @@ const TABS = [
   { id: 'logistics',  label: 'In Logistics' },
   { id: 'inspection', label: 'Inspection' },
   { id: 'resolution', label: 'Resolution' },
+  { id: 'closure',    label: 'Closure Requests' },
   { id: 'closed',     label: 'Closed' },
 ];
 
@@ -323,7 +324,15 @@ export default function QueuePage() {
                         border: '1px solid var(--border-2)', borderRadius: 4, padding: '1px 5px' }}>auto</span>}
                     </div>
                   </td>
-                  <td style={TD}><StagePill stage={t.stage} /></td>
+                  <td style={TD}>
+                    <StagePill stage={t.stage} />
+                    {t.closure_requested_at && !t.closed_at && (
+                      <div className="num" style={{ marginTop: 3, fontSize: 9.5, fontWeight: 700, color: 'var(--warn-fg)' }}>
+                        closure req · {t.closure_requested_by_name || '—'}
+                        {t.closure_request_reason ? ` · ${String(t.closure_request_reason).replace(/_/g, ' ')}` : ''}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...TD, color: t.assigned_agent_name ? 'var(--t1)' : 'var(--t4)', fontWeight: 500 }}>{t.assigned_agent_name || 'Unassigned'}</td>
                   <td style={TD}><AgeCell createdAt={t.created_at} dueAt={t.due_at} closedAt={t.closed_at} /></td>
                 </tr>

@@ -41,12 +41,12 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Agents-tab filters (Pruthvi #bugs 2026-07-25). businessHours defaults OFF —
-  // 24x7 is the honest basis; business hours flatters every response time, so it
-  // should be a deliberate choice, not the number you land on.
+  // Agents-tab filters (Pruthvi #bugs 2026-07-25). businessHours defaults ON since
+  // 2026-08-27 (Pruthvi, #bugs 1787684420 reply): the team is judged on these numbers,
+  // so the default basis is their rostered hours; untick for the 24x7 view.
   const [agChannel, setAgChannel] = useState('');
   const [agTag, setAgTag] = useState('');
-  const [businessHours, setBusinessHours] = useState(false);
+  const [businessHours, setBusinessHours] = useState(true);
   const [tags, setTags] = useState([]);
 
   useEffect(() => {
