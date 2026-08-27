@@ -144,7 +144,13 @@ export default function ReportsPage() {
     const t = agentData.totals || {};
     // Breakdown is a separate request and may legitimately be absent — the CSV then
     // simply omits those rows rather than exporting blanks that read as zeroes.
-    const wt = waitData?.totals || null;
+    // Same gate as the panel: only export the breakdown when its own total agrees
+    // with the report's, or the CSV carries three numbers that do not add up to the
+    // "Avg to close" two rows above them.
+    const wRaw = waitData?.totals || null;
+    const wt = (wRaw && t.avg_resolution_min != null && wRaw.avg_resolution_min != null
+      && Math.abs(Number(wRaw.avg_resolution_min) - Number(t.avg_resolution_min))
+         <= Math.max(60, 0.10 * Number(t.avg_resolution_min))) ? wRaw : null;
     const wByAgent = new Map((waitData?.by_agent || []).map(x => [x.agent_id || x.name, x]));
     const lines = [];
     lines.push(`Pitstop Agent Conversation Report,${from} to ${to}`);
@@ -180,8 +186,8 @@ export default function ReportsPage() {
       lines.push([r.name, r.assigned, r.handled, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
         r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
         r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
-        wByAgent.get(r.agent_id || r.name)?.avg_customer_wait_min,
-        wByAgent.get(r.agent_id || r.name)?.avg_close_lag_min,
+        wt ? wByAgent.get(r.agent_id || r.name)?.avg_customer_wait_min : '',
+        wt ? wByAgent.get(r.agent_id || r.name)?.avg_close_lag_min : '',
         r.waiting_agent, r.waiting_customer].map(esc).join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -360,8 +366,17 @@ function AgentsPanel({ data, wait }) {
   // ever disagrees with the report's, the two populations have drifted and the
   // subtraction below is no longer honest — so say nothing rather than show a total
   // that does not match the one three panels up.
+  // Tolerance is RELATIVE and generous on purpose. The two figures come from two
+  // separate HTTP calls, so threads close between them: one thread entering or
+  // leaving moves the mean by mean/(n+1) — 1.4 min at n=1779, but 13 min at n=200
+  // and 50 min at n=50. A tight check would flicker on the unfiltered view and
+  // essentially never pass with a channel or tag filter applied. What this is
+  // guarding against is a STRUCTURAL divergence — someone changing the population
+  // filter in one function and not the other — which moves the mean far more than
+  // 10%. Normal churn must never trip it.
   const resAgrees = hasWaitBreakdown && t.avg_resolution_min != null
-    && Math.abs(Number(w.avg_resolution_min) - Number(t.avg_resolution_min)) <= 1;
+    && Math.abs(Number(w.avg_resolution_min) - Number(t.avg_resolution_min))
+       <= Math.max(60, 0.10 * Number(t.avg_resolution_min));
   // Per-agent breakdown arrives from the other RPC keyed the same way the report keys
   // its rows (agent_id, falling back to name for the unassigned bucket).
   const waitByAgent = new Map((wait?.by_agent || []).map(x => [x.agent_id || x.name, x]));
@@ -369,8 +384,11 @@ function AgentsPanel({ data, wait }) {
   // Clamped at 0: the three components are each population means over the same threads,
   // so the arithmetic holds in aggregate, but a filtered slice could in principle round
   // its way negative — and a negative "active handling" would read as a bug, not a number.
+  // All four panel figures come from the breakdown's own query, so they are
+  // internally consistent by construction — never mix its components with the
+  // report's total, or the subtraction stops being exact.
   const activeHandling = !resAgrees ? null
-    : Math.max(0, Number(t.avg_resolution_min) - Number(w.avg_customer_wait_min ?? 0) - Number(w.avg_close_lag_min ?? 0));
+    : Math.max(0, Number(w.avg_resolution_min) - Number(w.avg_customer_wait_min ?? 0) - Number(w.avg_close_lag_min ?? 0));
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
@@ -443,7 +461,7 @@ function AgentsPanel({ data, wait }) {
         <Panel title="What the resolution time is made of">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', padding: 12 }}>
             <div title={TIPS.avg_to_close}>
-              <KpiCard label="Total to close" value={dur(t.avg_resolution_min)} sub="raised → closed, unchanged" tone="var(--t1)" size={22} />
+              <KpiCard label="Total to close" value={dur(w.avg_resolution_min)} sub="raised → closed, unchanged" tone="var(--t1)" size={22} />
             </div>
             <div title={TIPS.customer_wait}>
               <KpiCard label="− Waiting on customer" value={dur(w.avg_customer_wait_min)} sub="ball in their court" tone="var(--t3)" size={22} />
@@ -501,8 +519,8 @@ function AgentsPanel({ data, wait }) {
                 <Th align="right" tip={TIPS.avg_first_reply}>Avg 1st reply</Th>
                 <Th align="right" tip={TIPS.avg_reply}>Avg reply</Th>
                 <Th align="right" tip={TIPS.avg_to_close}>Avg to close</Th>
-                {hasWaitBreakdown && <Th align="right" tip={TIPS.customer_wait}>— on customer</Th>}
-                {hasWaitBreakdown && <Th align="right" tip={TIPS.close_lag}>— unclosed</Th>}
+                {resAgrees && <Th align="right" tip={TIPS.customer_wait}>— on customer</Th>}
+                {resAgrees && <Th align="right" tip={TIPS.close_lag}>— unclosed</Th>}
                 <Th align="right" tip={TIPS.on_us}>On us</Th>
               </tr>
             </thead>
@@ -523,8 +541,8 @@ function AgentsPanel({ data, wait }) {
                   <Td mono align="right">{dur(r.avg_frt_min)}</Td>
                   <Td mono align="right">{dur(r.avg_response_min)}</Td>
                   <Td mono align="right">{dur(r.avg_resolution_min)}</Td>
-                  {hasWaitBreakdown && <Td mono align="right" color="var(--t3)">{dur(wRow(r)?.avg_customer_wait_min)}</Td>}
-                  {hasWaitBreakdown && <Td mono align="right" color={(wRow(r)?.avg_close_lag_min ?? 0) > 0 ? 'var(--warn-fg)' : 'var(--t3)'}>{dur(wRow(r)?.avg_close_lag_min)}</Td>}
+                  {resAgrees && <Td mono align="right" color="var(--t3)">{dur(wRow(r)?.avg_customer_wait_min)}</Td>}
+                  {resAgrees && <Td mono align="right" color={(wRow(r)?.avg_close_lag_min ?? 0) > 0 ? 'var(--warn-fg)' : 'var(--t3)'}>{dur(wRow(r)?.avg_close_lag_min)}</Td>}
                   <Td mono align="right" color={r.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.waiting_agent.toLocaleString()}</Td>
                 </tr>
               ))}
