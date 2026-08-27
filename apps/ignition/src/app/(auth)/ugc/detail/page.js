@@ -9,6 +9,7 @@ import {
   UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, UGC_HAPPY_PATH,
   roasTone, roasToneColor,
 } from '../../../../lib/ugcStages.js';
+import { titleish } from '../../../../lib/productLabel.js';
 
 const ORANGE = '#FF6B00';
 function inr(n) { return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
@@ -279,8 +280,8 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {products.map((p, i) => (
             <div key={p.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
-              <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{p.product_code || '—'}</span>
-              {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{p.product_variant}</span>}
+              <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{titleish(p.product_code) || '—'}</span>
+              {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{titleish(p.product_variant)}</span>}
               {Number(p.quantity) > 1 && <span style={{ color: 'var(--text-3)' }}>×{p.quantity}</span>}
               {p.goodies_cost != null && <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{inr(p.goodies_cost)}</span>}
             </div>

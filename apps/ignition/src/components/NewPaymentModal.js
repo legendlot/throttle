@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Modal, useToast } from '@throttle/ui';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
+import { titleish } from '../lib/productLabel.js';
 
 const PROOF_BUCKET = 'ignition-payment-proofs';
 
@@ -130,7 +131,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved, presetInfluen
             <select value={form.engagement_id} onChange={e => setField('engagement_id', e.target.value)} style={inp}>
               <option value="">Select a deal…</option>
               {engagements.map(e => (
-                <option key={e.id} value={e.id}>{e.engagement_no} · {e.product_code || 'no product'} · {e.stage}</option>
+                <option key={e.id} value={e.id}>{e.engagement_no} · {titleish(e.product_code) || 'no product'} · {e.stage}</option>
               ))}
             </select>
           )}

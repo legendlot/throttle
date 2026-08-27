@@ -6,6 +6,7 @@ import { Spinner, Chip } from '@throttle/ui';
 import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../components/StageBadge.js';
+import { titleish } from '../../../lib/productLabel.js';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -98,7 +99,7 @@ export default function SchedulePage() {
                   <div style={{ fontSize: 11, color: isToday ? '#FF6B00' : 'var(--text-3)', fontWeight: isToday ? 700 : 500, marginBottom: 4 }}>{d}</div>
                   {items.slice(0, 4).map(e => (
                     <div key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
-                      title={`${e.engagement_no} · ${influencerLabel(e)}${e.product_code ? ` · ${e.product_code}` : ''}`}
+                      title={`${e.engagement_no} · ${influencerLabel(e)}${e.product_code ? ` · ${titleish(e.product_code)}` : ''}`}
                       style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, color: 'var(--text-1)', padding: '2px 4px', borderRadius: 4, marginBottom: 2, background: 'var(--surface-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       <span style={dot(e.is_planned ? 'transparent' : '#FF6B00', e.is_planned)} />
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{influencerLabel(e)}</span>
@@ -126,7 +127,7 @@ export default function SchedulePage() {
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{e.effective_date}</td>
                   <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
                   <td style={td}>{influencerLabel(e)}</td>
-                  <td style={td}>{e.product_code || '—'}</td>
+                  <td style={td}>{titleish(e.product_code) || '—'}</td>
                   <td style={td}><StageBadge stage={e.stage} /></td>
                   <td style={td}><span style={dot(e.is_planned ? 'transparent' : '#FF6B00', e.is_planned)} />{e.is_planned ? 'Planned' : 'Posted'}</td>
                   <td style={td}>

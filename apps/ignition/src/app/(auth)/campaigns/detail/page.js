@@ -6,6 +6,7 @@ import { Spinner, KpiCard, Modal, useToast } from '@throttle/ui';
 import { Plus, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import { productLabel, titleish } from '../../../../lib/productLabel.js';
 
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 function num(n) { return n == null || isNaN(n) ? 0 : Number(n); }
@@ -102,7 +103,7 @@ export default function CampaignDetailPage() {
               <tr key={e.id} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={td}><a onClick={() => router.push(`/engagements/detail/?id=${e.id}`)} style={{ color: '#FF6B00', fontWeight: 600, cursor: 'pointer' }}>{e.engagement_no}</a></td>
                 <td style={td}>{e.engagement_type === 'ugc' ? 'UGC' : 'Video'}</td>
-                <td style={td}>{e.product_code || '—'}{e.product_variant ? ` · ${e.product_variant}` : ''}</td>
+                <td style={td}>{productLabel(e.product_code, e.product_variant) || '—'}</td>
                 <td style={td}>{e.stage}</td>
                 <td style={td}>{inr(e.total_cost != null ? e.total_cost : e.payment_amount)}</td>
                 <td style={td}>{num(e.views).toLocaleString()}</td>
@@ -241,7 +242,7 @@ function AttachModal({ session, campaign, onClose, onAttached }) {
             <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 9, borderBottom: '1px solid var(--border)' }}>
               <span>
                 <span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span>
-                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-2)' }}>{e.product_code || '—'} · {e.stage}</span>
+                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-2)' }}>{titleish(e.product_code) || '—'} · {e.stage}</span>
               </span>
               <button onClick={() => attach(e.id)} disabled={busy || e.campaign_id === campaign.id} style={{ ...btnPrimary, opacity: (busy || e.campaign_id === campaign.id) ? 0.5 : 1 }}>
                 {e.campaign_id === campaign.id ? 'Linked' : 'Attach'}
