@@ -13,10 +13,13 @@ export const STAGE_VALUES = [
   // STAGE_LABELS below deliberately KEEPS an entry for it so historical rows still render.
   'proposed',
   'planning','shipped','delivered','scheduled','posting','live',
-  'delayed','on_hold','ghosted','dropped',
+  // 'cancelled' (Reann, 2026-08-27) — terminal like 'dropped', but the deal was called off
+  // before anything was spent, so it is EXCLUDED from every spend/CPM total. 'dropped' still
+  // counts: goods went out and never became a video, which is a real loss.
+  'delayed','on_hold','ghosted','dropped','cancelled',
 ];
 
-export const TERMINAL_FAIL = new Set(['ghosted','dropped']);
+export const TERMINAL_FAIL = new Set(['ghosted','dropped','cancelled']);
 
 export const STAGE_LABELS = {
   proposed:  'Proposed',
@@ -31,6 +34,7 @@ export const STAGE_LABELS = {
   on_hold:   'On hold',
   ghosted:   'Ghosted',
   dropped:   'Dropped',
+  cancelled: 'Cancelled',
 };
 
 export const STAGE_PALETTE = {
@@ -46,6 +50,9 @@ export const STAGE_PALETTE = {
   on_hold:   { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
   ghosted:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
   dropped:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
+  // Neutral grey, deliberately NOT the error red the other two exits wear: a cancelled deal
+  // is not a failure, it is a deal that stopped costing anything.
+  cancelled: { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
 };
 
 // Free model: from any stage you may move to any other.

@@ -12,11 +12,13 @@ export const UGC_STAGE_VALUES = [
   // kept so a historical row still renders rather than showing a blank badge.
   'proposed',
   'outreach', 'shipped', 'delivered', 'draft', 'live',
-  'paused', 'vault', 'retired', 'dropped',
+  // 'cancelled' added 2026-08-27 in lockstep with lib/stages.js, ignitionops UGC_STAGES and the
+  // DB CHECK — a UGC deal gets called off the same way an influencer deal does.
+  'paused', 'vault', 'retired', 'dropped', 'cancelled',
 ];
 
 // Off the happy path; vault/paused are reopenable holds, retired/dropped are exits.
-export const UGC_TERMINAL = new Set(['retired', 'dropped']);
+export const UGC_TERMINAL = new Set(['retired', 'dropped', 'cancelled']);
 
 export const UGC_STAGE_LABELS = {
   proposed:  'Proposed',
@@ -30,6 +32,7 @@ export const UGC_STAGE_LABELS = {
   vault:     'Vault',
   retired:   'Retired',
   dropped:   'Dropped',
+  cancelled: 'Cancelled',
 };
 
 export const UGC_STAGE_PALETTE = {
@@ -44,6 +47,7 @@ export const UGC_STAGE_PALETTE = {
   vault:     { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
   retired:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
   dropped:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
+  cancelled: { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
 };
 
 /** Happy path for the stepper. Paused/Vault/Retired/Dropped sit off-path. */

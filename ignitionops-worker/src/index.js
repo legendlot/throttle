@@ -284,14 +284,41 @@ const STAGES = [
   // explicit approval — see the gate in advanceStage. Every OTHER transition stays free (S138).
   'proposed',
   'planning','shipped','delivered','scheduled','posting','live',
-  'delayed','on_hold','ghosted','dropped',
+  // 'cancelled' (Reann, 2026-08-27) is terminal like 'dropped' but its money NEVER HAPPENED, so it
+  // is excluded from every spend/metric aggregation — see SPEND_EXCLUDED_STAGES.
+  'delayed','on_hold','ghosted','dropped','cancelled',
 ];
+
+// ── Deals whose numbers must not reach any total (Reann, 2026-08-27) ─────────────────────────
+// "Some deals are dropped but are not losses; they are simply postponed or cancelled before the
+// products were shipped."
+//
+// ⚠️ 'dropped' is deliberately NOT in here. The two mean different things and the distinction is
+// the whole point of the request: a DROPPED deal shipped goods that never became a video, so its
+// cost is a real loss and must keep counting; a CANCELLED deal was called off before anything was
+// spent, so counting it invents spend that never left the building.
+//
+// ⚠️ This is ONE list on purpose. There are five separate spend aggregations in this file
+// (getReports · getMonthlyTargets · getMonthlyBreakdown · getCampaignSummary · campaignRollup)
+// plus the KPI tiles and the engagements summary in the app. A rule applied to four of them is
+// the PATTERN-218 shape and would surface as two screens quoting different spend for the same
+// month — exactly the divergence fixed earlier this session between the deal list and the deal page.
+const SPEND_EXCLUDED_STAGES = ['cancelled'];
+// PostgREST filter fragment; append to any aggregation query that totals money or metrics.
+const EXCLUDE_NON_SPEND = `stage=not.in.(${SPEND_EXCLUDED_STAGES.join(',')})`;
+/** JS-side twin of EXCLUDE_NON_SPEND, for rows already fetched (e.g. embedded engagements). */
+function countsTowardSpend(e) {
+  return !SPEND_EXCLUDED_STAGES.includes(e && e.stage);
+}
 
 // Terminal stages — entering one stamps closed_at + closed_reason.
 // 'live' is terminal-success for video deals but NOT for UGC (UGC terminals = retired/dropped),
 // so it's handled conditionally in advanceStage rather than sitting in this global set.
-const TERMINAL_FAIL = new Set(['ghosted','dropped']);
-const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC terminal (C1, S177)
+// 'cancelled' joins both sets: it stamps closed_at/closed_reason like any terminal, and being in
+// TERMINAL_FAIL is what lets a PROPOSED deal be cancelled without first being approved — you must
+// be able to call off a proposal you are not going ahead with (same reasoning as drop/ghost).
+const TERMINAL_FAIL = new Set(['ghosted','dropped','cancelled']);
+const TERMINAL = new Set(['ghosted','dropped','cancelled','retired']);   // 'retired' = UGC terminal (C1, S177)
 
 // UGC pipeline stage set (Reann Batch C1, S177). Reuses engagements with
 // engagement_type='ugc'; vault/paused are non-terminal holds (vault reopenable to live).
@@ -300,7 +327,7 @@ const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC 
 // silently invisible on the board.
 // 'agreed' dropped here too (2026-08-27) — verified first that no UGC deal is sitting on it, since
 // a stage missing from this list renders in no column on the board rather than erroring.
-const UGC_STAGES = ['proposed','outreach','shipped','delivered','draft','live','paused','vault','retired','dropped'];
+const UGC_STAGES = ['proposed','outreach','shipped','delivered','draft','live','paused','vault','retired','dropped','cancelled'];
 
 // Free model: from any stage you may move to any other (terminals reopenable) — but only
 // within the vocabulary that belongs to the deal's TYPE.
@@ -756,7 +783,12 @@ function campaignRollup(c) {
   const engs = c.engagements || [];
   const num = v => Number(v) || 0;
   const POSTED = new Set(['posting', 'live']);
-  const spend = engs.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
+  // Embedded rows, so the exclusion is applied here rather than in the query (Reann, 2026-08-27).
+  // `linked_count` deliberately still counts cancelled deals — they ARE linked to the campaign and
+  // hiding them would make the list disagree with the campaign's own deal table — but their money
+  // and metrics are left out of every total below.
+  const counted = engs.filter(countsTowardSpend);
+  const spend = counted.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
   // Reann #3 — budget consumed / remaining. "Consumed" is the deal's agreed cost the moment it is
   // linked, NOT amounts actually paid: a campaign's budget is committed when the deal is struck,
   // and a manager needs to see the commitment before the money moves. Remaining is null (not 0)
@@ -769,8 +801,8 @@ function campaignRollup(c) {
     budget,
     budget_remaining: budget != null ? budget - spend : null,
     budget_pct: budget ? Math.round(spend / budget * 100) : null,
-    views: engs.reduce((s, e) => s + num(e.views), 0),
-    orders: engs.reduce((s, e) => s + num(e.orders), 0),
+    views: counted.reduce((s, e) => s + num(e.views), 0),
+    orders: counted.reduce((s, e) => s + num(e.orders), 0),
   };
 }
 
@@ -940,7 +972,7 @@ async function getKpis(url, auth, env) {
   let engagement_totals = { views: 0, likes: 0, shares: 0 };
   const ugc_summary = { deals: 0, views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
   const aggR = await sb(
-    `/rest/v1/engagements?select=engagement_type,views,likes,shares,orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`,
+    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=engagement_type,views,likes,shares,orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`,
     env,
   );
   if (aggR.ok) {
@@ -967,7 +999,10 @@ async function getKpis(url, auth, env) {
 const OVERDUE_DEFAULT_DAYS = 7;
 // Don't flag as overdue if it's already posting/posted/done, terminal, or
 // deliberately paused/late (on_hold/delayed) — the team already knows about those.
-const POSTED_OR_TERMINAL = ['posting', 'live', 'ghosted', 'dropped', 'on_hold', 'delayed'];
+// 'cancelled' added 2026-08-27: a called-off deal must never surface as "overdue to post" —
+// it drives the Schedule chase list and the auto-red-rating sweep, and neither should be
+// hounding a creator about a deal LOT itself cancelled.
+const POSTED_OR_TERMINAL = ['posting', 'live', 'ghosted', 'dropped', 'cancelled', 'on_hold', 'delayed'];
 
 function overdueCutoffDate(days) {
   const n = Number(days) || OVERDUE_DEFAULT_DAYS;
@@ -1217,6 +1252,9 @@ async function getReports(url, auth, env) {
   const filters = [];
   if (from) filters.push(`created_at=gte.${encodeURIComponent(from)}`);
   if (to) filters.push(`created_at=lte.${encodeURIComponent(to)}`);
+  // Cancelled deals are excluded from the whole report, not just its money columns — a report is
+  // metrics end to end, and a deal called off before anything was spent has no numbers to add.
+  filters.push(EXCLUDE_NON_SPEND);
 
   const r = await sb(
     `/rest/v1/engagements?${filters.join('&')}&select=engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
@@ -1389,7 +1427,7 @@ async function getCatalogs(url, auth, env) {
     payment_terms: ['advance','on_draft','on_release','n_a'],
     engagement_types: ['video_tracking','ugc'],
     stages: STAGES,
-    closed_reasons: ['completed','ghosted','declined','dropped','historical_import'],
+    closed_reasons: ['completed','ghosted','declined','dropped','cancelled','historical_import'],
     list_statuses: ['master','b_list','archived'],
     quality_ratings: ['green','yellow','red','unrated'],
     directed_to: ['website','amazon','flipkart'],
@@ -3002,7 +3040,8 @@ async function getMonthlyBreakdown(url, auth, env) {
   const sel = 'id,engagement_no,post_date,created_at,views,orders,conversions_value,campaign_tag,'
     + 'total_cost,payment_amount,ad_spend,commission_amount,engagement_type,stage,'
     + 'influencer:influencers(id,influencer_code,channel_name,person_name,channel_link,channel_platform)';
-  const r = await sb(`/rest/v1/engagements?select=${encodeURIComponent(sel)}&limit=5000`, env);
+  // Must match getMonthlyTargets' exclusion or the drill-down stops summing to the tile above it.
+  const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${encodeURIComponent(sel)}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
 
   const spend = [], views = [], conversions = [];
@@ -3067,7 +3106,7 @@ async function getCampaignSummary(url, auth, env) {
   const sel = 'id,campaign_tag,post_date,created_at,views,likes,comments,shares,saves,reposts,'
     + 'orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount,'
     + 'follower_count_at_post,stage,influencer_id';
-  const r = await sb(`/rest/v1/engagements?select=${sel}&limit=5000`, env);
+  const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${sel}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
 
   const g = {};
@@ -3110,7 +3149,7 @@ async function getMonthlyTargets(url, auth, env) {
 
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
-  const er = await sb(`/rest/v1/engagements?select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
+  const er = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
   const actMap = {};
   let unallocSpend = 0, unallocDeals = 0;
   const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_spend: 0 }));

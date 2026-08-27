@@ -30,7 +30,12 @@ const DATE_MODES = [
 // never be overdue. Mirrors the worker's POSTED_OR_TERMINAL list (ignitionops
 // getOverdueEngagements); the two must agree or the Schedule page and this filter would
 // disagree about who is late.
-const POSTED_OR_TERMINAL = new Set(['posting', 'live', 'ghosted', 'dropped', 'on_hold', 'delayed']);
+const POSTED_OR_TERMINAL = new Set(['posting', 'live', 'ghosted', 'dropped', 'cancelled', 'on_hold', 'delayed']);
+
+// Stages whose money never happened (Reann, 2026-08-27) — mirrors SPEND_EXCLUDED_STAGES in
+// ignitionops. Kept as a Set here for the same reason it is one constant there: the moment this
+// list and the worker's disagree, this page and the Reports page quote different spend.
+const SPEND_EXCLUDED_STAGES = new Set(['cancelled']);
 
 // Filters survive leaving the page and coming back (Reann #2: "once a user applies filters,
 // those filters should remain active … filters should only reset when the user manually
@@ -178,8 +183,13 @@ export default function EngagementsPage() {
   // on the main dashboard, to view the total number of videos displayed and the total cost
   // when the filters are selected").
   const summary = useMemo(() => {
-    let cost = 0, views = 0, costOfViewed = 0, viewedDeals = 0;
+    let cost = 0, views = 0, costOfViewed = 0, viewedDeals = 0, cancelled = 0;
     for (const r of visible) {
+      // Reann, 2026-08-27: a CANCELLED deal was called off before anything was spent, so its
+      // money never happened and must not reach any total. DROPPED still counts — goods went
+      // out and never became a video, which is a real loss. Mirrors SPEND_EXCLUDED_STAGES in
+      // ignitionops; the two must agree or this tile and the Reports page quote different spend.
+      if (SPEND_EXCLUDED_STAGES.has(r.stage)) { cancelled += 1; continue; }
       cost += Number(r.total_cost || 0);
       const v = Number(r.views || 0);
       views += v;
@@ -188,11 +198,14 @@ export default function EngagementsPage() {
       if (v > 0) { costOfViewed += Number(r.total_cost || 0); viewedDeals += 1; }
     }
     return {
+      // The deal COUNT stays honest to the rows on screen — a cancelled deal is still a row you
+      // are looking at. Only the money and metrics leave it out, and the tile says so.
       deals: visible.length,
       cost,
       views,
       cpm: views > 0 ? (costOfViewed / views) * 1000 : null,
       viewedDeals,
+      cancelled,
     };
   }, [visible]);
 
@@ -290,8 +303,18 @@ export default function EngagementsPage() {
           display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
           gap: 12, marginBottom: 12,
         }}>
-          <Tile label={filtersActive ? 'Deals (filtered)' : 'Deals'} value={summary.deals.toLocaleString('en-IN')} />
-          <Tile label="Total cost" value={`₹${Math.round(summary.cost).toLocaleString('en-IN')}`} />
+          <Tile
+            label={filtersActive ? 'Deals (filtered)' : 'Deals'}
+            value={summary.deals.toLocaleString('en-IN')}
+            hint={summary.cancelled ? `incl. ${summary.cancelled} cancelled` : undefined}
+          />
+          <Tile
+            label="Total cost"
+            value={`₹${Math.round(summary.cost).toLocaleString('en-IN')}`}
+            // Say so on the tile rather than leaving someone to wonder why the costs do not add
+            // up to the deals — a total that quietly omits rows is how mistrust starts.
+            hint={summary.cancelled ? `${summary.cancelled} cancelled deal${summary.cancelled === 1 ? '' : 's'} excluded` : undefined}
+          />
           <Tile label="Views" value={summary.views.toLocaleString('en-IN')} />
           <Tile
             label="Blended CPM"
