@@ -329,10 +329,15 @@ function AgentsPanel({ data }) {
     return <EmptyState icon={Users} title="No conversations in range" message="Adjust the date range or filters." />;
   }
   const rows = data.by_agent || [];
+  // The breakdown is only shown when the RPC actually returns it. Treating a missing
+  // field as zero would render the FULL time to close as "active handling", which is
+  // the most flattering possible reading of a number this page exists to be honest
+  // about — so absence must hide the panel, never default it.
+  const hasWaitBreakdown = t.avg_customer_wait_min != null || t.avg_close_lag_min != null;
   // Clamped at 0: the three components are each population means over the same threads,
   // so the arithmetic holds in aggregate, but a filtered slice could in principle round
   // its way negative — and a negative "active handling" would read as a bug, not a number.
-  const activeHandling = t.avg_resolution_min == null ? null
+  const activeHandling = !hasWaitBreakdown || t.avg_resolution_min == null ? null
     : Math.max(0, Number(t.avg_resolution_min) - Number(t.avg_customer_wait_min ?? 0) - Number(t.avg_close_lag_min ?? 0));
   return (
     <>
@@ -402,7 +407,7 @@ function AgentsPanel({ data }) {
           a customer-wait pause on the clock — that was the alternative and it was declined.
           Every figure here is a population mean over exactly the same threads as
           "Avg to close", so the subtraction is valid. */}
-      {t.avg_resolution_min != null && (
+      {hasWaitBreakdown && t.avg_resolution_min != null && (
         <Panel title="What the resolution time is made of">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', padding: 12 }}>
             <div title={TIPS.avg_to_close}>
@@ -464,8 +469,8 @@ function AgentsPanel({ data }) {
                 <Th align="right" tip={TIPS.avg_first_reply}>Avg 1st reply</Th>
                 <Th align="right" tip={TIPS.avg_reply}>Avg reply</Th>
                 <Th align="right" tip={TIPS.avg_to_close}>Avg to close</Th>
-                <Th align="right" tip={TIPS.customer_wait}>— on customer</Th>
-                <Th align="right" tip={TIPS.close_lag}>— unclosed</Th>
+                {hasWaitBreakdown && <Th align="right" tip={TIPS.customer_wait}>— on customer</Th>}
+                {hasWaitBreakdown && <Th align="right" tip={TIPS.close_lag}>— unclosed</Th>}
                 <Th align="right" tip={TIPS.on_us}>On us</Th>
               </tr>
             </thead>
@@ -486,8 +491,8 @@ function AgentsPanel({ data }) {
                   <Td mono align="right">{dur(r.avg_frt_min)}</Td>
                   <Td mono align="right">{dur(r.avg_response_min)}</Td>
                   <Td mono align="right">{dur(r.avg_resolution_min)}</Td>
-                  <Td mono align="right" color="var(--t3)">{dur(r.avg_customer_wait_min)}</Td>
-                  <Td mono align="right" color={(r.avg_close_lag_min ?? 0) > 0 ? 'var(--warn-fg)' : 'var(--t3)'}>{dur(r.avg_close_lag_min)}</Td>
+                  {hasWaitBreakdown && <Td mono align="right" color="var(--t3)">{dur(r.avg_customer_wait_min)}</Td>}
+                  {hasWaitBreakdown && <Td mono align="right" color={(r.avg_close_lag_min ?? 0) > 0 ? 'var(--warn-fg)' : 'var(--t3)'}>{dur(r.avg_close_lag_min)}</Td>}
                   <Td mono align="right" color={r.waiting_agent > 0 ? 'var(--bad-fg)' : 'var(--t3)'}>{r.waiting_agent.toLocaleString()}</Td>
                 </tr>
               ))}
