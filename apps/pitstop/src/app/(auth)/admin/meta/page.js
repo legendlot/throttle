@@ -232,10 +232,18 @@ export default function MetaDiagnosticsPage() {
           ) : (
             <>
               <div style={{ padding: '10px 12px', fontSize: 12.5, color: 'var(--text2,#8a8a8a)', borderBottom: '1px solid #222', lineHeight: 1.55 }}>
-                <strong style={{ color: 'inherit' }}>How to read this:</strong> if <code>me</code> returns 200 but{' '}
-                <code>recipient</code> does not, the credential is healthy and Meta is refusing this
-                specific person — which is the code-200 case, and the response body below is the first
-                direct evidence of why. If <code>me</code> also fails, the problem is the token, not the customer.
+                <strong style={{ color: 'inherit' }}>How to read this:</strong> if <code>me</code> fails,
+                the problem is our token and it is affecting everybody — that is an Afshaan job, not a
+                per-customer one. If <code>me</code> succeeds but <code>recipient</code> or{' '}
+                <code>conversation</code> fails, Meta is refusing this specific person and the response
+                body is the evidence.
+                <br /><br />
+                <strong style={{ color: '#d9a441' }}>⚠️ All three returning 200 does NOT mean the chat is
+                fine.</strong> Measured 2026-08-27: the thread that had just been refused four times with
+                a code 200 returned <em>identical</em> 200s to two threads that were sending normally
+                minutes earlier. These calls prove the account exists and the conversation is reachable;
+                they cannot see whether we are permitted to <em>message</em> it. So a clean result here
+                rules the token out and rules nothing in — do not report it as &ldquo;no problem found&rdquo;.
               </div>
               <pre style={{ margin: 0, padding: 12, fontSize: 11.5, lineHeight: 1.5, overflowX: 'auto',
                             fontFamily: 'var(--mono,monospace)', background: 'rgba(0,0,0,0.25)' }}>

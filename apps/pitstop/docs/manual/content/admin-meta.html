@@ -17,21 +17,27 @@
     <tr><td class="mono">10</td><td>Outside the 24-hour window and our &ldquo;Human Agent&rdquo; permission is still pending Meta review.</td><td>Nothing. This is expected behaviour, not a fault. The chat reopens if the customer writes again.</td></tr>
     <tr><td class="mono">100</td><td>Invalid parameter &mdash; almost always a reply longer than 2,000 characters.</td><td>Shorten the reply. The composer now warns before this happens.</td></tr>
     <tr><td class="mono">190</td><td>Our access token has expired or been revoked. Affects <em>every</em> chat, not one.</td><td>Tell Afshaan. Replying from the Instagram app still works meanwhile.</td></tr>
-    <tr><td class="mono">200</td><td>Permissions error, refused for that <strong>one recipient</strong> while other chats send normally.</td><td>Press <strong>Diagnose</strong> on the row. This is the case the probe exists for.</td></tr>
+    <tr><td class="mono">200</td><td>Permissions error, refused for that <strong>one recipient</strong> while other chats send normally.</td><td>Press <strong>Diagnose</strong> on the row, then read the warning under Diagnose &mdash; as of 27 Aug 2026 the probe rules the token out but cannot yet name this cause. Pass the result to Afshaan.</td></tr>
   </tbody>
 </table>
 
 <h2 class="sec">Diagnose</h2>
-<p><strong>Diagnose</strong> makes two read-only checks against Meta using the same credential the reply would have used: one for our own account (<span class="mono">me</span>) and one for the customer (<span class="mono">recipient</span>). Read the result this way:</p>
+<p><strong>Diagnose</strong> makes three read-only checks against Meta using the same credential the reply would have used: one for our own account (<span class="mono">me</span>), one for the customer (<span class="mono">recipient</span>) and one for the conversation itself (<span class="mono">conversation</span>). Read the result this way:</p>
 <div class="steps">
-  <p><strong>1.</strong> <span class="mono">me</span> succeeds and <span class="mono">recipient</span> succeeds &mdash; our connection and the customer are both fine; the refusal is about the message or the window, not the chat.</p>
-  <p><strong>2.</strong> <span class="mono">me</span> succeeds but <span class="mono">recipient</span> fails &mdash; our connection is healthy and Meta is refusing this specific person. The response body is the evidence of why.</p>
-  <p><strong>3.</strong> <span class="mono">me</span> also fails &mdash; the problem is our token, not the customer. That is an Afshaan job, and it will be affecting everybody.</p>
+  <p><strong>1.</strong> <span class="mono">me</span> fails &mdash; the problem is our token, not the customer. That is an Afshaan job, and it will be affecting everybody.</p>
+  <p><strong>2.</strong> <span class="mono">me</span> succeeds but <span class="mono">recipient</span> or <span class="mono">conversation</span> fails &mdash; our connection is healthy and Meta is refusing this specific person. The response body is the evidence of why.</p>
+  <p><strong>3.</strong> All three succeed &mdash; this rules the token out, and rules nothing in. See the warning below.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Three green results do not mean the chat is healthy</div>
+  <p>On 27 August 2026 the probe was run on a chat that had just been refused four times with a code&nbsp;200, and on two chats that were sending normally minutes earlier. <strong>All three came back identical</strong> &mdash; same three 200s, same credential, differing only in the customer&rsquo;s follower count and display name.</p>
+  <p>These checks prove the account <em>exists</em> and the conversation is <em>reachable</em>. They cannot see whether Meta will let us <em>message</em> it, which is the thing a code&nbsp;200 is refusing. So report a clean probe as &ldquo;the token is fine and the cause is still unknown&rdquo; &mdash; never as &ldquo;no problem found&rdquo;.</p>
 </div>
 
 <div class="callout">
   <div class="c-title">&#9432; It sends nothing</div>
-  <p>Diagnose is safe to press at any time, on any chat, as often as you like. It reads two things from Meta and writes nothing &mdash; the customer sees no message and the conversation is not touched.</p>
+  <p>Diagnose is safe to press at any time, on any chat, as often as you like. It reads three things from Meta and writes nothing &mdash; the customer sees no message and the conversation is not touched.</p>
 </div>
 
 <div class="callout danger">
