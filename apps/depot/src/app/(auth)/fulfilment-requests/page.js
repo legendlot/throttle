@@ -189,7 +189,10 @@ export default function FulfilmentRequestsPage() {
                   <tr key={r.id} onClick={() => openDetail(r.id)}
                     style={{ cursor: 'pointer', background: sel?.request?.id === r.id ? 'var(--surface2)' : 'transparent' }}>
                     <td style={{ ...td, color: 'var(--t1)', fontWeight: 700 }}>{r.request_no}</td>
-                    <td style={td}>{r.sales_order_no}</td>
+                    <td style={td}>
+                      {r.sales_order_no}
+                      {r.so_notes && <span title={r.so_notes} style={{ marginLeft: 6, cursor: 'help' }}>📝</span>}
+                    </td>
                     <td style={td}>{formatDateOnly(r.so_order_date)}</td>
                     <td style={{ ...td, color: r.accepted_at ? 'var(--t1)' : 'var(--t3)' }}>{formatDateTime(r.accepted_at)}</td>
                     <td style={td}>{r.destination_warehouse || '—'}</td>
@@ -247,6 +250,17 @@ export default function FulfilmentRequestsPage() {
               </div>
             ))}
           </div>
+
+          {/* Order notes — the instructions typed on the Snorkel SO (delay notes, extra
+              requirements). Ram, #bugs 2026-08-27: these never reached dispatch before. */}
+          {sel.request.so_notes && (
+            <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 6,
+              background: 'var(--surface2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--amber, #d97706)' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em',
+                textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>Order notes — from Snorkel</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{sel.request.so_notes}</div>
+            </div>
+          )}
 
           {/* requested lines */}
           <div style={{ overflowX: 'auto', marginBottom: 16 }}>

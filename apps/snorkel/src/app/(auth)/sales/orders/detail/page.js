@@ -312,6 +312,15 @@ function OrderDetailInner() {
             <Stat label="Place of supply" value={o.place_of_supply} />
             <Stat label="Partner PO ref" value={o.partner_po_ref} />
           </div>
+          {/* Notes were only visible inside Edit details (Ram, #bugs 2026-08-27) —
+              surfaced read-only here; Depot shows the same text on the request. */}
+          {o.notes && (
+            <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 6,
+              background: 'var(--surface-2, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderLeft: '3px solid var(--yellow, #d9a406)' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 4 }}>Order notes</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>{o.notes}</div>
+            </div>
+          )}
           {Array.isArray(o.shipments) && o.shipments.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Shipments &amp; tracking</div>
