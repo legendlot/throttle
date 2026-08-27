@@ -773,6 +773,16 @@ export default {
       ));
     }
 
+    // Relay sending watchdog (S318). Every 5 minutes, NOT four times a day like the channel
+    // alarm below: a sending outage blocks every agent immediately, so a ~6h detection window
+    // would be useless for it. Cheap — one row read, and a write only when the state changes.
+    if (mins % 5 === 0) {
+      ctx.waitUntil(checkRelaySendingHealth(env).then(
+        r => { if (r?.down) console.warn('[relay-watchdog] SENDING DOWN', JSON.stringify(r)); },
+        e => console.error('[relay-watchdog] error', e),
+      ));
+    }
+
     // Channel health alarm (S314). Four times a day — 05:00 / 11:00 / 17:00 / 23:00 IST —
     // which bounds "a channel died and nobody noticed" to ~6h. Replayed against the real
     // Instagram outage it first trips at 21 Aug 23:00 IST; that outage took two days to
@@ -6655,7 +6665,71 @@ async function getWaConversationLocal(thread, env) {
 // renders the banner. That also makes the alert durable rather than a message that scrolls
 // away — an outage stays visible on screen until it actually recovers.
 const CH_LABEL = { instagram: 'Instagram', whatsapp: 'WhatsApp', email: 'Email',
-                   messenger: 'Messenger', web: 'Web' };
+                   messenger: 'Messenger', web: 'Web',
+                   // Not a channel — a pseudo-row for the Relay sending pipeline, so that a
+                   // sending outage reuses the banner agents already watch (S318).
+                   relay_sending: 'Outgoing messages' };
+
+// ── Relay sending-pipeline watchdog (S318) ───────────────────────────────────
+// On 2026-08-27 WhatsApp replies were dead for 52 minutes and NOTHING noticed — an agent
+// reported it. Two properties of that outage decide this design:
+//
+// ⭐ 1. THE WATCHER CANNOT BE THE THING WATCHED. What died was commsops' scheduled + queue
+//    handlers, while its fetch handler kept serving 200s. So a self-check inside commsops, or
+//    any HTTP liveness ping, would have read green throughout. This lives in **csops**, which
+//    has its own independent `*/2` cron, and it watches commsops from outside.
+// ⚠️ 2. THE EXISTING CHANNEL-HEALTH ALARM STRUCTURALLY CANNOT CATCH THIS. It compares inbound
+//    volume against agent sends per channel; inbound was completely healthy the whole time (9
+//    messages in the outage's last 20 minutes). Outbound died while inbound looked normal.
+//
+// The signal is `comms.settings.cron_lock_at`: `runScheduled` claims it every tick with a
+// 4-minute staleness cutoff, so on a `*/5` cron it can never legitimately be more than ~6
+// minutes old. It sat frozen for 53 minutes during the outage.
+//
+// ⚠️ Threshold is 15 minutes = three missed ticks. Deliberately not tighter: a single slow or
+// skipped tick is normal and must not raise a banner in front of agents, because an alarm that
+// cries wolf is one they learn to scroll past — and this one has to be believed the day it
+// matters. ⚠️ Fails SILENT on a read error rather than alarming: a Supabase blip is not a Relay
+// outage, and a false "sending is down" would send agents chasing the wrong thing.
+const RELAY_CRON_STALE_MIN = 15;
+
+async function checkRelaySendingHealth(env) {
+  const r = await sb('/rest/v1/settings?id=eq.1&select=cron_lock_at', env,
+    { headers: { 'Accept-Profile': 'comms' } });
+  if (!r.ok || !Array.isArray(r.data) || !r.data.length) return { ok: false, reason: 'read_failed' };
+  const lockAt = r.data[0]?.cron_lock_at ? new Date(r.data[0].cron_lock_at).getTime() : null;
+  if (!lockAt) return { ok: false, reason: 'no_lock_value' };
+
+  const staleMin = Math.round((Date.now() - lockAt) / 60000);
+  const down = staleMin >= RELAY_CRON_STALE_MIN;
+  const existing = await sb('/rest/v1/cs_channel_alert_state?channel=eq.relay_sending&select=channel,first_seen_at,alert_count', env);
+  const prev = existing.data?.[0] || null;
+  const now = new Date().toISOString();
+
+  if (down) {
+    await sb('/rest/v1/cs_channel_alert_state?on_conflict=channel', env, {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({
+        channel: 'relay_sending', verdict: 'outbound_down',
+        first_seen_at: prev?.first_seen_at || now,
+        last_alert_at: now,
+        alert_count: (prev?.alert_count || 0) + 1,
+        last_payload: { stale_minutes: staleMin, cron_lock_at: r.data[0].cron_lock_at,
+                        threshold_minutes: RELAY_CRON_STALE_MIN },
+      }),
+    }).catch(e => console.error('[relay-watchdog] upsert failed', e?.message));
+    return { ok: true, down: true, staleMin };
+  }
+
+  // Recovered → delete, same convention as the channel alarm: the banner should vanish the
+  // moment sending resumes, and nobody needs a history of cleared alarms in this table.
+  if (prev) {
+    await sb('/rest/v1/cs_channel_alert_state?channel=eq.relay_sending', env, { method: 'DELETE' })
+      .catch(e => console.error('[relay-watchdog] clear failed', e?.message));
+  }
+  return { ok: true, down: false, staleMin };
+}
 
 // Run the detector and reconcile `cs_channel_alert_state` with it. Nothing is "sent" anywhere —
 // the state table IS the alert, and Pitstop renders it (getChannelAlerts → the inbox banner).
@@ -6720,6 +6794,7 @@ async function getChannelAlerts(params, auth, env) {
       inbound: row.last_payload?.inbound ?? null,
       agent_failed: row.last_payload?.agent_failed ?? null,
       baseline_median: row.last_payload?.baseline_median ?? null,
+      stale_minutes: row.last_payload?.stale_minutes ?? null,   // relay_sending watchdog (S318)
     })),
   });
 }

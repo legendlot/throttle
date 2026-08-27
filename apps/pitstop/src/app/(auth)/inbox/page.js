@@ -1434,11 +1434,21 @@ export default function InboxPage() {
             borderBottom: '1px solid var(--bad-bd)', padding: '8px 16px' }}>
             <AlertTriangle size={13} style={{ flexShrink: 0, alignSelf: 'center' }} />
             <span>
-              <strong>{a.label}: {a.verdict === 'silent' ? 'nobody is replying' : 'replies are being refused'}</strong>
+              <strong>{a.label}: {a.verdict === 'silent' ? 'nobody is replying'
+                : a.verdict === 'outbound_down' ? 'sending is down'
+                : 'replies are being refused'}</strong>
               {' — '}
               {a.verdict === 'silent'
                 ? <>{a.inbound != null ? `${a.inbound.toLocaleString()} customer messages` : 'customers have written in'} over the last 24h and no agent reply has gone out{a.baseline_median ? ` (normally ~${Math.round(a.baseline_median)}/day)` : ''}.
                     Automated replies may still be sending, so the channel can look fine from outside.</>
+                /* S318. Its own wording because the other two are per-channel and this is the
+                   whole outgoing pipeline: on 2026-08-27 nothing was leaving for 52 minutes
+                   while messages kept ARRIVING normally, so "nobody is replying" would have
+                   read as a staffing problem rather than an outage. Tells agents the two
+                   things they actually needed that day: incoming is safe, and stop retyping. */
+                : a.verdict === 'outbound_down'
+                ? <>No message has left the system for {a.stale_minutes != null ? `${a.stale_minutes} minutes` : 'a while'} — replies, automated messages and campaigns are all stuck.
+                    Messages coming IN are unaffected and nothing is being lost. Retyping a reply will not help; it will send once this clears. Afshaan is the one to tell.</>
                 : <>{a.agent_failed != null ? `${a.agent_failed} agent replies` : 'Agent replies'} were refused by the provider in the last 24h. Open one of those conversations to see the reason.</>}
               {hrs ? ` Flagged ${hrs}h ago.` : ''}
             </span>
