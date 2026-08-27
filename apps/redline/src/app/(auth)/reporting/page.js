@@ -288,7 +288,13 @@ export default function ReportingPage() {
       byLine[lKey].ecom       += ec;
     }
 
-    const fpy = totalQc > 0 ? Math.round((totalQc / (totalQc + (qcData?.fpy?.[0]?.fail_count || 0))) * 1000) / 10 : null;
+    // NB: no `fpy` here. A dead line used to compute totalQc / (totalQc + fail_count) and
+    // put it in `totals`, which nothing renders. Deleted rather than wired up, because that
+    // formula is a PASS RATE, not First Pass Yield: totalQc counts rework passes, so a car
+    // that failed, went to Workshop and passed on the second attempt scored as a success.
+    // FPY exists to exclude exactly that. It also read fail_count off `fpy[0]`, i.e. one
+    // arbitrary (date, line, product) group, against a whole-period totalQc.
+    // The real figure is `fpyPct` below — derived from the view's own first_pass_count.
     const vsTarget = totalTarget > 0 ? Math.round((totalDispatched / totalTarget) * 1000) / 10 : null;
 
     const chartRows = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)).map(r => ({
@@ -296,7 +302,7 @@ export default function ReportingPage() {
     }));
 
     return {
-      totals: { totalQc, totalDispatched, totalTarget, totalRetail, totalEcom, runs, fpy, vsTarget },
+      totals: { totalQc, totalDispatched, totalTarget, totalRetail, totalEcom, runs, vsTarget },
       chartRows,
       byProduct: Object.values(byProduct),
       byLine: Object.values(byLine).map(l => ({ ...l, productCount: l.products.size })),
@@ -346,8 +352,23 @@ export default function ReportingPage() {
     };
   }, [qcData]);
 
-  const fpy = qcData?.fpy?.[0];
-  const fpyPct = fpy?.fpy_pct != null ? Number(fpy.fpy_pct) : null;
+  // ⚠️ `v_first_pass_yield` is grouped per (scan_date, line, product) and the worker returns
+  // its rows RAW, newest first. Reading `fpy[0].fpy_pct` therefore showed ONE arbitrary
+  // group — one product, on one line, on one day — under a tile labelled as the period's
+  // FPY. Measured 2026-08-27 over a 30-day window: 125 rows across 26 dates, row 0 read
+  // 75.3% (Shadow on L1) while the true figure was 83.8%, and per-row values span 0–100.
+  // ⚠️ Aggregate by SUMMING the view's counts, never by averaging fpy_pct — that would give
+  // a 1-car group the same weight as a 500-car one.
+  // NB the view is cars only (component_type='car'), so this is car FPY by definition.
+  const fpyPct = (() => {
+    const rows = Array.isArray(qcData?.fpy) ? qcData.fpy : [];
+    let firstPass = 0, inspected = 0;
+    for (const r of rows) {
+      firstPass += Number(r?.first_pass_count) || 0;
+      inspected += Number(r?.total_inspected)  || 0;
+    }
+    return inspected > 0 ? Math.round((firstPass / inspected) * 1000) / 10 : null;
+  })();
   const fpyTone = fpyPct == null ? undefined : fpyPct >= 95 ? 'ok' : fpyPct >= 85 ? 'warn' : 'bad';
   const vsTargetTone = prodAggs.totals.vsTarget == null ? undefined
     : prodAggs.totals.vsTarget >= 95 ? 'ok'

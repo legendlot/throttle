@@ -423,6 +423,23 @@ export default function ScansPage() {
             </button>
           </div>
         )}
+        {/* The search is capped at 500 rows in the worker (both the exact-UPC filter and
+            f_scans_search). Landing exactly on it means there are more matches behind the
+            search — say so, rather than presenting a clipped list as the whole answer.
+            ⚠️ The cap is PRE-EXISTING but was effectively unreachable until 2026-08-20: a
+            UPC search returns a handful of rows, whereas a PRODUCT search routinely hits it
+            ('ghost burnout yellow' returns exactly 500 of far more). Same silent-truncation
+            class as PATTERN-322, arriving by a different door.
+            ⚠️ Counted off the RAW result, not the filtered view — the Activity/voided
+            filters below run client-side over what came back, so filtering a capped result
+            would otherwise hide the notice exactly when it matters most. */}
+        {upcMode && upcScans.length >= 500 && (
+          <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--warn, #e8b93c)' }}>
+              showing the newest 500 matches — there are more; narrow the search to see the rest
+            </span>
+          </div>
+        )}
         {!hasMore && scans.length > 0 && !upcMode && (
           <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>
