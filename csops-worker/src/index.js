@@ -1985,7 +1985,14 @@ async function getCsAgents(_params, _auth, env) {
 // override, auto=false ). Effective status is computed live, so a stale 'online'
 // (closed/forgotten tab) is never trusted and never routed — no reset cron needed.
 
-const PRESENCE_FRESH_MS = 3 * 60 * 1000;   // heartbeat freshness (~3x the 60s client ping)
+// Heartbeat freshness. Widened 3 -> 10 minutes 2026-08-27 (S318) alongside removing the
+// tab-visibility gate from the client heartbeat, because browsers throttle timers in hidden tabs
+// and a beat can land late.
+// 🔴 THIS VALUE IS DUPLICATED IN SQL — `store.cs_autoassign_thread` carries the same window as
+// `p.last_seen_at >= now() - interval '10 minutes'`. They are restated, not derived: this one
+// drives the Admin -> Shifts "On duty now" roster, that one drives ROUTING. If they drift, a lead
+// sees someone on duty the router refuses to route to, or the reverse. **MOVE BOTH OR NEITHER.**
+const PRESENCE_FRESH_MS = 10 * 60 * 1000;
 
 // Current IST wall-clock: minutes past midnight + ISO day-of-week (1=Mon..7=Sun).
 function istNow() {

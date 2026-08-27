@@ -2,9 +2,10 @@
 /* ════════════════════════════════════════════════════════════
    PresenceToggle — topbar availability control (Phase 1).
    - Login → online (the mount heartbeat creates/promotes the row).
-   - Activity-gated heartbeat: pings every BEAT_MS while the tab is
-     VISIBLE and there was real interaction within IDLE_LIMIT_MS, so a
-     forgotten-open tab decays to offline (server freshness window).
+   - Activity-gated heartbeat: pings every BEAT_MS while there was real
+     interaction within IDLE_LIMIT_MS, so a forgotten-open tab decays to
+     offline (server freshness window). NOT gated on tab visibility —
+     that gate was removed S318; see the note in the interval below.
    - Manual Online/Away/Offline → setPresence (auto=false). "Online"
      outside shift hours = the off-schedule override for today.
    The toggle reflects the server's authoritative status (heartbeat
@@ -47,7 +48,20 @@ export default function PresenceToggle({ session }) {
     };
     beat();
     const iv = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      // ⚠️ The visibility check that used to sit here was REMOVED 2026-08-27 (S318) and must
+      // not come back. It stopped the heartbeat whenever the tab was backgrounded, so an agent
+      // checking an order in Shopify — present, working, one tab away — went unroutable within
+      // 3 minutes. Measured mid-shift: only 3 of 12 presence rows were effectively online.
+      //
+      // ⚠️ Idleness is what actually detects absence, and IDLE_LIMIT_MS below still enforces it:
+      // a forgotten-open tab stops beating after 15 minutes of no interaction whether it is
+      // visible or not. Visibility was a proxy for "is this person here", and a bad one —
+      // support work lives in other tabs.
+      //
+      // ⚠️ Browsers throttle setInterval in hidden tabs (Chrome clamps to >=60s and degrades
+      // further the longer a tab stays hidden), so a beat CAN still land late. That is why the
+      // server freshness window was widened to 10 minutes in the same change — the two halves
+      // compensate, and shipping either alone leaves the gap open.
       if (Date.now() - lastActivity.current > IDLE_LIMIT_MS) return;
       beat();
     }, BEAT_MS);
