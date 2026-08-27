@@ -2853,7 +2853,48 @@ async function createCampaign(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
-const CAMPAIGN_FIELDS = ['name', 'budget_amount', 'video_count', 'agreed_total', 'status'];
+const CAMPAIGN_FIELDS = [
+  'name', 'budget_amount', 'video_count', 'agreed_total', 'status',
+  // Brief upload (Reann #8, 2026-08-27). Written by the client after it has uploaded to the
+  // signed URL — the object is already in the private bucket by then, so these three only
+  // record where it landed.
+  'brief_path', 'brief_name', 'brief_mime', 'brief_uploaded_at',
+];
+
+const CAMPAIGN_BRIEF_BUCKET = 'ignition-campaign-briefs';
+
+/**
+ * Mint a signed upload token for a campaign brief (Reann #8). Same shape as
+ * createPaymentProofUploadUrl: the browser never sees a service key, only a one-object token.
+ */
+async function createCampaignBriefUploadUrl(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.campaign_id) return err('campaign_id required', 400);
+  if (!body.file_name) return err('file_name required', 400);
+  const path = `${safeSeg(body.campaign_id)}/${Date.now()}_${safeSeg(body.file_name)}`;
+  const sr = await storageFetch(`/object/upload/sign/${CAMPAIGN_BRIEF_BUCKET}/${path}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null });
+}
+
+/** Short-lived signed URL for reading a campaign brief. The bucket is private. */
+async function getCampaignBriefUrl(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const cr = await sb(`/rest/v1/campaigns?id=eq.${id}&select=brief_path,brief_name,brief_mime&limit=1`, env);
+  const c = cr.data?.[0];
+  if (!c || !c.brief_path) return err('no_brief', 404);
+  const seg = String(c.brief_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${CAMPAIGN_BRIEF_BUCKET}/${seg}`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: c.brief_name, mime_type: c.brief_mime });
+}
 
 async function updateCampaign(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
@@ -3539,6 +3580,7 @@ const GET_ACTIONS = {
   getCatalogs,
   getLocations,
   getPaymentProofUrl,
+  getCampaignBriefUrl,
   getInfluencerMetrics,
   getMe,
   searchShopifyCustomer,
@@ -3590,6 +3632,7 @@ const POST_ACTIONS = {
   addPayment,
   deletePayment,
   createPaymentProofUploadUrl,
+  createCampaignBriefUploadUrl,
   addMetricSnapshot,
   deleteMetricSnapshot,
   upsertMonthlyTarget,

@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, KpiCard, Modal, useToast } from '@throttle/ui';
 import { Plus, X, ArrowLeft } from 'lucide-react';
+import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
@@ -77,6 +78,12 @@ export default function CampaignDetailPage() {
         <KpiCard label="Orders" value={num(r.orders).toLocaleString()} />
       </div>
 
+      {/* Reann #8 (2026-08-27): "When creating/adding a campaign, there should be a dedicated
+          Brief Upload section. We will upload the campaign brief ourselves." Lives on the
+          campaign detail rather than the create form so a brief can be added or replaced later —
+          briefs are rewritten more often than campaigns are created. */}
+      <CampaignBrief campaign={campaign} canManage={canManage} session={session} onSaved={load} />
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <h2 style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Linked engagements</h2>
         {canManage && <button onClick={() => setShowAttach(true)} style={btnPrimary}><Plus size={13} strokeWidth={2.5} style={{ verticalAlign: '-2px', marginRight: 4 }} />Attach</button>}
@@ -117,6 +124,86 @@ export default function CampaignDetailPage() {
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); load(); }} />
       )}
+    </div>
+  );
+}
+
+const BRIEF_BUCKET = 'ignition-campaign-briefs';
+
+/**
+ * Campaign brief upload + read (Reann #8, 2026-08-27).
+ *
+ * Same three-step shape as the payment screenshot (S138 #4): ask the worker for a signed upload
+ * token, PUT the file straight to storage with it, then record where it landed. The browser
+ * never holds a service key and the bucket is private — the brief is read back through a
+ * short-lived signed URL, never a public link.
+ */
+function CampaignBrief({ campaign, canManage, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  async function open() {
+    try {
+      const r = await ignitionopsGet('getCampaignBriefUrl', { id: campaign.id }, session);
+      if (r?.url) window.open(r.url, '_blank', 'noopener');
+      else toast('No brief on this campaign', 'error');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function upload(file) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const { storage_path, token } = await ignitionopsPost(
+        'createCampaignBriefUploadUrl',
+        { campaign_id: campaign.id, file_name: file.name },
+        session,
+      );
+      if (!token) throw new Error('Could not get an upload link for the brief');
+      const { error } = await supabase.storage.from(BRIEF_BUCKET).uploadToSignedUrl(storage_path, token, file);
+      if (error) throw error;
+      // Only recorded AFTER the object is actually in the bucket — recording first would leave a
+      // campaign advertising a brief that does not exist.
+      await ignitionopsPost('updateCampaign', {
+        campaign_id: campaign.id,
+        patch: {
+          brief_path: storage_path,
+          brief_name: file.name,
+          brief_mime: file.type || null,
+          brief_uploaded_at: new Date().toISOString(),
+        },
+      }, session);
+      toast('Brief uploaded', 'success');
+      onSaved?.();
+    } catch (e) { toast(e.message || 'Upload failed', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 14, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Campaign brief</h2>
+        {campaign.brief_path ? (
+          <>
+            <button onClick={open} style={{ background: 'transparent', border: 'none', color: '#FF6B00', cursor: 'pointer', fontSize: 13, textDecoration: 'underline', padding: 0 }}>
+              {campaign.brief_name || 'Open brief'}
+            </button>
+            {campaign.brief_uploaded_at && (
+              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                uploaded {new Date(campaign.brief_uploaded_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
+              </span>
+            )}
+          </>
+        ) : (
+          <span style={{ fontSize: 13, color: 'var(--text-3)' }}>None uploaded.</span>
+        )}
+        {canManage && (
+          <label style={{ ...btnGhost, marginLeft: 'auto', display: 'inline-block', opacity: busy ? 0.5 : 1, cursor: busy ? 'not-allowed' : 'pointer' }}>
+            {busy ? 'Uploading…' : campaign.brief_path ? 'Replace' : 'Upload brief'}
+            <input type="file" disabled={busy} onChange={e => upload(e.target.files?.[0])} style={{ display: 'none' }} />
+          </label>
+        )}
+      </div>
     </div>
   );
 }
