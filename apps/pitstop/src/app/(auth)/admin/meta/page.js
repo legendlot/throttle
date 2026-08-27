@@ -121,7 +121,7 @@ export default function MetaDiagnosticsPage() {
       </div>
       <p style={{ margin: '0 0 16px', fontSize: 12.5, color: 'var(--text2,#8a8a8a)', lineHeight: 1.5 }}>
         One row per chat per error code; <strong>Attempts</strong> is how many times the agent pressed send.
-        Diagnosing sends nothing — it makes two read-only Graph calls with the same credential the reply
+        Diagnosing sends nothing — it makes three read-only Graph calls with the same credential the reply
         would have used. Failures are only recorded from 2026-08-26 onward, when csops began persisting them.
       </p>
 
