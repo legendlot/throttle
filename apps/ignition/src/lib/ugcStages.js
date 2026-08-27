@@ -7,8 +7,11 @@
 export const UGC_STAGE_VALUES = [
   // 'proposed' leads here too — the UGC board buckets by stage with no filter, so a proposed UGC
   // deal missing from this list would be fetched but render in no column (silently invisible).
+  // 'agreed' retired 2026-08-27 (Reann #11) in lockstep with lib/stages.js + ignitionops
+  // UGC_STAGES. Verified no UGC deal was sitting on it before removing — the label below is
+  // kept so a historical row still renders rather than showing a blank badge.
   'proposed',
-  'outreach', 'agreed', 'shipped', 'delivered', 'draft', 'live',
+  'outreach', 'shipped', 'delivered', 'draft', 'live',
   'paused', 'vault', 'retired', 'dropped',
 ];
 
@@ -44,7 +47,7 @@ export const UGC_STAGE_PALETTE = {
 };
 
 /** Happy path for the stepper. Paused/Vault/Retired/Dropped sit off-path. */
-export const UGC_HAPPY_PATH = ['outreach', 'agreed', 'shipped', 'delivered', 'draft', 'live'];
+export const UGC_HAPPY_PATH = ['outreach', 'shipped', 'delivered', 'draft', 'live'];
 
 /**
  * ROAS colour tone (item #5): green >4, yellow 3–4, red <3.

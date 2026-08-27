@@ -8,8 +8,11 @@
 export const STAGE_VALUES = [
   // 'proposed' — mandatory first stage with a HARD approval gate (Reann #5, Afshaan 2026-08-11).
   // Must mirror ignitionops STAGES; PATTERN-076 three-layer encoding.
+  // 'agreed' retired 2026-08-27 (Reann #11) — approval is the go-ahead, so the stage was saying
+  // the same thing twice. Legal-but-unused in the DB CHECK, exactly like 'completed' (S214);
+  // STAGE_LABELS below deliberately KEEPS an entry for it so historical rows still render.
   'proposed',
-  'planning','agreed','shipped','delivered','scheduled','posting','live',
+  'planning','shipped','delivered','scheduled','posting','live',
   'delayed','on_hold','ghosted','dropped',
 ];
 
@@ -54,5 +57,5 @@ export function allowedTransitions(stage) {
  *  sits before "Scheduled": influencer sends the draft → it's scheduled → goes Live
  *  (the terminal success stage). */
 export const HAPPY_PATH = [
-  'proposed','planning','agreed','shipped','delivered','posting','scheduled','live',
+  'proposed','planning','shipped','delivered','posting','scheduled','live',
 ];

@@ -272,11 +272,18 @@ function requirePerm(perm, auth) {
 // S214: 'completed' dropped — for a video deal **'live' is the terminal success stage**
 // (video posted = deal done); mandatory colour rating + post_date now enforced at live.
 // ('completed' stays legal in the DB CHECK as an unused legacy value; app never emits it.)
+// 2026-08-27 (Reann #11): 'agreed' RETIRED — "the agreed state is not required, it can be
+// removed". Approval is now the go-ahead (see approveEngagement), which is what 'agreed' was
+// standing in for, so the stage was a second confirmation of the same fact. Retired the same way
+// S214 retired 'completed': the value stays LEGAL in engagements_stage_check and in historical
+// engagement_history rows, and simply stops being offered. The 3 deals that were sitting on it
+// moved to 'planning' (migration ignition_retire_agreed_stage_v1, snapshot
+// ignition.safety_stage_agreed_retire_2026_08_27) — all three approved, none shipped.
 const STAGES = [
   // 'proposed' is the mandatory first stage (Reann #5, Afshaan 2026-08-11). Leaving it requires an
   // explicit approval — see the gate in advanceStage. Every OTHER transition stays free (S138).
   'proposed',
-  'planning','agreed','shipped','delivered','scheduled','posting','live',
+  'planning','shipped','delivered','scheduled','posting','live',
   'delayed','on_hold','ghosted','dropped',
 ];
 
@@ -291,7 +298,9 @@ const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC 
 // 'proposed' leads the UGC set too: getUgcPipeline buckets by_stage with NO stage filter, so a
 // proposed UGC deal that was not in this list would be fetched but render in no column — i.e.
 // silently invisible on the board.
-const UGC_STAGES = ['proposed','outreach','agreed','shipped','delivered','draft','live','paused','vault','retired','dropped'];
+// 'agreed' dropped here too (2026-08-27) — verified first that no UGC deal is sitting on it, since
+// a stage missing from this list renders in no column on the board rather than erroring.
+const UGC_STAGES = ['proposed','outreach','shipped','delivered','draft','live','paused','vault','retired','dropped'];
 
 // Free model: from any stage you may move to any other (terminals reopenable).
 function allowedTransitions(stage) {
@@ -516,6 +525,19 @@ async function getInfluencer(url, auth, env) {
 // silently dropped — the failure mode this replaced.
 const SEARCH_SCAN_MAX = 2000;
 
+// List order — creation order, NOT last-touched order (Reann #10, 2026-08-27: "when an action
+// is performed on a deal in engagements, the deal automatically moves to the top of the list;
+// please stop this from happening. Please keep the engagement in the same chronological order
+// it was initially added").
+//
+// This read used to be `updated_at.desc`, so ANY edit — a stage move, a note, a metric, the
+// worker's own `updated_at` stamp — teleported that row to row 1 and shifted everything the
+// user was reading. Creation order is stable: a deal sits where it was filed and stays there.
+// `id` is the tie-break so rows created in the same millisecond cannot swap places between
+// two page fetches, which would drop or duplicate a row at a page boundary (CORE: order by
+// something unique before paging).
+const LIST_ORDER = 'created_at.desc,id.desc';
+
 async function getEngagements(url, auth, env) {
   const type = url.searchParams.get('type');
   const stage = url.searchParams.get('stage');
@@ -560,9 +582,9 @@ async function getEngagements(url, auth, env) {
     const viaInf = `influencer.or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`;
     const base = qsFrom(filters);
     const [a, b] = await Promise.all([
-      sb(`/rest/v1/engagements?${base}${own}&select=${SELECT}&order=updated_at.desc&limit=${SEARCH_SCAN_MAX}`, env,
+      sb(`/rest/v1/engagements?${base}${own}&select=${SELECT}&order=${LIST_ORDER}&limit=${SEARCH_SCAN_MAX}`, env,
         { prefer: 'return=representation,count=exact' }),
-      sb(`/rest/v1/engagements?${base}${viaInf}&select=*,influencer:influencer_id!inner(influencer_code,channel_name,person_name,influencer_type)&order=updated_at.desc&limit=${SEARCH_SCAN_MAX}`, env,
+      sb(`/rest/v1/engagements?${base}${viaInf}&select=*,influencer:influencer_id!inner(influencer_code,channel_name,person_name,influencer_type)&order=${LIST_ORDER}&limit=${SEARCH_SCAN_MAX}`, env,
         { prefer: 'return=representation,count=exact' }),
     ]);
     if (!a.ok) return err(`db_error: ${JSON.stringify(a.data)}`, 500);
@@ -576,8 +598,10 @@ async function getEngagements(url, auth, env) {
     }
     const byId = new Map();
     for (const row of [...(a.data || []), ...(b.data || [])]) if (row && row.id) byId.set(row.id, row);
+    // Same creation order as the unsearched list, so searching does not silently re-sort.
     const merged = [...byId.values()]
-      .sort((x, y) => String(y.updated_at || '').localeCompare(String(x.updated_at || '')));
+      .sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || ''))
+        || String(y.id || '').localeCompare(String(x.id || '')));
     return ok({
       engagements: merged.slice(offset, offset + limit),
       offset, limit, total: merged.length,
@@ -585,7 +609,7 @@ async function getEngagements(url, auth, env) {
   }
 
   const r = await sb(
-    `/rest/v1/engagements?${qsFrom(filters)}select=${SELECT}&order=updated_at.desc&limit=${limit}&offset=${offset}`,
+    `/rest/v1/engagements?${qsFrom(filters)}select=${SELECT}&order=${LIST_ORDER}&limit=${limit}&offset=${offset}`,
     env,
     // count=exact so a caller can tell a page from the whole list. Scoped to this read — an exact
     // count is a full scan, and it is only worth paying for where something pages.
@@ -1412,6 +1436,9 @@ const ENGAGEMENT_FIELDS = [
   'engagement_type','campaign_id','product_code','product_variant',
   'deal_type','payment_terms','payment_amount','affiliate_pct','commission_amount',
   'ad_spend','goodies_cost','shipping_cost','return_cost',
+  // Ad rights (Reann #4, 2026-08-27). `ad_rights_amount` is a term of the GENERATED total_cost,
+  // so saving one recomputes CPM through the same path every other cost field uses.
+  'ad_rights','ad_rights_amount','ad_rights_duration',
   // cpm is worker-computed (recomputeCpm), not a manual field (theme ④ B13).
   'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
@@ -1703,22 +1730,42 @@ async function approveEngagement(body, auth, env) {
   // Removing the key from a role would therefore have changed NOTHING. Wiring it is the fix.
   const gate = requirePerm('ignition_approve', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
-  const cur = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,approved_at&limit=1`, env);
+  const cur = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,approved_at,engagement_type&limit=1`, env);
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   // Idempotent — re-approving is a no-op rather than an error, so a double-click cannot
   // overwrite who actually approved it or when.
   if (cur.data[0].approved_at) {
     return ok({ already_approved: true, approved_at: cur.data[0].approved_at });
   }
+  const from = cur.data[0].stage;
+  const isUgc = cur.data[0].engagement_type === 'ugc';
+
+  // ── Reann #11 (2026-08-27): approval MOVES the deal on ──────────────────────────────────────
+  // "Once the video is approved, could you please move it to planning automatically? Right now,
+  // it just stays in proposed."
+  //
+  // Approving was previously a flag and nothing more: the deal sat in Proposed wearing an
+  // "approved" stamp, and someone still had to open Advance and pick the next stage by hand.
+  // Since the ONLY thing the gate blocks is leaving Proposed, an approved deal that is still in
+  // Proposed is a contradiction — the approval is the go-ahead.
+  //
+  // ⚠️ UGC goes to `outreach`, not `planning`: `planning` is not in UGC_STAGES, so a UGC deal
+  // parked there would be fetched by getUgcPipeline and render in NO column — the same silent
+  // invisibility the S272 'proposed' bucket trap caused. Only a deal actually in Proposed is
+  // moved; approving anything else stamps the flag and leaves the stage alone.
+  const autoStage = from === 'proposed' ? (isUgc ? 'outreach' : 'planning') : null;
+
   const at = nowIso();
+  const patch = { approved_at: at, approved_by: auth.userId, updated_at: at };
+  if (autoStage) patch.stage = autoStage;
   const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
     method: 'PATCH',
-    body: JSON.stringify({ approved_at: at, approved_by: auth.userId, updated_at: at }),
+    body: JSON.stringify(patch),
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  await writeHistory(env, body.engagement_id, 'approve', cur.data[0].stage, cur.data[0].stage,
+  await writeHistory(env, body.engagement_id, 'approve', from, autoStage || from,
     (body.note && String(body.note).trim()) || null, auth.userId);
-  return ok({ approved_at: at, approved_by: auth.userId });
+  return ok({ approved_at: at, approved_by: auth.userId, stage: autoStage || from, auto_advanced: !!autoStage });
 }
 
 async function advanceStage(body, auth, env) {

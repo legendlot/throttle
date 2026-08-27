@@ -12,6 +12,7 @@ import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
 import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
+import { titleish } from '../../../../lib/productLabel.js';
 
 export default function EngagementDetailPage() {
   const sp = useSearchParams();
@@ -187,6 +188,14 @@ export default function EngagementDetailPage() {
           onSaved={reload}
         />
 
+        {/* Reann #1 (2026-08-27): "add Name, Phone Number, Location, Platform Type in the Deal
+            section so that Influencers' identity can be verified within the Engagement itself."
+            Every field here was already on the wire — getEngagement embeds the whole influencer
+            row — it simply was not rendered, so verifying who a deal was with meant opening the
+            profile in another tab. Read-only on purpose: the influencer record is edited on the
+            influencer page, and two edit surfaces for one row is how they drift apart. */}
+        <InfluencerCard inf={inf} />
+
         <Card title="POC">
           <KV label="Assigned to" value={e.poc_name || '—'} />
         </Card>
@@ -353,8 +362,11 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {products.map((p, i) => (
                 <div key={p.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
-                  <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{p.product_code || '—'}</span>
-                  {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{p.product_variant}</span>}
+                  {/* Cased through titleish (Reann, 2026-08-27) so CREST / Crest / crest all read
+                      the same on screen. The stored strings are free text and inconsistent —
+                      display normalisation is what makes the card legible today. */}
+                  <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{titleish(p.product_code) || '—'}</span>
+                  {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{titleish(p.product_variant)}</span>}
                   {Number(p.quantity) > 1 && <span style={{ color: 'var(--text-3)' }}>×{p.quantity}</span>}
                   <span style={{ marginLeft: 'auto', color: 'var(--text-3)', display: 'flex', gap: 10 }}>
                     {p.goodies_cost != null && <span title="Goodies">🎁 ₹{Number(p.goodies_cost).toLocaleString()}</span>}
@@ -420,6 +432,11 @@ function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
       affiliate_pct: e.affiliate_pct ?? '',
       commission_amount: e.commission_amount ?? '',
       campaign_id: e.campaign_id || '',
+      // Reann #4 — ad rights. '' is the third state ("not recorded"), NOT a No; see the
+      // column comment on ignition.engagements.ad_rights.
+      ad_rights: e.ad_rights == null ? '' : (e.ad_rights ? 'yes' : 'no'),
+      ad_rights_amount: e.ad_rights_amount ?? '',
+      ad_rights_duration: e.ad_rights_duration || '',
     });
     setEditing(true);
   }
@@ -437,6 +454,9 @@ function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
         // '' means "no campaign" — send null so the worker detaches rather than
         // failing the FK on an empty string.
         campaign_id: f.campaign_id || null,
+        ad_rights: f.ad_rights === '' ? null : f.ad_rights === 'yes',
+        ad_rights_amount: numOrNull(f.ad_rights_amount),
+        ad_rights_duration: f.ad_rights_duration || null,
       }, session);
       toast('Deal terms updated', 'success');
       setEditing(false);
@@ -473,6 +493,15 @@ function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
           <CostEdit label="Commission ₹" value={f.commission_amount} onChange={v => setF(x => ({ ...x, commission_amount: v }))} />
           <SelectEdit label="Campaign" value={f.campaign_id} onChange={v => setF(x => ({ ...x, campaign_id: v }))}
             options={[{ value: '', label: '— No campaign —' }, ...campaigns.map(c => ({ value: c.id, label: c.name }))]} />
+          <SelectEdit label="Ad rights" value={f.ad_rights} onChange={v => setF(x => ({ ...x, ad_rights: v }))}
+            options={[{ value: '', label: '— Not recorded —' }, { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]} />
+          {f.ad_rights === 'yes' && (
+            <>
+              <CostEdit label="Ad rights ₹" value={f.ad_rights_amount} onChange={v => setF(x => ({ ...x, ad_rights_amount: v }))} />
+              <SelectEdit label="Ad duration" value={f.ad_rights_duration} onChange={v => setF(x => ({ ...x, ad_rights_duration: v }))}
+                options={[{ value: '', label: '— Not set —' }, ...AD_RIGHTS_DURATIONS.map(d => ({ value: d, label: d }))]} />
+            </>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
             <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
@@ -491,11 +520,32 @@ function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
           {e.affiliate_pct != null && <KV label="Affiliate %" value={`${e.affiliate_pct}%`} />}
           {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
           <KV label="Campaign" value={campaignName || <span style={{ color: 'var(--text-3)' }}>—</span>} />
+          <KV label="Ad rights" value={
+            e.ad_rights == null
+              // "—" not "No": nobody has answered the question on this deal yet.
+              ? <span style={{ color: 'var(--text-3)' }}>—</span>
+              : e.ad_rights
+                ? <span style={{ color: '#27c93f', fontWeight: 600 }}>Yes</span>
+                : <span style={{ color: 'var(--text-3)' }}>No</span>
+          } />
+          {e.ad_rights && (
+            <>
+              <KV label="Ad rights ₹" value={e.ad_rights_amount != null ? `₹${Number(e.ad_rights_amount).toLocaleString('en-IN')}` : '—'} />
+              <KV label="Ad duration" value={e.ad_rights_duration || '—'} />
+            </>
+          )}
         </>
       )}
     </section>
   );
 }
+
+// Ad-rights durations (Reann #4). A fixed picker rather than a free-text box, because the
+// product/variant columns on this same table are the standing demonstration of what free text
+// does: 44 typed spellings for 22 products (measured 2026-08-27). Deliberately NOT a DB CHECK —
+// a CHECK would make adding an option a three-layer edit (PATTERN-218) for no gain, since
+// nothing branches on the value.
+const AD_RIGHTS_DURATIONS = ['1 month', '3 months', '6 months', '12 months', 'Perpetual'];
 
 function SelectEdit({ label, value, onChange, options }) {
   return (
@@ -1078,6 +1128,37 @@ const pill = { fontSize: 10, color: 'var(--text-3)', border: '1px solid var(--bo
 const pctInp = { width: 90, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13 };
 const issueBtn = { padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: 'pointer' };
 const miniBtn = { padding: '4px 10px', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' };
+
+/** Influencer identity, on the deal (Reann #1, 2026-08-27). Read-only mirror of the profile. */
+function InfluencerCard({ inf }) {
+  if (!inf || !inf.id) {
+    return <Card title="Influencer"><div style={{ color: 'var(--text-3)', fontSize: 13 }}>Not linked.</div></Card>;
+  }
+  // A creator may run several platforms (channel_platforms[], S144); channel_platform is only
+  // the primary one, so showing just that would under-report someone posting on two.
+  const platforms = Array.isArray(inf.channel_platforms) && inf.channel_platforms.length
+    ? inf.channel_platforms
+    : (inf.channel_platform ? [inf.channel_platform] : []);
+  return (
+    <Card title="Influencer">
+      <KV label="Handle" value={inf.channel_name || '—'} />
+      <KV label="Name" value={inf.person_name || '—'} />
+      <KV
+        label="Phone"
+        value={inf.contact_number
+          // A tel: link so the number can be dialled from a phone — Ignition has a mobile shell
+          // (S304) and this card is exactly what someone checks on the way to a call.
+          ? <a href={`tel:${inf.contact_number}`} style={{ color: 'var(--text-1)', textDecoration: 'none', borderBottom: '1px dotted var(--text-3)' }}>{inf.contact_number}</a>
+          : '—'}
+      />
+      <KV label="Email" value={inf.email || '—'} />
+      <KV label="Location" value={inf.location || '—'} />
+      <KV label="Platform" value={platforms.length ? platforms.map(titleish).join(', ') : '—'} />
+      <KV label="Type" value={inf.influencer_type ? titleish(inf.influencer_type) : '—'} />
+      <KV label="Followers" value={inf.follower_count ? Number(inf.follower_count).toLocaleString('en-IN') : '—'} />
+    </Card>
+  );
+}
 
 function Card({ title, children }) {
   return (

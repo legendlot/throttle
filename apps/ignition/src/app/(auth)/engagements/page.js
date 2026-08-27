@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Chip, useListNav, useToast } from '@throttle/ui';
@@ -7,6 +7,7 @@ import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../components/StageBadge.js';
 import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
+import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 
 // 'Live' is the terminal success stage (S214 ⑤) — the old 'Completed' tab is gone.
 const TABS = [
@@ -17,22 +18,80 @@ const TABS = [
   { id: 'delivered', label: 'Delivered', filter: 'delivered' },
 ];
 
+// Posting-date filter modes (Reann #5, 2026-08-27).
+const DATE_MODES = [
+  { id: 'any',      label: 'Any date' },
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'overdue',  label: 'Overdue' },
+  { id: 'range',    label: 'Date range' },
+];
+
+// Stages that mean "already posted, or the deal is closed" — a deal in one of these can
+// never be overdue. Mirrors the worker's POSTED_OR_TERMINAL list (ignitionops
+// getOverdueEngagements); the two must agree or the Schedule page and this filter would
+// disagree about who is late.
+const POSTED_OR_TERMINAL = new Set(['posting', 'live', 'ghosted', 'dropped', 'on_hold', 'delayed']);
+
+// Filters survive leaving the page and coming back (Reann #2: "once a user applies filters,
+// those filters should remain active … filters should only reset when the user manually
+// clears or changes them"). They were being lost on every trip into a deal and back, because
+// the page remounts with fresh state. Session-scoped on purpose: it should outlive a
+// navigation, not a working day.
+const FILTER_KEY = 'ignition.engagements.filters.v1';
+const EMPTY_FILTERS = {
+  tab: 'all', type: 'all', stages: [], search: '',
+  product: 'all', dateMode: 'any', dateFrom: '', dateTo: '',
+};
+
+function loadFilters() {
+  if (typeof window === 'undefined') return EMPTY_FILTERS;
+  try {
+    const raw = window.sessionStorage.getItem(FILTER_KEY);
+    if (!raw) return EMPTY_FILTERS;
+    const saved = JSON.parse(raw);
+    // Merge over the defaults so a stored shape from an older build cannot leave a field
+    // undefined and blank the control it drives.
+    return { ...EMPTY_FILTERS, ...saved, stages: Array.isArray(saved.stages) ? saved.stages : [] };
+  } catch { return EMPTY_FILTERS; }
+}
+
+/** The date a deal is judged on: actual post date when it has one, else the expected date.
+ *  Same rule as the Schedule page's `effective_date`, deliberately. */
+function effectiveDate(r) {
+  return r.post_date || r.expected_post_date || null;
+}
+
+function todayISO() {
+  // IST — the team's day, not UTC's (a UTC date rolls over at 05:30 local and would call
+  // this evening's deals "overdue" tomorrow morning by mistake).
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 export default function EngagementsPage() {
   const { session } = useAuth();
   const { showToast: toast } = useToast();
   const router = useRouter();
-  const [tab, setTab] = useState('all');
-  const [type, setType] = useState('all');
-  const [stages, setStages] = useState([]); // multi-select (#11)
-  const [search, setSearch] = useState('');
+
+  const [f, setF] = useState(EMPTY_FILTERS);
+  const [restored, setRestored] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
-  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
-    const r = rows[i]; if (r) router.push(`/engagements/detail/?id=${r.id}`);
-  });
+
+  // Restore once, after mount — sessionStorage does not exist during the static export's
+  // prerender, so this cannot be the useState initialiser.
+  useEffect(() => { setF(loadFilters()); setRestored(true); }, []);
+  useEffect(() => {
+    if (!restored) return;
+    try { window.sessionStorage.setItem(FILTER_KEY, JSON.stringify(f)); } catch { /* private mode */ }
+  }, [f, restored]);
+
+  function set(patch) { setF(prev => ({ ...prev, ...patch })); }
+  function clearAll() { setF(EMPTY_FILTERS); }
+
+  const { tab, type, stages, search, product, dateMode, dateFrom, dateTo } = f;
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || !restored) return;
     let cancelled = false;
     setLoading(true);
     const base = { type };
@@ -72,11 +131,84 @@ export default function EngagementsPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [tab, type, stages, search, session]);
+  }, [tab, type, stages, search, session, restored]);
+
+  // Product + posting-date filtering are done HERE, not in the worker, because the page
+  // already holds the entire filtered set (it pages until a short page arrives — ~350 rows
+  // today). That keeps the summary tiles below honest by construction: they count exactly the
+  // rows on screen. It also means the product picker can offer the values actually in use
+  // rather than the catalogue, which is what "filter by the product they are working with"
+  // asks for — only 5 of 377 deal lines carry a catalogue reference (measured 2026-08-27).
+  const productOptions = useMemo(() => {
+    const byKey = new Map();
+    for (const r of rows) {
+      const k = productKey(r.product_code);
+      if (!k) continue;
+      if (!byKey.has(k)) byKey.set(k, { key: k, label: titleish(r.product_code), count: 0 });
+      byKey.get(k).count += 1;
+    }
+    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [rows]);
+
+  const visible = useMemo(() => {
+    const today = todayISO();
+    return rows.filter(r => {
+      if (product !== 'all' && productKey(r.product_code) !== product) return false;
+      if (dateMode === 'any') return true;
+      const d = effectiveDate(r);
+      if (dateMode === 'upcoming') {
+        // Not yet posted, and expected on or after today.
+        return !r.post_date && !!r.expected_post_date && r.expected_post_date >= today;
+      }
+      if (dateMode === 'overdue') {
+        return !r.post_date && !!r.expected_post_date && r.expected_post_date < today
+          && !POSTED_OR_TERMINAL.has(r.stage);
+      }
+      if (dateMode === 'range') {
+        if (!d) return false;
+        if (dateFrom && d < dateFrom) return false;
+        if (dateTo && d > dateTo) return false;
+        return true;
+      }
+      return true;
+    });
+  }, [rows, product, dateMode, dateFrom, dateTo]);
+
+  // Summary of what is on screen (Reann, 2026-08-27: "a summary tab in engagements, as it is
+  // on the main dashboard, to view the total number of videos displayed and the total cost
+  // when the filters are selected").
+  const summary = useMemo(() => {
+    let cost = 0, views = 0, costOfViewed = 0, viewedDeals = 0;
+    for (const r of visible) {
+      cost += Number(r.total_cost || 0);
+      const v = Number(r.views || 0);
+      views += v;
+      // Blended CPM counts only deals that actually have views. Folding in the cost of deals
+      // that have not posted yet would inflate the cost-per-thousand of the ones that have.
+      if (v > 0) { costOfViewed += Number(r.total_cost || 0); viewedDeals += 1; }
+    }
+    return {
+      deals: visible.length,
+      cost,
+      views,
+      cpm: views > 0 ? (costOfViewed / views) * 1000 : null,
+      viewedDeals,
+    };
+  }, [visible]);
+
+  const { focusedIdx, setFocusedIdx } = useListNav(visible.length, (i) => {
+    const r = visible[i]; if (r) router.push(`/engagements/detail/?id=${r.id}`);
+  });
 
   function toggleStage(s) {
-    setStages(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+    setF(prev => ({
+      ...prev,
+      stages: prev.stages.includes(s) ? prev.stages.filter(x => x !== s) : [...prev.stages, s],
+    }));
   }
+
+  const filtersActive = tab !== 'all' || type !== 'all' || stages.length > 0 || !!search
+    || product !== 'all' || dateMode !== 'any';
 
   return (
     <div>
@@ -96,22 +228,50 @@ export default function EngagementsPage() {
       </header>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        {TABS.map(t => <Chip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</Chip>)}
+        {TABS.map(t => <Chip key={t.id} active={tab === t.id} onClick={() => set({ tab: t.id })}>{t.label}</Chip>)}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
           data-search-primary
           placeholder="Search engagement #, video link, tracking, order…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => set({ search: e.target.value })}
           style={inputStyle(280)}
         />
-        <select value={type} onChange={e => setType(e.target.value)} style={inputStyle(140)}>
+        <select value={type} onChange={e => set({ type: e.target.value })} style={inputStyle(140)}>
           <option value="all">All types</option>
           <option value="video_tracking">Video</option>
           <option value="ugc">UGC</option>
         </select>
+
+        {/* Reann #3 — product filter. Options are the products actually on deals. */}
+        <select value={product} onChange={e => set({ product: e.target.value })} style={inputStyle(190)}>
+          <option value="all">All products</option>
+          {productOptions.map(o => (
+            <option key={o.key} value={o.key}>{o.label} ({o.count})</option>
+          ))}
+        </select>
+
+        {/* Reann #5 — posting-date filter. */}
+        <select value={dateMode} onChange={e => set({ dateMode: e.target.value })} style={inputStyle(140)}>
+          {DATE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+        {dateMode === 'range' && (
+          <>
+            <input type="date" value={dateFrom} onChange={e => set({ dateFrom: e.target.value })} style={inputStyle(150)} />
+            <span style={{ color: 'var(--text-3)', fontSize: 12 }}>to</span>
+            <input type="date" value={dateTo} onChange={e => set({ dateTo: e.target.value })} style={inputStyle(150)} />
+          </>
+        )}
+
+        {filtersActive && (
+          <button onClick={clearAll} style={{
+            padding: '6px 10px', background: 'transparent', color: 'var(--text-3)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
+          }}>clear all filters</button>
+        )}
       </div>
 
       {tab === 'all' && (
@@ -120,15 +280,31 @@ export default function EngagementsPage() {
             <Chip key={s} active={stages.includes(s)} onClick={() => toggleStage(s)}>{STAGE_LABELS[s]}</Chip>
           ))}
           {stages.length > 0 && (
-            <button onClick={() => setStages([])} style={{ marginLeft: 4, padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: 'none', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>clear</button>
+            <button onClick={() => set({ stages: [] })} style={{ marginLeft: 4, padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: 'none', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>clear</button>
           )}
+        </div>
+      )}
+
+      {!loading && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          gap: 12, marginBottom: 12,
+        }}>
+          <Tile label={filtersActive ? 'Deals (filtered)' : 'Deals'} value={summary.deals.toLocaleString('en-IN')} />
+          <Tile label="Total cost" value={`₹${Math.round(summary.cost).toLocaleString('en-IN')}`} />
+          <Tile label="Views" value={summary.views.toLocaleString('en-IN')} />
+          <Tile
+            label="Blended CPM"
+            value={summary.cpm == null ? '—' : `₹${summary.cpm.toFixed(0)}`}
+            hint={summary.cpm == null ? 'no views yet' : `over ${summary.viewedDeals} deal${summary.viewedDeals === 1 ? '' : 's'} with views`}
+          />
         </div>
       )}
 
       {loading ? <Spinner /> : (
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)', overflow: 'hidden',
+          borderRadius: 'var(--radius-md)', overflowX: 'auto',
         }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
@@ -139,37 +315,48 @@ export default function EngagementsPage() {
                 <th style={th}>Stage</th>
                 <th style={th}>Deal</th>
                 <th style={th}>Product</th>
+                <th style={th}>Expected post</th>
                 <th style={th}>Post date</th>
-                <th style={th}>Total cost</th>
+                <th style={thNum}>Views</th>
+                <th style={thNum}>CPM</th>
+                <th style={thNum}>Total cost</th>
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No engagements</td></tr>
+              {visible.length === 0 && (
+                <tr><td colSpan={11} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No engagements</td></tr>
               )}
-              {rows.map((r, i) => (
-                <tr key={r.id}
-                  onClick={() => router.push(`/engagements/detail/?id=${r.id}`)}
-                  style={{
-                    cursor: 'pointer', borderTop: '1px solid var(--border)',
-                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                    outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
-                  }}
-                  onMouseEnter={() => setFocusedIdx(i)}
-                >
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.engagement_no}</span></td>
-                  <td style={td}>
-                    <div>{r.influencer?.channel_name || '—'}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.influencer?.influencer_code}</div>
-                  </td>
-                  <td style={td}>{r.engagement_type === 'ugc' ? 'UGC' : 'Video'}</td>
-                  <td style={td}><StageBadge stage={r.stage} /></td>
-                  <td style={td}><DealTypeBadge dealType={r.deal_type} /></td>
-                  <td style={td}>{r.product_variant || r.product_code || '—'}</td>
-                  <td style={td}>{r.post_date || '—'}</td>
-                  <td style={td}>₹{Number(r.total_cost || 0).toLocaleString()}</td>
-                </tr>
-              ))}
+              {visible.map((r, i) => {
+                const label = productLabel(r.product_code, r.product_variant);
+                return (
+                  <tr key={r.id}
+                    onClick={() => router.push(`/engagements/detail/?id=${r.id}`)}
+                    style={{
+                      cursor: 'pointer', borderTop: '1px solid var(--border)',
+                      background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
+                      outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
+                    }}
+                    onMouseEnter={() => setFocusedIdx(i)}
+                  >
+                    <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.engagement_no}</span></td>
+                    <td style={td}>
+                      <div>{r.influencer?.channel_name || '—'}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.influencer?.influencer_code}</div>
+                    </td>
+                    <td style={td}>{r.engagement_type === 'ugc' ? 'UGC' : 'Video'}</td>
+                    <td style={td}><StageBadge stage={r.stage} /></td>
+                    <td style={td}><DealTypeBadge dealType={r.deal_type} /></td>
+                    <td style={td}>{label || '—'}</td>
+                    <td style={{ ...td, color: r.post_date ? 'var(--text-3)' : 'var(--text-1)' }}>
+                      {r.expected_post_date || '—'}
+                    </td>
+                    <td style={td}>{r.post_date || '—'}</td>
+                    <td style={tdNum}>{r.views ? Number(r.views).toLocaleString('en-IN') : '—'}</td>
+                    <td style={tdNum}>{r.cpm ? `₹${Number(r.cpm).toFixed(0)}` : '—'}</td>
+                    <td style={tdNum}>₹{Number(r.total_cost || 0).toLocaleString('en-IN')}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -178,8 +365,23 @@ export default function EngagementsPage() {
   );
 }
 
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
+function Tile({ label, value, hint }) {
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-md)', padding: '10px 14px',
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      {hint && <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{hint}</div>}
+    </div>
+  );
+}
+
+const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap' };
+const thNum = { ...th, textAlign: 'right' };
 const td = { padding: '10px 12px' };
+const tdNum = { ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' };
 function inputStyle(w) {
   return {
     background: 'var(--surface-2)', color: 'var(--text-1)',
