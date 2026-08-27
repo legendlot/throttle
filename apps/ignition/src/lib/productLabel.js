@@ -10,9 +10,14 @@
  *    rendering both (`productLabel`).
  *
  *  ② The values themselves are free text and wildly inconsistent: 44 distinct product
- *    strings collapse to 22 once cased, and 75 variant strings collapse to 43 (measured
+ *    strings collapsing to 22 once cased, and 75 variant strings to 43 (measured
  *    2026-08-27 over 377 `engagement_products` rows). CREST / Crest / crest are one
  *    product typed three ways.
+ *    ⚠️ Those two numbers are the JUSTIFICATION, not the current state: the stored strings
+ *    were cleaned later the same day (18 products / 32 variants after). Do not re-measure and
+ *    conclude this file is pointless — **the field is still free text**, so the mess regrows,
+ *    which is exactly why the normalisation lives at the display layer and not only in a
+ *    one-off migration.
  *
  * `titleish()` fixes the CASING half of ② at the display layer so the screen reads as one
  * catalogue while the stored strings are cleaned separately.
