@@ -4588,9 +4588,14 @@ async function sendWaTemplateReply(body, auth, env) {
 
   const msg = data?.data || data?.message || data || {};
   // An unresolved variable or a Meta rejection comes back 200-with-status-failed. Surface it,
-  // rather than showing the agent a message that never left.
-  if (msg.status === 'failed' || msg.status === 'skipped')
+  // rather than showing the agent a message that never left. S318: also PERSIST the reason —
+  // this branch previously returned without writing anything, so a refused template left no
+  // trace for anyone diagnosing it afterwards.
+  if (msg.status === 'failed' || msg.status === 'skipped') {
+    await logRelayWaFailure(thread, { kind: 'template', body: tplRow?.name || template_id },
+      `relay ${msg.status}: ${msg.reason || '(no reason given)'}`, auth, env);
     return err(`WhatsApp refused the template (${msg.reason || msg.status})`, 422);
+  }
 
   const pmid = msg.provider_message_id || msg.id || null;
   const now = new Date().toISOString();
@@ -6410,6 +6415,41 @@ async function sendWebReplyViaRelay(thread, text, auth, env) {
   return ok({ message: { direction: 'outbound', body: String(text), status: 'sent' }, via: 'relay_web' });
 }
 
+// Persist WHY a Relay WhatsApp send failed. Added 2026-08-27 (S318) after a 52-minute WhatsApp
+// outage took ~an hour to diagnose because there was nothing to read: the three Relay send paths
+// wrote `status: msg.status || 'sent'` and stored no reason, and their two hard-error branches
+// returned without writing a row at all. So a refusal was either a `failed` bubble with
+// `status_error` NULL, or no trace whatsoever.
+//
+// This is the same fix S314 made on the Meta/Instagram path, applied to the busier channel —
+// and it is what makes /admin/meta useful on WhatsApp instead of showing a blank Error column.
+//
+// ⚠️ Writes on the HARD-ERROR branches too, where nothing was written before. That is a
+// deliberate improvement, not just logging: the agent's typed text was previously lost outright
+// on those paths, so they had nothing to copy and retry from. Now it survives as a failed bubble.
+// ⚠️ Best-effort by construction — a logging failure must never turn a refusal into a 500, which
+// is why every call site swallows. Same rule as the Meta path.
+async function logRelayWaFailure(thread, fields, reason, auth, env) {
+  const detail = typeof reason === 'string' ? reason : JSON.stringify(reason || {});
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, direction: 'outbound', kind: fields.kind || 'text',
+      body: fields.body ?? null,
+      media_url: fields.media_url ?? null,
+      media_filename: fields.media_filename ?? null,
+      media_mime_type: fields.media_mime_type ?? null,
+      waba_phone_number_id: thread.waba_phone_number_id || null,
+      status: 'failed',
+      status_error: String(detail).slice(0, 1000),
+      is_internal: false,
+      sent_by_user_id: auth.userId,
+      sent_by_name: auth.fullName || auth.name || auth.email || null,
+      sent_at: new Date().toISOString(),
+    }),
+  }).catch((e) => console.error('[relay-wa] failure-log insert failed', e?.message));
+}
+
 async function sendWaReplyViaRelay(thread, text, auth, env) {
   if (thread.relay_web) return sendWebReplyViaRelay(thread, text, auth, env);
   const until = thread.customer_window_until ? new Date(thread.customer_window_until).getTime() : 0;
@@ -6432,14 +6472,33 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
       }),
     });
     data = await resp.json().catch(() => ({}));
-  } catch (e) { return err(`Relay send failed: ${e.message}`, 502); }
-  if (!resp.ok || data?.ok === false)
+  } catch (e) {
+    await logRelayWaFailure(thread, { kind: 'text', body: String(text) }, `transport: ${e.message}`, auth, env);
+    return err(`Relay send failed: ${e.message}`, 502);
+  }
+  if (!resp.ok || data?.ok === false) {
+    await logRelayWaFailure(thread, { kind: 'text', body: String(text) },
+      `http ${resp.status}: ${JSON.stringify(data)?.slice(0, 400)}`, auth, env);
     return err(`Relay send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status || 502);
+  }
 
   const msg = data?.data || data?.message || data || {};
   const pmid = msg.provider_message_id || msg.id || null;
   const now = new Date().toISOString();
   const senderName = auth.fullName || auth.name || auth.email || null;
+
+  // ⚠️ Relay answers 200-with-status-failed when the send gate or Meta refuses. This path used
+  // to copy that straight into the row with no reason attached — which is exactly the state the
+  // 2026-08-27 outage was found in: 15 `failed` rows, `status_error` NULL on every one, nothing
+  // to diagnose from. Capture the reason here and let the rest of the function run unchanged.
+  // ⚠️ Deliberately still returns ok() rather than err(): the inbox already renders a failed
+  // bubble (that is how agents noticed the outage), and switching to an error toast would change
+  // behaviour on the busiest channel for no diagnostic gain. The template and media paths DO
+  // return err — they were written that way and are left alone.
+  const relayFailed = msg.status === 'failed' || msg.status === 'skipped';
+  const failureDetail = relayFailed
+    ? `relay ${msg.status}: ${msg.reason || '(no reason given)'}`
+    : null;
 
   const threadPatch = { last_message_at: now };
   if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {
@@ -6458,6 +6517,7 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text', body: String(text),
       waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       provider_message_id: pmid, status: msg.status || 'sent', is_internal: false,
+      status_error: failureDetail,
       sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
     }),
   }).catch((e) => console.error('[relay-wa] outbound insert failed', e?.message));
@@ -6512,8 +6572,15 @@ async function sendWaAttachmentViaRelay(thread, file, auth, env) {
   // A media upload that Meta refused comes back 200-with-status-failed, not as an HTTP error —
   // surface it as a real failure so the agent retries rather than believing it sent.
   const msg = data?.data || data?.message || data || {};
-  if (msg.status === 'failed' || msg.status === 'skipped')
+  if (msg.status === 'failed' || msg.status === 'skipped') {
+    // S318: persist the reason. Same gap as the template path — the agent saw a toast and the
+    // system kept no record of why the attachment was refused.
+    await logRelayWaFailure(thread,
+      { kind: spec.kind, body: caption ? String(caption) : null, media_url: publicUrl,
+        media_filename: filename || null, media_mime_type: mime_type },
+      `relay ${msg.status}: ${msg.reason || '(no reason given)'}`, auth, env);
     return err(`WhatsApp refused the attachment (${msg.reason || msg.status})`, 422);
+  }
 
   const pmid = msg.provider_message_id || msg.id || null;
   const now = new Date().toISOString();
@@ -6996,6 +7063,11 @@ async function getMetaSendFailures(params, auth, env) {
   for (const m of rows) {
     let parsed = null;
     try { parsed = JSON.parse(m.status_error); } catch { /* keep raw; malformed is still evidence */ }
+    // ⚠️ Two shapes land in `status_error` and the screen must render BOTH. The Meta path stores
+    // Meta's raw JSON error (has `code` + `message`); the Relay/WhatsApp path added in S318
+    // stores a plain string (`relay failed: wa_131049:…`). Parsing only the JSON shape would give
+    // the WhatsApp rows a blank Error column — the exact fault this page exists to remove — so a
+    // non-JSON value falls back to being its own message.
     const code = parsed?.code ?? null;
     const key = `${m.thread_id}|${code}`;
     const prev = grouped.get(key);
@@ -7016,7 +7088,7 @@ async function getMetaSendFailures(params, auth, env) {
         && new Date(t.customer_window_until).getTime() > new Date(m.created_at).getTime()),
       customer_window_until: t.customer_window_until || null,
       error_code: code,
-      error_message: parsed?.message || null,
+      error_message: parsed?.message || (parsed ? null : String(m.status_error).slice(0, 300)),
       error_raw: m.status_error,
       last_body_snippet: (m.body || '').slice(0, 140),
       sent_by_name: m.sent_by_name || null,
