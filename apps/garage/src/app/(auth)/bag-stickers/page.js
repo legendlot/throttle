@@ -97,7 +97,12 @@ export default function BagStickersPage() {
   // The worker decides what counts as evidence (physical receiving bags first, catalogue as
   // fallback, and neither if the sample is too thin to accuse anyone off).
   const expectedSz = evidence?.expected ?? null;
-  const szMismatch = !!(expectedSz && sz >= 1 && sz !== expectedSz);
+  // A part can have several legitimate bag sizes (HW-SC-23-6 is genuinely bagged as both
+  // 1650 and 5000), so anything with real backing is normal. Warn only for a size that is
+  // normal for nothing — otherwise this cries wolf and gets ignored, which is worse than
+  // not having it.
+  const commonSizes = evidence?.common_sizes || [];
+  const szMismatch = !!(expectedSz && sz >= 1 && sz !== expectedSz && !commonSizes.includes(sz));
   const nb = sz >= 1 && tq >= 1 ? Math.ceil(tq / sz) : 0; // auto-derived bag count
   const remainder = sz >= 1 && tq >= 1 ? (tq % sz) : 0;
   const canPrint = !!partCode && sz >= 1 && tq >= 1 && nb <= 500 && !busy;
@@ -233,6 +238,9 @@ export default function BagStickersPage() {
                     ? ` (${evidence?.observed_count} of the last ${evidence?.sampled} bags from receiving)`
                     : ' (the set bag size for this part)'}
                   , but you&rsquo;ve entered <strong style={{ color: 'var(--t1)' }}>{sz}</strong>.
+                  {commonSizes.length > 1 && (
+                    <> {' '}(Sizes actually used for it: {commonSizes.join(', ')}.)</>
+                  )}
                   {' '}Only carry on if the physical bags really hold {sz} — a label that overstates its bag
                   lets a run pick more than it needs.
                   {evidence?.disagrees && (
