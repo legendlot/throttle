@@ -860,7 +860,12 @@ async function getUgcPipeline(_url, auth, env) {
   const num = v => Number(v) || 0;
   const now = new Date();
   const monthKey = istMonthKey(now);
-  const TERMINAL_UGC = new Set(['retired', 'dropped']);
+  // ⚠️ 'cancelled' belongs here too — MISSED when the stage was added and caught by the S317
+  // hostile review. This is a LOCAL duplicate of the module-level TERMINAL set, so widening that
+  // one did not reach it: a cancelled UGC deal would have been counted as an active creative and
+  // accrued "days active" forever. Latent (no UGC deal is cancelled today) but exactly the
+  // PATTERN-218 shape — a rule taught to every site but one. Mirrors UGC_TERMINAL in ugcStages.js.
+  const TERMINAL_UGC = new Set(['retired', 'dropped', 'cancelled']);
   let month_ad_spend = 0, month_revenue = 0, commissions_owed = 0, active_creatives = 0;
   const by_stage = {};
   const rows = engs.map(e => {
