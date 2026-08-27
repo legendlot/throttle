@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, EmptyState, Combobox, useToast, buildBagLabelsHtml, printWindow } from '@throttle/ui';
@@ -24,7 +24,12 @@ export default function BagStickersPage() {
   const [totalQty, setTotalQty] = useState('');
   const [busy, setBusy]         = useState(false);
   const [lastBatch, setLastBatch] = useState(null); // { bags, label }
-  const [dupPrompt, setDupPrompt] = useState(null); // { bags, minutesAgo, message, requestId }
+  const [dupPrompt, setDupPrompt] = useState(null); // { bags, minutesAgo, message, requestId, snap }
+  // `busy` is React state, so it does NOT stop a second onClick fired in the SAME tick —
+  // the button's disabled attribute only updates on the next render. The fastest duplicate
+  // in the live data was 1 SECOND apart (MC-PB-04), which is too quick to be a human
+  // re-press, so that path is real. A ref flips synchronously and closes it.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     if (!allowed) { setLoading(false); return; }
@@ -54,7 +59,10 @@ export default function BagStickersPage() {
     label: `${p.part_code} — ${p.part_name}${p.product && p.product !== 'Universal' ? ` (${p.product})` : ' (Universal)'}`,
   })), [parts]);
 
+  // Any input edit invalidates an open confirm panel — it was raised for the old numbers,
+  // and leaving it on screen invites answering a question that is no longer being asked.
   function selectPart(code) {
+    setDupPrompt(null);
     setPartCode(code);
     const p = partMap[code];
     if (p && p.bag_size && !bagSize) setBagSize(String(p.bag_size));
@@ -78,12 +86,20 @@ export default function BagStickersPage() {
 
   async function generate(opts = {}) {
     if (!canPrint && !opts.force) return;
+    if (inFlight.current) return;           // same-tick double-fire — see the ref's note
+    inFlight.current = true;
     const requestId = opts.requestId || newRequestId();
+    // Snapshot the inputs. The confirm panel is inline and the qty fields stay editable,
+    // so "print a new set anyway" must send the values the PROMPT was raised for — not
+    // whatever is in the boxes now. Reusing a request_id against changed quantities would
+    // collide on the earlier batch's bag_ids and hand back the WRONG labels as
+    // "already generated".
+    const snap = opts.snap || { part_code: partCode, bag_size: sz, total_qty: tq };
     setBusy(true);
     try {
       const res = await workerFetch('generateManualBags', {
         data: {
-          part_code: partCode, bag_size: sz, total_qty: tq,
+          ...snap,
           request_id: requestId,
           ...(opts.confirmDuplicate ? { confirm_duplicate: true } : {}),
         },
@@ -96,7 +112,7 @@ export default function BagStickersPage() {
           bags:       res.data.existing_bags || [],
           minutesAgo: res.data.minutes_ago,
           message:    res.data.message,
-          requestId,
+          requestId, snap,
         });
         return;
       }
@@ -104,16 +120,19 @@ export default function BagStickersPage() {
       const bags = res?.data?.bags || [];
       if (!bags.length) { showToast('No bags generated', 'info'); return; }
       printWindow(buildBagLabelsHtml(bags, 'MANUAL'));
-      setLastBatch({ bags, label: `${partCode} — ${bags.length} bag${bags.length === 1 ? '' : 's'} for ${tq} pcs` });
+      // Label off the SNAPSHOT, not current state — on the confirm path the boxes may
+      // have been edited since, and the labels just printed are the snapshot's.
+      setLastBatch({ bags, label: `${snap.part_code} — ${bags.length} bag${bags.length === 1 ? '' : 's'} for ${snap.total_qty} pcs` });
       showToast(
         res?.data?.duplicate
           ? `Already generated — reprinting the same ${bags.length} label${bags.length === 1 ? '' : 's'}`
-          : `${bags.length} bag label${bags.length === 1 ? '' : 's'} generated for ${partCode}`,
+          : `${bags.length} bag label${bags.length === 1 ? '' : 's'} generated for ${snap.part_code}`,
         res?.data?.duplicate ? 'info' : 'success');
     } catch (e) {
       showToast(e.message || 'Bag generation failed', 'error');
     } finally {
       setBusy(false);
+      inFlight.current = false;
     }
   }
 
@@ -126,17 +145,19 @@ export default function BagStickersPage() {
     const bags = dupPrompt?.bags || [];
     if (bags.length) {
       printWindow(buildBagLabelsHtml(bags, 'MANUAL'));
-      setLastBatch({ bags, label: `${partCode} — ${bags.length} bag${bags.length === 1 ? '' : 's'} (reprint)` });
+      setLastBatch({ bags, label: `${dupPrompt?.snap?.part_code || partCode} — ${bags.length} bag${bags.length === 1 ? '' : 's'} (reprint)` });
       showToast(`Reprinted ${bags.length} existing label${bags.length === 1 ? '' : 's'} — no new bags created`, 'success');
     }
     setDupPrompt(null);
   }
 
   // Deliberate override: the floor really does have a second physical set of bags.
+  // Sends the SNAPSHOT the prompt was raised for, so the reused request_id can never
+  // meet a different quantity (see the snapshot note in generate()).
   function printNewAnyway() {
-    const requestId = dupPrompt?.requestId;
+    const { requestId, snap } = dupPrompt || {};
     setDupPrompt(null);
-    generate({ confirmDuplicate: true, requestId, force: true });
+    generate({ confirmDuplicate: true, requestId, snap, force: true });
   }
 
   if (!allowed) {
@@ -166,11 +187,11 @@ export default function BagStickersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
               <div>
                 <span style={lbl}>Bag size (pieces per bag) *</span>
-                <input style={input} type="number" min="1" value={bagSize} onChange={e => setBagSize(e.target.value)} placeholder="e.g. 50" />
+                <input style={input} type="number" min="1" value={bagSize} onChange={e => { setDupPrompt(null); setBagSize(e.target.value); }} placeholder="e.g. 50" />
               </div>
               <div>
                 <span style={lbl}>Total quantity *</span>
-                <input style={input} type="number" min="1" value={totalQty} onChange={e => setTotalQty(e.target.value)} placeholder="e.g. 1000" />
+                <input style={input} type="number" min="1" value={totalQty} onChange={e => { setDupPrompt(null); setTotalQty(e.target.value); }} placeholder="e.g. 1000" />
               </div>
             </div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 14 }}>
