@@ -777,8 +777,14 @@ export default {
     // alarm below: a sending outage blocks every agent immediately, so a ~6h detection window
     // would be useless for it. Cheap — one row read, and a write only when the state changes.
     if (mins % 5 === 0) {
+      // ⚠️ Logs on EVERY run, not only when down. A watchdog whose healthy state is silence
+      // cannot be told apart from a watchdog that never executed — and "0 alert rows" reads
+      // identically either way. That ambiguity is exactly what made the S314 channel alarm
+      // unverifiable for a day; do not "tidy" this into a failure-only log. 288 lines/day.
       ctx.waitUntil(checkRelaySendingHealth(env).then(
-        r => { if (r?.down) console.warn('[relay-watchdog] SENDING DOWN', JSON.stringify(r)); },
+        r => (r?.down
+          ? console.warn('[relay-watchdog] SENDING DOWN', JSON.stringify(r))
+          : console.log('[relay-watchdog] ok', JSON.stringify(r))),
         e => console.error('[relay-watchdog] error', e),
       ));
     }
