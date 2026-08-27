@@ -302,9 +302,23 @@ const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC 
 // a stage missing from this list renders in no column on the board rather than erroring.
 const UGC_STAGES = ['proposed','outreach','shipped','delivered','draft','live','paused','vault','retired','dropped'];
 
-// Free model: from any stage you may move to any other (terminals reopenable).
-function allowedTransitions(stage) {
-  return STAGES.filter(s => s !== stage);
+// Free model: from any stage you may move to any other (terminals reopenable) — but only
+// within the vocabulary that belongs to the deal's TYPE.
+//
+// ⚠️ `isUgc` is not optional decoration. This used to return the video `STAGES` for every deal,
+// so a UGC deal could be advanced to `planning`/`scheduled`/`posting`/`delayed`/`on_hold` —
+// none of which are UGC stages. The /ugc board builds its count chips and its stage filter from
+// `UGC_STAGE_VALUES`, so such a deal became **uncountable and unfilterable**: still in the
+// all-stages table, absent from every chip, unreachable by the filter, and carrying a stage its
+// own board has no name for. Same family as the S272 `proposed` trap, found by the S317 hostile
+// review. Latent at the time — 0 UGC deals were in a video-only stage and only 2 UGC deals
+// existed at all, which is exactly why nobody had hit it (cf. S267: a fully-coded rule whose
+// first real exercise would have been its first failure).
+//
+// Callers MUST pass the deal's type. A missing argument defaults to the video set, which is the
+// pre-existing behaviour and correct for the 351 video deals.
+function allowedTransitions(stage, isUgc = false) {
+  return (isUgc ? UGC_STAGES : STAGES).filter(s => s !== stage);
 }
 
 // ── Util ────────────────────────────────────────────────────────────────────
@@ -691,7 +705,7 @@ async function getEngagement(url, auth, env) {
     attachments: ar.data || [],
     payments,
     paid_total: Math.round(paid_total),
-    allowed_next: allowedTransitions(eng.stage),
+    allowed_next: allowedTransitions(eng.stage, eng.engagement_type === 'ugc'),
   });
 }
 
@@ -1805,9 +1819,14 @@ async function advanceStage(body, auth, env) {
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
   const isUgc = cur.data[0].engagement_type === 'ugc';
-  const allowed = allowedTransitions(from);
+  const allowed = allowedTransitions(from, isUgc);
   if (!allowed.includes(body.to_stage)) {
-    return err(`illegal_transition: ${from} → ${body.to_stage}`, 422);
+    // The message names the deal's type deliberately: "illegal_transition: delivered → planning"
+    // is baffling on its own when planning is a perfectly ordinary stage for the OTHER type.
+    return err(
+      `illegal_transition: ${from} → ${body.to_stage} (not a ${isUgc ? 'UGC' : 'video'} stage)`,
+      422,
+    );
   }
 
   // ── Reann #5: the approval gate ────────────────────────────────────────────────────────────
@@ -1921,7 +1940,7 @@ async function advanceStage(body, auth, env) {
       else console.error('[advanceStage] tracking link mint failed', body.engagement_id, lr.error);
     } catch (e) { console.error('[advanceStage] tracking link mint threw', String(e?.message || e)); }
   }
-  return ok({ stage: body.to_stage, allowed_next: allowedTransitions(body.to_stage), tracking_link });
+  return ok({ stage: body.to_stage, allowed_next: allowedTransitions(body.to_stage, isUgc), tracking_link });
 }
 
 async function closeEngagement(body, auth, env) {

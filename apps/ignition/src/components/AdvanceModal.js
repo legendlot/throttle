@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Modal } from '@throttle/ui';
 import { STAGE_LABELS, allowedTransitions, HAPPY_PATH } from '../lib/stages.js';
+import { UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_HAPPY_PATH } from '../lib/ugcStages.js';
 
 const fieldStyle = {
   width: '100%', marginTop: 6, padding: '8px 10px',
@@ -27,10 +28,23 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   if (!engagement) return null;
 
   const isUgc          = engagement.engagement_type === 'ugc';
-  const options = allowedTransitions(engagement.stage);
+  // ⚠️ The stage list MUST follow the deal's type. This modal already branched on `isUgc` for the
+  // post-date, rating, order-id and tracking-url guards but not for the stages themselves, so it
+  // offered the VIDEO vocabulary to a UGC deal. Moving one to planning/scheduled/posting/delayed/
+  // on_hold left it uncountable and unfilterable on the /ugc board, which builds its count chips
+  // and stage filter from UGC_STAGE_VALUES. The worker now refuses those transitions too — this
+  // is the convenience half of the fix, not the gate. (S317 hostile review.)
+  const stageLabels = isUgc ? UGC_STAGE_LABELS : STAGE_LABELS;
+  const happyPath   = isUgc ? UGC_HAPPY_PATH : HAPPY_PATH;
+  const options = isUgc
+    ? UGC_STAGE_VALUES.filter(s => s !== engagement.stage)
+    : allowedTransitions(engagement.stage);
   const isLive         = target === 'live';                 // ⑤ terminal success (video)
   const needsVideoLink = isLive;                            // #4
-  const isSchedule     = target === 'scheduled';            // #10
+  // #10 — the On-track/Delayed branch routes to the `delayed` stage, which is video-only. Scoped
+  // to !isUgc so it can never fire for a UGC deal: 'scheduled' is no longer offered to one, and
+  // if it were re-introduced this would otherwise quietly write an invalid stage again.
+  const isSchedule     = !isUgc && target === 'scheduled';
   const isShipped      = target === 'shipped';              // #7
   const existingLink   = (engagement.video_link || '').trim();
   const existingPost   = (engagement.post_date || '').toString().trim();
@@ -53,9 +67,9 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const needsTrackUrl  = isShipped && isUgc && !existingTrack;
 
   // B11 — soft skip-stage warning (transitions are free by design; this only nudges).
-  const _fromIdx = HAPPY_PATH.indexOf(engagement.stage);
-  const _toIdx   = HAPPY_PATH.indexOf(target);
-  const skipped  = (_fromIdx >= 0 && _toIdx > _fromIdx + 1) ? HAPPY_PATH.slice(_fromIdx + 1, _toIdx) : [];
+  const _fromIdx = happyPath.indexOf(engagement.stage);
+  const _toIdx   = happyPath.indexOf(target);
+  const skipped  = (_fromIdx >= 0 && _toIdx > _fromIdx + 1) ? happyPath.slice(_fromIdx + 1, _toIdx) : [];
 
   const missingVideo    = needsVideoLink && !(videoLink.trim() || existingLink);
   const missingPostDate = needsPostDate && !postDate;
@@ -107,7 +121,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
     <Modal open={open} onClose={onClose} title={`Advance ${engagement.engagement_no}`}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 360 }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          Current stage: <strong style={{ color: 'var(--text-1)' }}>{STAGE_LABELS[engagement.stage]}</strong>
+          Current stage: <strong style={{ color: 'var(--text-1)' }}>{stageLabels[engagement.stage] || engagement.stage}</strong>
         </div>
         <div>
           <label style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -124,14 +138,14 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
             }}
           >
             <option value="">— select —</option>
-            {options.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+            {options.map(s => <option key={s} value={s}>{stageLabels[s] || s}</option>)}
           </select>
         </div>
 
         {/* B11 — soft nudge when skipping happy-path stages (still allowed) */}
         {skipped.length > 0 && (
           <div style={{ fontSize: 12, color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid #fbbf24', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
-            ⚠ Skipping {skipped.map(s => STAGE_LABELS[s] || s).join(', ')}. You can still advance if that&apos;s intended.
+            ⚠ Skipping {skipped.map(s => stageLabels[s] || s).join(', ')}. You can still advance if that&apos;s intended.
           </div>
         )}
 

@@ -89,8 +89,28 @@ export default function UgcPage() {
             <KpiCard label="Commissions owed" value={inr(summary.commissions_owed)} accent={ORANGE} />
           </div>
 
-          {/* Per-stage count chips */}
+          {/* Per-stage count chips.
+              ⚠️ `strayStages` is the backstop for a UGC deal sitting in a stage this board has no
+              column for. That used to be reachable — the shared Advance modal offered the VIDEO
+              stage list to UGC deals — and the deal then vanished from every chip and from the
+              stage filter while still sitting in the table below, i.e. uncountable rather than
+              missing. The modal and the worker both refuse those transitions now (S317), so this
+              should always be empty; it renders LOUDLY rather than silently if it ever is not,
+              because silence is what made the original bug survive. */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+            {Object.keys(byStage)
+              .filter(s => byStage[s] && !UGC_STAGE_VALUES.includes(s))
+              .map(s => (
+                <span key={s} title="Not a UGC stage — this deal cannot be filtered to. Report it."
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px',
+                    fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
+                    textTransform: 'uppercase', color: 'var(--state-error-fg)', background: 'var(--state-error-bg)',
+                    border: '1px solid currentColor', borderRadius: 'var(--radius-sm)',
+                  }}>
+                  ⚠ {s} <strong style={{ color: 'inherit' }}>{byStage[s]}</strong>
+                </span>
+              ))}
             {UGC_STAGE_VALUES.filter(s => byStage[s]).map(s => {
               const pal = UGC_STAGE_PALETTE[s] || { fg: 'var(--text-2)', bg: 'var(--surface-2)' };
               return (
