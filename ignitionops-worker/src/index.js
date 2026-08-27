@@ -2462,32 +2462,117 @@ function trackingSlug(influencerCode, engagementNo) {
 
 // Target resolution, best-known-first. A homepage link still attributes correctly but converts
 // worse, so prefer the product page whenever the handle cache has one.
+/**
+ * Last-resort product resolution from the TYPED product + variant (Reann, 2026-08-27, approved
+ * in-thread: "Yes please go ahead").
+ *
+ * Why it exists: a tracking link only points at a product page when the deal's line carries a
+ * catalogue `product_ref`, and **only 7 of 378 lines do** (measured 2026-08-27) — so ~98% of links
+ * sent a creator's audience to the shop front. Reann raised it twice. Matching the typed text
+ * rescues 107 of the 371 ref-less lines with **zero ambiguous matches** (measured against live
+ * `product_master`); the remaining 264 are free text that is not a product/model/colour
+ * (`Crest`/`Ravenclaw`-shaped) and is deliberately left unresolved.
+ *
+ * ⚠️ **Returns a match ONLY when exactly one active product fits.** Two candidates means we do not
+ * know which, and sending a creator's followers to the WRONG product is worse than sending them to
+ * the shop front — the wrong page damages their post. Never "pick the first".
+ *
+ * ⚠️ The whole catalogue is fetched and matched in JS rather than filtered in PostgREST, on
+ * purpose: the comparison is on `model || ' ' || color`, which no single column holds, and an
+ * `ilike` prefilter would treat `%`/`_` in a product name as wildcards. `product_master` is small
+ * (a few hundred active rows) and a mint is rare.
+ */
+async function matchProductsFromText(env, productText, variantText) {
+  const norm = s => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const p = norm(productText);
+  if (!p) return [];
+  const v = norm(variantText);
+  const r = await sb(
+    `/rest/v1/product_master?is_active=eq.true&select=product_code,sku,product,model,color&limit=1000`,
+    env,
+    { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
+  ).catch(() => ({ data: [] }));
+  return (r.data || []).filter(row => {
+    if (norm(row.product) !== p) return false;
+    // No variant typed — every variant of that product is a candidate. That is NOT treated as a
+    // failure: the caller checks whether they all lead to the SAME page, and on Shopify a product's
+    // colourways usually do (all 12 Flare rows → /products/flare-2-rc-drift-car).
+    if (!v) return true;
+    return norm(`${row.model} ${row.color}`) === v;
+  });
+}
+
+/**
+ * The Shopify handle these candidates point at, but ONLY when they agree on one.
+ *
+ * ⚠️ The test is on the DESTINATION, not the catalogue row, and that is what makes it both safe and
+ * useful. A deal typed as bare "Fang" with no variant matches two active products — ambiguous as a
+ * row — yet both sell on `/products/fang-rc-excavator`, so the page is not in doubt at all.
+ * Measured 2026-08-27: judging by product row resolves 116 of 371 ref-less lines; judging by handle
+ * resolves **139**, and still refuses the **1** line whose candidates genuinely disagree.
+ *
+ * Batched deliberately — three reads regardless of how many candidates, rather than three per
+ * candidate (bare "Flare" has 12).
+ */
+async function singleHandleFor(env, candidates) {
+  const codes = [...new Set(candidates.map(c => c.product_code).filter(Boolean))];
+  if (!codes.length) return null;
+  const inCodes = codes.map(c => `"${String(c).replace(/"/g, '')}"`).join(',');
+  // product_master.sku can be stale vs the live Shopify sku (the HP crest case), so take the
+  // channel aliases too — same fallback the price lookup uses.
+  const aliases = await sb(
+    `/rest/v1/sku_map?product_code=in.(${encodeURIComponent(inCodes)})&select=channel_sku&limit=200`, env,
+    { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
+  ).catch(() => ({ data: [] }));
+  const skus = [...new Set([
+    ...candidates.map(c => c.sku),
+    ...(aliases.data || []).map(a => a.channel_sku),
+  ].map(s => (s || '').trim()).filter(Boolean))];
+  if (!skus.length) return null;
+  const inSkus = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+  const pp = await sb(
+    `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inSkus)})&handle=not.is.null&select=handle&limit=200`, env,
+  ).catch(() => ({ data: [] }));
+  const handles = [...new Set((pp.data || []).map(x => x.handle).filter(Boolean))];
+  return handles.length === 1 ? handles[0] : null;
+}
+
 async function resolveLinkTarget(env, engagementId, explicit) {
   if (explicit && /^https?:\/\//i.test(explicit)) return String(explicit);
   const pr = await sb(
-    `/rest/v1/engagement_products?engagement_id=eq.${engagementId}&select=product_ref,sort_order&order=sort_order.asc&limit=1`,
+    `/rest/v1/engagement_products?engagement_id=eq.${engagementId}&select=product_ref,product_code,product_variant,sort_order&order=sort_order.asc&limit=1`,
     env,
   ).catch(() => ({ data: [] }));
-  const code = pr.data?.[0]?.product_ref;
-  if (!code) return LOT_STORE_URL;
-  // product_master.sku can be stale vs the live Shopify sku (the HP crest case), so try the
-  // channel aliases too — same fallback the price lookup uses.
-  const pm = await sb(
-    `/rest/v1/product_master?product_code=eq.${encodeURIComponent(code)}&select=sku&limit=1`, env,
-    { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
-  ).catch(() => ({ data: [] }));
-  const aliases = await sb(
-    `/rest/v1/sku_map?product_code=eq.${encodeURIComponent(code)}&select=channel_sku&limit=20`, env,
-    { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
-  ).catch(() => ({ data: [] }));
-  const skus = [...new Set([pm.data?.[0]?.sku, ...(aliases.data || []).map(a => a.channel_sku)]
-    .map(s => (s || '').trim()).filter(Boolean))];
-  if (!skus.length) return LOT_STORE_URL;
-  const inList = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
-  const pp = await sb(
-    `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=handle&limit=1`, env,
-  ).catch(() => ({ data: [] }));
-  const handle = pp.data?.[0]?.handle;
+  const line = pr.data?.[0] || null;
+
+  if (line?.product_ref) {
+    // ⚠️ An explicit pick is an INSTRUCTION, not an inference, so this path keeps its original
+    // first-handle-wins behaviour. Applying the stricter "all candidates must agree" rule here
+    // would be a regression: the user already told us which product, and a second handle arriving
+    // via a channel alias must not be allowed to veto their choice.
+    const pm = await sb(
+      `/rest/v1/product_master?product_code=eq.${encodeURIComponent(line.product_ref)}&select=sku&limit=1`, env,
+      { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
+    ).catch(() => ({ data: [] }));
+    const aliases = await sb(
+      `/rest/v1/sku_map?product_code=eq.${encodeURIComponent(line.product_ref)}&select=channel_sku&limit=20`, env,
+      { headers: { 'Accept-Profile': 'sales', 'Content-Profile': 'sales' } },
+    ).catch(() => ({ data: [] }));
+    const skus = [...new Set([pm.data?.[0]?.sku, ...(aliases.data || []).map(a => a.channel_sku)]
+      .map(s => (s || '').trim()).filter(Boolean))];
+    if (!skus.length) return LOT_STORE_URL;
+    const inList = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+    const pp = await sb(
+      `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=handle&limit=1`, env,
+    ).catch(() => ({ data: [] }));
+    const handle = pp.data?.[0]?.handle;
+    return handle ? `${LOT_STORE_URL}/products/${handle}` : LOT_STORE_URL;
+  }
+
+  // Typed, not picked — the ~98% case. Infer, but only when the destination is not in doubt.
+  const candidates = await matchProductsFromText(env, line?.product_code, line?.product_variant);
+  if (!candidates.length) return LOT_STORE_URL;
+  const handle = await singleHandleFor(env, candidates);
   return handle ? `${LOT_STORE_URL}/products/${handle}` : LOT_STORE_URL;
 }
 
