@@ -865,6 +865,7 @@ async function handleGet(action, params, auth, env) {
     case 'getShifts':        return getShifts(params, auth, env);
     case 'getRoutingConfig': return getRoutingConfig(params, auth, env);
     case 'getTags':          return getTags(params, auth, env);
+    case 'getMetaSendFailures': return getMetaSendFailures(params, auth, env); // admin worklist feeding diagIgRecipient
     case 'getCannedResponses': return getCannedResponses(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
@@ -6892,6 +6893,70 @@ async function metaHandleMessage(channel, ev, env) {
   }
 }
 
+
+// The worklist that feeds the probe. A refused Meta send has persisted its error since S314
+// (`cs_wa_messages.status='failed'` + `status_error`), but nothing surfaced it: the only way to
+// find one was to know a customer's handle and go looking. That is why the 2026-08-26 code-200
+// report sat undiagnosed — not because the data was missing, but because reaching it needed a
+// hand-written query and then a thread UUID typed into a probe with no UI.
+//
+// ⚠️ Groups by THREAD, not by message. Four identical refusals on one chat are one problem, and
+// a per-message list buries a second affected customer under a retry storm (phani4449 pressed
+// send 4 times; rahul.sukhija 3). `attempts` keeps the retry count visible without spending rows.
+// ⚠️ `error_code` is parsed out of the stored blob rather than stored separately, because the
+// blob is what Meta actually said and is the thing worth showing verbatim — a parsed code is a
+// convenience for sorting, never the record.
+async function getMetaSendFailures(params, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const days = Math.min(Math.max(Number(params.get('days')) || 14, 1), 90);
+  const sinceISO = new Date(Date.now() - days * 86400000).toISOString();
+  const r = await sb(`/rest/v1/cs_wa_messages`
+    + `?status=eq.failed&status_error=not.is.null&created_at=gte.${encodeURIComponent(sinceISO)}`
+    + `&select=thread_id,created_at,status_error,body,sent_by_name`
+    + `&order=created_at.desc&limit=500`, env);
+  if (!r.ok) return err('failed to load send failures', 500);
+  const rows = r.data || [];
+  if (!rows.length) return ok({ failures: [], days });
+
+  // One batched read for the threads — never a lookup per row (CORE.md global invariant).
+  const ids = [...new Set(rows.map(m => m.thread_id).filter(Boolean))];
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=in.(${ids.join(',')})`
+    + `&select=id,channel,customer_handle,customer_name,external_user_id,customer_window_until,thread_state`, env);
+  const byId = Object.fromEntries((tRes.data || []).map(t => [t.id, t]));
+
+  const grouped = new Map();
+  for (const m of rows) {
+    let parsed = null;
+    try { parsed = JSON.parse(m.status_error); } catch { /* keep raw; malformed is still evidence */ }
+    const code = parsed?.code ?? null;
+    const key = `${m.thread_id}|${code}`;
+    const prev = grouped.get(key);
+    if (prev) { prev.attempts += 1; prev.first_at = m.created_at; continue; }
+    const t = byId[m.thread_id] || {};
+    grouped.set(key, {
+      thread_id: m.thread_id, attempts: 1,
+      last_at: m.created_at, first_at: m.created_at,
+      channel: t.channel || null,
+      customer_handle: t.customer_handle || null,
+      customer_name: t.customer_name || null,
+      recipient_id: t.external_user_id || null,
+      thread_state: t.thread_state || null,
+      // Whether the 24h window was open AT THE ATTEMPT — the single fact that separates a
+      // code-10 (legitimately outside the window) from a code-200 (refused while inside it).
+      // Computing it against now() instead would relabel every old failure as "window shut".
+      window_open_at_attempt: !!(t.customer_window_until
+        && new Date(t.customer_window_until).getTime() > new Date(m.created_at).getTime()),
+      customer_window_until: t.customer_window_until || null,
+      error_code: code,
+      error_message: parsed?.message || null,
+      error_raw: m.status_error,
+      last_body_snippet: (m.body || '').slice(0, 140),
+      sent_by_name: m.sent_by_name || null,
+    });
+  }
+  const failures = [...grouped.values()].sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
+  return ok({ failures, days, message_rows_scanned: rows.length });
+}
 
 // READ-ONLY probe for the recurring "Meta send failed ... code 200 Permissions error" report
 // (Pruthvi 2026-08-26). That code is NOT the past-24h human_agent block (code 10) and NOT an

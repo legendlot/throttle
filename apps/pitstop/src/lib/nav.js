@@ -23,6 +23,7 @@ export const NAV_SETUP = [
   { id: 'myop',        label: 'MyOp Accounts', route: '/admin/myop',         icon: 'phone', requires: 'cs_ticket_admin' },
   { id: 'telephony',   label: 'Telephony',     route: '/admin/telephony',    icon: 'phone', requires: 'cs_ticket_admin' },
   { id: 'wa',          label: 'WA Templates',  route: '/admin/wa-templates', icon: 'msg',   requires: 'cs_ticket_admin' },
+  { id: 'meta',        label: 'Meta Diagnostics', route: '/admin/meta',     icon: 'alert', requires: 'cs_ticket_admin' },
   { id: 'tags',        label: 'Tags',          route: '/admin/tags',         icon: 'list',  requires: 'cs_ticket_admin' },
   { id: 'canned',      label: 'Canned Responses', route: '/admin/canned',  icon: 'msg',   requires: 'cs_ticket_manage' },
 ];
@@ -52,6 +53,7 @@ const CRUMBS = {
   '/admin/myop':          { crumb: 'Setup · Admin',    title: 'MyOperator Accounts' },
   '/admin/telephony':     { crumb: 'Setup · Admin',    title: 'Telephony' },
   '/admin/wa-templates':  { crumb: 'Setup · Admin',    title: 'WhatsApp Templates' },
+  '/admin/meta':          { crumb: 'Setup · Admin',    title: 'Meta Diagnostics' },
   '/admin/tags':          { crumb: 'Setup · Admin',    title: 'Tags' },
   '/admin/canned':        { crumb: 'Setup · Admin',    title: 'Canned Responses' },
   '/manual':              { crumb: 'Help',             title: 'System Manual' },

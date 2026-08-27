@@ -3,6 +3,23 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.10.0] - 2026-08-27
+### Added
+- Meta Diagnostics (`/admin/meta`): a new admin chapter for the screen that lists refused
+  Instagram/Messenger sends and probes a chat to find out why. Documents the four error codes
+  actually observed on this estate (10 / 100 / 190 / 200), how to read the probe's `me` vs
+  `recipient` result, and that Diagnose sends nothing.
+- Carries the standing warning that the raw Meta error must not be translated into an
+  explanation: in August 2026 an error was paraphrased from documentation rather than measured,
+  and the resulting copy told agents a reply would send while it was silently failing.
+
+### Note
+- `manual.json` was already at **1.9.0** with no matching entry in this file — the version was
+  bumped by the S317 lane alongside the Closure Requests queue tab and the business-hours
+  default, and the changelog step was missed. Recorded here rather than renumbered, since the
+  PDF for that version has already been built and this file's own rule is that the version on
+  the cover must match. 1.9.0's content is that lane's to describe.
+
 ## [1.8.0] - 2026-08-26
 ### Added
 - The Inbox: new "If a whole channel goes quiet" section for the channel-health banner.

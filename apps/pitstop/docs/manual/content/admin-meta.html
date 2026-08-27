@@ -1,0 +1,43 @@
+<p class="lead">Meta Diagnostics answers one question: <strong>why did Instagram or Messenger refuse to send a reply?</strong> When an agent&rsquo;s message to a customer bounces, the refusal is recorded here with Meta&rsquo;s own error, and you can probe the chat to see whether the problem is our connection or that particular customer.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Diagnosing refused Instagram / Messenger replies.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read only. It never sends a message.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Records from</div><div class="g-val">26 Aug 2026 onward.</div></div>
+</div>
+
+<h2 class="sec">Reading the list</h2>
+<p>Each row is <strong>one chat and one error code</strong>, not one message &mdash; if an agent pressed send four times and it failed four times, that is a single row with <strong>Attempts&nbsp;4</strong>. <strong>Window</strong> says whether the 24-hour reply window was open <em>at the moment of the attempt</em>, which is the fact that separates a normal out-of-hours refusal from a genuine fault. Use the range selector to look further back.</p>
+
+<h2 class="sec">What the error codes mean</h2>
+<table class="tbl">
+  <thead><tr><th>Code</th><th>Meaning</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">10</td><td>Outside the 24-hour window and our &ldquo;Human Agent&rdquo; permission is still pending Meta review.</td><td>Nothing. This is expected behaviour, not a fault. The chat reopens if the customer writes again.</td></tr>
+    <tr><td class="mono">100</td><td>Invalid parameter &mdash; almost always a reply longer than 2,000 characters.</td><td>Shorten the reply. The composer now warns before this happens.</td></tr>
+    <tr><td class="mono">190</td><td>Our access token has expired or been revoked. Affects <em>every</em> chat, not one.</td><td>Tell Afshaan. Replying from the Instagram app still works meanwhile.</td></tr>
+    <tr><td class="mono">200</td><td>Permissions error, refused for that <strong>one recipient</strong> while other chats send normally.</td><td>Press <strong>Diagnose</strong> on the row. This is the case the probe exists for.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Diagnose</h2>
+<p><strong>Diagnose</strong> makes two read-only checks against Meta using the same credential the reply would have used: one for our own account (<span class="mono">me</span>) and one for the customer (<span class="mono">recipient</span>). Read the result this way:</p>
+<div class="steps">
+  <p><strong>1.</strong> <span class="mono">me</span> succeeds and <span class="mono">recipient</span> succeeds &mdash; our connection and the customer are both fine; the refusal is about the message or the window, not the chat.</p>
+  <p><strong>2.</strong> <span class="mono">me</span> succeeds but <span class="mono">recipient</span> fails &mdash; our connection is healthy and Meta is refusing this specific person. The response body is the evidence of why.</p>
+  <p><strong>3.</strong> <span class="mono">me</span> also fails &mdash; the problem is our token, not the customer. That is an Afshaan job, and it will be affecting everybody.</p>
+</div>
+
+<div class="callout">
+  <div class="c-title">&#9432; It sends nothing</div>
+  <p>Diagnose is safe to press at any time, on any chat, as often as you like. It reads two things from Meta and writes nothing &mdash; the customer sees no message and the conversation is not touched.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Do not translate the raw result into an explanation</div>
+  <p>The probe output is shown exactly as Meta returned it, on purpose. In August 2026 a Meta error was explained from the documentation rather than from a measurement, and the wording that reached agents told them a reply would go through while it was in fact failing silently. If the result does not obviously say what is wrong, that is the honest answer &mdash; pass it to Afshaan rather than guessing at a cause.</p>
+</div>
+
+<h2 class="sec">Probing a chat by hand</h2>
+<p>Refusals are only recorded from 26 August 2026 onward, so an older report will not appear in the list. The box at the bottom takes a conversation id directly and probes it the same way.</p>
