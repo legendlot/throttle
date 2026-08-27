@@ -2644,8 +2644,19 @@ export default {
                  || (env.IGNITIONOPS_INGEST_TOKEN && tok === env.IGNITIONOPS_INGEST_TOKEN)))
         return err('unauthorised', 401);
       const b = await request.json().catch(() => ({}));
-      const base = await LINKS.getLinkBaseUrl(env);
-      if (!base) return err('link_host_unconfigured', 503);
+      // ⚠️ Still fails CLOSED — both branches 503, for the reason in the comment above. What
+      // changed 2026-08-27 is that they no longer tell the SAME story. `link_host_unconfigured`
+      // used to be returned when the settings row could not be READ, so an outage that took
+      // `comms` off the PostgREST schema list looked exactly like someone having switched the
+      // link feature off, and the caller (Ignition) swallowed it as a configuration choice.
+      const { url: base, reason } = await LINKS.readLinkBaseUrl(env);
+      if (!base) {
+        if (reason === 'read_failed') {
+          console.error('[campaign-link] settings unreadable — refusing to mint');
+          return err('link_base_read_failed', 503);
+        }
+        return err('link_host_unconfigured', 503);
+      }
       const r = await LINKS.createCampaignLink(env, {
         slug: b.slug, target: b.target_url, title: b.title || null, utm: b.utm || null,
         userId: null,                       // no person behind a service call — never invent one

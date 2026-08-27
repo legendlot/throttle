@@ -53,12 +53,50 @@ function newLinkCode() {
  * Fail-soft on an unreadable settings row — the send path must never be lost to an attribution
  * lookup (same rule as `utm_defaults` in send.js).
  */
-async function getLinkBaseUrl(env) {
+/**
+ * Read the link base URL AND say why it is missing when it is.
+ *
+ * ⚠️ Added 2026-08-27 after an incident: `getLinkBaseUrl` returned null for BOTH "the feature is
+ * switched off" and "I could not read the settings row", and every caller had to guess. When
+ * `comms` silently dropped off the PostgREST exposed-schema list, every settings read failed, and
+ * the campaign-link seam reported `link_host_unconfigured` — so a total database outage presented
+ * as a deliberately-off feature flag while `link_base_url` was present and correct the whole time.
+ * It cost an hour of looking in the wrong place. Same silent-degrade family as the S309
+ * `getCatalogs` error-object-as-empty-array.
+ *
+ * Returns `{ url, reason }` with reason one of:
+ *   'ok'          — url is a usable base
+ *   'unset'       — the row was read fine and link_base_url is genuinely empty (feature off)
+ *   'read_failed' — the settings row could not be read at all. NOT the same statement, and the
+ *                   only one that means something is broken rather than switched off.
+ */
+async function readLinkBaseUrl(env) {
+  let s;
   try {
-    const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=link_base_url&limit=1', env);
-    const v = (s.ok && s.data?.[0]?.link_base_url) || null;
-    return v ? String(v).replace(/\/+$/, '') : null;
-  } catch { return null; }
+    s = await A.sbComms('/rest/v1/settings?id=eq.1&select=link_base_url&limit=1', env);
+  } catch (e) {
+    console.error('[links] settings read THREW — link base unknown, not unset:', String(e?.message || e));
+    return { url: null, reason: 'read_failed' };
+  }
+  if (!s || !s.ok) {
+    // Logged even though callers fail soft: a fail-soft path that never says anything is how this
+    // hid for an hour. The log is the only trace a whole-schema outage leaves on the send path.
+    console.error('[links] settings read FAILED — link base unknown, not unset:', JSON.stringify(s?.data || null));
+    return { url: null, reason: 'read_failed' };
+  }
+  const v = s.data?.[0]?.link_base_url || null;
+  if (!v) return { url: null, reason: 'unset' };
+  return { url: String(v).replace(/\/+$/, ''), reason: 'ok' };
+}
+
+/**
+ * Back-compatible accessor: string, or null when there is no usable base for ANY reason.
+ * The send path and the journey workflow both treat null as "carry on with an untracked link",
+ * which is deliberate (see the fail-soft note above) — they keep that behaviour untouched. Callers
+ * that need to tell a broken read from a disabled feature use `readLinkBaseUrl` instead.
+ */
+async function getLinkBaseUrl(env) {
+  return (await readLinkBaseUrl(env)).url;
 }
 
 /**
@@ -540,7 +578,7 @@ async function applyButtonRedirects(components, { template, baseUrl, mint } = {}
 }
 
 module.exports = {
-  newLinkCode, getLinkBaseUrl, mintLink, resolveLink, targetFor, countsAsClick, recordClick,
+  newLinkCode, getLinkBaseUrl, readLinkBaseUrl, mintLink, resolveLink, targetFor, countsAsClick, recordClick,
   buildButtonTarget, applyButtonRedirects,
   istDayOf, clickSource, refererHost, parseUa, visitorKey,
   normalizeSlug, createCampaignLink, updateCampaignLink, SLUG_RE,
