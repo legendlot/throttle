@@ -79,6 +79,7 @@ function DetailContent() {
       gate_datetime: gp.gate_datetime ? toLocalInput(gp.gate_datetime) : '',
       vehicle_no: gp.vehicle_no || '', person_name: gp.person_name || '', person_phone: gp.person_phone || '',
       transporter_name: gp.transporter_name || '', box_count: gp.box_count ?? '', purpose: gp.purpose || '',
+      direction: gp.direction, direction_change_reason: '',
       party_name: gp.party_name || '', reference_no: gp.reference_no || '', material_description: gp.material_description || '',
       remarks: gp.remarks || '', is_returnable: !!gp.is_returnable, expected_return_date: gp.expected_return_date || '',
     });
@@ -95,6 +96,11 @@ function DetailContent() {
         vehicle_no: ef.vehicle_no, person_name: ef.person_name, person_phone: ef.person_phone,
         transporter_name: ef.transporter_name, box_count: ef.box_count === '' ? null : ef.box_count,
         purpose: ef.purpose, party_name: ef.party_name, reference_no: ef.reference_no,
+        // Only sent when it actually changed — the worker requires a valid new-direction
+        // purpose AND a reason alongside it, and refuses the pair otherwise.
+        ...(ef.direction !== gp.direction
+          ? { direction: ef.direction, direction_change_reason: ef.direction_change_reason }
+          : {}),
         material_description: ef.material_description, remarks: ef.remarks,
         is_returnable: ef.is_returnable, expected_return_date: ef.is_returnable && ef.expected_return_date ? ef.expected_return_date : null,
       };
@@ -174,7 +180,14 @@ function DetailContent() {
 
   const isVoid = gp.status === 'void';
   const rst = returnState(gp);
-  const purposes = GP_PURPOSES[gp.direction] || [];
+  // ⚠️ Follows the EDITED direction while editing, not the stored one — otherwise flipping
+  // direction would leave the old direction's purposes on screen and let the user re-pick an
+  // illegal one (which the worker would then reject, after they'd typed everything).
+  const editDir  = editing ? (ef.direction || gp.direction) : gp.direction;
+  const purposes = GP_PURPOSES[editDir] || [];
+  const dirChanged = editing && ef.direction !== gp.direction;
+  // A direction flip is only submittable complete: new-direction purpose + a reason.
+  const dirBlocked = dirChanged && (!ef.purpose || !String(ef.direction_change_reason || '').trim());
 
   return (
     <div style={{ color: 'var(--t1)', maxWidth: 860 }}>
@@ -203,7 +216,25 @@ function DetailContent() {
           <div style={pbody}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <div><label style={lbl}>Date &amp; time</label><input style={input} type="datetime-local" value={ef.gate_datetime} onChange={(e) => setE('gate_datetime', e.target.value)} /></div>
-              <div><label style={lbl}>Purpose</label><select style={input} value={ef.purpose} onChange={(e) => setE('purpose', e.target.value)}>{purposes.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</select></div>
+              <div>
+                <label style={lbl}>Direction</label>
+                <select style={input} value={ef.direction} onChange={(e) => {
+                  // Clearing the purpose is the point: the old one belongs to the old
+                  // direction, so it MUST be re-picked rather than silently carried over.
+                  // That carry-over is precisely how GP-305 broke.
+                  setEf((p) => ({ ...p, direction: e.target.value, purpose: '' }));
+                }}>
+                  <option value="inbound">{DIRECTION_LABEL.inbound}</option>
+                  <option value="outbound">{DIRECTION_LABEL.outbound}</option>
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Purpose{dirChanged && !ef.purpose ? ' — re-pick for the new direction' : ''}</label>
+                <select style={input} value={ef.purpose} onChange={(e) => setE('purpose', e.target.value)}>
+                  {!ef.purpose && <option value="">— select —</option>}
+                  {purposes.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                </select>
+              </div>
               <div><label style={lbl}>Vehicle number</label><input style={input} value={ef.vehicle_no} onChange={(e) => setE('vehicle_no', e.target.value)} /></div>
               <div><label style={lbl}>No. of boxes</label><input style={input} type="number" min="0" value={ef.box_count} onChange={(e) => setE('box_count', e.target.value)} /></div>
               <div><label style={lbl}>Driver / person name</label><input style={input} value={ef.person_name} onChange={(e) => setE('person_name', e.target.value)} /></div>
@@ -220,9 +251,31 @@ function DetailContent() {
               {ef.is_returnable && <div style={{ marginTop: 8, maxWidth: 240 }}><label style={lbl}>Expected return date</label><input style={input} type="date" value={ef.expected_return_date} onChange={(e) => setE('expected_return_date', e.target.value)} /></div>}
             </div>
             <div style={{ marginTop: 12 }}><label style={lbl}>Remarks</label><textarea style={{ ...input, minHeight: 40, resize: 'vertical' }} value={ef.remarks} onChange={(e) => setE('remarks', e.target.value)} /></div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <button style={btnP} onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            {dirChanged && (
+              <div style={{ marginTop: 12, border: '1px solid #d9a441', background: 'rgba(217,164,65,0.08)', borderRadius: 4, padding: 12 }}>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#d9a441', marginBottom: 6 }}>
+                  Changing direction: {DIRECTION_LABEL[gp.direction]} → {DIRECTION_LABEL[ef.direction]}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--t2)', lineHeight: 1.5, marginBottom: 10 }}>
+                  This pass has already been printed and signed. The number stays the same, so the paper
+                  copy in the security file remains valid — but the movement it records is being corrected,
+                  so say why. This is recorded against {gp.gate_pass_no}.
+                </div>
+                <label style={lbl}>Reason for the direction change *</label>
+                <input style={input} value={ef.direction_change_reason}
+                  onChange={(e) => setE('direction_change_reason', e.target.value)}
+                  placeholder="e.g. logged against the wrong truck — this one was the outbound job-work vehicle" />
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button style={{ ...btnP, opacity: (saving || dirBlocked) ? 0.5 : 1, cursor: (saving || dirBlocked) ? 'not-allowed' : 'pointer' }}
+                onClick={saveEdit} disabled={saving || dirBlocked}>{saving ? 'Saving…' : 'Save'}</button>
               <button style={btnS} onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
+              {dirBlocked && (
+                <span style={{ fontSize: 12, color: 'var(--t3)' }}>
+                  {!ef.purpose ? 'Pick a purpose for the new direction' : 'Give a reason for the direction change'}
+                </span>
+              )}
             </div>
           </div>
         </div>

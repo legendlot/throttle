@@ -8,7 +8,7 @@
 </div>
 
 <h2 class="sec">Inbound or outbound</h2>
-<p>Every pass is one movement in one direction, and the direction is fixed when you create it.</p>
+<p>Every pass is one movement in one direction. You choose the direction when you create it, and if it was logged the wrong way round you can correct it later &mdash; see <em>Fixing a pass logged in the wrong direction</em> below.</p>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Inbound (entry)</div><div class="a-val">Something arriving: a material delivery, returnable goods coming back, or a sample in.</div></div>
   <div class="a-row"><div class="a-key">Outbound (exit)</div><div class="a-val">Something leaving for a non-sale reason: a vendor return, goods going out for job-work or repair, a sample out, scrap, or a transfer to another unit.</div></div>
@@ -32,10 +32,22 @@
 
 <div class="callout warn">
   <div class="c-title">&#9888; Void, never delete</div>
-  <p>A pass cannot be deleted. If one is wrong or cancelled, open it and press <strong>Void</strong> with a reason; the record stays and still prints, but with a VOID watermark across it, so a printed pass can never quietly disappear. Direction is locked once created, so to flip inbound to outbound you void and make a new one.</p>
+  <p>A pass cannot be deleted. If one is wrong or cancelled, open it and press <strong>Void</strong> with a reason; the record stays and still prints, but with a VOID watermark across it, so a printed pass can never quietly disappear. Use Void when the movement did not happen at all &mdash; not merely to fix a wrong direction, which now has its own correction (below) and keeps the pass number.</p>
 </div>
 
 <div class="callout note">
   <div class="c-title">&#9432; This is not customer dispatch</div>
   <p>Gate Pass covers material arrivals and non-sale departures (vendor returns, job-work, samples, scrap, inter-unit transfers). Sending finished products to a customer still goes through the dispatch challan, not here.</p>
+</div>
+
+<h2 class="sec">Fixing a pass logged in the wrong direction</h2>
+<p>If a pass was logged inbound when the vehicle was going out (or the other way round) &mdash; the usual cause being two trucks at the gate close together &mdash; open the pass, press <strong>Edit</strong> and change <strong>Direction</strong>. You do not void it and you do not make a new one: <strong>the pass number stays exactly the same</strong>, so the signed paper copy already filed with security is still the right document.</p>
+<p>Two things are asked of you, and Save stays greyed out until both are done:</p>
+<ol class="steps">
+  <li><span class="s-title">Pick the purpose again.</span> Purposes belong to a direction &mdash; <em>Material receipt</em> is an inbound reason, <em>Job-work out</em> an outbound one &mdash; so the old purpose is cleared and you choose one that fits the new direction. This is deliberate: a pass once ended up marked outbound while still saying "material receipt", which is a document contradicting itself.</li>
+  <li><span class="s-title">Say why.</span> A short reason, recorded against the pass number, because you are changing what a signed security document says.</li>
+</ol>
+<div class="callout note">
+  <div class="c-title">&#9432; When to void instead</div>
+  <p>Correct the direction when the movement happened but was written down the wrong way round. <strong>Void</strong> when the movement did not happen at all, or the pass was raised in error and nothing should have gone through the gate.</p>
 </div>
