@@ -879,6 +879,10 @@ async function handleGet(action, params, auth, env) {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getAgentConversationReport(params, auth, env);
     }
+    case 'getConversationWaitBreakdown': {
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getConversationWaitBreakdown(params, auth, env);
+    }
     case 'getSupportAnalytics': {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getSupportAnalytics(params, auth, env);
@@ -1693,6 +1697,40 @@ async function getAgentConversationReport(params, auth, env) {
     }),
   });
   if (!r.ok) return err('Failed to load agent conversation report', 500);
+  return ok(r.data || {});
+}
+
+// getConversationWaitBreakdown — what the resolution time is MADE OF (S319).
+//
+// Deliberately its OWN RPC rather than more columns on cs_agent_conversation_report:
+// folding it in there cost 9-22x (3.4s -> 30-74s on the YTD range the reports page
+// defaults to) and broke the page outright. This one skips the assigned/closed
+// cohorts, turn-level response times and per-agent rollups it does not need.
+//
+// The page calls it ALONGSIDE the main report and renders the panel only if it
+// returns — so a slow or failed breakdown can never take the report down with it.
+//
+// Afshaan 2026-08-27: the clock is never paused and avg_resolution_min is never
+// redefined; the waits are carved out beside it so they can be subtracted by hand.
+// Its avg_resolution_min is verified byte-identical to the main report's, which is
+// what makes that subtraction valid — if the two ever diverge, the populations have
+// drifted apart and the panel is lying.
+async function getConversationWaitBreakdown(params, auth, env) {
+  const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
+  const to   = params.get('to')   || new Date().toISOString();
+  const channel = params.get('channel') || null;
+  const tagId   = params.get('tag_id')  || null;
+  const businessHours = params.get('business_hours') === 'true';
+
+  const r = await sb('/rest/v1/rpc/cs_conversation_wait_breakdown', env, {
+    method: 'POST',
+    body: JSON.stringify({
+      p_from: from, p_to: to,
+      p_channel: channel, p_tag_id: tagId,
+      p_business_hours: businessHours,
+    }),
+  });
+  if (!r.ok) return err('Failed to load conversation wait breakdown', 500);
   return ok(r.data || {});
 }
 
