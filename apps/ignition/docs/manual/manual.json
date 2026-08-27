@@ -2,63 +2,257 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.3.0",
-  "date": "2026-06-06",
+  "version": "1.4.0",
+  "date": "2026-08-27",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
-    "mkt":  { "label": "Marketer", "name": "Marketing Team", "desc": "Runs influencer deals day to day: finds creators, opens engagements, advances them." },
-    "lead": { "label": "Lead",     "name": "Lead",           "desc": "Adds approval to a marketer's access, plus the reports." },
-    "adm":  { "label": "Admin",    "name": "Admin",          "desc": "Full access including the admin screens (users reference and data import)." }
+    "mkt": {
+      "label": "Marketer",
+      "name": "Marketing Team",
+      "desc": "Runs influencer deals day to day: finds creators, opens engagements, advances them."
+    },
+    "lead": {
+      "label": "Lead",
+      "name": "Lead",
+      "desc": "Adds approval to a marketer's access, plus the reports."
+    },
+    "adm": {
+      "label": "Admin",
+      "name": "Admin",
+      "desc": "Full access including the admin screens (users reference and data import)."
+    }
   },
   "parts": [
     {
       "part": "Getting Started",
       "subtitle": "What Ignition is, how to sign in and get around, and what your role can see.",
       "chapters": [
-        { "id": "intro",      "title": "Welcome to Ignition",          "file": "00-introduction.html", "roles": ["mkt","lead","adm"] },
-        { "id": "navigation", "title": "Signing In & Getting Around",  "file": "01-navigation.html",   "roles": ["mkt","lead","adm"] },
-        { "id": "roles",      "title": "Roles & What You Can See",      "file": "02-roles.html",        "roles": ["mkt","lead","adm"] }
+        {
+          "id": "intro",
+          "title": "Welcome to Ignition",
+          "file": "00-introduction.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "navigation",
+          "title": "Signing In & Getting Around",
+          "file": "01-navigation.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles",
+          "title": "Roles & What You Can See",
+          "file": "02-roles.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Work",
       "subtitle": "The dashboard, the influencer roster, the deal pipeline, and working a single engagement.",
       "chapters": [
-        { "id": "dashboard",        "title": "Dashboard",         "route": "/dashboard",        "file": "work-dashboard.html",  "roles": ["mkt","lead","adm"] },
-        { "id": "influencers",      "title": "Influencers",       "route": "/influencers",      "file": "work-influencers.html","roles": ["mkt","lead","adm"] },
-        { "id": "engagements",      "title": "Engagements",       "route": "/engagements",      "file": "work-engagements.html","roles": ["mkt","lead","adm"] },
-        { "id": "new-deal",         "title": "New Deal",          "route": "/engagements/new",  "file": "work-newdeal.html",    "roles": ["mkt","lead","adm"] },
-        { "id": "engagement-detail","title": "Working an Engagement","route": "/engagements/detail","file": "work-engagementdetail.html","roles": ["mkt","lead","adm"] },
-        { "id": "payments",         "title": "Payments",          "route": "/payments",         "file": "work-payments.html",   "roles": ["mkt","lead","adm"] },
-        { "id": "schedule",         "title": "Schedule",          "route": "/schedule",         "file": "work-schedule.html",   "roles": ["mkt","lead","adm"] }
+        {
+          "id": "dashboard",
+          "title": "Dashboard",
+          "route": "/dashboard",
+          "file": "work-dashboard.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "influencers",
+          "title": "Influencers",
+          "route": "/influencers",
+          "file": "work-influencers.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "engagements",
+          "title": "Engagements",
+          "route": "/engagements",
+          "file": "work-engagements.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "new-deal",
+          "title": "New Deal",
+          "route": "/engagements/new",
+          "file": "work-newdeal.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "engagement-detail",
+          "title": "Working an Engagement",
+          "route": "/engagements/detail",
+          "file": "work-engagementdetail.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "payments",
+          "title": "Payments",
+          "route": "/payments",
+          "file": "work-payments.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "schedule",
+          "title": "Schedule",
+          "route": "/schedule",
+          "file": "work-schedule.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Lists",
       "subtitle": "The proven roster, parked candidates, UGC pipeline, campaigns and discount codes.",
       "chapters": [
-        { "id": "roster",         "title": "Roster",         "route": "/roster",         "file": "lists-roster.html",    "roles": ["mkt","lead","adm"] },
-        { "id": "blist",          "title": "B-List",         "route": "/blist",          "file": "lists-blist.html",     "roles": ["mkt","lead","adm"] },
-        { "id": "ugc",            "title": "UGC Pipeline",   "route": "/ugc",            "file": "lists-ugc.html",       "roles": ["mkt","lead","adm"] },
-        { "id": "campaigns",      "title": "Campaigns",      "route": "/campaigns",      "file": "lists-campaigns.html", "roles": ["mkt","lead","adm"] },
-        { "id": "discount-codes", "title": "Discount Codes", "route": "/discount-codes", "file": "lists-codes.html",     "roles": ["mkt","lead","adm"] }
+        {
+          "id": "roster",
+          "title": "Roster",
+          "route": "/roster",
+          "file": "lists-roster.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "blist",
+          "title": "B-List",
+          "route": "/blist",
+          "file": "lists-blist.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "ugc",
+          "title": "UGC Pipeline",
+          "route": "/ugc",
+          "file": "lists-ugc.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "campaigns",
+          "title": "Campaigns",
+          "route": "/campaigns",
+          "file": "lists-campaigns.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "discount-codes",
+          "title": "Discount Codes",
+          "route": "/discount-codes",
+          "file": "lists-codes.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Analyze",
       "subtitle": "Spend and performance reporting.",
       "chapters": [
-        { "id": "targets", "title": "Targets", "route": "/targets", "file": "analyze-targets.html", "roles": ["mkt","lead","adm"] },
-        { "id": "reports", "title": "Reports", "route": "/reports", "file": "analyze-reports.html", "roles": ["lead","adm"] }
+        {
+          "id": "targets",
+          "title": "Targets",
+          "route": "/targets",
+          "file": "analyze-targets.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "reports",
+          "title": "Reports",
+          "route": "/reports",
+          "file": "analyze-reports.html",
+          "roles": [
+            "lead",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Admin",
       "subtitle": "Where user roles are managed, and how the legacy sheet is imported.",
       "chapters": [
-        { "id": "users",  "title": "User Roles",  "route": "/admin/users",  "file": "admin-users.html",  "roles": ["adm"] },
-        { "id": "import", "title": "Sheet Import", "route": "/admin/import", "file": "admin-import.html", "roles": ["adm"] }
+        {
+          "id": "users",
+          "title": "User Roles",
+          "route": "/admin/users",
+          "file": "admin-users.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "import",
+          "title": "Sheet Import",
+          "route": "/admin/import",
+          "file": "admin-import.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     }
   ]
