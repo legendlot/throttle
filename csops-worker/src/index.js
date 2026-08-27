@@ -7000,9 +7000,23 @@ async function diagIgRecipient(body, auth, env) {
     const d = await r.json().catch(() => ({}));
     return { http_status: r.status, ok: r.ok, body: d };
   };
-  const [me, recipient] = await Promise.all([
+  // ⚠️ `me` + `recipient` ALONE CANNOT DIAGNOSE A CODE-200 — measured 2026-08-27 (S318).
+  // Probed the failing thread against two threads that were sending fine minutes earlier: all
+  // three returned me 200 + recipient 200, same token_source, same provider_account_id, differing
+  // only in follower_count and display name. A profile GET says the account EXISTS; it says
+  // nothing about whether we may MESSAGE it, which is the actual question. Twin 200s must
+  // therefore never be read as "everything is fine" — that reading is what the controls disproved.
+  //
+  // `conversation` is the discriminating call: the messaging edge, scoped to this one user. It is
+  // the closest read-only proxy for "is this conversation reachable by us" without sending, and
+  // unlike a profile fetch it is answered by the messaging permission layer that issues the 200.
+  // Still read-only. If it too comes back identical on a failing and a healthy thread, then the
+  // refusal is invisible to every GET we have and the ONLY remaining instrument is a real send
+  // on a live window — say so plainly rather than inventing a cause (S262/S263).
+  const [me, recipient, conversation] = await Promise.all([
     get('/me?fields=id,username'),
     get(`/${encodeURIComponent(thread.external_user_id)}?fields=id,username,name,is_verified_user,follower_count`),
+    get(`/me/conversations?user_id=${encodeURIComponent(thread.external_user_id)}&fields=id,updated_time,message_count`),
   ]);
 
   return ok({
@@ -7024,6 +7038,7 @@ async function diagIgRecipient(body, auth, env) {
     customer_window_until: thread.customer_window_until,
     me,
     recipient,
+    conversation,
   });
 }
 
