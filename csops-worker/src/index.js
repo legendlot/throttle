@@ -6730,9 +6730,22 @@ const RETRO_ASSIGN_PER_RUN = 10;
 const RETRO_ASSIGN_MAX_AGE_DAYS = 7;
 
 async function retroAssignUnownedThreads(env) {
+  // ⚠️ Only sweep channels the router can actually serve. `cs_autoassign_thread` resolves agents
+  // through `cs_routing_config`, which has rows for instagram / messenger / whatsapp and NONE for
+  // email — so an email thread ALWAYS returns null. Without this filter the sweep picks
+  // newest-first across every channel and can spend its whole per-run budget on threads that are
+  // structurally unassignable, then report `assigned: 0` and look broken. Found by running the
+  // RPC by hand on the newest eligible thread, which happened to be email.
+  // ⚠️ Read from config rather than hardcoding: disabling a channel there must stop the sweep for
+  // it too, or the two disagree about what is being routed.
+  const cfg = await sb('/rest/v1/cs_routing_config?auto_assign_enabled=is.true&select=channel', env);
+  const channels = (Array.isArray(cfg.data) ? cfg.data : []).map(c => c.channel).filter(Boolean);
+  if (!channels.length) return { ok: true, candidates: 0, assigned: 0, reason: 'no_routable_channels' };
+
   const cutoff = new Date(Date.now() - RETRO_ASSIGN_MAX_AGE_DAYS * 86400000).toISOString();
   const q = `/rest/v1/cs_wa_threads`
     + `?thread_state=eq.open&assigned_agent_id=is.null`
+    + `&channel=in.(${channels.map(encodeURIComponent).join(',')})`
     + `&or=(last_message_at.gte.${encodeURIComponent(cutoff)},`
     + `and(last_message_at.is.null,created_at.gte.${encodeURIComponent(cutoff)}))`
     + `&select=id,channel,last_message_at,created_at`
