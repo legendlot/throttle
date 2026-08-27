@@ -71,7 +71,11 @@ export default function MetaDiagnosticsPage() {
     try {
       const r = await csopsGet('getMetaSendFailures', { days: String(d) }, session);
       setFailures(r?.failures || []);
-      setError(null);
+      // A degraded enrichment still lists the refusals, but the rows will say "(unknown)"
+      // instead of a handle — say why, rather than letting it read as missing data.
+      setError(r?.enrichment_error
+        ? `Customer details could not be loaded, so rows show as (unknown). The refusals below are still accurate. ${r.enrichment_error}`
+        : null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); setFirstLoadDone(true); }
   }, [session]);
@@ -151,7 +155,9 @@ export default function MetaDiagnosticsPage() {
                 return (
                   <tr key={`${f.thread_id}-${f.error_code}`} style={{ borderTop: '1px solid #222' }}>
                     <td style={{ padding: '8px' }}>
-                      <div style={{ fontWeight: 600 }}>{f.customer_handle || f.customer_name || '(unknown)'}</div>
+                      {/* A thread has a handle (IG/Messenger) or a phone (WhatsApp) — never a
+                          `customer_name`; that column lives on cs_tickets, not cs_wa_threads. */}
+                      <div style={{ fontWeight: 600 }}>{f.customer_handle || f.customer_phone || '(unknown)'}</div>
                       <div style={{ fontSize: 11, color: 'var(--text2,#8a8a8a)', fontFamily: 'var(--mono,monospace)' }}>{f.recipient_id || '—'}</div>
                     </td>
                     <td style={{ padding: '8px', fontSize: 12 }}>{f.channel || '—'}</td>

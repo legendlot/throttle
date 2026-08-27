@@ -6914,15 +6914,29 @@ async function getMetaSendFailures(params, auth, env) {
     + `?status=eq.failed&status_error=not.is.null&created_at=gte.${encodeURIComponent(sinceISO)}`
     + `&select=thread_id,created_at,status_error,body,sent_by_name`
     + `&order=created_at.desc&limit=500`, env);
-  if (!r.ok) return err('failed to load send failures', 500);
-  const rows = r.data || [];
+  // ⚠️ `sb()` returns the PARSED BODY on failure, which for PostgREST is an ERROR OBJECT, not an
+  // array. `(r.data || [])` therefore does NOT make it array-shaped, and a later `.map` on it
+  // throws a TypeError — which in a Worker escapes as an unhandled exception, i.e. a 500 with NO
+  // CORS headers, so the browser only ever sees "Failed to fetch" and the real error is invisible
+  // from the app. That is exactly how this shipped: `customer_name` does not exist on
+  // `cs_wa_threads` (it is a `cs_calls` column), PostgREST answered 42703, and the page showed a
+  // CORS message that pointed nowhere near the cause. Always test the SHAPE, never just `|| []`.
+  if (!r.ok || !Array.isArray(r.data)) {
+    return err(`failed to load send failures: ${JSON.stringify(r.data)?.slice(0, 300)}`, 500);
+  }
+  const rows = r.data;
   if (!rows.length) return ok({ failures: [], days });
 
   // One batched read for the threads — never a lookup per row (CORE.md global invariant).
   const ids = [...new Set(rows.map(m => m.thread_id).filter(Boolean))];
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=in.(${ids.join(',')})`
-    + `&select=id,channel,customer_handle,customer_name,external_user_id,customer_window_until,thread_state`, env);
-  const byId = Object.fromEntries((tRes.data || []).map(t => [t.id, t]));
+    + `&select=id,channel,customer_handle,customer_phone,external_user_id,customer_window_until,thread_state`, env);
+  // Thread detail is ENRICHMENT — the refusals and their raw Meta errors are the actual payload,
+  // and they are still readable without a handle. So a failed enrichment degrades and says so,
+  // rather than taking down the one screen built to diagnose failures.
+  const threadRows = Array.isArray(tRes.data) ? tRes.data : [];
+  const enrichmentError = Array.isArray(tRes.data) ? null : (JSON.stringify(tRes.data)?.slice(0, 300) || 'unknown');
+  const byId = Object.fromEntries(threadRows.map(t => [t.id, t]));
 
   const grouped = new Map();
   for (const m of rows) {
@@ -6938,7 +6952,7 @@ async function getMetaSendFailures(params, auth, env) {
       last_at: m.created_at, first_at: m.created_at,
       channel: t.channel || null,
       customer_handle: t.customer_handle || null,
-      customer_name: t.customer_name || null,
+      customer_phone: t.customer_phone || null,
       recipient_id: t.external_user_id || null,
       thread_state: t.thread_state || null,
       // Whether the 24h window was open AT THE ATTEMPT — the single fact that separates a
@@ -6955,7 +6969,7 @@ async function getMetaSendFailures(params, auth, env) {
     });
   }
   const failures = [...grouped.values()].sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
-  return ok({ failures, days, message_rows_scanned: rows.length });
+  return ok({ failures, days, message_rows_scanned: rows.length, enrichment_error: enrichmentError });
 }
 
 // READ-ONLY probe for the recurring "Meta send failed ... code 200 Permissions error" report
