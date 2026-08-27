@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.11.0] - 2026-08-27
+### Added
+- The Inbox: chats can now arrive in **Mine** without being claimed. Explains the retro-assignment
+  sweep in the agent's terms — small batches, last 7 days only, Release/Transfer if it is not
+  yours — and why it exists (a chat with a name on it gets answered; a shared pile does not).
+- The Inbox: a third health banner, **"Outgoing messages: sending is down"**, distinct from the
+  per-channel ones because it means nothing is leaving at all. Tells agents the two things that
+  actually mattered during the 27 Aug outage: incoming is safe, and retyping a failed reply will
+  not help.
+
 ## [1.10.0] - 2026-08-27
 ### Added
 - Meta Diagnostics (`/admin/meta`): a new admin chapter for the screen that lists refused
