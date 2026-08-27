@@ -322,7 +322,9 @@ export default function AmazonPage() {
             <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order · excl. cancelled + replacements" now={seg.aov} prev={segP.aov} />
             <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · orders, not units`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
-            <Kpi hue={HUE.returns} lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
+            {/* Units-primary to match RTV (Akshay, #bugs 2026-08-26 1787741218) — both tiles now
+                lead with units; the refunded value moves to the subline. */}
+            <Kpi hue={HUE.returns} lbl="RTO" val={fmtInt(ret.rto.units)} sub={`undelivered · ${inr(ret.rto.value)} refunded`} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="RTV" val={fmtInt(ret.rtvReported.units || ret.rtv.units)} sub={ret.rtvReported.units ? `units returned · ${inr(ret.rtv.value)} refunded so far` : `${inr(ret.rtv.value)} · customer returns`} tone="neutral" />
             <Kpi hue={HUE.neutral} lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
             {/* S274 — REVERSED from S273 on Afshaan's call. Free replacements Amazon ships against an
