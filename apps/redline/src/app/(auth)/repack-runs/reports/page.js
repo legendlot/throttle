@@ -105,6 +105,9 @@ export default function RepackReportsPage() {
   const [to, setTo]     = useState(init.to);
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(false);
+  // Released-but-not-repacked is CURRENT STATE, not a date range — it deliberately does not
+  // move with the from/to pickers above, and loads on its own.
+  const [stranded, setStranded] = useState(null);
 
   async function load() {
     if (!session || !allowed) return;
@@ -123,6 +126,15 @@ export default function RepackReportsPage() {
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [session, from, to]);
 
+  async function loadStranded() {
+    if (!session || !allowed) return;
+    try {
+      const r = await workerFetch('getReleasedNotRepacked', { data: {} }, session);
+      if (r?.ok) setStranded(r.data);
+    } catch (_) { /* panel degrades to hidden; the range reports still work */ }
+  }
+  useEffect(() => { loadStranded(); /* eslint-disable-next-line */ }, [session]);
+
   function applyPreset(p) {
     setPreset(p);
     const r = rangeFor(p);
@@ -139,8 +151,63 @@ export default function RepackReportsPage() {
 
   const t = data?.totals || {};
 
+  const strandedRows = (stranded?.rows || []).map(r => ({
+    ...r,
+    age_label:    r.age_days == null ? '—' : `${r.age_days}d`,
+    released_day: r.released_at ? String(r.released_at).slice(0, 10) : '—',
+    // A car whose paired remote is NOT also held has drifted — the pair must move together.
+    pair_flag:    r.remote_upc ? (r.remote_held ? 'paired' : '⚠ remote not held') : 'no remote',
+  }));
+
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {stranded && stranded.total_cars > 0 && (
+        <Panel
+          header={`Released, not repacked — ${stranded.total_cars} car${stranded.total_cars === 1 ? '' : 's'}`
+                  + ` · ${stranded.total_remotes} remote${stranded.total_remotes === 1 ? '' : 's'} riding them`
+                  + (stranded.aged_over_14d ? ` · ${stranded.aged_over_14d} over 14 days` : '')
+                  + (stranded.oldest_age_days != null ? ` · oldest ${stranded.oldest_age_days}d` : '')}
+          headerAction={strandedRows.length
+            ? <button style={btnS} onClick={() => downloadCsv('released-not-repacked.csv', strandedRows,
+                [{ key: 'car_upc', label: 'Car UPC' }, { key: 'product', label: 'Product' },
+                 { key: 'color', label: 'Colour' }, { key: 'repack_run_no', label: 'Repack run' },
+                 { key: 'to_channel', label: 'To channel' }, { key: 'released_day', label: 'Released' },
+                 { key: 'age_label', label: 'Age' }, { key: 'released_by', label: 'Released by' },
+                 { key: 'remote_upc', label: 'Remote UPC' }, { key: 'pair_flag', label: 'Pair' }])}>CSV</button>
+            : null}
+        >
+          <div style={{ padding: '0 0 8px', fontSize: 11.5, color: 'var(--t3)' }}>
+            Dispatch released these at <strong>Repack Release</strong> and they never came back at
+            Repack In. They are out of the dispatch flow until they do.
+            {stranded.total_remotes > 0 && <> The remotes have no release row of their own — they ride their car — so they must be moved with it.</>}
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                {['Car UPC','Product','Colour','Repack run','To','Released','Age','Released by','Pair'].map(h =>
+                  <th key={h} style={h === 'Age' ? { ...th, textAlign: 'right' } : th}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {strandedRows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ ...td, fontFamily: 'var(--mono)' }}>{r.car_upc}</td>
+                    <td style={td}>{r.product ?? '—'}</td>
+                    <td style={td}>{r.color ?? '—'}</td>
+                    <td style={{ ...td, fontFamily: 'var(--mono)' }}>{r.repack_run_no ?? '—'}</td>
+                    <td style={td}>{r.to_channel ?? '—'}</td>
+                    <td style={{ ...td, fontFamily: 'var(--mono)' }}>{r.released_day}</td>
+                    <td style={{ ...tdNum, color: (r.age_days ?? 0) > 14 ? 'var(--bad-fg)' : 'var(--t2)',
+                                 fontWeight: (r.age_days ?? 0) > 14 ? 700 : 400 }}>{r.age_label}</td>
+                    <td style={td}>{r.released_by ?? '—'}</td>
+                    <td style={{ ...td, color: r.pair_flag.startsWith('⚠') ? 'var(--warn-fg)' : 'var(--t3)' }}>{r.pair_flag}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
       <Panel
         header="Repack Reports · Channel Swap Analytics"
         headerAction={<button onClick={() => router.push('/repack-runs')} style={btnS}>← Runs</button>}
