@@ -7559,8 +7559,12 @@ async function diagIgCommentsScope(body, auth, env) {
       || (media.body?.data || [])[0]?.id
       || null;
 
+  // ⚠️ `from{id,username}` is requested SEPARATELY from the flat `username`, because the two are
+  // not the same claim and the comment→DM bot depends on the harder one. `username` is a label;
+  // `from.id` is the IGSID you would need to actually DM the commenter. A probe that only proved
+  // "we can read the text" would greenlight a bot that cannot reach anybody.
   const comments = mediaId
-    ? await get(`/${encodeURIComponent(mediaId)}/comments?fields=id,text,username,timestamp&limit=5`)
+    ? await get(`/${encodeURIComponent(mediaId)}/comments?fields=id,text,username,timestamp,from{id,username}&limit=5`)
     : { http_status: null, ok: false, body: { note: 'no media id available to probe' } };
 
   // Meta reports a missing scope as an OAuthException (code 10 / 200 / 190 depending on the flavour)
