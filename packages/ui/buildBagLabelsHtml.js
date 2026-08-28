@@ -6,6 +6,17 @@
 // qty, bag_seq, total_bags, mark_code, bin_code.
 // headerRef is shown in the small top-right slot — pass the shipment_id for
 // receiving-flow prints, or the grn_no for direct-GRN prints.
+//
+// ⚠️ The printed date pins `timeZone: 'Asia/Kolkata'` (added 2026-08-28, S322). A bare
+// `toLocaleDateString('en-IN', …)` uses the RENDERER's zone, so an instant of
+// 2026-08-21T00:30+05:30 printed "20 Aug" under TZ=UTC and "21 Aug" under IST — the label
+// would carry the wrong calendar day for anything rendered outside IST. Low impact in
+// practice (these print from the floor's own IST browser) but the label is a physical
+// artifact that outlives the session, so it must not depend on where it was rendered.
+// ⚠️ The two sibling generators, `buildUnitCountSheetHtml` and `buildCycleCountSheetHtml`,
+// are NOT affected and must not be "fixed" to match: they use the
+// `new Date(d + 'T00:00:00')` idiom, which forces local-midnight parsing and renders the
+// same calendar date in every zone.
 export function buildBagLabelsHtml(bags, headerRef) {
   const shipRef = headerRef || '—';
   const labelItems = bags.map(b => {
@@ -33,7 +44,7 @@ export function buildBagLabelsHtml(bags, headerRef) {
         </div>
         <div class="lf">
           <span class="lid">${b.bag_id || ''}</span>
-          <span>${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+          <span>${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })}</span>
         </div>
       </div>`;
   }).join('');
