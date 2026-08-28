@@ -773,6 +773,20 @@ export default {
       ));
     }
 
+    // Instagram COMMENTS poll (S322). Every 10 minutes — and this is the PRIMARY ingestion for
+    // the Comments inbox, not a backstop, because the IG app is subscribed to `messages` only
+    // (verified via diagIgCommentsScope) so no comment webhook is delivered at all. If the
+    // subscription is ever widened, this keeps running harmlessly: both paths converge on
+    // upsertPostComment, which is idempotent on platform_comment_id.
+    // 10 minutes rather than 2: comments are lower-SLA than DMs, and each run costs
+    // 1 + N media subrequests.
+    if (mins % 10 === 0) {
+      ctx.waitUntil(syncIgComments(env).then(
+        r => console.log('[ig-comments]', JSON.stringify(r)),
+        e => console.error('[ig-comments] error', e),
+      ));
+    }
+
     // Retro-assignment sweep (S318). Every 10 minutes. Gives an owner to conversations that
     // arrived when nobody was routable — the second chance the arrival-time assignment never had.
     // Logs EVERY run, including the no-ops, for the same reason as the watchdog below: a sweep
@@ -913,6 +927,8 @@ async function handleGet(action, params, auth, env) {
       return makeSoftphone({ env, sb, ok, err }).getSoftphoneToken(params, auth);
     }
     case 'getWaThread':      return getWaThread(params, auth, env);
+    case 'getPostComments':  return getPostComments(params, auth, env);   // Comments inbox (S322)
+    case 'getCommentThread': return getCommentThread(params, auth, env);
     case 'getTicketThread':  return getTicketThread(params, auth, env);   // ticket → its conversation, any channel
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
@@ -990,6 +1006,11 @@ async function handlePost(action, body, auth, env, request) {
     case 'startEmailConversation':   return startEmailConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'diagIgRecipient':          return diagIgRecipient(body, auth, env);   // read-only: why does Meta refuse THIS recipient
+    case 'replyToComment':           return replyToComment(body, auth, env);
+    case 'setCommentStatus':         return setCommentStatus(body, auth, env);
+    case 'setCommentState':          return setCommentState(body, auth, env);
+    case 'assignComment':            return assignComment(body, auth, env);
+    case 'syncCommentsNow':          return syncCommentsNow(body, auth, env);
     case 'diagIgCommentsScope':      return diagIgCommentsScope(body, auth, env); // read-only: can our token read post comments
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -7197,11 +7218,114 @@ async function handleMetaWebhook(request, env) {
       for (const ev of (entry.messaging || entry.standby || [])) {
         if (ev.message) await metaHandleMessage(channel, ev, env);
       }
+      // ── Comments (S322) ────────────────────────────────────────────────────────────────
+      // ⚠️ DORMANT ON PURPOSE, and this is the single most important thing to know about
+      // this branch: as of 2026-08-28 the IG app is subscribed to `messages` ONLY, so Meta
+      // sends no comment events and this loop never runs. Verified, not assumed —
+      // `diagIgCommentsScope` reads `/{ig-user-id}/subscribed_apps` and reports
+      // `instagram_webhook_subscribed`. The Comments inbox is fed by the POLLER
+      // (`syncIgComments`) until someone appends `comments` to the subscription.
+      // ⚠️ When that flip happens it MUST be `subscribed_fields=comments,messages` — sending
+      // `comments` alone REPLACES the set and would silently kill live DM delivery.
+      // Both paths converge on `upsertPostComment`, which is idempotent on
+      // `platform_comment_id`, so running both at once double-writes nothing.
+      for (const ch of (entry.changes || [])) {
+        try {
+          if (ch.field === 'comments' || ch.field === 'feed') {
+            await metaHandleComment(channel, entry, ch, env);
+          }
+        } catch (e) { console.error('[meta] comment handler error', e); }
+      }
     }
   } catch (e) {
     console.error('[meta] handler error', e);
   }
   return json({ ok: true });   // always ack to avoid Meta retry storms
+}
+
+// ── Comments ingestion ────────────────────────────────────────────────────────────────────
+// One home for "a comment arrived", shared by the webhook branch above and the poller below.
+// Idempotent on `platform_comment_id` (UNIQUE), so a comment seen by both is written once.
+//
+// ⚠️ `merge-duplicates` and NOT a blind insert: the poller re-reads the same recent comments
+// every tick by design, and an agent may already have assigned or closed the row. The upsert
+// therefore writes only the platform-owned fields — never `comment_state`, `assigned_*` or
+// `ticket_id`, which are ours. Getting this wrong would silently reopen every comment an agent
+// closed, once every two minutes.
+async function upsertPostComment(row, env) {
+  const r = await sb('/rest/v1/cs_post_comments?on_conflict=platform_comment_id', env, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) console.error(`[meta] comment upsert failed ${r.status} ${JSON.stringify(r.data)?.slice(0, 200)}`);
+  return r.data?.[0] || null;
+}
+
+async function findOrCreateSocialPost(channel, platformPostId, meta, env) {
+  if (!platformPostId) return null;
+  const found = await sb(
+    `/rest/v1/cs_social_posts?channel=eq.${channel}&platform_post_id=eq.${encodeURIComponent(platformPostId)}&select=*&limit=1`, env);
+  if (found.data?.[0]) return found.data[0];
+  const ins = await sb('/rest/v1/cs_social_posts?on_conflict=channel,platform_post_id', env, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify({
+      channel, platform_post_id: platformPostId,
+      permalink: meta?.permalink || null, caption: meta?.caption || null,
+      media_url: meta?.media_url || null, media_type: meta?.media_type || null,
+    }),
+  });
+  return ins.data?.[0] || null;
+}
+
+// Webhook shape → the same row the poller writes. IG `comments` and FB `feed` carry different
+// payloads; FB `feed` also fires for posts, reactions and shares, so `item==='comment'` is a
+// hard filter and `verb` decides insert-vs-moderate.
+async function metaHandleComment(channel, entry, ch, env) {
+  const v = ch.value || {};
+  const isFb = ch.field === 'feed';
+  if (isFb && v.item !== 'comment') return;               // posts/reactions/shares are not ours
+
+  const commentId = isFb ? v.comment_id : v.id;
+  if (!commentId) return;
+  const postId = isFb ? v.post_id : v.media?.id;
+  const from = v.from || {};
+  const ourId = String(entry?.id || '');
+
+  // FB moderation verbs carry no body worth storing — they restate an existing row's state.
+  if (isFb && (v.verb === 'remove' || v.verb === 'hide' || v.verb === 'unhide')) {
+    await sb(`/rest/v1/cs_post_comments?platform_comment_id=eq.${encodeURIComponent(commentId)}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: v.verb === 'remove' ? 'deleted' : v.verb === 'hide' ? 'hidden' : 'visible',
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => {});
+    return;
+  }
+
+  const post = await findOrCreateSocialPost(channel === 'messenger' ? 'facebook' : 'instagram', postId, null, env);
+  if (!post) return;
+  await upsertPostComment({
+    post_id: post.id,
+    channel: post.channel,
+    platform_comment_id: String(commentId),
+    parent_comment_id: v.parent_id ? String(v.parent_id) : null,
+    // ⚠️ Our own replies echo back on the webhook. They are stored as `outbound` rather than
+    // skipped, so the reply tree renders complete in the inbox — but they must never land in
+    // the agent work queue, which is why every queue read filters `direction=inbound`.
+    direction: String(from.id || '') === ourId ? 'outbound' : 'inbound',
+    from_external_id: from.id ? String(from.id) : null,
+    from_handle: from.username || from.name || null,
+    body: isFb ? (v.message || null) : (v.text || null),
+    posted_at: v.created_time ? new Date(Number(v.created_time) * 1000).toISOString()
+      : (v.timestamp || new Date().toISOString()),
+    raw_meta: v,
+  }, env);
+  await sb(`/rest/v1/cs_social_posts?id=eq.${post.id}`, env, {
+    method: 'PATCH', body: JSON.stringify({ last_comment_at: new Date().toISOString() }),
+  }).catch(() => {});
 }
 
 async function metaFindOrCreateThread(channel, extUserId, accountId, env) {
@@ -7510,6 +7634,277 @@ async function diagIgRecipient(body, auth, env) {
     recipient,
     conversation,
   });
+}
+
+// ── syncIgComments — the Comments inbox's actual ingestion (S322) ────────────────────────────
+//
+// Walks the account's recent media and re-reads each post's comments. This is the PRIMARY feed,
+// not a backfill: the IG app is subscribed to `messages` only, so no comment webhook arrives.
+//
+// ⚠️ Bounded by POSTS, not by time. Comments land on old posts — the whole reason the FB/IG
+// comment queues rot is that nobody sees a reply to something from three weeks ago — but re-reading
+// the entire back catalogue every 10 minutes is not affordable. MEDIA_LOOKBACK posts is the
+// compromise, and it is a KNOWN, DELIBERATE hole: a comment on post number 26 will not be seen.
+// The count is logged every run so the hole is visible rather than assumed empty.
+const IG_COMMENT_MEDIA_LOOKBACK = 25;
+
+async function syncIgComments(env) {
+  const token = await metaToken('instagram', env);
+  if (!token) return { skipped: 'no_ig_token' };
+  const base = metaGraphBase('instagram');
+  const get = async (path) => {
+    const r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`);
+    return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
+  };
+
+  const me = await get('/me?fields=id');
+  const ourId = String(me.body?.id || '');
+  if (!ourId) return { skipped: 'no_ig_user', detail: me.body?.error?.message || null };
+
+  const media = await get(`/me/media?fields=id,caption,permalink,media_type,media_url,comments_count,timestamp&limit=${IG_COMMENT_MEDIA_LOOKBACK}`);
+  if (!media.ok) return { error: media.body?.error?.message || `media ${media.status}` };
+  const posts = media.body?.data || [];
+
+  let scanned = 0, seen = 0, written = 0;
+  for (const m of posts) {
+    // Skip the read entirely when Meta already tells us the post has no comments — this is what
+    // keeps a 25-post sweep cheap on a mostly-quiet account.
+    if (!Number(m.comments_count)) continue;
+    scanned++;
+    const c = await get(`/${encodeURIComponent(m.id)}/comments?fields=id,text,timestamp,from{id,username},parent_id,replies{id,text,timestamp,from{id,username}}&limit=50`);
+    if (!c.ok) { console.error('[ig-comments] read failed', m.id, c.body?.error?.message); continue; }
+
+    const post = await findOrCreateSocialPost('instagram', m.id, {
+      permalink: m.permalink, caption: m.caption, media_url: m.media_url, media_type: m.media_type,
+    }, env);
+    if (!post) continue;
+
+    // Flatten one level: a top-level comment plus its replies is the whole tree IG exposes.
+    const flat = [];
+    for (const top of (c.body?.data || [])) {
+      flat.push({ ...top, parent: null });
+      for (const rep of (top.replies?.data || [])) flat.push({ ...rep, parent: top.id });
+    }
+    seen += flat.length;
+
+    for (const cm of flat) {
+      const fromId = String(cm.from?.id || '');
+      const row = await upsertPostComment({
+        post_id: post.id,
+        channel: 'instagram',
+        platform_comment_id: String(cm.id),
+        parent_comment_id: cm.parent || (cm.parent_id ? String(cm.parent_id) : null),
+        // ⚠️ Our own replies are stored `outbound` so the tree renders complete, and every work
+        // queue read filters `direction=inbound` so they never become someone's task.
+        direction: fromId && fromId === ourId ? 'outbound' : 'inbound',
+        from_external_id: fromId || null,
+        from_handle: cm.from?.username || null,
+        body: cm.text || null,
+        posted_at: cm.timestamp || null,
+        raw_meta: cm,
+      }, env);
+      if (row) written++;
+    }
+    await sb(`/rest/v1/cs_social_posts?id=eq.${post.id}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({ last_comment_at: new Date().toISOString(), comment_count: flat.length }),
+    }).catch(() => {});
+  }
+  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_upserted: written, lookback: IG_COMMENT_MEDIA_LOOKBACK };
+}
+
+// ── Comments inbox: reads ────────────────────────────────────────────────────────────────────
+async function getPostComments(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const state   = params.get('state') || 'open';           // open | closed | all
+  const channel = params.get('channel') || '';
+  const tab     = params.get('tab') || '';                 // mine | unassigned | ''
+  const q       = (params.get('q') || '').trim();
+  const limit   = Math.min(Number(params.get('limit')) || 60, 200);
+
+  const f = [
+    // ⚠️ `direction=inbound` is load-bearing, not cosmetic: our own replies are stored as rows so
+    // the tree renders, and without this filter every reply an agent posts would come back as a
+    // new task for someone.
+    'direction=eq.inbound',
+    'status=neq.deleted',
+    `select=*,post:post_id(id,permalink,caption,media_type,media_url,platform_post_id)`,
+    'order=posted_at.desc.nullslast',
+    `limit=${limit}`,
+  ];
+  if (state !== 'all') f.push(`comment_state=eq.${state}`);
+  if (channel) f.push(`channel=eq.${encodeURIComponent(channel)}`);
+  if (tab === 'mine') f.push(`assigned_agent_id=eq.${auth.userId}`);
+  if (tab === 'unassigned') f.push('assigned_agent_id=is.null');
+  if (q) f.push(`or=(body.ilike.*${encodeURIComponent(q)}*,from_handle.ilike.*${encodeURIComponent(q)}*)`);
+
+  const r = await sb(`/rest/v1/cs_post_comments?${f.join('&')}`, env);
+  if (!r.ok) return err('Failed to load comments', r.status || 500);
+
+  // Counts for the tabs — one cheap head request each rather than loading the closed tail.
+  const countOf = async (extra) => {
+    const c = await sb(`/rest/v1/cs_post_comments?direction=eq.inbound&status=neq.deleted&${extra}&select=id&limit=1`,
+      env, { headers: { Prefer: 'count=exact' } });
+    return c.count ?? null;
+  };
+  const [open, unassigned] = await Promise.all([
+    countOf('comment_state=eq.open'),
+    countOf('comment_state=eq.open&assigned_agent_id=is.null'),
+  ]);
+  return ok({ comments: r.data || [], counts: { open, unassigned } });
+}
+
+// One top-level comment plus its replies — the detail/reply view.
+async function getCommentThread(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const id = params.get('id');
+  if (!id) return err('id required');
+  const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(id)}`
+    + `&select=*,post:post_id(id,permalink,caption,media_type,media_url,platform_post_id)&limit=1`, env);
+  const c = r.data?.[0];
+  if (!c) return err('Comment not found', 404);
+  // Replies are keyed on the PLATFORM id, not our uuid — that is what Meta hands us in `parent_id`.
+  const reps = await sb(`/rest/v1/cs_post_comments?parent_comment_id=eq.${encodeURIComponent(c.platform_comment_id)}`
+    + `&status=neq.deleted&select=*&order=posted_at.asc`, env);
+  return ok({ comment: c, replies: reps.data || [] });
+}
+
+// ── Comments inbox: writes ───────────────────────────────────────────────────────────────────
+async function replyToComment(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { comment_id, text } = body || {};
+  if (!comment_id || !String(text || '').trim()) return err('comment_id and text required');
+
+  const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(comment_id)}&select=*&limit=1`, env);
+  const c = r.data?.[0];
+  if (!c) return err('Comment not found', 404);
+  if (c.status === 'deleted') return err('That comment has been deleted on Instagram — you cannot reply to it.', 422);
+  const token = await metaToken(c.channel === 'facebook' ? 'messenger' : 'instagram', env);
+  if (!token) return err('No token configured for this channel', 503);
+  const base = metaGraphBase(c.channel === 'facebook' ? 'messenger' : 'instagram');
+
+  // ⚠️ Reply to the TOP-LEVEL comment. Instagram has no nested-reply tree: replying to a reply
+  // returns an error, so an agent answering the second message in a sub-thread must post against
+  // the parent or the send fails for a reason they cannot see.
+  const target = c.parent_comment_id || c.platform_comment_id;
+  const res = await fetch(`${base}/${encodeURIComponent(target)}/replies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ message: String(text).trim(), access_token: token }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // Same discipline as the DM path: surface Meta's own words, never a paraphrase of the docs.
+    return err(d?.error?.message || `Instagram refused the reply (HTTP ${res.status})`, 502);
+  }
+
+  const now = new Date().toISOString();
+  // Insert our reply immediately rather than waiting for the poller, so the agent sees it land.
+  // Idempotent on the returned id, so the next sync is a no-op rather than a duplicate.
+  if (d?.id) {
+    await upsertPostComment({
+      post_id: c.post_id, channel: c.channel, platform_comment_id: String(d.id),
+      parent_comment_id: target, direction: 'outbound',
+      body: String(text).trim(), posted_at: now,
+      replied_by_user_id: auth.userId, raw_meta: d,
+    }, env);
+  }
+  // Replying claims the comment (mirrors the DM inbox, where sending claims an unowned thread).
+  await sb(`/rest/v1/cs_post_comments?id=eq.${c.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      replied_at: now, replied_by_user_id: auth.userId, updated_at: now,
+      ...(c.assigned_agent_id ? {} : {
+        assigned_agent_id: auth.userId, assigned_agent_name: auth.fullName || null, assigned_at: now,
+      }),
+    }),
+  }).catch(() => {});
+  return ok({ replied: true, platform_comment_id: d?.id || null });
+}
+
+// Moderation. ⚠️ Hide is `cs_ticket_manage`; DELETE is `cs_ticket_admin` — it is irreversible on
+// Meta's side and publicly visible, so it sits behind the higher bar (spec §8.3).
+async function setCommentStatus(body, auth, env) {
+  const { comment_id, status } = body || {};
+  if (!comment_id || !['visible', 'hidden', 'deleted'].includes(status)) {
+    return err('comment_id and status (visible|hidden|deleted) required');
+  }
+  const g = require(status === 'deleted' ? 'cs_ticket_admin' : 'cs_ticket_manage', auth); if (g) return g;
+
+  const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(comment_id)}&select=*&limit=1`, env);
+  const c = r.data?.[0];
+  if (!c) return err('Comment not found', 404);
+  const token = await metaToken(c.channel === 'facebook' ? 'messenger' : 'instagram', env);
+  if (!token) return err('No token configured for this channel', 503);
+  const base = metaGraphBase(c.channel === 'facebook' ? 'messenger' : 'instagram');
+  const url = `${base}/${encodeURIComponent(c.platform_comment_id)}`;
+
+  const res = status === 'deleted'
+    ? await fetch(`${url}?access_token=${token}`, { method: 'DELETE' })
+    : await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ hide: status === 'hidden' ? 'true' : 'false', access_token: token }),
+    });
+  const d = await res.json().catch(() => ({}));
+  // ⚠️ The local row is updated ONLY on a confirmed platform success. Writing it optimistically
+  // would tell an agent a comment was hidden from the public while it is still on the post.
+  if (!res.ok) return err(d?.error?.message || `Instagram refused (HTTP ${res.status})`, 502);
+
+  await sb(`/rest/v1/cs_post_comments?id=eq.${c.id}`, env, {
+    method: 'PATCH', body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
+  });
+  return ok({ status });
+}
+
+async function setCommentState(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { comment_id, state } = body || {};
+  if (!comment_id || !['open', 'closed'].includes(state)) return err('comment_id and state (open|closed) required');
+  const patch = state === 'closed'
+    ? { comment_state: 'closed', closed_at: new Date().toISOString(), closed_by_user_id: auth.userId }
+    : { comment_state: 'open', closed_at: null, closed_by_user_id: null };
+  const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(comment_id)}`, env, {
+    method: 'PATCH', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+  });
+  if (!r.ok) return err('Failed to update comment', r.status || 500);
+  return ok({ state });
+}
+
+// Mirrors assignThread exactly: self-claim/release needs cs_ticket_manage; assigning to SOMEONE
+// ELSE needs cs_ticket_reassign or cs_ticket_admin.
+async function assignComment(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { comment_id, agent_id } = body || {};
+  if (!comment_id) return err('comment_id required');
+  const canReassign = !!(auth?.permissions?.cs_ticket_reassign || auth?.permissions?.cs_ticket_admin);
+  if (agent_id && agent_id !== auth.userId && !canReassign) {
+    return err('Forbidden — assigning to another agent needs cs_ticket_reassign', 403);
+  }
+  let name = null;
+  if (agent_id) {
+    const u = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(agent_id)}&select=full_name,email&limit=1`, env);
+    name = u.data?.[0]?.full_name || u.data?.[0]?.email || null;
+  }
+  const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(comment_id)}`, env, {
+    method: 'PATCH', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      assigned_agent_id: agent_id || null,
+      assigned_agent_name: agent_id ? name : null,
+      assigned_at: agent_id ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!r.ok) return err('Failed to assign', r.status || 500);
+  return ok({ assigned: !!agent_id });
+}
+
+// Admin: run the poller by hand. The cron covers steady state; this exists for the first fill and
+// for verifying a change without waiting up to 10 minutes.
+async function syncCommentsNow(_body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  return ok(await syncIgComments(env));
 }
 
 // ── diagIgCommentsScope — can OUR Instagram token read (and reply to) post comments? ─────────
