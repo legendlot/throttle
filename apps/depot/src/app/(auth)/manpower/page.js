@@ -192,6 +192,7 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
   const [dept, setDept] = useState('');      // '' = all departments
   const [loading, setLoading] = useState(true);
   const [closeTarget, setCloseTarget] = useState(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [savingStatus, setSavingStatus] = useState({}); // attendance_id → bool (day_status save in flight)
 
@@ -256,6 +257,37 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
     [rows, dept, deptOf]
   );
 
+  // Bulk close (S322, Piyush `1786193088.818009`). Closes every OPEN shift currently visible
+  // — i.e. it respects the department filter, so it can never reach a row not on screen.
+  // ⚠️ Garage's version has per-row checkboxes; these two do NOT, deliberately. Their rows are
+  // a CSS-grid template (`cols`) that the S304 mobile overrides are written against by prefix,
+  // so inserting a checkbox column would silently change the phone layout. The ask was a bulk
+  // close, and "close all open" delivers it without touching that template.
+  const openVisible = visibleRows.filter((r) => !r.clock_out);
+
+  async function confirmBulkClose() {
+    const ids = openVisible.map((r) => r.id);
+    if (!ids.length) return;
+    setClosing(true);
+    try {
+      // ONE batched call — the worker does a single `in.()` update and reports per-row
+      // outcomes. Partial by design: a row closed by someone else meanwhile is reported,
+      // never fatal.
+      const res = await workerFetch('closeAttendanceShift', { data: { attendance_ids: ids } }, session);
+      const d = res?.data || {};
+      const bits = [`${d.closed ?? 0} shift${(d.closed ?? 0) === 1 ? '' : 's'} closed`];
+      if (d.already_closed) bits.push(`${d.already_closed} already closed`);
+      if (d.not_found)      bits.push(`${d.not_found} not found`);
+      showToast(bits.join(' · '), (d.closed ?? 0) > 0 ? 'success' : 'error');
+      setBulkOpen(false);
+      load();
+    } catch (e) {
+      showToast(e.message || 'Bulk close failed', 'error');
+    } finally {
+      setClosing(false);
+    }
+  }
+
   async function confirmClose() {
     if (!closeTarget) return;
     setClosing(true);
@@ -315,6 +347,12 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
             {countPresent(visibleRows)} present · {visibleRows.length} record{visibleRows.length === 1 ? '' : 's'}
             {dept ? ` · ${capitalize(dept)}` : ''}
           </span>
+          {openVisible.length > 0 && (
+            <button style={smallGhost} onClick={() => setBulkOpen(true)} disabled={closing || loading}
+              title="Close every open shift shown">
+              Close {openVisible.length} open
+            </button>
+          )}
           <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
             <Icon name="undo" size={13} /> Refresh
           </button>
@@ -418,6 +456,16 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
           </div>
         )}
       </Panel>
+
+      <ConfirmModal
+        open={bulkOpen}
+        onClose={() => !closing && setBulkOpen(false)}
+        title="Close Shifts"
+        confirmLabel={closing ? 'Closing…' : `Close ${openVisible.length} shift${openVisible.length === 1 ? '' : 's'}`}
+        onConfirm={confirmBulkClose}
+        loading={closing}
+        message={`Close ${openVisible.length} open shift${openVisible.length === 1 ? '' : 's'}? Each clock-out is set to the current time. This cannot be undone here.`}
+      />
 
       <ConfirmModal
         open={!!closeTarget}

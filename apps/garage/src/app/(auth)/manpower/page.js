@@ -511,6 +511,8 @@ function AttendanceTab({ session, canManageFloor }) {
   const [closeTarget, setCloseTarget] = useState(null);
   const [closing, setClosing] = useState(false);
   const [savingStatus, setSavingStatus] = useState({}); // attendance_id → bool
+  const [selected, setSelected] = useState(() => new Set()); // attendance_ids picked for bulk close
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!session || !canManageFloor || !date) return;
@@ -546,6 +548,40 @@ function AttendanceTab({ session, canManageFloor }) {
       load();
     } finally {
       setSavingStatus((s) => { const n = { ...s }; delete n[row.id]; return n; });
+    }
+  }
+
+  // Only OPEN shifts are selectable — a closed one has nothing to do.
+  const openRows = rows.filter((r) => !r.clock_out);
+  const allOpenSelected = openRows.length > 0 && openRows.every((r) => selected.has(r.id));
+  function toggleRow(id) {
+    setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  function toggleAll() {
+    setSelected(allOpenSelected ? new Set() : new Set(openRows.map((r) => r.id)));
+  }
+
+  async function confirmBulkClose() {
+    const ids = openRows.filter((r) => selected.has(r.id)).map((r) => r.id);
+    if (!ids.length) return;
+    setClosing(true);
+    try {
+      // One batched call — the worker closes them with a single `in.()` update and reports
+      // per-row outcomes. Deliberately partial: a row someone else closed in the meantime is
+      // reported, never fatal (see the handler's note on why this differs from RULE-STOCK-002).
+      const res = await workerFetch('closeAttendanceShift', { data: { attendance_ids: ids } }, session);
+      const d = res?.data || {};
+      const bits = [`${d.closed ?? 0} shift${(d.closed ?? 0) === 1 ? '' : 's'} closed`];
+      if (d.already_closed) bits.push(`${d.already_closed} already closed`);
+      if (d.not_found)      bits.push(`${d.not_found} not found`);
+      showToast(bits.join(' · '), (d.closed ?? 0) > 0 ? 'success' : 'error');
+      setBulkOpen(false);
+      setSelected(new Set());
+      load();
+    } catch (e) {
+      showToast(e.message || 'Bulk close failed', 'error');
+    } finally {
+      setClosing(false);
     }
   }
 
@@ -585,12 +621,17 @@ function AttendanceTab({ session, canManageFloor }) {
         <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div>
             <span style={labelStyle}>Date</span>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, fontFamily: 'var(--mono)' }} />
+            <input type="date" value={date} onChange={(e) => { setSelected(new Set()); setDate(e.target.value); }} style={{ ...inputStyle, fontFamily: 'var(--mono)' }} />
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {presentCount} present · {rows.length} record{rows.length === 1 ? '' : 's'}
             </span>
+            {selected.size > 0 && (
+              <button style={{ ...btnSecondary, fontSize: 11 }} onClick={() => setBulkOpen(true)} disabled={closing}>
+                Close {selected.size} shift{selected.size === 1 ? '' : 's'}
+              </button>
+            )}
             <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
           </div>
         </div>
@@ -607,6 +648,11 @@ function AttendanceTab({ session, canManageFloor }) {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 920 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ ...th, width: 30 }}>
+                      <input type="checkbox" checked={allOpenSelected} onChange={toggleAll}
+                        disabled={!openRows.length}
+                        title={openRows.length ? 'Select all open shifts' : 'No open shifts'} />
+                    </th>
                     <th style={th}>Operator</th>
                     <th style={th}>Clock in</th>
                     <th style={th}>Clock out</th>
@@ -623,6 +669,11 @@ function AttendanceTab({ session, canManageFloor }) {
                     const isOt = (row.shift_type || '').toLowerCase() === 'overtime';
                     return (
                       <tr key={row.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={td}>
+                          {!row.clock_out && (
+                            <input type="checkbox" checked={selected.has(row.id)} onChange={() => toggleRow(row.id)} />
+                          )}
+                        </td>
                         <td style={{ ...td, color: 'var(--t1)', fontWeight: 600 }}>
                           {row.operator_name || '—'}
                           {isOt && <Badge color="var(--yellow)" style={{ marginLeft: 6 }}>OT</Badge>}
@@ -683,6 +734,16 @@ function AttendanceTab({ session, canManageFloor }) {
           )}
         </div>
       </div>
+
+      <ConfirmModal
+        open={bulkOpen}
+        onClose={() => !closing && setBulkOpen(false)}
+        title="Close Shifts"
+        confirmLabel={closing ? 'Closing…' : `Close ${selected.size} shift${selected.size === 1 ? '' : 's'}`}
+        onConfirm={confirmBulkClose}
+        loading={closing}
+        message={`Close ${selected.size} open shift${selected.size === 1 ? '' : 's'}? Each clock-out is set to the current time. This cannot be undone here.`}
+      />
 
       <ConfirmModal
         open={!!closeTarget}
