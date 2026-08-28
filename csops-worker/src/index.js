@@ -7577,8 +7577,49 @@ async function diagIgCommentsScope(body, auth, env) {
       ? `REFUSED — Meta says: ${e.message || '(no message)'} (type ${e.type || '?'}, code ${e.code ?? '?'})`
       : 'INCONCLUSIVE — no comments edge reached; see the raw response.';
 
+  // ── §3.1 of the design: THE WEBHOOK FIELD SUBSCRIPTION ────────────────────────────────────
+  // Reading comments over Graph and RECEIVING them on the webhook are two different grants, and
+  // the second is the one that makes an inbox live. The app must be subscribed to the `comments`
+  // field on the IG object and `feed` on the Page object; without it the ingestion branch is
+  // correct code that never fires — the most expensive kind to debug, because nothing errors.
+  const igUserId = me.body?.id || null;
+  const igSubs = igUserId
+    ? await get(`/${encodeURIComponent(igUserId)}/subscribed_apps`)
+    : { http_status: null, ok: false, body: { note: 'no ig user id' } };
+
+  // Facebook is a DIFFERENT host and a DIFFERENT credential (META_PAGE_TOKEN), so it cannot ride
+  // the `get` helper above, which is pinned to the Instagram base + IG token.
+  let pageMe = null, pageSubs = null, pageComments = null;
+  if (env.META_PAGE_TOKEN) {
+    const fbGet = async (path) => {
+      const r = await fetch(`${META_GRAPH}${path}${path.includes('?') ? '&' : '?'}access_token=${env.META_PAGE_TOKEN}`);
+      const d = await r.json().catch(() => ({}));
+      return { http_status: r.status, ok: r.ok, body: d };
+    };
+    pageMe = await fbGet('/me?fields=id,name');
+    const pageId = pageMe.body?.id || null;
+    if (pageId) {
+      pageSubs = await fbGet(`/${encodeURIComponent(pageId)}/subscribed_apps?fields=subscribed_fields`);
+      // Read-scope probe: the Page's own recent posts and one post's comments.
+      pageComments = await fbGet(`/${encodeURIComponent(pageId)}/feed?fields=id,created_time,comments.limit(3){id,message,from{id,name}}&limit=3`);
+    }
+  }
+
+  const igSubscribed = JSON.stringify(igSubs.body || {}).includes('comments');
+  const fbSubscribed = JSON.stringify(pageSubs?.body || {}).includes('feed');
+
   return ok({
     verdict,
+    // ⚠️ Read access and webhook delivery are SEPARATE grants. A green `verdict` with a false
+    // `*_webhook_subscribed` means we can go and FETCH comments but will never be told about a
+    // new one — an inbox that is always stale and never errors.
+    ingest_ready: {
+      instagram_read: comments.ok,
+      instagram_webhook_subscribed: igSubscribed,
+      facebook_token_present: !!env.META_PAGE_TOKEN,
+      facebook_read: !!pageComments?.ok,
+      facebook_webhook_subscribed: fbSubscribed,
+    },
     token_source: storedIgToken ? 'cs_meta_token_config.ig_access_token'
       : env.META_IG_TOKEN ? 'META_IG_TOKEN (secret fallback)' : 'META_PAGE_TOKEN (last-resort fallback)',
     graph_base: base,
@@ -7586,6 +7627,10 @@ async function diagIgCommentsScope(body, auth, env) {
     me,
     media,
     comments,
+    ig_subscribed_apps: igSubs,
+    fb_page: pageMe,
+    fb_subscribed_apps: pageSubs,
+    fb_comments: pageComments,
   });
 }
 
