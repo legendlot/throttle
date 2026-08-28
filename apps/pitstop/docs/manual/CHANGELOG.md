@@ -3,6 +3,22 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.13.0] - 2026-08-28
+### Changed
+- **BiteSpeed is gone from the manual, because it is gone from the product.** The ticket screen no
+  longer shows a read-only WhatsApp mirror with a "Reply in BiteSpeed" button: it shows the
+  customer's conversation on whichever channel raised the ticket (WhatsApp, Instagram, Messenger,
+  email or web chat) with an **Open in inbox** button that opens that exact conversation. Rewrote
+  the "Where the conversation happens" callout in the Introduction and the conversation callout in
+  Work a Ticket to match.
+- The Introduction said phone calls arrive from MyOperator. They have come from **Exotel** since
+  19 August; corrected in the same pass.
+
+### Added
+- Work a Ticket: a **Linked or just matched** warning. When no conversation is bound to the ticket
+  the panel falls back to matching the customer by phone or email, and the manual now says plainly
+  that a match is background rather than a binding, and how to bind one.
+
 ## [1.11.0] - 2026-08-27
 ### Added
 - The Inbox: chats can now arrive in **Mine** without being claimed. Explains the retro-assignment

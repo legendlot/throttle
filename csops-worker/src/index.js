@@ -913,6 +913,7 @@ async function handleGet(action, params, auth, env) {
       return makeSoftphone({ env, sb, ok, err }).getSoftphoneToken(params, auth);
     }
     case 'getWaThread':      return getWaThread(params, auth, env);
+    case 'getTicketThread':  return getTicketThread(params, auth, env);   // ticket → its conversation, any channel
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getWaSendTemplates': return getWaSendTemplates(params, auth, env);
     case 'getWaNumbers':     return getWaNumbers(params, auth, env);
@@ -4494,6 +4495,11 @@ async function findOrCreateWaThread(customer_phone, env, { create = true } = {})
   return { thread: ins.data?.[0] || null, created: true };
 }
 
+// ⚠️ SUPERSEDED 2026-08-28 by getTicketThread — NO CALLER REMAINS in any app.
+// Kept only so an older deployed bundle mid-rollout does not 400 against a fresh worker.
+// Do NOT wire new UI to it: it resolves by phone through findOrCreateWaThread's
+// `waba_phone_number_id=is.null` filter, which cannot see a Relay thread (2.8% hit rate
+// measured over 30 days — see getTicketThread's header). Delete once a deploy has settled.
 async function getWaThread(params, auth, env) {
   const ticket_id = params.get('ticket_id');
   const ticket_no = params.get('ticket_no');
@@ -4524,6 +4530,104 @@ async function getWaThread(params, auth, env) {
     messages: msgsRes.data || [],
     within_customer_window: withinCustomerWindow(thread),
     provider_wired: false,   // flip to true in Phase C2
+  });
+}
+
+// ── getTicketThread — the conversation a ticket was raised from, on ANY channel ──────────
+//
+// Replaces getWaThread as the ticket-detail panel's source (Pruthvi, #bugs 1787900742.603819).
+// Two things were wrong with the old one and only the first was reported:
+//
+//  (1) It resolved by PHONE through findOrCreateWaThread, which filters
+//      `waba_phone_number_id=is.null` — a Phase-C placeholder. Every Relay-migrated thread
+//      carries a real phone_number_id, so the panel could not see them. MEASURED 2026-08-28
+//      over the 4,227 tickets of the last 30 days that carry a phone: the old lookup finds a
+//      thread for 120 of them (2.8%), and 2,621 tickets have a genuinely linked conversation
+//      the panel renders as blank. It was not "degrading as numbers migrate" — it was already
+//      dead for 97% of tickets.
+//  (2) Phone is the wrong key regardless: an Instagram or email ticket has no phone, so the
+//      panel could never show those conversations at all.
+//
+// The ticket↔conversation link lives on `cs_wa_messages.ticket_id` — cs_tickets carries no
+// thread column — and BOTH binding paths write it there (createTicketFromThread auto-links,
+// linkMessagingThread binds by hand). So the link is the primary key here and it is
+// channel-agnostic by construction.
+//
+// The phone/email match is kept as a FALLBACK, because 1,588 of those 5,353 tickets have no
+// link at all (nearly all of them call-raised, which never touches a thread) and the customer
+// may still have a live conversation worth seeing. It is reported as `matched_by:'phone'` /
+// `'email'` so the UI can say "same customer" rather than implying a binding that does not
+// exist — a matched thread is a lead, a linked one is a fact.
+async function getTicketThread(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const ticket_id = params.get('ticket_id');
+  const ticket_no = params.get('ticket_no');
+  if (!ticket_id && !ticket_no) return err('ticket_id or ticket_no required');
+
+  const tRes = ticket_id
+    ? await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=id,ticket_no,customer_phone,customer_email&limit=1`, env)
+    : await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=id,ticket_no,customer_phone,customer_email&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+
+  const empty = (reason) => ok({ threads: [], thread: null, messages: [], matched_by: null, reason });
+
+  // ① The link. Paged rather than `limit=1` because a ticket can legitimately be bound to more
+  // than one conversation (a WhatsApp thread and a later email, say) and the agent should see
+  // every one — picking an arbitrary single row would hide the others silently.
+  const linkRes = await sb(
+    `/rest/v1/cs_wa_messages?ticket_id=eq.${encodeURIComponent(t.id)}&select=thread_id&limit=1000`, env);
+  const linkedIds = [...new Set((linkRes.data || []).map((m) => m.thread_id).filter(Boolean))];
+
+  let threads = [];
+  let matched_by = null;
+  if (linkedIds.length) {
+    const r = await sb(
+      `/rest/v1/cs_wa_threads?id=in.(${linkedIds.map(encodeURIComponent).join(',')})`
+      + `&select=*&order=last_message_at.desc.nullslast&limit=20`, env);
+    threads = r.data || [];
+    matched_by = 'link';
+  }
+
+  // ② Fallback — same customer, no binding. Phone covers WhatsApp; email threads carry the
+  // address in `external_user_id` (there is no customer_email on cs_wa_threads — see the
+  // db-schema note). Deliberately NOT filtered on waba_phone_number_id: that filter is the
+  // whole bug this handler exists to fix.
+  if (!threads.length) {
+    // ⚠️ Values are DOUBLE-QUOTED inside or=(). An E.164 phone starts with `+`, which a query
+    // string decodes to a SPACE, and an email is full of dots — both would be mis-parsed bare.
+    // Quote first, then percent-encode: the two layers are independent.
+    const q = (v) => `"${encodeURIComponent(String(v).replace(/"/g, ''))}"`;
+    const or = [];
+    if (t.customer_phone) or.push(`customer_phone.eq.${q(toE164(t.customer_phone))}`);
+    if (t.customer_email) or.push(`external_user_id.eq.${q(String(t.customer_email).trim().toLowerCase())}`);
+    if (!or.length) return empty('no_phone_or_email_on_ticket');
+    // `ignition_connect=is.false` — a conversation handed to the Influencer team is out of
+    // Pitstop's hands (csops getThreads draws the same line); linking a CS ticket at one would
+    // send the agent to a thread they may not act on. Both columns are NOT NULL DEFAULT false,
+    // so `is.false` cannot silently drop rows here.
+    const r = await sb(
+      `/rest/v1/cs_wa_threads?or=(${or.join(',')})&ignition_connect=is.false`
+      + `&select=*&order=last_message_at.desc.nullslast&limit=5`, env);
+    threads = r.data || [];
+    if (!threads.length) return empty('no_conversation_yet');
+    matched_by = threads[0].channel === 'email' ? 'email' : 'phone';
+  }
+
+  // Newest conversation is the one the panel opens on; the rest are offered as links.
+  // Internal notes are NOT filtered out — they are the handover context an agent opening the
+  // ticket most wants, and the inbox's own getMessagingThread does not filter them either.
+  const primary = threads[0];
+  const msgsRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(primary.id)}`
+    + `&select=*&order=created_at.asc&limit=200`, env);
+
+  return ok({
+    thread: primary,
+    threads,
+    messages: msgsRes.data || [],
+    matched_by,
+    within_customer_window: withinCustomerWindow(primary),
   });
 }
 

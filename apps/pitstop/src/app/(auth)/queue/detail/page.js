@@ -10,7 +10,7 @@ import TagPicker from '../../../../components/TagPicker.js';
 import { Stepper as VoltStepper, StepperToggle, Icon, btnPrimary, btnGhost } from '../../../../components/kit/index.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../../components/IssuePicker.js';
-import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
+import ConversationPanel from '../../../../components/ConversationPanel.js';
 import AssignmentControl from '../../../../components/AssignmentControl.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
@@ -978,7 +978,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
         />
       )}
 
-      <WhatsAppPanel ticket={t} session={session} />
+      <ConversationPanel ticket={t} session={session} />
     </div>
   );
 }

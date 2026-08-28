@@ -3,7 +3,8 @@
    Pitstop "Volt" — Agent Inbox (S161; tabs + notes + composer S162).
    Cross-channel DM console over store.cs_wa_threads / cs_wa_messages.
    • Instagram + Facebook Messenger = two-way (reply via sendMetaMessage).
-   • WhatsApp = read-only mirror (reply in BiteSpeed) until C2-B.
+   • WhatsApp = two-way since C2-B; sends route through Relay (BiteSpeed left 2026-07-30).
+   • Deep link: /inbox/?thread=<uuid> opens that conversation (ticket → conversation, S322).
    • Mine / Unassigned / All assignment tabs + thread claim/assign (S162-A).
    • Private (internal) notes for agent hand-off (S162-B).
    • Composer: emoji · canned responses · note formatting (S162-C).
@@ -250,11 +251,6 @@ function useFitLadder(barRef, spacerRef) {
   return level;
 }
 
-const BITESPEED_BASE = 'https://chat.bitespeed.co';
-const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
-  ? `${BITESPEED_BASE}/app/accounts/${t.provider_account_id}/conversations/${t.provider_thread_ref}`
-  : BITESPEED_BASE;
-
 export default function InboxPage() {
   const { session, userId, user, perms } = useAuth();
   const { setTopbarBadge } = useRefreshState();
@@ -432,6 +428,36 @@ export default function InboxPage() {
 
   // Debounce the search box → server query (S178)
   useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
+
+  // ── Deep link: /inbox/?thread=<uuid> ────────────────────────────────────────────────
+  // The one thing that made "open this conversation" impossible from anywhere else in
+  // Pitstop: selection lived only in `selectedId`, never in the URL, so a ticket could not
+  // point at its own conversation (Pruthvi, #bugs 1787900742.603819).
+  //
+  // ⚠️ It must ALSO widen the state filter. The list defaults to `active`, and a ticket is
+  // very often worked after its conversation was closed — landing on a deep link that silently
+  // showed nothing would be worse than no link at all. `loadConvo` reads the thread by id and
+  // does not care whether its row is in the list, so the conversation pane is correct either
+  // way; this is only so the row is visible in the list beside it.
+  //
+  // ⚠️ Consumed ONCE (ref guard), not kept in sync. Re-applying it on every render would fight
+  // the agent the moment they clicked a different thread; the URL is an entry point, not state.
+  //
+  // ⚠️ Read from `window.location`, NOT `useSearchParams`. This app is `output: 'export'`, where
+  // Next prerenders every route and a client `useSearchParams()` outside a Suspense boundary is
+  // a build-time error. An effect on the client cannot run during prerender, so it sidesteps
+  // that entirely — and this is a 3,000-line client component nobody wants to wrap.
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current) return;
+    let id = null;
+    try { id = new URLSearchParams(window.location.search).get('thread'); } catch { id = null; }
+    deepLinkDone.current = true;
+    if (!id) return;
+    setStateFilter('all');
+    setChannel('all');
+    setSelectedId(id);
+  }, []);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -2109,12 +2135,13 @@ export default function InboxPage() {
                   )}
                 </div>
               ) : (
-                <div style={{ borderTop: '1px solid var(--border)', padding: 12, display: 'flex',
-                  alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface-2)' }}>
-                  <span style={{ fontSize: 11, color: 'var(--t3)' }}>Read-only mirror — reply in BiteSpeed to deliver.</span>
-                  <a href={biteSpeedLink(thread)} target="_blank" rel="noreferrer" style={{ ...btnPrimary, textDecoration: 'none' }}>
-                    <ExternalLink size={13} /> Reply in BiteSpeed
-                  </a>
+                /* Unknown channel — `chanOf` falls back to sendable:false. Unreachable today
+                   (all 5 live channel values are sendable), and it must stay honest if a 6th
+                   ever lands: this used to offer "Reply in BiteSpeed", which would now send an
+                   agent to a vendor we left on 2026-07-30. Say what is true, offer nothing. */
+                <div style={{ borderTop: '1px solid var(--border)', padding: 12,
+                  background: 'var(--surface-2)', fontSize: 11, color: 'var(--t3)' }}>
+                  Read-only — Pitstop cannot send on the “{thread?.channel || 'unknown'}” channel yet.
                 </div>
               )}
             </>
