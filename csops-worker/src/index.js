@@ -8788,7 +8788,18 @@ async function getMessagingThread(params, auth, env) {
     env,
   );
   const messages = mRes.data || [];
-  const linkedId = messages.find(m => m.ticket_id)?.ticket_id || null;
+  // ⚠️ The NEWEST stamped message, not the oldest. `messages` is ordered created_at.asc, so the
+  // old `.find()` returned the FIRST ticket ever raised on this conversation — usually one closed
+  // weeks ago. A long-running thread accumulates tickets in chronological blocks because the
+  // retro-link (see relayWaIngestInbound) only stamps messages with `ticket_id IS NULL`, so each
+  // new ticket claims just the messages banked since the last one.
+  // MEASURED 2026-08-28: 702 of 4,216 ticket-carrying threads host more than one ticket (worst
+  // case 9), and 655 of them (15.5%) were showing a stale one in the conversation header — while
+  // the thread LIST row beside it showed the current ticket, so the same screen disagreed with
+  // itself. Found by smoking the new ticket → conversation deep link, which lands agents here.
+  // `assignLinkedTicketToReplier` already resolves the current ticket as `created_at.desc limit 1`;
+  // this is the same rule, so the two now agree.
+  const linkedId = [...messages].reverse().find(m => m.ticket_id)?.ticket_id || null;
   let linked_ticket = null;
   if (linkedId) {
     const tk = await sb(`/rest/v1/cs_tickets?id=eq.${linkedId}&select=id,ticket_no,disposition,stage&limit=1`, env);
