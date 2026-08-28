@@ -7756,7 +7756,7 @@ async function syncIgComments(env) {
   if (!media.ok) return { error: media.body?.error?.message || `media ${media.status}` };
   const posts = media.body?.data || [];
 
-  let scanned = 0, seen = 0, written = 0;
+  let scanned = 0, seen = 0, written = 0, sent = 0;
   for (const m of posts) {
     // Skip the read entirely when Meta already tells us the post has no comments — this is what
     // keeps a 25-post sweep cheap on a mostly-quiet account.
@@ -7833,13 +7833,19 @@ async function syncIgComments(env) {
         raw_meta: cm,
       });
     }
+    sent += rows.length;
+    // ⚠️ `returned` is NOT the number written, and must not be labelled as though it were.
+    // PostgREST's merge-duplicates + return=representation gave back 34 for 63 rows sent while
+    // the table verifiably held all 63 (55 inbound / 8 outbound, checked in SQL). Rather than
+    // guess at its semantics, report both: `rows_sent` is exact and `rows_returned` is
+    // diagnostic. **The DB is the authority, not either number.**
     written += (await upsertPostComments(rows, env)).length;
     await sb(`/rest/v1/cs_social_posts?id=eq.${post.id}`, env, {
       method: 'PATCH',
       body: JSON.stringify({ last_comment_at: new Date().toISOString(), comment_count: flat.length }),
     }).catch(() => {});
   }
-  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_upserted: written, lookback: IG_COMMENT_MEDIA_LOOKBACK };
+  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_sent: sent, rows_returned: written, lookback: IG_COMMENT_MEDIA_LOOKBACK };
 }
 
 // ── Comments inbox: reads ────────────────────────────────────────────────────────────────────
