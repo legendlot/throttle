@@ -70,7 +70,12 @@ you are on a past day. You cannot pick a future date.</div>
   <li><strong>Functional</strong> (red total): the toy doesn&rsquo;t work right: motor, electronics, movement.</li>
   <li><strong>Visual</strong> (orange total): how it looks: scratches, paint, stickers, finish.</li>
 </ul>
-<p>Each defect appears as a small card showing its <strong>code</strong>, a short <strong>description</strong>, its <strong>category</strong>, a <strong>severity</strong> (Critical, Major or Minor), and how many times it occurred. Cards are ordered worst-first: Critical before Major before Minor, then by count. A <span class="role sup" style="font-size:7pt">Flag</span> marker means the defect is flagged for operator training.</p>
+<p>Each defect appears as a small card showing its <strong>code</strong>, a short <strong>description</strong>, its <strong>category</strong>, a <strong>severity</strong> (Critical, Major, Minor or Cosmetic), and how many times it occurred. Cards are ordered worst-first: Critical before Major before Minor before Cosmetic, then by count. A <span class="role sup" style="font-size:7pt">Flag</span> marker means the defect is flagged for operator training.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Cosmetic defects only start appearing from 28 Aug 2026</div>
+  <p>The scanner has always offered the five <strong>Cosmetic</strong> defects (body scratch or scuff, sticker issue, foreign material), but a database rule silently rejected them, so the QC Fail scan failed and nothing was recorded. That was fixed on 28&nbsp;Aug&nbsp;2026. Expect Cosmetic counts to appear from that date onward &mdash; <strong>a jump in cosmetic defects is the capture starting to work, not quality getting worse</strong>, and comparisons with earlier months will understate them.</p>
+</div>
 
 <h2 class="sec">Defect Breakdown by product</h2>
 <p>The same defects, organised by <strong>product</strong> instead of line. Each product is a row showing its total defect count; <strong>click a row to expand it</strong>. Inside, defects are grouped first by component (Car vs Remote), then by severity, then listed individually with their code, description and count. A <span class="role sup" style="font-size:7pt">Training</span> tag again marks defects flagged for coaching.</p>
