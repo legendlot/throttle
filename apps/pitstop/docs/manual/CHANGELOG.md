@@ -3,6 +3,17 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.14.0] - 2026-08-28
+### Added
+- **Post Comments** — a new chapter for the new Comments screen. Covers the ten-minute sync (and
+  why a quiet screen may just be a few minutes behind), Sync now, claiming and replying, and the
+  fact that a reply posts publicly under the L.O.T account rather than the agent's own.
+- Spells out the two distinctions the screen most invites people to get wrong: **Done** is about
+  your work and changes nothing on Instagram, while **Hide** removes the comment from public view;
+  and **Delete** is permanent, admin only, and should lose to Hide almost every time.
+- States plainly that Facebook Page comments are **not** included yet (the permission is not
+  granted), so nobody assumes this screen covers both networks.
+
 ## [1.13.0] - 2026-08-28
 ### Changed
 - **BiteSpeed is gone from the manual, because it is gone from the product.** The ticket screen no
