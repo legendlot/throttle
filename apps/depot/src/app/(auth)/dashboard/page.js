@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Panel, Chip, EmptyState, Spinner, StatusBadge } from '@throttle/ui';
+import { isPresent } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 
@@ -192,7 +193,11 @@ export default function DepotOverview() {
     if (attRes.status === 'fulfilled') {
       const rows = Array.isArray(attRes.value?.data) ? attRes.value.data
         : Array.isArray(attRes.value) ? attRes.value : [];
-      const present = new Set(rows.filter(r => !r.clock_out).map(r => r.operator_id));
+      // `!clock_out` alone is not enough: someone marked `absent`/`leave` who has not clocked
+      // out yet would still count as on-floor. Today no absent row has an open shift (0 of 27,
+      // measured 2026-08-28), so this was latent rather than live — closed anyway now that the
+      // rule has one home. See isPresent() in @throttle/domain.
+      const present = new Set(rows.filter(r => !r.clock_out && isPresent(r)).map(r => r.operator_id));
       setFloorOps(present.size);
     }
   }, [session]);
