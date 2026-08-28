@@ -8,6 +8,7 @@ import { Plus, ArrowRight, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone } from '@/components/format.js';
 import { csvCell } from '@/lib/sales.js';
+import { todayStr } from '@throttle/domain';
 
 const PO_STATUSES = ['Soft', 'Draft', 'Pending Approval', 'Approved', 'Sent', 'Confirmed & Payment Done', 'Partially Received', 'Closed', 'Cancelled'];
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
@@ -98,7 +99,11 @@ export default function POListPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lot-purchase-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    // todayStr() is LOCAL-date, not `toISOString()` — PATTERN-221. Between midnight and
+    // 05:30 IST, toISOString() still reads the previous UTC day, so an early-morning
+    // download would be stamped yesterday. The three sibling exports in this app all use
+    // this helper; matching them is the point.
+    a.download = `lot-purchase-orders-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }

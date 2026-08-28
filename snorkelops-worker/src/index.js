@@ -1289,7 +1289,19 @@ export default {
             const status = url.searchParams.get('status')     || '';
             const source = url.searchParams.get('source')     || '';
             const type   = url.searchParams.get('order_type') || '';
-            let filter = '?order=created_at.desc&limit=500';
+            // ⚠️ Was `limit=500`, raised 2026-08-28 (S321 hostile review). 500 was not a
+            // distant ceiling: 384 POs exist and 145 were raised in the last 30 days
+            // (~4.8/day, both measured that day), so the cap was about **24 days** away —
+            // and the PO list silently truncates past it, as does the Export button shipped
+            // the same day. A truncated list looks short; a truncated SPREADSHEET gets
+            // totalled and looks authoritative.
+            // 2000 is chosen against the real constraint, not plucked: PostgREST clamps every
+            // response to the project's `db-max-rows` (5,000 — CORE.md), so anything above
+            // that is fiction, and 2000 is ~4 years of headroom at the measured rate while
+            // staying well clear. ⚠️ This is a REPRIEVE, NOT the fix — the read still has no
+            // total and still cannot say it was cut. Real paging is tracked in BACKLOG
+            // [snorkel]; do not close that item on the strength of this line.
+            let filter = '?order=created_at.desc&limit=2000';
             if (status) filter += `&status=eq.${encodeURIComponent(status)}`;
             if (source) filter += `&source=eq.${encodeURIComponent(source)}`;
             if (type)   filter += `&order_type=eq.${encodeURIComponent(type)}`;
