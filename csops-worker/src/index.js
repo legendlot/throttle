@@ -793,10 +793,18 @@ export default {
     // whose healthy state is silence cannot be told apart from one that stopped running, and
     // "nothing got assigned" is exactly what a broken sweep and a quiet inbox both look like.
     if (mins % 10 === 0) {
-      ctx.waitUntil(retroAssignUnownedThreads(env).then(
-        r => console.log('[retro-assign]', JSON.stringify(r)),
-        e => console.error('[retro-assign] error', e),
-      ));
+      // ⚠️ CHAINED, not two independent waitUntils. Release must land BEFORE the sweep runs, or a
+      // thread freed this tick sits unowned for another ten minutes before anyone is offered it.
+      ctx.waitUntil(
+        releaseUnworkableThreads(env)
+          .then(r => { if (r?.released) console.warn('[release-unworkable]', JSON.stringify(r)); else console.log('[release-unworkable]', JSON.stringify(r)); })
+          .catch(e => console.error('[release-unworkable] error', e))
+          .then(() => retroAssignUnownedThreads(env))
+          .then(
+            r => console.log('[retro-assign]', JSON.stringify(r)),
+            e => console.error('[retro-assign] error', e),
+          ),
+      );
     }
 
     // Relay sending watchdog (S318). Every 5 minutes, NOT four times a day like the channel
@@ -1012,6 +1020,10 @@ async function handlePost(action, body, auth, env, request) {
     case 'assignComment':            return assignComment(body, auth, env);
     case 'syncCommentsNow':          return syncCommentsNow(body, auth, env);
     case 'subscribeIgComments':      return subscribeIgComments(body, auth, env);
+    case 'releaseUnworkableThreads': {   // admin: run the ownership-integrity sweep by hand
+      const g2 = require('cs_ticket_admin', auth); if (g2) return g2;
+      return ok(await releaseUnworkableThreads(env));
+    }
     case 'diagIgCommentsScope':      return diagIgCommentsScope(body, auth, env); // read-only: can our token read post comments
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -6893,6 +6905,65 @@ const CH_LABEL = { instagram: 'Instagram', whatsapp: 'WhatsApp', email: 'Email',
 // requires an in-shift, present agent, so outside shift hours every call simply returns null.
 const RETRO_ASSIGN_PER_RUN = 10;
 const RETRO_ASSIGN_MAX_AGE_DAYS = 7;
+
+// ── releaseUnworkableThreads — an owner who CANNOT work a thread is not an owner (S322) ──────
+//
+// A thread assigned to someone without `cs_ticket_manage` is in a black hole: they cannot reply,
+// and because the retro-assign sweep only looks at `assigned_agent_id IS NULL`, nobody else is
+// offered it either. It is not unassigned, so it is invisible; it is not workable, so it is dead.
+//
+// Found 2026-08-28 while measuring the "auto-reassign on agent unavailability" request. One person
+// had been moved to the **`viewer`** role — which holds neither `cs_ticket_manage` NOR
+// `cs_ticket_view`, so they cannot even open Pitstop — while still owning **24 open conversations,
+// 21 of them with the customer waiting**, the oldest 22 days. Nobody had done anything wrong; the
+// role changed and thread ownership simply did not follow.
+//
+// ⚠️ This is deliberately an INTEGRITY rule, not an availability one. It does NOT touch threads
+// owned by agents who are merely offline, on leave or slow — that was the shape the backlog item
+// proposed, and the data refutes it: of 49 threads waiting over 24h, **29 belong to agents who had
+// replied to someone else within the hour**. Releasing those would shuffle work between people who
+// are present and working, which is churn, not routing. Availability is a prioritisation problem;
+// this is a correctness one.
+async function releaseUnworkableThreads(env) {
+  // Who can actually work a thread? Roles are tiny; resolve the able set rather than hardcoding
+  // role names, so adding a role with cs_ticket_manage needs no change here.
+  const roles = await sb('/rest/v1/roles?select=role_id,permissions', env);
+  if (!roles.ok || !Array.isArray(roles.data)) return { ok: false, reason: 'roles_read_failed' };
+  const ableRoles = roles.data
+    .filter(r => r?.permissions?.cs_ticket_manage === true)
+    .map(r => r.role_id);
+  if (!ableRoles.length) return { ok: false, reason: 'no_able_roles' };
+
+  const users = await sb(
+    `/rest/v1/users_profile?role=in.(${ableRoles.map(encodeURIComponent).join(',')})&select=id`, env);
+  if (!users.ok || !Array.isArray(users.data)) return { ok: false, reason: 'users_read_failed' };
+  const able = new Set(users.data.map(u => u.id));
+  // ⚠️ Fail CLOSED. An empty able-set almost certainly means the read broke, and acting on it
+  // would unassign EVERY open thread in the system in one tick.
+  if (!able.size) return { ok: false, reason: 'able_set_empty_refusing' };
+
+  const open = await sb(
+    '/rest/v1/cs_wa_threads?thread_state=eq.open&assigned_agent_id=not.is.null'
+    + '&select=id,assigned_agent_id,assigned_agent_name&limit=2000', env);
+  if (!open.ok || !Array.isArray(open.data)) return { ok: false, reason: 'threads_read_failed' };
+
+  // Catches a deleted user too: no profile row means not in `able`.
+  const orphans = open.data.filter(t => !able.has(t.assigned_agent_id));
+  if (!orphans.length) return { ok: true, checked: open.data.length, released: 0 };
+
+  const ids = orphans.map(t => t.id);
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=in.(${ids.map(encodeURIComponent).join(',')})`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ assigned_agent_id: null, assigned_agent_name: null, assigned_at: null }),
+  });
+  if (!upd.ok) return { ok: false, reason: `patch_failed_${upd.status}` };
+
+  // Name who lost them. A silent re-pool of someone's queue is exactly the kind of change a lead
+  // should be able to explain the next morning.
+  const byOwner = {};
+  for (const t of orphans) byOwner[t.assigned_agent_name || t.assigned_agent_id] = (byOwner[t.assigned_agent_name || t.assigned_agent_id] || 0) + 1;
+  return { ok: true, checked: open.data.length, released: orphans.length, by_former_owner: byOwner };
+}
 
 async function retroAssignUnownedThreads(env) {
   // ⚠️ Only sweep channels the router can actually serve. `cs_autoassign_thread` resolves agents
