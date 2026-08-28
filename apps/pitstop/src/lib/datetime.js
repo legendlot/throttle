@@ -8,7 +8,7 @@
 // case, not the mildest: any instant between 00:00 and 05:30 IST maps back to the previous
 // calendar day, so the row reads a day early with no clock shown to give the error away.
 // Swept 2026-08-21 (S302) across calls, inbox, queue/detail, new, admin/myop, CallPop,
-// ShopifyPanel and WhatsAppPanel. (Number formatting via `toLocaleString('en-IN')` is
+// ShopifyPanel and ConversationPanel. (Number formatting via `toLocaleString('en-IN')` is
 // unaffected and is fine inline — this rule is about instants only.)
 const IST = 'Asia/Kolkata';
 
