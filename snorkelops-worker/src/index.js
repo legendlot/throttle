@@ -567,17 +567,34 @@ function deriveFulfilment(request, shipments) {
 // fail to match a '' on the other and report a shipped line as pending.
 async function withLineFulfilment(lines, f) {
   const rows = Array.isArray(lines) ? lines : [];
-  const shipments = (f?.shipments || []).filter(s => s.status !== 'cancelled');
+  // ⚠️ MUST mirror getSalesOrder's own `shipments` fallback. A pre-cutover order has NO
+  // fulfilment request — it links to a single shipment via sales_orders.dispatch_shipment_id —
+  // so reading `f.shipments` alone returns [], the early return fires, and every line reports
+  // "Sent 0 / Pending all" on an order that has ALREADY SHIPPED. Caught by hostile review
+  // before it reached anyone: 4 confirmed legacy orders, all 4 shipped, 9 lines, and this is
+  // the very screen sales and finance were told to chase outstanding items from — so the
+  // failure direction is "go chase a delivered order", the worst one available.
+  const all = (f?.shipments?.length ? f.shipments : (f?.legacyShipment ? [f.legacyShipment] : []));
+  const shipments = all.filter(s => s.status !== 'cancelled');
   if (!rows.length || !shipments.length) {
-    // No request/shipments yet: everything is honestly outstanding, and saying so beats
+    // Genuinely nothing dispatched: everything is honestly outstanding, and saying so beats
     // omitting the fields and leaving the UI unable to tell "nothing sent" from "unknown".
-    return rows.map(l => ({ ...l, shipped_qty: 0, pending_qty: Math.round(Number(l.qty)) || 0 }));
+    return rows.map(l => ({ ...l, shipped_qty: 0, packed_qty: 0, pending_qty: Math.round(Number(l.qty)) || 0 }));
   }
   const shIds = shipments.map(s => s.id);
   const shipped = new Set(shipments.filter(s => s.status === 'shipped').map(s => s.id));
   const lnR = await queryPublic('dispatch_shipment_lines',
     `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,product,model,color,target_qty,packed_qty`);
-  const key = (p, m, c) => `${String(p || '').trim().toLowerCase()}|${String(m || '').trim().toLowerCase()}|${String(c || '').trim().toLowerCase()}`;
+  // ⚠️ WHITESPACE-INSENSITIVE, not just trimmed. `store.sales_order_lines` holds one line
+  // spelled "Mc Cloud" while every dispatch line says "McCloud" (RULE-NAME-001's canonical
+  // form) — a trim-and-lowercase key leaves those unequal, so that shipped line would read as
+  // pending forever. Verified safe before widening: squashing whitespace across every distinct
+  // variant in BOTH tables produces exactly ONE collision, and it is those two spellings of the
+  // same product — zero genuinely different variants collide (measured 2026-08-28). The data
+  // row is corrected separately; this makes the next drift harmless rather than silent.
+  const key = (p, m, c) => [p, m, c]
+    .map(x => String(x ?? '').toLowerCase().replace(/\s+/g, ''))
+    .join('|');
   const sentBy = {};   // packed AND despatched
   const packedBy = {}; // packed but NOT yet despatched — the two buckets are disjoint, so
                        // the pools below can be drained independently without double-counting
@@ -589,8 +606,10 @@ async function withLineFulfilment(lines, f) {
     else packedBy[k] = (packedBy[k] || 0) + q;
   }
   // ⚠️ ALLOCATE across lines, never look up per line. Dispatch lines carry no sales-order
-  // line id, so the match is on variant — and 179 orders have TWO OR MORE lines of the same
-  // product+model+colour (measured 2026-08-28). A plain per-line lookup would hand each of
+  // line id, so the match is on variant — and duplicate-variant lines are common: 179
+  // duplicated variant GROUPS across 140 of 504 orders, i.e. 28% of orders (re-measured
+  // 2026-08-28 by hostile review; this line first said "179 orders", which was the group
+  // count wearing the wrong denominator). A plain per-line lookup would hand each of
   // them the SAME shipped figure, so a 2×1-unit order with 1 unit sent would read as 2
   // shipped and 0 pending: an order still owing a unit would look complete. Drain a shared
   // pool in sort order instead, filling each line up to its own ordered qty.
