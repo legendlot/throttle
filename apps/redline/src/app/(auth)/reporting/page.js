@@ -42,15 +42,21 @@ function fmtMonthDay(s) {
 }
 
 // ── Severity colour ──────────────────────────────────────────
+// ⚠️ These four keys must match the distinct severities in public.defect_master and the
+// qc_fail_defects_severity_check CHECK. `cosmetic` was added 2026-08-28 (S322): the CHECK had
+// never been widened for it, so no Cosmetic defect could be recorded at all — and this file
+// would have silently counted any that were as `minor` (the else-branch below).
 const SEVERITY_COLOR = {   // chart fills
   critical: '#ef4444',
   major:    '#f59e0b',
   minor:    '#888',
+  cosmetic: '#38bdf8',
 };
 const SEVERITY_FG = {      // WCAG-safe text colors
   critical: 'var(--bad-fg)',
   major:    'var(--warn-fg)',
   minor:    'var(--t3)',
+  cosmetic: 'var(--t2)',
 };
 
 // ── Common styles ────────────────────────────────────────────
@@ -324,10 +330,11 @@ export default function ReportingPage() {
       codeMap[code].count += cnt;
       const product = row.product || '—';
       const sev = (row.severity || 'minor').toLowerCase();
-      if (!productMap[product]) productMap[product] = { product, total: 0, critical: 0, major: 0, minor: 0, top: { code: '', count: 0 } };
+      if (!productMap[product]) productMap[product] = { product, total: 0, critical: 0, major: 0, minor: 0, cosmetic: 0, top: { code: '', count: 0 } };
       productMap[product].total += cnt;
       if (sev === 'critical') productMap[product].critical += cnt;
       else if (sev === 'major') productMap[product].major += cnt;
+      else if (sev === 'cosmetic') productMap[product].cosmetic += cnt;
       else productMap[product].minor += cnt;
       if (cnt > productMap[product].top.count) productMap[product].top = { code, count: cnt };
     }
@@ -335,9 +342,9 @@ export default function ReportingPage() {
     const top = codeList[0];
 
     const top8 = codeList.slice(0, 8).map(c => ({ code: c.code, count: c.count, severity: c.severity }));
-    const sevSplit = { critical: 0, major: 0, minor: 0 };
+    const sevSplit = { critical: 0, major: 0, minor: 0, cosmetic: 0 };
     for (const c of codeList) sevSplit[c.severity || 'minor'] = (sevSplit[c.severity || 'minor'] || 0) + c.count;
-    const sevPie = ['critical', 'major', 'minor']
+    const sevPie = ['critical', 'major', 'minor', 'cosmetic']
       .map(k => ({ name: k.charAt(0).toUpperCase() + k.slice(1), value: sevSplit[k] || 0, key: k }))
       .filter(d => d.value > 0);
 
@@ -751,7 +758,7 @@ function DefectsSection({ aggs, fpyPct, fpyTone, defView, setDefView }) {
               <tr>
                 {defView === 'code'
                   ? ['Code','Issue','Category','Severity','Count'].map(h => <th key={h} style={thStyle}>{h}</th>)
-                  : ['Product','Total','Critical','Major','Minor','Top Defect'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                  : ['Product','Total','Critical','Major','Minor','Cosmetic','Top Defect'].map(h => <th key={h} style={thStyle}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -772,6 +779,7 @@ function DefectsSection({ aggs, fpyPct, fpyTone, defView, setDefView }) {
                       <td style={{ ...numTd, color: 'var(--bad-fg)' }}>{fmt(p.critical)}</td>
                       <td style={{ ...numTd, color: 'var(--warn-fg)' }}>{fmt(p.major)}</td>
                       <td style={{ ...numTd, color: 'var(--t3)' }}>{fmt(p.minor)}</td>
+                      <td style={{ ...numTd, color: 'var(--t2)' }}>{fmt(p.cosmetic)}</td>
                       <td style={{ ...numTd, color: 'var(--yellow)' }}>{p.top.code} <span style={{ color: 'var(--t3)' }}>({fmt(p.top.count)})</span></td>
                     </tr>
                   ))}

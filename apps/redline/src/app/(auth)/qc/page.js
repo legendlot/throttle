@@ -44,10 +44,14 @@ const dayNavStyle = {
 };
 
 /* severity → semantic tones (status colors only, per design rules) */
+// ⚠️ Keys must match the distinct severities in public.defect_master. `Cosmetic` was added
+// 2026-08-28 (S322) — its 5 codes existed and were offered on the scanner, but the
+// qc_fail_defects CHECK rejected them, so none had ever reached this screen.
 const SEV_T = {
   Critical: { fg: 'var(--bad-fg)',  dot: 'var(--red)',      tone: 'bad'  },
   Major:    { fg: 'var(--warn-fg)', dot: 'var(--amber)',    tone: 'warn' },
   Minor:    { fg: 'var(--t2)',      dot: 'var(--t4)',       tone: 'mute' },
+  Cosmetic: { fg: 'var(--t2)',      dot: 'var(--blue)',     tone: 'mute' },
 };
 const sevT = (s) => SEV_T[s] || SEV_T.Minor;
 
@@ -293,7 +297,7 @@ function ByProduct({ rows }) {
     return <Empty icon="box" message="No defect data for selected period" />;
   }
 
-  const SEV_ORDER = { Critical: 0, Major: 1, Minor: 2 };
+  const SEV_ORDER = { Critical: 0, Major: 1, Minor: 2, Cosmetic: 3 };
   const byProduct = {};
   rows.forEach(r => {
     const p = r.product || 'Unknown';
