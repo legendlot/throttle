@@ -7798,9 +7798,12 @@ async function syncIgComments(env) {
     // matter most, and it would truncate INVISIBLY. Meta gives us its own total on the media, so
     // compare and report the shortfall rather than letting "we ingested 50" read as "there were
     // 50". If this ever fires, add paging; do not just raise the limit.
+    // ⚠️ Compare against EVERYTHING we ingested for this post, not just the top-level page.
+    // Meta's `comments_count` includes replies, so comparing it to `data.length` reported a
+    // shortfall on any post that has a reply — it read `not_fetched: 2` on a first run where
+    // nothing was actually missed. A cry-wolf metric is worse than no metric.
     const metaTotal = Number(m.comments_count) || 0;
-    const topLevel = (c.body?.data || []).length;
-    if (metaTotal > topLevel) truncated += (metaTotal - topLevel);
+    if (metaTotal > flat.length) truncated += (metaTotal - flat.length);
 
     const rows = [];
     for (const cm of flat) {
