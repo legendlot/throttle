@@ -45,7 +45,12 @@ const BOM_GROUPS = [
   { key: 'consumables', label: '🔧 Consumables' },
 ];
 
-const ITEM_TYPES = ['Part', 'Other', 'FBU Unit', 'Ecom Packaging', 'Comic', 'Consumable'];
+// ⚠️ 'Charge' (S322) marks a NON-RECEIVABLE line — freight / transportation / die / tool /
+// design-plate costs. It stays a real PO line (the vendor invoices it, it carries GST, it prints
+// on the PO and it belongs in landed cost), but the receiving seeder skips it, so nobody is asked
+// to count 4,080 of "Shipping Charges" off a truck. A Charge line still needs an HSN/SAC code and
+// a GST % under RULE-PO-001.
+const ITEM_TYPES = ['Part', 'Other', 'FBU Unit', 'Ecom Packaging', 'Comic', 'Consumable', 'Charge'];
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },

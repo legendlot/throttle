@@ -84,6 +84,12 @@ function formatDateInput(raw) {
   return d.toISOString().slice(0, 10);
 }
 
+
+// ⚠️ Mirrors ITEM_TYPES in procurement/pos/new/page.js — keep the two in lockstep.
+// This modal previously hardcoded item_type:'Part' with no picker, so a charge added to an
+// EXISTING PO was silently typed as a part and seeded as a countable receiving line (S322).
+const ADD_LINE_ITEM_TYPES = ['Part', 'Other', 'FBU Unit', 'Ecom Packaging', 'Comic', 'Consumable', 'Charge'];
+
 export default function PODetailPage() {
   // BUG-C: support both the new query-string route (/pos/detail?po_number=X)
   // and the legacy /pos/[poNumber]/ route (only renders the 'sample' placeholder
@@ -559,7 +565,7 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
         <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
           <thead>
             <tr>
-              {['Part', 'Description', 'Qty *', 'Unit', 'Unit Price', 'HSN', 'GST %', ''].map((h) => (
+              {['Part', 'Description', 'Type', 'Qty *', 'Unit', 'Unit Price', 'HSN', 'GST %', ''].map((h) => (
                 <th key={h} style={{ ...labelStyle, textAlign: 'left', padding: '4px 6px', borderBottom: '1px solid #333' }}>{h}</th>
               ))}
             </tr>
@@ -582,6 +588,12 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
                   </div>
                 </td>
                 <td style={{ padding: '4px 6px' }}><input type="text" value={l.description} onChange={(e) => upd(i, 'description', e.target.value)} style={{ ...inputStyle, width: 200 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}>
+                  <select value={l.item_type || 'Part'} onChange={(e) => upd(i, 'item_type', e.target.value)} style={{ ...inputStyle, width: 110 }} disabled={submitting}
+                    title="Charge = freight / die / tool cost. Stays on the PO and carries GST, but is never seeded as a receivable line.">
+                    {ADD_LINE_ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </td>
                 <td style={{ padding: '4px 6px' }}><input type="number" value={l.qty_ordered} onChange={(e) => upd(i, 'qty_ordered', e.target.value)} style={{ ...inputStyle, width: 90 }} disabled={submitting} /></td>
                 <td style={{ padding: '4px 6px' }}><input type="text" value={l.unit} onChange={(e) => upd(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} disabled={submitting} /></td>
                 <td style={{ padding: '4px 6px' }}><input type="number" value={l.unit_price} onChange={(e) => upd(i, 'unit_price', e.target.value)} style={{ ...inputStyle, width: 100 }} disabled={submitting} /></td>
