@@ -1410,8 +1410,28 @@ async function getCatalogs(url, auth, env) {
   // product_code added S273 (Reann #2) — without it the picker cannot record a real product
   // reference, which is what made COGS unlookupable. Inactive rows excluded: a discontinued
   // variant should not be pickable on a new deal.
+  // ⛔ REMOTES EXCLUDED 2026-08-28 (S321, Nandu #bugs) — this is the fix for "the variant is
+  // not visible", and the mechanism is worth keeping in mind before widening this select again.
+  // A remote row carries `model = color = NULL`, so ProductLinesEditor's
+  // `[name, model, color].filter(Boolean).join(' · ')` collapses it to the BARE PRODUCT NAME —
+  // "Ghost" sitting in the same dropdown as "Ghost · Underground · White". Typing the product
+  // name therefore surfaces the remote as the closest match, and picking it stores the remote's
+  // product_code with an empty variant. That is not a display quirk: it is how IGN-2026-00550,
+  // -00544 and -00156 each ended up with a REMOTE saved as the deal's product (3 of the only 9
+  // rows that carry a product_ref at all). The S310 pick-splitting fix corrected which FIELD the
+  // variant lands in; it could not help here, because a remote genuinely has no variant to split.
+  // Ignition never ships a bare remote as a goodie, so the row has no business in this picker.
+  // The Combobox stays creatable, so a genuine one-off can still be typed as free text.
+  // ⚠️ NULL-SAFE ON PURPOSE — `component_type=not.eq.remote` alone would DROP a row whose
+  // component_type is NULL, because SQL comparisons against NULL are unknown, not true. Every
+  // active row carries one today (car 126 · remote 38 · puzzle 28 · drone 7, measured
+  // 2026-08-28), so the plain filter would look correct forever right up until someone
+  // registers a product without it — and it would then vanish from the picker with no error,
+  // which is the same silent-exclusion class RULE-009 records. An unclassified product should
+  // stay pickable; only an explicit remote is excluded.
   const productsRes = await sb(
-    `/rest/v1/product_master?select=name:product,sku,product_code,model,color&is_active=eq.true&order=product`,
+    `/rest/v1/product_master?select=name:product,sku,product_code,model,color&is_active=eq.true`
+    + `&or=(component_type.is.null,component_type.neq.remote)&order=product`,
     env,
     { headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
   ).catch(() => ({ ok: false, data: [] }));
