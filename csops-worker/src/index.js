@@ -7658,8 +7658,15 @@ async function syncIgComments(env) {
     return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
   };
 
-  const me = await get('/me?fields=id');
+  const me = await get('/me?fields=id,username');
   const ourId = String(me.body?.id || '');
+  // ⚠️ **THE USERNAME IS THE ONLY RELIABLE SELF-TEST — the ids are DIFFERENT ID SPACES.**
+  // `/me?fields=id` returns the Instagram-Login user id (27678039331790006), while a comment's
+  // `from.id` for the SAME account is the IG Business id (17841469573167166). Measured
+  // 2026-08-28: they never match, so the `from.id === ourId` comparison this code shipped with
+  // was DEAD — it never once identified one of our own comments, and looked like a working
+  // branch. `from.username` and `/me.username` are both `legendoftoys` and do match.
+  const ourUsername = String(me.body?.username || '').toLowerCase();
   if (!ourId) return { skipped: 'no_ig_user', detail: me.body?.error?.message || null };
 
   const media = await get(`/me/media?fields=id,caption,permalink,media_type,media_url,comments_count,timestamp&limit=${IG_COMMENT_MEDIA_LOOKBACK}`);
@@ -7720,7 +7727,10 @@ async function syncIgComments(env) {
       //   select * from store.cs_post_comments
       //   where direction='outbound' and replied_by_user_id is null and from_handle is null;
       // and sanity-check the bodies read like us, not like customers.
-      const isOurs = !cm.from || (fromId && fromId === ourId);
+      const fromUser = String(cm.from?.username || '').toLowerCase();
+      const isOurs = !cm.from
+        || (ourUsername && fromUser === ourUsername)   // the test that actually fires
+        || (fromId && fromId === ourId);               // kept in case Meta ever aligns the ids
       const row = await upsertPostComment({
         post_id: post.id,
         channel: 'instagram',
