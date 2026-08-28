@@ -30,6 +30,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Lint gate (S322) — see the note in deploy-garage.yml. Runs from the REPO ROOT
+      # deliberately: lint:ci lives in the root package.json and sweeps apps/*/src +
+      # packages/*, unlike the Build step below which is scoped to apps/throttle.
+      - name: Lint (rules-of-hooks + no-undef)
+        run: npm run lint:ci
+
       - name: Build
         run: |
           set -o pipefail

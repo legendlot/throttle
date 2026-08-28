@@ -27,6 +27,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Lint gate (S322). `next build` does NOT run these rules on this estate, so a
+      # ReferenceError at render compiles clean and ships — that white-screened Pitstop /inbox
+      # (S311) and left podium /appraisals/detail dead on every render until 2026-08-28.
+      # rules-of-hooks + no-undef ONLY; exhaustive-deps stays off on purpose (it lights up
+      # estate-wide and drowns the signal). Baseline was zero when this was wired.
+      - name: Lint (rules-of-hooks + no-undef)
+        run: npm run lint:ci
+
       - name: Build Odo
         run: |
           set -o pipefail
