@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Panel, KpiCard, ProductTag, ProgressBar, StatusBadge, EmptyState, Spinner } from '@throttle/ui';
+import { countPresent } from '@throttle/domain';
 import {
   ListChecks, Inbox, Send, Undo2, AlertTriangle, Users,
   Zap, Target, Activity as ActivityIcon, ArrowRight, Route, TrendingUp,
@@ -154,15 +155,9 @@ export default function OverviewPage() {
       const res = await workerFetch('getOperatorAttendance', { data: { date_from: today, date_to: today, team: 'store' } }, session);
       if (!res.ok) { setStoreOps(null); return; }
       const rows = Array.isArray(res.data) ? res.data : [];
-      // ⚠️ An attendance row is NOT the same as being present: a supervisor can mark the day
-      // `absent` or `leave` and the row stays (that is how day_status works — RULE-ATT-001).
-      // Counting the raw rows therefore reported people known to be away as "Present"
-      // (22 `absent` rows in the 30 days to 2026-08-28). Fixed S322.
-      // ⚠️ Values are lowercase snake_case — `absent`, not `Absent`; a filter written against
-      // the manual's display labels would match nothing and look like it worked.
-      // `half_day`/`full_day`/`holiday`/null all still count as present.
-      const AWAY = new Set(['absent', 'leave']);
-      setStoreOps(new Set(rows.filter(r => !AWAY.has(r.day_status)).map(r => r.operator_id)).size);
+      // An attendance row is NOT the same as being present — see countPresent() in
+      // @throttle/domain for the full rule and the five surfaces this was wrong on.
+      setStoreOps(countPresent(rows));
     } catch { setStoreOps(null); }
   }
 

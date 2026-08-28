@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Badge, ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { countPresent } from '@throttle/domain';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const STORE_ACTIVITIES = [
@@ -575,7 +576,8 @@ function AttendanceTab({ session, canManageFloor }) {
     );
   }
 
-  const presentCount = new Set(rows.map((r) => r.operator_id)).size;
+  // Excludes day_status absent/leave — see countPresent() in @throttle/domain.
+  const presentCount = countPresent(rows);
 
   return (
     <div>

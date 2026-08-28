@@ -13,7 +13,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { todayStr } from '@throttle/domain';
+import { todayStr, isPresent } from '@throttle/domain';
 import { Plus, Users, X } from 'lucide-react';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -330,16 +330,9 @@ export default function OverviewPage() {
         const mpl = Array.isArray(mplRaw?.data) ? mplRaw.data : (Array.isArray(mplRaw) ? mplRaw : []);
         const att = Array.isArray(attRaw?.data) ? attRaw.data : (Array.isArray(attRaw) ? attRaw : []);
         if (mpl.length) {
-          // ⚠️ An attendance row is NOT the same as being present — a supervisor can mark the
-          // day `absent`/`leave` and the row remains (RULE-ATT-001). Counting raw rows showed
-          // people known to be away as "present" against the roster plan. Fixed S322, same
-          // day as the identical bug on Garage's Store Present KPI.
-          // ⚠️ Values are lowercase snake_case (`absent`, not `Absent`) — a filter written
-          // against the manual's display labels matches nothing and looks like it worked.
-          // ⚠️ Depot's dashboard is NOT affected and needs no change: it filters on
-          // `!clock_out`, and all 27 absent rows carry a clock_out (verified 2026-08-28).
-          const AWAY = new Set(['absent', 'leave']);
-          const attIds = new Set(att.filter(a => !AWAY.has(a.day_status)).map(a => a.operator_id));
+          // An attendance row is NOT the same as being present — see isPresent() in
+          // @throttle/domain for the full rule and the five surfaces this was wrong on.
+          const attIds = new Set(att.filter(isPresent).map(a => a.operator_id));
           const byLine = {};
           for (const a of mpl) {
             const line = a.line || a.line_no || 'Others';

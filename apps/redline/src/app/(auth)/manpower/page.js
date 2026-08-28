@@ -19,7 +19,7 @@ import {
   Icon, Panel, ToneBadge, lineColor, lineRgb, btnPrimary, btnGhost,
   inputStyle as kitInput,
 } from '../../../components/kit/index.js';
-import { dateStr } from '@throttle/domain';
+import { dateStr, countPresent } from '@throttle/domain';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const LINE_ORDER          = ['L1', 'L2', 'L3'];
@@ -646,7 +646,7 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
-            {new Set(visibleRows.map(r => r.operator_id)).size} present · {visibleRows.length} record{visibleRows.length === 1 ? '' : 's'}
+            {countPresent(visibleRows)} present · {visibleRows.length} record{visibleRows.length === 1 ? '' : 's'}
             {dept ? ` · ${capitalize(dept)}` : ''}
           </span>
           <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
