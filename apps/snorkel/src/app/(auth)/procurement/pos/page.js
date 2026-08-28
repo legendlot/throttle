@@ -4,9 +4,10 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowRight } from 'lucide-react';
+import { Plus, ArrowRight, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone } from '@/components/format.js';
+import { csvCell } from '@/lib/sales.js';
 
 const PO_STATUSES = ['Soft', 'Draft', 'Pending Approval', 'Approved', 'Sent', 'Confirmed & Payment Done', 'Partially Received', 'Closed', 'Cancelled'];
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
@@ -68,6 +69,40 @@ export default function POListPage() {
     };
   }, [rows]);
 
+  // Export exactly what is on screen — same rows, same filters, same order (Priya,
+  // #bugs 2026-08-28). Mirrors the Sales Orders export rather than inventing a second
+  // pattern; `csvCell` is the shared quoter.
+  // ⚠️ Built from `filteredRows`, which is the CLIENT's list, and that is what makes the
+  // China permission hold automatically: getPOs already drops Soft POs and strips China
+  // header values for anyone without `po_china`, so a restricted user's file simply cannot
+  // contain what their screen does not. A server-side export would have had to re-implement
+  // that gate — the recurring way a permission gets taught to one surface and not the next.
+  // The value column is written as the RESTRICTED marker for those users, never the number.
+  function exportCsv() {
+    const canChina = !!perms?.po_china;
+    const cols = ['PO Number', 'Revision', 'Type', 'Source', 'Vendor', 'Vendor Code', 'Lines',
+      'Currency', 'Value', 'Value (INR approx)', 'Expected', 'Raised by', 'Status'];
+    const lines = [cols.join(',')];
+    for (const p of filteredRows) {
+      const restricted = p.source === 'China' && !canChina;
+      lines.push([
+        p.po_number, p.revision || 0, p.order_type, p.source, p.vendor_name, p.vendor_code,
+        p.line_count ?? p.lines ?? 0,
+        restricted ? '' : (p.currency || ''),
+        restricted ? 'Restricted' : (p.po_value ?? ''),
+        restricted ? '' : Math.round(toInr(p.po_value, p.currency)),
+        p.expected_delivery || '', p.raised_by_name || p.raised_by || '', p.status,
+      ].map(csvCell).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lot-purchase-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (perms && !perms.procurement_view) {
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
@@ -77,7 +112,10 @@ export default function POListPage() {
   return (
     <div className="pg">
       <PageHead title="Purchase Orders" sub="All purchase orders raised across categories."
-        actions={perms?.po_create && <Btn kind="primary" onClick={() => router.push('/procurement/pos/new')}><Plus size={14} /> New PO</Btn>} />
+        actions={<>
+          <Btn onClick={exportCsv} disabled={!filteredRows.length}><Download size={14} /> Export</Btn>
+          {perms?.po_create && <Btn kind="primary" onClick={() => router.push('/procurement/pos/new')}><Plus size={14} /> New PO</Btn>}
+        </>} />
 
       <div className="kpi-row">
         <Kpi label="Open value" value={kpi.openVal} sub="≈ INR, all open" tone="blue" format={(v) => inrCompact(v)} />
