@@ -1011,6 +1011,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setCommentState':          return setCommentState(body, auth, env);
     case 'assignComment':            return assignComment(body, auth, env);
     case 'syncCommentsNow':          return syncCommentsNow(body, auth, env);
+    case 'subscribeIgComments':      return subscribeIgComments(body, auth, env);
     case 'diagIgCommentsScope':      return diagIgCommentsScope(body, auth, env); // read-only: can our token read post comments
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -7919,6 +7920,71 @@ async function assignComment(body, auth, env) {
 async function syncCommentsNow(_body, auth, env) {
   const g = require('cs_ticket_admin', auth); if (g) return g;
   return ok(await syncIgComments(env));
+}
+
+// ── subscribeIgComments — add `comments` to the IG webhook subscription (S322) ───────────────
+//
+// ⚠️ THE FIELD LIST IS A REPLACE, NOT AN APPEND. Sending `comments` alone REMOVES `messages`, and
+// live DM delivery stops with no error anywhere — the S161 inbox simply goes quiet. That is the
+// whole reason this is a deliberate, admin-gated action instead of a one-off curl.
+//
+// The guard is structural, not advisory: `messages` is force-added to whatever is requested, and
+// the result is READ BACK and refused if `messages` is missing. A caller cannot express the
+// dangerous request even by mistake.
+const IG_REQUIRED_WEBHOOK_FIELDS = ['messages'];
+
+async function subscribeIgComments(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const token = await metaToken('instagram', env);
+  if (!token) return err('No Instagram token configured', 503);
+  const base = metaGraphBase('instagram');
+
+  const meRes = await fetch(`${base}/me?fields=id&access_token=${token}`);
+  const me = await meRes.json().catch(() => ({}));
+  const igUserId = me?.id;
+  if (!igUserId) return err(`Could not resolve the IG user: ${me?.error?.message || meRes.status}`, 502);
+
+  const readFields = async () => {
+    const r = await fetch(`${base}/${encodeURIComponent(igUserId)}/subscribed_apps?access_token=${token}`);
+    const d = await r.json().catch(() => ({}));
+    const set = new Set();
+    for (const row of (d?.data || [])) for (const f of (row?.subscribed_fields || [])) set.add(f);
+    return { fields: [...set], raw: d };
+  };
+
+  const before = await readFields();
+  // Union of what is already there, what was asked for, and the non-negotiables.
+  const wanted = [...new Set([
+    ...before.fields,
+    ...(Array.isArray(body?.fields) && body.fields.length ? body.fields : ['comments']),
+    ...IG_REQUIRED_WEBHOOK_FIELDS,
+  ])];
+
+  const res = await fetch(`${base}/${encodeURIComponent(igUserId)}/subscribed_apps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ subscribed_fields: wanted.join(','), access_token: token }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) return err(d?.error?.message || `Instagram refused the subscription (HTTP ${res.status})`, 502);
+
+  // ⚠️ Read back, never trust the write. A 200 on the POST does not prove the resulting set is
+  // what we asked for, and the failure we care about is silent by nature.
+  const after = await readFields();
+  const messagesKept = after.fields.includes('messages');
+  return ok({
+    ig_user_id: igUserId,
+    requested: wanted,
+    before: before.fields,
+    after: after.fields,
+    comments_subscribed: after.fields.includes('comments'),
+    messages_still_subscribed: messagesKept,
+    verdict: messagesKept
+      ? (after.fields.includes('comments')
+        ? 'OK — comments added, messages intact. DM delivery is unaffected.'
+        : 'PARTIAL — messages intact but comments did not stick; check the app dashboard.')
+      : '🔴 DM DELIVERY MAY BE BROKEN — `messages` is missing from the subscription. Re-run immediately with fields ["comments","messages"] and confirm a test DM arrives.',
+  });
 }
 
 // ── diagIgCommentsScope — can OUR Instagram token read (and reply to) post comments? ─────────
