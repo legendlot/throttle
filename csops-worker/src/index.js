@@ -7755,11 +7755,12 @@ async function getPostComments(params, auth, env) {
   if (!r.ok) return err('Failed to load comments', r.status || 500);
 
   // Counts for the tabs — one cheap head request each rather than loading the closed tail.
-  const countOf = async (extra) => {
-    const c = await sb(`/rest/v1/cs_post_comments?direction=eq.inbound&status=neq.deleted&${extra}&select=id&limit=1`,
-      env, { headers: { Prefer: 'count=exact' } });
-    return c.count ?? null;
-  };
+  // ⚠️ `sbCount`, NOT `sb` with Prefer:count=exact. `sb()` returns only `{ok,status,data}` and
+  // DROPS the response headers, so the Content-Range the count arrives in is thrown away and the
+  // pill reads null forever. Caught by smoking the deployed endpoint; the helper for this already
+  // existed and its own comment says why.
+  const countOf = (extra) =>
+    sbCount(`/rest/v1/cs_post_comments?direction=eq.inbound&status=neq.deleted&${extra}&select=id`, env);
   const [open, unassigned] = await Promise.all([
     countOf('comment_state=eq.open'),
     countOf('comment_state=eq.open&assigned_agent_id=is.null'),
