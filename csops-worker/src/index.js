@@ -7680,11 +7680,24 @@ async function syncIgComments(env) {
     if (!post) continue;
 
     // Flatten one level: a top-level comment plus its replies is the whole tree IG exposes.
-    const flat = [];
+    // ⚠️ DEDUPE BY ID, PREFERRING THE ENTRY THAT KNOWS ITS PARENT. Instagram returns a reply
+    // BOTH nested under `replies{}` and, sometimes, again as its own entry in `data` — where it
+    // carries no parent. Measured on the first live sync: 68 upserts for 62 distinct comments.
+    // The UNIQUE key already collapses them, so nothing duplicated; the hazard is the LAST write
+    // winning with `parent_comment_id: null` and silently flattening a reply into a top-level
+    // comment. It happened not to, because the nested pass ran second — i.e. correctness rested
+    // on loop order. Made explicit here so a later reorder cannot break it.
+    const byId = new Map();
+    const push = (cm, parent) => {
+      const prev = byId.get(cm.id);
+      if (prev && prev.parent && !parent) return;     // never downgrade a known parent to null
+      byId.set(cm.id, { ...cm, parent: parent || cm.parent || (cm.parent_id ? String(cm.parent_id) : null) });
+    };
     for (const top of (c.body?.data || [])) {
-      flat.push({ ...top, parent: null });
-      for (const rep of (top.replies?.data || [])) flat.push({ ...rep, parent: top.id });
+      push(top, null);
+      for (const rep of (top.replies?.data || [])) push(rep, top.id);
     }
+    const flat = [...byId.values()];
     seen += flat.length;
 
     for (const cm of flat) {
