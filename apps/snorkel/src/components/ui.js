@@ -64,6 +64,11 @@ function CountUp({ value, format = (v) => Math.round(v).toLocaleString('en-IN') 
 
 /* ---- Sparkline ------------------------------------------------------- */
 export function Sparkline({ data = [], stroke = '#9aa0a6', fill = true, w = 96, h = 30 }) {
+  // ⚠️ useRef MUST stay above the empty-data early return. It used to sit below it, so a
+  // Sparkline whose data array emptied (or filled) between renders changed its hook count and
+  // threw React #310 — the same crash that took Pitstop down twice in three days (S305, S311).
+  // Rules-of-hooks does not run in CI on this estate yet, so this is guarded by comment.
+  const id = useRef('sp' + Math.random().toString(36).slice(2)).current;
   if (!data || data.length === 0) return null;
   const max = Math.max(...data, 1), min = Math.min(...data, 0);
   const span = max - min || 1;
@@ -71,7 +76,6 @@ export function Sparkline({ data = [], stroke = '#9aa0a6', fill = true, w = 96, 
   const pts = data.map((d, i) => [i * step, h - 4 - ((d - min) / span) * (h - 8)]);
   const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
   const area = `${line} L ${w} ${h} L 0 ${h} Z`;
-  const id = useRef('sp' + Math.random().toString(36).slice(2)).current;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block', overflow: 'visible' }}>
       <defs>

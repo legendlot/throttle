@@ -33,6 +33,18 @@ export default function PayoutsAdminPage() {
       .then(setSheet).catch(() => setSheet(false));
   }, [session, tab, period, half]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⚠️ MUST stay ABOVE the salary-access early return below. `sheet` starts null (hooks all
+  // run), and the fetch's `.catch(() => setSheet(false))` then flips it — so on the next render
+  // the gate returned early and this hook was skipped, dropping the hook count and throwing
+  // React #310. That fired for anyone OUTSIDE the 4-person `podium.comp_access` allow-list
+  // (RULE-PODIUM-001) — i.e. most people who open Payouts. Fixed S322.
+  const visibleRows = useMemo(() => {
+    const rows = sheet?.rows || [];
+    if (tab !== 'variable') return rows;
+    const want = sheet?.period_type; // monthly | half_yearly
+    return rows.filter((r) => (r.bonus_type === 'Monthly' ? 'monthly' : r.bonus_type === 'Half-Yearly' ? 'half_yearly' : null) === want);
+  }, [sheet, tab]);
+
   if (sheet === false) return <div style={{ color: 'var(--t3)' }}>Requires salary access.</div>;
 
   async function generateFixed() {
@@ -77,12 +89,6 @@ export default function PayoutsAdminPage() {
   }
 
   const setEdit = (id, patch) => setEdits((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
-  const visibleRows = useMemo(() => {
-    const rows = sheet?.rows || [];
-    if (tab !== 'variable') return rows;
-    const want = sheet?.period_type; // monthly | half_yearly
-    return rows.filter((r) => (r.bonus_type === 'Monthly' ? 'monthly' : r.bonus_type === 'Half-Yearly' ? 'half_yearly' : null) === want);
-  }, [sheet, tab]);
 
   return (
     <div style={{ maxWidth: 940 }}>
