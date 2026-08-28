@@ -45,6 +45,22 @@ function statusLabel(s) {
   return (s || '').replace(/_/g, ' ').toUpperCase();
 }
 
+
+// Courier vocabulary for the intake datalist. Derived from what has ACTUALLY been received
+// (store.return_shipments, measured 2026-08-28) — not an aspirational carrier list.
+// ⚠️ TWO AXES live in this one field and that is the existing reality, not a mistake to
+// "clean up" here: real carriers AND the return's provenance. `Warehouse RTO` is the SECOND
+// most common value (26 of 148), so a carriers-only picker would have made the most common
+// non-carrier entry harder to type and pushed people back to free text.
+// ⚠️ This is a DATALIST, deliberately, not a <select>: free text must still be accepted so a
+// new carrier is never blocked at intake. It removes the typo, it does not gate the field.
+// The worker trims on write, which is what actually kills the `Amazon ` / `Amazon` split.
+const COURIER_OPTIONS = [
+  'Delhivery', 'Amazon', 'Shadowfax', 'Xpressbee', 'Ekart', 'Bluedart',
+  'Delhivery RTO', 'Amazon RTO', 'Shadowfax RTO', 'Flipkart RTO',
+  'Warehouse RTO', 'Events RTO',
+];
+
 export default function ShipmentsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
@@ -167,7 +183,10 @@ export default function ShipmentsPage() {
               </div>
               <div>
                 <span style={labelStyle}>Courier</span>
-                <input type="text" value={courier} onChange={(e) => setCourier(e.target.value)} placeholder="e.g. Delhivery, Bluedart" style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
+                <input type="text" list="courier-options" value={courier} onChange={(e) => setCourier(e.target.value)} placeholder="e.g. Delhivery, Warehouse RTO" style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
+                <datalist id="courier-options">
+                  {COURIER_OPTIONS.map((c) => <option key={c} value={c} />)}
+                </datalist>
               </div>
               <div>
                 <span style={labelStyle}>Channel (optional)</span>
