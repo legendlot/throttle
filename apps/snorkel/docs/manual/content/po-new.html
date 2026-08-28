@@ -43,3 +43,10 @@
   <div class="c-title">&#10003; Coming from a request or a reorder</div>
   <p>If you started this PO from a PO request, that request is pinned in a side panel so you can copy the details across; accepting the PO will mark the request approved. If you started it from a reorder request, the new PO is linked back and the reorder is closed when you finish.</p>
 </div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Use the "Charge" item type for freight and tooling (from 28 Aug 2026)</div>
+  <p>Line types now include <strong>Charge</strong>. Use it for anything the vendor bills that is not goods &mdash; shipping, transportation, die charges, tool charges, design plates.</p>
+  <p>A Charge line behaves like any other PO line: it still needs an <strong>HSN/SAC code and GST&nbsp;%</strong>, it still prints on the PO, and it still counts toward the PO total. The one difference is that <strong>it is never sent to the store as something to receive</strong>. Before this, a shipping charge appeared on the receiving screen as a quantity to count &mdash; one asked the floor to count 4,080 of &ldquo;Shipping Charges&rdquo;.</p>
+  <p class="tip">If you find yourself typing a rupee amount into the <strong>Qty</strong> box to make the total come out right, the line should be a Charge: enter quantity&nbsp;1 and put the amount in Unit Price.</p>
+</div>

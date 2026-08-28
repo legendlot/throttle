@@ -23,3 +23,10 @@
   <div class="c-title">&#9432; Requests come from New Run / Request</div>
   <p>Repack runs are now requested with a product, channel direction and quantity (not just a bare count), which is what lets the store auto-receive the right packaging and dispatch know which units to release. This screen is where you watch and close them.</p>
 </div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Released, not repacked (from 28 Aug 2026)</div>
+  <p><strong>Repack Runs &rarr; Reports</strong> now opens with a list of units that Dispatch released at <strong>Repack Release</strong> and that never came back at <strong>Repack In</strong>. Until they are scanned in, they are out of the dispatch flow entirely &mdash; they cannot be allocated, packed or shipped.</p>
+  <p>The panel shows the age of each release in days, red past two weeks, oldest first, with the repack run and who released it. It is a <strong>live list, not a date range</strong> &mdash; it deliberately ignores the date pickers below it, so an old unit can never hide by falling outside &ldquo;last 7 days&rdquo;.</p>
+  <p><strong>Read the header count carefully.</strong> It reads for example <span class="mono">34 cars &middot; 22 remotes riding them</span>. The table lists cars; the remotes were locked with their car and must be moved with it, so the number of physical items to fetch is both figures added together. A row flagged <span class="mono">&#9888; remote not held</span> means the pair has come apart and needs looking at.</p>
+</div>
