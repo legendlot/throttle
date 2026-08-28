@@ -54,7 +54,11 @@ export default function CommentsPage() {
   const load = useCallback(async () => {
     if (!session) return;
     try {
-      const d = await csopsGet('getPostComments', { state, tab, q }, session);
+      // ⚠️ Ask for the worker's maximum. The default is 60 and the counter beside it is the TRUE
+      // total, so at 62 open comments the list silently showed 60 while the pill said 62 — a
+      // two-row hole with nothing to reveal it. 200 covers the foreseeable queue; if it is ever
+      // hit, the pill will exceed the list again and that is the signal to add paging.
+      const d = await csopsGet('getPostComments', { state, tab, q, limit: 200 }, session);
       setRows(d?.comments || []);
       setCounts(d?.counts || { open: null, unassigned: null });
       setError(null);
