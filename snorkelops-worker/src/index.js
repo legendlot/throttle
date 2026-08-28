@@ -550,6 +550,68 @@ function deriveFulfilment(request, shipments) {
   if (shipped_units === 0) return { fulfilment_status: 'not_fulfilled', shipped_units, requested_units };
   return { fulfilment_status: shipped_units >= requested_units ? 'fully_fulfilled' : 'partially_fulfilled', shipped_units, requested_units };
 }
+// Per-LINE fulfilment for one order (Ram, #bugs 2026-08-28: "when an order is partially
+// fulfilled it is not reflected onto Snorkel to see what has been fulfilled and what is
+// pending"). The order-level `partially_fulfilled` pill already existed; what sales and
+// finance could not see was WHICH items were short — SO-0410 read "partially fulfilled"
+// with no way to learn that the three outstanding items were Flare LE Race Black, Knox
+// Explorer Black and Knox Adventure Red.
+//
+// ⚠️ `packed_qty`, NOT `target_qty`. The order-level roll-up above sums target_qty, which is
+// what the manifest PLANNED — fine for "is there a shipment", wrong for "what actually went".
+// A line packed short would report as fully sent, which is precisely the follow-up this is
+// meant to support.
+// ⚠️ Cancelled shipments are excluded; a cancelled shipment sent nothing.
+// ⚠️ Matched on product+model+colour because dispatch lines carry no sales-order line id.
+// Colour/model are compared as ''-normalised strings so a NULL on one side does not silently
+// fail to match a '' on the other and report a shipped line as pending.
+async function withLineFulfilment(lines, f) {
+  const rows = Array.isArray(lines) ? lines : [];
+  const shipments = (f?.shipments || []).filter(s => s.status !== 'cancelled');
+  if (!rows.length || !shipments.length) {
+    // No request/shipments yet: everything is honestly outstanding, and saying so beats
+    // omitting the fields and leaving the UI unable to tell "nothing sent" from "unknown".
+    return rows.map(l => ({ ...l, shipped_qty: 0, pending_qty: Math.round(Number(l.qty)) || 0 }));
+  }
+  const shIds = shipments.map(s => s.id);
+  const shipped = new Set(shipments.filter(s => s.status === 'shipped').map(s => s.id));
+  const lnR = await queryPublic('dispatch_shipment_lines',
+    `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,product,model,color,target_qty,packed_qty`);
+  const key = (p, m, c) => `${String(p || '').trim().toLowerCase()}|${String(m || '').trim().toLowerCase()}|${String(c || '').trim().toLowerCase()}`;
+  const sentBy = {};   // packed AND despatched
+  const packedBy = {}; // packed but NOT yet despatched — the two buckets are disjoint, so
+                       // the pools below can be drained independently without double-counting
+                       // a unit as both sent and waiting.
+  for (const dl of (lnR.ok && Array.isArray(lnR.data) ? lnR.data : [])) {
+    const k = key(dl.product, dl.model, dl.color);
+    const q = Math.round(Number(dl.packed_qty)) || 0;
+    if (shipped.has(dl.shipment_id)) sentBy[k] = (sentBy[k] || 0) + q;
+    else packedBy[k] = (packedBy[k] || 0) + q;
+  }
+  // ⚠️ ALLOCATE across lines, never look up per line. Dispatch lines carry no sales-order
+  // line id, so the match is on variant — and 179 orders have TWO OR MORE lines of the same
+  // product+model+colour (measured 2026-08-28). A plain per-line lookup would hand each of
+  // them the SAME shipped figure, so a 2×1-unit order with 1 unit sent would read as 2
+  // shipped and 0 pending: an order still owing a unit would look complete. Drain a shared
+  // pool in sort order instead, filling each line up to its own ordered qty.
+  const sentPool = { ...sentBy };
+  const packedPool = { ...packedBy };
+  const take = (pool, k, want) => {
+    const got = Math.min(pool[k] || 0, want);
+    pool[k] = (pool[k] || 0) - got;
+    return got;
+  };
+  return rows.map(l => {
+    const k = key(l.product, l.model, l.color);
+    const ordered = Math.round(Number(l.qty)) || 0;
+    const sent = take(sentPool, k, ordered);
+    // Packed but not yet gone — shown separately so "3 pending" never quietly includes
+    // items already boxed and waiting on the van.
+    const packedStill = take(packedPool, k, Math.max(0, ordered - sent));
+    return { ...l, shipped_qty: sent, packed_qty: packedStill, pending_qty: Math.max(0, ordered - sent) };
+  });
+}
+
 // Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
 // New orders link via a fulfilment request; legacy (pre-cutover) orders link via the single
 // sales_orders.dispatch_shipment_id — both paths resolved here so historical orders keep their dates/status.
@@ -1586,9 +1648,10 @@ export default {
             if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
               await reconcileRejections([{ o, reason: f.request.reject_reason }]);
             const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, anchor);
+            const lines = await withLineFulfilment(linesR.ok ? linesR.data : [], f);
             return ok({ ...dec, ...der, partner, request: f?.request || null,
               shipments: f?.shipments?.length ? f.shipments : (f?.legacyShipment ? [f.legacyShipment] : []),
-              lines: linesR.ok ? linesR.data : [], payments: paysR.ok ? paysR.data : [] });
+              lines, payments: paysR.ok ? paysR.data : [] });
           }
 
           case 'getSalesCollections': {

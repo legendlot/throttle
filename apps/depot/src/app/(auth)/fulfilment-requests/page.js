@@ -38,6 +38,25 @@ function formatDateOnly(dateStr) {
   if (!m) return '—';
   return `${m[3]}-${MON[Number(m[2]) - 1]}-${m[1].slice(2)}`;
 }
+// Is the promised dispatch date behind us on a request still owed to the partner?
+// Compared as PLAIN STRINGS against today-in-IST — deliberately not via `new Date()`,
+// for the same reason formatDateOnly avoids it: a bare 'YYYY-MM-DD' parses as UTC
+// midnight and would flip a same-day request to overdue for anyone behind UTC.
+// 'YYYY-MM-DD' sorts lexicographically, so `<` is a correct date comparison here.
+// Only `pending` and `accepted` count — rejected and cancelled are not owed to
+// anyone, and a request with no promised date is never overdue.
+// NB deliberately NOT the `istToday` imported from kit — that one returns a DISPLAY string
+// ("28 Aug 2026") for headers, which would compare as nonsense against a 'YYYY-MM-DD' column.
+// en-CA is the locale that formats as ISO.
+function istTodayISO() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+}
+function overdueExpected(r) {
+  const d = r?.so_expected_dispatch_date;
+  if (!d) return false;
+  if (r.status !== 'pending' && r.status !== 'accepted') return false;
+  return String(d).slice(0, 10) < istTodayISO();
+}
 function formatDateTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -179,7 +198,7 @@ export default function FulfilmentRequestsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
                 <th style={th}>Request</th><th style={th}>Sales Order</th>
-                <th style={th}>Order date</th><th style={th}>Accepted</th>
+                <th style={th}>Order date</th><th style={th}>Expected dispatch</th><th style={th}>Accepted</th>
                 <th style={th}>Warehouse</th>
                 <th style={th}>Platform PO</th><th style={{ ...th, textAlign: 'right' }}>Units</th>
                 <th style={th}>Status</th><th style={th}>Mode</th>
@@ -194,6 +213,13 @@ export default function FulfilmentRequestsPage() {
                       {r.so_notes && <span title={r.so_notes} style={{ marginLeft: 6, cursor: 'help' }}>📝</span>}
                     </td>
                     <td style={td}>{formatDateOnly(r.so_order_date)}</td>
+                    {/* Promised-to-partner date (Ram, #bugs 2026-08-28). Amber only while the
+                        request is still OPEN and the date has passed — a shipped request that
+                        went out late is history, and colouring it red forever would turn the
+                        queue into a wall of alarm nobody can act on. */}
+                    <td style={{ ...td, color: overdueExpected(r) ? 'var(--amber, #d97706)' : 'var(--t3)' }}>
+                      {formatDateOnly(r.so_expected_dispatch_date)}
+                    </td>
                     <td style={{ ...td, color: r.accepted_at ? 'var(--t1)' : 'var(--t3)' }}>{formatDateTime(r.accepted_at)}</td>
                     <td style={td}>{r.destination_warehouse || '—'}</td>
                     <td style={td}>{r.partner_po_ref || '—'}</td>
@@ -239,6 +265,12 @@ export default function FulfilmentRequestsPage() {
               ['Raised',       formatDateTime(sel.request.so_created_at),   'punched in Snorkel'],
               ['Confirmed',    formatDateTime(sel.request.so_confirmed_at), 'sent to Depot'],
               ['Accepted',     formatDateTime(sel.request.accepted_at),     'taken by dispatch'],
+              // The only FORWARD-looking stamp — what sales promised the partner (Ram,
+              // #bugs 2026-08-28). Optional on the Snorkel form and blank on most orders,
+              // so it renders as a plain "—" like any other missing stamp rather than
+              // being hidden, which would leave dispatch unsure whether there is a date
+              // at all. Deliberately last: the four before it are chronological history.
+              ['Expected dispatch', formatDateOnly(sel.request.so_expected_dispatch_date), 'promised to partner'],
             ].map(([label, value, hint], i) => (
               <div key={label} style={{ flex: '1 1 150px', padding: '10px 14px',
                 borderLeft: i === 0 ? 'none' : '1px solid var(--border)' }}>

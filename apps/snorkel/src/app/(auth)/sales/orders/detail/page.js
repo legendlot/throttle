@@ -100,6 +100,11 @@ function OrderDetailInner() {
   const pm = paymentMeta(o.payment_status);
   const isDraft = o.status === 'draft';
   const isConfirmed = o.status === 'confirmed';
+  // Per-line Sent/Pending (Ram, #bugs 2026-08-28). Shown on a confirmed order only, and never
+  // while the line grid is in edit mode — that grid swaps in inputs and has its own columns.
+  // `shipped_qty` is only ever absent on a payload from an older worker, so the `in` test
+  // keeps the page rendering rather than showing a column of zeroes if the two ever skew.
+  const showFulfilCols = isConfirmed && !lineEdit && lines.some(l => 'shipped_qty' in l);
 
   async function act(action, body, okMsg) {
     setBusy(true);
@@ -396,8 +401,15 @@ function OrderDetailInner() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead><tr>
-              {['#', 'Product', 'Model', 'Colour', 'HSN', 'Qty', 'Rate', 'Disc%', 'GST%', 'Taxable', 'Total'].map((h, i) => (
-                <th key={i} style={{ ...tableThStyle, textAlign: ['Qty', 'Rate', 'Disc%', 'GST%', 'Taxable', 'Total'].includes(h) ? 'right' : 'left' }}>{h}</th>
+              {/* Sent/Pending only once the order is confirmed and only while NOT editing:
+                  the edit grid is a different set of columns, and an unconfirmed order has
+                  nothing dispatched, so the pair would just be a column of zeroes.
+                  Ram, #bugs 2026-08-28 — the order-level "partially fulfilled" pill never
+                  said WHICH items were short. */}
+              {['#', 'Product', 'Model', 'Colour', 'HSN', 'Qty',
+                ...(showFulfilCols ? ['Sent', 'Pending'] : []),
+                'Rate', 'Disc%', 'GST%', 'Taxable', 'Total'].map((h, i) => (
+                <th key={i} style={{ ...tableThStyle, textAlign: ['Qty', 'Sent', 'Pending', 'Rate', 'Disc%', 'GST%', 'Taxable', 'Total'].includes(h) ? 'right' : 'left' }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
@@ -410,6 +422,22 @@ function OrderDetailInner() {
                     <td style={tableTdStyle}>{l.color || '—'}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.hsn_code || '—'}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{l.qty}</td>
+                    {showFulfilCols && (
+                      <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>
+                        {Number(l.shipped_qty) || 0}
+                        {/* packed-but-not-gone is called out rather than folded into either
+                            column — it is neither sent nor still to be picked. */}
+                        {Number(l.packed_qty) > 0 && (
+                          <span style={{ color: 'var(--t3)', fontSize: 11 }}> +{Number(l.packed_qty)} packed</span>
+                        )}
+                      </td>
+                    )}
+                    {showFulfilCols && (
+                      <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)',
+                        color: Number(l.pending_qty) > 0 ? 'var(--yellow, #d9a406)' : 'var(--t3)' }}>
+                        {Number(l.pending_qty) || 0}
+                      </td>
+                    )}
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.rate).toLocaleString('en-IN')}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.discount_pct) || 0}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{Number(l.gst_pct) || 0}</td>
