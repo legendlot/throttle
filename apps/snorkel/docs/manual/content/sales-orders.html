@@ -40,6 +40,11 @@
   <li><span class="s-title">Record a receipt.</span> In the Collections panel, log a payment (amount, date, mode, reference). Partial payments are fine, and the balance and payment state update themselves.</li>
   <li><span class="s-title">Cancel the order.</span> Stop a draft or confirmed order, with a reason.</li>
 </ol>
+<h2 class="sec">Seeing what has actually shipped</h2>
+<p>Once an order is confirmed, its items table gains two columns: <strong>Sent</strong> and <strong>Pending</strong>. These are per item, so on a partly-fulfilled order you can see exactly which products have gone and which are still owed &mdash; the order-level <em>Partially fulfilled</em> badge tells you that something is outstanding, these columns tell you <em>what</em>. Anything still outstanding shows amber.</p>
+<p>Where stock has been packed but has not left yet, it is called out beside the Sent figure as <em>&ldquo;+n packed&rdquo;</em> rather than folded into either column &mdash; it is neither dispatched nor still to be picked, and a follow-up with the partner should say so.</p>
+<div class="callout"><p>These columns are read from what dispatch actually packed and sent, not from what was planned. An order that was packed short will show the short figure, which is the point.</p></div>
+
 <p><strong>Order notes are visible everywhere they matter.</strong> The Notes field on an order (delay instructions, special requirements) shows in an amber <strong>Order notes</strong> box on the order&rsquo;s Status panel &mdash; you no longer have to open Edit details to read it &mdash; and the same text appears on the fulfilment request the Depot team sees, so instructions typed here actually reach dispatch.</p>
 
 <div class="callout danger">
