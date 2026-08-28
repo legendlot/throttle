@@ -26,6 +26,10 @@ const STATES = [
   { id: 'closed', label: 'Done' },
   { id: 'all',    label: 'All' },
 ];
+// Instagram's per-comment cap. Mirrored in csops (IG_COMMENT_MAX_CHARS) — the worker is the
+// authority; this exists so the agent finds out while typing rather than on a refused send.
+const IG_COMMENT_MAX_CHARS = 2200;
+
 const TABS = [
   { id: '',           label: 'All' },
   { id: 'mine',       label: 'Mine' },
@@ -94,9 +98,12 @@ export default function CommentsPage() {
     finally { setBusy(false); }
   }
 
+  const replyLen = reply.trim().length;
+  const replyOverLimit = replyLen > IG_COMMENT_MAX_CHARS;
+
   async function sendReply() {
     const t = reply.trim();
-    if (!t || busy) return;
+    if (!t || busy || replyOverLimit) return;
     setBusy(true);
     try {
       await csopsPost('replyToComment', { comment_id: selId, text: t }, session);
@@ -239,11 +246,21 @@ export default function CommentsPage() {
                     placeholder={sel.status === 'deleted' ? 'This comment was deleted on Instagram' : 'Reply publicly on the post…'}
                     disabled={!canManage || sel.status === 'deleted'}
                     style={{ ...inputStyle, flex: 1 }} />
-                  <button onClick={sendReply} disabled={busy || !canManage || !reply.trim() || sel.status === 'deleted'}
-                    style={{ ...btnPrimary, opacity: (busy || !reply.trim() || sel.status === 'deleted') ? 0.5 : 1 }}>
+                  <button onClick={sendReply} disabled={busy || !canManage || !reply.trim() || replyOverLimit || sel.status === 'deleted'}
+                    title={replyOverLimit ? `${replyLen.toLocaleString()} of ${IG_COMMENT_MAX_CHARS.toLocaleString()} characters — too long to send` : undefined}
+                    style={{ ...btnPrimary, opacity: (busy || !reply.trim() || replyOverLimit || sel.status === 'deleted') ? 0.5 : 1 }}>
                     <Send size={13} /> Reply
                   </button>
                 </div>
+                {/* Appears only in the last 10% before the cap, so it reads as a warning rather
+                    than permanent furniture — same shape as the inbox composer's counter. */}
+                {replyLen > IG_COMMENT_MAX_CHARS * 0.9 && (
+                  <div style={{ padding: '0 10px 8px', fontSize: 11, textAlign: 'right',
+                    color: replyOverLimit ? '#dc2626' : '#d97706' }}>
+                    {replyLen.toLocaleString()} / {IG_COMMENT_MAX_CHARS.toLocaleString()}
+                    {replyOverLimit && ' — too long for an Instagram comment. Shorten it, or reply briefly and continue in a DM.'}
+                  </div>
+                )}
               </>
             )}
         </div>

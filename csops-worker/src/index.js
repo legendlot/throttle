@@ -7325,13 +7325,23 @@ async function handleMetaWebhook(request, env) {
 // `ticket_id`, which are ours. Getting this wrong would silently reopen every comment an agent
 // closed, once every two minutes.
 async function upsertPostComment(row, env) {
+  const out = await upsertPostComments([row], env);
+  return out[0] || null;
+}
+
+// Array form. ⚠️ CORE.md global invariant: never loop awaits per row — the poller was doing one
+// HTTP round trip per comment (63 on the first live run), which is both the documented
+// anti-pattern and a real cost against the Worker's 30s CPU budget as comment volume grows.
+// PostgREST upserts an array in ONE request with the same conflict semantics.
+async function upsertPostComments(rows, env) {
+  if (!Array.isArray(rows) || !rows.length) return [];
   const r = await sb('/rest/v1/cs_post_comments?on_conflict=platform_comment_id', env, {
     method: 'POST',
     headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-    body: JSON.stringify(row),
+    body: JSON.stringify(rows),
   });
   if (!r.ok) console.error(`[meta] comment upsert failed ${r.status} ${JSON.stringify(r.data)?.slice(0, 200)}`);
-  return r.data?.[0] || null;
+  return Array.isArray(r.data) ? r.data : [];
 }
 
 async function findOrCreateSocialPost(channel, platformPostId, meta, env) {
@@ -7719,6 +7729,8 @@ async function diagIgRecipient(body, auth, env) {
 // compromise, and it is a KNOWN, DELIBERATE hole: a comment on post number 26 will not be seen.
 // The count is logged every run so the hole is visible rather than assumed empty.
 const IG_COMMENT_MEDIA_LOOKBACK = 25;
+// Instagram's per-comment character cap.
+const IG_COMMENT_MAX_CHARS = 2200;
 
 async function syncIgComments(env) {
   const token = await metaToken('instagram', env);
@@ -7779,6 +7791,7 @@ async function syncIgComments(env) {
     const flat = [...byId.values()];
     seen += flat.length;
 
+    const rows = [];
     for (const cm of flat) {
       const fromId = String(cm.from?.id || '');
       // ⚠️ **INSTAGRAM OMITS `from` ON OUR OWN COMMENTS — INCONSISTENTLY.** Measured 2026-08-28
@@ -7802,7 +7815,7 @@ async function syncIgComments(env) {
       const isOurs = !cm.from
         || (ourUsername && fromUser === ourUsername)   // the test that actually fires
         || (fromId && fromId === ourId);               // kept in case Meta ever aligns the ids
-      const row = await upsertPostComment({
+      rows.push({
         post_id: post.id,
         channel: 'instagram',
         platform_comment_id: String(cm.id),
@@ -7818,9 +7831,9 @@ async function syncIgComments(env) {
         body: cm.text || null,
         posted_at: cm.timestamp || null,
         raw_meta: cm,
-      }, env);
-      if (row) written++;
+      });
     }
+    written += (await upsertPostComments(rows, env)).length;
     await sb(`/rest/v1/cs_social_posts?id=eq.${post.id}`, env, {
       method: 'PATCH',
       body: JSON.stringify({ last_comment_at: new Date().toISOString(), comment_count: flat.length }),
@@ -7852,7 +7865,15 @@ async function getPostComments(params, auth, env) {
   if (channel) f.push(`channel=eq.${encodeURIComponent(channel)}`);
   if (tab === 'mine') f.push(`assigned_agent_id=eq.${auth.userId}`);
   if (tab === 'unassigned') f.push('assigned_agent_id=is.null');
-  if (q) f.push(`or=(body.ilike.*${encodeURIComponent(q)}*,from_handle.ilike.*${encodeURIComponent(q)}*)`);
+  if (q) {
+    // ⚠️ DOUBLE-QUOTE the value inside or=(). Unquoted, a COMMA in the search box is read as the
+    // filter separator: searching `price, delivery` 400s the whole request and the agent gets an
+    // error banner with no idea why. Verified live before fixing. Same trap handled in
+    // getTicketThread; this one shipped without it. Strip quotes/backslashes so the quoting
+    // itself cannot be escaped.
+    const safe = encodeURIComponent(q.replace(/["\\]/g, ''));
+    f.push(`or=(body.ilike."*${safe}*",from_handle.ilike."*${safe}*")`);
+  }
 
   const r = await sb(`/rest/v1/cs_post_comments?${f.join('&')}`, env);
   if (!r.ok) return err('Failed to load comments', r.status || 500);
@@ -7892,6 +7913,17 @@ async function replyToComment(body, auth, env) {
   const { comment_id, text } = body || {};
   if (!comment_id || !String(text || '').trim()) return err('comment_id and text required');
 
+  // ⚠️ Instagram caps a comment at 2,200 characters and refuses the whole call above it. Same
+  // class as the IG DM 2,000-char limit already guarded in the inbox composer: refuse at OUR edge
+  // with a number the agent can act on, rather than passing a raw Meta error back for a mistake
+  // that is entirely predictable. The composer counts down to this too.
+  const replyText = String(text).trim();
+  if (replyText.length > IG_COMMENT_MAX_CHARS) {
+    return err(`This reply is ${replyText.length.toLocaleString()} characters. Instagram allows `
+      + `${IG_COMMENT_MAX_CHARS.toLocaleString()} in a comment — shorten it, or reply briefly and `
+      + `continue in a DM.`, 422);
+  }
+
   const r = await sb(`/rest/v1/cs_post_comments?id=eq.${encodeURIComponent(comment_id)}&select=*&limit=1`, env);
   const c = r.data?.[0];
   if (!c) return err('Comment not found', 404);
@@ -7907,7 +7939,7 @@ async function replyToComment(body, auth, env) {
   const res = await fetch(`${base}/${encodeURIComponent(target)}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ message: String(text).trim(), access_token: token }),
+    body: new URLSearchParams({ message: replyText, access_token: token }),
   });
   const d = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -7922,7 +7954,7 @@ async function replyToComment(body, auth, env) {
     await upsertPostComment({
       post_id: c.post_id, channel: c.channel, platform_comment_id: String(d.id),
       parent_comment_id: target, direction: 'outbound',
-      body: String(text).trim(), posted_at: now,
+      body: replyText, posted_at: now,
       replied_by_user_id: auth.userId, raw_meta: d,
     }, env);
   }
