@@ -6942,14 +6942,17 @@ async function releaseUnworkableThreads(env) {
   // would unassign EVERY open thread in the system in one tick.
   if (!able.size) return { ok: false, reason: 'able_set_empty_refusing' };
 
+  // ⚠️ Bounded scan. 545 owned open threads today, so 2000 is ample — but it is a CAP, and a cap
+  // that is hit silently reads as "nothing to release". Reported below rather than assumed clear.
+  const SCAN_CAP = 2000;
   const open = await sb(
     '/rest/v1/cs_wa_threads?thread_state=eq.open&assigned_agent_id=not.is.null'
-    + '&select=id,assigned_agent_id,assigned_agent_name&limit=2000', env);
+    + `&select=id,assigned_agent_id,assigned_agent_name&limit=${SCAN_CAP}`, env);
   if (!open.ok || !Array.isArray(open.data)) return { ok: false, reason: 'threads_read_failed' };
 
   // Catches a deleted user too: no profile row means not in `able`.
   const orphans = open.data.filter(t => !able.has(t.assigned_agent_id));
-  if (!orphans.length) return { ok: true, checked: open.data.length, released: 0 };
+  if (!orphans.length) return { ok: true, checked: open.data.length, released: 0, scan_capped: open.data.length >= SCAN_CAP };
 
   const ids = orphans.map(t => t.id);
   const upd = await sb(`/rest/v1/cs_wa_threads?id=in.(${ids.map(encodeURIComponent).join(',')})`, env, {
@@ -6962,7 +6965,7 @@ async function releaseUnworkableThreads(env) {
   // should be able to explain the next morning.
   const byOwner = {};
   for (const t of orphans) byOwner[t.assigned_agent_name || t.assigned_agent_id] = (byOwner[t.assigned_agent_name || t.assigned_agent_id] || 0) + 1;
-  return { ok: true, checked: open.data.length, released: orphans.length, by_former_owner: byOwner };
+  return { ok: true, checked: open.data.length, released: orphans.length, by_former_owner: byOwner, scan_capped: open.data.length >= SCAN_CAP };
 }
 
 async function retroAssignUnownedThreads(env) {
@@ -7756,7 +7759,7 @@ async function syncIgComments(env) {
   if (!media.ok) return { error: media.body?.error?.message || `media ${media.status}` };
   const posts = media.body?.data || [];
 
-  let scanned = 0, seen = 0, written = 0, sent = 0;
+  let scanned = 0, seen = 0, written = 0, sent = 0, truncated = 0;
   for (const m of posts) {
     // Skip the read entirely when Meta already tells us the post has no comments — this is what
     // keeps a 25-post sweep cheap on a mostly-quiet account.
@@ -7790,6 +7793,14 @@ async function syncIgComments(env) {
     }
     const flat = [...byId.values()];
     seen += flat.length;
+    // ⚠️ NO SILENT CAPS. We read `comments?limit=50` per post and do NOT page. Today's busiest
+    // post has 6 comments, so this never bites — but a viral post is precisely where comments
+    // matter most, and it would truncate INVISIBLY. Meta gives us its own total on the media, so
+    // compare and report the shortfall rather than letting "we ingested 50" read as "there were
+    // 50". If this ever fires, add paging; do not just raise the limit.
+    const metaTotal = Number(m.comments_count) || 0;
+    const topLevel = (c.body?.data || []).length;
+    if (metaTotal > topLevel) truncated += (metaTotal - topLevel);
 
     const rows = [];
     for (const cm of flat) {
@@ -7845,7 +7856,7 @@ async function syncIgComments(env) {
       body: JSON.stringify({ last_comment_at: new Date().toISOString(), comment_count: flat.length }),
     }).catch(() => {});
   }
-  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_sent: sent, rows_returned: written, lookback: IG_COMMENT_MEDIA_LOOKBACK };
+  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_sent: sent, rows_returned: written, lookback: IG_COMMENT_MEDIA_LOOKBACK, not_fetched: truncated };
 }
 
 // ── Comments inbox: reads ────────────────────────────────────────────────────────────────────
