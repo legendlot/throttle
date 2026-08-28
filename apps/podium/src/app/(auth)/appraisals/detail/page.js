@@ -325,6 +325,12 @@ function KpiEditor({ kpis, setKpis, side }) {
 
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8 };
 const sub = { fontSize: 12, color: 'var(--text-3)', marginTop: 4 };
+// ⚠️ `badge` is used in the <h1> status pill at the top of this page and was NEVER defined,
+// so DetailPage threw ReferenceError on EVERY render — the page did not work at all (S322).
+// Modelled on badgeGray in admin/roles/page.js to match the app's pill styling. The PIP
+// variant spreads this and overrides only the colour, so keep it a plain object.
+const badge = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 6px', textTransform: 'uppercase' };
+
 const back = { background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 12 };
 const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' };
 const cardHead = { padding: '9px 14px', borderBottom: '1px solid var(--border)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-2)' };

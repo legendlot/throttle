@@ -1,5 +1,6 @@
-/**
 import { dateStr } from '@throttle/domain';
+
+/**
  * Sprint utilities
  * Sprints run Thursday → Wednesday (6 days)
  * DB enforces this with CHECK constraints

@@ -504,6 +504,9 @@ const CAUSE_COPY = {
 };
 
 function ProvenancePanel({ auditNo, session }) {
+  // `toast` here is this panel's own — the identifier it used to reference belonged to
+  // StockAuditPage, so the catch below threw ReferenceError instead of showing the error (S322).
+  const { showToast: toast } = useToast();
   const [state, setState] = useState('idle');
   const [prov, setProv]   = useState(null);
 

@@ -565,6 +565,9 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, sessi
 }
 
 export default function TemplatesPage() {
+  // `choose` here is this page's own — the identifier it used to reference belonged to
+  // RcsEditor, so the hardened delete path below threw ReferenceError (S322).
+  const choose = useChoose();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
