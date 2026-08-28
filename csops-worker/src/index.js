@@ -7798,10 +7798,13 @@ async function syncIgComments(env) {
     // matter most, and it would truncate INVISIBLY. Meta gives us its own total on the media, so
     // compare and report the shortfall rather than letting "we ingested 50" read as "there were
     // 50". If this ever fires, add paging; do not just raise the limit.
-    // ⚠️ Compare against EVERYTHING we ingested for this post, not just the top-level page.
-    // Meta's `comments_count` includes replies, so comparing it to `data.length` reported a
-    // shortfall on any post that has a reply — it read `not_fetched: 2` on a first run where
-    // nothing was actually missed. A cry-wolf metric is worse than no metric.
+    // ⚠️ Compare against EVERYTHING we ingested for this post, not just the top-level page —
+    // Meta's `comments_count` includes replies, so a top-level-only comparison would over-report.
+    // ⚠️ **The residual 2 is REAL and UNEXPLAINED, measured 2026-08-28.** I assumed the replies
+    // mismatch was the whole story, changed the comparison, and the number did not move: Meta
+    // counts 2 comments across the estate that its own comments edge does not return. Most likely
+    // hidden/restricted comments, or a stale count on Meta's side — NOT established. Treat a small
+    // steady `not_fetched` as this known gap and a JUMP as genuine truncation.
     const metaTotal = Number(m.comments_count) || 0;
     if (metaTotal > flat.length) truncated += (metaTotal - flat.length);
 
