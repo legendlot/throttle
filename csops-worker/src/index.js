@@ -990,6 +990,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'startEmailConversation':   return startEmailConversation(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'diagIgRecipient':          return diagIgRecipient(body, auth, env);   // read-only: why does Meta refuse THIS recipient
+    case 'diagIgCommentsScope':      return diagIgCommentsScope(body, auth, env); // read-only: can our token read post comments
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
@@ -7508,6 +7509,79 @@ async function diagIgRecipient(body, auth, env) {
     me,
     recipient,
     conversation,
+  });
+}
+
+// ── diagIgCommentsScope — can OUR Instagram token read (and reply to) post comments? ─────────
+//
+// This answers the gating question on two HIGH backlog items — the FB/IG **comment inbox** and
+// the IG **comment→DM bot** — both of which carry the same warning: *check the permission FIRST,
+// because a missing one means a Meta review cycle, and that sets the timeline, not the code.*
+//
+// ⚠️ It probes **csops'** token deliberately, not throttleops'. They are DIFFERENT credentials —
+// throttleops reads the `META_IG_TOKEN` secret, csops reads `store.cs_meta_token_config` (S311,
+// self-refreshing) and only falls back to the secret. The comment inbox would be built in csops,
+// because that is where `handleMetaWebhook` lives, so csops' token is the one whose scopes decide
+// the answer. Checking Throttle's would answer a question nobody asked.
+//
+// ⚠️ **Functional, not introspective, and that is the point.** Meta bakes scopes in at MINT time,
+// so a permission being green in the App Dashboard says nothing about a token minted before it was
+// added — which is precisely the risk the backlog flags ("the one open risk is token vintage, not
+// permission"). Asking Graph to actually read a comment thread is the only answer that cannot be
+// wrong. Read-only: it fetches, never writes, and never posts a reply.
+//
+// Reply capability is INFERRED, not tested — posting a real comment on a live post to find out is
+// not an acceptable probe. Read access is the necessary condition; if reads work and replies still
+// 403, that is a second, narrower finding.
+async function diagIgCommentsScope(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const token = await metaToken('instagram', env);
+  if (!token) return err('No Instagram token configured', 503);
+  const base = metaGraphBase('instagram');
+  const cfg = await sb('/rest/v1/cs_meta_token_config?id=eq.1&select=ig_access_token&limit=1', env)
+    .catch(() => null);
+  const storedIgToken = !!cfg?.data?.[0]?.ig_access_token;
+
+  const get = async (path) => {
+    const r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`);
+    const d = await r.json().catch(() => ({}));
+    return { http_status: r.status, ok: r.ok, body: d };
+  };
+
+  // Walk the real chain the comment inbox would walk: who am I → my recent media → that media's
+  // comments. A caller may pass an explicit ig_media_id to pin the probe to a known-commented post.
+  const me = await get('/me?fields=id,username');
+  const media = await get('/me/media?fields=id,caption,comments_count,permalink&limit=5');
+  const pinned = String(body?.ig_media_id || '').trim();
+  const mediaId = /^\d+$/.test(pinned)
+    ? pinned
+    : (media.body?.data || []).find((m) => Number(m.comments_count) > 0)?.id
+      || (media.body?.data || [])[0]?.id
+      || null;
+
+  const comments = mediaId
+    ? await get(`/${encodeURIComponent(mediaId)}/comments?fields=id,text,username,timestamp&limit=5`)
+    : { http_status: null, ok: false, body: { note: 'no media id available to probe' } };
+
+  // Meta reports a missing scope as an OAuthException (code 10 / 200 / 190 depending on the flavour)
+  // whose `message` names the permission. Surface it VERBATIM — the standing rule on this surface
+  // is that a paraphrase of Meta's docs is what put wrong copy in front of agents in S262/S263.
+  const e = comments.body?.error || null;
+  const verdict = comments.ok
+    ? 'READS OK — the token can read post comments; no Meta review cycle needed for ingestion.'
+    : e
+      ? `REFUSED — Meta says: ${e.message || '(no message)'} (type ${e.type || '?'}, code ${e.code ?? '?'})`
+      : 'INCONCLUSIVE — no comments edge reached; see the raw response.';
+
+  return ok({
+    verdict,
+    token_source: storedIgToken ? 'cs_meta_token_config.ig_access_token'
+      : env.META_IG_TOKEN ? 'META_IG_TOKEN (secret fallback)' : 'META_PAGE_TOKEN (last-resort fallback)',
+    graph_base: base,
+    probed_media_id: mediaId,
+    me,
+    media,
+    comments,
   });
 }
 
