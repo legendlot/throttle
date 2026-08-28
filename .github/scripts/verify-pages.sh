@@ -32,6 +32,17 @@ API="https://api.github.com/repos/${TARGET}/pages/builds"
 MAX_POLLS=20        # x 15s = up to 5 minutes
 SLEEP=15
 
+# ⚠️ RE-REQUEST BACKOFF. This used to be a single `sleep 15` after the rebuild, which is far
+# too soon to work: measured 2026-08-27 (S317) on pitstop, the auto-retry fired 16s after the
+# first failure and errored identically, burning the only retry — then the IDENTICAL request,
+# issued by hand ~10 minutes later with no other change, built first time. Detection was never
+# the problem; remediation was sampling the same transient window.
+# ⚠️ Two tries with real gaps, NOT a tight loop: the S313 ignition case had 12 Pages runs queued
+# against 0 in progress, so hammering makes it worse. Bounded post-retry polling keeps the
+# worst-case Action time sane (~13 min) rather than 3 full 5-minute settles.
+RETRY_BACKOFFS=(90 240)   # seconds to wait AFTER each re-request before looking again
+RETRY_POLLS=8             # x 15s = 2 min of polling per retry attempt
+
 # To STDERR, deliberately. settle()'s status is read via $(settle), which captures
 # stdout — so anything logged on stdout would be swallowed by that capture instead of
 # appearing in the Actions log, silently losing every diagnostic this script exists to
@@ -72,8 +83,9 @@ rebuild() {
 
 # Wait for Pages to settle, then report. Echoes the terminal status.
 settle() {
+  local budget="${1:-$MAX_POLLS}"
   local i out code status msg
-  for ((i = 1; i <= MAX_POLLS; i++)); do
+  for ((i = 1; i <= budget; i++)); do
     out="$(probe)"
     code="${out%%|*}"; out="${out#*|}"
     status="${out%%|*}"; msg="${out#*|}"
@@ -87,10 +99,10 @@ settle() {
         warn "no Pages build found for ${TARGET} (HTTP 404). Either Pages is not enabled there, or it has never built. Skipping."
         echo "skipped"; return ;;
       000)
-        warn "network error reaching the Pages API (attempt ${i}/${MAX_POLLS}); retrying."
+        warn "network error reaching the Pages API (attempt ${i}/${budget}); retrying."
         sleep "$SLEEP"; continue ;;
       *)
-        warn "unexpected HTTP ${code} from the Pages API; retrying (${i}/${MAX_POLLS})."
+        warn "unexpected HTTP ${code} from the Pages API; retrying (${i}/${budget})."
         sleep "$SLEEP"; continue ;;
     esac
 
@@ -105,7 +117,7 @@ settle() {
                sleep "$SLEEP"; continue ;;
     esac
   done
-  warn "${TARGET}: Pages build did not finish within $((MAX_POLLS * SLEEP))s. Not failing the deploy — check https://github.com/${TARGET}/deployments"
+  warn "${TARGET}: Pages build did not finish within $((budget * SLEEP))s. Not failing the deploy — check https://github.com/${TARGET}/deployments"
   echo "timeout"
 }
 
@@ -116,15 +128,23 @@ case "$result" in
   built|skipped|timeout)
     exit 0 ;;
   errored)
-    warn "${TARGET}: re-requesting the Pages build (this is the fix applied by hand on 2026-07-02 and 2026-07-23)."
-    rebuild
-    sleep "$SLEEP"
-    retry="$(settle | tail -n1)"
-    if [[ "$retry" == "built" ]]; then
-      note "${TARGET}: recovered — the re-requested Pages build succeeded. Live is current."
-      exit 0
-    fi
-    fail "${TARGET}: Pages STILL not built after a re-request (${retry}). LIVE IS STALE — it is serving the previous build. Open https://github.com/${TARGET}/deployments"
+    attempt=0
+    for backoff in "${RETRY_BACKOFFS[@]}"; do
+      attempt=$((attempt + 1))
+      warn "${TARGET}: re-requesting the Pages build (attempt ${attempt}/${#RETRY_BACKOFFS[@]}; this is the fix applied by hand on 2026-07-02 and 2026-07-23)."
+      rebuild
+      # Waiting BEFORE looking is the whole fix — see RETRY_BACKOFFS above. A re-request
+      # checked seconds later just re-observes the same bad window and wastes the attempt.
+      note "${TARGET}: waiting ${backoff}s before re-checking (a re-request needs time to leave the failing window)."
+      sleep "$backoff"
+      retry="$(settle "$RETRY_POLLS" | tail -n1)"
+      if [[ "$retry" == "built" ]]; then
+        note "${TARGET}: recovered on attempt ${attempt} — the re-requested Pages build succeeded. Live is current."
+        exit 0
+      fi
+      warn "${TARGET}: attempt ${attempt} did not recover (${retry})."
+    done
+    fail "${TARGET}: Pages STILL not built after ${#RETRY_BACKOFFS[@]} re-requests with backoff. LIVE IS STALE — it is serving the previous build. Re-run this workflow, or re-request the build at https://github.com/${TARGET}/deployments — by hand it has always succeeded once the failing window passed."
     exit 1 ;;
   *)
     warn "${TARGET}: unexpected verifier result '${result}'; not failing the deploy."
