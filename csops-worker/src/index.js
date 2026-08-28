@@ -7703,16 +7703,37 @@ async function syncIgComments(env) {
 
     for (const cm of flat) {
       const fromId = String(cm.from?.id || '');
+      // ⚠️ **INSTAGRAM OMITS `from` ON OUR OWN COMMENTS — INCONSISTENTLY.** Measured 2026-08-28
+      // over 63 rows: 8 replies exist, ALL of them ours (no customer has ever replied to a
+      // comment), and Instagram returned `from` on exactly ONE of them (`legendoftoys`) and
+      // omitted it on the other 7. So `from.id === ourId` alone is not the test.
+      //
+      // This was live for one sync: the first reply posted through `replyToComment` was inserted
+      // `outbound` correctly, then the very next poll re-read it from Graph, found no `from`,
+      // and FLIPPED IT TO `inbound` — putting our own reply into the agent work queue as a new
+      // task. Exactly the failure the `direction=eq.inbound` filter exists to prevent, reached by
+      // corrupting the field the filter reads.
+      //
+      // ⚠️ Residual risk, unobserved in 63 rows but real: a CUSTOMER comment arriving with no
+      // `from` would be mislabelled `outbound` and vanish from the queue silently — the worse
+      // direction of error. Detect it with:
+      //   select * from store.cs_post_comments
+      //   where direction='outbound' and replied_by_user_id is null and from_handle is null;
+      // and sanity-check the bodies read like us, not like customers.
+      const isOurs = !cm.from || (fromId && fromId === ourId);
       const row = await upsertPostComment({
         post_id: post.id,
         channel: 'instagram',
         platform_comment_id: String(cm.id),
         parent_comment_id: cm.parent || (cm.parent_id ? String(cm.parent_id) : null),
-        // ⚠️ Our own replies are stored `outbound` so the tree renders complete, and every work
+        // Our own replies are stored `outbound` so the tree renders complete, and every work
         // queue read filters `direction=inbound` so they never become someone's task.
-        direction: fromId && fromId === ourId ? 'outbound' : 'inbound',
-        from_external_id: fromId || null,
-        from_handle: cm.from?.username || null,
+        direction: isOurs ? 'outbound' : 'inbound',
+        // ⚠️ Only assert identity when Instagram actually supplied it. Writing `null` on every
+        // `from`-less row overwrote handles the DB already held — the poller must never clobber a
+        // known value with an absence.
+        ...(fromId ? { from_external_id: fromId } : {}),
+        ...(cm.from?.username ? { from_handle: cm.from.username } : {}),
         body: cm.text || null,
         posted_at: cm.timestamp || null,
         raw_meta: cm,
