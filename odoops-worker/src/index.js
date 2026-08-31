@@ -4282,7 +4282,18 @@ function connectorAlertText(rows) {
       const top = Array.isArray(d.top_skus) ? d.top_skus : [];
       const head = `   • *${nameOf(r)}* — ₹${fmtInr(d.unmapped_gross)} across ${d.sku_count} SKU${d.sku_count === 1 ? '' : 's'}`
                  + ` (${d.unmapped_units} units, last ${d.last_date}) is NOT in sales_fact`;
-      const list = top.map(t => `        – \`${t.sku}\` ₹${fmtInr(t.gross)} (${t.units}u)`).join('\n');
+      // ⭐ LEAD WITH THE TITLE, not the SKU (S325). The Zepto alert fired twice on
+      // `b8d7db11-c182-4f29-836b-d7eca70477fd` and nobody acted, because an opaque UUID is not
+      // something a human can do anything with — the miss was still found by someone noticing a
+      // variance. Zepto sends a perfectly good title ("Construction Fang"); the alert just never
+      // carried it. The SKU stays in the line because it is the value you paste into Odo → Mapping.
+      // `suggested_product_code` is a PROPOSAL and is null unless exactly one non-remote product
+      // matches the title — never auto-applied. See migration 0023 for why both guards exist.
+      const list = top.map(t => {
+        const label = t.title ? `*${t.title}* ` : '';
+        const hint = t.suggested_product_code ? ` → likely \`${t.suggested_product_code}\`?` : '';
+        return `        – ${label}\`${t.sku}\` ₹${fmtInr(t.gross)} (${t.units}u)${hint}`;
+      }).join('\n');
       const more = d.sku_count > top.length ? `\n        – …and ${d.sku_count - top.length} more` : '';
       return list ? `${head}\n${list}${more}` : head;
     }).join('\n'));
