@@ -105,6 +105,7 @@ export default function ReceivingPage() {
   const [reconExpanded, setReconExpanded] = useState(false);
   const [boxContentsExpanded, setBoxContentsExpanded] = useState(false);
   const [bagCountCache, setBagCountCache] = useState({});         // line_id → total_bags
+  const [missingBagsBusy, setMissingBagsBusy] = useState(false);  // S324 — missing-label print in flight
   const [bagSizeMap, setBagSizeMap]       = useState({});         // part_code → default_bag_size (central catalogue)
 
   // Mark form
@@ -844,6 +845,56 @@ export default function ReceivingPage() {
     }
   }
 
+  // Generate + print ONLY the bag labels a line is short of (S324).
+  //
+  // The gap this closes: generateBags is append-only and correct, but nothing
+  // re-invokes it when a line's qty_counted grows after its box was submitted
+  // (a later box, an amend, recompute_line_counts). The label series then stops
+  // short permanently — 147 of 1,678 counted lines, ~1,546 bags, measured
+  // 2026-08-31 — and the floor, which has physically bagged the full counted
+  // quantity, ends up improvising a bag QR that hard-404s at STORE_ISSUE.
+  //
+  // ⚠️ Prints ONLY the newly-created bags, never the whole series. "Print All
+  // Labels" already reprints everything, and a duplicate label lets the SAME
+  // physical stock be picked twice (RUN-387 read 500 against a required 100) —
+  // which is exactly what the S317 double-print guards exist to stop. Hence the
+  // before/after bag-id snapshot, the same shape handleBoxSubmit uses.
+  async function generateAndPrintMissingLabels() {
+    if (!currentShipmentId) return;
+    const shortLines = (shipmentData?.lines || []).filter(l => (l.bags_short || 0) > 0);
+    if (!shortLines.length) { showToast('Every counted line already has its labels', 'info'); return; }
+    setMissingBagsBusy(true);
+    try {
+      const priorArrays = await Promise.all(
+        shortLines.map(l =>
+          garageFetch('getBags', { line_id: l.line_id }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const priorIds = new Set(priorArrays.flat().map(b => b.bag_id));
+
+      await workerFetch('generateBagsForShipment', { data: { shipment_id: currentShipmentId } }, session);
+
+      const afterArrays = await Promise.all(
+        shortLines.map(l =>
+          garageFetch('getBags', { line_id: l.line_id }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const newBags = afterArrays.flat().filter(b => !priorIds.has(b.bag_id));
+
+      if (!newBags.length) {
+        showToast('Nothing new to print — labels were already up to date', 'info');
+      } else {
+        printWindow(buildBagLabelsHtml(newBags, currentShipmentId));
+        showToast(`${newBags.length} missing bag label(s) sent to print`, 'success');
+      }
+      await refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Failed to generate missing labels', 'error');
+    } finally {
+      setMissingBagsBusy(false);
+    }
+  }
+
   async function updateLineBagSize(lineId, newSize) {
     const size = parseInt(newSize);
     if (!size || size < 1) { showToast('Bag size must be at least 1', 'error'); return; }
@@ -930,6 +981,10 @@ export default function ReceivingPage() {
 
   const hasQtyForGRN   = lines.some(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0));
   const showBagButtons = !isFbu && lines.some(l => l.status === 'Counted' || l.status === 'GRN Raised');
+  // S324 — bags a line was counted for but never got a label printed for.
+  // Server-computed (getShipment → store.bag_coverage); absent on an older
+  // worker, in which case this is 0 and the button simply does not appear.
+  const bagsShortTotal = lines.reduce((s, l) => s + (parseInt(l.bags_short) || 0), 0);
   // Empty shipment = nothing received: no boxes in, no counted/GRN'd lines (expected-only
   // lines from a PO are fine). Only then is the Delete button offered (worker re-checks).
   const shipmentEmpty  = !!shipmentData
@@ -1281,6 +1336,16 @@ export default function ReceivingPage() {
               <>
                 <button style={btnSec} onClick={generateAllBags}>⚙ Gen All Bags</button>
                 <button style={btnSec} onClick={printAllLabels}>🖨 Print All Labels</button>
+                {bagsShortTotal > 0 && (
+                  <button
+                    style={{ ...btnSec, color: 'var(--yellow)', borderColor: 'rgba(214,168,42,.45)' }}
+                    onClick={generateAndPrintMissingLabels}
+                    disabled={missingBagsBusy}
+                    title="Generate and print ONLY the labels these lines are short of — does not reprint existing labels"
+                  >
+                    {missingBagsBusy ? '…' : `🏷 Print ${bagsShortTotal} missing label${bagsShortTotal === 1 ? '' : 's'}`}
+                  </button>
+                )}
               </>
             )}
             {shipment.po_reference && (
@@ -1749,9 +1814,15 @@ export default function ReceivingPage() {
                         else if (dmgQty > 0)        { statusLabel = 'Has Damage'; statusTone = 'orange';}
                         else                        { statusLabel = 'Matched';    statusTone = 'green'; }
 
-                        const bagsTotal = bagCountCache[l.line_id];
                         const bagsOf    = l.bags_of || bagSizeMap[l.part_code] || 50;
                         const expBags   = totalCounted > 0 ? Math.ceil(totalCounted / bagsOf) : 0;
+                        // Prefer the server's live count (S324) over the click-populated
+                        // cache — the cache is only filled after Gen All, so before that
+                        // every line read "N exp" whether or not it had any bags at all.
+                        const bagsPresent = l.bags_present != null
+                          ? Number(l.bags_present)
+                          : bagCountCache[l.line_id];
+                        const bagsShort   = parseInt(l.bags_short) || 0;
 
                         return (
                           <tr key={i}>
@@ -1782,8 +1853,18 @@ export default function ReceivingPage() {
                                       title="Pcs per bag"
                                     />
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', minWidth: 36 }}>
-                                      {bagsTotal != null ? bagsTotal + ' gen' : expBags + ' exp'}
+                                      {bagsPresent != null ? bagsPresent + ' gen' : expBags + ' exp'}
                                     </span>
+                                    {/* S324 — pieces counted on this line that no printed
+                                        label covers. The floor has these bags physically;
+                                        without a label it improvises a QR that 404s at
+                                        STORE_ISSUE. Server-computed; absent = 0 = hidden. */}
+                                    {bagsShort > 0 && (
+                                      <span
+                                        style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--state-error-fg)', border: '1px solid rgba(222,42,42,.35)', borderRadius: 2, padding: '1px 4px', whiteSpace: 'nowrap' }}
+                                        title={`${l.bags_short_pcs} pcs counted on this line have no printed bag label (${bagsShort} bag${bagsShort === 1 ? '' : 's'} of ${bagsOf})`}
+                                      >{bagsShort} unlabelled</span>
+                                    )}
                                     <button
                                       onClick={() => generateBagsForLine(l.line_id)}
                                       style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 2, color: 'var(--t2)', fontSize: 9, fontFamily: 'var(--mono)', padding: '2px 5px', cursor: 'pointer' }}
