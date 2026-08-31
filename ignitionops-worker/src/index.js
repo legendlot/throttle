@@ -2618,9 +2618,17 @@ async function resolveLinkTarget(env, engagementId, explicit) {
     // instruction; aliases are only a fallback for when product_master.sku is stale (the HP crest
     // case). First-handle-wins is unchanged — see the note above.
     const pp = await sb(
-      `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=sku,handle,variant_id&limit=20`, env,
+      `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=sku,handle,variant_id&order=sku.asc&limit=20`, env,
     ).catch(() => ({ data: [] }));
     const rows = pp.data || [];
+    // ⚠️ `own` first, `rows[0]` only as the stale-sku fallback — and the query is ORDERED
+    // (`order=sku.asc`) precisely so that fallback is deterministic. An unordered `limit`
+    // plus a first-row pick is the defect that produced the DSO-0397 phantom manifest slots
+    // the same day (PACK and RESTOCK each picked a different row from an unordered
+    // `limit=1`); this is the same shape and it was caught here by hostile review, latent.
+    // Measured 2026-08-31: every `product_ref` in use resolves to exactly ONE variant, so it
+    // could not bite yet — the tomorrow-input is a `sku_map` alias that matches a sibling
+    // colour's Shopify sku, which would make the picked colour arbitrary.
     const own = pm.data?.[0]?.sku ? rows.find(r => r.sku === pm.data[0].sku) : null;
     const row = own || rows[0];
     return productUrl(row?.handle, row?.variant_id);
