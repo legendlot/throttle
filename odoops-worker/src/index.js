@@ -3506,6 +3506,76 @@ async function startConnectorWf(env, channelId, trigger, cursorOverride) {
 }
 
 // QC report ingest — download file from Storage, parse, supersede, stage, map.
+// ── Delhivery invoice CSV → per-shipment D2C freight cost (S325) ────────────
+// Delhivery One → Finances → Invoices → Download. ONE ROW PER SHIPMENT.
+// ⛔ There is NO API for this. Delhivery One's report builder exposes only Order Type / Status /
+// Sub-status / frequency — no charge fields whatsoever — and the tracking webhooks carry
+// `AWB · NSLCode · PickUpDate · ReferenceNo · Sortcode · Status`, i.e. no money. Upload is the only
+// route; do not go hunting for an endpoint.
+// ⚠️ Every value arrives Excel-armoured as `="39308710269146"` — strip it or every numeric is NaN
+// and every key fails to join.
+// ⚠️ Key on `serial_number` INSIDE the file, never the filename: the file arrives named for one
+// date while its content is another invoice entirely.
+// ⚠️ Reject the `EPVASH*` Communication-VAS file — it is per-SMS billing, not freight, and folding
+// it in would inflate logistics. Its tell is a `charge_vas` column and no `waybill_num`.
+const dlvUnq = (v) => String(v ?? '').replace(/^="?/, '').replace(/"$/, '').trim();
+const dlvNum = (v) => { const n = Number(dlvUnq(v).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
+
+async function ingestDelhiveryInvoice(csvText) {
+  const grid = parseCSV(String(csvText));
+  if (!grid.length) return { ok: false, error: 'empty_csv' };
+  const head = grid[0].map((h) => dlvUnq(h).toLowerCase());
+  const ix = (name) => head.indexOf(name);
+  if (ix('waybill_num') < 0 || ix('serial_number') < 0) {
+    return { ok: false, error: head.includes('charge_vas')
+      ? 'this is the Communication VAS invoice (charge_vas), not the freight invoice — do not ingest it'
+      : 'not a Delhivery freight invoice: waybill_num/serial_number missing' };
+  }
+  const chargeCols = head.map((h, i) => ({ h, i })).filter((x) => x.h.startsWith('charge_'));
+  const rows = [];
+  for (let r = 1; r < grid.length; r++) {
+    const g = grid[r];
+    if (!g || !dlvUnq(g[ix('waybill_num')])) continue;
+    const charges = {};
+    for (const c of chargeCols) charges[c.h] = dlvNum(g[c.i]);
+    const pickup = dlvUnq(g[ix('pickup_date')]);
+    rows.push({
+      invoice_no: dlvUnq(g[ix('serial_number')]),
+      waybill_num: dlvUnq(g[ix('waybill_num')]),
+      order_id: dlvUnq(g[ix('order_id')]) || null,
+      // Delhivery writes 'YYYY-MM-DD HH:MM:SS' with no zone; it is IST wall-clock.
+      pickup_at: pickup ? new Date(pickup.replace(' ', 'T') + '+05:30').toISOString() : null,
+      status: dlvUnq(g[ix('status')]) || null,
+      charged_weight: dlvNum(g[ix('charged_weight')]),
+      zone: dlvUnq(g[ix('zone')]) || null,
+      payment_mode: dlvUnq(g[ix('payment_mode')]) || null,
+      product_value: dlvNum(g[ix('product_value')]),
+      cod_amount: dlvNum(g[ix('cod_amount')]),
+      charge_forward: dlvNum(g[ix('charge_dl')]),
+      charge_rto: dlvNum(g[ix('charge_rto')]),
+      charge_dto: dlvNum(g[ix('charge_dto')]),
+      charge_cod: dlvNum(g[ix('charge_cod')]),
+      igst: dlvNum(g[ix('igst')]),
+      cgst: dlvNum(g[ix('cgst')]),
+      sgst: dlvNum(g[ix('sgst/ugst')]),
+      gross_amount: dlvNum(g[ix('gross_amount')]),
+      total_amount: dlvNum(g[ix('total_amount')]),
+      charges,
+      raw: null,
+    });
+  }
+  if (!rows.length) return { ok: false, error: 'no_rows' };
+  // Idempotent: PK is (invoice_no, waybill_num), so re-uploading the same invoice is a no-op.
+  await sbInsertChunked('/rest/v1/stg_delhivery_invoice?on_conflict=invoice_no,waybill_num', rows,
+    'return=minimal,resolution=merge-duplicates');
+  const rc = await rpcSales('recompute_delhivery_logistics', {});
+  const invoices = [...new Set(rows.map((r) => r.invoice_no))];
+  const total = rows.reduce((a, r) => a + (r.total_amount || 0), 0);
+  return { ok: true, invoices, rows_staged: rows.length,
+           csv_total: Math.round(total * 100) / 100,
+           months_written: rc.ok ? Number(rc.data) : null };
+}
+
 async function ingestUpload(batch, env) {
   const cm = batch.column_map || {};
   let text;
@@ -5801,6 +5871,16 @@ export default {
             const batch = { ...ins.data[0], column_map: d.column_map || {}, csv_text: d.csv_text };
             try { const res = await ingestUpload(batch, env); return ok({ batch_id: batch.id, ...res }); }
             catch (e) { await sbSales(`/rest/v1/upload_batch?id=eq.${batch.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'error', error: String(e?.message || e) }) }); return err('Parse failed: ' + String(e?.message || e), 422); }
+          }
+          // Delhivery freight invoice (S325). Upload-only by necessity — see ingestDelhiveryInvoice.
+          // Gated on canUpload, the same permission as the QC report upload.
+          case 'uploadDelhiveryInvoice': {
+            if (!canUpload(P)) return err('No permission', 403);
+            if (!d.csv_text) return err('csv_text required');
+            try {
+              const r = await ingestDelhiveryInvoice(d.csv_text);
+              return r.ok ? ok(r) : err(r.error, 422);
+            } catch (e) { return err('Parse failed: ' + String(e?.message || e), 422); }
           }
           // Idempotent Shopify webhook subscribe (super-admin) — S303.
           // ⚠️ MUST live in the POST switch. It first shipped in the GET switch while the Admin
