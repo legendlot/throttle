@@ -4524,6 +4524,18 @@ export default {
         const p = await logReconcileProbe(env);
         console.log('odoops cron (reconcile probe):', JSON.stringify(p));
       } catch (e) { console.error('odoops cron (reconcile probe) failed:', e?.message || e); }
+      // RTO → RETURN (S325). Afshaan 2026-08-31: "Returns is customer cancellation + RTO (never
+      // accepted)... it should be net as a return on the RTO date." An RTO slipped through the
+      // RULE-SALES-001 ladder entirely — it is neither a cancellation nor a refund, and for a COD
+      // parcel no refund can ever exist — leaving ₹34.4L of gross counted on goods that came back.
+      // Runs AFTER syncUniwareTracking on purpose: that is what advances lifecycle to 'rto', so
+      // this picks up the same tick's RTOs instead of waiting an hour. Idempotent (source_line_id
+      // is `rto:<pkg>:<line>`), so a re-run inserts nothing and the cost is one cheap RPC.
+      try {
+        const rt = await rpcSales('sync_rto_returns', {});
+        if (rt.ok && Number(rt.data) > 0) console.log('odoops cron (rto→returns): staged', rt.data, 'return rows');
+        else if (!rt.ok) console.error('odoops cron (rto→returns) failed:', JSON.stringify(rt.data || null));
+      } catch (e) { console.error('odoops cron (rto→returns) threw:', e?.message || e); }
     } catch (e) {
       console.error('odoops cron (uniware tracking) failed:', e?.message || e);
       try { await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', { method: 'PATCH',
