@@ -26,9 +26,16 @@
 --   4. A product can have fees in the range but no sales (and vice versa). Keys are UNIONed
 --      from all three sources, not LEFT JOINed off sales, or such a product's fees vanish.
 --
--- RECONCILIATION CONTRACT: SUM over all returned rows, residual INCLUDED, equals f_pnl's
--- gmv/cogs/logistics/platform_fee/cac for the same channels+platforms. Verified S325 to within
--- ±3 rupees on CM2 (per-row ROUND()).
+-- RECONCILIATION CONTRACT — AND ITS LIMIT (corrected by the S325 hostile review):
+--   Σ all rows, residual INCLUDED, equals f_pnl's gmv/cogs/logistics/platform_fee/cac for the
+--   same channels+platforms ONLY where those lines are SETTLEMENT-derived. Verified for Amazon
+--   to ±3 rupees on CM2 (per-row ROUND()).
+--   ⛔ It does NOT hold for a channel with MANUAL lines. This function never reads
+--   `sales.pnl_manual`, which f_pnl adds — so for Website, f_pnl logistics is ₹2,29,546 (the
+--   Delhivery invoice row) while this returns 0. The gap is silent.
+--   That is survivable ONLY because the worker's `has_cm` refuses to show CM columns unless a
+--   REAL product carries cost, which keeps such a channel on the GM view. If you ever loosen
+--   `has_cm`, fold `pnl_manual` into the residual FIRST (it needs a p_channel_key arg).
 -- ⚠️ Compare the two IN ONE QUERY. The 5-minute recompute cron moves sales_fact between calls;
 -- two figures read minutes apart differ by thousands and look like a bug that is not there.
 

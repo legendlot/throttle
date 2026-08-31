@@ -5303,8 +5303,13 @@ export default {
             const rows = r.data || [];
             // has_cm is DERIVED from the data, not hardcoded to Amazon — the moment another
             // channel gets a settlement feed its CM columns light up with no code change here.
-            const has_cm = famKey !== 'all' && rows.some(x =>
-              Number(x.logistics) || Number(x.platform_fee) || Number(x.cac));
+            // ⚠️ It MUST ignore the residual row. Website has zero per-product fees and zero
+            // per-product ad rows (`mkt_product_fact` holds no meta/google), so ALL its cost
+            // falls into the residual — and counting that row turned CM on for a view where
+            // every product showed CM2 == GM while ₹61L sat in one unattributable line. If no
+            // real product carries cost, per-product CM is not meaningful: stay on GM.
+            const has_cm = famKey !== 'all' && rows.some(x => !x.is_residual &&
+              (Number(x.logistics) || Number(x.platform_fee) || Number(x.cac)));
             return ok({ rows, family: famKey, has_cm,
               families: PNL_FAMILIES.map(f => ({ key: f.key, label: f.label })) });
           }
