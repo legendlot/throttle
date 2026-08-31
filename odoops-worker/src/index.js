@@ -4701,6 +4701,12 @@ export default {
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
       const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
       const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
+      // Uniware scopes SOME endpoints to a facility and 403s `Illegal Access, facility is required`
+      // without the header — `/services/rest/v1/oms/return/search` is one (found 2026-08-31, S325;
+      // the 403 is how we established that endpoint EXISTS while every other returns path guess
+      // 404s). Pass-through for the same reason `path` exists: probe without a redeploy per guess.
+      // Read-only probe surface, already behind ODOOPS_INTERNAL_TOKEN.
+      if (b.facility) H.Facility = String(b.facility);
       // Search mode: Uniware's own order `code` is not the Shopify order name, so find it first.
       if (!b.code) {
         const days = Math.min(Number(b.days) || 3, 30);
