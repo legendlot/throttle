@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Lock, Download } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
+import { LINES } from '@throttle/domain';
 import { Spinner, useToast } from '@throttle/ui';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
@@ -387,7 +388,7 @@ export default function ReportingPage() {
     if (!taktData) return null;
     const taktRows = Array.isArray(taktData.takt) ? taktData.takt : [];
     const stations = ['INW', 'QC_DECISION', 'QC_PASS', 'PKG', 'PKG_OUT'];
-    const lines = ['L1', 'L2', 'L3'];
+    const lines = LINES;   // S324: was ['L1','L2','L3'] — silently dropped L4/L5 units from throughput
     const grid = {};
     for (const r of taktRows) {
       grid[`${r.line}|${r.station}`] = r;

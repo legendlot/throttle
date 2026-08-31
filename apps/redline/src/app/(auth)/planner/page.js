@@ -17,6 +17,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Check, RotateCcw } from 'lucide-react';
 import { useRefreshState } from '../layout.js';
+import { LINES } from '@throttle/domain';
 import {
   Icon, KpiTile, ToneBadge, fmt, btnPrimary, btnGhost,
 } from '../../../components/kit/index.js';
@@ -437,7 +438,7 @@ export default function PlannerPage() {
   function nextAvailableLine(cart) {
     if (!cart) return 'L1';
     const used = new Set(cart.lines.map(l => l.line_no));
-    return ['L1','L2','L3'].find(l => !used.has(l)) || 'L1';
+    return LINES.find(l => !used.has(l)) || 'L1';
   }
 
   // FEAT-018 — fire stock check per variant of a cart line, aggregate short parts
@@ -518,7 +519,7 @@ export default function PlannerPage() {
       setSchedulingError('No variants with qty > 0');
       return;
     }
-    if (!['L1','L2','L3'].includes(scheduleTarget.line_no)) {
+    if (!LINES.includes(scheduleTarget.line_no)) {
       setSchedulingError('Pick a line first');
       return;
     }
@@ -595,7 +596,7 @@ export default function PlannerPage() {
       setRepeatError('Pick a date');
       return;
     }
-    if (!['L1','L2','L3'].includes(targetLine)) {
+    if (!LINES.includes(targetLine)) {
       setRepeatError('Pick a line');
       return;
     }
@@ -1198,7 +1199,7 @@ export default function PlannerPage() {
 
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                           <span className="eyebrow" style={{ marginRight: 4 }}>Line</span>
-                                          {['L1','L2','L3'].map(L => (
+                                          {LINES.map(L => (
                                             <LinePickBtn key={L}
                                               active={scheduleTarget.line_no === L}
                                               onClick={() => { setScheduleTarget(prev => ({ ...prev, line_no: L })); setSchedulingError(''); }}>
@@ -1295,7 +1296,7 @@ export default function PlannerPage() {
                       </button>
                     </div>
 
-                    {['L1','L2','L3'].map(L => {
+                    {LINES.map(L => {
                       const line = cart.lines.find(l => l.line_no === L);
                       if (!line) {
                         return (
@@ -1418,7 +1419,7 @@ export default function PlannerPage() {
                                   onChange={e => { setRepeatTarget(prev => ({ ...prev, date: e.target.value })); setRepeatError(''); }}
                                   style={{ ...dateInput, fontSize: 11, padding: '3px 7px' }} />
                                 <span className="eyebrow" style={{ marginLeft: 4 }}>Line</span>
-                                {['L1','L2','L3'].map(LL => (
+                                {LINES.map(LL => (
                                   <LinePickBtn key={LL} size="sm"
                                     active={repeatTarget.line_no === LL}
                                     onClick={() => { setRepeatTarget(prev => ({ ...prev, line_no: LL })); setRepeatError(''); }}>
