@@ -42,7 +42,10 @@ export default function ProductPnlPage() {
       // flag on it would be meaningless — and its margin % has no denominator.
       resid: !!r.is_residual, costed: cogs > 0 || !!r.is_residual };
   });
-  const prodSort = useTableSort(prodRows, { initialKey: 'gm' });
+  // The residual is a RECONCILING row, not a product — it must never sort among them, or it
+  // reads as a product line with a huge negative fee. Held out of the sort and pinned last.
+  const residRows = prodRows.filter(r => r.resid);
+  const prodSort = useTableSort(prodRows.filter(r => !r.resid), { initialKey: 'gm' });
   const pcell = (v, nmv) => pctMode ? (nmv ? `${(100 * v / nmv).toFixed(1)}%` : '—') : rs(v);
   const saveCost = async (product_code, v) => {
     try { await salesPost('setProductCost', { product_code, cogs_inr: Math.round(Number(v) || 0) }, session); setCosts(cs => (cs || []).map(c => c.product_code === product_code ? { ...c, cogs_inr: Math.round(Number(v) || 0) } : c)); load(); }
@@ -97,8 +100,8 @@ export default function ProductPnlPage() {
                 </tr></thead>
                 <tbody>
                   {prodSort.sorted.length === 0 && <tr><td colSpan={hasCm ? 13 : 7} style={{ color: 'var(--t3)', padding: 14 }}>No product sales in this range.</td></tr>}
-                  {prodSort.sorted.map(r => (
-                    <tr key={r.product} style={r.resid ? { background: 'var(--row-alt, rgba(127,127,127,.06))' } : undefined}>
+                  {[...prodSort.sorted, ...residRows].map(r => (
+                    <tr key={r.product} style={r.resid ? { background: 'var(--row-alt, rgba(127,127,127,.06))', borderTop: '2px solid var(--row-border)' } : undefined}>
                       <td style={{ whiteSpace: 'nowrap' }}>
                         {r.resid ? <span title="Fees and ad spend that pin to no SKU — shown so the table reconciles to the channel P&L. Never pro-rated across products." style={{ fontStyle: 'italic', color: 'var(--t3)' }}>{r.product}</span> : r.product}
                         {!r.costed && <span className="so-sub" title="No standard cost set — GM overstated" style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)' }}>no cost</span>}
