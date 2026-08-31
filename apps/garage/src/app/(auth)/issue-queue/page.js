@@ -702,7 +702,10 @@ export default function IssueQueuePage() {
         .slice()
         .sort((a, b) => pickSortKey(a, materials) - pickSortKey(b, materials));
       const partRows = rows.map((p) => {
-        const bagSize = (materials[p.part_code]?.bag_size) || 25;
+        // NULL bag_size defaults to 50 (Afshaan, 2026-08-31 S324). Was 25 here while the
+        // worker used 50, so the same part showed a different bag count in the UI than
+        // the worker wrote. All 7 fallback sites now read 50. See reference/decisions.md.
+        const bagSize = (materials[p.part_code]?.bag_size) || 50;
         const bags = Math.ceil((p.required || 0) / bagSize);
         const status = (p.available || 0) >= (p.required || 0) ? 'OK' : 'SHORT';
         return `
@@ -786,7 +789,7 @@ export default function IssueQueuePage() {
         partRows += `<tr class="type-row"><td colspan="${COLSPAN}">${escapeHtml(type.toUpperCase())}</td></tr>`;
         lastType = type;
       }
-      const bagSize = (materials[p.part_code]?.bag_size) || 25;
+      const bagSize = (materials[p.part_code]?.bag_size) || 50;
       const bags = Math.ceil((p.total_qty || 0) / bagSize);
       const status = (p.available || 0) >= (p.total_qty || 0) ? 'OK' : 'SHORT';
       partRows += `
@@ -900,7 +903,7 @@ export default function IssueQueuePage() {
         if (Array.isArray(full) && full.length) lines = full;
       } catch { /* fall back to in-memory lines */ }
       const partRows = lines.map((l) => {
-        const bagSize = (materials[l.part_code]?.bag_size) || 25;
+        const bagSize = (materials[l.part_code]?.bag_size) || 50;
         const bags = Math.ceil((parseFloat(l.actual_issued) || 0) / bagSize);
         return `
           <tr>
