@@ -6,6 +6,16 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.15.0] - 2026-08-31
+
+### Added
+- **Users & Roles: Attendance device.** New section for the super-admin card that ties clock-in and clock-out to one phone at the gate. Explains in plain terms why a PIN or a device code cannot prove *which* phone is asking, and why the phone's own non-exportable key can. Covers enrol, lock and the reset path for a lost or replaced handset.
+- States plainly that the lock is **set up but not yet enforced**, and that switching it on before the gate phone is enrolled would stop the whole floor clocking in.
+- States what the lock does not solve (someone at the desk scanning a colleague's badge) and the queue to expect (about 110 clock-ins between 8:30 and 9:30).
+
+### Changed
+- **Fix:** the Scanner Department PINs section said the scanner has **three** PIN-gated departments. It has had **four** since Attendance was gated in S199, and the card on screen has shown four rows for weeks.
+
 ## [1.10.0] - 2026-07-29
 
 ### Added
