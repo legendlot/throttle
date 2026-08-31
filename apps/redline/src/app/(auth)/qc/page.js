@@ -371,12 +371,27 @@ function ByProduct({ rows }) {
 
 /* ── repeat-failure watchlist ───────────────────────────────── */
 function RepeatWatchlist({ rows }) {
+  /* ⚠️ ALL-TIME, and it cannot follow the range selector. `public.v_repeat_defects` exposes
+     only (upc, product, total_defects, unique_defect_codes, defect_codes) — there is no date
+     column to filter on, client-side or in the query, and the worker fetches it with no date
+     filter by design. With a single-day picker the mismatch was self-evident; sitting next to
+     a Week/Month range it would silently look like it obeyed one. Labelled rather than
+     hidden — the panel is genuinely useful, it just answers a different question. Making it
+     range-aware needs a view change (flagged by Bugs 3108 when this item was filed). */
   return (
     <Panel title="Repeat failures" icon="undo" pad={8}
-      action={rows.length ? (
-        <span className="num" style={{ fontSize: 11, color: 'var(--warn-fg)', background: 'var(--warn-bg)',
-          border: '1px solid var(--warn-bd)', borderRadius: 'var(--r-full)', padding: '2px 9px' }}>{rows.length}</span>
-      ) : null}>
+      action={(
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {/* ⚠️ Rendered in `action` because Panel has NO `subtitle` prop — passing one
+              silently drops it, which is how a label that exists in the source never
+              reaches the screen. Panel is ({title, icon, action, pad, children, style}). */}
+          <span style={{ fontSize: 11, color: 'var(--t3)' }}>All time — ignores the date range</span>
+          {rows.length ? (
+            <span className="num" style={{ fontSize: 11, color: 'var(--warn-fg)', background: 'var(--warn-bg)',
+              border: '1px solid var(--warn-bd)', borderRadius: 'var(--r-full)', padding: '2px 9px' }}>{rows.length}</span>
+          ) : null}
+        </span>
+      )}>
       {!rows.length ? (
         <Empty icon="undo" message="No repeat failures" />
       ) : (
@@ -468,15 +483,59 @@ export default function QcPage() {
   const [filters, setFilters] = useState({ line: 'all', cat: 'all' });
   const [drawer,  setDrawer]  = useState(null);
   // Defaults to today, per the standing rule for every date picker in every app.
+  // `date` stays the ANCHOR day; `preset` widens it backwards. Day is the default so the
+  // page opens exactly as it always has.
   const [date,    setDate]    = useState(() => todayStr());
+  const [preset,  setPreset]  = useState('day');   // 'day' | 'week' | 'month'
   const isToday = date === todayStr();
+
+  // Range derived from (anchor, preset). Week = the anchor's Mon→anchor; Month = 1st→anchor.
+  // ⚠️ Built with dateStr()/local fields, never toISOString().slice(0,10) — that renders a
+  // local moment as UTC and, for a local midnight like `new Date(y, m, 1)`, returns the
+  // PREVIOUS month's last day in IST, all day (PATTERN-221; the same trap closed fleet-wide
+  // earlier today, where a year-to-date report opened on 31 Dec of the prior year).
+  const { from, to } = useMemo(() => {
+    const anchor = new Date(`${date}T00:00:00`);          // local midnight, not UTC-parsed
+    if (preset === 'week') {
+      const d = new Date(anchor);
+      d.setDate(d.getDate() - ((d.getDay() + 6) % 7));    // back to Monday
+      return { from: dateStr(d), to: date };
+    }
+    if (preset === 'month') {
+      const d = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+      return { from: dateStr(d), to: date };
+    }
+    return { from: date, to: date };
+  }, [date, preset]);
+
+  const isSingleDay = from === to;
+
+  /* Export the defect breakdown for the CURRENT range. Mahesh Jain asked for this to
+     track why lines fail QC (#bugs 1788170951.949929), so it exports the per-line/per-defect
+     rows behind the Pareto, not the summary tiles.
+     ⚠️ Quotes every field and doubles embedded quotes — defect descriptions are free text
+     and a comma or a quote in one would otherwise shift every later column silently.
+     ⚠️ Filename uses the range, not `new Date().toISOString()`, so it cannot carry
+     yesterday's date in the small hours (PATTERN-221). */
+  const exportCsv = useCallback(() => {
+    if (!defects.length) return;
+    const cols = Object.keys(defects[0]);
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [cols.map(esc).join(','), ...defects.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = from === to ? `qc-defects-${from}.csv` : `qc-defects-${from}_to_${to}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [defects, from, to]);
 
   const loadAll = useCallback(async () => {
     const s = sessionRef.current;
     if (!s) return;
     setRefreshing(true);
     try {
-      const data  = await garageFetch('getQCView', { from: date, to: date }, s);
+      const data  = await garageFetch('getQCView', { from, to }, s);
 
       setCycleTime(data.cycle_time       || null);
       setCtByLine(data.cycle_time_lines  || {});
@@ -492,7 +551,7 @@ export default function QcPage() {
       setRefreshing(false);
       setLastRefreshed(new Date());
     }
-  }, [date, setRefreshing, setLastRefreshed]);
+  }, [from, to, setRefreshing, setLastRefreshed]);
 
   // Load on mount and on every date change. NB `useAutoRefresh` cannot carry this —
   // it keys its effect on [skip, intervalMs] and holds fn in a ref, so a date change
@@ -502,10 +561,12 @@ export default function QcPage() {
   // Poll only while looking at today. A past day is settled, so re-fetching it every
   // 30s just churns and makes the "Updated hh:mm" stamp read as if it were live.
   useEffect(() => {
-    if (!userId || !isToday) return;
+    // Live only when the view IS live: today, and a single day. A week/month range is a
+    // report, so polling it every 30s churns and makes "Updated hh:mm" read as live.
+    if (!userId || !isToday || !isSingleDay) return;
     const id = setInterval(() => loadAll(), 30000);
     return () => clearInterval(id);
-  }, [userId, isToday, loadAll]);
+  }, [userId, isToday, isSingleDay, loadAll]);
 
   /* aggregate heatmap rows by line+code for the Pareto */
   const defects = useMemo(() => {
@@ -576,12 +637,31 @@ export default function QcPage() {
               letterSpacing: '0.05em', textTransform: 'uppercase', border: '1px solid var(--border)',
               borderRadius: 'var(--r-sm)', background: 'var(--surface)' }}>Today</button>
         )}
-        {isToday ? (
+        {/* Range presets. Day is the default so the page opens exactly as it always has
+            (standing rule: every picker defaults to Today). Week = Mon→anchor, Month =
+            1st→anchor — both END at the anchor rather than running to a future date. */}
+        <div style={{ display: 'flex', gap: 5 }}>
+          {[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([k, label]) => (
+            <FilterChip key={k} active={preset === k} onClick={() => setPreset(k)}>{label}</FilterChip>
+          ))}
+        </div>
+        <button type="button" onClick={exportCsv} disabled={!defects.length}
+          title={defects.length ? 'Download the defect breakdown for this range as CSV'
+                                : 'Nothing to export for this range'}
+          style={{ ...dayNavStyle, width: 'auto', padding: '6px 11px', fontSize: 11.5,
+            letterSpacing: '0.05em', textTransform: 'uppercase', border: '1px solid var(--border)',
+            borderRadius: 'var(--r-sm)', background: 'var(--surface)',
+            opacity: defects.length ? 1 : 0.4, cursor: defects.length ? 'pointer' : 'default' }}>
+          ↓ Export
+        </button>
+        {isToday && isSingleDay ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t3)' }}>
             <span className="rl-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)' }} /> Auto-refresh 30s
           </span>
         ) : (
-          <span style={{ fontSize: 12, color: 'var(--t3)' }}>Showing a past day — not live</span>
+          <span style={{ fontSize: 12, color: 'var(--t3)' }}>
+            {isSingleDay ? 'Showing a past day — not live' : `${fmtDay(from)} → ${fmtDay(to)} — not live`}
+          </span>
         )}
       </div>
 
@@ -592,7 +672,8 @@ export default function QcPage() {
         </div>
       )}
 
-      <FpyScorecard rows={fpy} defects={defects} dayLabel={isToday ? 'today' : fmtDay(date)} />
+      <FpyScorecard rows={fpy} defects={defects}
+        dayLabel={isSingleDay ? (isToday ? 'today' : fmtDay(date)) : `${fmtDay(from)} → ${fmtDay(to)}`} />
       <CycleStrip ct={cycleTime} ctByLine={ctByLine} />
 
       {/* defects + repeats */}
