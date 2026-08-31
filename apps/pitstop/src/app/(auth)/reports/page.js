@@ -5,6 +5,7 @@ import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download, Phone, Users } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { KpiCard, btnGhost } from '../../../components/kit/index.js';
+import { dateStr } from '@throttle/domain';
 
 function toIsoStart(date) {
   const d = new Date(date);
@@ -33,8 +34,13 @@ export default function ReportsPage() {
   const ytdStart = new Date(today.getFullYear(), 0, 1);
 
   const [view, setView] = useState('tickets');   // 'tickets' | 'calls' | 'agents'
-  const [from, setFrom] = useState(ytdStart.toISOString().slice(0, 10));
-  const [to,   setTo]   = useState(today.toISOString().slice(0, 10));
+  // ⚠️ `dateStr`, not `.toISOString().slice(0,10)` — PATTERN-221. This one was the worst
+  // case of the class: `ytdStart` is a LOCAL midnight (`new Date(y, 0, 1)`), and
+  // toISOString() renders local midnight as the PREVIOUS day in any positive offset — so
+  // the year-to-date report opened on **31 Dec of the previous year** in IST, every time.
+  // `to` had the ordinary form of the bug: yesterday between 00:00 and 05:30 IST.
+  const [from, setFrom] = useState(dateStr(ytdStart));
+  const [to,   setTo]   = useState(dateStr(today));
   const [data, setData] = useState(null);
   const [callData, setCallData] = useState(null);
   const [agentData, setAgentData] = useState(null);

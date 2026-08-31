@@ -28,6 +28,7 @@ import TagPicker, { TagChip } from '../../../components/TagPicker.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 import { useRefreshState } from '../layout.js';
 import { fmtIstShort } from '../../../lib/datetime.js';
+import { dateStr } from '@throttle/domain';
 
 // Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
 const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
@@ -505,7 +506,7 @@ export default function InboxPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pitstop-chats-${channel || 'all'}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `pitstop-chats-${channel || 'all'}-${dateStr(new Date())}.csv`;
     a.click(); URL.revokeObjectURL(url);
   }
 

@@ -10,6 +10,7 @@ import { BarChart3, RefreshCw, Download } from 'lucide-react';
 import { PageHead, Panel, Kpi, Badge, Btn, EmptyState, ChannelChip } from '@/components/ui.js';
 import { fmtDateShort, inr } from '@/components/format.js';
 import { istPresetRange, PRESETS } from '@/lib/dateRanges.js';
+import { dateStr } from '@throttle/domain';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 
@@ -54,7 +55,7 @@ function downloadCsv(name, header, body) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${name}-${dateStr(new Date())}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }

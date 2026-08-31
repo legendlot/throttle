@@ -11,6 +11,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Download } from 'lucide-react';
 import { PageHead, Panel, Kpi, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { istPresetRange, PRESETS } from '@/lib/dateRanges.js';
+import { dateStr } from '@throttle/domain';
 
 const EVENTS = [
   { key: 'checkout_abandoned', label: 'Checkout abandoned' },
@@ -50,7 +51,7 @@ function downloadActivityCsv(rows, event, preset) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `relay-activity-${event}-${preset}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `relay-activity-${event}-${preset}-${dateStr(new Date())}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }

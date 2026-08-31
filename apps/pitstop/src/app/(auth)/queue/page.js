@@ -13,6 +13,7 @@ import { fmtIstDateTime } from '../../../lib/datetime.js';
 import {
   KpiCard, Tabs, StagePill, Icon, btnPrimary, btnGhost, inputStyle, selectStyle, fmt,
 } from '../../../components/kit/index.js';
+import { dateStr } from '@throttle/domain';
 
 const TABS = [
   { id: 'my',         label: 'My Queue' },
@@ -199,7 +200,7 @@ export default function QueuePage() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `pitstop-${activeTab}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.href = url; a.download = `pitstop-${activeTab}-${dateStr(new Date())}.csv`;
     a.click(); URL.revokeObjectURL(url);
   }
 

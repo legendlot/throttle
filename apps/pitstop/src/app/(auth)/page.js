@@ -19,17 +19,23 @@ import { TrendChart, hourFmt } from '../../components/kit/Chart.js';
 import { csopsGet } from '../../lib/csopsFetch.js';
 import { getActiveDept } from '../../components/DeptSwitcher.js';
 import { useRefreshState } from './layout.js';
+import { dateStr } from '@throttle/domain';
 
 const AGENT_CAP = 15; // soft per-agent open-ticket capacity (no capacity field exists yet)
 
 function rangeFor(preset) {
   // IST-anchored date-only bounds (the worker accepts ISO; date-only is fine).
+  // ⚠️ `istNow` is already an IST wall-clock Date, so it must be read with its LOCAL
+  // calendar fields (`dateStr`). The old `.toISOString().slice(0,10)` re-converted it to
+  // UTC, i.e. shifted it back off IST — returning YESTERDAY for any time between 00:00
+  // and 05:30 IST, and the previous month's last day for a local 1st (`d.setDate(1)`
+  // below hits exactly that). PATTERN-221.
   const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const to = istNow.toISOString().slice(0, 10);
+  const to = dateStr(istNow);
   const d = new Date(istNow);
   if (preset === 'week') { const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); } // Monday
   else if (preset === 'month') { d.setDate(1); }
-  const from = d.toISOString().slice(0, 10);
+  const from = dateStr(d);
   return { from, to };
 }
 

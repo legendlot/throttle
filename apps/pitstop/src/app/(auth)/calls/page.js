@@ -12,6 +12,7 @@ import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { KpiCard, Tabs, selectStyle } from '../../../components/kit/index.js';
 import { TrendChart, hourFmt } from '../../../components/kit/Chart.js';
 import { fmtIstShort } from '../../../lib/datetime.js';
+import { dateStr } from '@throttle/domain';
 
 const TABS = [
   { id: 'all',        label: 'All Calls' },
@@ -110,8 +111,10 @@ export default function CallsPage() {
 
   // Hourly call-volume chart (a particular day, default today).
   const [chartDay, setChartDay] = useState(() => {
+    // `ist` is already an IST wall-clock Date — read its LOCAL fields. `.toISOString()`
+    // would shift it back off IST and default the chart to YESTERDAY before 05:30 IST.
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    return ist.toISOString().slice(0, 10);
+    return dateStr(ist);
   });
   const [hourly, setHourly] = useState([]);
   useEffect(() => {

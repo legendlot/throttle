@@ -13,6 +13,7 @@ import { useNewParam } from '@/lib/useNewParam.js';
 import VariantSetup from './VariantSetup.js';
 import VariantProgress from './VariantProgress.js';
 import VariantResults, { STATE_META } from './VariantResults.js';
+import { dateStr } from '@throttle/domain';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -106,7 +107,7 @@ function downloadCampaignsCsv(rows, overview, tab, experiments = {}) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `relay-broadcasts-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `relay-broadcasts-${tab}-${dateStr(new Date())}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
