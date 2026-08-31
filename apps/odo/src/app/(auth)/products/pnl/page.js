@@ -21,18 +21,26 @@ export default function ProductPnlPage() {
   const [costs, setCosts] = useState(null);
   const [showCosts, setShowCosts] = useState(false);
   const [mode, setMode] = useState('abs');
+  const [fam, setFam] = useState('all');
+  const [meta, setMeta] = useState(null);
   const [err, setErr] = useState('');
 
   useEffect(() => { const t = istToday(); const [y, m] = t.split('-').map(Number); setFrom(new Date(Date.UTC(y, m - 1 - 5, 1)).toISOString().slice(0, 10)); setTo(t); }, []);
-  const load = () => { if (from && to) salesGet('getPnlByProduct', { from, to }, session).then(r => setProd(r?.rows || [])).catch(e => setErr(e.message || String(e))); };
-  useEffect(() => { if (session && from && to) { setProd(null); setErr(''); load(); } }, [session, from, to]);
+  const load = () => { if (from && to) salesGet('getPnlByProduct', { from, to, family: fam }, session).then(r => { setProd(r?.rows || []); setMeta(r || null); }).catch(e => setErr(e.message || String(e))); };
+  useEffect(() => { if (session && from && to) { setProd(null); setErr(''); load(); } }, [session, from, to, fam]);
   useEffect(() => { if (session && isAdmin && showCosts && !costs) salesGet('getProductCosts', {}, session).then(r => setCosts(r?.rows || [])).catch(() => setCosts([])); }, [session, isAdmin, showCosts, costs]);
 
   const pctMode = mode === 'pct';
+  const hasCm = !!(meta && meta.has_cm);
   const prodRows = (prod || []).map(r => {
     const gmv = +r.gmv || 0, ret = +r.returns_val || 0, tax = +r.taxes || 0, cogs = +r.cogs || 0, units = +r.units || 0;
-    const nmv = gmv - ret - tax, gm = nmv - cogs;
-    return { product: r.product, units, gmv, nmv, cogs, gm, gm_pct: nmv ? 100 * gm / nmv : 0, costed: cogs > 0 };
+    const logi = +r.logistics || 0, plat = +r.platform_fee || 0, cac = +r.cac || 0;
+    const nmv = gmv - ret - tax, gm = nmv - cogs, cm1 = gm - logi - plat, cm2 = cm1 - cac;
+    return { product: r.product, units, gmv, nmv, cogs, gm, gm_pct: nmv ? 100 * gm / nmv : 0,
+      logi, plat, cac, cm1, cm2, cm2_pct: nmv ? 100 * cm2 / nmv : 0,
+      // The residual row carries fees/CAC that pin to no SKU. It has no GMV, so a "no cost"
+      // flag on it would be meaningless — and its margin % has no denominator.
+      resid: !!r.is_residual, costed: cogs > 0 || !!r.is_residual };
   });
   const prodSort = useTableSort(prodRows, { initialKey: 'gm' });
   const pcell = (v, nmv) => pctMode ? (nmv ? `${(100 * v / nmv).toFixed(1)}%` : '—') : rs(v);
@@ -54,15 +62,22 @@ export default function ProductPnlPage() {
       </div>
 
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<><SegmentedToggle options={[['abs', '₹'], ['pct', '% of NMV']]} value={mode} onChange={setMode} size="sm" /><span className="so-sub" style={{ marginLeft: 10 }}>Per product · through GM</span></>} />
+        right={<>
+          <select className="so-input" style={{ padding: '3px 7px', fontSize: 12, marginRight: 10 }} value={fam} onChange={e => setFam(e.target.value)}>
+            <option value="all">All channels</option>
+            {(meta?.families || []).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+          </select>
+          <SegmentedToggle options={[['abs', '₹'], ['pct', '% of NMV']]} value={mode} onChange={setMode} size="sm" />
+          <span className="so-sub" style={{ marginLeft: 10 }}>Per product · through {hasCm ? 'CM2' : 'GM'}</span>
+        </>} />
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
       {!prod ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
           <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By product <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· margin through GM · all channels · {pctMode ? '% of NMV' : '₹'} for the range</span></div>
+            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By product <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· margin through {hasCm ? 'CM2' : 'GM'} · {fam === 'all' ? 'all channels' : ((meta?.families || []).find(f => f.key === fam)?.label || fam)} · {pctMode ? '% of NMV' : '₹'} for the range</span></div>
             <div style={{ overflowX: 'auto' }}>
-              <table className="so-table" style={{ marginTop: 8, minWidth: 620 }}>
+              <table className="so-table" style={{ marginTop: 8, minWidth: hasCm ? 1020 : 620 }}>
                 <thead><tr>
                   <SortHeader k="product" label="Product" sort={prodSort} />
                   <SortHeader k="units" label="Units" sort={prodSort} numeric />
@@ -71,25 +86,49 @@ export default function ProductPnlPage() {
                   <SortHeader k="cogs" label="COGS" sort={prodSort} numeric />
                   <SortHeader k="gm" label="GM" sort={prodSort} numeric />
                   <SortHeader k="gm_pct" label="GM %" sort={prodSort} numeric />
+                  {hasCm && <>
+                    <SortHeader k="logi" label="Logistics" sort={prodSort} numeric />
+                    <SortHeader k="plat" label="Platform fee" sort={prodSort} numeric />
+                    <SortHeader k="cm1" label="CM1" sort={prodSort} numeric />
+                    <SortHeader k="cac" label="CAC" sort={prodSort} numeric />
+                    <SortHeader k="cm2" label="CM2" sort={prodSort} numeric />
+                    <SortHeader k="cm2_pct" label="CM2 %" sort={prodSort} numeric />
+                  </>}
                 </tr></thead>
                 <tbody>
-                  {prodSort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>No product sales in this range.</td></tr>}
+                  {prodSort.sorted.length === 0 && <tr><td colSpan={hasCm ? 13 : 7} style={{ color: 'var(--t3)', padding: 14 }}>No product sales in this range.</td></tr>}
                   {prodSort.sorted.map(r => (
-                    <tr key={r.product}>
-                      <td style={{ whiteSpace: 'nowrap' }}>{r.product}{!r.costed && <span className="so-sub" title="No standard cost set — GM overstated" style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)' }}>no cost</span>}</td>
-                      <td className="so-num">{rs(r.units)}</td>
-                      <td className="so-num">{pcell(r.gmv, r.nmv)}</td>
-                      <td className="so-num">{pcell(r.nmv, r.nmv)}</td>
-                      <td className="so-num">{pcell(r.cogs, r.nmv)}</td>
-                      <td className="so-num">{pcell(r.gm, r.nmv)}</td>
-                      <td className="so-num" style={{ color: r.gm_pct < 0 ? 'var(--red)' : 'var(--green-fg)', fontWeight: 600 }}>{r.gm_pct.toFixed(1)}%</td>
+                    <tr key={r.product} style={r.resid ? { background: 'var(--row-alt, rgba(127,127,127,.06))' } : undefined}>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {r.resid ? <span title="Fees and ad spend that pin to no SKU — shown so the table reconciles to the channel P&L. Never pro-rated across products." style={{ fontStyle: 'italic', color: 'var(--t3)' }}>{r.product}</span> : r.product}
+                        {!r.costed && <span className="so-sub" title="No standard cost set — GM overstated" style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)' }}>no cost</span>}
+                      </td>
+                      <td className="so-num">{r.resid ? '—' : rs(r.units)}</td>
+                      <td className="so-num">{r.resid ? '—' : pcell(r.gmv, r.nmv)}</td>
+                      <td className="so-num">{r.resid ? '—' : pcell(r.nmv, r.nmv)}</td>
+                      <td className="so-num">{r.resid ? '—' : pcell(r.cogs, r.nmv)}</td>
+                      <td className="so-num">{r.resid ? '—' : pcell(r.gm, r.nmv)}</td>
+                      <td className="so-num" style={{ color: r.gm_pct < 0 ? 'var(--red)' : 'var(--green-fg)', fontWeight: 600 }}>{r.resid ? '—' : `${r.gm_pct.toFixed(1)}%`}</td>
+                      {hasCm && <>
+                        <td className="so-num">{pcell(r.logi, r.nmv)}</td>
+                        <td className="so-num">{pcell(r.plat, r.nmv)}</td>
+                        <td className="so-num">{r.resid ? '—' : pcell(r.cm1, r.nmv)}</td>
+                        <td className="so-num">{pcell(r.cac, r.nmv)}</td>
+                        <td className="so-num">{r.resid ? '—' : pcell(r.cm2, r.nmv)}</td>
+                        <td className="so-num" style={{ color: r.cm2_pct < 0 ? 'var(--red)' : 'var(--green-fg)', fontWeight: 600 }}>{r.resid ? '—' : `${r.cm2_pct.toFixed(1)}%`}</td>
+                      </>}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
-          <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Product margin through Gross Margin (the cleanly product-attributable slice). Fees / CAC per product (→ CM) are Amazon-only — a later add. COGS = units × standard cost (below); products flagged <span style={{ color: 'var(--red)' }}>no cost</span> overstate GM.</div>
+          <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>
+            {hasCm
+              ? <>Through <b>CM2</b> for this channel. Fees are settlement-dated while sales are sale-dated (same basis as <code>/pnl</code>), so a month&rsquo;s fees can trail its revenue. The <i>Account-level (unattributable)</i> row holds fees and ad spend that pin to no SKU — it exists so the columns still sum to the channel P&amp;L, and is deliberately <b>never</b> pro-rated across products. Amazon ad spend is taken from per-product spend, not the settlement <code>fee_advertising</code> line, which would double-count it.</>
+              : <>Product margin through <b>Gross Margin</b> (the cleanly product-attributable slice) across all channels. <b>Pick a channel above to go through CM2</b> — fees and CAC only mean anything once scoped, and today only Amazon has per-SKU fee data.</>}
+            {' '}COGS = units × standard cost (below); products flagged <span style={{ color: 'var(--red)' }}>no cost</span> overstate GM.
+          </div>
 
           {isAdmin && (
             <div className="so-card">

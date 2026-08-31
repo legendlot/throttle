@@ -5281,11 +5281,32 @@ export default {
             } catch (_) { sga_meta = { source: 'unknown' }; /* never fail the P&L over provenance — but never claim 'manual' either */ }
             return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta });
           }
-          case 'getPnlByProduct': {   // S189 — per-product P&L (through GM), all channels
+          case 'getPnlByProduct': {   // S189 — per-product P&L; through CM2 when scoped to a family (S325)
             if (!canSuperAdmin(P)) return err('No permission', 403);
-            const r = await rpcSales('f_pnl_by_product', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            // ⚠️ CM only means anything on a CHANNEL-SCOPED view. Unscoped, the fee side is
+            // Amazon-only (settlement_fact has exactly one channel) while CAC would be every
+            // platform — charging Website ad spend against products carrying no Website fees.
+            // So 'all' stays the through-GM view it has always been: no channels, no platforms.
+            const famKey = qp('family') || 'all';
+            let p_channels = null, p_ad_platforms = null;
+            if (famKey !== 'all') {
+              const fam = PNL_FAMILIES.find(f => f.key === famKey);
+              if (!fam) return err('invalid family', 400);
+              const chans = await getChannels();
+              p_channels = chans.filter(c => pnlFamilyOf(c.name) === famKey).map(c => c.id);
+              if (!p_channels.length) return err('no channels in family ' + famKey, 400);
+              p_ad_platforms = fam.ads;
+            }
+            const r = await rpcSales('f_pnl_by_product', {
+              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_channels, p_ad_platforms });
             if (!r.ok) return err('Product P&L failed: ' + JSON.stringify(r.data), 502);
-            return ok({ rows: r.data || [] });
+            const rows = r.data || [];
+            // has_cm is DERIVED from the data, not hardcoded to Amazon — the moment another
+            // channel gets a settlement feed its CM columns light up with no code change here.
+            const has_cm = famKey !== 'all' && rows.some(x =>
+              Number(x.logistics) || Number(x.platform_fee) || Number(x.cac));
+            return ok({ rows, family: famKey, has_cm,
+              families: PNL_FAMILIES.map(f => ({ key: f.key, label: f.label })) });
           }
           case 'getProductCosts': {   // S189 — active SKUs + latest standard COGS (for the /pnl cost editor)
             if (!canSuperAdmin(P)) return err('No permission', 403);
