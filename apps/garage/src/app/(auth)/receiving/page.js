@@ -863,6 +863,19 @@ export default function ReceivingPage() {
     if (!currentShipmentId) return;
     const shortLines = (shipmentData?.lines || []).filter(l => (l.bags_short || 0) > 0);
     if (!shortLines.length) { showToast('Every counted line already has its labels', 'info'); return; }
+    // ⚠️ The BACKLOG item's ⛔ is real and this confirm is how it is honoured:
+    // new bags are numbered from existing+1, so they will NOT match a number
+    // already written on a bag that somehow carries one. Sticking a second label
+    // on an already-labelled bag is the RUN-387 double-pick failure. The labels
+    // are only safe on bags that carry NO label at all.
+    const shortBags = shortLines.reduce((s, l) => s + (parseInt(l.bags_short) || 0), 0);
+    const okToPrint = window.confirm(
+      `Print ${shortBags} missing bag label(s) across ${shortLines.length} line(s).\n\n` +
+      `These are numbered on from the last label this system printed.\n\n` +
+      `Only stick them on bags that have NO label. If a bag already carries a label, ` +
+      `do NOT add a second one — the same stock would then be pickable twice.`
+    );
+    if (!okToPrint) return;
     setMissingBagsBusy(true);
     try {
       const priorArrays = await Promise.all(
