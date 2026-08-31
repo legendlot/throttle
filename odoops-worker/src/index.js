@@ -1734,49 +1734,115 @@ const googleAdsAdapter = {
 
 // ── GA4 (Analytics Data API runReport) — domain: traffic → traffic_fact ───
 const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+const GA4_METRICS = [{ name: 'sessions' }, { name: 'addToCarts' }, { name: 'checkouts' }, { name: 'ecommercePurchases' }, { name: 'purchaseRevenue' }];
+const GA4_LIMIT = 100000;
+// GA4 stamps an absent dimension as the literal "(not set)", never null.
+const ga4Dim = v => (v == null || v === '') ? '(not set)' : v;
+// "YYYYMMDD" → "YYYY-MM-DD".
+const ga4Date = ymd => `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
+
+/**
+ * One paged runReport. Extracted so the channel-group and UTM reads share exactly one pagination
+ * path — they used to be one inline loop, and a second copy would be the thing that drifts.
+ * Shares the caller's subrequest budget: `used` is what has already been spent this fetch.
+ */
+async function ga4RunReport({ prop, token, body, budget, used }) {
+  const out = []; let subreqs = 0, partial = false, offset = 0;
+  while (true) {
+    if (used + subreqs >= budget) { partial = true; break; }
+    const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${prop}:runReport`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, limit: GA4_LIMIT, offset, keepEmptyRows: false }),
+    }).catch(() => null);
+    subreqs++;
+    if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`GA4 ${res ? res.status : 'network'}: ${b.slice(0, 200)}`); }
+    const j = await res.json();
+    for (const row of (j.rows || [])) out.push(row);
+    const total = Number(j.rowCount || 0);
+    offset += GA4_LIMIT;
+    if (offset >= total || !(j.rows || []).length) break;
+  }
+  return { rows: out, subreqs, partial };
+}
+
 const ga4Adapter = {
   kind: 'ga4', stgTable: 'stg_ga4',
-  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  // ⚠️ Union BOTH row sets. The UTM read is filtered to influencer traffic, so in practice its
+  // dates are a subset of the channel-group read's — but if a date ever appears only in the UTM
+  // rows, recompute_traffic_utm would never be called for it and that day's attribution would
+  // stage without ever reaching the fact table.
+  datesOf(rows, fetched) {
+    const u = (fetched && fetched.utmRows) || [];
+    return [...new Set([...rows, ...u].map(r => r.the_date))].sort();
+  },
   async fetch({ env, channelId, cursor, budget, config }) {
     const prop = config && config.property_id;
     if (!prop) throw new Error('GA4 config.property_id missing');
     const startDate = (cursor || (config && config.backfill_start) || BACKFILL_START).slice(0, 10);
     const endDate = istDate(nowISO());
     const token = await googleToken(env, GA4_SCOPE);
-    const rows = []; let subreqs = 0, partial = false, maxDate = startDate, offset = 0;
-    const LIMIT = 100000;
-    while (true) {
-      if (subreqs >= budget) { partial = true; break; }
-      const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${prop}:runReport`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dateRanges: [{ startDate, endDate }],
-          dimensions: [{ name: 'date' }, { name: 'sessionDefaultChannelGroup' }],
-          metrics: [{ name: 'sessions' }, { name: 'addToCarts' }, { name: 'checkouts' }, { name: 'ecommercePurchases' }, { name: 'purchaseRevenue' }],
-          limit: LIMIT, offset, keepEmptyRows: false,
-        }),
-      }).catch(() => null);
-      subreqs++;
-      if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`GA4 ${res ? res.status : 'network'}: ${b.slice(0, 200)}`); }
-      const j = await res.json();
-      for (const row of (j.rows || [])) {
+    const dateRanges = [{ startDate, endDate }];
+    let subreqs = 0, partial = false, maxDate = startDate;
+
+    // (1) Channel-group grain → stg_ga4 → traffic_fact. UNCHANGED — /funnel, f_payment_recon,
+    // f_website_cr and recompute_conversion_snapshot all read that fact table.
+    const cg = await ga4RunReport({
+      prop, token, budget, used: subreqs,
+      body: { dateRanges, dimensions: [{ name: 'date' }, { name: 'sessionDefaultChannelGroup' }], metrics: GA4_METRICS },
+    });
+    subreqs += cg.subreqs; partial = partial || cg.partial;
+    const rows = cg.rows.map(row => {
+      const dv = row.dimensionValues, mv = row.metricValues;
+      const the_date = ga4Date(dv[0].value);
+      if (the_date > maxDate) maxDate = the_date;
+      return {
+        channel_id: channelId, the_date, src_group: dv[1].value || '(none)',
+        sessions: num(mv[0].value), add_to_carts: num(mv[1].value), checkouts: num(mv[2].value),
+        purchases: num(mv[3].value), conv_value: num(mv[4].value), raw: row,
+      };
+    });
+
+    // (2) UTM grain → stg_ga4_utm → traffic_utm_fact (attribution lane ③, S325). Ignition's
+    // per-deal links stamp utm_medium=influencer · utm_source=<influencer_code> ·
+    // utm_campaign=<engagement_no lowercased>, so this is what makes a deal's traffic visible.
+    // ⚠️ FILTERED to medium='influencer' on purpose. Unfiltered, this is every campaign/source/
+    // medium combination the site has ever seen — a large multiple of the channel-group row count
+    // for traffic nobody asked to attribute. Widening it later is a deliberate act with its own
+    // cardinality budget, not a default.
+    // ⚠️ Its failure must NOT cost the channel-group read: that one feeds live financial surfaces,
+    // this one is additive. So it is try/caught and degrades to "no attribution this tick".
+    let utmRows = [];
+    try {
+      const utm = await ga4RunReport({
+        prop, token, budget, used: subreqs,
+        body: {
+          dateRanges,
+          dimensions: [{ name: 'date' }, { name: 'sessionCampaignName' }, { name: 'sessionSource' }, { name: 'sessionMedium' }],
+          metrics: GA4_METRICS,
+          dimensionFilter: { filter: { fieldName: 'sessionMedium', stringFilter: { matchType: 'EXACT', value: 'influencer', caseSensitive: false } } },
+        },
+      });
+      subreqs += utm.subreqs; partial = partial || utm.partial;
+      utmRows = utm.rows.map(row => {
         const dv = row.dimensionValues, mv = row.metricValues;
-        const ymd = dv[0].value;
-        const the_date = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
-        if (the_date > maxDate) maxDate = the_date;
-        rows.push({
-          channel_id: channelId, the_date, src_group: dv[1].value || '(none)',
+        return {
+          channel_id: channelId, the_date: ga4Date(dv[0].value),
+          campaign: ga4Dim(dv[1].value), source: ga4Dim(dv[2].value), medium: ga4Dim(dv[3].value),
           sessions: num(mv[0].value), add_to_carts: num(mv[1].value), checkouts: num(mv[2].value),
           purchases: num(mv[3].value), conv_value: num(mv[4].value), raw: row,
-        });
-      }
-      const total = Number(j.rowCount || 0);
-      offset += LIMIT;
-      if (offset >= total || !(j.rows || []).length) break;
+        };
+      });
+    } catch (e) {
+      console.error('[ga4] UTM report failed (channel-group read unaffected):', String(e?.message || e));
     }
-    return { rows, cursorAfter: maxDate, subreqs, partial };
+
+    // ⚠️ maxDate comes from the channel-group rows ONLY. The UTM read is filtered, so its latest
+    // date lags whenever no influencer session happened — letting it move the cursor would be
+    // harmless, but letting it CAP the cursor would re-walk the main report forever.
+    return { rows, utmRows, cursorAfter: maxDate, subreqs, partial };
   },
-  async stage(rows, runId, channelId) {
+  async stage(rows, runId, channelId, fetched) {
+    await stageGa4Utm((fetched && fetched.utmRows) || [], runId, channelId);
     if (!rows.length) return;
     const body = rows.map(r => ({
       run_id: runId, channel_id: channelId, the_date: r.the_date, src_group: r.src_group,
@@ -1787,9 +1853,28 @@ const ga4Adapter = {
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_traffic', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    // Additive sibling (S325). Kept OUT of the returned factsUpserted count on purpose — that
+    // number is the traffic_fact figure the connector card and connector_runs have always shown,
+    // and folding a second table's rows into it would silently redefine a live metric.
+    const u = await rpcSales('recompute_traffic_utm', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    if (!u.ok) console.error('[ga4] recompute_traffic_utm failed:', JSON.stringify(u.data || null));
     return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
   },
 };
+
+// UTM-grain staging (S325). Upserts on the same key the fact recompute groups by, so GA4's habit
+// of restating the last ~48h corrects in place instead of double-counting.
+async function stageGa4Utm(utmRows, runId, channelId) {
+  if (!utmRows.length) return;
+  const body = utmRows.map(r => ({
+    run_id: runId, channel_id: channelId, the_date: r.the_date,
+    campaign: r.campaign, source: r.source, medium: r.medium,
+    sessions: Math.round(r.sessions), add_to_carts: Math.round(r.add_to_carts),
+    checkouts: Math.round(r.checkouts), purchases: Math.round(r.purchases),
+    conv_value: r.conv_value, raw: r.raw,
+  }));
+  await sbInsertChunked('/rest/v1/stg_ga4_utm?on_conflict=channel_id,the_date,campaign,source,medium', body, 'return=minimal,resolution=merge-duplicates');
+}
 
 // ── Unicommerce (Uniware) — Flipkart + long-tail via the OMS sale-order API ──
 // Fallback aggregator for channels with no usable direct API (Flipkart has none while Unicommerce
