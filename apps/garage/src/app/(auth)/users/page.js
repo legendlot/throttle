@@ -447,7 +447,10 @@ export default function UsersPage() {
       )}
 
       {activeTab === 'scannerpins' && myRole === 'super_admin' && (
-        <ScannerPins session={session} showToast={showToast} />
+        <>
+          <ScannerPins session={session} showToast={showToast} />
+          <AttendanceDevice session={session} showToast={showToast} />
+        </>
       )}
 
       {activeTab === 'roles' && (
@@ -938,6 +941,129 @@ function Field({ label, value, onChange, type = 'text', disabled }) {
     <div>
       <span style={labelStyle}>{label}</span>
       <input type={type} value={value} onChange={(e) => onChange(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={disabled} />
+    </div>
+  );
+}
+
+/* ── Attendance device (S324) ─────────────────────────────────────────────────
+   Afshaan's requirement, 2026-08-31: attendance must not be markable from an
+   operator's own phone — "they'll get paid for it". Everything else in the
+   scanner is explicitly NOT treated as a security issue, so this is deliberately
+   ONE device and the four attendance handlers, not the 43-device fleet rollout
+   the S319 design describes.
+
+   Why a key and not a code: a code is a string in the phone's storage — screenshot
+   it or read it out and anyone marks attendance from home. That is the
+   department-PIN failure mode. The device generates a key the browser refuses to
+   export, so possession of the physical phone IS the credential.
+
+   ⚠️ NOTHING IS ENFORCED YET and this panel says so on screen. Enrol the gate
+   phone, confirm it signs, and only then flip the handlers — every attendance call
+   today carries no device code at all, so enforcing first stops 100% of clock-ins.
+   ────────────────────────────────────────────────────────────────────────────── */
+function AttendanceDevice({ session, showToast }) {
+  const [devices, setDevices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel]         = useState('');
+  const [reason, setReason]   = useState('');
+  const [busy, setBusy]       = useState('');
+  const [code, setCode]       = useState(null);   // { code, device_code, expires_at }
+
+  const load = useCallback(async () => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const rows = await garageFetch('getDevices', {}, session);
+      setDevices(Array.isArray(rows) ? rows : []);
+    } catch (e) { showToast(e.message || 'Failed to load devices', 'error'); }
+    finally { setLoading(false); }
+  }, [session, showToast]);
+  useEffect(() => { load(); }, [load]);
+
+  const current  = devices.find(d => d.is_attendance_device) || null;
+  const enrolled = devices.filter(d => d.device_pubkey).length;
+
+  async function run(action, label) {
+    if (!sel) { showToast('Pick a device first', 'error'); return; }
+    if (!reason.trim()) { showToast('A reason is required — it is logged', 'error'); return; }
+    setBusy(action);
+    try {
+      const res = await workerFetch(action, { data: { device_code: sel, reason: reason.trim() } }, session);
+      const d = res?.data || {};
+      // Mint actions return a one-time code; it is the only time it is shown.
+      if (d.code) setCode({ code: d.code, device_code: d.device_code, expires_at: d.expires_at });
+      showToast(d.warning || `${label} — done`, d.warning ? 'info' : 'success');
+      setReason('');
+      load();
+    } catch (e) { showToast(e.message || `${label} failed`, 'error'); }
+    finally { setBusy(''); }
+  }
+
+  const fmtWhen = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+
+  return (
+    <div style={panelStyle}>
+      <div style={panelHeaderStyle}><span>Attendance device</span></div>
+      <div style={panelBodyStyle}>
+        <p style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)', marginTop: 0, marginBottom: 14, lineHeight: 1.55 }}>
+          Locks clock-in/out to a single phone at the gate, so attendance cannot be marked from an
+          operator&apos;s own device. The phone generates a key it cannot export — copying its settings
+          gets you nothing. <strong style={{ color: 'var(--yellow)' }}>Not enforced yet:</strong> enrol the
+          gate phone and confirm it signs before the lock is switched on, or every clock-in fails.
+        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>CURRENT</span>
+          {current
+            ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>
+                {current.device_code}
+                {current.device_pubkey
+                  ? <span style={{ color: 'var(--state-success-fg)' }}> · enrolled {fmtWhen(current.enrolled_at)}</span>
+                  : <span style={{ color: 'var(--red)' }}> · NOT enrolled — it cannot sign</span>}
+              </span>
+            : <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>none set</span>}
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            {enrolled} of {devices.length} devices enrolled
+          </span>
+        </div>
+
+        {code && (
+          <div style={{ border: '1px solid rgba(214,168,42,.45)', borderRadius: 4, padding: '10px 12px', marginBottom: 14, background: 'rgba(214,168,42,.06)' }}>
+            <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)', marginBottom: 4 }}>
+              ENROLMENT CODE for {code.device_code} — type it on that phone. Shown once, single use, expires {fmtWhen(code.expires_at)}.
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 26, fontWeight: 700, letterSpacing: '0.18em', color: 'var(--yellow)' }}>{code.code}</div>
+          </div>
+        )}
+
+        {loading ? <Spinner /> : (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select value={sel} onChange={e => setSel(e.target.value)} style={{ ...inputStyle, minWidth: 230 }}>
+              <option value="">Select a device…</option>
+              {devices.filter(d => d.is_active !== false).map(d => (
+                <option key={d.device_code} value={d.device_code}>
+                  {d.device_code}{d.device_pubkey ? ' · enrolled' : ''}{d.is_attendance_device ? ' · ATTENDANCE' : ''}
+                </option>
+              ))}
+            </select>
+            <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (logged)"
+              style={{ ...inputStyle, minWidth: 220, flex: 1 }} />
+            <button type="button" disabled={!!busy} onClick={() => run('createDeviceEnrolment', 'Enrolment code minted')}
+              style={{ ...inputStyle, cursor: 'pointer', color: 'var(--t1)' }}>
+              {busy === 'createDeviceEnrolment' ? '…' : 'Mint enrolment code'}
+            </button>
+            <button type="button" disabled={!!busy} onClick={() => run('setAttendanceDevice', 'Attendance device set')}
+              style={{ ...inputStyle, cursor: 'pointer', color: 'var(--yellow)', borderColor: 'rgba(214,168,42,.45)' }}>
+              {busy === 'setAttendanceDevice' ? '…' : 'Make attendance device'}
+            </button>
+            <button type="button" disabled={!!busy} onClick={() => run('resetDeviceEnrolment', 'Enrolment reset')}
+              title="Clears the device's key and mints a fresh code — use when a phone is lost, wiped or replaced"
+              style={{ ...inputStyle, cursor: 'pointer', color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>
+              {busy === 'resetDeviceEnrolment' ? '…' : 'Reset enrolment'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
