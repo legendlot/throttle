@@ -331,9 +331,19 @@ export default function HourlyPage() {
         title={view === 'stage' ? `Hourly · ${STAGE_META[metric].label}` : 'Hourly · all stages, by line'}
         icon={view === 'stage' ? STAGE_META[metric].icon : 'layers'}
         action={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <Seg />
-            <div style={{ display: 'flex', gap: 5 }}>
+          // ⚠️ This row MUST be its own horizontal scroller (S324). It sits in the Panel
+          // header, which clips: measured on a 375px viewport the row was 629px inside a
+          // 349px box with `overflow-x: hidden`, so **all five line filters L1–L5 were
+          // completely unreachable on a phone** — they laid out at x 378–642, entirely
+          // outside the viewport, with no way to scroll to them. That is a functional
+          // loss, not the cosmetic clip it was filed as: a supervisor on the floor could
+          // not filter Hourly by line at all. Per CORE.md's S304 rule, wide content
+          // scrolls inside its own `overflow-x: auto` container and the page body never
+          // scrolls horizontally. `flexShrink: 0` keeps the chips their natural size
+          // instead of squashing them to fit.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, maxWidth: '100%', overflowX: 'auto' }}>
+            <div style={{ flexShrink: 0 }}><Seg /></div>
+            <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
               <FilterChip active={lineFilter === 'all'} onClick={() => setLineFilter('all')}>All</FilterChip>
               {model.lines.map(l => (
                 <FilterChip key={l} active={lineFilter === l} onClick={() => setLineFilter(l)} dot={lineColor(l)}>{l}</FilterChip>
