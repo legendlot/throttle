@@ -510,25 +510,6 @@ export default function QcPage() {
 
   const isSingleDay = from === to;
 
-  /* Export the defect breakdown for the CURRENT range. Mahesh Jain asked for this to
-     track why lines fail QC (#bugs 1788170951.949929), so it exports the per-line/per-defect
-     rows behind the Pareto, not the summary tiles.
-     ⚠️ Quotes every field and doubles embedded quotes — defect descriptions are free text
-     and a comma or a quote in one would otherwise shift every later column silently.
-     ⚠️ Filename uses the range, not `new Date().toISOString()`, so it cannot carry
-     yesterday's date in the small hours (PATTERN-221). */
-  const exportCsv = useCallback(() => {
-    if (!defects.length) return;
-    const cols = Object.keys(defects[0]);
-    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [cols.map(esc).join(','), ...defects.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = from === to ? `qc-defects-${from}.csv` : `qc-defects-${from}_to_${to}.csv`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [defects, from, to]);
 
   const loadAll = useCallback(async () => {
     const s = sessionRef.current;
@@ -594,6 +575,30 @@ export default function QcPage() {
         : !(d.category || '').includes('Functional')))
   ), [defects, filters]);
   const filteredTotal = useMemo(() => filtered.reduce((s, d) => s + d.count, 0), [filtered]);
+
+  /* Export the defect breakdown for the CURRENT range. Mahesh Jain asked for this to
+     track why lines fail QC (#bugs 1788170951.949929), so it exports the per-line/per-defect
+     rows behind the Pareto, not the summary tiles.
+     ⚠️ Quotes every field and doubles embedded quotes — defect descriptions are free text
+     and a comma or a quote in one would otherwise shift every later column silently.
+     ⚠️ Filename uses the range, not `new Date().toISOString()`, so it cannot carry
+     yesterday's date in the small hours (PATTERN-221). */
+  // ⚠️ Declared AFTER `defects`, not with the other callbacks. `defects` is a useMemo, not
+  // state, so referencing it from a hook placed above its declaration is a temporal dead
+  // zone — it builds clean and throws "Cannot access 'ee' before initialization" at runtime,
+  // white-screening the whole page. That is exactly what my first version of this did.
+  const exportCsv = useCallback(() => {
+    if (!defects.length) return;
+    const cols = Object.keys(defects[0]);
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [cols.map(esc).join(','), ...defects.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = from === to ? `qc-defects-${from}.csv` : `qc-defects-${from}_to_${to}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [defects, from, to]);
 
   if (loading) {
     return <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}><Spinner /></div>;
