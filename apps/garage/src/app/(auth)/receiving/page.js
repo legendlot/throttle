@@ -894,8 +894,13 @@ export default function ReceivingPage() {
       // nothing had been printed. Per-line keeps generated and printed identical.
       // Concurrent, not a per-row await loop (CORE.md global invariant) — the same
       // Promise.all shape handleBoxSubmit already uses for this exact call.
+      // Failures are COUNTED, not swallowed: with a bare .catch(() => {}) a total
+      // failure fell through to the "already up to date" toast below, which tells the
+      // operator the opposite of what happened (S324 hostile review).
+      let mintFailed = 0;
       await Promise.all(shortLines.map(l =>
-        workerFetch('generateBags', { data: { line_id: l.line_id } }, session).catch(() => {})
+        workerFetch('generateBags', { data: { line_id: l.line_id } }, session)
+          .catch(() => { mintFailed += 1; })
       ));
 
       const afterArrays = await Promise.all(
@@ -906,10 +911,16 @@ export default function ReceivingPage() {
       const newBags = afterArrays.flat().filter(b => !priorIds.has(b.bag_id));
 
       if (!newBags.length) {
-        showToast('Nothing new to print — labels were already up to date', 'info');
+        showToast(mintFailed
+          ? `Could not generate labels for ${mintFailed} line(s) — nothing printed, try again`
+          : 'Nothing new to print — labels were already up to date',
+          mintFailed ? 'error' : 'info');
       } else {
         printWindow(buildBagLabelsHtml(newBags, currentShipmentId));
-        showToast(`${newBags.length} missing bag label(s) sent to print`, 'success');
+        showToast(mintFailed
+          ? `${newBags.length} label(s) printed, but ${mintFailed} line(s) failed — check the badges`
+          : `${newBags.length} missing bag label(s) sent to print`,
+          mintFailed ? 'error' : 'success');
       }
       await refreshDetail();
     } catch (e) {
