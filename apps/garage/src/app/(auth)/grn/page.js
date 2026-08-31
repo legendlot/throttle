@@ -1155,9 +1155,15 @@ function RecentGrnsPanel({ grns, loading, onOpenDetail, search, setSearch }) {
   const searching = search.trim().length > 0;
   return (
     <div style={panel}>
-      <div style={panelHdr}>
+      {/* ⚠️ Header WRAPS (S324). `maxWidth: '46vw'` on the search input is 172px on a
+          375px phone, which squeezed the field until its placeholder cut mid-word and
+          forced the title to wrap to two lines — the "GRN panel head is cramped" defect.
+          Wrapping puts the search on its own full-width row on a phone and is a no-op on
+          desktop, where the row has always fitted. `minWidth: 0` is required or the flex
+          item refuses to shrink below its content and wrapping never triggers. */}
+      <div style={{ ...panelHdr, flexWrap: 'wrap', gap: 8 }}>
         <span>{searching ? 'GRN Search' : 'Recent GRNs'}</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 auto', minWidth: 0, justifyContent: 'flex-end' }}>
           <input
             data-search-primary
             value={search}
@@ -1166,7 +1172,7 @@ function RecentGrnsPanel({ grns, loading, onOpenDetail, search, setSearch }) {
             style={{
               background: 'var(--surface2, #1a1a1a)', border: '1px solid var(--border)', borderRadius: 4,
               padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)',
-              outline: 'none', width: 320, maxWidth: '46vw',
+              outline: 'none', width: 320, maxWidth: '100%', flex: '1 1 180px', minWidth: 0,
             }}
           />
           {searching && (
