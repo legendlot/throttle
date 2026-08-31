@@ -44,7 +44,9 @@ export default function ProductPnlPage() {
   });
   // The residual is a RECONCILING row, not a product — it must never sort among them, or it
   // reads as a product line with a huge negative fee. Held out of the sort and pinned last.
-  const residRows = prodRows.filter(r => r.resid);
+  // ...and it is only MEANINGFUL when the CM columns are on. Unscoped, every column it could
+  // speak to is hidden, so it renders as a row of dashes with an alarming label and no content.
+  const residRows = hasCm ? prodRows.filter(r => r.resid) : [];
   const prodSort = useTableSort(prodRows.filter(r => !r.resid), { initialKey: 'gm' });
   const pcell = (v, nmv) => pctMode ? (nmv ? `${(100 * v / nmv).toFixed(1)}%` : '—') : rs(v);
   const saveCost = async (product_code, v) => {
