@@ -885,7 +885,18 @@ export default function ReceivingPage() {
       );
       const priorIds = new Set(priorArrays.flat().map(b => b.bag_id));
 
-      await workerFetch('generateBagsForShipment', { data: { shipment_id: currentShipmentId } }, session);
+      // ⛔ Per-LINE generateBags, NOT generateBagsForShipment — caught by hostile review.
+      // The shipment-wide call mints bags for every line with an un-bagged remainder,
+      // which since the bags_present>0 scoping is a WIDER set than the lines counted
+      // here. Those extra lines would get bag ROWS while this function prints labels
+      // only for the lines it snapshotted — a row with no physical label, i.e. the
+      // original bug inverted, and the line's "unlabelled" badge would vanish while
+      // nothing had been printed. Per-line keeps generated and printed identical.
+      // Concurrent, not a per-row await loop (CORE.md global invariant) — the same
+      // Promise.all shape handleBoxSubmit already uses for this exact call.
+      await Promise.all(shortLines.map(l =>
+        workerFetch('generateBags', { data: { line_id: l.line_id } }, session).catch(() => {})
+      ));
 
       const afterArrays = await Promise.all(
         shortLines.map(l =>
