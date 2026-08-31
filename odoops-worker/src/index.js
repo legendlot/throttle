@@ -474,6 +474,7 @@ async function stageOrders(orderRows, runId, channelId) {
 }
 
 // ── GT/MT (reads Snorkel confirmed sales orders) ───────────────
+const SNORKEL_TRAIL_DAYS = 90;  // re-read this many trailing days each tick so post-ingest cancellations land
 const snorkelAdapter = {
   kind: 'snorkel_internal', stgTable: 'stg_snorkel', sourceKind: 'snorkel',
   async fetch({ channelId, channelName: cname, cursor, config }) {
@@ -496,8 +497,26 @@ const snorkelAdapter = {
     if (!(cfgR.ok && cfgR.data?.[0]?.feeds_odo_sellout)) return { rows: [], cursorAfter: sinceDate, subreqs: 1, partial: false };
     // confirmed + cancelled (cancelled nets out on recompute). channel_key = GT|MT|FLIPKART_MGD.
     const sel = 'id,order_no,order_date,channel_key,status,confirmed_at,sales_order_lines(id,product,model,color,sku,qty,rate,discount_pct,gst_pct,taxable_value,gst_amount,line_total)';
-    const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(skey)}&order_date=gte.${sinceDate}&select=${sel}&order=order_date.asc`);
+    // ⚠️ READ from a TRAILING window, not from the cursor. The cursor is max(order_date), so once it
+    // passes an order's date that order is never re-read — and a cancellation recorded AFTER ingest
+    // could never reach Odo (₹5.11L of cancelled GT/MT sat in facts as revenue; SO-0352 was cancelled
+    // 30 days after its order date). Same class the amazon adapter's trailing re-walk fixes above.
+    // Every other piece was already correct: the query includes `cancelled`, `is_cancelled` is stamped,
+    // and the stage upserts on source_line_id (merge-duplicates) — so a re-read self-corrects.
+    // 90 days = 3× the largest cancellation lag observed (30d, measured 2026-08-31 across all 8
+    // cancelled sell-out orders). Cheap: the whole sell-out order table is ~451 rows and 90 days is
+    // ~163, one subrequest, far inside PostgREST's 5,000-row response ceiling (CORE.md).
+    // ⚠️ Do NOT poll `updated_at` instead (the other shape considered): store.sales_orders has NO
+    // trigger maintaining it — verified 2026-08-31, zero non-internal triggers on the table — so it is
+    // stamped by application code only. A writer that forgets would make the adapter miss a SALE
+    // outright, which is strictly worse than missing a cancellation.
+    const readFrom = new Date(Date.parse(`${sinceDate}T00:00:00Z`) - SNORKEL_TRAIL_DAYS * 24 * 3600 * 1000)
+      .toISOString().slice(0, 10);
+    const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(skey)}&order_date=gte.${readFrom}&select=${sel}&order=order_date.asc`);
     if (!r.ok) throw new Error('Snorkel read failed: ' + JSON.stringify(r.data));
+    // ⚠️ maxDate is seeded from `sinceDate`, NOT `readFrom` — this is load-bearing. It keeps the
+    // cursor anchored where it already was, so widening the read window can only ever advance it.
+    // Seeding from readFrom would rewind the cursor 90 days on every quiet tick.
     const rows = [], orderRows = []; let maxDate = sinceDate;
     for (const o of (r.data || [])) {
       if (o.order_date && o.order_date > maxDate) maxDate = o.order_date;
