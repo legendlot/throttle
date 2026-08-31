@@ -34,6 +34,8 @@ export default function UploadsPage() {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ channel_id: '', from: istToday(), to: istToday(), sku: 'sku', units: 'units', gross: 'gross', date: 'date' });
   const [file, setFile] = useState(null);
+  const [dlvFile, setDlvFile] = useState(null);
+  const [dlvBusy, setDlvBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const fileRef = useRef(null);
 
@@ -74,6 +76,23 @@ export default function UploadsPage() {
       setFile(null); load();
     } catch (e) { toast?.showToast?.(e.message, 'error'); }
     finally { setBusy(false); }
+  };
+
+  // Delhivery freight invoice. No channel picker on purpose — the file names its own invoice in
+  // `serial_number`, and the month is derived from each row's pickup date, not from anything picked
+  // here (one invoice can span two months).
+  const submitDelhivery = async () => {
+    if (!dlvFile) return;
+    setDlvBusy(true);
+    try {
+      const csv_text = await dlvFile.text();
+      const r = await salesPost('uploadDelhiveryInvoice', { csv_text }, session);
+      toast?.showToast?.(
+        `${r.invoices?.join(', ')} · ${r.rows_staged} shipments · ₹${Number(r.csv_total).toLocaleString('en-IN')} · ${r.months_written} month(s) written`,
+        'success');
+      setDlvFile(null); load();
+    } catch (e) { toast?.showToast?.(e.message, 'error'); }
+    finally { setDlvBusy(false); }
   };
 
   if (loading) return <Spinner />;
@@ -147,6 +166,27 @@ export default function UploadsPage() {
             style={{ width: '100%', marginTop: 16, padding: 11, fontSize: 13.5, fontWeight: 700, borderRadius: 'var(--r-md)' }}>
             {busy ? 'Uploading…' : 'Upload & ingest'}
           </button>
+
+          {/* ── Delhivery freight invoice (S325) ──────────────────────────────
+              A DIFFERENT shape from the sales report above and deliberately its own control:
+              this file is COST, one row per shipment, and it feeds the /pnl logistics line —
+              it is not a sales report and must never go through the channel picker. */}
+          <div style={{ borderTop: '1px solid var(--line)', margin: '18px 0 0', paddingTop: 16 }}>
+            <div className="so-eyebrow" style={{ marginBottom: 6 }}>Delhivery freight invoice</div>
+            <p className="so-sub" style={{ margin: '0 0 10px', maxWidth: '68ch' }}>
+              Delhivery One → Finances → Invoices → <b>Download</b>. One row per shipment; this is what
+              puts D2C shipping cost on the P&amp;L. Re-uploading the same invoice is a no-op, so it is
+              safe to repeat. <b>Upload the “Domestic” invoice</b> — the <code>EPVASH…</code> file is
+              SMS billing and is rejected.
+            </p>
+            <input type="file" accept=".csv,text/csv" disabled={!canUpload || dlvBusy}
+              onChange={(e) => setDlvFile(e.target.files?.[0] || null)}
+              style={{ fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--t2)' }} />
+            <button className="so-btn" disabled={!canUpload || dlvBusy || !dlvFile} onClick={submitDelhivery}
+              style={{ width: '100%', marginTop: 12, padding: 10, fontSize: 13, fontWeight: 700, borderRadius: 'var(--r-md)' }}>
+              {dlvBusy ? 'Ingesting…' : 'Upload freight invoice'}
+            </button>
+          </div>
         </div>
 
         {/* ── the contract ── */}
