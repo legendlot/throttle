@@ -5509,6 +5509,15 @@ export default {
             const r = await sbSales('/rest/v1/unmapped_sku?status=eq.open&order=pending_units.desc&select=*');
             return ok({ rows: r.ok ? r.data : [] });
           }
+          // "3 of 4 mapped" — a SELLING channel SKU left unmapped while its family siblings ARE
+          // mapped. Deliberately NOT value-gated, unlike the `unmapped` alarm: that one fires on
+          // ₹10k/7d per channel and a slow-selling sibling never reaches it. Here the PATTERN is
+          // the signal. Empty is the healthy state (0 live today) — see migration 0025 for the two
+          // rejected catalogue-side designs, which warned on 39–47% of pairs and were useless.
+          case 'getSiblingSkips': {
+            const r = await rpcSales('f_sibling_skips', {});
+            return ok({ rows: r.ok && Array.isArray(r.data) ? r.data : [] });
+          }
           case 'getUploadBatches': {
             const r = await sbSales('/rest/v1/upload_batch?order=uploaded_at.desc&limit=100&select=*');
             return ok({ rows: r.ok ? r.data : [] });
