@@ -2388,7 +2388,12 @@ async function refreshProductPrices(body, auth, env) {
   // `handle` (S313) is the storefront path segment — it is what lets a tracking link point at
   // the product page instead of the site root. Minted links never expire and the mint seam
   // cannot repoint them, so the target has to be right at mint time.
-  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ sku price product{ title handle } } } pageInfo{ hasNextPage } } }`;
+  // ⚠️ `id` (S324) is the Shopify ProductVariant GID and it is load-bearing, not decorative: the
+  // handle alone identifies the PRODUCT PAGE, never the colour. All 6 Shadow car SKUs share
+  // `shadow-rc-drift-car`, so a link built from the handle showed whichever variant Shopify has
+  // first (Tarmac Black) regardless of which colour the deal was for. `?variant=<id>` is the only
+  // thing the storefront honours — verified live 2026-08-31.
+  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ id sku price product{ title handle } } } pageInfo{ hasNextPage } } }`;
   // Page until Shopify says there is no next page. This was `p < 8` — a hard 800-variant ceiling
   // that would have truncated silently once the catalogue outgrew it (266 today, so it had not
   // bitten yet). PAGE_MAX is a runaway guard, not a budget: hitting it is logged and reported, so
@@ -2404,7 +2409,10 @@ async function refreshProductPrices(body, auth, env) {
       const n = e.node; cursor = e.cursor;
       const sku = (n.sku || '').trim();
       if (!sku) continue;
-      seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
+      // GID → bare number. Stored as text: it is an identifier we only ever concatenate into a
+      // URL, and 47394784149556 is already past what a JS number holds exactly for arithmetic.
+      const variantId = String(n.id || '').split('/').pop() || null;
+      seen.push({ sku, title: n.product?.title || null, handle: n.product?.handle || null, variant_id: /^\d+$/.test(variantId || '') ? variantId : null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
     }
     if (!conn?.pageInfo?.hasNextPage) break;
     if (p === PAGE_MAX - 1) truncated = true;
@@ -2539,6 +2547,16 @@ async function matchProductsFromText(env, productText, variantText) {
  * Batched deliberately — three reads regardless of how many candidates, rather than three per
  * candidate (bare "Flare" has 12).
  */
+// The storefront URL for a product page, with the deal's own colour preselected when we know it.
+// Without `?variant=` Shopify shows the product's DEFAULT variant, which is how a Tarmac Purple
+// deal sent its audience to Tarmac Black (Reann, 2026-08-31). `appendUtm` in commsops parses with
+// `new URL()` and appends, so an existing query string survives the 302 — verified before shipping.
+function productUrl(handle, variantId) {
+  if (!handle) return LOT_STORE_URL;
+  const base = `${LOT_STORE_URL}/products/${handle}`;
+  return /^\d+$/.test(String(variantId || '')) ? `${base}?variant=${variantId}` : base;
+}
+
 async function singleHandleFor(env, candidates) {
   const codes = [...new Set(candidates.map(c => c.product_code).filter(Boolean))];
   if (!codes.length) return null;
@@ -2556,10 +2574,17 @@ async function singleHandleFor(env, candidates) {
   if (!skus.length) return null;
   const inSkus = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
   const pp = await sb(
-    `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inSkus)})&handle=not.is.null&select=handle&limit=200`, env,
+    `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inSkus)})&handle=not.is.null&select=sku,handle,variant_id&limit=200`, env,
   ).catch(() => ({ data: [] }));
   const handles = [...new Set((pp.data || []).map(x => x.handle).filter(Boolean))];
-  return handles.length === 1 ? handles[0] : null;
+  if (handles.length !== 1) return null;
+  // ⚠️ The VARIANT is held to a stricter test than the handle, deliberately. A bare "Flare" with
+  // no colour typed matches 12 rows that all sell on one page — the page is certain, the colour is
+  // not. Preselecting one of the 12 would be a guess shown to a creator's audience as a choice we
+  // made, which is worse than the page default. So: one candidate, one variant id, or nothing.
+  const variantIds = [...new Set((pp.data || []).map(x => x.variant_id).filter(Boolean))];
+  const variantId = (candidates.length === 1 && variantIds.length === 1) ? variantIds[0] : null;
+  return { handle: handles[0], variantId };
 }
 
 async function resolveLinkTarget(env, engagementId, explicit) {
@@ -2587,18 +2612,25 @@ async function resolveLinkTarget(env, engagementId, explicit) {
       .map(s => (s || '').trim()).filter(Boolean))];
     if (!skus.length) return LOT_STORE_URL;
     const inList = skus.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+    // ⚠️ Was `select=handle&limit=1`. The extra rows are needed to pick the right VARIANT: the sku
+    // list is the product's own sku PLUS its channel aliases, and first-row-wins could land on an
+    // alias belonging to a sibling colour on the same page. The product's own sku is the
+    // instruction; aliases are only a fallback for when product_master.sku is stale (the HP crest
+    // case). First-handle-wins is unchanged — see the note above.
     const pp = await sb(
-      `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=handle&limit=1`, env,
+      `/rest/v1/product_prices?sku=in.(${encodeURIComponent(inList)})&handle=not.is.null&select=sku,handle,variant_id&limit=20`, env,
     ).catch(() => ({ data: [] }));
-    const handle = pp.data?.[0]?.handle;
-    return handle ? `${LOT_STORE_URL}/products/${handle}` : LOT_STORE_URL;
+    const rows = pp.data || [];
+    const own = pm.data?.[0]?.sku ? rows.find(r => r.sku === pm.data[0].sku) : null;
+    const row = own || rows[0];
+    return productUrl(row?.handle, row?.variant_id);
   }
 
   // Typed, not picked — the ~98% case. Infer, but only when the destination is not in doubt.
   const candidates = await matchProductsFromText(env, line?.product_code, line?.product_variant);
   if (!candidates.length) return LOT_STORE_URL;
-  const handle = await singleHandleFor(env, candidates);
-  return handle ? `${LOT_STORE_URL}/products/${handle}` : LOT_STORE_URL;
+  const hit = await singleHandleFor(env, candidates);
+  return productUrl(hit?.handle, hit?.variantId);
 }
 
 async function mintTrackingLink(body, auth, env) {
@@ -2660,9 +2692,18 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   // true for two *unrelated* deals and would silently merge their links and their clicks —
   // reintroducing precisely the failure the seam's 409 exists to prevent. `product_ref` is
   // null on every pre-S313 deal, so that is the common case, not the exotic one.
+  let staleTarget = null;
   if (res.status === 409) {
     const existing = res.body?.existing;
     if (existing && existing.title === title) {
+      // ⚠️ Adopting our own link does NOT repoint it, and `force` cannot make it. The commsops
+      // seam is mint-only by design (repointing a campaign link is audited to a named person and
+      // a service token has none), so a deal whose product changed AFTER the link was minted keeps
+      // the old destination and every path here reports success. Say so instead of lying: Nandu
+      // hit exactly this on IGN-2026-00550 (2026-08-31) — the link was minted against the Ghost
+      // remote, she corrected the product, and nothing she could do in Ignition moved the link.
+      // Repointing is Relay → Links (JWT + comms.link_changes).
+      if (existing.target_url && existing.target_url !== targetUrl) staleTarget = existing.target_url;
       res = { status: 200, body: { ok: true, data: { link: existing, url: res.body.url } } };
     } else {
       slug = `${slug.slice(0, 27)}-${Math.random().toString(36).slice(2, 5)}`;
@@ -2678,7 +2719,8 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ utm_link: url, ...utm, updated_at: nowIso() }),
   });
-  return { ok: true, data: { url, slug, target_url: targetUrl, utm, already: false } };
+  return { ok: true, data: { url, slug, target_url: targetUrl, utm, already: false,
+    ...(staleTarget ? { target_stale: true, current_target: staleTarget } : {}) } };
 }
 
 // ── Batch B ① — deal brief + post reminder, DRAFT AND INERT (S313) ──────────────────────────
