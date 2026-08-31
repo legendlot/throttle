@@ -6,6 +6,18 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## 1.13.0 - 2026-08-31
+
+- **QC** now documents the Day / Week / Month period picker and the range label, the
+  Export CSV button, and the fact that **Repeat failures is deliberately all time** and
+  ignores the chosen period. The glance strip said "any single day", which stopped being
+  true when the range shipped.
+- **Planner** no longer says a run is scheduled to "an L1/L2/L3 line": all five lines are
+  selectable. **Line Design** and **Hourly** corrected from "L1-L3" to "L1-L5", and
+  Hourly's per-line colour list was generalised rather than naming three colours.
+- **Manpower deliberately still says L1, L2, L3**, because that screen genuinely handles
+  only three lines today. That gap is tracked in BACKLOG, not papered over here.
+
 ## [1.9.0] - 2026-06-27
 
 ### Changed

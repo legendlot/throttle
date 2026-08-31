@@ -3,13 +3,23 @@
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Spotting quality problems on the floor as they happen, today.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only: a live view.</div></div>
-  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Any single day (opens on today), all lines.</div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">A day, a week or a month (opens on today), all lines.</div></div>
   <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 30s on today; a past day is fixed.</div></div>
 </div>
 
 <div class="callout note">
   <div class="c-title">&#9432; Where the numbers come from</div>
   <p>When a unit is inwarded it gets an <strong>INW</strong> scan; when it&rsquo;s checked it gets a <strong>QC&nbsp;Pass</strong> or <strong>QC&nbsp;Fail</strong> scan, and a failure records one or more <strong>defect codes</strong>. This screen simply adds those scans up for today. Nothing here changes a unit; to actually pass, fail or re-check a unit, use the scanner on the floor.</p>
+</div>
+
+<h2 class="sec">Choosing the period, and taking the numbers away</h2>
+<p>The screen opens on <strong>today</strong>. Above the cards there are three presets, <strong>Day</strong>, <strong>Week</strong> and <strong>Month</strong>, plus the date itself. Day is a single date. Week is that date and the six days before it. Month is that date and the twenty-nine days before it. Whatever you pick, the range you are looking at is spelled out next to the presets, so a screenshot of this page always says which period it covers.</p>
+<p>Live refresh follows the same rule as before: a range that includes today keeps refreshing every 30&nbsp;seconds, and a range wholly in the past stays still, because a settled period should not move under you.</p>
+<p><strong>Export CSV</strong> downloads exactly what is on screen for the chosen range, so you can send it on or work it in a spreadsheet without anybody re-typing figures.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Repeat failures ignores the range</div>
+  <p>One panel does not follow the period you picked: <strong>Repeat failures</strong> is deliberately <strong>all time</strong>, because a unit that has failed twice matters whenever the second failure happened. The panel says so on screen. Every other number on the page obeys the range.</p>
 </div>
 
 <h2 class="sec">QC Cycle Time: INW to outcome</h2>

@@ -21,6 +21,15 @@
   <p>Bag labels are generated from the <strong>OK</strong> quantity only; damaged pieces never get labels. Re-opening a counted box to fix it runs in <strong>amend</strong> mode, which overwrites all that box&rsquo;s lines with whatever you enter (including zeros), so do not blank a field you did not mean to clear. <strong>Raise GRN</strong> only picks up lines that have a count and no existing GRN; re-counting after a GRN will not re-raise it.</p>
 </div>
 
+<h2 class="sec">Bags that never got a label</h2>
+<p>A counted line normally gets one bag label per bag. Sometimes a line ends up with fewer labels than it has bags, usually because a count was amended after the labels were run. Each line now shows a small <strong>N unlabelled</strong> badge when that has happened, and the shipment header offers <strong>Print N missing labels</strong> so you can make up the shortfall in one go.</p>
+<p>The button only counts lines that already have a label series started. A line that was never bagged at all is not &ldquo;short of labels&rdquo;, it is simply un-bagged, and it keeps its usual per-line generate button instead.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Only stick these on bags that carry NO label</div>
+  <p>New labels are numbered on from the last one this system printed, so they will not match a number already written on a bag. Putting a second label on a bag that already has one makes the same stock pickable twice, which is exactly the double-pick problem labels exist to prevent. The screen asks you to confirm before printing for this reason. If the print fails for any line, the screen now says so and the line keeps its badge, so nothing is quietly reported as done.</p>
+</div>
+
 <div class="callout note">
   <div class="c-title">&#9432; Built cars (FBU): linking an outsourced run auto-closes it</div>
   <p>When the format is <strong>FBU</strong>, the worksheet lists the fully-built cars (per variant and colour) and they book into <strong>normal stock</strong> on GRN, like any other part. If these are cars coming back from a vendor, pick the <strong>outsourced run</strong> they belong to in the link box: the GRN is tagged to that run and the run <strong>auto-completes</strong> once the full planned count is received. Leave the link empty for cars you simply bought ready-built. Either way there is no counting pool and no one-by-one Ext Inwarding scan, built cars come in here in Receiving.</p>

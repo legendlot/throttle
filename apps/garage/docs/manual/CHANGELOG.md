@@ -6,6 +6,15 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.16.0 - 2026-08-31
+
+- **Receiving** gains "Bags that never got a label": the per-line **N unlabelled** badge,
+  the **Print N missing labels** button, why a never-bagged line is not counted as short,
+  and the warning that these labels must only go on bags carrying no label at all.
+- **Bag Sizes** now states what a blank size means: a part with no size set is treated as
+  **50** per bag. Flagged as a fallback, not a house standard, since real sizes vary by
+  product and several recent products use 25.
+
 ## [1.15.0] - 2026-08-31
 
 ### Added
