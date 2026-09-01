@@ -344,8 +344,35 @@ async function enrol(env, { journeyId, profileId, eventId }) {
     // running under this id; otherwise mark the enrolment failed and THROW so the queue
     // retries the whole enrol() (review H10) instead of leaving a dangling active row.
     if (!String(e?.message || '').toLowerCase().includes('already')) {
-      await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolment.id)}`, env,
-        { method: 'PATCH', body: JSON.stringify({ status: 'failed', ended_at: new Date().toISOString() }) });
+      // ⛔ THIS PATCH IS LOAD-BEARING AND ITS RESULT USED TO BE UNCHECKED (S228 reviewer item
+      // (a), fixed S327). The whole retry story above depends on this row reaching 'failed':
+      // the throw makes the queue retry enrol(), and the retry's dedup check matches
+      // status='active' — so if the PATCH silently failed, the retry finds the still-ACTIVE row,
+      // returns skipped:'reenrolment_policy', and ACKS. Net effect: an enrolment that is
+      // 'active' with no Workflow instance, blocking every future enrolment of that profile on
+      // this journey, and a customer who never receives the journey at all — silently.
+      //
+      // ⚠️ The J1 max-duration sweep is NOT a fix for this, only a mop: it stamps such rows
+      // 'expired' after the journey's max_duration (3–30 days), which unblocks re-enrolment
+      // eventually but never delivers the message that was owed. So the PATCH has to land.
+      //
+      // Bounded retry, then say so loudly. Three attempts because the failure this guards is a
+      // transient blip; anything durable enough to survive three tries needs a human, and going
+      // quiet there is exactly the original defect.
+      let patched = false;
+      for (let attempt = 1; attempt <= 3 && !patched; attempt++) {
+        const pf = await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolment.id)}`, env,
+          { method: 'PATCH', body: JSON.stringify({ status: 'failed', ended_at: new Date().toISOString() }) })
+          .catch(() => ({ ok: false }));      // a transport rejection must not escape as an unrelated throw
+        patched = !!pf.ok;
+      }
+      if (!patched) {
+        // Named + greppable: this enrolment id is now an active row with no workflow, and the
+        // retry will skip it. Recovery is a one-row PATCH to 'failed'.
+        console.log('enrol_failed_patch_stuck_active', enrolment.id, journeyId, profileId);
+        throw new Error('workflow_start_failed_and_enrolment_stuck_active:' + enrolment.id
+          + ':' + (e?.message || ''));
+      }
       throw new Error('workflow_start_failed:' + (e?.message || ''));
     }
   }

@@ -91,10 +91,57 @@ async function runSegmentEntry(env) {
       // One enrol message per (entrant × journey). The queue is the drain — enrol() is
       // idempotent-ish via the re-enrolment policy, and the Workflow instance id is the
       // enrolment id, so a duplicate delivery can't double-run a journey.
+      //
+      // ⛔ M16 — THE SCAN ABOVE HAS ALREADY COMMITTED MEMBERSHIP, SO A FAILED ENQUEUE HERE IS
+      // PERMANENT UNLESS WE UNDO IT. `segment_entry_scan(emit=true)` inserts the
+      // `segment_membership` rows and returns; entrant detection on the next tick is
+      // `current members EXCEPT rows WHERE exited_at IS NULL`, so a profile whose row exists
+      // is NEVER re-detected. Before this, a single `BROADCAST_QUEUE.send` rejection meant that
+      // person silently never entered the journey — and because the loop sat inside the outer
+      // try, **the throw also abandoned every remaining entrant in the batch**, all of them
+      // equally already-committed. One queue hiccup could lose hundreds, invisibly.
+      //
+      // So: each send is individually guarded, and any profile with a failed send has its
+      // membership row DELETED, which is precisely what makes the next tick re-detect and
+      // retry it. Deleting (rather than stamping `exited_at`) is deliberate — an exit is a
+      // real analytics event and this profile never actually left the segment; and the upsert
+      // above has already overwritten any prior entered_at/exited_at for these rows, so the
+      // delete destroys no history the scan had not already replaced.
+      //
+      // A profile is retried WHOLE (all its journeys) even if only one of several sends failed.
+      // Safe by the same property the comment above relies on: a duplicate enrol message cannot
+      // double-run a journey. Under-messaging is the failure worth engineering against here.
+      const failedProfiles = new Set();
       for (const profileId of entered) {
         for (const j of journeys) {
-          await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId });
-          out.enrolled++;
+          try {
+            await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId });
+            out.enrolled++;      // counts SUCCESSES only — it used to count attempts
+          } catch (e) {
+            failedProfiles.add(profileId);
+            out.errors.push(`enqueue:${row.name}:${j.name}:${profileId}:${e?.message || e}`);
+          }
+        }
+      }
+
+      if (failedProfiles.size) {
+        const ids = [...failedProfiles];
+        out.requeued = (out.requeued || 0) + ids.length;
+        const del = await A.sbComms(
+          `/rest/v1/segment_membership?segment_id=eq.${A.enc(segmentId)}`
+          + `&profile_id=in.(${ids.map((x) => A.enc(x)).join(',')})`, env, { method: 'DELETE' });
+        // ⚠️ If the undo itself fails we ARE back to the original silent loss, so this is the
+        // one branch that must never be quiet — it is the only signal anybody would ever get.
+        if (!del.ok) {
+          out.errors.push(`entry_undo_failed:${row.name}:${ids.length}`);
+          await AL.alert(env, `🚨 *Relay segment-entry — ${ids.length} entrant(s) LOST* on "${row.name}": `
+            + `their enrol enqueue failed AND the membership undo failed, so the next tick will not `
+            + `re-detect them. They will not enter ${journeys.map((j) => `"${j.name}"`).join(', ')} `
+            + `without a manual re-add. Profile ids: ${ids.slice(0, 20).join(', ')}`
+            + `${ids.length > 20 ? ` (+${ids.length - 20} more)` : ''}`);
+        } else {
+          await AL.alert(env, `⚠️ *Relay segment-entry — ${ids.length} enqueue(s) failed* on "${row.name}", `
+            + `membership rolled back so the next tick re-detects them. No action needed unless this repeats.`);
         }
       }
 
