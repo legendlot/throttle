@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
+import { LINES } from '@throttle/domain';
 import { useProducts } from '../../../../hooks/useProducts.js';
 import QRCode from 'qrcode';
 
@@ -572,7 +573,9 @@ function RelabelModal({ unit, session, busy, setBusy, showToast, onDone, onClose
               <div>
                 <span style={labelStyle}>Printer Line</span>
                 <select value={printLine} onChange={(e) => setPrintLine(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={busy}>
-                  {['D1', 'D2', 'L1', 'L2', 'L3'].map((l) => <option key={l} value={l}>{l}</option>)}
+                  {/* S326: was ['D1','D2','L1','L2','L3'] — the L4/L5 printers are live
+                      (27,536 print jobs in 90 days) but could not be selected here. */}
+                  {['D1', 'D2', ...LINES].map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
             </div>

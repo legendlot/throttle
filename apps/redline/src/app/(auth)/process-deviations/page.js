@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast } from '@throttle/ui';
+import { LINES } from '@throttle/domain';
 import {
   Icon, Panel, ToneBadge, Drawer,
   lineColor, lineRgb, btnPrimary, btnGhost, inputStyle,
@@ -690,7 +691,8 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
           <span className="eyebrow" style={eyebrow}>Line</span>
           <select value={form.line} onChange={e => setForm({ ...form, line: e.target.value })} style={{ ...inputStyle, cursor: 'pointer' }}>
             <option value="">— all lines —</option>
-            {['L1','L2','L3','D1','D2'].map(l => <option key={l} value={l}>{l}</option>)}
+            {/* S326: was ['L1','L2','L3','D1','D2'] — a deviation on L4/L5 could not be filed. */}
+            {[...LINES, 'D1', 'D2'].map(l => <option key={l} value={l}>{l}</option>)}
           </select>
         </div>
         <div style={{ gridColumn: '1 / 3' }}>

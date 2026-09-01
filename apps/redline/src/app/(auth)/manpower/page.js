@@ -19,10 +19,16 @@ import {
   Icon, Panel, ToneBadge, lineColor, lineRgb, btnPrimary, btnGhost,
   inputStyle as kitInput,
 } from '../../../components/kit/index.js';
-import { dateStr, countPresent } from '@throttle/domain';
+import { dateStr, countPresent, LINES } from '@throttle/domain';
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const LINE_ORDER          = ['L1', 'L2', 'L3'];
+// S326: was ['L1','L2','L3'] — the floor runs FIVE production lines (L4/L5 each have
+// 9 active devices and 29 runs in 30 days), so a 3-line list silently made L4/L5
+// unassignable and counted their operators as unassigned. Same fix S324 applied to
+// reporting/page.js. Everything below derives from LINE_ORDER — do not re-inline a
+// literal ['L1','L2','L3'], and note `byLine`/`grouped`/`targets` must be BUILT from
+// this list, not hand-listed, or a widened LINE_ORDER dereferences undefined.
+const LINE_ORDER          = LINES;
 const DISPATCH_LINE_ORDER = ['D1', 'D2'];
 const ROSTER_SECTIONS     = ['Assembly', 'QC', 'Packaging'];
 const PERFORMANCE_CATEGORIES = [
@@ -39,6 +45,13 @@ const BUCKET_COLOR = {
   Dispatch: '#ec4899', Unassigned: 'var(--t3)',
 };
 const accentFor = (key) => (LINE_ORDER.includes(key) ? lineColor(key) : BUCKET_COLOR[key] || 'var(--t3)');
+
+// Per-line roster state, always built from LINE_ORDER. Both the initial state and the
+// date-change reset go through these, so the two can never disagree about the line set.
+const emptyLineTargets = () => Object.fromEntries(
+  LINE_ORDER.map((l) => [l, Object.fromEntries(ROSTER_SECTIONS.map((s) => [s, '']))]),
+);
+const emptyLineHints = () => Object.fromEntries(LINE_ORDER.map((l) => [l, null]));
 
 // ── Shared styles ───────────────────────────────────────────────────────────
 const inputStyle  = { ...kitInput, width: 'auto', fontSize: 13, padding: '8px 11px' };
@@ -139,7 +152,7 @@ function EmptyNote({ icon = 'users', title, sub }) {
 // Others: [...], D1: [...], D2: [...] }. L1/L2/L3 nested by station; D1/D2 and
 // Others arrive flat. flattenRoster collapses everything to flat arrays per line.
 function flattenRoster(nested) {
-  const out = { L1: [], L2: [], L3: [], D1: [], D2: [], Others: [] };
+  const out = { ...Object.fromEntries(LINE_ORDER.map((l) => [l, []])), D1: [], D2: [], Others: [] };
   for (const line of LINE_ORDER) {
     const sections = nested?.[line];
     if (!sections) continue;
@@ -299,7 +312,7 @@ function LiveViewTab({ session, canManageFloor }) {
     return m;
   }, [rosterByLine]);
 
-  // operator → station, from the nested L1–L3 roster sections (presentation only).
+  // operator → station, from the nested per-line roster sections (presentation only).
   const stationByOpId = useMemo(() => {
     const m = {};
     for (const line of LINE_ORDER) {
@@ -313,7 +326,9 @@ function LiveViewTab({ session, canManageFloor }) {
   }, [rosterNested]);
 
   const { byLine, dispatch, store, others, unassigned } = useMemo(() => {
-    const lines = { L1: [], L2: [], L3: [] };
+    // Built from LINE_ORDER, never hand-listed: the summary cards below read
+    // byLine[line].length unguarded, so a missing key here is a white screen.
+    const lines = Object.fromEntries(LINE_ORDER.map((l) => [l, []]));
     const disp = [];
     const str = [];
     const oth = [];
@@ -378,8 +393,10 @@ function LiveViewTab({ session, canManageFloor }) {
               { key: 'Unassigned', label: 'Unassigned', accent: 'var(--t3)', count: unassigned.length,
                 sub: 'open shift, no line' },
             ];
+            // Column count derives from the cards actually rendered (lines + the 4
+            // fixed buckets) — a hardcoded 7 wrapped the moment LINE_ORDER grew.
             return (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 12, marginBottom: 18 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cards.length}, minmax(0, 1fr))`, gap: 12, marginBottom: 18 }}>
                 {cards.map((c) => (
                   <div key={c.key} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
                     borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', padding: '12px 14px',
@@ -399,7 +416,7 @@ function LiveViewTab({ session, canManageFloor }) {
           })()}
 
           {/* Line floor map — line → station presence */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${LINE_ORDER.length}, minmax(0, 1fr))`, gap: 16, marginBottom: 16, alignItems: 'start' }}>
             {LINE_ORDER.map((line) => (
               <LineColumn key={line} line={line} rows={byLine[line]} accent={accentFor(line)}
                 assigned={(rosterByLine[line] || []).length} stationByOpId={stationByOpId} />
@@ -1096,7 +1113,7 @@ function ManpowerAnalyticsTab({ session, canManageFloor, operators, team }) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DailyRosterTab — line assignment roster backed by store.manpower_assignments.
-// HTML5 drag-and-drop from operators panel into L1/L2/L3 columns + dropdown
+// HTML5 drag-and-drop from operators panel into the per-line columns + dropdown
 // fallback. assignManpower upserts (operator+date+line UNIQUE).
 // removeManpower DELETEs a single (operator_id, shift_date, line) row.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1113,16 +1130,14 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   const highlightedPickerRef = useRef(null);
 
   const [targets, setTargets] = useState({
-    L1: { Assembly: '', QC: '', Packaging: '' },
-    L2: { Assembly: '', QC: '', Packaging: '' },
-    L3: { Assembly: '', QC: '', Packaging: '' },
+    ...emptyLineTargets(),
     D1: '',
     D2: '',
     Store: '',
     Others: '',
   });
   // null = no active run for that line; { product, run_no } = run that seeded its targets
-  const [targetHints, setTargetHints] = useState({ L1: null, L2: null, L3: null });
+  const [targetHints, setTargetHints] = useState(() => emptyLineHints());
   const [selectedOpIds, setSelectedOpIds] = useState(() => new Set());
 
   const activeOperators = useMemo(
@@ -1132,7 +1147,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
 
   const assignedOpIds = useMemo(() => {
     const s = new Set();
-    for (const line of ['L1', 'L2', 'L3']) {
+    for (const line of LINE_ORDER) {
       const sections = grouped[line] || {};
       for (const section of Object.keys(sections)) {
         for (const row of sections[section] || []) s.add(row.operator_id);
@@ -1159,7 +1174,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
 
   const totalAssigned = useMemo(() => {
     let n = 0;
-    for (const line of ['L1', 'L2', 'L3']) {
+    for (const line of LINE_ORDER) {
       const sections = grouped[line] || {};
       for (const section of Object.keys(sections)) n += (sections[section] || []).length;
     }
@@ -1191,13 +1206,9 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       // garageFetch unwraps { data: ... } already, but tolerate both shapes.
       const lineSetupPayload = (lineSetupRes && lineSetupRes.lines) ? lineSetupRes : (lineSetupRes?.data || {});
       const lineDesigns = lineSetupPayload.lines || {};
-      const lineTargets = {
-        L1: { Assembly: '', QC: '', Packaging: '' },
-        L2: { Assembly: '', QC: '', Packaging: '' },
-        L3: { Assembly: '', QC: '', Packaging: '' },
-      };
-      const newHints = { L1: null, L2: null, L3: null };
-      for (const line of ['L1', 'L2', 'L3']) {
+      const lineTargets = emptyLineTargets();
+      const newHints = emptyLineHints();
+      for (const line of LINE_ORDER) {
         const lineData = lineDesigns[line];
         if (!lineData?.run || !Array.isArray(lineData?.design?.departments)) continue;
         newHints[line] = {
@@ -1342,7 +1353,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
 
     const slots = [];
-    for (const line of ['L1', 'L2', 'L3']) {
+    for (const line of LINE_ORDER) {
       for (const section of ROSTER_SECTIONS) {
         const n = Math.max(0, parseInt(targets[line][section], 10) || 0);
         for (let i = 0; i < n; i++) slots.push({ line, station: section });
@@ -1584,7 +1595,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       <Panel pad={0} style={{ marginBottom: 14 }}>
         <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
           <span className="eyebrow">Targets</span>
-          {['L1', 'L2', 'L3'].map((line) => (
+          {LINE_ORDER.map((line) => (
             <div key={line} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="num" style={{ fontSize: 11.5, color: lineColor(line), minWidth: 18, fontWeight: 700 }}>{line}</span>
               {ROSTER_SECTIONS.map((section) => (
@@ -1644,7 +1655,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         {/* Hint row — shows which active run seeded each line's targets, or "no run". */}
         <div style={{ padding: '0 15px 11px', display: 'flex', gap: 18, flexWrap: 'wrap',
           fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
-          {['L1', 'L2', 'L3'].map((line) => (
+          {LINE_ORDER.map((line) => (
             targetHints[line] ? (
               <span key={line}>
                 <span className="num" style={{ color: lineColor(line), fontWeight: 700, marginRight: 4 }}>{line}</span>
@@ -1729,7 +1740,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       </Panel>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
-          {['L1', 'L2', 'L3'].map((line) => {
+          {LINE_ORDER.map((line) => {
             const sections = grouped[line] || {};
             const accent = lineColor(line);
             const lineCount = Object.values(sections).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
