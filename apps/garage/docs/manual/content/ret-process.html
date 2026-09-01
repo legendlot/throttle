@@ -11,8 +11,8 @@
 <ol class="steps">
   <li><span class="s-title">Units appear automatically.</span> As the PWA (bound to this <code>RS-NNN</code>) scans each unit, a row appears here within a few seconds &mdash; no reload. Use <strong>Log Unit Manually</strong> only when nothing is scannable.</li>
   <li><span class="s-title">Set the disposition.</span> On each row click <strong>UDR / CXR / BRV / Loss</strong>, or open <strong>Details</strong> for box/product condition, switcheroo and notes. Loss requires a note of what physically arrived.</li>
-  <li><span class="s-title">Relabel legacy.</span> A unit with no LOT label shows <strong>Relabel</strong> &mdash; it mints a real LOT box label for the sealed box (never opened) and blocks that UPC from future batch printing.</li>
-  <li><span class="s-title">Close the shipment</span> when the pile is done.</li>
+  <li><span class="s-title">Relabel legacy.</span> A unit with no LOT label shows <strong>Relabel</strong> &mdash; it mints a real LOT box label for the sealed box (which is never opened) and prints it. Do this <em>before</em> closing the shipment: once closed, the button disappears.</li>
+  <li><span class="s-title">Close the shipment</span> when the pile is done. If any unit still needs relabelling, Garage now <strong>warns you and asks before closing</strong> &mdash; closing hides the Relabel button, so those units could not be relabelled or issued afterwards. Relabel them first, or confirm to close anyway (which is recorded). If a shipment was already closed with units outstanding, <strong>Reopen</strong> it, relabel, and close again.</li>
 </ol>
 
 <table class="tbl">
