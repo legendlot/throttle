@@ -190,7 +190,33 @@ function renderWhatsapp(template, ctx) {
 // pr1..pr5 params, so this returns the resolved values as a NAMED map plus the template's
 // `var_order`, and lets the adapter own the positional binding (one place, unit-tested there).
 // `body` is still rendered in full because /v1/sms wants the message text alongside the id.
-const URL_RE = /https?:\/\//i;
+// A URL in message content — WITH OR WITHOUT A SCHEME.
+//
+// ⚠️ THIS USED TO BE `/https?:\/\//i` AND THAT MISSED THE COMMON CASE. People do not type
+// "https://" into marketing copy; they type `legendoftoys.com/sale`. A bare domain sailed past
+// the F6 guard below and reached the vendor as ordinary text, which is precisely what F6 exists
+// to stop — `isdesturl` rewrites it, the delivered content stops matching the DLT registration,
+// and the carrier rejects the send. Widened 2026-09-01 (S327) to the SAME pattern the template
+// editor has warned authors with since S290; the editor warning and the send-time rule
+// disagreeing was itself the defect (an author fixed nothing because the send still "passed").
+//
+// ⛔ MEASURED BEFORE WIDENING, because a false positive here HARD-BLOCKS A LIVE SEND. Across
+// every catalogue body and every declared variable (2026-09-01):
+//   • bodies — exactly ONE newly caught: `Freedom to Play Sale_17AugRCS`, and it is ARCHIVED,
+//     so it cannot send. Zero live impact.
+//   • variables (`checkRcsFallbackLink`) — ZERO change: every fallback/value the wide pattern
+//     catches already carried a scheme, so the classification is identical.
+//   • `has_link` → the adapter's `isdesturl` — zero change for the same reason.
+// ⚠️ Re-derive this before widening it FURTHER; do not treat the above as permanent.
+//
+// ⚠️ KNOWN, ACCEPTED FALSE-POSITIVE SHAPE: `in` and `co` are English words, so copy with a
+// missing space after a full stop ("Order now.In stock") matches. That is malformed copy and the
+// error names the offending text, but it is a hard block — if this ever fires on something
+// legitimate, narrow the TLD list rather than reverting to scheme-only, which reopens the real hole.
+//
+// 📎 Mirrored in the template editor (`apps/relay/.../templates/page.js`, `hasUrl`). THIS IS THE
+// AUTHORITY — same relationship as commsops `purposes.js` and the UI's purpose list. Change both.
+const URL_RE = /https?:\/\/|[a-z0-9-]+\.(com|in|co|net|io|shop)(\/|\s|$)/i;
 
 // DLT positional placeholders. ⚠️ IT IS NOT ONLY `{#var#}` — DLT also issues `{#urg#}` for a URL
 // slot, and one live template uses it: `harry potter` (`srYE8B8vR`), which is the SMS fallback leg

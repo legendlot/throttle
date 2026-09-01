@@ -131,5 +131,46 @@ t('dlt_var_count absent → arity check is skipped, not assumed zero', () => {
   assert.doesNotThrow(() => renderSms(tpl, {}));
 });
 
+
+// ── F6 widened: bare domains (S327, 2026-09-01) ──────────────────────────────────
+// The guard used to match only `https?://`, so `legendoftoys.com/sale` — the way a human
+// actually types a link into copy — walked straight through it. These lock the widening in and,
+// just as importantly, lock in what must NOT match.
+const WIDE = { ...TPL, variables: TPL.variables.slice(0, 1) };
+const bodyTpl = (body) => ({ ...WIDE, content: { ...TPL.content, body, var_order: ['first_name'] } });
+
+t('F6 — a SCHEMELESS domain is refused, the case that used to slip through', () => {
+  assert.throws(() => renderSms(bodyTpl('Hi {first_name}, shop legendoftoys.com/sale'), CTX),
+    /static_url_in_template/);
+});
+
+t('F6 — a bare domain at end-of-body is refused (no trailing slash or space)', () => {
+  assert.throws(() => renderSms(bodyTpl('Hi {first_name}, visit lottoys.in'), CTX),
+    /static_url_in_template/);
+});
+
+t('F6 — ordinary copy with NO url still renders; the guard must not block real sends', () => {
+  // The whole risk of widening: a false positive here hard-blocks a live transactional send.
+  for (const body of [
+    'Hi {first_name}, your order is confirmed. Thank you for shopping with Legend of Toys.',
+    'Hi {first_name}, reply STOP to opt out. Sign in to your account for details.',
+    'Hi {first_name}, your L.O.T order ships today. Rs.499 refunded.',
+    'Hi {first_name}, 5.5 inch model, in stock now.',
+  ]) {
+    assert.doesNotThrow(() => renderSms(bodyTpl(body), CTX), `must not flag: ${body}`);
+  }
+});
+
+t('F6 — a url arriving via a VARIABLE is still fine; only static urls are refused', () => {
+  // The guard tests the pre-token body precisely so a tracked link can be injected.
+  const okTpl = { ...TPL,
+    content: { ...TPL.content, body: 'Hi {first_name}, shop {link}', var_order: ['first_name', 'link'] },
+    variables: [TPL.variables[0], { token: 'link', source: 'constant', value: 'https://lottoys.in/r/abc' }] };
+  const out = renderSms(okTpl, CTX);
+  assert.match(out.body, /lottoys\.in\/r\/abc/);
+  assert.equal(out.has_link, true, 'has_link must be set so the adapter sends isdesturl');
+});
+
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

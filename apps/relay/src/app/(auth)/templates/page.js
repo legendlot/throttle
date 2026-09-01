@@ -483,7 +483,13 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, sessi
   // Mirrors render.js F6 at authoring time, but WIDER: render.js uses /https?:\/\//i, so a
   // scheme-less "legendoftoys.com/sale" slips past it. A bare domain is still a URL to the
   // carrier's verbatim match. Warn-only here — the send-time rule is deliberately untouched.
-  const hasUrl = /https?:\/\//i.test(body) || /[a-z0-9-]+\.(com|in|co|net|io|shop)(\/|\s|$)/i.test(body);
+  // ⚠️ MIRRORS `URL_RE` in commsops-worker/src/render.js, which is THE AUTHORITY — change both.
+  // Until 2026-09-01 (S327) this editor warning was WIDER than the send-time guard, which only
+  // matched `https?://`. That divergence was the actual defect: an author saw the warning, left
+  // the bare domain in, and the send "passed" anyway — then the carrier rejected it because
+  // `isdesturl` had rewritten content that no longer matched the DLT registration. Both now use
+  // the same pattern, so a warning here means a refusal there.
+  const hasUrl = /https?:\/\/|[a-z0-9-]+\.(com|in|co|net|io|shop)(\/|\s|$)/i.test(body);
 
   const problems = [];
   if (stillRaw) problems.push('Body still contains {#var#} — replace each with a named {token}, left to right.');
