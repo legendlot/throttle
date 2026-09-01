@@ -41,6 +41,7 @@ const A = require('./auth.js');
 const SH = require('./shopify.js');
 const AL = require('./alerts.js');
 const { send } = require('./send.js');
+const JG = require('./journey-graph.js');   // ID_TYPE_FOR_CHANNEL — one channel→identifier map, shared with journey-workflow
 
 // Buttons that mean "keep my COD order". Both C2P send steps route these to `confirm_tag`:
 // `Confirm COD Order` on the initial ask, `no_confirm` on the cancel double-check.
@@ -139,11 +140,17 @@ async function sendLateConfirmAck(env, { profileId, enrolment, journeyId }) {
     const props = await triggerPropsForEnrolment(env, enrolment);
     if (!props) return { ok: true, skipped: 'no_trigger_props' };
 
+    // ⚠️ Resolve the identifier TYPE from the shared map, not a hardcoded 'phone' — found by
+    // hostile review 2026-09-01. journey-workflow.js uses G.ID_TYPE_FOR_CHANNEL for exactly this
+    // lookup; a second hardcoded copy is the same duplicate-constant drift that put a fourth
+    // literal DLT-marker regex in index.js earlier the same day. It resolves to 'phone' today, so
+    // this is drift-proofing, not a live bug.
+    const idType = JG.ID_TYPE_FOR_CHANNEL.whatsapp || 'phone';
     const idr = await A.sbComms(
-      `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.phone` +
+      `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.${A.enc(idType)}` +
       `&select=value&order=last_seen.desc&limit=1`, env);
     const to = idr.ok ? idr.data?.[0]?.value : null;
-    if (!to) return { ok: true, skipped: 'no_phone_identifier' };
+    if (!to) return { ok: true, skipped: `no_${idType}_identifier` };
 
     const res = await send(env, {
       channel: 'whatsapp',
