@@ -402,6 +402,9 @@ function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setPr
 function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, session, templateRowId, onMirrored }) {
   const { showToast } = useToast();
   const [mirroring, setMirroring] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [bindables, setBindables] = useState(null);   // null = not looked up yet, [] = none
+  const [binding, setBinding] = useState(null);
   const s = sms || {};
   const up = (k, v) => setSms({ ...s, [k]: v });
   // S290 part 3 — push the vendor mirror for a DLT-registered body straight from here, so
@@ -419,11 +422,51 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, sessi
     } catch (e) { showToast(e.message || 'Mirror create failed', 'error'); }
     finally { setMirroring(false); }
   }
+  // S326 — adopt a template authored VENDOR-FIRST in Sigmo. Before this there was no path at all:
+  // saveTemplate persists provider_template_id for channel 'rcs' only, so a Sigmo-authored SMS
+  // template was invisible here and unadoptable, and the one live case had to be bound by hand.
+  // `bindable` (not `unbound`) is listed on purpose — the worker filters to the consent types the
+  // send path can actually accept, so we never offer a template that dies at the first send.
+  async function findUnbound() {
+    setFinding(true);
+    try {
+      const res = await workerFetch('smsSyncTemplateStatus', {}, session);
+      const d = res?.data || {};
+      setBindables(d.bindable || []);
+      const skipped = (d.unbound || []).length - (d.bindable || []).length;
+      showToast(
+        `${(d.bindable || []).length} adoptable at TrustSignal`
+        + (skipped > 0 ? ` · ${skipped} unbound but not sendable (consent type is not explicit/implicit)` : ''),
+        'success');
+    } catch (e) { showToast(e.message || 'Lookup failed', 'error'); }
+    finally { setFinding(false); }
+  }
+  async function adopt(vendorId) {
+    if (!templateRowId) { showToast('Save the template first — the binding is stamped onto the saved row.', 'error'); return; }
+    setBinding(vendorId);
+    try {
+      const res = await workerFetch('smsBindVendorTemplate',
+        { id: templateRowId, provider_template_id: vendorId }, session);
+      const d = res?.data || {};
+      showToast(d.needs_variable_authoring
+        ? `Adopted ${vendorId} — now name its ${d.slots} placeholder${d.slots === 1 ? '' : 's'} in Variable order.`
+        : `Adopted ${vendorId}.`, 'success');
+      // The bind REWRITES content server-side (registered body, dlt id, consent type, slot count).
+      // This form still holds the pre-bind values, and a Save from here would push them straight
+      // back over the adoption. Reload rather than patch field-by-field — the same stale-tab
+      // hazard saveTemplate's carry-over guards exist for, and a reload cannot get it half-right.
+      setTimeout(() => window.location.reload(), 900);
+    } catch (e) { showToast(e.message || 'Adopt failed', 'error'); }
+    finally { setBinding(null); }
+  }
   const order = Array.isArray(s.var_order) ? s.var_order : [];
   const body = s.body || '';
 
   const declared = (variables || []).map((v) => (v.token || '').trim()).filter(Boolean);
-  const stillRaw = /\{#var#\}/.test(body);
+  // ⚠️ ANY {#word#}, not just {#var#} — DLT also issues {#urg#} for a URL slot and one live
+  // template uses it (`harry potter`). Matching only {#var#} let a raw URL marker through this
+  // check silently. Same fix as render.js dltVarRe / countDltVars (S326).
+  const stillRaw = /\{#\w+#\}/.test(body);
   const bodyTokens = [...new Set((body.match(/\{([a-zA-Z0-9_]+)\}/g) || []).map((x) => x.slice(1, -1)))];
   const arityKnown = typeof s.dlt_var_count === 'number';
   const arityBad = arityKnown && order.length !== s.dlt_var_count;
@@ -545,6 +588,44 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, sessi
               ? 'Pushes this body + consent type + DLT id to the vendor — no Sigmo step.'
               : 'Arms once the body, consent type and the 19-digit DLT id (from the portal) are set — register on the DLT portal first.'}
           </span>
+        </div>
+      )}
+      {!providerTemplateId && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--line, #333)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <Btn onClick={findUnbound} disabled={disabled || finding}>
+              {finding ? 'Looking…' : 'Find templates in Sigmo'}
+            </Btn>
+            <span className="dim" style={{ fontSize: 12 }}>
+              Already registered on DLT <em>and</em> created in Sigmo? Adopt it here instead of
+              retyping — the registered body, consent type, DLT id and placeholder count are
+              copied from the vendor.
+            </span>
+          </div>
+          {bindables && bindables.length === 0 && (
+            <div className="dim" style={{ fontSize: 12, marginTop: 10 }}>
+              Nothing adoptable — every Sigmo template is either already bound here or carries a
+              consent type the send path cannot use (only <code>explicit</code> and{' '}
+              <code>implicit</code> can send; a <code>promotional</code> one is refused at bind).
+            </div>
+          )}
+          {bindables && bindables.length > 0 && (
+            <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+              {bindables.map((b) => (
+                <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                       padding: '6px 8px', borderRadius: 6, border: '1px solid var(--line, #333)' }}>
+                  <code style={{ fontSize: 12 }}>{b.id}</code>
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>{b.name}</span>
+                  <span className="chip" style={{ fontSize: 11 }}>{b.template_type}</span>
+                  <span className="chip" style={{ fontSize: 11 }}>{b.var_count} slot{b.var_count === 1 ? '' : 's'}</span>
+                  <span className="dim" style={{ fontSize: 11 }}>{b.status}</span>
+                  <Btn kind="primary" onClick={() => adopt(b.id)} disabled={disabled || !!binding}>
+                    {binding === b.id ? 'Adopting…' : 'Adopt'}
+                  </Btn>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {problems.length > 0 ? (

@@ -2170,6 +2170,106 @@ async function handlePost(body, auth, env) {
       if (!patched.ok) return err(`vendor_created_${r.id}_but_row_patch_failed`, 500);
       return ok({ provider_template_id: r.id });
     }
+    case 'smsSyncTemplateStatus': {       // S326 — the SMS mirror of rcsSyncTemplateStatus:
+      // vendor registry → provider_status on every bound sms row, + the registry and the UNBOUND
+      // set so a vendor-first template is discoverable instead of invisible.
+      // ⚠️ Deliberately does NOT touch body/var_order on a bound row. Our stored body is the
+      // NAMED form ({link}); the vendor's is the positional DLT form ({#var#}/{#urg#}). Syncing
+      // it back would overwrite authored variable names with markers and break every send.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const list = await SMSTPL.tsListTemplates(env, body || {});
+      if (!list.ok) return err(list.error, 400);
+      const rowsR = await A.sbComms(`/rest/v1/templates?channel=eq.sms&provider_template_id=not.is.null&select=id,content,provider_template_id`, env);
+      const rows = (rowsR.ok && rowsR.data) || [];
+      const byId = new Map(list.templates.map((t) => [t.id, t]));
+      const updated = [];
+      for (const row of rows) {
+        const v = byId.get(row.provider_template_id);
+        if (!v) continue;
+        if ((row.content?.provider_status || '') === v.status) continue;
+        await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({ content: { ...(row.content || {}), provider_status: v.status } }),
+        });
+        updated.push({ id: row.id, status: v.status });
+      }
+      const boundIds = new Set(rows.map((r2) => r2.provider_template_id));
+      // `bindable` is the honest subset: a vendor template the send path could ACTUALLY use.
+      // assertBindable (adapters/sms.js) only ever wants 'explicit' or 'implicit', so a
+      // 'promotional' or untyped template can never send — surfacing it as bindable would
+      // offer the operator a template that fails at the first send. Measured 2026-09-01: of 5
+      // unbound, 3 are 'promotional' and 2 are untyped probes, so bindable was EMPTY.
+      const unbound = list.templates.filter((t) => !boundIds.has(t.id));
+      return ok({
+        updated, registry: list.templates, unbound,
+        bindable: unbound.filter((t) => t.template_type === 'explicit' || t.template_type === 'implicit'),
+      });
+    }
+    case 'smsBindVendorTemplate': {       // S326 — adopt an EXISTING Sigmo-authored SMS template
+      // onto a Relay row. The inverse of smsCreateVendorTemplate: that one pushes our copy TO the
+      // vendor, this one pulls the vendor's REGISTERED copy onto our row. Before this there was no
+      // path at all — saveTemplate writes provider_template_id for channel 'rcs' only — so a
+      // vendor-first SMS template was invisible and unadoptable, and the one live case
+      // (`harry potter`, 2026-08-21) had to be bound by hand.
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const vendorId = String(body.provider_template_id || '').trim();
+      if (!body.id || !vendorId) return err('id_and_provider_template_id_required', 400);
+      const rowR = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(body.id)}&select=id,name,channel,content,provider_template_id&limit=1`, env);
+      const row = rowR.ok && rowR.data?.[0];
+      if (!row || row.channel !== 'sms') return err('sms_template_not_found', 404);
+      // Replacing a live binding silently is how a row starts sending someone else's copy.
+      if (row.provider_template_id) return err(`already_bound:${row.provider_template_id}`, 400);
+      const list = await SMSTPL.tsListTemplates(env, {});
+      if (!list.ok) return err(list.error, 400);
+      const v = list.templates.find((t) => t.id === vendorId);
+      if (!v) return err(`vendor_template_not_found:${vendorId}`, 404);
+      // ⛔ Refuse a type the send path can never accept, at BIND time. ROUTE_TYPE in
+      // adapters/sms.js only ever wants 'explicit' or 'implicit'; binding a 'promotional' or
+      // untyped template would produce a row that looks adopted and dies at the first send with
+      // route_template_type_mismatch. Fail here, where the operator can still fix it in Sigmo.
+      if (v.template_type !== 'explicit' && v.template_type !== 'implicit')
+        return err(`vendor_template_type_unsendable:${v.template_type_raw || 'unset'}`, 422);
+      // The item's own warning: the bind must carry the EXACT DLT-registered body, because the
+      // carrier matches delivered content against the registration. So the body comes from the
+      // vendor, never from whatever the Relay row happened to hold.
+      const registered = String(v.content || '');
+      const slots = SMSTPL.countDltVars(registered);
+      const order = Array.isArray(body.var_order) ? body.var_order.map((x) => String(x || '').trim()) : null;
+      let namedBody = registered;
+      let needsAuthoring = slots > 0;
+      if (order) {
+        if (order.length !== slots) return err(`var_order_arity:want=${slots},got=${order.length}`, 400);
+        if (order.some((t) => !/^[a-zA-Z0-9_]+$/.test(t))) return err('var_order_invalid_token', 400);
+        if (new Set(order).size !== order.length) return err('var_order_duplicate_token', 400);
+        // Positional → named, in registry order. DLT slot names are NOT recoverable from the
+        // vendor (the markers are positional), so the operator supplies them; this only maps them
+        // onto the right slots. Replace one marker at a time so index N gets token N.
+        let i = 0;
+        namedBody = registered.replace(/\{#\w+#\}/g, () => `{${order[i++]}}`);
+        needsAuthoring = false;
+      }
+      // A row left with raw markers CANNOT send: renderSms throws unfilled_dlt_placeholders
+      // (which as of this session also catches {#urg#}). So an un-authored bind fails closed
+      // rather than shipping "{#var#}" to a customer.
+      const content = {
+        ...(row.content || {}),
+        body: namedBody,
+        header: (v.headers && v.headers[0]) || row.content?.header || 'LGNDRC',
+        var_order: order || [],
+        dlt_var_count: slots,
+        dlt_template_id: v.dlt_entity_id || '',   // vendor field name differs — see sms-templates.js
+        template_type: v.template_type,
+        provider_status: v.status,
+        needs_variable_authoring: needsAuthoring,
+        source: 'vendor_bind_s326',
+      };
+      const patched = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(row.id)}`, env, {
+        method: 'PATCH', body: JSON.stringify({ provider_template_id: vendorId, content }),
+      });
+      if (!patched.ok) return err('db_error', 500);
+      return ok({ provider_template_id: vendorId, slots, needs_variable_authoring: needsAuthoring,
+                  template_type: v.template_type, provider_status: v.status });
+    }
     case 'cashfreeMintTestLink': {        // J3 — mint a Cashfree pay-link (sandbox bring-up proof)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await CF.createPaymentLink(env, {
