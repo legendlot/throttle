@@ -20,7 +20,7 @@
 - **Snapshot before any bulk mutation:** `CREATE TABLE store.safety_<name>_2026_09_01 AS SELECT …`
 - **`damaged_qty` is counted BESIDE `qty_received`, never inside it** (`worker.js:16900`). Never subtract it.
 - **Grep the schema first.** `reference/db-schema.md` before writing SQL; live-verify via `information_schema.columns` before DDL.
-- **Cutover date is a single constant** used by both the view and any report. It is set in Task 8, not scattered.
+- **Cutover date lives in `store.settings.jobwork_cutover_date`** (`'2026-09-01'`, seeded 2026-09-01). ⛔ Never hardcode it in a view, report or query — it is the pivot between two eras of rules and must be readable and changeable in one place. The row carries its own explanation.
 
 ---
 
@@ -941,7 +941,12 @@ cd 01_worker && git add worker.js && git commit -m "S328 [lotops]: best-effort I
 
 ```sql
 CREATE VIEW store.jobwork_balance AS
-WITH cutover AS (SELECT DATE '2026-09-01' AS d),   -- single constant; see Global Constraints
+-- ⛔ Read the cutover from store.settings, never hardcode it. The date IS the pivot between two
+-- eras of rules, so it must live in exactly ONE place that a person can read and change.
+WITH cutover AS (
+  SELECT COALESCE((SELECT value FROM store.settings WHERE key='jobwork_cutover_date'),
+                  '2026-09-01')::date AS d
+),
 sent AS (
   SELECT di.vendor_code, ii.part_code AS unpainted_part_code, SUM(ii.qty)::int AS sent
   FROM store.direct_issuances di
