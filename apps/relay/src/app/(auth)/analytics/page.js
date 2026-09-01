@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import { Spinner, useToast } from '@throttle/ui';
 import { BarChart3, RefreshCw, Download } from 'lucide-react';
 import { PageHead, Panel, Kpi, Badge, Btn, EmptyState, ChannelChip } from '@/components/ui.js';
@@ -142,7 +143,7 @@ export default function AnalyticsPage() {
       const [ov, hl, cs, js] = await Promise.all([
         garageFetch('getSendsOverview', range, session).catch(() => { setStatsError(true); return null; }),
         garageFetch('getDeliverabilityHealth', range, session).catch(() => { setStatsError(true); return null; }),
-        garageFetch('getCampaigns', {}, session).catch(() => { setStatsError(true); return null; }),
+        getCampaignsShared(session).catch(() => { setStatsError(true); return null; }),
         // getJourneysOverview is ONE set-based RPC for every journey. It replaced a
         // getJourneys + per-journey getJourneyAttribution fan-out (an N+1 that made this page
         // cost one request per journey), and it is also the only source carrying `send_purpose`

@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import { Spinner, useToast } from '@throttle/ui';
 import {
   Plus, Mail, MessageCircle, Send, Lock, ShieldAlert, CheckCircle2, Clock,
@@ -71,7 +72,7 @@ export default function OverviewPage() {
       const [ov, hl, cs, co, jo, st] = await Promise.all([
         garageFetch('getSendsOverview', { days: 7 }, session).catch(() => null),
         garageFetch('getDeliverabilityHealth', { days: 7 }, session).catch(() => null),
-        garageFetch('getCampaigns', {}, session),
+        getCampaignsShared(session),
         garageFetch('getCampaignsOverview', {}, session).catch(() => null),
         garageFetch('getJourneysOverview', {}, session).catch(() => null),
         // Non-fatal — unknown settings read as "test mode still ON" (fail safe).

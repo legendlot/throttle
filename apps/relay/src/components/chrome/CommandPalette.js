@@ -6,6 +6,7 @@
 // fetched lazily when the palette opens and cached for a minute.
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { garageFetch } from '@throttle/db';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import {
   Search, Send, GitBranch, Filter, Mail, Plus, SearchX,
 } from 'lucide-react';
@@ -53,7 +54,7 @@ export function CommandPalette({ open, onClose, groups, onNav, session, perms, p
     let dead = false;
     (async () => {
       const [cs, js, sg, tp] = await Promise.all([
-        garageFetch('getCampaigns', {}, session).catch(() => null),
+        getCampaignsShared(session).catch(() => null),
         garageFetch('getJourneys', {}, session).catch(() => null),
         garageFetch('getSegments', {}, session).catch(() => null),
         garageFetch('getTemplates', {}, session).catch(() => null),

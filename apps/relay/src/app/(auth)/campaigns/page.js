@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download, OctagonX } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi, KpiStrip, ChannelChip, Modal, FieldLabel, InfoDot } from '@/components/ui.js';
@@ -552,7 +553,7 @@ export default function CampaignsPage() {
     setLoading(true);
     try {
       const [cs, sg, tp, ov, st, ex] = await Promise.all([
-        garageFetch('getCampaigns', {}, session),
+        getCampaignsShared(session),
         garageFetch('getSegments', {}, session),
         // Archived templates are excluded from the picker (S252): archiving means
         // "retired, do not wire this up again". Templates already bound to an

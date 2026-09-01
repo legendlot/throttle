@@ -5,6 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { Menu, X, LogOut } from 'lucide-react';
 import { garageFetch } from '@throttle/db';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { Sidebar } from '../../components/chrome/Sidebar.js';
 import { ContextBar } from '../../components/chrome/ContextBar.js';
@@ -67,7 +68,7 @@ function AuthLayoutInner({ children }) {
     let dead = false;
     async function tick() {
       try {
-        const cs = await garageFetch('getCampaigns', {}, session);
+        const cs = await getCampaignsShared(session);
         const sending = (Array.isArray(cs) ? cs : []).filter((c) => c.status === 'sending');
         if (dead) return;
         if (!sending.length) { setOnair(null); return; }
