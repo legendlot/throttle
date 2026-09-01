@@ -9,6 +9,7 @@
 // template_type update) is out of scope; a single-call create leaves template_type empty, which
 // adapters/sms.js `assertBindable` rejects as `template_type_unset`.
 const TS = require('./trustsignal-client.js');
+const { dltVarRe } = require('./render.js');   // ONE marker pattern, shared with renderSms
 
 // TrustSignal returns DLT consent types as display strings ("Service-Explicit"), while the send
 // path and assertBindable use the Sigmo form's value tokens ("explicit"). The vendor's own docs
@@ -26,7 +27,11 @@ function normalizeTemplateType(raw) {
 // TrustSignal (DLT placeholders are positional), so var_order still has to be authored by hand —
 // this only tells us how many slots a template has, and whether it exceeds the pr1..pr5 ceiling.
 function countDltVars(content) {
-  const m = String(content || '').match(/\{#var#\}/g);
+  // ⚠️ Counts ANY {#word#} marker, not just {#var#} — see dltVarRe in render.js. A live template
+  // (`harry potter`, srYE8B8vR) carries {#urg#} and was counted as ZERO slots here, which would
+  // have written dlt_var_count:0 onto any row bound from this registry and made every send fail
+  // `var_order_arity_mismatch`. Do not narrow this back to {#var#}.
+  const m = String(content || '').match(dltVarRe());
   return m ? m.length : 0;
 }
 

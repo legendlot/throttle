@@ -191,6 +191,19 @@ function renderWhatsapp(template, ctx) {
 // `var_order`, and lets the adapter own the positional binding (one place, unit-tested there).
 // `body` is still rendered in full because /v1/sms wants the message text alongside the id.
 const URL_RE = /https?:\/\//i;
+
+// DLT positional placeholders. ⚠️ IT IS NOT ONLY `{#var#}` — DLT also issues `{#urg#}` for a URL
+// slot, and one live template uses it: `harry potter` (`srYE8B8vR`), which is the SMS fallback leg
+// of the HP Crest campaign. Found 2026-09-01 by pulling the vendor registry: 59 `{#var#}` and
+// 1 `{#urg#}` across the 26 registered templates.
+// Matching only `{#var#}` breaks in two directions, so both readers use THIS one pattern:
+//   • it UNDERCOUNTS slots — `countDltVars` returned 0 for a 1-slot template, and a bind writing
+//     that into `dlt_var_count` would make renderSms throw `var_order_arity_mismatch` forever;
+//   • it MISSES an unsubstituted marker — the `unfilled_dlt_placeholders` guard below would let a
+//     literal `{#urg#}` through to a customer, which is exactly what that guard exists to stop.
+// Returned as a factory: a /g regex carries `lastIndex` between calls, so a shared instance would
+// make `.test()` alternate true/false on identical input.
+const dltVarRe = () => /\{#\w+#\}/g;
 function renderSms(template, ctx) {
   const content = template.content || {};
   const order = Array.isArray(content.var_order) ? content.var_order : [];
@@ -221,7 +234,7 @@ function renderSms(template, ctx) {
   // markers, and send.js fetches templates with NO status gate — so `draft` does not stop a
   // send. This is what actually makes an un-authored template fail closed instead of shipping
   // "{#var#}" to a customer.
-  if (/\{#var#\}/.test(body)) throw new Error('unfilled_dlt_placeholders');
+  if (dltVarRe().test(body)) throw new Error('unfilled_dlt_placeholders');
 
   return {
     provider_template_id: template.provider_template_id || null,
@@ -343,5 +356,5 @@ function checkRcsFallbackLink(rcsTemplate, fbTemplate) {
 
 module.exports = {
   renderEmail, renderWhatsapp, renderSms, renderRcs, resolveVar, applyTokens, resolveDeclared,
-  checkRcsFallbackLink, URL_RE,
+  checkRcsFallbackLink, URL_RE, dltVarRe,
 };
