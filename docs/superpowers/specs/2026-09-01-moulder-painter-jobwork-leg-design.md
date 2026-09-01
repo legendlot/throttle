@@ -63,7 +63,7 @@ return leg is a discrete action someone must perform will read exactly like thes
 | 4 | **Vehicle = Direct Issuance** (approach A) | The return side needs no new object and no new habit: the store already GRNs painted tops today. |
 | 5 | **Vendor is mandatory and structured — never free text** | Combobox with server search + inline create. `destination` free text is retired from this path. |
 | 6 | **Office becomes a vendor**, `IN-VND-135` | So that every DI has a real vendor, office requests included. |
-| 7 | **Rejects use `grn_register.qty_rejected`**, and receiving starts populating it | No new object; rework reconciles through the balance for free. |
+| 7 | **Rejects use `grn_register.damaged_qty`** — the field the floor ALREADY fills in | ⚠️ **CORRECTED 2026-09-01, after the decision was taken and before any code.** The decision as approved was `qty_rejected`. Measured against the source: `qty_rejected` is **hardcoded `0`** in the receiving GRN insert (`worker.js:20452`) and is `>0` on **0 of 7,025 rows**, while `damaged_qty` is a live per-line input on the Garage receiving screen and carries **13 GRNs / 582 units**, last used 2026-08-04. Activating the dead column would have been this design's own anti-pattern — building on a mechanism nobody uses. **No new field, no new habit: the floor already types this number.** |
 | 8 | **A rejected top is credited back to the UNPAINTED code** | Makes rework an ordinary second challan rather than a special path. |
 | 9 | **The challan raiser gets vendor-create rights** | An unknown painter must never block a challan. |
 
@@ -137,7 +137,7 @@ Grain: `(vendor_code, unpainted_part_code, painted_part_code)`.
   `issued_at >= cutover`
 - `returned` = Σ `grn_register.qty_received` where `part_code` = the painted code,
   `supplier` = the vendor, `grn_date >= cutover`
-- `rejected` = Σ `grn_register.qty_rejected`, same filter
+- `rejected` = Σ `grn_register.damaged_qty`, same filter (⛔ **not** `qty_rejected` — see §5)
 - `outstanding` = `sent − returned − rejected` — material still physically at the painter
 
 ⚠️ **`outstanding` and `paint_loss` are the SAME arithmetic read in two different states, and
@@ -187,8 +187,23 @@ also captures **rejected qty** on job-work returns. The DI stamp is best-effort.
 
 ### Rejects and rework
 
-`qty_rejected` is **not** credited to painted stock; it is credited back to the **unpainted** code.
-So 1,000 sent → 950 good + 30 rejected + 20 spoiled reads as: unpainted −1,000, painted +950,
+**The reject quantity is `grn_register.damaged_qty`** — already a per-line input on the Garage
+receiving screen, already used by the floor (13 GRNs / 582 units). ⛔ **NOT `qty_rejected`**, which
+is hardcoded `0` in the receiving insert and is `>0` on **0 of 7,025 rows**; activating it would mean
+asking the floor to start using a field they never have, which is this design's own anti-pattern.
+
+⭐ **The interpretation is what differs, and it keys off a column that already exists.** On a normal
+purchase, damaged goods are a supplier claim and credit nothing. On a **job-work return
+(`grn_register.source='jobwork'`, already set by the receiving path)** the damaged material is still
+**LOT's own**, so it must come back to the ledger — credited to the **unpainted** code. Same field,
+same floor habit, different handling selected by `source`.
+
+⚠️ **Damaged/rejected quantities are counted BESIDE `qty_received`, never inside it.** The worker
+already documents this (`worker.js:16900`): rows exist with `qty_received=0` alongside
+`damaged_qty=30` (GRN-092), and an earlier reading that subtracted them rendered that receipt as a
+−30 stock delta for a movement of nothing. **Do not subtract `damaged_qty` from `qty_received`.**
+
+So 1,000 sent → 950 good + 30 damaged + 20 unaccounted reads as: unpainted −1,000, painted +950,
 unpainted +30. Net 970 consumed, 950 converted, **20 paint loss**, outstanding zero. Rework is then
 an ordinary second challan on the unpainted code — no special path, no third state.
 
@@ -200,10 +215,8 @@ normal receive, and a naive implementation will silently credit rejects to the p
 inverts the whole balance. Write it as an explicit two-part movement with its own test
 (§7, "a rework cycle").
 
-⚠️ **`grn_register.qty_rejected` is 0 on every row ever recorded.** This design depends on receiving
-starting to populate it *for job-work returns*. Scope that prompt to the job-work path only — do not
-add a required field to all receiving. **If it stays at zero after cutover, this design has the same
-disease as the three mechanisms it replaces** — see §8's pass condition.
+✅ **This half now needs NO behaviour change from the floor** — `damaged_qty` is an existing input
+they already use. What changes is only what the worker does with it when `source='jobwork'`.
 
 ---
 
@@ -229,6 +242,15 @@ disease as the three mechanisms it replaces** — see §8's pass condition.
   it as Garage → lotopsproxy (checks the DI permission) → snorkelops with an **internal bridge token**,
   scope-limited to vendor create — the same shape as the existing `IGNITION_BRIDGE_TOKEN`. Mint the
   token; it is not a blocker.
+- ⛔ **BUT THE WORKER-TO-WORKER HOP HAS A HARD BLOCKER, and it is not the token.** A Worker
+  **cannot `fetch()` another Worker on the same `workers.dev` zone** — Cloudflare error 1042, which
+  surfaces confusingly as a **404**. Cross-worker calls require a **`[[services]]` binding** (the
+  precedent is `csops-worker/wrangler.toml`). That means editing `01_worker/wrangler.toml`, and the
+  repo rule is **never modify `wrangler.toml` without explicit permission** — so this needs Afshaan's
+  go-ahead as a discrete step, not a silent one.
+  ⭐ **Therefore the vendor-create hop is split out as its own task and is NOT on the critical path.**
+  Until the binding exists, the inline "+ Add vendor" affordance is hidden and an unknown painter is
+  added in Snorkel first — degraded, not blocked. **Do not let this hold the rest of the build.**
 
 ---
 
@@ -276,8 +298,9 @@ Order matters; each step is safe on its own.
 - ✅ Its painted return GRNs normally, credits the painted code, and `jobwork_balance` returns to zero.
 - ✅ `paint_loss` is non-zero and plausible on at least one closed challan — **a number that does not
   exist anywhere today.**
-- ⚠️ **`qty_rejected > 0` on at least one job-work GRN within 30 days of cutover.** If it is still 0,
-  the reject half has joined the three dead mechanisms and needs re-thinking, not re-explaining.
+- ⚠️ **A job-work GRN with `damaged_qty > 0` credits the UNPAINTED code, verified in `stock_ledger`.**
+  This is the assertion that the two-part movement was built correctly rather than silently crediting
+  the painted code — which would invert the balance while looking fine on screen.
 
 ### Deliberately out of scope
 
@@ -316,7 +339,7 @@ different shapes, deliberately kept apart — do not merge them later without re
 | # | Question | Owner |
 |---|---|---|
 | 1 | Painted counterparts for `FL-PB-97` and `FL-PB-98` | ⏳ Piyush |
-| 2 | Will receiving actually record rejected qty on job-work returns? | ⏳ Piyush (behaviour), tracked by §8's 30-day pass condition |
+| 2 | ~~Will receiving record rejected qty?~~ **CLOSED** — `damaged_qty` is already a live floor input (13 GRNs / 582 units); no behaviour change needed | — |
 | 3 | Are Mudra Innovation and SG Ventures painters on job-work, or genuine suppliers of painted tops? | ⏳ Procurement — decides whether they get pairs and challans or stay purchase |
 | 4 | Filtering `category='Internal'` out of procurement vendor pickers | ⏳ Snorkel lane |
 | 5 | The cutover date | ⏳ Afshaan |
