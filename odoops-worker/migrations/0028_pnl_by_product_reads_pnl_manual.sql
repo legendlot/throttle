@@ -3,6 +3,15 @@
 -- `sales.pnl_manual`, so it silently under-reported any channel carrying manual P&L lines.
 -- ⚠️ This file is the EXACT SQL applied live on 2026-09-01 (migration
 -- `odo_pnl_by_product_reads_pnl_manual`). Keep them identical.
+-- ⚠️ AMENDED SAME DAY BY 0029 — this version carries TWO latent defects that its own hostile
+--    review found: a NULL `p_channel_key` silently returns 0 manual cost (the very bug this file
+--    fixes, through the front door), and the `month BETWEEN` predicate diverges from f_pnl's
+--    exact month-start matching for any mid-month row, which nothing prevented. **Read 0029 for
+--    the live definition.**
+-- ⛔ ROLLBACK TRAP: re-running 0027 to revert would DROP the THREE-arg signature (which no longer
+--    exists) and CREATE a four-arg one ALONGSIDE the live five-arg — both resolvable over
+--    PostgREST, so every call would fail PGRST203. Drop the five-arg explicitly first:
+--    `DROP FUNCTION sales.f_pnl_by_product(date, date, uuid[], text[], text);`
 --
 -- MEASURED BEFORE (Jul–Aug 2026, both figures read IN ONE QUERY per 0027's own warning — the
 -- 5-minute recompute cron moves sales_fact between calls):
@@ -10,7 +19,9 @@
 --   Amazon   f_pnl logistics ₹11,52,198 ·  f_pnl_by_product ₹11,52,199 ← already reconciled
 -- The ₹2,29,546 is exactly the two auto-written Delhivery invoice rows in `sales.pnl_manual`
 -- (2026-07 ₹95,700.92 + 2026-08 ₹1,33,844.75), written by `sales.recompute_delhivery_logistics`
--- (0026). MEASURED AFTER: every one of the seven families reconciles line-for-line, and the
+-- (0026). MEASURED AFTER: six of the seven families reconcile line-for-line; the seventh ('other')
+-- has no sales and no fees at all, so f_pnl_by_product returns NULL over an empty set against
+-- f_pnl's 0 — an empty-set artifact that predates this change, not a discrepancy. And the
 -- unscoped view now equals the /pnl master row (Σ families) to the same ±₹1.
 --
 -- WHY THE RESIDUAL ROW
