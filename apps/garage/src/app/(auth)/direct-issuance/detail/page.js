@@ -18,7 +18,9 @@ const btnD  = { background: 'rgba(222,42,42,.15)', border: '1px solid #ff7070', 
 const th    = { padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
 const td    = { padding: '6px 8px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, verticalAlign: 'top' };
 
-const HEADER_FIELDS = ['purpose','destination','destination_contact','requester_notes','expected_return_at','notes'];
+// Mirrors the worker's HEADER_FIELDS — a field missing here is silently un-editable.
+const HEADER_FIELDS = ['purpose','destination','destination_contact','requester_notes',
+                       'expected_return_at','notes','vendor_code','challan_no'];
 
 export default function DirectIssuanceDetailPage() {
   return (

@@ -1,9 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
-import { workerFetch } from '@throttle/db';
-import { EmptyState, useToast } from '@throttle/ui';
+import { workerFetch, garageFetch } from '@throttle/db';
+import { EmptyState, useToast, Combobox } from '@throttle/ui';
 import { PURPOSES } from '../page.js';
 
 const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
@@ -16,24 +16,40 @@ const btnS  = { background: 'transparent', border: '1px solid var(--border)', bo
 
 export default function DirectIssuanceNewPage() {
   const router = useRouter();
-  const { session, perms } = useAuth();
+  const { session, perms, userId } = useAuth();
   const { showToast: toast } = useToast();
   const allowed = hasPermission(perms, 'direct_issuance_request') || hasPermission(perms, 'users_manage');
 
   const [f, setF] = useState({
     purpose: 'sample',
+    vendor_code: '',
     destination: '',
     destination_contact: '',
     requester_notes: '',
     expected_return_at: '',
     notes: '',
   });
+  const [vendors, setVendors] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Keyed on userId, NEVER on `session` — onAuthStateChange re-fires on tab switch and a real
+  // token refresh lands ~hourly, and re-running this effect would blow away a half-typed form.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await garageFetch('getVendors', {}, session);
+        if (alive && Array.isArray(r)) setVendors(r);
+      } catch { /* picker stays empty; the field still blocks submit */ }
+    })();
+    return () => { alive = false; };
+  }, [userId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function setField(k, v) { setF(prev => ({ ...prev, [k]: v })); }
 
   async function submit() {
     if (!f.purpose) { toast('Purpose required', 'error'); return; }
+    if (!f.vendor_code) { toast('Pick a vendor — use LOT Office for an internal request', 'error'); return; }
     setSubmitting(true);
     try {
       const r = await workerFetch('saveDirectIssuance', { data: f }, session);
@@ -74,12 +90,32 @@ export default function DirectIssuanceNewPage() {
               <input type="date" value={f.expected_return_at} onChange={e => setField('expected_return_at', e.target.value)} style={input} />
             </div>
             <div style={{ gridColumn: '1 / 3' }}>
-              <label style={lbl}>Destination / recipient</label>
-              <input value={f.destination} onChange={e => setField('destination', e.target.value)} placeholder="e.g. Brand Team / Influencer XYZ / Retail HQ" style={input} />
+              <label style={lbl}>Vendor <span style={{ color: '#ff7070' }}>*</span></label>
+              {/* `portal` is required — this form sits inside a bordered panel, and without it
+                  the dropdown is clipped by the panel's bounds. */}
+              <Combobox
+                portal
+                value={f.vendor_code}
+                onChange={v => setField('vendor_code', v)}
+                options={vendors.map(v => ({
+                  value:  v.vendor_code,
+                  label:  v.vendor_name,
+                  hint:   v.vendor_code,
+                  search: v.category || '',
+                }))}
+                placeholder="Search vendor… (use LOT Office for internal)"
+              />
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+                Internal / office requests go to <strong>LOT Office</strong>.
+              </div>
             </div>
             <div style={{ gridColumn: '1 / 3' }}>
-              <label style={lbl}>Destination contact</label>
-              <input value={f.destination_contact} onChange={e => setField('destination_contact', e.target.value)} placeholder="Name / phone / email" style={input} />
+              <label style={lbl}>Deliver to (person or place)</label>
+              <input value={f.destination} onChange={e => setField('destination', e.target.value)} placeholder="e.g. Kirti / LOT HQ / Brand Team" style={input} />
+            </div>
+            <div style={{ gridColumn: '1 / 3' }}>
+              <label style={lbl}>Contact phone</label>
+              <input value={f.destination_contact} onChange={e => setField('destination_contact', e.target.value)} placeholder="e.g. +91 98204 90522" style={input} />
             </div>
             <div style={{ gridColumn: '1 / 3' }}>
               <label style={lbl}>Reason / context (visible to store)</label>

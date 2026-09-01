@@ -13,12 +13,15 @@ export const STATUSES = [
   { id: 'cancelled', label: 'Cancelled', tone: 'gray'   },
 ];
 
+// ⛔ MIRRORED SERVER-SIDE in 01_worker/worker.js `DI_PURPOSES`. Adding a purpose here WITHOUT
+// adding it there makes the worker reject it on create with "Invalid purpose". Both or neither.
 export const PURPOSES = [
   { id: 'sample',               label: 'Sample' },
   { id: 'office_request',       label: 'Office Request' },
   { id: 'external_test',        label: 'External Test' },
   { id: 'customer_replacement', label: 'Customer Replacement' },
   { id: 'marketing_event',      label: 'Marketing Event' },
+  { id: 'jobwork',              label: 'Job Work (to vendor)' },
   { id: 'other',                label: 'Other' },
 ];
 
