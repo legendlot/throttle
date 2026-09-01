@@ -65,6 +65,8 @@ export const GARAGE_NAV_PRIMARY = [
       { id: 'library-pick-scans', label: 'Pick Scans',      route: '/library/pick-scans', icon: ScanLine,    desc: 'Bags scanned per run at store issue' },
       { id: 'flush-verify',       label: 'Flush Verify',    route: '/flush-verify',       icon: CheckSquare, desc: 'Verify line-flush returns', gate: (p) => hasPermission(p, 'line_flush_verify') },
       { id: 'direct-issuance',    label: 'Direct Issuance', route: '/direct-issuance',    icon: Gift,        desc: 'Issue outside a run', gate: (p) => hasPermission(p, 'direct_issuance_request') || hasPermission(p, 'direct_issuance_approve') || hasPermission(p, 'users_manage') },
+      // Gate mirrors what getJobworkBalance actually enforces — a nav key with no worker reader is dead UI.
+      { id: 'jobwork',            label: 'Job Work',        route: '/jobwork',            icon: Gift,        desc: 'Material out at a vendor', gate: (p) => hasPermission(p, 'direct_issuance_request') || hasPermission(p, 'direct_issuance_approve') || hasPermission(p, 'users_manage') },
       // Unit Restock · Dispatch (roster) · Dispatch Counts moved to Redline → Dispatch
       // (S128, Afshaan — dispatch-team tooling). Garage routes redirect there.
       { id: 'gate-pass',          label: 'Gate Pass',       route: '/gate-pass',          icon: Truck,       desc: 'Outward gate passes', gate: (p) => hasPermission(p, 'gate_pass') },
