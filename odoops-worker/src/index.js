@@ -5297,8 +5297,15 @@ export default {
               if (!p_channels.length) return err('no channels in family ' + famKey, 400);
               p_ad_platforms = fam.ads;
             }
+            // ⚠️ p_channel_key is NOT redundant with p_channels. `sales.pnl_manual` (the Delhivery
+            // freight rows, and any hand-entered line) is keyed by FAMILY KEY, not by channel_id,
+            // so the RPC cannot find a channel's manual lines from the uuid list alone. Omitting
+            // it made f_pnl_by_product under-report every channel carrying manual cost — Website
+            // read ₹0 logistics against f_pnl's ₹2,29,546 (S325 hostile review; fixed S327).
+            // The two arguments MUST describe the same channels — both are derived from famKey here.
             const r = await rpcSales('f_pnl_by_product', {
-              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_channels, p_ad_platforms });
+              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_channels, p_ad_platforms,
+              p_channel_key: famKey });
             if (!r.ok) return err('Product P&L failed: ' + JSON.stringify(r.data), 502);
             const rows = r.data || [];
             // has_cm is DERIVED from the data, not hardcoded to Amazon — the moment another

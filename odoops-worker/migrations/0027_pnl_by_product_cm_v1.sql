@@ -1,6 +1,10 @@
 -- 0027_pnl_by_product_cm_v1.sql — S325
 -- Per-product P&L extended from GM to CM1/CM2 (fast-follow ① of the split /pnl v2 entry).
 -- ⚠️ This file is the EXACT SQL applied live on 2026-08-31. Keep them identical.
+-- ⚠️ SUPERSEDED BY 0028 (2026-09-01) — the "It does NOT hold for a channel with MANUAL lines"
+--    limit in the reconciliation contract below is CLOSED: f_pnl_by_product now reads
+--    `sales.pnl_manual` via a p_channel_key arg. Kept verbatim as the record of what was
+--    applied that day; read 0028 for the live definition.
 --
 -- WHY THIS SHAPE
 --   f_pnl_by_product stopped at GM. Amazon is the only channel with per-SKU cost inputs, and
