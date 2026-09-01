@@ -205,13 +205,31 @@ function ProcessPage() {
     }
   }
 
-  async function closeShipment() {
+  // S326: the worker now refuses (409) to close a shipment that still holds units
+  // awaiting relabel — closing sets `fully_processed`, which disables the per-row Relabel
+  // button, so those units become permanently unreachable. 693 of 697 stuck legacy returns
+  // were stranded exactly this way. Surface the refusal as a confirm rather than a dead
+  // end: the operator can relabel first, or knowingly accept it (`close_with_pending`,
+  // which the worker logs).
+  // ⚠️ Call it as `onClick={() => closeShipment()}`, NEVER `onClick={closeShipment}` — the bare
+  // reference passes the MouseEvent as `withPending`, and a MouseEvent is truthy, so every close
+  // would send close_with_pending:true and silently defeat the guard this exists to enforce.
+  async function closeShipment(withPending = false) {
     setBusy(true);
     try {
-      await workerFetch('closeReturnShipment', { data: { shipment_id: shipmentId } }, session);
+      await workerFetch('closeReturnShipment',
+        { data: { shipment_id: shipmentId, ...(withPending ? { close_with_pending: true } : {}) } }, session);
       showToast(`${shipmentId} closed`, 'success');
       loadShipment(false);
-    } catch (e) { showToast(e.message || 'Close failed', 'error'); }
+    } catch (e) {
+      const msg = e.message || 'Close failed';
+      if (!withPending && /awaiting relabel/i.test(msg)) {
+        // eslint-disable-next-line no-alert
+        if (window.confirm(`${msg}\n\nClose anyway?`)) { setBusy(false); return closeShipment(true); }
+      } else {
+        showToast(msg, 'error');
+      }
+    }
     finally { setBusy(false); }
   }
   async function reopenShipment() {
@@ -254,7 +272,7 @@ function ProcessPage() {
         <div style={{ display: 'flex', gap: 6 }}>
           {closed
             ? <button style={btnSecondary} onClick={reopenShipment} disabled={busy}>Reopen</button>
-            : <button style={btnGreen} onClick={closeShipment} disabled={busy}>Close Shipment</button>}
+            : <button style={btnGreen} onClick={() => closeShipment()} disabled={busy}>Close Shipment</button>}
         </div>
       </div>
 
