@@ -20,7 +20,7 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
   await t('concurrent callers share one underlying call', async () => {
     let calls = 0;
     const d = defer();
-    const f = dedupeInFlight(() => { calls++; return d.p; });
+    const f = dedupeInFlight('k1', () => { calls++; return d.p; });
     const a = f(), b = f(), c = f();
     assert.equal(calls, 1, 'expected exactly one underlying call');
     d.resolve('x');
@@ -30,7 +30,7 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
   // THE ANTI-CACHE GUARD. If someone adds a TTL, this fails.
   await t('a caller after settle gets a FRESH call, never a cached value', async () => {
     let calls = 0;
-    const f = dedupeInFlight(() => { calls++; return Promise.resolve(calls); });
+    const f = dedupeInFlight('k2', () => { calls++; return Promise.resolve(calls); });
     assert.equal(await f(), 1);
     assert.equal(await f(), 2, 'second call must re-fetch, not replay the first result');
     assert.equal(await f(), 3);
@@ -40,7 +40,7 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
   await t('a rejection is shared by concurrent callers and clears the slot', async () => {
     let calls = 0;
     const d = defer();
-    const f = dedupeInFlight(() => { calls++; return d.p; });
+    const f = dedupeInFlight('k3', () => { calls++; return d.p; });
     const a = f(), b = f();
     d.reject(new Error('boom'));
     await assert.rejects(() => a, /boom/);
@@ -56,7 +56,7 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
     // The layout swallows to keep the On-Air rail; the home page toasts. Both must work off
     // the same shared promise.
     const d = defer();
-    const f = dedupeInFlight(() => d.p);
+    const f = dedupeInFlight('k4', () => d.p);
     const swallowed = f().catch(() => 'kept-last-known');
     let surfaced = null;
     const toasted = f().catch((e) => { surfaced = e.message; return 'toasted'; });
@@ -68,7 +68,7 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
 
   await t('a synchronous throw rejects rather than wedging the slot', async () => {
     let calls = 0;
-    const f = dedupeInFlight(() => { calls++; if (calls === 1) throw new Error('sync'); return Promise.resolve('ok'); });
+    const f = dedupeInFlight('k5', () => { calls++; if (calls === 1) throw new Error('sync'); return Promise.resolve('ok'); });
     await assert.rejects(() => f(), /sync/);
     assert.equal(await f(), 'ok', 'helper must still work after a synchronous throw');
   });
@@ -79,10 +79,33 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
     // consumer passing meaningfully different args needs keying, not this helper.
     const seen = [];
     const d = defer();
-    const f = dedupeInFlight((x) => { seen.push(x); return d.p; });
+    const f = dedupeInFlight('k6', (x) => { seen.push(x); return d.p; });
     f('first'); f('second');
     assert.deepEqual(seen, ['first']);
     d.resolve(null);
+  });
+
+  // ⭐ THE REGRESSION TEST FOR THE BUG THAT SHIPPED. The first version kept the slot in a
+  // module-level closure, which passes every test above — in node there is only ever one
+  // module instance. On the deployed build there are TWO: Next's app router inlined this
+  // module into both the `layout` and `page` chunks, so each side deduped against itself and
+  // the duplicate request still fired (measured 2026-09-01: 2 calls, 1ms apart). Requiring
+  // the module a second time reproduces that, and only a globalThis-anchored slot survives it.
+  await t('TWO module instances still share one slot (the bundler-duplication bug)', async () => {
+    delete require.cache[require.resolve('./dedupeInFlight.js')];
+    const second = require('./dedupeInFlight.js');
+    assert.notStrictEqual(second.dedupeInFlight, dedupeInFlight, 'expected a genuinely separate module instance');
+
+    let calls = 0;
+    const d = defer();
+    const fromA = dedupeInFlight('shared-key', () => { calls++; return d.p; });
+    const fromB = second.dedupeInFlight('shared-key', () => { calls++; return d.p; });
+
+    const a = fromA();          // "layout" calls first
+    const b = fromB();          // "page" calls 1ms later, from the OTHER copy
+    assert.equal(calls, 1, 'the second module instance must join the first call, not start its own');
+    d.resolve('shared');
+    assert.deepEqual(await Promise.all([a, b]), ['shared', 'shared']);
   });
 
   console.log(`\ndedupeInFlight: ${pass} passed, ${fail} failed`);

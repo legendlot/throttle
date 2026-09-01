@@ -15,4 +15,6 @@ import { dedupeInFlight } from '@/lib/dedupeInFlight.js';
 //
 // Staleness is impossible here by construction — see dedupeInFlight.js for why that is a
 // deliberate choice and not an oversight.
-export const getCampaignsShared = dedupeInFlight((session) => garageFetch('getCampaigns', {}, session));
+// ⚠️ The key is what ties the two duplicated copies of this module together — see
+// dedupeInFlight.js. It must be stable and unique per logical request.
+export const getCampaignsShared = dedupeInFlight('getCampaigns', (session) => garageFetch('getCampaigns', {}, session));
