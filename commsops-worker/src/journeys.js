@@ -364,7 +364,8 @@ async function enrol(env, { journeyId, profileId, eventId }) {
         const pf = await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolment.id)}`, env,
           { method: 'PATCH', body: JSON.stringify({ status: 'failed', ended_at: new Date().toISOString() }) })
           .catch(() => ({ ok: false }));      // a transport rejection must not escape as an unrelated throw
-        patched = !!pf.ok;
+        patched = !!pf?.ok;   // optional-chain: sbProfile can hand back a non-object, and a
+        // TypeError here would escape as an unrelated throw — the exact class this block fixes.
       }
       if (!patched) {
         // Named + greppable: this enrolment id is now an active row with no workflow, and the

@@ -132,7 +132,8 @@ async function runSegmentEntry(env) {
           + `&profile_id=in.(${ids.map((x) => A.enc(x)).join(',')})`, env, { method: 'DELETE' });
         // ⚠️ If the undo itself fails we ARE back to the original silent loss, so this is the
         // one branch that must never be quiet — it is the only signal anybody would ever get.
-        if (!del.ok) {
+        if (!del?.ok) {          // same optional-chain reasoning as journeys.js: a non-object
+          // response must take the LOUD branch, never throw past the alert.
           out.errors.push(`entry_undo_failed:${row.name}:${ids.length}`);
           await AL.alert(env, `🚨 *Relay segment-entry — ${ids.length} entrant(s) LOST* on "${row.name}": `
             + `their enrol enqueue failed AND the membership undo failed, so the next tick will not `

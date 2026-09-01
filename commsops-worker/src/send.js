@@ -195,7 +195,14 @@ async function unsubscribeUrl(env, profileId, channel, purpose) {
   // Written on the `marketing` axis deliberately: handleUnsubscribe hardcodes
   // purpose:'marketing' when the link is clicked, and the gate reads that axis — so the loop
   // closes with no change to the unsubscribe handler.
-  if (!token && purpose === 'influencer_outreach') {
+  // ⚠️ GUARDED ON `!row`, NOT MERELY `!token` — and that is deliberate, not belt-and-braces.
+  // This POST goes straight to /consent, so it BYPASSES recordConsent's guard against an
+  // `unknown` landing on top of a KNOWN opted_in/opted_out. Today `!token` already implies
+  // `!row` (a row with no token takes the mint-PATCH branch above, which returns null on
+  // failure and never falls through to here) — but that is an accident of the branches above,
+  // and one edit to them would turn this into the exact bug that guard exists to prevent.
+  // Requiring `!row` makes it structurally impossible instead of incidentally safe.
+  if (!row && !token && purpose === 'influencer_outreach') {
     token = rand();
     const seeded = await A.sbComms('/rest/v1/consent', env, {
       method: 'POST', headers: { Prefer: 'return=representation' },
