@@ -4,6 +4,7 @@
 // consumer invocation stays well under the subrequest limit at any audience size.
 const A = require('./auth.js');
 const { send } = require('./send.js');
+const P = require('./purposes.js');   // S327 — purpose classes, see purposes.js
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 const AL = require('./alerts.js');   // build-completion park alert (§9.14) — nobody is at a button there
@@ -81,7 +82,11 @@ async function loadVariants(env, campaignId) {
 // Does this campaign need an approver before it can send?
 async function needsApproval(env, campaign, audienceCount) {
   const s = await getSettings(env);
-  return campaign.purpose === 'marketing'
+  // S327: `influencer_outreach` needs approval on the same terms as marketing. A large cold
+  // outreach blast is, if anything, the higher-risk of the two — it goes to people with no
+  // prior relationship. Strictly MORE restrictive and no outreach campaign exists yet, so this
+  // cannot change the behaviour of anything live.
+  return P.isMarketingSide(campaign.purpose)
       && s.approval_required_marketing !== false
       && Number(audienceCount || 0) > Number(s.approval_audience_threshold ?? 500);
 }
@@ -338,7 +343,11 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   // budget" case it is built for, not a race down to the last few units. Do NOT harden it into a
   // reservation: holding budget across a fan-out that can be stopped or resumed would leak units
   // and starve transactional traffic on a failure.
-  if (String(camp.purpose || 'marketing') === 'marketing' && !allowPartial) {
+  // S327: outreach CONSUMES the send budget at the gate (gate.js step 6), so it needs the same
+  // pre-flight guard. Without this the two halves disagree: the campaign would pass pre-flight,
+  // fan out, and then start skipping `budget_exhausted` partway through — the exact "94k
+  // audience, 15k budget" failure this check exists to catch, reached by the new purpose.
+  if (P.isMarketingSide(String(camp.purpose || 'marketing')) && !allowPartial) {
     const b = await sendBudget(env);
     if (b.remaining != null && guardCount > b.remaining) {
       return { ok: false, error: 'audience_exceeds_budget',

@@ -6,6 +6,7 @@ const { renderEmail, renderWhatsapp, renderSms, renderRcs, checkRcsFallbackLink 
 const { tagLinks, resolveUtm } = require('./tracking.js');
 const LINKS = require('./links.js');   // Phase-B /r/<code> minting for redirect-backed buttons
 const { runGate } = require('./gate.js');
+const P = require('./purposes.js');
 const emailAdapter = require('./adapters/email.js');
 const whatsappAdapter = require('./adapters/whatsapp.js');
 const smsAdapter = require('./adapters/sms.js');
@@ -91,9 +92,13 @@ function pickSender(rows, { purpose, senderId, wabaId } = {}) {
   // distinction: both are non-marketing, Meta bills both as utility, and our own templates and
   // sender rows just happen to label them differently. That mismatch is what was breaking every
   // send, and it is now allowed through.
+  // S327: `influencer_outreach` counts as marketing-SIDE here (P.isMarketingSide), not as
+  // "everything else". Cold outreach leaving the order-updates number is precisely the harm
+  // this carve-out exists to prevent — it reads as marketing to the recipient and drags down
+  // that number's quality rating. A bare `=== 'marketing'` would have let it through.
   if (wabaId && rows.length === 1) {
     const only = rows[0];
-    const sendIsMkt = purpose === 'marketing';
+    const sendIsMkt = P.isMarketingSide(purpose);
     const senderIsMkt = only.purpose === 'marketing';
     if (!isWild(only.purpose) && sendIsMkt !== senderIsMkt) return null;   // crosses the marketing boundary
     return only;
@@ -140,7 +145,9 @@ async function getProfile(env, profileId) {
 }
 
 // Mint/reuse an unsubscribe token on the latest marketing-consent row for the profile.
-async function unsubscribeUrl(env, profileId, channel) {
+// `purpose` (S327) only selects the no-row behaviour below; the token itself always lives on
+// the `marketing` axis, because that is the axis handleUnsubscribe writes back to.
+async function unsubscribeUrl(env, profileId, channel, purpose) {
   if (!profileId) return null;
   const r = await A.sbComms(
     `/rest/v1/consent?profile_id=eq.${A.enc(profileId)}&channel=eq.${A.enc(channel)}` +
@@ -171,6 +178,39 @@ async function unsubscribeUrl(env, profileId, channel) {
   // posture: return null and let the caller degrade gracefully (send.js:189-190 only sets
   // sys.unsubscribe_url when truthy; it never crashes on null). This function's job is to make
   // the MINTING step race-safe/fail-closed, not to change what happens when there's no row.
+  //
+  // ⚠️ EXCEPT FOR OUTREACH (S327), WHERE "no row" IS THE NORMAL CASE AND RETURNING NULL WOULD
+  // BREAK THE CLASS. The token lives ON a consent row, and a COLD business contact has no
+  // consent row by definition — so every influencer_outreach email would have shipped with no
+  // unsubscribe link at all, i.e. the population the footer exists for is exactly the
+  // population that would never have got one. The gate refuses outreach to anyone opted_out
+  // and this footer is how they BECOME opted_out, so without this the class is unopt-outable.
+  //
+  // Seed an `unknown` marketing row to carry the token. `unknown` is the honest state — it
+  // literally means "we have no information" — and it is inert in both directions:
+  //   · _latestConsentRaw EXCLUDES unknown rows, so this can never read as consent to anyone,
+  //     neither the gate's opted_out check nor marketing's opted_in requirement;
+  //   · recordConsent's own guard only ever appends an unknown when no KNOWN state exists, so
+  //     the same write from any other path still cannot clobber a real opt-in/opt-out.
+  // Written on the `marketing` axis deliberately: handleUnsubscribe hardcodes
+  // purpose:'marketing' when the link is clicked, and the gate reads that axis — so the loop
+  // closes with no change to the unsubscribe handler.
+  if (!token && purpose === 'influencer_outreach') {
+    token = rand();
+    const seeded = await A.sbComms('/rest/v1/consent', env, {
+      method: 'POST', headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({
+        profile_id: profileId, channel, purpose: 'marketing', state: 'unknown',
+        source: 'influencer_outreach_seed',
+        evidence: { reason: 'unsubscribe_token_carrier', at: new Date().toISOString() },
+        unsubscribe_token: token, captured_at: new Date().toISOString(),
+      }),
+    });
+    // Fail closed, same posture as the mint PATCH above: no dead unsubscribe links in live mail.
+    // A concurrent outreach send can seed a second row with a different token; both resolve to
+    // the same profile, so the duplicate is cosmetic (the ledger is append-only + latest-wins).
+    if (!seeded.ok) return null;
+  }
   if (!token) return null;
   const base = (env.SUPABASE_URL && 'https://commsops.afshaan.workers.dev') || 'https://commsops.afshaan.workers.dev';
   return `${base}/unsubscribe?token=${token}`;
@@ -507,8 +547,13 @@ async function send(env, opts) {
       };
     } else {
       const sys = {};
-      if (purpose === 'marketing') {
-        let u = await unsubscribeUrl(env, opts.profileId, channel);
+      // S327: `influencer_outreach` gets the footer too (P.needsUnsubscribe). Bulk cold email
+      // without a working unsubscribe is an ESP-policy breach on its own — but the sharper
+      // reason is circular: the gate refuses outreach to anyone opted_out, and clicking this
+      // footer is how an influencer BECOMES opted_out. Withhold it and that refusal has no
+      // input, so the class would look consent-respecting while being unopt-outable in practice.
+      if (P.needsUnsubscribe(purpose)) {
+        let u = await unsubscribeUrl(env, opts.profileId, channel, purpose);
         // Test sends carry no profileId, so every test email shipped the literal
         // "{unsubscribe_url}" as a dead footer link (found 2026-08-16, Mishica's builder
         // report). Try the test recipient's own profile so internal testers see the real
@@ -520,7 +565,7 @@ async function send(env, opts) {
             `/rest/v1/identifiers?type=eq.email&value=eq.${A.enc(String(to).trim().toLowerCase())}` +
             `&select=profile_id&limit=1`, env);
           const pid = idr.ok ? idr.data?.[0]?.profile_id : null;
-          if (pid) u = await unsubscribeUrl(env, pid, channel);
+          if (pid) u = await unsubscribeUrl(env, pid, channel, purpose);
           if (!u) u = 'https://commsops.afshaan.workers.dev/unsubscribe?token=test-preview';
         }
         if (u) sys.unsubscribe_url = u;

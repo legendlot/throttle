@@ -5,6 +5,7 @@ export { JourneyWorkflow } from './journey-workflow.js';
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
+const { PURPOSES } = require('./purposes.js');   // S327 — one purpose vocabulary, see purposes.js
 const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs } = require('./webhooks.js');
 const TSC = require('./trustsignal-client.js');
 const SMSTPL = require('./sms-templates.js');
@@ -1707,7 +1708,12 @@ async function handlePost(body, auth, env) {
         // isMarketing = purpose==='marketing' && !isTest) and hard-locks recipients to
         // the test union either way.
         channel: body.channel || 'email',
-        purpose: ['marketing', 'utility', 'transactional'].includes(body.purpose) ? body.purpose : 'transactional',
+        // S327: was the literal list ['marketing','utility','transactional'], which silently
+        // coerced anything else to 'transactional' — so it had ALREADY been wrong since S274:
+        // a `service` test send routed as transactional, defeating the purpose-match this very
+        // comment says the line exists for. Driven off the shared vocabulary now, so a purpose
+        // added later is testable the day it lands instead of failing this way again.
+        purpose: PURPOSES.includes(body.purpose) ? body.purpose : 'transactional',
         isTest: true,
         to: body.to, templateId: body.templateId || null, template: body.template || null,
         profileId: body.profileId || null, constants: body.constants || {},

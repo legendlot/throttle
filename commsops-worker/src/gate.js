@@ -2,7 +2,8 @@
 // (PRD §5.4): suppression → consent → frequency cap → quiet hours → channel rule.
 // Transactional/utility bypass consent+cap+quiet-hours, but NEVER suppression.
 const A = require('./auth.js');
-const { latestConsent } = require('./consent.js');
+const { latestConsent, _latestConsentRaw } = require('./consent.js');
+const P = require('./purposes.js');
 
 let _settingsCache = null;
 let _settingsAt = 0;
@@ -182,7 +183,70 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   // purpose, without exception) suppression. Journey sends defer-and-retry at the quiet-hours
   // boundary rather than dropping, so those 601 are delayed to the morning, not lost.
   const isService = purpose === 'service' && !isTest;
-  const quietHoursApply = isMarketing || isService;
+  // S327 — 'influencer_outreach': BULK COLD OUTREACH TO A BUSINESS CONTACT (Ignition B10).
+  // Decided by Afshaan 2026-08-26, option (c) of §4 of the ignition-relay-email design; the two
+  // rejected options are why this exists at all — sending it as 'marketing' would have meant
+  // recording an opted_in consent that is a fiction, and sending it as 'service' would have
+  // mislabelled cold outreach as operational correspondence about a deal that does not exist yet.
+  //
+  // It sits between the two neighbours and takes the STRICTER half of each:
+  //   · consent — does NOT require opted_in (a cold contact has never opted in; demanding it
+  //     would make the class pointless), but DOES refuse an explicit opted_out. See below.
+  //   · frequency cap — APPLIES, sharing the marketing counter (P.PRESSURE_PURPOSES) so an
+  //     influencer who is also a customer cannot receive a full allowance of each.
+  //   · quiet hours — APPLY, on the S274 'service' reasoning: an influencer is a person with a
+  //     phone, and cold outreach at 02:00 IST is worse than outreach tomorrow morning.
+  //   · send budget — CONSUMED. This is the one place outreach is treated as MORE risky than
+  //     marketing's neighbours: the M9 warm-up budget exists to protect sender reputation, and
+  //     cold bulk mail to a roster that never asked for it is precisely that risk.
+  const isOutreach = purpose === 'influencer_outreach' && !isTest;
+  const quietHoursApply = isMarketing || isService || isOutreach;
+
+  // 2a. consent — WITHDRAWAL CHECK for purposes that bypass the opted_in requirement.
+  // ⚠️ THE POINT OF THIS BLOCK: optout.js writes a CONSENT row (purpose 'marketing'), not a
+  // suppression — deliberately, so a STOP does not also kill someone's order updates. That
+  // means an influencer who replied STOP or clicked unsubscribe is INVISIBLE to step 1 and
+  // visible only here. Without this block, "bypasses consent" would silently mean "ignores
+  // withdrawals", and the class would be a loophole rather than an honest posture.
+  //
+  // Reads BOTH axes and refuses if EITHER is opted_out:
+  //   · 'marketing' — where every withdrawal actually lands today (applyOptOut's default), so
+  //     this is the axis that does the real work.
+  //   · 'influencer_outreach' — nothing writes it yet; read so a future outreach-specific
+  //     opt-out (an influencer who wants deals but not cold pitches) works the day it exists,
+  //     rather than being silently ignored until someone remembers this line.
+  //
+  // ⚠️ FAILS CLOSED, and this is why it cannot use latestConsent(): that collapses "no row"
+  // and "read failed" into 'unknown', and a check which PASSES on 'unknown' would therefore
+  // treat a transient DB error as consent to send. _latestConsentRaw keeps them apart.
+  // ⚠️ NO PROFILE ⇒ REFUSE. Withdrawals live on a consent row keyed by profile, so without a
+  // profileId there is no way to discover that this person opted out — and unlike marketing
+  // (which blocks anyway, since 'unknown' is not 'opted_in') a purpose that passes on "no row"
+  // would sail straight through. Refusing is also honest about what outreach IS: a message to a
+  // known business contact on a roster. A send with nobody to be accountable to is not that.
+  if (isOutreach && !profileId) return { pass: false, reason: 'no_profile' };
+  if (isOutreach && profileId) {
+    for (const axis of ['marketing', purpose]) {
+      const c = await _latestConsentRaw(env, profileId, channel, axis);
+      if (!c.ok) return { pass: false, reason: 'gate_error:consent' };
+      if (c.state === 'opted_out') return { pass: false, reason: 'opted_out' };
+    }
+  }
+
+  // 3a. frequency cap for outreach — same window and ceiling as marketing, but counting the
+  // shared pressure set so the two cannot stack on one person. Fails closed like its twin.
+  if (isOutreach && profileId) {
+    const s = settings;
+    const since = new Date(Date.now() - Number(s.frequency_cap_window_hours || 24) * 3600 * 1000).toISOString();
+    const cnt = await A.sbComms(
+      `/rest/v1/messages?profile_id=eq.${A.enc(profileId)}` +
+      `&purpose=in.(${P.PRESSURE_PURPOSES.join(',')})` +
+      `&status=in.(sent,delivered,opened,clicked)&queued_at=gte.${A.enc(since)}&select=id`, env);
+    if (!cnt.ok || !Array.isArray(cnt.data)) return { pass: false, reason: 'gate_error:freq_cap' };
+    if (cnt.data.length >= Number(s.frequency_cap_per_day || 3))
+      return { pass: false, reason: 'freq_cap' };
+  }
+
   if (isMarketing) {
     // 2. consent — marketing requires opted_in
     let state;
@@ -268,10 +332,14 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
       return { pass: false, reason: 'window_closed' };
   }
 
-  // 6. warm-up send budget (M9) — marketing only; transactional/utility bypass. Consumed
-  // LAST so a unit is never burned on a send that another check would skip (quiet hours,
-  // invalid address, cap). Atomic per-IST-day via the consume_send_budget() RPC.
-  if (isMarketing) {
+  // 6. warm-up send budget (M9) — marketing AND influencer_outreach; transactional/utility
+  // bypass. Consumed LAST so a unit is never burned on a send that another check would skip
+  // (quiet hours, invalid address, cap). Atomic per-IST-day via the consume_send_budget() RPC.
+  // ⚠️ Outreach consumes it even though 'service' (S274) deliberately does not — the two are
+  // not comparable. A CSAT survey goes to someone who just talked to us; outreach is cold bulk
+  // mail to a roster that never asked, which is the exact deliverability risk this budget was
+  // added to ramp. Sharing one counter is correct: sender reputation is shared.
+  if (isMarketing || isOutreach) {
     const b = await A.sbComms('/rest/v1/rpc/consume_send_budget', env, { method: 'POST', body: '{}' });
     if (!b.ok) return { pass: false, reason: 'gate_error:budget' };      // don't misdiagnose a 500 as "cap hit"
     if (b.data !== true) return { pass: false, reason: 'budget_exhausted' };

@@ -18,6 +18,7 @@
 const A = require('./auth.js');
 
 const LINT = require('./wa-template-lint.js');   // pre-submit gate — see waSubmitTemplate
+const P = require('./purposes.js');              // S327 — purpose classes, see purposes.js
 const MEDIA_HEADERS = new Set(['IMAGE', 'VIDEO', 'DOCUMENT']);
 
 // Sample suffix for a `/r/{{1}}` URL button, used ONLY in the Meta approval payload — a reviewer
@@ -173,7 +174,13 @@ async function waUploadHeaderMedia(env, body) {
 function categoryFor(template) {
   const c = (template.content?.category || '').toUpperCase();
   if (c) return c;
-  return template.purpose === 'marketing' ? 'MARKETING' : 'UTILITY';
+  // S327: `influencer_outreach` submits as MARKETING, not UTILITY. Meta's category is a claim
+  // about the CONTENT, not about our internal routing label, and cold outreach is promotional
+  // by any reading — submitting it as UTILITY would be a policy misdeclaration that Meta
+  // reclassifies or rejects. Latent today (outreach is email-first, so no WA outreach template
+  // exists yet), fixed here because a default that is wrong only when someone finally uses it
+  // is the worst kind. An explicit content.category still overrides, as before.
+  return P.isMarketingSide(template.purpose) ? 'MARKETING' : 'UTILITY';
 }
 
 // waSubmitTemplate({templateId}) — submit to Meta, mark local approval_status PENDING.

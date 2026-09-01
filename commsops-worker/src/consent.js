@@ -88,4 +88,11 @@ async function latestConsent(env, profile_id, channel, purpose) {
   return r.state || 'unknown';
 }
 
-module.exports = { recordConsent, latestConsent };
+// `_latestConsentRaw` is exported for gate.js's `influencer_outreach` check ONLY (S327).
+// That check treats "no consent row" as PASS (cold outreach is the point), so it cannot use
+// latestConsent: that collapses "no row" and "read failed" into the same 'unknown' string, and
+// a purpose which passes on 'unknown' would therefore FAIL OPEN on a transient DB error —
+// sending cold outreach to someone who may have opted out. The raw variant keeps the two apart
+// so the gate can block on a read failure, matching every other step in it.
+// Underscore retained: still not for general use. Prefer latestConsent everywhere else.
+module.exports = { recordConsent, latestConsent, _latestConsentRaw };
