@@ -430,8 +430,22 @@ WhatsApp button-tap contract already specified in J3 (`outcomes[button_id]` / `n
 journey graph reuses `handlesFor` rather than growing a second mechanism.
 
 **Media constraints are hard vendor limits and belong in validation, not documentation:**
-- rich card: **3:1**, ≤2MB, optimal 1440×480, JPEG/JPG/PNG/GIF; video ≤10MB
-- carousel: **5:4**, ≤1MB, optimal 960×720; video ≤5MB
+- rich card — **the ratio follows the ORIENTATION; there is no single value** (corrected
+  2026-09-01, S327; this line read a flat "3:1", which describes only the vertical case):
+  - **`HORIZONTAL` → 2:1**, optimal **1440×720**. ⭐ **This is what LOT actually uses**, and it is
+    also what `rcs-templates.js` defaults to (`body.orientation = spec.orientation || 'HORIZONTAL'`).
+  - **`VERTICAL` → 3:1**, optimal **1440×480** (plus `height`, vertical-only).
+  - ⛔ **A validator written against the old flat "3:1" would have rejected every real LOT rich
+    card.** Nothing had been built from it yet — there is no media validator today, which is the
+    only reason this was still free to fix. Validate the ratio *against the orientation on the
+    same record*, never as a constant.
+  - ≤2MB, JPEG/JPG/PNG/GIF; video ≤10MB. ⚠️ **"2MB" is ambiguous and it MATTERS at the boundary:**
+    two staged creatives measure **2,059,194** and **1,995,045** bytes — both pass under a MiB
+    reading (2,097,152), one fails under a decimal-MB one (2,000,000). The vendor has not been
+    asked which it means. **Do not encode a byte threshold until it is confirmed**; warn near the
+    boundary instead of hard-refusing, or the validator rejects artwork the vendor would accept.
+- carousel: **5:4**, ≤1MB, optimal 960×720; video ≤5MB — ⚠️ unverified against the live UI the way
+  the rich-card ratios now are; treat as vendor-doc-derived, not measured.
 - template name ≤20 chars · header ≤200 · body ≤2000 · button label ≤25
 
 ⚠️ **RCS templates require vendor approval** (`status` on the template record, plus a `Template`
