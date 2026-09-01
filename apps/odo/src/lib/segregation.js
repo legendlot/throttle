@@ -101,9 +101,14 @@ export function hybridHeadline(orderRows, productRows) {
     units += Number(r.units) || 0;
     if (ogChannels.has(r.channel_id)) continue;
     const g = Number(r.gross_value) || 0;
-    const t = Number(r.tax_value);
+    // ⚠️ Test ABSENCE before coercing: `Number('') === 0`, which is finite and not null, so a
+    // blank `tax_value` would read as ZERO GST and OVERSTATE net — the dangerous direction, and
+    // the exact thing the per-row fallback exists to prevent. A real `0`/`'0'` is left alone,
+    // because zero tax is a legitimate value. (Own-diff hostile review, S328.)
+    const raw = r.tax_value;
+    const t = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
     fbGross += g;
-    fbGst += Number.isFinite(t) && r.tax_value !== null ? t : g - g / (1 + GST_RATE);
+    fbGst += Number.isFinite(t) ? t : g - g / (1 + GST_RATE);
     fbChannels.add(r.channel_id);
   }
   const grossAll = og.grossAll + fbGross;                    // complete gross (P&L, tax-incl)
