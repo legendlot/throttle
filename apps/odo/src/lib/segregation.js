@@ -74,27 +74,48 @@ export function aggOrders(rows) {
 //   orderRows   = f_order_rollup rows (sale_date × channel)            — getSegregation
 //   productRows = f_sales_rollup rows (variant grain; channel_id, gross_value, units) — getSales
 // Units come from product-grain only (order-grain carries no unit count). QC has no order-level
-// discount/return data, so its net is the flat ex-GST strip (gross / 1.18) — same fallback the
-// rest of the ladder already uses for un-settled channels (S166).
+// discount/return data, so its net is gross minus GST — see the tax note on the loop below.
+//
+// ⭐ THE FALLBACK USES THE REAL PER-SKU GST, NOT A FLAT 18% STRIP (S328, 2026-09-01).
+// `f_sales_rollup` has returned `tax_value` since S294 and `sales.fill_qc_tax` populates it per-HSN
+// on every QC row (measured 2026-09-01: 100% non-null across all 6,010 Blinkit/Zepto/Instamart
+// `sales_fact` rows). Recomputing `fbGross/1.18` here THREW THAT AWAY and over-taxed every L.O.T
+// Build SKU, which is 5% (RULE-LOTBUILD-002), understating net revenue.
+//   Measured 2026-09-01, all time: Blinkit stored GST ₹10,22,171 vs flat-18% ₹10,63,587
+//   — net was understated by ₹41,416 (Blinkit's implied blended rate is 14.66%).
+//   Instamart (₹2.49) and Zepto (₹0.64) are ~zero: their catalogue is genuinely all-18%, so the
+//   flat strip was already right there. The whole QC exposure was one channel.
+// ⚠️ This does NOT fix the ORDER-grain ladder (`aggOrders` above, line ~37), which still strips a
+// flat 18% — that is the remaining Website ₹36,538 + GT ₹3,734 and it needs a product dimension the
+// order grain does not have. "The ladder has no product dimension" was true of THAT grain only and
+// got generalised; the QC path had per-SKU tax all along.
+// ⚠️ Per-ROW fallback is deliberate: a row with no `tax_value` (a future fallback channel that
+// `fill_qc_tax` does not cover) degrades to the flat strip rather than reading as zero GST, which
+// would OVERSTATE net — the dangerous direction on a financial surface.
 export function hybridHeadline(orderRows, productRows) {
   const og = aggOrders(orderRows);
   const ogChannels = new Set((orderRows || []).map(r => r.channel_id));
-  let fbGross = 0, units = 0;
+  let fbGross = 0, fbGst = 0, units = 0;
   const fbChannels = new Set();
   for (const r of (productRows || [])) {
     units += Number(r.units) || 0;
-    if (!ogChannels.has(r.channel_id)) { fbGross += Number(r.gross_value) || 0; fbChannels.add(r.channel_id); }
+    if (ogChannels.has(r.channel_id)) continue;
+    const g = Number(r.gross_value) || 0;
+    const t = Number(r.tax_value);
+    fbGross += g;
+    fbGst += Number.isFinite(t) && r.tax_value !== null ? t : g - g / (1 + GST_RATE);
+    fbChannels.add(r.channel_id);
   }
-  const fbGst = fbGross - fbGross / (1 + GST_RATE);          // estimated GST on the fallback (QC) gross
   const grossAll = og.grossAll + fbGross;                    // complete gross (P&L, tax-incl)
-  const netExGst = og.netExGst + fbGross / (1 + GST_RATE);   // complete net revenue (ex-GST)
+  const netExGst = og.netExGst + (fbGross - fbGst);          // complete net revenue (ex-GST)
   const totalGst = og.tax + fbGst;
   return {
     ...og,
     grossAll, netExGst, units,
     asp: units ? grossAll / units : 0,
-    // Confidence over the WHOLE headline: only order-grain settlement is ever "confirmed";
-    // the QC fallback GST is always an 18% estimate, so it correctly drags the badge down.
+    // Confidence over the WHOLE headline: only order-grain settlement is ever "confirmed".
+    // The QC fallback GST is now HSN-derived rather than a flat 18% guess, but it is still not
+    // marketplace-settled, so it correctly keeps dragging the badge down. Do not "promote" it.
     settledPct: totalGst > 0 ? Math.min(100, Math.round(og.gstSettled / totalGst * 100)) : null,
     ogChannelCount: ogChannels.size,
     fallbackChannelCount: fbChannels.size,
