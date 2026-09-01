@@ -1,5 +1,21 @@
 'use client';
 
+// Self-injected style, same pattern as the shared Sidebar (.sb-wrap) — inline styles cannot
+// carry a media query, and this rule has to be width-conditional.
+//
+// ⚠️ WHY THE SUB-TABS ARE HIDDEN ON A PHONE RATHER THAN MADE SCROLLABLE. Measured live on
+// Ignition /engagements at 375px (2026-09-01, S327): the row is 699px of content and the
+// header's other children (breadcrumb, page title, right cluster) leave it a clientWidth of
+// **16px**. `overflowX:auto` alone therefore "worked" — technically scrollable — while being
+// useless, a 16px porthole onto seven tabs. Every app that renders this Topbar also renders a
+// bottom tab bar plus a "More" sheet carrying the FULL grouped nav under 767px, so hiding the
+// row loses no destination; it removes a control that could not be operated anyway.
+// The scroller is KEPT for widths where the row has real space but can still overflow.
+const STYLE = `
+.tb-subtabs { overflow-x: auto; min-width: 0; scrollbar-width: thin; }
+@media (max-width: 767px) { .tb-subtabs { display: none !important; } }
+`;
+
 export function Topbar({
   navGroups = [],
   pathname = '',
@@ -28,6 +44,7 @@ export function Topbar({
       flexShrink: 0,
       background: 'var(--bg, transparent)',
     }}>
+      <style>{STYLE}</style>
       {/* Breadcrumb — group label */}
       <span style={{
         fontFamily: 'var(--mono)',
@@ -57,19 +74,16 @@ export function Topbar({
       </h1>
 
       {showSubTabs && (
-        <div style={{
+        <div className="tb-subtabs" style={{
           display: 'flex', gap: 4,
           marginLeft: 20,
           borderLeft: '1px solid var(--border)',
           paddingLeft: 16,
-          // S304 rule, applied at the source (2026-09-01, S327): every tab button is
-          // whiteSpace:nowrap and this row never wrapped, while the app shells wrap the
-          // Topbar in `overflow:hidden` — so on a phone the tabs past the right edge were
-          // clipped with no way to scroll to them. Ignition's WORK group is 7 tabs, far
-          // wider than 375px. This is a shared component, so one scroller fixes all 12 apps.
-          // ⚠️ minWidth:0 is required: without it this flex item refuses to shrink below its
-          // content and the scroller never engages — the row just pushes the header wider.
-          overflowX: 'auto', minWidth: 0, scrollbarWidth: 'thin',
+          // S304 rule at the source (2026-09-01, S327). Every tab button is whiteSpace:nowrap
+          // and this row never wrapped, while the app shells wrap the Topbar in
+          // `overflow:hidden` — so tabs past the right edge were clipped with no scroller.
+          // The scroll + hide-on-phone rules live in STYLE above (a media query cannot be an
+          // inline style); read the comment there before changing either.
         }}>
           {subTabs.map(item => {
             const isActive = pathname === item.route || pathname.startsWith(item.route + '/');
