@@ -1221,7 +1221,11 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           if (dept.department === 'Packaging') lineTargets[line].Packaging = String(dept.total_headcount || '');
         }
       }
-      setTargets((prev) => ({ ...lineTargets, D1: prev.D1, D2: prev.D2, Others: prev.Others }));
+      // S326: `Store` was missing from this carry-over while its three siblings were kept,
+      // so a date change dropped targets.Store to undefined — the input flipped
+      // controlled→uncontrolled and parseInt(undefined)||0 silently planned 0 Store slots.
+      // Pre-existing since 1f752124; fixed here because it is the same hand-listed-keys class.
+      setTargets((prev) => ({ ...lineTargets, D1: prev.D1, D2: prev.D2, Store: prev.Store, Others: prev.Others }));
       setTargetHints(newHints);
     } catch (e) {
       showToast(e.message || 'Failed to load roster', 'error');
