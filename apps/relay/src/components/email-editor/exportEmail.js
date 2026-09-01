@@ -33,10 +33,28 @@ export function normaliseMjAttributes(mjml) {
   });
 }
 
+// ⚠️ `validationLevel: 'soft'` means MJML COMPILES A BROKEN TEMPLATE AND ONLY WARNS. That is the
+// right setting — a hard failure would block a save over something cosmetic — but it means the
+// warnings are the ONLY signal an author ever gets, and until 2026-09-01 (S327) they went to
+// `console.warn`, i.e. nowhere. That is precisely how the nested-head bug above survived across
+// all 7 saved templates and reached a live customer send: MJML noticed, said so, and no human was
+// listening. So the warnings are now RETURNED and surfaced in the editor.
+// The console.warn stays — it costs nothing and is still the fastest thing to read while debugging.
 export function exportEmail(editor) {
   const mjml = normaliseMjAttributes(editor.getHtml());
   const compile = mjml2html.default || mjml2html;
   const { html, errors } = compile(mjml, { validationLevel: 'soft', minify: false });
-  if (errors && errors.length) console.warn('[email-editor] MJML warnings', errors);
-  return { mjml, html: html || '', text: htmlToPlain(html || ''), design: editor.getProjectData() };
+  const warnings = Array.isArray(errors) ? errors : [];
+  if (warnings.length) console.warn('[email-editor] MJML warnings', warnings);
+  return {
+    mjml, html: html || '', text: htmlToPlain(html || ''), design: editor.getProjectData(),
+    // Shape is MJML's own: { line, message, tagName, formattedMessage }. Normalised to a string
+    // here so no caller has to know that, and so a future MJML version changing the field names
+    // degrades to a readable line instead of rendering "[object Object]".
+    warnings: warnings.map((e) => ({
+      line: e?.line ?? null,
+      tag: e?.tagName || null,
+      message: e?.formattedMessage || e?.message || String(e),
+    })),
+  };
 }

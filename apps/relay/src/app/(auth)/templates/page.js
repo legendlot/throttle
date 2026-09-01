@@ -675,6 +675,11 @@ export default function TemplatesPage() {
   const [t, setT] = useState(emptyTemplate());
   const [saving, setSaving] = useState(false);
   const edRef = useRef(null);
+  // MJML warnings from the most recent export, surfaced under the editor (S327). A ref because
+  // it is written inside buildPayload (called during save) and must not re-render mid-save; it is
+  // copied into state right after, which is what actually paints it.
+  const mjmlWarnRef = useRef([]);
+  const [mjmlWarnings, setMjmlWarnings] = useState([]);
   const [editorKey, setEditorKey] = useState('new');
   // M13 — a template with html_body but no design_json opens the visual editor onto a
   // BLANK scaffold (EmailEditor.js only loads initialDesign when it's non-empty; otherwise
@@ -1030,6 +1035,10 @@ export default function TemplatesPage() {
       if (typeof r.ttl === 'number' && r.ttl > 0) content.ttl = r.ttl;
     } else if (edRef.current && !preserveBodyRef.current) {
       const ex = edRef.current.export();
+      // MJML compiles at validationLevel 'soft', so a broken template saves cleanly and only
+      // warns. Capture the warnings here — this is the one moment the compiler has an opinion
+      // about what the author just built. Surfaced below the editor; see exportEmail.js.
+      mjmlWarnRef.current = Array.isArray(ex.warnings) ? ex.warnings : [];
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design, mjml: ex.mjml || '' };
     } else if (preserveBodyRef.current) {
       // HTML-ONLY TEMPLATE, BODY PRESERVED. The canvas is sitting on the blank scaffold because
@@ -1055,6 +1064,8 @@ export default function TemplatesPage() {
 
   async function save() {
     if (!t.name.trim()) { showToast('Name required', 'error'); return; }
+    // Cleared per attempt so a fixed template stops showing yesterday's warnings.
+    mjmlWarnRef.current = [];
     // htmlOnly deliberately does NOT mount the canvas (it shows the real email read-only), so a
     // null edRef is the expected state there, not a still-loading editor — without this exemption
     // an html-only template could never have its subject or status saved at all.
@@ -1214,7 +1225,19 @@ export default function TemplatesPage() {
       if (saved?.id && !t.id) set('id', saved.id);
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
-    finally { setSaving(false); }
+    finally {
+      setSaving(false);
+      // Publish whatever the compiler said about THIS save. Deliberately in `finally`: a template
+      // that fails to save for an unrelated reason still deserves its warnings shown, and a
+      // successful save is exactly when an author is looking. ⚠️ Warn, never block — MJML's soft
+      // level means these are cosmetic-to-serious and we cannot tell which, so refusing the save
+      // would be worse than the silence this replaces.
+      const w = mjmlWarnRef.current || [];
+      setMjmlWarnings(w);
+      if (w.length) {
+        showToast(`Saved — but MJML reported ${w.length} warning${w.length === 1 ? '' : 's'}. See below the editor.`, 'error');
+      }
+    }
   }
 
   async function sendTest() {
@@ -1650,6 +1673,40 @@ export default function TemplatesPage() {
                   </div>
                 )}
                 <EmailEditor key={editorKey} onReady={(api) => { edRef.current = api; }} initialDesign={t.design_json} initialMjml={t.mjml} session={session} />
+                {/* MJML compiles at validationLevel 'soft', so a broken template saves cleanly and
+                    only console.warns. That is how a nested <mj-attributes> head — which makes MJML
+                    apply NONE of the template's global defaults — survived across all 7 saved
+                    templates and shipped to a live customer send at the wrong font size. The
+                    compiler DID notice; nobody was listening. This is the listening. */}
+                {mjmlWarnings.length > 0 && (
+                  <div style={{
+                    marginTop: 12, padding: '12px 14px', borderRadius: 8,
+                    border: '1px solid var(--yellow, #eab308)',
+                    background: 'color-mix(in srgb, var(--yellow, #eab308) 8%, transparent)',
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>
+                      MJML reported {mjmlWarnings.length} warning{mjmlWarnings.length === 1 ? '' : 's'} on the last save
+                    </div>
+                    <div className="dim" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+                      The template still saved — these do not block anything. But MJML only warns,
+                      so an ignored warning here is what reaches the recipient&apos;s inbox.
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.7 }}>
+                      {mjmlWarnings.slice(0, 12).map((w, i) => (
+                        <li key={i}>
+                          {w.tag ? <code>{w.tag}</code> : null}
+                          {w.line ? <span className="dim mono"> line {w.line}</span> : null}
+                          {(w.tag || w.line) ? ' — ' : null}{w.message}
+                        </li>
+                      ))}
+                    </ul>
+                    {mjmlWarnings.length > 12 && (
+                      <div className="dim" style={{ fontSize: 12, marginTop: 6 }}>
+                        …and {mjmlWarnings.length - 12} more — the full list is in the browser console.
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <iframe title="Email preview" sandbox="" srcDoc={t.html_body || '<p style="font-family:sans-serif;color:#888;padding:24px">No content</p>'}
