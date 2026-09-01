@@ -192,7 +192,14 @@ async function unsubscribeUrl(env, profileId, channel) {
 // effect on ctx — to assert the fallback leg actually carries it. See checkRcsFallbackLink.
 async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults) {
   const c = template.content || {};
-  if (!c.link_param || !c.link_target_base) return null;
+  // ⚠️ TRIMMED, and it must stay trimmed — found by hostile review 2026-09-01. The ctx key was
+  // written from the RAW value while checkRcsFallbackLink compares against a trimmed one, so a
+  // link_param saved as "link " (a plausible editor typo) would key ctx as "link " while the
+  // guard read "link" and ALLOWED it — the guard passing on a template whose legs cannot meet,
+  // which is the one failure mode a guard must never have. Canonicalise once, here, so the
+  // runtime key and every check agree by construction.
+  const linkParam = String(c.link_param || '').trim();
+  if (!linkParam || !c.link_target_base) return null;
   try {
     const linkBase = await LINKS.getLinkBaseUrl(env);
     if (!linkBase) return null;
@@ -205,13 +212,13 @@ async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmD
     });
     if (!code) return null;
     const url = `${String(linkBase).replace(/\/$/, '')}/r/${code}`;
-    ctx.constants = { ...(ctx.constants || {}), [c.link_param]: url };
+    ctx.constants = { ...(ctx.constants || {}), [linkParam]: url };
     // Also under the event map keyed by the param name — an event-sourced variable (on this
     // template OR on the SMS fallback leg rendered from the same ctx) whose field matches the
     // param picks the minted url up. This is what lets both legs share one code.
-    ctx.event = { ...(ctx.event || {}), [c.link_param]: url };
-    const decl = (template.variables || []).find((v) => v && v.token === c.link_param);
-    if (decl && decl.source === 'event' && (decl.field || decl.token) !== c.link_param) {
+    ctx.event = { ...(ctx.event || {}), [linkParam]: url };
+    const decl = (template.variables || []).find((v) => v && v.token === linkParam);
+    if (decl && decl.source === 'event' && (decl.field || decl.token) !== linkParam) {
       ctx.event[decl.field || decl.token] = url;
     }
     return url;

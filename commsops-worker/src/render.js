@@ -281,7 +281,7 @@ function renderRcs(template, ctx) {
 //
 // Measured 2026-09-01 on the 2026-08-21 HP Crest campaign: the RCS row carried `link_param: ""`,
 // so `mintLinkVariable` returned at its first guard and minted nothing. The fallback's {link}
-// resolved to its static 56-char product URL, and ALL 5,199 fallback sends failed at the carrier
+// resolved to its static 57-char product URL, and ALL 5,199 fallback sends failed at the carrier
 // — 41.4% `Template variable exceed max legnth`, 19.7% `TEMPLATE_FAILED_ON_DYNAMIC_PART`, 11.6%
 // `URL not whitelisted`. Zero reached a customer, and nothing surfaced it but the receipts.
 //

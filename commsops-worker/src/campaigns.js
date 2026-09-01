@@ -270,7 +270,7 @@ async function startCampaign(env, id, sentBy, opts = {}) {
   //
   // This is the guard that would have stopped 2026-08-21: `HP_crest_rcs_01` shipped with
   // `link_param: ""`, so no tracked link was minted and the fallback's {link} rendered its own
-  // static 56-char product URL. All 5,199 fallback messages failed at the carrier and not one
+  // static 57-char product URL. All 5,199 fallback messages failed at the carrier and not one
   // reached a customer — while the campaign reported itself `sent`.
   if (camp.channel === 'rcs') {
     const rcsIds = [...new Set([camp.template_id, ...variants.map((v) => v.template_id)].filter(Boolean))];
