@@ -61,7 +61,7 @@ return leg is a discrete action someone must perform will read exactly like thes
 | 2 | **Stock is the forcing function** | "At the painter" is a *balance*, not a checkbox. Nobody can skip the return step because there is no step to skip — the numbers simply read wrong until the goods come back. |
 | 3 | **Full loop: the store inwards the unpainted delivery** | The balance is only real if unpainted stock exists. This is the one genuinely new habit in the design. |
 | 4 | **Vehicle = Direct Issuance** (approach A) | The return side needs no new object and no new habit: the store already GRNs painted tops today. |
-| 5 | **Vendor is mandatory and structured — never free text** | Combobox with server search + inline create. `destination` free text is retired from this path. |
+| 5 | **Vendor is mandatory and structured — never free text** | Combobox with server search + inline create. ⚠️ **`destination` is NOT retired** — corrected during Task 3: it holds the recipient's NAME while `destination_contact` holds their PHONE. It stays as optional free text beside a mandatory vendor. |
 | 6 | **Office becomes a vendor**, `IN-VND-135` | So that every DI has a real vendor, office requests included. |
 | 7 | **Rejects use `grn_register.damaged_qty`** — the field the floor ALREADY fills in | ⚠️ **CORRECTED 2026-09-01, after the decision was taken and before any code.** The decision as approved was `qty_rejected`. Measured against the source: `qty_rejected` is **hardcoded `0`** in the receiving GRN insert (`worker.js:20452`) and is `>0` on **0 of 7,025 rows**, while `damaged_qty` carries **13 GRNs / 582 units**, last used 2026-08-04. ⚠️ **REFINED by hostile review:** damage is not a column the receiver types per line — it is an **event**, `store.receiving_entries.condition='damaged'`, aggregated into `grn_register.damaged_qty` by the `createGRN` path (worker.js ~14610). `store.receiving_lines` has **no damaged column at all**, so the shipment→GRN path must read the entries table. See the plan's Task 7. Activating the dead column would have been this design's own anti-pattern — building on a mechanism nobody uses. **No new field and no new screen — but see the plan's Task 7 for the honest limit: the shipment→GRN path has never carried damage, so the capture exists while its use on a painter return is unproven.** |
 | 8 | **A rejected top is credited back to the UNPAINTED code** | Makes rework an ordinary second challan rather than a special path. |
@@ -118,8 +118,15 @@ screw cohort records.
 - `+ challan_no text` — the GST delivery challan
 - `expected_return_at` already exists and finally carries meaning
 
-`destination_contact` already exists and takes the person's name, so "issued to Kirti at the office"
-survives the move to a structured vendor.
+⚠️ **CORRECTED 2026-09-01 by reading the live rows during Task 3 — the earlier claim that
+`destination_contact` "takes the person's name" was WRONG.** It holds **phone numbers** on 7 of the
+8 rows (`9902665537`, `+91 98204 90522`, …); the person's NAME lives in `destination` (Kirti,
+Kaushik, Joseph Mathew). So the three fields are: **`vendor_code` = the org · `destination` = the
+person or place · `destination_contact` = their phone.**
+⛔ **`destination` is therefore NOT retired — it becomes optional free text alongside a mandatory
+vendor.** Retiring it would have deleted the only field holding the recipient's name. ⭐ **The
+row-level read caught this; the count-level check did not** — `lost_contact = 0` was true and
+useless, because the column was already populated with something else.
 
 ### 4.3 `store.direct_issuance_returns` (NEW)
 

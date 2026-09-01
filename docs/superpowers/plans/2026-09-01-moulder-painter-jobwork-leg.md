@@ -479,7 +479,8 @@ Expected: `## main...origin/main` with no `ahead`. ⛔ Deploying off an unpushed
 
 **Interfaces:**
 - Consumes: Task 4's `vendor_code` requirement.
-- Produces: a DI form that cannot submit without a vendor.
+- Produces: a DI form that cannot submit without a vendor, while `destination` (name) and
+  `destination_contact` (phone) both survive as optional fields.
 
 - [ ] **Step 1: Add the vendor picker to the new-DI form**
 
@@ -524,9 +525,20 @@ Render the picker:
 
 ⚠️ **Key the load on `userId`, not `session`.** `onAuthStateChange` re-fires on tab switch and a real token refresh lands ~hourly; keying on `session` re-runs the effect and can unmount a form holding unsaved input.
 
-- [ ] **Step 2: Remove the free-text destination input**
+- [ ] **Step 2: Keep `destination`, relabel both fields honestly**
 
-Delete the `destination` text input and replace with a `destination_contact` input labelled "Contact person (optional)". `destination` is no longer written by the UI.
+⛔ **DO NOT delete the `destination` input.** Corrected during Task 3 by reading the live rows:
+`destination_contact` holds **phone numbers** on 7 of 8 rows; the recipient's **name** is in
+`destination`. Deleting it would drop the only field naming who received the goods.
+
+The three fields, relabelled:
+- **Vendor** (`vendor_code`) — required, Combobox. The organisation.
+- **Deliver to** (`destination`) — optional free text. The person or place, e.g. `Kirti`, `LOT HQ`.
+- **Contact phone** (`destination_contact`) — optional. Currently mislabelled in the UI as a
+  generic contact; it is a phone number in every populated row.
+
+⭐ **Worth internalising: the count-level check passed and told us nothing.** `lost_contact = 0`
+was true because the column was already full — of the wrong thing. Read the rows, not the counts.
 
 - [ ] **Step 3: Build all twelve apps**
 
