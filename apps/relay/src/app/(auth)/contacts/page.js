@@ -11,7 +11,18 @@ import { useConfirm } from '@/components/confirm.js';
 // `rcs` is here so an EXPLICIT rcs opt-out/opt-in can be recorded — that override is what
 // the gate's resolver honours. Day-to-day rcs consent is DERIVED from sms (see rcsEffective).
 const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
-const PURPOSES = ['marketing', 'transactional', 'utility'];
+// This is the "Record consent" WRITE form, not a filter — so the list is what may legitimately
+// be RECORDED against a profile, and `utility` was removed 2026-09-01 (S327) because nothing
+// ever reads it. The gate bypasses consent for utility outright (gate.js: "Transactional/utility
+// bypass consent+cap+quiet-hours, but NEVER suppression"), and `comms.consent` has never held a
+// single utility row. Offering it invited someone to record a state that is inert forever and
+// believe it had an effect — a worse footgun on a write path than on a filter, because the row
+// persists and reads as meaningful later.
+// ⚠️ `transactional` STAYS even though the gate also bypasses it: 91,020 real rows exist (email,
+// opted_in), written by the ingest pipes, so it is a genuine recorded axis rather than a
+// theoretical one. The discriminator is "does this axis exist in the data", not "does the gate
+// read it".
+const PURPOSES = ['marketing', 'transactional'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 const STATE_TONE = { opted_in: 'green', opted_out: 'red', unknown: 'gray' };
 

@@ -70,7 +70,25 @@ const CHANNELS = ['email', 'sms', 'rcs', 'whatsapp'];
 // consent is DERIVED (sms opt-in + explicit overrides), so a raw-row leaf would count ~0
 // while the gate sends to ~10k. Build the condition on `sms` instead.
 const CONSENT_LEAF_CHANNELS = ['email', 'sms', 'whatsapp'];
-const PURPOSES = ['marketing', 'transactional', 'utility'];
+// ⚠️ TWO LISTS, ON PURPOSE — the condition and the preview ask DIFFERENT questions, so they
+// take different vocabularies. Sweeping them into one is how `utility` ended up offered as a
+// filter that could never match anybody.
+//
+// A consent CONDITION filters raw `comms.consent` rows, so it may only offer purposes that
+// column actually holds. Measured 2026-09-01: marketing (all 3 channels, 300,032) and
+// transactional (EMAIL ONLY, opted_in, 91,020). `utility` has NEVER had a single row, so a
+// `utility` leaf is a rule matching nobody — removed. 0 of 24 saved segments used it.
+// ⚠️ Keep `transactional`: it reads 0 on whatsapp/sms but returns 91,020 on EMAIL. A quick test
+// on the wrong channel makes it look as dead as utility, and it is not.
+const CONSENT_LEAF_PURPOSES = ['marketing', 'transactional'];
+
+// The reachability preview asks "would the GATE deliver this?", which is a different question —
+// and there `utility` is meaningful, not dead. Verified against comms.preview_segment
+// 2026-09-01: marketing 98,140 vs transactional 212,408 vs utility 212,408 — utility matches
+// transactional exactly, because both bypass consent (gate.js: "Transactional/utility bypass
+// consent+cap+quiet-hours, but NEVER suppression"). ⛔ Do NOT remove it here to match the list
+// above; the preview would then be unable to answer the question it exists for.
+const REACH_PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATES = ['opted_in', 'opted_out', 'unknown'];
 
 // ── One condition row ──────────────────────────────────────────────────────────
@@ -207,7 +225,7 @@ function ConditionRow({ r, onPatch, onType, onRemove, disabled, canEdit, eventDe
       {CONSENT_LEAF_CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
     </select>
     <select className="f-inp" style={{ width: 130 }} value={r.purpose} onChange={(e) => onPatch({ purpose: e.target.value })} disabled={disabled}>
-      {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+      {CONSENT_LEAF_PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
     </select>
     <select className="f-inp" style={{ width: 120 }} value={r.state} onChange={(e) => onPatch({ state: e.target.value })} disabled={disabled}>
       {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -788,7 +806,7 @@ export default function SegmentsPage() {
                 {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
               <select className="f-inp" style={{ width: 'auto' }} value={pvPurpose} onChange={(e) => setPvPurpose(e.target.value)}>
-                {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+                {REACH_PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
               <Btn onClick={preview} disabled={pvLoading}><Eye size={14} /> {pvLoading ? 'Counting…' : 'Preview'}</Btn>
               {pv && (
