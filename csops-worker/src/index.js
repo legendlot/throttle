@@ -4342,7 +4342,15 @@ async function getCalls(params, auth, env) {
   // Abandoned is DISTINCT from missed and the split is the point: `missed` = nobody
   // picked up; `abandoned` = the caller hung up seconds in, having reached us. Merging
   // them hides both. 36 of 39 abandoned calls on the first live day lasted under 20s.
-  else if (tab === 'abandoned') filters.push(`status=eq.abandoned`);
+  // ⚠️ `called_back_at=is.null` is NOT optional decoration — without it this tab was the
+  // one worklist that never drained. `markCalledBack` stamps `called_back_at` and clears
+  // `needs_callback`; it deliberately does NOT change `status`, because an abandoned call
+  // that was returned is still historically an abandoned call (the KPI at ~4405 counts it,
+  // and must keep counting it). So the row stayed here with its ABANDONED badge and the
+  // agents read that as "my update did not save" — reported by Pruthvi 2026-09-01, by which
+  // point 197 of 395 abandoned calls in 7 days had been marked back with every write landing
+  // correctly. The `missed` tab above already excluded them; this line was the asymmetry.
+  else if (tab === 'abandoned') filters.push(`status=eq.abandoned`, `called_back_at=is.null`);
   // The callback worklist. Replaces nothing - every call still has its ticket; this is
   // the list of people who tried to reach us and did not.
   else if (tab === 'callback') filters.push(`needs_callback=is.true`, `called_back_at=is.null`);
