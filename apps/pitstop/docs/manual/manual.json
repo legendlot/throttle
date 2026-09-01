@@ -2,8 +2,8 @@
   "title": "Pitstop",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
-  "version": "1.14.0",
-  "date": "2026-08-28",
+  "version": "1.15.0",
+  "date": "2026-09-01",
   "app_url": "pitstop.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
