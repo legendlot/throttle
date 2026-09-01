@@ -27,6 +27,13 @@
   <li><span class="s-title">Create at TrustSignal.</span> The button arms only once the id is in place &mdash; one click pushes everything to the vendor. No retyping into any portal.</li>
 </ol>
 
+<h2 class="sec">Already made it in Sigmo? Adopt it instead</h2>
+<p class="lead">If the template was written at the vendor first, do <em>not</em> retype it here &mdash; press <span class="s-title">Find templates in Sigmo</span> on the SMS panel and press <span class="s-title">Adopt</span> next to it. Relay copies the registered wording, the consent type, the DLT id and the placeholder count straight off the vendor, so what you send is exactly what was registered.</p>
+<ul class="tbl">
+  <li><span class="s-title">Nothing listed?</span> Every Sigmo template is either already adopted here, or carries a consent type this system cannot send on. Only <code>Service-Explicit</code> and <code>Service-Implicit</code> can send &mdash; a template made as <code>Promotional</code> is refused at adopt rather than failing later in front of a customer.</li>
+  <li><span class="s-title">After adopting,</span> name the placeholders in <span class="s-title">Variable order</span>. Until you do, the template holds the raw <code>{#var#}</code> markers and will refuse to send &mdash; deliberately, so a marker can never reach a customer as literal text.</li>
+</ul>
+
 <div class="callout danger"><div class="c-title">&#9940; Important</div><p>Never reword a registered SMS body &mdash; not a comma. The carrier compares the delivered text against the registration and silently refuses a mismatch. Only the <code>{token}</code> values change. New wording means a new DLT registration.</p></div>
 
 <h2 class="sec">What the numbers will show</h2>
