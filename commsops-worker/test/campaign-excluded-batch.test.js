@@ -1,7 +1,8 @@
 // Per-page VISIBLE exclusion in the fan-out (frozen-roster spec §9.21, Task 2).
 // Run: node test/campaign-excluded-batch.test.js
 //
-// THE CONTRACT UNDER TEST: an excluded profile leaves a `skipped/excluded_recent_contact` row and
+// THE CONTRACT UNDER TEST: an excluded profile leaves a `skipped/excluded_<cause>` row NAMING THE
+// CAUSE the RPC reported (S326 — segment | prior_campaign | recent_contact) and
 // is not sent; a failed batch check or a failed skip-write THROWS the page (retry) rather than
 // soft-continuing; a campaign with no exclusion rules pays zero extra subrequests; and a page
 // consisting entirely of excluded profiles still advances the chain's cursor.
@@ -27,8 +28,16 @@ const CAMPROW = (over = {}) => ({ id: CID, status: 'sending', segment_id: 'S', t
 
 const RECS = (n) => Array.from({ length: n }, (_, i) => ({ profile_id: `P${i}`, address: `p${i}@t.com` }));
 
-// One stub for every test: records batch-RPC calls, skip inserts, and send attempts.
-function stub({ camp = CAMPROW(), recs = RECS(4), excludedIds = [], batchOk = true, skipInsertOk = true } = {}) {
+// ⚠️ THE RPC RETURNS ROWS, NOT IDS — `TABLE(profile_id uuid, cause text)`, since migration
+// `comms_campaign_excluded_batch_reports_cause_v1` (S326). This stub returned a bare `['P1','P3']`
+// for a while after that change and the file went red: `campaigns.js` maps `r.profile_id` over the
+// response, which is `undefined` for a string, so the excluded set became `{undefined}`, matched
+// nobody, and inserted an empty array. `cause` defaults to what THIS file's CAMPROW would really
+// produce — it sets `exclude_campaign_ids` and nothing else, so the RPC's CASE lands on
+// 'prior_campaign' (precedence: segment → prior_campaign → recent_contact).
+function stub({ camp = CAMPROW(), recs = RECS(4), excludedIds = [], batchOk = true, skipInsertOk = true,
+                cause = 'prior_campaign' } = {}) {
+  const asRows = (xs) => xs.map((x) => (typeof x === 'string' ? { profile_id: x, cause } : x));
   const seen = { batchCalls: 0, skipRows: null, reserves: [], continued: null };
   G._clearSettingsCache();
   A.sbComms = async (path, env, opts = {}) => {
@@ -37,7 +46,7 @@ function stub({ camp = CAMPROW(), recs = RECS(4), excludedIds = [], batchOk = tr
     if (path.includes('/rpc/campaign_recipients')) return { ok: true, data: recs };
     if (path.includes('/rpc/campaign_excluded_batch')) {
       seen.batchCalls++;
-      return batchOk ? { ok: true, data: excludedIds } : { ok: false, status: 500, data: null };
+      return batchOk ? { ok: true, data: asRows(excludedIds) } : { ok: false, status: 500, data: null };
     }
     if (path === '/rest/v1/messages' && opts.method === 'POST') {
       if (!skipInsertOk) return { ok: false, status: 500, data: null };
@@ -65,7 +74,12 @@ function stub({ camp = CAMPROW(), recs = RECS(4), excludedIds = [], batchOk = tr
     assert.ok(Array.isArray(seen.skipRows) && seen.skipRows.length === 2, 'one array insert, two rows');
     for (const row of seen.skipRows) {
       assert.equal(row.status, 'skipped');
-      assert.equal(row.reason, 'excluded_recent_contact');
+      // ⭐ REGRESSION GUARD FOR THE S326 FIX, and note this assertion USED to read
+      // 'excluded_recent_contact' — which was the bug: this campaign's only rule is
+      // `exclude_campaign_ids`, so labelling it a time-window skip is exactly the mislabel that
+      // hid 52,381 deliberate suppressions on `Freedom to Play Sale_17Aug`. The reason must name
+      // the cause the RPC actually reported, or a suppression is indistinguishable from a bug.
+      assert.equal(row.reason, 'excluded_prior_campaign');
       assert.equal(row.source, `campaign:${CID}`);
       assert.ok(row.to_address, 'the address travels with the evidence');
     }

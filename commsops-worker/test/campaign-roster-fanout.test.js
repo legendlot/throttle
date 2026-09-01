@@ -28,7 +28,12 @@ function stub({ camp = ROSTERED(), rosterPage = [], variants = [], excludedIds =
     if (path.includes('/campaign_variants?')) return { ok: true, data: variants };
     if (path.includes('/campaign_roster?')) { seen.rosterGets.push(path); return { ok: true, data: rosterPage }; }
     if (path.includes('/rpc/campaign_recipients')) { seen.rpcCalls++; return { ok: true, data: rosterPage }; }
-    if (path.includes('/rpc/campaign_excluded_batch')) return { ok: true, data: excludedIds };
+    // ⚠️ Returns ROWS, not ids — `TABLE(profile_id uuid, cause text)` since S326's
+    // `comms_campaign_excluded_batch_reports_cause_v1`. A bare id array makes campaigns.js read
+    // `r.profile_id` off a string, so the excluded set matches nobody. `recent_contact` is the
+    // truthful cause here: the campaign fixture below excludes via `exclude_contacted_hours`.
+    if (path.includes('/rpc/campaign_excluded_batch'))
+      return { ok: true, data: excludedIds.map((x) => (typeof x === 'string' ? { profile_id: x, cause: 'recent_contact' } : x)) };
     if (path === '/rest/v1/messages' && opts.method === 'POST') { seen.skipInserts.push(JSON.parse(opts.body)); return { ok: true, data: [] }; }
     if (path.includes('/messages?on_conflict')) {
       seen.reserves.push(JSON.parse(opts.body).profile_id);
