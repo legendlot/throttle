@@ -18,6 +18,24 @@
   <div class="a-row"><div class="a-key">Marketing ROI</div><div class="a-val"><p>Attributed revenue against send cost. Transactional messages are excluded from this, because an order confirmation does not cause the order.</p></div></div>
 </div>
 
+<h2 class="sec">Where the rupee figures come from</h2>
+<p class="lead">Under the money tiles there is a <strong>Cost basis &middot; rate card</strong> panel. It
+lists the rate charged for each kind of message, and the date each rate came into force.</p>
+<p>Read it whenever a cost or ROI number looks wrong. The most likely explanation is not a bug &mdash; it
+is that the provider changed its prices and the rate card has not been updated yet, in which case every
+figure above it is quietly out of date. <strong>The <em>Effective from</em> column is what tells you.</strong>
+A date that has not moved in a long time is the thing to question.</p>
+<div class="callout"><p><strong>Spend is a floor, not a final number.</strong> A message is only costed once
+the provider tells us what it charged. A message that failed was never charged for, and one still in flight
+has not been priced yet &mdash; both are left out of Spend rather than counted as zero. So the real spend is
+never lower than the figure shown, and may be slightly higher.</p></div>
+<div class="callout"><p><strong>SMS and RCS show no cost on purpose.</strong> Those providers report a credit
+balance rather than a per-message charge, and the two are not the same unit. Rather than show a
+plausible-but-wrong rupee figure, they are left out until the credits are reconciled.</p></div>
+<p>Rates cannot be edited from this screen. Changing one re-prices <em>history</em> as well as new sends
+&mdash; every past message is costed at the rate that applied on the day it went out &mdash; so a repricing
+is done as a reviewed change to the database, not from a dashboard.</p>
+
 <h2 class="sec">Sent, delivered, skipped, failed</h2>
 <p>These are four different things and mixing them up is the most common misreading on this screen.</p>
 <table class="tbl">

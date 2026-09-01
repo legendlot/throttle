@@ -27,3 +27,18 @@
 <p>Archiving retires a template from the pickers so nobody wires it up again. Anything already using it keeps working, on purpose: silently breaking a live flow would be worse than letting an old template continue.</p>
 
 <div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Deleting a WhatsApp template on Meta&rsquo;s side is not reversible from here and removes every language version at once. Archive in Relay instead unless you are certain.</p></div>
+
+<h2 class="sec">Warnings when you save an email</h2>
+<p class="lead">The email builder checks your template every time you save. If anything is wrong with the
+underlying markup, a yellow panel appears under the editor listing what it found.</p>
+<p><strong>These do not stop the save, and they are worth reading anyway.</strong> The checker only warns
+&mdash; it will happily save a template it knows is broken. A real example: a fault in one template&rsquo;s
+global styling meant none of its font settings applied, so it went out to customers at the wrong size. The
+checker had spotted it every single time; nobody could see what it was saying. Now you can.</p>
+<p>If you see warnings you do not understand, fix them before setting the template Active rather than after
+&mdash; once it is live the next thing that reads it is a customer&rsquo;s inbox.</p>
+
+<h2 class="sec">Choosing a purpose</h2>
+<p>The <strong>Purpose</strong> dropdown decides which rules a send has to pass &mdash; whether it needs
+marketing consent, whether it obeys quiet hours, and which number it goes out from. Pick the one that
+describes the message honestly; it is not a label, it is the rule set.</p>
