@@ -192,6 +192,25 @@ also captures **rejected qty** on job-work returns. The DI stamp is best-effort.
 
 **④ Balance** — derived, never entered.
 
+### What marks a receipt as a job-work return
+
+⭐ **THREE conditions, all automatic — the receiver ticks nothing:** the part has an active
+`part_finish_pairs` row · the supplier resolves to a real `store.vendors` row · **an OPEN job-work
+challan exists for that vendor** · and the GRN is dated ≥ cutover.
+
+⛔ **THE OPEN-CHALLAN CONDITION IS LOad-BEARING AND WAS LEARNED THE HARD WAY.** A cutover-date-only
+test looks sufficient and is not: **in-flight material is SENT before cutover but RECEIVED after
+it**, so the date alone classifies it as a return. That shipped and was live for ~7 minutes on
+2026-09-01 before being caught by loading the live receiving screen — SHP-322 (SG Ventures,
+`SH-PB-52`, 922 units) and SHP-321 (VITBOJ, `SH-PB-60`, 945) were sitting un-GRN'd at the time and
+would have been the first misreads. No GRN occurred in the window; nothing was corrupted.
+**The principle: you cannot get back material you never sent.** No challan → ordinary receipt.
+
+`source='jobwork_paint'`, **deliberately distinct from EXT's `'jobwork'`** — EXT job-work returns
+UNITS against an `ext_run_no`, paint returns the same PART transformed, and §9 keeps them apart. A
+paint GRN wearing `'jobwork'` with no `ext_run_no` would look exactly like a broken EXT link.
+⚠️ **An ITC-04 report must therefore union `source IN ('jobwork','jobwork_paint')`.**
+
 ### Rejects and rework
 
 **The reject quantity is `grn_register.damaged_qty`** — already a per-line input on the Garage
