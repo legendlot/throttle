@@ -1,4 +1,4 @@
-<p class="lead">Direct Store Issuance records stock leaving the warehouse for non-production reasons: samples, office requests, external testing, customer replacements, marketing events. Each issuance is a numbered document (DI) created as a draft, filled with part or unit lines, then approved and issued (which actually deducts stock).</p>
+<p class="lead">Direct Store Issuance records stock leaving the warehouse for non-production reasons: samples, office requests, external testing, customer replacements, marketing events, and (new) job work sent out to a vendor. Each issuance is a numbered document (DI) created as a draft, filled with part or unit lines, then approved and issued.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Issuing stock for non-production needs.</div></div>
@@ -9,14 +9,40 @@
 
 <h2 class="sec">The flow</h2>
 <ol class="steps">
-  <li><span class="s-title">+ New Issue.</span> Pick a purpose, destination and contact, then <strong>Create Draft</strong>.</li>
+  <li><span class="s-title">+ New Issue.</span> Pick a purpose, <strong>pick a vendor</strong>, optionally say who it is going to and their phone, then <strong>Create Draft</strong>.</li>
   <li><span class="s-title">Add lines.</span> Add part lines (with quantities) and unit lines (by UPC), and save.</li>
   <li><span class="s-title">Approve &amp; Issue.</span> An approver confirms; this deducts the parts from stock, flips the units to &ldquo;direct issued&rdquo;, stamps the issuer, and opens an accountability sticker to print.</li>
   <li><span class="s-title">Mark Closed</span> when items return, optionally logging a GRN reference.</li>
 </ol>
 <p>The list filters by status (Draft, Issued, Closed, Cancelled) and by purpose. A draft can be edited or cancelled; once issued, the header and lines lock.</p>
 
+<h2 class="sec">Vendor is now required (changed 1 Sep 2026)</h2>
+<p>Every issuance must name a vendor. The old free-text destination box is gone, replaced by three clearer fields:</p>
+<div class="tbl">
+  <table>
+    <thead><tr><th>Field</th><th>What goes in it</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Vendor</strong> (required)</td><td>The company. Search and pick. For anything internal, pick <strong>LOT Office</strong>.</td></tr>
+      <tr><td>Deliver to</td><td>The person or place, for example Kirti, or LOT HQ.</td></tr>
+      <tr><td>Contact phone</td><td>Their number.</td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="callout">
+  <div class="c-title">The vendor is not in the list?</div>
+  <p>Type the name and choose <strong>+ Add vendor</strong> at the bottom of the dropdown. It is created and selected immediately, so a new painter or supplier never blocks you. It only fires when you click that row, so clicking away will not create anything by accident.</p>
+</div>
+
+<h2 class="sec">Job Work: sending material to a vendor and getting it back</h2>
+<p>Pick the purpose <strong>Job Work (to vendor)</strong> when you are sending LOT material out to a vendor who will work on it and send it back. Painting is the first case: we send unpainted tops to a painter and they come back painted. The material stays ours the whole time; the vendor is paid for the work, not for the goods.</p>
+<p>Approving a job work issuance does two extra things automatically:</p>
+<ul class="bul">
+  <li>It creates a numbered <strong>delivery challan</strong> (JWC).</li>
+  <li>It raises the outward <strong>gate pass</strong> for you, marked returnable, so you do not have to remember to raise one.</li>
+</ul>
+<p>What comes back is received normally through Receiving. There is no extra step and no box to tick. See the <strong>Job Work</strong> screen for what is currently out at a vendor.</p>
+
 <div class="callout danger">
   <div class="c-title">&#9940; Issuing is irreversible</div>
-  <p><strong>Approve &amp; Issue</strong> deducts real stock and cannot be undone in the app; to reverse it you would book the items back via a GRN. Closing does <em>not</em> auto-return stock either: a physical return goes through the normal GRN flow. Creating and filling a draft needs request access; approving and issuing needs approve access, so a requester cannot issue their own draft without an approver.</p>
+  <p>Stock moves when the DI sticker is <strong>scanned at the DSP Issue station</strong>, not when someone clicks approve. Approving authorises it and prints the sticker. (A supervisor can force-issue without a scan when a hand-over genuinely cannot pass a scanner; that is logged with a reason.) Once it moves, it cannot be undone in the app; to reverse it you would book the items back via a GRN. Closing does <em>not</em> auto-return stock either: a physical return goes through the normal GRN flow. Creating and filling a draft needs request access; approving and issuing needs approve access, so a requester cannot issue their own draft without an approver.</p>
 </div>

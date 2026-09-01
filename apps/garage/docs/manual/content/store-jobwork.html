@@ -1,0 +1,43 @@
+<p class="lead">Job Work shows what LOT material is currently sitting at a vendor. We send our own parts out to be worked on (painting is the first case), the vendor works on them and sends them back, and this screen is the running count of what has not come back yet.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing what is out at a vendor.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">By itself, from stock movements.</div></div>
+</div>
+
+<h2 class="sec">The idea, in one line</h2>
+<p>Nobody has to tick anything for this screen to be right. It counts what went out on a job work challan and what came back through normal Receiving, and shows the difference. If the numbers look wrong, the goods have not been received yet.</p>
+
+<h2 class="sec">Reading the table</h2>
+<div class="tbl">
+  <table>
+    <thead><tr><th>Column</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>Vendor</td><td>Who is holding the material.</td></tr>
+      <tr><td>Unpainted / Painted</td><td>The part that went out, and the part it comes back as.</td></tr>
+      <tr><td>Sent</td><td>Quantity issued on job work challans.</td></tr>
+      <tr><td>Returned</td><td>Quantity received back and accepted into stock.</td></tr>
+      <tr><td>Damaged</td><td>Quantity that came back unusable. This goes back on the unpainted code so it can be sent out again.</td></tr>
+      <tr><td>Remainder</td><td>Still at the vendor. Once a job is finished, whatever is left here is material that never came back, in other words paint loss.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">An empty table does not mean nothing is out</div>
+  <p>This screen only counts material sent from <strong>1 September 2026</strong> onwards, because before that date sending material out was not recorded anywhere. Roughly 7,400 tops were already sitting with painters on that date and none of them appear here. They will be received normally when they arrive; they simply cannot be reconciled, because there is no record of them going out.</p>
+</div>
+
+<div class="callout">
+  <div class="c-title">A red, negative remainder</div>
+  <p>It means more came back than we sent. That is a real signal worth looking at, not a display bug: usually an older consignment arriving, or a receipt booked against the wrong vendor. Tell whoever owns the parts data.</p>
+</div>
+
+<h2 class="sec">What to do when something looks stuck</h2>
+<ol class="steps">
+  <li><span class="s-title">Check the age.</span> A remainder that has not moved for weeks means goods are sitting at the vendor. Chase the vendor, not the screen.</li>
+  <li><span class="s-title">Check Receiving.</span> If the vendor says they delivered, the shipment may be logged but not yet counted or GRN&rsquo;d.</li>
+  <li><span class="s-title">Do not adjust stock to make this balance.</span> The number is the symptom, not the problem. Fixing it by hand hides the thing you wanted to know.</li>
+</ol>

@@ -46,3 +46,9 @@
   <div class="c-title">&#9432; Reading the status column</div>
   <p>A shipment&rsquo;s status shows where it is. Once every line is booked, it switches from <strong>Arriving</strong> to <strong>GRN&rsquo;d</strong> (or <strong>Received</strong> for a box-only shipment) in green, so you can tell at a glance which arrivals are still open and which are fully done. The Progress column shows the running count (for example &ldquo;2 / 2 GRN&rsquo;d&rdquo;).</p>
 </div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; On a job work return, the damaged count moves stock</div>
+  <p>When a vendor sends back material we sent them (painted tops are the first case), the <strong>damaged</strong> quantity you enter is not just a note. Those pieces are still ours, so the system puts them back on the <em>unpainted</em> part code, ready to be sent out again. Count damaged accurately: under-count it and the parts vanish from stock, over-count it and we think we have tops we do not.</p>
+  <p>This applies only to a return against an open job work challan. On an ordinary purchase, damaged is recorded and nothing moves, exactly as before.</p>
+</div>

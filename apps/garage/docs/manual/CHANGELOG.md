@@ -15,6 +15,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
   **50** per bag. Flagged as a fallback, not a house standard, since real sizes vary by
   product and several recent products use 25.
 
+## [1.19.0] - 2026-09-01
+
+### Added
+- **Job Work** chapter (`/jobwork`): what LOT material is currently sitting at a vendor, how to
+  read Sent / Returned / Damaged / Remainder, and why an empty table does not mean nothing is out.
+
+### Changed
+- **Direct Issuance**: a vendor is now required on every issuance. The old free-text destination
+  box is replaced by Vendor (required), Deliver to (person or place) and Contact phone. Documents
+  the new **Job Work (to vendor)** purpose, the automatic JWC delivery challan and gate pass, and
+  the inline "+ Add vendor" option.
+- **Direct Issuance**: corrected a long-standing inaccuracy. Stock moves when the DI sticker is
+  scanned at the DSP Issue station, not when someone clicks approve. Approving authorises and
+  prints the sticker; force-issue without a scan is the logged exception.
+- **Receiving**: on a job work return, the damaged quantity moves stock. Those pieces are still
+  ours, so they go back on the unpainted code to be sent out again. On an ordinary purchase,
+  damaged is recorded and nothing moves, exactly as before.
+
 ## [1.15.0] - 2026-08-31
 
 ### Added
