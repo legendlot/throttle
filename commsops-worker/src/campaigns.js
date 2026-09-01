@@ -575,14 +575,24 @@ async function processQueueMessage(env, body) {
         p_exclude_contacted_hours: exArgs.p_exclude_contacted_hours }),
     });
     if (!bx.ok) throw new Error(`campaign_excluded_batch_failed:${campaignId}:${bx.status}`);
-    excluded = new Set(Array.isArray(bx.data) ? bx.data : []);
+    // The RPC now returns [{profile_id, cause}] rather than a bare uuid[] (migration
+    // comms_campaign_excluded_batch_reports_cause_v1). ⚠️ The reason written below used to be the
+    // literal 'excluded_recent_contact' for EVERY excluded profile, while campaign_excluded
+    // collapses THREE causes into one boolean — so a deliberate exclude_campaign_ids suppression
+    // was reported as a time-window skip. Measured on `Freedom to Play Sale_17Aug`: 52,381 of
+    // 53,793 skipped people (97.4%) were `prior_campaign` wearing the recent-contact label. That
+    // mislabel is why a BACKLOG item recorded a fan-out defect that does not exist — the skip
+    // reason is the only thing anyone reads to tell a suppression from a bug, so it has to be true.
+    const causeById = new Map((Array.isArray(bx.data) ? bx.data : [])
+      .map((r) => [r.profile_id, r.cause || 'recent_contact']));
+    excluded = new Set(causeById.keys());
     if (excluded.size) {
       // One array insert for the whole page. variant_id is stamped for the same reason finalize
       // stamps it on every outcome: a skipped message still belongs to an arm, and ab-stats'
       // per-arm failure-asymmetry check reads those rows.
       const rows = recs.filter((x) => excluded.has(x.profile_id)).map((x) => ({
         profile_id: x.profile_id, channel: camp.channel, purpose: camp.purpose,
-        status: 'skipped', reason: 'excluded_recent_contact',
+        status: 'skipped', reason: `excluded_${causeById.get(x.profile_id) || 'recent_contact'}`,
         source: `campaign:${campaignId}`, to_address: x.address || null,
         variant_id: pickVariant(campaignId, x.profile_id, variants)?.id || null,
       }));
