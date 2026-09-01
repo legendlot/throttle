@@ -62,6 +62,14 @@ export function Topbar({
           marginLeft: 20,
           borderLeft: '1px solid var(--border)',
           paddingLeft: 16,
+          // S304 rule, applied at the source (2026-09-01, S327): every tab button is
+          // whiteSpace:nowrap and this row never wrapped, while the app shells wrap the
+          // Topbar in `overflow:hidden` — so on a phone the tabs past the right edge were
+          // clipped with no way to scroll to them. Ignition's WORK group is 7 tabs, far
+          // wider than 375px. This is a shared component, so one scroller fixes all 12 apps.
+          // ⚠️ minWidth:0 is required: without it this flex item refuses to shrink below its
+          // content and the scroller never engages — the row just pushes the header wider.
+          overflowX: 'auto', minWidth: 0, scrollbarWidth: 'thin',
         }}>
           {subTabs.map(item => {
             const isActive = pathname === item.route || pathname.startsWith(item.route + '/');
