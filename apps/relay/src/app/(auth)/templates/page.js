@@ -12,6 +12,7 @@ import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
 import WaPreview from '@/components/wa-editor/WaPreview.js';
 import { validateWaTemplate, WA_WABAS, normalizeMetaName } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
+import { PURPOSES, purposeLabel } from '@/lib/purposes.js';
 import ImageLibrary from '@/components/ImageLibrary.js';
 import MsgPreview from '@/components/MsgPreview.js';
 import { useConfirm, useChoose } from '@/components/confirm.js';
@@ -28,7 +29,6 @@ const CHAN_FILTERS = [
   { key: 'sms', label: 'SMS' },
   { key: 'rcs', label: 'RCS' },
 ];
-const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUSES = ['draft', 'active', 'archived'];
 const VAR_SOURCES = ['profile', 'event', 'constant', 'recipient', 'system'];
 
@@ -1524,7 +1524,7 @@ export default function TemplatesPage() {
             </div>
             <div className="ff"><div className="kv-k">Purpose</div>
               <select className="f-inp" value={t.purpose} onChange={(e) => set('purpose', e.target.value)} disabled={saving || !canEdit}>
-                {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+                {PURPOSES.map((p) => <option key={p} value={p}>{purposeLabel(p)}</option>)}
               </select>
             </div>
             <div className="ff"><div className="kv-k">Language</div>
@@ -1923,7 +1923,7 @@ export default function TemplatesPage() {
                 <select className="f-inp" value={purposeFilter} onChange={(e) => setPurposeFilter(e.target.value)}
                   style={{ width: 'auto', minWidth: 130 }}>
                   <option value="all">Any purpose</option>
-                  {PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {PURPOSES.map((p) => <option key={p} value={p}>{purposeLabel(p)}</option>)}
                 </select>
                 <select className="f-inp" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
                   style={{ width: 'auto', minWidth: 120 }}>

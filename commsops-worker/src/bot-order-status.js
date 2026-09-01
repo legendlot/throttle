@@ -7,6 +7,7 @@
 const SHOP = require('./shopify.js');
 const A = require('./auth.js');
 const sbPublic = A.sbProfile('public');
+const { courierName } = require('./courier-display.js');
 
 function identityMatches(given, order) {
   if (given?.phone && order?.phone) return String(order.phone).replace(/\D/g, '').slice(-10) === String(given.phone).replace(/\D/g, '').slice(-10);
@@ -19,9 +20,9 @@ function statusTextFor(sh) {
   const trk = sh.tracking_link ? `\nTrack it live: ${sh.tracking_link}` : '';
   switch (sh.lifecycle) {
     case 'delivered':        return `Your order was delivered${sh.delivered_at ? ` on ${new Date(sh.delivered_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}` : ''}. Enjoy!`;
-    case 'out_for_delivery': return `Great news — your order is out for delivery today with ${sh.courier || 'our courier'}.${trk}`;
-    case 'in_transit':       return `Your order is on its way with ${sh.courier || 'our courier'}.${trk}`;
-    case 'manifested':       return `Your order is packed and ready for pickup by ${sh.courier || 'our courier'}.${trk}`;
+    case 'out_for_delivery': return `Great news — your order is out for delivery today with ${courierName(sh.courier)}.${trk}`;
+    case 'in_transit':       return `Your order is on its way with ${courierName(sh.courier)}.${trk}`;
+    case 'manifested':       return `Your order is packed and ready for pickup by ${courierName(sh.courier)}.${trk}`;
     case 'rto':              return 'This shipment is returning to us. Our support team can help — pick "Chat with an agent".';
     case 'cancelled':        return 'This order shows as cancelled. If that is unexpected, pick "Chat with an agent".';
     default:                 return 'Your order is confirmed and being prepared for dispatch.';
