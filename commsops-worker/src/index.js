@@ -274,6 +274,17 @@ async function handleGet(url, auth, env) {
       const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
       return r.ok ? ok(r.data?.[0] || null) : err('db_error', 500);
     }
+    case 'getRateCard': {              // S327 — the ₹ basis behind every cost/ROI figure
+      // ⚠️ READ-ONLY ON PURPOSE. `channel_rate_card` is effective-dated and multiplies into every
+      // cost and ROI number on /analytics and both overview lists (comms.campaign_stats_list /
+      // journey_stats_list call rate_for()). A wrong rate here does not error — it silently
+      // rescales money across the whole app, retroactively, because a historical send is costed
+      // at the rate in force on its send date. So this exposes the card for INSPECTION (the real
+      // gap: when Meta reprices, nothing on screen shows the numbers went stale) and deliberately
+      // does not offer an edit path. Repricing stays a migration, where it is reviewable.
+      const r = await A.sbComms('/rest/v1/channel_rate_card?select=*&order=channel.asc,category.asc,effective_from.desc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
     case 'getChannelQuietHours': {     // S268 — per-channel marketing quiet windows
       const r = await A.sbComms('/rest/v1/channel_quiet_hours?select=*&order=channel.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);

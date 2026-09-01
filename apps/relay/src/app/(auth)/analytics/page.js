@@ -113,6 +113,7 @@ export default function AnalyticsPage() {
   const [health, setHealth] = useState([]);
   const [camps, setCamps] = useState([]);
   const [journeys, setJourneys] = useState([]);
+  const [rateCard, setRateCard] = useState([]);
   // M15 — a failed RPC must not render as a fake zero. One flag for the whole data
   // domain (overview/health/campaigns/journeys load together); render an explicit
   // "unavailable" state instead of ₹0/empty rows when any of them fails.
@@ -140,7 +141,7 @@ export default function AnalyticsPage() {
     try {
       const [from, to] = istPresetRange(preset);
       const range = { from: from.toISOString(), to: to.toISOString() };
-      const [ov, hl, cs, js] = await Promise.all([
+      const [ov, hl, cs, js, rc] = await Promise.all([
         garageFetch('getSendsOverview', range, session).catch(() => { setStatsError(true); return null; }),
         garageFetch('getDeliverabilityHealth', range, session).catch(() => { setStatsError(true); return null; }),
         getCampaignsShared(session).catch(() => { setStatsError(true); return null; }),
@@ -149,7 +150,11 @@ export default function AnalyticsPage() {
         // cost one request per journey), and it is also the only source carrying `send_purpose`
         // and `by_failure_class` — both of which this page now needs.
         garageFetch('getJourneysOverview', {}, session).catch(() => { setStatsError(true); return null; }),
+        // Context for the Spend tile, NOT a KPI — so a failure here must not set statsError and
+        // blank the page. Absent rates render as "unavailable", never as a silent ₹0 basis.
+        garageFetch('getRateCard', {}, session).catch(() => null),
       ]);
+      setRateCard(Array.isArray(rc) ? rc : []);
       setOverview(Array.isArray(ov) ? ov : []);
       setHealth(Array.isArray(hl) ? hl : []);
       setJourneys(Array.isArray(js) ? js : []);
@@ -268,7 +273,7 @@ export default function AnalyticsPage() {
 
           <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
             <Kpi label={`Spend · ${presetLabel}`} value={totals.spend} tone="gray" format={(v) => inr(v)}
-              sub={totals.spend > 0 ? 'per-conversation cost' : 'no priced sends (email is flat-rate)'} />
+              sub={totals.spend > 0 ? 'per-conversation cost · basis below' : 'no priced sends (email is flat-rate)'} />
             <Kpi label="Attributed revenue" value={revenueTotal} tone="green" format={(v) => inr(v)}
               sub="campaigns + marketing journeys, last-touch" />
             <Kpi label="Transactional (excluded)" value={utilityRevenue} tone="gray" format={(v) => inr(v)}
@@ -278,6 +283,50 @@ export default function AnalyticsPage() {
               format={() => fmtRoi(roi(revenueTotal, marketingSpend))}
               sub={marketingSpend > 0 ? 'marketing revenue ÷ marketing spend' : 'needs priced marketing sends'} />
           </div>
+
+          {/* THE BASIS BEHIND EVERY ₹ ON THIS PAGE. Added S327 because `channel_rate_card` had no
+              surface at all: when Meta reprices (annually at least), the only way to update it is
+              SQL, and until someone does every cost and ROI figure here is quietly wrong rather
+              than visibly stale. Showing `effective from` is the whole point — a date that has not
+              moved in a year is the tell. Read-only by design; repricing stays a reviewable
+              migration, because a wrong rate silently rescales money retroactively (a historical
+              send is costed at the rate in force on its send date). */}
+          <Panel title="Cost basis · rate card" pad>
+            {!rateCard.length ? (
+              <div className="dim" style={{ fontSize: 13 }}>
+                Rate card unavailable — the ₹ figures above could not be checked against their basis.
+              </div>
+            ) : (
+              <>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="tbl" style={{ minWidth: 460 }}>
+                    <thead><tr>
+                      <th>Channel</th><th>Category</th><th className="num">Rate</th><th>Effective from</th>
+                    </tr></thead>
+                    <tbody>
+                      {rateCard.map((r) => (
+                        <tr key={`${r.channel}-${r.category}-${r.effective_from}`}>
+                          <td>{r.channel}</td>
+                          <td>{r.category}</td>
+                          <td className="num mono">{r.currency === 'INR' ? inr(Number(r.rate)) : `${r.rate} ${r.currency}`}</td>
+                          <td className="mono">{r.effective_from}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="dim" style={{ fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
+                  Spend is derived at read time: each send is priced at the rate in force on the day
+                  it went out, so a correction here re-prices history too.
+                  {' '}<strong>A send with no pricing verdict from the provider is left out of Spend,
+                  not counted as zero</strong> — so this figure is a floor, never an over-estimate.
+                  SMS and RCS are excluded on purpose: the vendor reports a credit, not a message
+                  count, and it is recorded but not yet reconciled.
+                  {' '}Updating a rate is a migration, not a screen.
+                </div>
+              </>
+            )}
+          </Panel>
 
           <Panel title={`Sends by day · ${presetLabel}`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: 'var(--green, #34d399)' }}>■</span> delivered</span>} pad>
             <SendsBars data={byDay} />
