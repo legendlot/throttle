@@ -2233,7 +2233,25 @@ async function handlePost(body, auth, env) {
       // carrier matches delivered content against the registration. So the body comes from the
       // vendor, never from whatever the Relay row happened to hold.
       const registered = String(v.content || '');
+      // A registry row with empty content would otherwise BLANK this row's body — the bind
+      // overwrites `body` unconditionally, so an empty vendor copy silently destroys whatever
+      // was authored here. renderSms would then fail closed on `empty_sms_body`, i.e. the row
+      // is wrecked and only discovered at send. Refuse instead. (hostile review 2026-09-01)
+      if (!registered.trim()) return err(`vendor_template_empty:${vendorId}`, 422);
       const slots = SMSTPL.countDltVars(registered);
+      // pr1..pr5 is a hard vendor ceiling (buildSmsParams throws above it), so a 6-slot
+      // registration can never send. Refuse at bind for the same reason an unsendable consent
+      // type is refused: a row that binds cleanly and dies at first send is worse than a no.
+      // 0 such templates exist today (max seen: 4) — this is the legal-but-absent case.
+      if (slots > 5) return err(`vendor_template_too_many_slots:${slots}`, 422);
+      // One vendor registration per Relay row. The adapter sends our rendered `message` ALONGSIDE
+      // the template_id, so two rows on one registration means two different bodies against one
+      // DLT record — and the carrier rejects whichever stops matching. Currently 1:1 across all
+      // 21 bound rows; this keeps it that way rather than discovering the mismatch at send.
+      const dupR = await A.sbComms(
+        `/rest/v1/templates?channel=eq.sms&provider_template_id=eq.${A.enc(vendorId)}&select=id,name&limit=1`, env);
+      const dup = dupR.ok && dupR.data?.[0];
+      if (dup) return err(`vendor_template_already_bound_to:${dup.name || dup.id}`, 409);
       const order = Array.isArray(body.var_order) ? body.var_order.map((x) => String(x || '').trim()) : null;
       let namedBody = registered;
       let needsAuthoring = slots > 0;
@@ -2245,7 +2263,9 @@ async function handlePost(body, auth, env) {
         // vendor (the markers are positional), so the operator supplies them; this only maps them
         // onto the right slots. Replace one marker at a time so index N gets token N.
         let i = 0;
-        namedBody = registered.replace(/\{#\w+#\}/g, () => `{${order[i++]}}`);
+        // R.dltVarRe(), not a local literal — a fourth copy of this pattern is exactly the drift
+        // the shared factory exists to prevent, and this file had one until the hostile review.
+        namedBody = registered.replace(R.dltVarRe(), () => `{${order[i++]}}`);
         needsAuthoring = false;
       }
       // A row left with raw markers CANNOT send: renderSms throws unfilled_dlt_placeholders
