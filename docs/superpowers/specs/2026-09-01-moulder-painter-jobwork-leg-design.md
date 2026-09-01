@@ -113,7 +113,10 @@ screw cohort records.
 
 ### 4.2 `store.direct_issuances` (ALTER — additive only)
 
-- `purpose` gains `'jobwork'`, validated server-side (mirror `gpPurposeValid`'s shape)
+- `purpose` gains `'jobwork'` in **three** places, all of which must move together: Garage's
+  `PURPOSES` picker, the worker's `DI_PURPOSES`, and ⛔ **`direct_issuances_purpose_check` — a real
+  CHECK constraint that DOES exist** (an earlier draft of this spec claimed it did not). It is the
+  only one that enforces; without widening it the first job-work DI fails at insert.
 - `+ vendor_code text` — **required for every new DI**, backfilled for the 8 existing rows
 - `+ challan_no text` — the GST delivery challan
 - `expected_return_at` already exists and finally carries meaning
