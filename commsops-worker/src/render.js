@@ -272,4 +272,76 @@ function renderRcs(template, ctx) {
   };
 }
 
-module.exports = { renderEmail, renderWhatsapp, renderSms, renderRcs, resolveVar, applyTokens, resolveDeclared };
+// ── The RCS→SMS fallback link contract ────────────────────────────────────────────────────
+// The fallback leg is rendered from the SAME ctx as the RCS body, so the per-recipient tracked
+// link minted by send.js `mintLinkVariable` reaches it ONLY through a variable that resolves
+// from the RCS template's `content.link_param`. When it does not, `resolveVar` falls through to
+// that variable's own static `fallback` — which does NOT throw, so the leg ships a hardcoded URL
+// and looks healthy right up to the carrier.
+//
+// Measured 2026-09-01 on the 2026-08-21 HP Crest campaign: the RCS row carried `link_param: ""`,
+// so `mintLinkVariable` returned at its first guard and minted nothing. The fallback's {link}
+// resolved to its static 56-char product URL, and ALL 5,199 fallback sends failed at the carrier
+// — 41.4% `Template variable exceed max legnth`, 19.7% `TEMPLATE_FAILED_ON_DYNAMIC_PART`, 11.6%
+// `URL not whitelisted`. Zero reached a customer, and nothing surfaced it but the receipts.
+//
+// ⚠️ This is the STRUCTURAL half — it checks the wiring, which is all that is knowable at save
+// time. The runtime half lives in send.js and asserts the rendered body actually carries the
+// tracked link (it also catches a mint that failed at runtime, which no static check can see).
+// BOTH call this one function so the two can never drift apart — the same lockstep discipline
+// RULE-GP-001 §5 records for GP_PURPOSES.
+//
+// Returns { ok: true } or { ok: false, error, detail } — never throws, so callers choose whether
+// a violation is a 400 (authoring) or a failed send.
+function checkRcsFallbackLink(rcsTemplate, fbTemplate) {
+  const c = (rcsTemplate && rcsTemplate.content) || {};
+  const linkParam = String(c.link_param || '').trim();
+  const linkBase = String(c.link_target_base || '').trim();
+  const declared = Array.isArray(fbTemplate && fbTemplate.variables) ? fbTemplate.variables : [];
+
+  // A variable can only ship a static URL if it HAS one as its fallback/value. A variable with
+  // neither cannot silently degrade — it either resolves from the event or fails closed as
+  // `unresolved_variables`, which is the behaviour we want and must not flag.
+  const urlVars = declared.filter((v) => v
+    && (URL_RE.test(String(v.fallback ?? '')) || URL_RE.test(String(v.value ?? ''))));
+  if (!urlVars.length) return { ok: true };
+
+  if (!linkParam || !linkBase) {
+    return {
+      ok: false,
+      error: 'rcs_link_param_required',
+      detail: `SMS fallback "${fbTemplate?.name || fbTemplate?.id || '?'}" carries a URL variable `
+        + `(${urlVars.map((v) => v.token).join(', ')}), so the RCS template must set both `
+        + `link_param and link_target_base — otherwise no tracked link is minted and the leg `
+        + `ships the static URL, which the carrier rejects on length and on whitelisting.`,
+    };
+  }
+
+  // Which of those URL variables actually RECEIVE the minted link. mintLinkVariable writes the
+  // url to ctx.constants[link_param] AND ctx.event[link_param], so:
+  //   • event-sourced   → resolves iff (field || token) === link_param
+  //   • constant-sourced→ resolves iff token === link_param AND it has no own `value`, because
+  //     resolveVar reads `v.value ?? ctx.constants[v.token]` and an own value always wins.
+  // Every other source can never see the mint.
+  const receives = (v) => (v.source === 'event' && String(v.field || v.token) === linkParam)
+    || (v.source === 'constant' && String(v.token) === linkParam
+        && (v.value === undefined || v.value === null || v.value === ''));
+
+  const orphans = urlVars.filter((v) => !receives(v));
+  if (orphans.length) {
+    return {
+      ok: false,
+      error: 'fallback_link_var_unwired',
+      detail: `SMS fallback "${fbTemplate?.name || fbTemplate?.id || '?'}" variable(s) `
+        + `${orphans.map((v) => `{${v.token}}`).join(', ')} will never receive the minted link `
+        + `(link_param="${linkParam}"). Name the token — or its event field — exactly `
+        + `"${linkParam}", and clear any static value, so both legs share one tracked link.`,
+    };
+  }
+  return { ok: true };
+}
+
+module.exports = {
+  renderEmail, renderWhatsapp, renderSms, renderRcs, resolveVar, applyTokens, resolveDeclared,
+  checkRcsFallbackLink, URL_RE,
+};

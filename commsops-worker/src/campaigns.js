@@ -7,6 +7,7 @@ const { send } = require('./send.js');
 const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 const AL = require('./alerts.js');   // build-completion park alert (§9.14) — nobody is at a button there
+const R = require('./render.js');    // shared RCS→SMS fallback link contract (also send.js, index.js)
 
 // Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 → 75 on 2026-08-15,
 // alongside SEND_CONCURRENCY 5 → 12 (see the long note at the pool below for why that moved).
@@ -259,6 +260,34 @@ async function startCampaign(env, id, sentBy, opts = {}) {
       if (!t) return { ok: false, error: `variant_${v.label}_template_missing` };
       if (camp.channel === 'whatsapp' && String(t.approval_status || '').toUpperCase() !== 'APPROVED')
         return { ok: false, error: `variant_${v.label}_template_not_approved` };
+    }
+  }
+
+  // ⛔ RCS→SMS fallback link contract — refuse the CAMPAIGN, which is the only layer that can
+  // refuse without collateral. `/rcs/with_fallback` is the vendor's only send path, so RCS and
+  // SMS ride one call: a per-message refusal would take the healthy RCS leg down with the dead
+  // SMS one. Here nothing has been sent yet, so refusing costs nothing and saves the whole run.
+  //
+  // This is the guard that would have stopped 2026-08-21: `HP_crest_rcs_01` shipped with
+  // `link_param: ""`, so no tracked link was minted and the fallback's {link} rendered its own
+  // static 56-char product URL. All 5,199 fallback messages failed at the carrier and not one
+  // reached a customer — while the campaign reported itself `sent`.
+  if (camp.channel === 'rcs') {
+    const rcsIds = [...new Set([camp.template_id, ...variants.map((v) => v.template_id)].filter(Boolean))];
+    const tr = await A.sbComms(
+      `/rest/v1/templates?id=in.(${rcsIds.map(A.enc).join(',')})&select=id,name,channel,content,variables`, env);
+    if (!tr.ok) return { ok: false, error: 'rcs_templates_unreadable' };
+    for (const t of (tr.data || [])) {
+      if (t.channel !== 'rcs') continue;
+      const fbId = t.content && t.content.sms_fallback_template_id;
+      if (!fbId) continue;                       // send.js refuses this one on its own terms
+      const fr = await A.sbComms(
+        `/rest/v1/templates?id=eq.${A.enc(fbId)}&select=id,name,channel,variables&limit=1`, env);
+      if (!fr.ok) return { ok: false, error: 'rcs_fallback_unreadable' };
+      const fb = fr.data && fr.data[0];
+      if (!fb || fb.channel !== 'sms') continue; // likewise send.js's own error
+      const v = R.checkRcsFallbackLink(t, fb);
+      if (!v.ok) return { ok: false, error: `${v.error}:${v.detail}` };
     }
   }
 

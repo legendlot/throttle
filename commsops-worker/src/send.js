@@ -2,7 +2,7 @@
 // Idempotent via dedup_key. On gate-fail writes a skipped/suppressed messages row
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
-const { renderEmail, renderWhatsapp, renderSms, renderRcs } = require('./render.js');
+const { renderEmail, renderWhatsapp, renderSms, renderRcs, checkRcsFallbackLink } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');
 const LINKS = require('./links.js');   // Phase-B /r/<code> minting for redirect-backed buttons
 const { runGate } = require('./gate.js');
@@ -187,12 +187,15 @@ async function unsubscribeUrl(env, profileId, channel) {
 // `value` (resolveVar's constant branch reads v.value FIRST); use a fallback instead.
 // Failure posture: minting is best-effort — a mint failure falls back to whatever the
 // variable resolves to (typically the campaign-slug fallback), never a blocked send.
+// Returns the minted tracked url, or null when nothing was minted (no link_param/target_base,
+// no link base configured, mint failed). The RCS branch needs the value — not just the side
+// effect on ctx — to assert the fallback leg actually carries it. See checkRcsFallbackLink.
 async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults) {
   const c = template.content || {};
-  if (!c.link_param || !c.link_target_base) return;
+  if (!c.link_param || !c.link_target_base) return null;
   try {
     const linkBase = await LINKS.getLinkBaseUrl(env);
-    if (!linkBase) return;
+    if (!linkBase) return null;
     const utm = purpose === 'marketing'
       ? resolveUtm({ channel, tracking: opts.tracking, template, defaults: utmDefaults })
       : null;
@@ -200,7 +203,7 @@ async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmD
       baseUrl: linkBase, target: c.link_target_base, utm,
       messageId: opts._reservedId || null, profileId: opts.profileId || null, channel,
     });
-    if (!code) return;
+    if (!code) return null;
     const url = `${String(linkBase).replace(/\/$/, '')}/r/${code}`;
     ctx.constants = { ...(ctx.constants || {}), [c.link_param]: url };
     // Also under the event map keyed by the param name — an event-sourced variable (on this
@@ -211,10 +214,15 @@ async function mintLinkVariable(env, template, ctx, opts, channel, purpose, utmD
     if (decl && decl.source === 'event' && (decl.field || decl.token) !== c.link_param) {
       ctx.event[decl.field || decl.token] = url;
     }
+    return url;
   } catch (e) {
     // Best-effort by design — the fallback value still renders. Logged because a silent
     // permanent mint failure would quietly downgrade attribution to aggregate-only.
+    // ⚠️ On the RCS path "the fallback value still renders" is NOT benign — that is exactly how
+    // a static product URL reaches a DLT variable. Returning null lets the RCS branch fail the
+    // send closed rather than ship one; email/sms/wa keep the old best-effort behaviour.
     console.log('link_var_mint_failed', String(e?.message || e).slice(0, 140));
+    return null;
   }
 }
 
@@ -434,7 +442,7 @@ async function send(env, opts) {
       // from `checkout_url`, so it carries the campaign's aggregate slug instead. Author
       // future DLT fallback templates with their url token named to match the RCS link_param
       // (constant- or event-sourced) and both legs share one minted code.
-      await mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults);
+      const mintedUrl = await mintLinkVariable(env, template, ctx, opts, channel, purpose, utmDefaults);
       const body = renderRcs(template, ctx);
 
       // The mandatory SMS fallback leg (with_fallback is the ONLY vendor send path) is resolved
@@ -450,6 +458,34 @@ async function send(env, opts) {
       if ((fbTemplate.content?.template_type || '') !== 'explicit')
         throw new Error('fallback_template_not_explicit');
       const fb = renderSms(fbTemplate, ctx);   // throws on unfilled {#var#} / arity — fail closed
+
+      // ⚠️ THE RUNTIME HALF — AND IT DELIBERATELY DOES NOT THROW. READ BEFORE "HARDENING" IT.
+      // An untracked URL on the fallback leg is dead on arrival at the carrier (too long for a
+      // DLT variable, domain not whitelisted): 5,199 of 5,199 failed that way on 2026-08-21.
+      // The instinct is to fail the send closed. That would be WRONG here, because
+      // `/rcs/with_fallback` is the ONLY vendor send path (adapters/rcs.js) — RCS and SMS leave
+      // in ONE call, so refusing the message would also destroy the RCS leg, which works and
+      // delivered 3,916 in that same campaign. Killing a healthy channel to spare a dead one is
+      // a worse trade than the waste it prevents.
+      // So the REFUSAL lives where it costs nothing: campaigns.js startCampaign blocks the whole
+      // send before any message goes out, and index.js saveTemplate blocks the authoring. This
+      // line exists for the paths those two cannot see — a journey step, a test send, a row
+      // edited outside the editor — where a log is the honest maximum.
+      if (fb.has_link) {
+        const trackedPrefix = mintedUrl ? String(mintedUrl).replace(/\/r\/.*$/, '/r/') : null;
+        const urls = String(fb.body).match(/https?:\/\/\S+/gi) || [];
+        const untracked = urls.filter((u) => !trackedPrefix || !u.startsWith(trackedPrefix));
+        if (untracked.length) {
+          const wiring = checkRcsFallbackLink(template, fbTemplate);
+          console.log('rcs_fallback_link_untracked', JSON.stringify({
+            template: template.name || template.id,
+            fallback: fbTemplate.name || fbTemplate.id,
+            cause: mintedUrl ? (wiring.ok ? 'unknown' : wiring.error) : 'mint_failed',
+            url: untracked[0].slice(0, 80),
+          }));
+        }
+      }
+
       const smsSender = await getActiveSender(env, 'sms', 'marketing');
       if (!smsSender) throw new Error('no_sms_fallback_sender');
 

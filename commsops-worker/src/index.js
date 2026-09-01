@@ -33,6 +33,7 @@ const LINKS = require('./links.js');        // Phase-B /r/<code> first-party red
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
 const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
 const QR = require('./queue-route.js');     // queue routing contract — unknown kinds THROW (§9.11)
+const R = require('./render.js');           // shared with send.js — the RCS→SMS fallback link contract
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -1263,6 +1264,26 @@ async function handlePost(body, auth, env) {
       if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
       const { id, channel, name, purpose, language, content, variables, status, utm } = body;
       if (!name) return err('name_required', 400);
+      // The RCS→SMS fallback link contract, enforced at AUTHORING so a broken pairing cannot be
+      // saved at all. send.js runs the SAME predicate at send time — a row edited outside this
+      // handler (SQL, an older client) must still fail closed rather than burn a campaign's
+      // fallback leg. Do not "simplify" by keeping only one of the two: the 2026-08-21 HP Crest
+      // send lost all 5,199 fallback messages to exactly this, and the save path is the only
+      // place an author gets told which variable is wrong while they can still fix it.
+      const validateRcsFallback = async (ch, cont, vars) => {
+        if (ch !== 'rcs') return null;
+        const fbId = cont && cont.sms_fallback_template_id;
+        if (!fbId) return null;
+        const fr = await A.sbComms(
+          `/rest/v1/templates?id=eq.${A.enc(fbId)}&select=id,name,channel,variables&limit=1`, env);
+        const fb = fr.ok ? fr.data?.[0] : null;
+        // A missing or wrong-channel fallback is already send.js's own error and is reachable
+        // while a template is half-authored — do not block the save on it here. This guard owns
+        // the link contract only.
+        if (!fb || fb.channel !== 'sms') return null;
+        const v = R.checkRcsFallbackLink({ content: cont, variables: vars }, fb);
+        return v.ok ? null : v;
+      };
       if (id) {
         const cur = await A.sbComms(
           `/rest/v1/templates?id=eq.${A.enc(id)}`
@@ -1355,6 +1376,8 @@ async function handlePost(body, auth, env) {
           + `&campaigns.status=in.(approved,scheduled,sending)&limit=1`, env);
         if ((boundDirect.ok && boundDirect.data?.[0]) || (boundVariant.ok && boundVariant.data?.[0]))
           return err('template_bound_to_live_campaign', 422);
+        const fbBad = await validateRcsFallback(channel, mergedContent, variables || []);
+        if (fbBad) return err(`${fbBad.error}:${fbBad.detail}`, 422);
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({
             channel, name, purpose, language: language || 'en', content: mergedContent,
@@ -1367,6 +1390,8 @@ async function handlePost(body, auth, env) {
         const archived = await archiveTemplateVersion(env, r.data?.[0], auth.userId);
         return ok({ ...r.data?.[0], archived });
       }
+      const fbBadNew = await validateRcsFallback(channel, content || {}, variables || []);
+      if (fbBadNew) return err(`${fbBadNew.error}:${fbBadNew.detail}`, 422);
       const r = await A.sbComms('/rest/v1/templates', env, {
         method: 'POST', body: JSON.stringify({
           channel: channel || 'email', name, purpose: purpose || 'marketing',
