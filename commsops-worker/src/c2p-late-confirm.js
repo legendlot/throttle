@@ -24,14 +24,23 @@
 // failed COD delivery is still true and is untouched here. This path only ever fires when
 // a customer DID answer. Do not widen it into a cancellation-suppressor.
 //
-// DELIBERATELY NOT DONE HERE: sending the customer a "thanks for confirming" message. That
-// needs the send gate, the 24h window and message logging, and commsops sends are under an
-// explicit go-live gate — so the acknowledgment is a follow-up for the relay lane, tracked
-// in BACKLOG. The tag is the load-bearing half: it is what CS reads before cancelling.
+// ✅ THE ACKNOWLEDGMENT NOW SHIPS (S326, 2026-09-01). The paragraph that stood here said it was
+// "deliberately not done" because "commsops sends are under an explicit go-live gate". ⚠️ THAT
+// GATE HAS BEEN OPEN SINCE S269 — `comms.settings.test_mode = false`, verified 2026-09-01, and
+// journeys/campaigns have been messaging real customers for weeks. The blocker was stale, which
+// is why the customer was still hearing silence a fortnight after the tag half was fixed.
+// Measured 2026-09-01: 136 late confirms all-time, 17 since the S297 tag fix, 16 in the last 14
+// days, most recent that morning — roughly one a day, every one of them answered with nothing.
+//
+// ⭐ THE COPY IS READ FROM THE LIVE JOURNEY, NEVER COPIED HERE. `sendLateConfirmAck` loads the
+// `confirm_msg` step out of the C2P journey's ACTIVE version and sends exactly that. So a late
+// confirm gets byte-identical wording to an in-window one, and editing the journey moves both.
+// A second copy of customer-facing text in a worker file is a divergence with a date on it.
 
 const A = require('./auth.js');
 const SH = require('./shopify.js');
 const AL = require('./alerts.js');
+const { send } = require('./send.js');
 
 // Buttons that mean "keep my COD order". Both C2P send steps route these to `confirm_tag`:
 // `Confirm COD Order` on the initial ask, `no_confirm` on the cancel double-check.
@@ -87,14 +96,80 @@ async function newerAskExists(env, profileId, enrolment) {
 // The order this enrolment was about. The interpreter reads the same shopify_order_id off the
 // pinned trigger event, so resolving it the same way keeps the repair aimed at exactly the
 // order `noresp_tag` wrote to.
-async function orderIdForEnrolment(env, enrolment) {
+async function triggerPropsForEnrolment(env, enrolment) {
   const evId = enrolment?.context?.trigger_event_id;
   if (!evId) return null;
   const r = await A.sbComms(
     `/rest/v1/events?id=eq.${A.enc(evId)}&select=properties&limit=1`, env);
   if (!r.ok) return null;
-  const p = r.data?.[0]?.properties || {};
+  return r.data?.[0]?.properties || {};
+}
+
+async function orderIdForEnrolment(env, enrolment) {
+  const p = await triggerPropsForEnrolment(env, enrolment);
+  if (!p) return null;
   return p.shopify_order_id ?? p.order_id ?? null;
+}
+
+// The acknowledgment. Best-effort by construction, exactly like the repair around it: this runs
+// AFTER the tags are already correct, and the tags are the load-bearing half (they are what CS
+// reads before cancelling). A failure to send must never undo or block a completed repair, so
+// every path here returns a reason and nothing throws.
+//
+// ⚠️ The 24h WhatsApp window is open by construction — this only ever runs because the customer
+// just sent us a button tap, which is an inbound message. It is still not ASSUMED: the send goes
+// through the normal gate, so if the window is somehow shut the message is logged `skipped`
+// rather than shipped blind.
+async function sendLateConfirmAck(env, { profileId, enrolment, journeyId }) {
+  try {
+    // Copy comes from the journey's ACTIVE version, so the late path can never drift from the
+    // in-window one. No step (renamed/removed) → send NOTHING. Inventing wording here is how a
+    // second, unreviewed customer message is born.
+    const jr = await A.sbComms(
+      `/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=active_version&limit=1`, env);
+    const activeVersion = jr.ok ? jr.data?.[0]?.active_version : null;
+    if (!activeVersion) return { ok: true, skipped: 'no_active_version' };
+    const vr = await A.sbComms(
+      `/rest/v1/journey_versions?journey_id=eq.${A.enc(journeyId)}` +
+      `&version=eq.${activeVersion}&select=definition&limit=1`, env);
+    const step = vr.ok ? vr.data?.[0]?.definition?.steps?.confirm_msg : null;
+    const text = step && (step.text || step.body);
+    if (!text) return { ok: true, skipped: 'no_confirm_msg_step' };
+
+    const props = await triggerPropsForEnrolment(env, enrolment);
+    if (!props) return { ok: true, skipped: 'no_trigger_props' };
+
+    const idr = await A.sbComms(
+      `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.phone` +
+      `&select=value&order=last_seen.desc&limit=1`, env);
+    const to = idr.ok ? idr.data?.[0]?.value : null;
+    if (!to) return { ok: true, skipped: 'no_phone_identifier' };
+
+    const res = await send(env, {
+      channel: 'whatsapp',
+      // 'utility' matters twice: quiet hours do not apply to utility (reference/decisions.md),
+      // and the gate lets transactional past everything but a hard suppression. Taken from the
+      // step rather than hardcoded so it tracks the journey if that ever changes.
+      purpose: step.purpose || 'utility',
+      profileId, to,
+      senderId: step.senderId || step.sender_id || undefined,
+      eventContext: props,
+      // Same inline-template shape journey-workflow.js uses for a free-form step: the body lives
+      // on the step, not in the template library.
+      template: { channel: 'whatsapp', name: 'c2p:late_confirm_ack',
+                  content: { text }, variables: step.variables || [] },
+      source: `c2p_late_confirm:${enrolment.id}`,
+      // One ack per enrolment, ever. Meta redelivers webhooks and a customer can tap twice; the
+      // tag-based idempotency above stops the repair repeating, and this stops the SEND repeating
+      // even on a path that somehow reached here twice.
+      dedupKey: `c2p_late_confirm_ack:${enrolment.id}`,
+    });
+    return { ok: true, send_status: res?.status || null, reason: res?.reason || null };
+  } catch (e) {
+    console.log('c2p_late_confirm_ack_failed', JSON.stringify({
+      enrolment_id: enrolment?.id || null, reason: String(e?.message || e).slice(0, 140) }));
+    return { ok: false, error: 'ack_failed' };
+  }
 }
 
 // Best-effort by construction: every failure returns a reason and the webhook carries on.
@@ -165,14 +240,22 @@ async function repairLateConfirm(env, { profileId, buttonId, providerMessageId }
       .catch((e) => { console.log('c2p_late_confirm_tag_failed', JSON.stringify({
         order: order.name, reason: String(e?.message || e).slice(0, 120) })); });
 
+    // ⛔ The ack fires ONLY here, on a genuine repair — never on the after_cancel branch above.
+    // That order is gone; "Order #X is set for Cash on Delivery" would be a false statement to a
+    // customer whose order was cancelled, and they are owed the phone call that branch alerts
+    // for, not a reassuring message. The early `return` up there is what keeps them apart.
+    const ack = await sendLateConfirmAck(env, {
+      profileId, enrolment: en, journeyId: en.journey_id });
+
     console.log('c2p_late_confirm_repaired', JSON.stringify({
       order: order.name, enrolment_id: en.id, button_id: buttonId,
-      ended_at: en.ended_at, provider_message_id: providerMessageId || null }));
-    return { ok: true, outcome: 'repaired', order: order.name };
+      ended_at: en.ended_at, provider_message_id: providerMessageId || null,
+      ack: ack?.send_status || ack?.skipped || ack?.error || null }));
+    return { ok: true, outcome: 'repaired', order: order.name, ack };
   }
 
   return { ok: true, skipped: 'no_matching_order' };
 }
 
-module.exports = { repairLateConfirm, isConfirmButton, CONFIRM_BUTTON_IDS,
+module.exports = { repairLateConfirm, sendLateConfirmAck, isConfirmButton, CONFIRM_BUTTON_IDS,
                    NO_RESPONSE_TAG, CONFIRMED_TAG, REPAIRED_TAG, AFTER_CANCEL_TAG };
