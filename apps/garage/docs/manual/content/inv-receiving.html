@@ -31,8 +31,15 @@
 </div>
 
 <div class="callout note">
-  <div class="c-title">&#9432; Built cars (FBU): linking an outsourced run auto-closes it</div>
-  <p>When the format is <strong>FBU</strong>, the worksheet lists the fully-built cars (per variant and colour) and they book into <strong>normal stock</strong> on GRN, like any other part. If these are cars coming back from a vendor, pick the <strong>outsourced run</strong> they belong to in the link box: the GRN is tagged to that run and the run <strong>auto-completes</strong> once the full planned count is received. Leave the link empty for cars you simply bought ready-built. Either way there is no counting pool and no one-by-one Ext Inwarding scan, built cars come in here in Receiving.</p>
+  <div class="c-title">&#9432; Built cars (FBU): you must say where they came from</div>
+  <p>When the format is <strong>FBU</strong>, the worksheet lists the fully-built cars (per variant and colour) and they book into <strong>normal stock</strong> on GRN, like any other part. There is no counting pool and no one-by-one Ext Inwarding scan &mdash; built cars come in here in Receiving.</p>
+  <p>You now have to answer one question before the shipment can be created: <strong>Job-work return</strong> or <strong>Purchased built units</strong>.</p>
+  <ul>
+    <li><strong>Job-work return</strong> &mdash; we sent this vendor our materials and these are the units built from them. You must then pick the <strong>outsourced run</strong> they came back against. The GRN is tagged to that run and the run <strong>auto-completes</strong> once the full planned count is received. This link is what lets materials-out be reconciled against units-in for <strong>ITC&#8209;04</strong>, so it is not optional.</li>
+    <li><strong>Purchased built units</strong> &mdash; we simply bought them ready-built and sent nothing out. No run to link.</li>
+  </ul>
+  <p>If no outsourced run is open, the screen says so; raise or issue the run first, or record the shipment as purchased units.</p>
+  <p class="note-sm">Why the question is forced: previously the link was optional and defaulted to blank, so &ldquo;bought ready-built&rdquo; and &ldquo;nobody filled it in&rdquo; looked identical in the records &mdash; and no job-work return had ever been linked to its run.</p>
 </div>
 
 <div class="callout note">
