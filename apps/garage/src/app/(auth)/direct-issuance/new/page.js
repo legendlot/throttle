@@ -31,6 +31,7 @@ export default function DirectIssuanceNewPage() {
   });
   const [vendors, setVendors] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [creatingVendor, setCreatingVendor] = useState(false);
 
   // Keyed on userId, NEVER on `session` — onAuthStateChange re-fires on tab switch and a real
   // token refresh lands ~hourly, and re-running this effect would blow away a half-typed form.
@@ -46,6 +47,26 @@ export default function DirectIssuanceNewPage() {
   }, [userId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function setField(k, v) { setF(prev => ({ ...prev, [k]: v })); }
+
+  // Inline vendor create, so an unknown painter can never block a job-work challan. Fires only
+  // from the explicit "+ Add vendor" row — Combobox deliberately does NOT wire this to blur, so
+  // clicking away can never create a record.
+  async function createVendor(name) {
+    const vendor_name = String(name || '').trim();
+    if (!vendor_name || creatingVendor) return;
+    setCreatingVendor(true);
+    try {
+      const r = await workerFetch('createVendorForDI', { data: { vendor_name } }, session);
+      if (!r?.ok) { toast(r?.error || 'Could not add vendor — add it in Snorkel instead', 'error'); return; }
+      const created = { vendor_code: r.data.vendor_code, vendor_name: r.data.vendor_name, category: null };
+      // Add to the local list FIRST so the Combobox can resolve the label it is about to show.
+      setVendors(prev => [...prev, created]);
+      setField('vendor_code', created.vendor_code);
+      toast(`${created.vendor_name} added as ${created.vendor_code}`, 'success');
+    } catch (e) {
+      toast(e.message || 'Could not add vendor', 'error');
+    } finally { setCreatingVendor(false); }
+  }
 
   async function submit() {
     if (!f.purpose) { toast('Purpose required', 'error'); return; }
@@ -104,7 +125,12 @@ export default function DirectIssuanceNewPage() {
                   search: v.category || '',
                 }))}
                 placeholder="Search vendor… (use LOT Office for internal)"
+                createLabel={q => `+ Add vendor “${q}”`}
+                onCreateOption={createVendor}
               />
+              {creatingVendor && (
+                <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>Creating vendor…</div>
+              )}
               <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
                 Internal / office requests go to <strong>LOT Office</strong>.
               </div>

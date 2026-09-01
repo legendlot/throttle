@@ -787,11 +787,60 @@ function err(msg, status = 400) {
     { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
 
+// Vendor creation, extracted S328 so there is exactly ONE minting path. Called by the
+// `postVendor` action (a Snorkel user) AND by the /bridge/vendor hop (lotopsproxy's Direct
+// Issuance form). ⛔ Do NOT reimplement this anywhere: two code paths minting vendor codes is the
+// duplicate-path class that keeps biting this codebase, and this one derives max+1 from LIVE DATA
+// precisely because bulk imports bypass the sequences counter.
+async function createVendorRow(d, createdBy) {
+  if (!d || !d.vendor_name) return { ok: false, error: 'vendor_name required' };
+  const iso    = countryToISO(d.source_country || 'Other');
+  const prefix = `${iso}-VND-`;
+  const maxR = await query('vendors',
+    `?vendor_code=like.${encodeURIComponent(prefix)}*&order=vendor_code.desc&limit=1&select=vendor_code`);
+  if (!maxR.ok) return { ok: false, error: 'Vendor max lookup failed: ' + JSON.stringify(maxR.data) };
+  const lastCode = maxR.data?.[0]?.vendor_code || '';
+  const lastNum  = parseInt(lastCode.slice(prefix.length), 10) || 0;
+  const code     = `${prefix}${String(lastNum + 1).padStart(3, '0')}`;
+  const r = await insert('vendors', {
+    vendor_code: code, vendor_name: d.vendor_name, category: d.category || null,
+    source_country: d.source_country || 'India', country_iso: iso,
+    location: d.location || null, contact_name: d.contact_name || null,
+    contact_phone: d.contact_phone || null, contact_email: d.contact_email || null,
+    address: d.address || null, payment_terms: d.payment_terms || null,
+    currency: d.currency || 'INR', lead_time_days: d.lead_time_days || null,
+    notes: d.notes || null, active: true, created_by: createdBy,
+  });
+  if (!r.ok) return { ok: false, error: 'Vendor insert failed: ' + JSON.stringify(r.data) };
+  return { ok: true, vendor_code: code };
+}
+
 export default {
   async fetch(request, env) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     if (request.method === 'OPTIONS')
       return new Response(null, { headers: CORS });
+
+    // ── Internal bridge: vendor create for lotopsproxy's Direct Issuance form (S328) ──
+    // MUST sit ahead of verifyJWT: this is a worker-to-worker call over a [[services]] binding
+    // and carries NO user JWT. The caller has already gated on the LOTOPS permission layer
+    // (direct_issuance_request via store.roles), which this worker cannot see — the two systems
+    // run different permission layers by design (CORE.md).
+    // ⛔ Scope-limited to ONE action on purpose. Do not grow this into a general proxy.
+    {
+      const bridgeUrl = new URL(request.url);
+      if (bridgeUrl.pathname === '/bridge/vendor' && request.method === 'POST') {
+        const tok = env.SNORKELOPS_BRIDGE_TOKEN || '';
+        const got = request.headers.get('x-bridge-token') || '';
+        // Fail CLOSED when the secret is unset — an absent token must never mean "allow".
+        if (!tok || got !== tok) return err('Unauthorised', 401);
+        let bd = {};
+        try { bd = await request.json(); } catch { return err('Bad JSON'); }
+        const out = await createVendorRow(bd.data || bd, bd.created_by || 'lotops-di-bridge');
+        if (!out.ok) return err(out.error);
+        return ok({ vendor_code: out.vendor_code });
+      }
+    }
 
     const url    = new URL(request.url);
     const action = url.searchParams.get('action');
@@ -1862,30 +1911,9 @@ export default {
 
           case 'postVendor': {
             if (!canManageVendors(P)) return err('No permission to add vendors', 403);
-            const d = body.data;
-            if (!d.vendor_name) return err('vendor_name required');
-            const iso  = countryToISO(d.source_country||'Other');
-            // Derive next number from actual data (bulk imports bypass the
-            // sequences counter), partitioned by country prefix.
-            const prefix = `${iso}-VND-`;
-            const maxR = await query('vendors',
-              `?vendor_code=like.${encodeURIComponent(prefix)}*&order=vendor_code.desc&limit=1&select=vendor_code`);
-            if (!maxR.ok) return err('Vendor max lookup failed: '+JSON.stringify(maxR.data));
-            const lastCode = maxR.data?.[0]?.vendor_code || '';
-            const lastNum  = parseInt(lastCode.slice(prefix.length), 10) || 0;
-            const seq      = lastNum + 1;
-            const code = `${prefix}${String(seq).padStart(3,'0')}`;
-            const r = await insert('vendors', {
-              vendor_code: code, vendor_name: d.vendor_name, category: d.category||null,
-              source_country: d.source_country||'India', country_iso: iso,
-              location: d.location||null, contact_name: d.contact_name||null,
-              contact_phone: d.contact_phone||null, contact_email: d.contact_email||null,
-              address: d.address||null, payment_terms: d.payment_terms||null,
-              currency: d.currency||'INR', lead_time_days: d.lead_time_days||null,
-              notes: d.notes||null, active: true, created_by: postRole,
-            });
-            if (!r.ok) return err('Vendor insert failed: '+JSON.stringify(r.data));
-            return ok({ vendor_code: code });
+            const out = await createVendorRow(body.data, postRole);
+            if (!out.ok) return err(out.error);
+            return ok({ vendor_code: out.vendor_code });
           }
 
           case 'updateVendor': {
