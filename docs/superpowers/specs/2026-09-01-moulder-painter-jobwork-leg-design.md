@@ -63,7 +63,7 @@ return leg is a discrete action someone must perform will read exactly like thes
 | 4 | **Vehicle = Direct Issuance** (approach A) | The return side needs no new object and no new habit: the store already GRNs painted tops today. |
 | 5 | **Vendor is mandatory and structured — never free text** | Combobox with server search + inline create. `destination` free text is retired from this path. |
 | 6 | **Office becomes a vendor**, `IN-VND-135` | So that every DI has a real vendor, office requests included. |
-| 7 | **Rejects use `grn_register.damaged_qty`** — the field the floor ALREADY fills in | ⚠️ **CORRECTED 2026-09-01, after the decision was taken and before any code.** The decision as approved was `qty_rejected`. Measured against the source: `qty_rejected` is **hardcoded `0`** in the receiving GRN insert (`worker.js:20452`) and is `>0` on **0 of 7,025 rows**, while `damaged_qty` is a live per-line input on the Garage receiving screen and carries **13 GRNs / 582 units**, last used 2026-08-04. Activating the dead column would have been this design's own anti-pattern — building on a mechanism nobody uses. **No new field, no new habit: the floor already types this number.** |
+| 7 | **Rejects use `grn_register.damaged_qty`** — the field the floor ALREADY fills in | ⚠️ **CORRECTED 2026-09-01, after the decision was taken and before any code.** The decision as approved was `qty_rejected`. Measured against the source: `qty_rejected` is **hardcoded `0`** in the receiving GRN insert (`worker.js:20452`) and is `>0` on **0 of 7,025 rows**, while `damaged_qty` carries **13 GRNs / 582 units**, last used 2026-08-04. ⚠️ **REFINED by hostile review:** damage is not a column the receiver types per line — it is an **event**, `store.receiving_entries.condition='damaged'`, aggregated into `grn_register.damaged_qty` by the `createGRN` path (worker.js ~14610). `store.receiving_lines` has **no damaged column at all**, so the shipment→GRN path must read the entries table. See the plan's Task 7. Activating the dead column would have been this design's own anti-pattern — building on a mechanism nobody uses. **No new field and no new screen — but see the plan's Task 7 for the honest limit: the shipment→GRN path has never carried damage, so the capture exists while its use on a painter return is unproven.** |
 | 8 | **A rejected top is credited back to the UNPAINTED code** | Makes rework an ordinary second challan rather than a special path. |
 | 9 | **The challan raiser gets vendor-create rights** | An unknown painter must never block a challan. |
 
@@ -215,8 +215,11 @@ normal receive, and a naive implementation will silently credit rejects to the p
 inverts the whole balance. Write it as an explicit two-part movement with its own test
 (§7, "a rework cycle").
 
-✅ **This half now needs NO behaviour change from the floor** — `damaged_qty` is an existing input
-they already use. What changes is only what the worker does with it when `source='jobwork'`.
+✅ **This half needs no NEW field** — damage capture already exists and the floor has used it.
+⚠️ **But be precise about what that buys:** the 582 recorded units came through `createGRN`, and the
+shipment→GRN path this design changes has **never** carried damage. So the mechanism exists and the
+habit exists; whether the floor uses it *on a painter return specifically* is still unproven. Treat a
+first job-work return with `damaged_qty = 0` as unverified, not as zero paint loss.
 
 ---
 
@@ -288,7 +291,7 @@ Order matters; each step is safe on its own.
    would block the desk. (Same ordering trap as the S327 `fbu_kind` deploy.)
 5. **Set the cutover date** and announce it.
 6. **Repoint `mould_parts`** at the unpainted codes. ⚠️ Do this **deliberately and last** — it feeds
-   `seedReceivingLinesFromPO`, so it changes what a mould PO explodes into.
+   `seedReceivingLinesFromPO` (worker.js **1405**), so it changes what a mould PO explodes into.
 7. **Procurement change**: moulder POs move to unpainted codes; painter POs become **service** POs for
    the painting charge, not goods POs on painted codes.
 

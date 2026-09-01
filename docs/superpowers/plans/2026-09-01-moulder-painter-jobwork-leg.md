@@ -583,25 +583,50 @@ Verify: the vendor field is a searchable box, typing `VITBOJ` narrows it, the dr
 
 - [ ] **Step 1: On approve of a `jobwork` DI, mint the challan number and raise the gate pass**
 
+⛔ **Call the existing `createGatePass` handler's logic — do NOT raw-insert into `gate_passes`.**
+A raw insert misses `gate_pass_no` (minted by `nextSeq('gate_pass','GP-')`), skips the direction and
+purpose validation, and skips the `vehicle_no || person_name` requirement — producing a malformed row
+or a failed insert.
+
 In `approveDI`, after the status flip to `approved`:
 
 ```js
 if (di.purpose === 'jobwork') {
   const challanNo = await nextSeq('jobwork_challan', 'JWC-');
   await update('direct_issuances', { challan_no: challanNo }, `id=eq.${di.id}`);
-  // Material physically leaving the premises is a gate pass (RULE-GP-001), and this is the
-  // same event as the BACKLOG's "gate-pass send-out on outsourced" item — raised here rather
-  // than left as a second thing to remember.
-  await insert('gate_passes', [{
-    direction: 'outward', purpose: 'jobwork',
-    party_name: di.vendor_code, reference_no: challanNo,
-    is_returnable: true, expected_return_date: di.expected_return_at || null,
-    notes: `Job-work challan for ${di.issue_no}`, created_by: authResult.userId,
+  // Material leaving the premises is a gate pass (RULE-GP-001), and this is the same event as
+  // the BACKLOG's "gate-pass send-out on outsourced" item.
+  const gatePassNo = await nextSeq('gate_pass', 'GP-');
+  const gpIns = await insert('gate_passes', [{
+    gate_pass_no:         gatePassNo,
+    direction:            'outbound',      // ⚠️ enum is inbound|outbound — NOT 'outward'
+    purpose:              'jobwork_out',   // ⚠️ the EXISTING GP_PURPOSES.outbound value
+    gate_datetime:        new Date().toISOString(),
+    party_name:           di.vendor_code,
+    person_name:          di.destination_contact || 'Job-work despatch',  // satisfies the
+                                            // vehicle_no || person_name requirement
+    reference_no:         challanNo,
+    is_returnable:        true,
+    expected_return_date: di.expected_return_at || null,
+    material_description: `Job-work challan for ${di.issue_no}`,
+    status:               'active',
+    created_by:           authResult.userId,
   }]);
+  // Best-effort: a failed gate pass must not block the approval — the challan is the record
+  // that matters and the pass can be raised by hand.
+  if (!gpIns.ok) console.log('gate pass raise failed for', di.issue_no, JSON.stringify(gpIns.data));
 }
 ```
 
-⚠️ **Verify `gate_passes` column names against `reference/db-schema.md` before writing this** — `party_name`, `reference_no` and `expected_return_date` are assumed here and the gate-pass table has its own vocabulary. Also confirm `'jobwork'` is valid for `direction='outward'` in `GP_PURPOSES`; if not, add it there in the same commit.
+⭐ **`jobwork_out` and `outbound` ALREADY EXIST in `GP_PURPOSES` (worker.js ~164) — do NOT add a
+`'jobwork'` purpose.** An earlier draft of this plan told you to add one if missing; that would have
+created a second vocabulary for the same concept. Verify before writing:
+
+Run: `grep -n "GP_PURPOSES" -A4 01_worker/worker.js | head -8`
+Expected: `outbound: ['vendor_return', 'jobwork_out', 'sample_out', 'scrap', 'inter_unit_transfer', 'other']`
+
+⚠️ **Confirm `status` is a legal value** — read an existing row before assuming `'active'`:
+`SELECT DISTINCT status FROM store.gate_passes;`
 
 - [ ] **Step 2: Add the sequence row**
 
@@ -621,7 +646,8 @@ LEFT JOIN store.gate_passes g ON g.reference_no = d.challan_no
 WHERE d.purpose='jobwork' ORDER BY d.id DESC LIMIT 1;
 ```
 
-Expected: one row, `challan_no` like `JWC-001`, gate pass present, `is_returnable=true`, `direction='outward'`.
+Expected: one row, `challan_no` like `JWC-001`, gate pass present, `is_returnable=true`,
+`direction='outbound'`, `purpose='jobwork_out'`, and a non-null `gate_pass_no`.
 
 - [ ] **Step 4: Confirm the send debits unpainted stock — no code change expected**
 
@@ -644,6 +670,20 @@ cd 01_worker && git add worker.js && git commit -m "S328 [lotops]: job-work appr
 ## Task 7: The job-work GRN credits damage back to the unpainted code
 
 **This is the riskiest task in the plan.** A naive implementation credits damage to the *painted* code and silently inverts the balance while looking correct on screen.
+
+⛔ **CORRECTED BY HOSTILE REVIEW — the first draft of this task was WRONG IN A WAY THAT WOULD HAVE
+SHIPPED SILENTLY.** It read `l.damaged_qty` off `partsLines`, which are `store.receiving_lines` rows —
+and `receiving_lines` has **no damaged column at all** (`qty_expected`, `qty_counted`, `qty_grn`).
+The value would have been `undefined → 0` on every line, so **the entire reject/rework half of this
+design would have done nothing, forever**, while the unit tests passed (they exercise the pure
+function, which was correct) and the feature looked built.
+
+⭐ **Damage at receiving is an EVENT, not a column: `store.receiving_entries` rows carry
+`condition='damaged'`** (`line_id`, `shipment_id`, `mark_id`, `qty`, `condition`), and that is what
+the read surfaces aggregate at `worker.js:16101–16140`. **This is the live mechanism the floor has
+actually used** — the 582 units across 13 GRNs reached `grn_register.damaged_qty` through
+`createGRN` (worker.js ~14610), a *different* path from the shipment→GRN one this task changes.
+**Join `receiving_entries → receiving_lines` on `line_id` to get the part.**
 
 **Files:**
 - Modify: `01_worker/worker.js` — the shipment GRN path around line 20444–20460.
@@ -724,32 +764,56 @@ At worker.js ~20452, the GRN rows currently hardcode `qty_rejected: 0` and build
 ```js
 // Job-work returns credit damaged material back to the INPUT (unpainted) code — on job-work
 // the goods are still LOT's own, so rework is an ordinary second challan rather than a third
-// part state. `source` is already set above ('jobwork' when the shipment links an EXT run).
+// part state. `source` is already set below ('jobwork' when the shipment links an EXT run).
+const grnSource = linkedExt ? 'jobwork' : (isFbuShip ? 'fbu_purchase' : null);
+const isJobwork = grnSource === 'jobwork' || ship.fbu_kind === 'jobwork';
+
+// Damage is an EVENT (condition='damaged'), NOT a column on receiving_lines. One query for the
+// whole shipment — never loop awaits per row.
+const damagedByPart = {};
+if (isJobwork) {
+  const enR = await query('receiving_entries',
+    `?shipment_id=eq.${encodeURIComponent(shipment_id)}&condition=eq.damaged&select=line_id,qty`);
+  if (enR.ok) {
+    const partByLine = {};
+    partsLines.forEach(l => { if (l.line_id) partByLine[l.line_id] = l.part_code; });
+    for (const e of (enR.data || [])) {
+      const pc = partByLine[e.line_id];
+      if (pc) damagedByPart[pc] = (damagedByPart[pc] || 0) + (Number(e.qty) || 0);
+    }
+  }
+}
+
 let pairs = [];
-if (linkedExt || ship.fbu_kind === 'jobwork') {
+if (isJobwork && partsLines.length) {
   const painted = partsLines.map(l => `"${l.part_code}"`).join(',');
   const pr = await query('part_finish_pairs',
     `?painted_part_code=in.(${painted})&is_active=eq.true&select=unpainted_part_code,painted_part_code,is_active`);
   if (pr.ok) pairs = pr.data || [];
 }
-const grnSource = linkedExt ? 'jobwork' : (isFbuShip ? 'fbu_purchase' : null);
+
 const stockUpdates = aggregateCredits(
   partsLines.flatMap(l => splitJobworkGrnCredits({
     source:      grnSource,
     partCode:    l.part_code,
     qtyReceived: grnDelta(l),
-    damagedQty:  l.damaged_qty || 0,
+    damagedQty:  damagedByPart[l.part_code] || 0,
     pair:        resolveFinishPair(pairs, l.part_code),
   })));
 if (stockUpdates.length > 0) await rpc('bulk_update_stock_received', { p_updates: stockUpdates });
 ```
 
-And stop hardcoding the damaged figure away in the GRN row:
+And record the damaged figure on the GRN row instead of dropping it:
 
 ```js
 qty_ordered: l.qty_expected||0, qty_received: grnDelta(l), qty_rejected: 0,
-damaged_qty: Math.round(Number(l.damaged_qty) || 0),
+damaged_qty: Math.round(Number(damagedByPart[l.part_code]) || 0),
 ```
+
+⚠️ **Verify `partsLines` actually carries `line_id`** before relying on it as the join key —
+`receiving_lines.line_id` is the zero-padded `RCV-NNNN` text id. If the select that builds
+`partsLines` omits it, add it there; do not fall back to matching on `part_code`, which is
+ambiguous when a shipment has two lines for the same part.
 
 ⚠️ **`qty_rejected` stays 0 deliberately.** It is dead across all 7,025 rows; `damaged_qty` is the live field the floor already fills in. Do not switch to it.
 
@@ -802,16 +866,23 @@ if (grnSource === 'jobwork' && stockUpdates.length > 0) {
   for (const line of partsLines) {
     const pair = resolveFinishPair(pairs, line.part_code);
     if (!pair) continue;
+    // ⛔ `shipments` has NO vendor_code — only `supplier` (free text). Resolve it to a code
+    // first; an undefined filter value becomes `vendor_code=eq.undefined`, which matches
+    // nothing and would make this link silently never write.
+    const vR = await query('vendors',
+      `?vendor_name=eq.${encodeURIComponent(ship.supplier || '')}&select=vendor_code&limit=1`);
+    const vendorCode = vR.ok ? vR.data?.[0]?.vendor_code : null;
+    if (!vendorCode) continue;                     // unknown supplier — receipt still stands
     const openR = await query('direct_issuances',
       `?purpose=eq.jobwork&status=eq.issued&returned_at=is.null` +
-      `&vendor_code=eq.${encodeURIComponent(ship.vendor_code || '')}` +
+      `&vendor_code=eq.${encodeURIComponent(vendorCode)}` +
       `&order=issued_at.asc&limit=1&select=id`);
     if (!openR.ok || !openR.data?.[0]) continue;   // no open challan — receipt still stands
     await insert('direct_issuance_returns', [{
       issuance_id: openR.data[0].id,
       part_code:   line.part_code,
       qty:         Math.round(Number(grnDelta(line)) || 0),
-      scrap_qty:   Math.round(Number(line.damaged_qty) || 0),
+      scrap_qty:   Math.round(Number(damagedByPart[line.part_code]) || 0),
       grn_no:      grnNo,
       note:        `Auto-linked from ${shipment_id}`,
     }]);
@@ -872,27 +943,48 @@ back AS (
          SUM(g.qty_received)::int AS returned,
          SUM(g.damaged_qty)::int  AS damaged
   FROM store.grn_register g
-  JOIN store.vendors v ON v.vendor_name = g.supplier
+  JOIN store.vendors v ON v.vendor_name = g.supplier   -- Line Flush never resolves: correct
   WHERE g.grn_date >= (SELECT d FROM cutover)
+    AND g.source = 'jobwork'                           -- purchases must not net off a challan
   GROUP BY 1,2
+),
+-- The grain is (vendor × pair), built from the UNION of both sides. A LEFT JOIN from sent
+-- would hide a vendor who returned goods we never sent — which is precisely the anomaly
+-- worth seeing — and when nothing was sent it would match every vendor at once.
+keys AS (
+  SELECT p.unpainted_part_code, p.painted_part_code, s.vendor_code
+    FROM store.part_finish_pairs p
+    JOIN sent s ON s.unpainted_part_code = p.unpainted_part_code
+   WHERE p.is_active
+  UNION
+  SELECT p.unpainted_part_code, p.painted_part_code, b.vendor_code
+    FROM store.part_finish_pairs p
+    JOIN back b ON b.painted_part_code = p.painted_part_code
+   WHERE p.is_active
 )
-SELECT p.unpainted_part_code, p.painted_part_code,
-       COALESCE(s.vendor_code, b.vendor_code)      AS vendor_code,
-       COALESCE(s.sent, 0)                          AS sent,
-       COALESCE(b.returned, 0)                      AS returned,
-       COALESCE(b.damaged, 0)                       AS damaged,
+SELECT k.vendor_code, k.unpainted_part_code, k.painted_part_code,
+       COALESCE(s.sent, 0)     AS sent,
+       COALESCE(b.returned, 0) AS returned,
+       COALESCE(b.damaged, 0)  AS damaged,
        COALESCE(s.sent,0) - COALESCE(b.returned,0) - COALESCE(b.damaged,0) AS remainder
-FROM store.part_finish_pairs p
-LEFT JOIN sent s ON s.unpainted_part_code = p.unpainted_part_code
-LEFT JOIN back b ON b.painted_part_code   = p.painted_part_code
-                AND (s.vendor_code IS NULL OR b.vendor_code = s.vendor_code)
-WHERE p.is_active;
+FROM keys k
+LEFT JOIN sent s ON s.vendor_code = k.vendor_code
+                AND s.unpainted_part_code = k.unpainted_part_code
+LEFT JOIN back b ON b.vendor_code = k.vendor_code
+                AND b.painted_part_code = k.painted_part_code;
 
 GRANT SELECT ON store.jobwork_balance TO service_role;
 NOTIFY pgrst, 'reload schema';
 ```
 
 ⚠️ **`remainder` is ONE column, deliberately.** While a challan is open it means *goods still at the vendor*; once closed it means *paint loss*. Same arithmetic, different reading. **Do not add a second column computing the same expression** — that invites one being read as an independent measurement.
+
+⚠️ **A NEGATIVE `remainder` is a real signal, not a bug — do not clamp it.** It means a vendor
+returned more than we sent them since cutover, which is either a pre-cutover challan closing or a
+misattributed receipt. Surfacing it is the point; hiding it was the first draft's defect.
+
+⚠️ **`back` is filtered to `source='jobwork'`.** Without it an ordinary purchase from the same
+vendor nets off a live challan and the balance under-reports what is still out.
 
 ⚠️ **`grn_register.supplier` is free text**, so the join to `vendors.vendor_name` is a string match. Verify it resolves for all three painters before trusting the view:
 
@@ -916,12 +1008,19 @@ Expected on day one, before any job-work DI exists: every row reads `sent=0`, `r
 
 ```js
 if (action === 'getJobworkBalance') {
-  if (!canViewProd(P)) return err('No permission', 403);
+  // ⛔ NOT canViewProd — `production_view` is null on every role except `procurement`
+  // (CORE.md permission model), and the audience for the at-painter balance is the STORE.
+  // Using it would silently lock out store_head / production_manager / admin.
+  if (!canRequestDirectIssuance(P) && !canViewProd(P)) return err('No permission', 403);
   const r = await query('jobwork_balance', '?order=remainder.desc&limit=2000');
   if (!r.ok) return err('Balance read failed: ' + JSON.stringify(r.data));
   return ok(r.data);
 }
 ```
+
+⚠️ **Verify the predicate against live roles before shipping it** — a predicate named after its
+handler is not proof (CORE.md): `SELECT role_id, permissions->>'direct_issuance_request' FROM store.roles;`
+At least one role that SHOULD see this must actually pass.
 
 ⚠️ **`limit=2000`, not the default.** PostgREST caps every response at `db-max-rows` (5,000) regardless, and a low explicit cap is the "silent truncation that reads as a successful answer" class this workspace keeps recording.
 
@@ -1045,6 +1144,6 @@ Same sha-anchored wait and forced reload as Task 5 Step 4–5.
 - [ ] Run `/hostile-review` over this session's own diff and DB writes.
 - [ ] ⏳ Chase Piyush for the Flare painted counterparts (spec §10 Q1) and add the pairs.
 - [ ] ⏳ Raise `category='Internal'` picker filtering with the Snorkel lane (spec §10 Q4).
-- [ ] ⚠️ **Repoint `store.mould_parts` at the unpainted codes** (spec §8 step 6). ⛔ **Deliberately LAST and never a side effect** — it feeds `seedReceivingLinesFromPO` (worker.js ~929), so it changes what a mould PO explodes into at receiving. Verify against a real mould PO before and after.
+- [ ] ⚠️ **Repoint `store.mould_parts` at the unpainted codes** (spec §8 step 6). ⛔ **Deliberately LAST and never a side effect** — it feeds `seedReceivingLinesFromPO` (worker.js **1405**; `computeReceivingRowsFromPO` is **1150**), so it changes what a mould PO explodes into at receiving. Verify against a real mould PO before and after.
 - [ ] ⏳ **Procurement change (spec §8 step 7), not a code task:** moulder POs move to unpainted codes, and painter POs become **service** POs for the painting charge rather than goods POs on painted codes. Without this the store has no unpainted PO to receive against, so **the loop cannot actually start** — raise it with Piyush/procurement as the real go-live gate.
 - [ ] ⚠️ **Tell the floor.** Inwarding the moulder's unpainted delivery is a visible change to the store's day — a `#bugs` note tagged to the station owner, same session.
