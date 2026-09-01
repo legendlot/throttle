@@ -340,7 +340,13 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   // mail to a roster that never asked, which is the exact deliverability risk this budget was
   // added to ramp. Sharing one counter is correct: sender reputation is shared.
   if (isMarketing || isOutreach) {
-    const b = await A.sbComms('/rest/v1/rpc/consume_send_budget', env, { method: 'POST', body: '{}' });
+    // ⚠️ The channel is passed so a per-channel cap can apply ON TOP of the global one — see
+    // comms.channel_send_budgets (S327). The global check itself is unchanged. A channel with no
+    // row there is uncapped, and its usage is still recorded, because you cannot size a cap
+    // without first seeing the split. The driver is the cold-email warm-up ramp: one global
+    // number cannot express "email max 500/day while WhatsApp runs at 13k".
+    const b = await A.sbComms('/rest/v1/rpc/consume_send_budget', env,
+      { method: 'POST', body: JSON.stringify({ p_channel: channel || null }) });
     if (!b.ok) return { pass: false, reason: 'gate_error:budget' };      // don't misdiagnose a 500 as "cap hit"
     if (b.data !== true) return { pass: false, reason: 'budget_exhausted' };
   }
