@@ -1,0 +1,31 @@
+<p class="lead">Odo is the one place where every LOT sale is counted, whatever channel it came from. It pulls Website, Amazon, Flipkart, quick-commerce, General and Modern Trade and the long-tail channels into a single set of numbers, so a question like "what did we sell last month?" has one answer instead of nine.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Consolidated sales across every channel.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly read. A few screens keep the feeds healthy.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role ch">Channels</span> <span class="role ops">Sales Ops</span> <span class="role sa">Super Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Hourly, with Website every 5 minutes.</div></div>
+</div>
+
+<h2 class="sec">Why this manual leads with definitions</h2>
+<p>Most disagreements about an Odo number are not errors. They are two people using the same word to mean different things.</p>
+<p>The clearest example, and the reason this manual exists: when the Channels team says <strong>gross</strong>, they usually mean revenue with returns, refunds and taxes already taken out. When Odo says <strong>gross</strong>, it means the opposite end of the ladder: the full order value before discounts, with tax still inside it. Both are reasonable. Neither is wrong. But if one person quotes Odo's gross into a conversation built on the other definition, the two figures will differ by a wide margin and everybody will start hunting for a bug that is not there.</p>
+<p>So the second part of this manual, <em>The Definitions</em>, is the part to read first. Every other chapter assumes you have.</p>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>If a number in Odo disagrees with a number in a channel's own portal, check the definition before checking the feed. In practice that is where the difference usually lives.</p></div>
+
+<h2 class="sec">What Odo is not</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Not an order manager</div><div class="a-val"><p>You cannot pick, pack, cancel or refund anything here. Odo reads what other systems did. Dispatch happens in Depot, procurement in Snorkel, customer conversations in Pitstop.</p></div></div>
+  <div class="a-row"><div class="a-key">Not the invoice</div><div class="a-val"><p>Odo is a management view. The GST invoice and the filed return are produced elsewhere and are the authority for tax.</p></div></div>
+  <div class="a-row"><div class="a-key">Not real time, except where it says so</div><div class="a-val"><p>Almost everything refreshes hourly. Only the <strong>Live</strong> screen and Website stock are faster. A figure for the last hour is normal to see move.</p></div></div>
+</div>
+
+<h2 class="sec">Where the numbers come from</h2>
+<p>Each channel has a <strong>connector</strong> that fetches its sales on a schedule and stages them. A shared calculation then turns those staged rows into the facts every screen reads. Two things follow from that design and are worth knowing early:</p>
+<ul>
+  <li><strong>Re-pulling the same period is safe.</strong> The calculation replaces a day rather than adding to it, so a feed that runs twice does not double a number.</li>
+  <li><strong>A correction lands on the original date.</strong> If an order placed on the 3rd is cancelled on the 9th, the 3rd changes. Yesterday's report can legitimately look different today.</li>
+</ul>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Because corrections back-date, a figure you screenshotted last week may not match the same figure today, and both can be correct. When you publish a number, publish the date you pulled it.</p></div>

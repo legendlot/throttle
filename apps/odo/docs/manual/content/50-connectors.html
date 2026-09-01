@@ -1,0 +1,21 @@
+<p class="lead">Every feed into Odo, its health, and the buttons to re-run it. This is the first screen to open when a number looks wrong.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Feed health and manual re-runs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role ops">Sales Ops</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Schedule</div><div class="g-val">Hourly, automatically.</div></div>
+</div>
+
+<h2 class="sec">What OK actually means</h2>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>A green tick means "we checked this feed and the run succeeded". It does not mean data arrived.</strong> A channel that genuinely sold nothing shows green, correctly. So green plus a suspiciously flat chart is not a contradiction, and it is not proof the feed is fine either. Check the row count and the last sale date, not just the tick.</p></div>
+
+<h2 class="sec">The buttons</h2>
+<ol class="steps">
+  <li><span class="s-title">Refresh.</span> Runs the feed now from where it left off. Safe to press: re-running a period cannot double-count.</li>
+  <li><span class="s-title">Backfill.</span> Re-walks a longer history. Slower, for when a period needs rebuilding.</li>
+  <li><span class="s-title">Disable.</span> Stops the feed running on schedule. Use sparingly, and remember it will then go stale silently.</li>
+</ol>
+
+<h2 class="sec">Unmapped counts</h2>
+<p>Each connector shows how many product codes it has seen that Odo cannot identify. A rising count means revenue is being held out of the totals, so it is worth clearing. See <em>Mapping</em>.</p>

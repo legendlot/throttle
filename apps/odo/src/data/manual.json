@@ -1,0 +1,332 @@
+{
+"title":"Odo",
+"title_accent":"Operations Manual",
+"subtitle":"What every number on the dashboard means, how it is calculated, and where it comes from.",
+"version":"1.0.0",
+"date":"2026-09-01",
+"app_url":"odo.legendoftoys.com",
+"owner":"Legend of Toys",
+"pdf":"/manual/Odo-Operations-Manual.pdf",
+"roles":{
+"ch":{
+"label":"Channels",
+"name":"Channels Team",
+"desc":"Reads the numbers and reports them onward. Needs the definitions above all."
+},
+"ops":{
+"label":"Sales Ops",
+"name":"Sales Ops",
+"desc":"Keeps the feeds healthy: mapping, uploads, connectors."
+},
+"adm":{
+"label":"Admin",
+"name":"Admin",
+"desc":"Manages access and channel configuration."
+},
+"sa":{
+"label":"Super Admin",
+"name":"Super Admin",
+"desc":"The only role that can open P&L. Sees cost, margin and SG&A."
+}
+},
+"parts":[
+{
+"part":"Getting Started",
+"subtitle":"What Odo is, how to get around, and what your role can open.",
+"chapters":[
+{
+"id":"intro",
+"title":"Welcome to Odo",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Odo is the one place where every LOT sale is counted, whatever channel it came from. It pulls Website, Amazon, Flipkart, quick-commerce, General and Modern Trade and the long-tail channels into a single set of numbers, so a question like \"what did we sell last month?\" has one answer instead of nine.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Consolidated sales across every channel.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Mostly read. A few screens keep the feeds healthy.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span> <span class=\"role ops\">Sales Ops</span> <span class=\"role sa\">Super Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Hourly, with Website every 5 minutes.</div></div>\n</div>\n\n<h2 class=\"sec\">Why this manual leads with definitions</h2>\n<p>Most disagreements about an Odo number are not errors. They are two people using the same word to mean different things.</p>\n<p>The clearest example, and the reason this manual exists: when the Channels team says <strong>gross</strong>, they usually mean revenue with returns, refunds and taxes already taken out. When Odo says <strong>gross</strong>, it means the opposite end of the ladder: the full order value before discounts, with tax still inside it. Both are reasonable. Neither is wrong. But if one person quotes Odo's gross into a conversation built on the other definition, the two figures will differ by a wide margin and everybody will start hunting for a bug that is not there.</p>\n<p>So the second part of this manual, <em>The Definitions</em>, is the part to read first. Every other chapter assumes you have.</p>\n\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>If a number in Odo disagrees with a number in a channel's own portal, check the definition before checking the feed. In practice that is where the difference usually lives.</p></div>\n\n<h2 class=\"sec\">What Odo is not</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">Not an order manager</div><div class=\"a-val\"><p>You cannot pick, pack, cancel or refund anything here. Odo reads what other systems did. Dispatch happens in Depot, procurement in Snorkel, customer conversations in Pitstop.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Not the invoice</div><div class=\"a-val\"><p>Odo is a management view. The GST invoice and the filed return are produced elsewhere and are the authority for tax.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Not real time, except where it says so</div><div class=\"a-val\"><p>Almost everything refreshes hourly. Only the <strong>Live</strong> screen and Website stock are faster. A figure for the last hour is normal to see move.</p></div></div>\n</div>\n\n<h2 class=\"sec\">Where the numbers come from</h2>\n<p>Each channel has a <strong>connector</strong> that fetches its sales on a schedule and stages them. A shared calculation then turns those staged rows into the facts every screen reads. Two things follow from that design and are worth knowing early:</p>\n<ul>\n  <li><strong>Re-pulling the same period is safe.</strong> The calculation replaces a day rather than adding to it, so a feed that runs twice does not double a number.</li>\n  <li><strong>A correction lands on the original date.</strong> If an order placed on the 3rd is cancelled on the 9th, the 3rd changes. Yesterday's report can legitimately look different today.</li>\n</ul>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Because corrections back-date, a figure you screenshotted last week may not match the same figure today, and both can be correct. When you publish a number, publish the date you pulled it.</p></div>\n"
+},
+{
+"id":"navigation",
+"title":"Signing In & Getting Around",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Odo signs in with your Legend of Toys Google account. What you see in the left rail depends on your role, so two people can open the same link and get different screens.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Sign in</div><div class=\"g-val\">Google, legendoftoys.com only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Address</div><div class=\"g-val\">odo.legendoftoys.com</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Search</div><div class=\"g-val\"><span class=\"kbd\">&#8984;</span> <span class=\"kbd\">K</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">On a phone</div><div class=\"g-val\">Same screens, five tabs along the bottom.</div></div>\n</div>\n\n<h2 class=\"sec\">Getting around</h2>\n<p>The left rail groups every screen under five headings, and they follow the shape of the data rather than the shape of the org:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Group</th><th>What lives there</th></tr></thead>\n  <tbody>\n    <tr><td><strong>Overview</strong></td><td>Dashboard and Live. Where you land, and what is happening right now.</td></tr>\n    <tr><td><strong>Sales</strong></td><td>Performance, Channels, Marketing, Funnel. Revenue over time and where it came from.</td></tr>\n    <tr><td><strong>Catalog</strong></td><td>Products, P&amp;L, Inventory. The same money cut by product instead of by channel.</td></tr>\n    <tr><td><strong>Pipeline</strong></td><td>Dyno, Mapping, Connectors, Uploads. The plumbing behind every other screen.</td></tr>\n    <tr><td><strong>Admin</strong></td><td>Access and channel configuration.</td></tr>\n  </tbody>\n</table>\n\n<h2 class=\"sec\">The date range applies to the screen you are on</h2>\n<p>Most screens carry a range picker with <code>Today</code>, <code>7D</code>, <code>30D</code>, <code>90D</code>, <code>MTD</code>, <code>Last mo</code> and <code>FY</code> shortcuts. The range does not follow you between screens, so if two screens disagree, check that both are set to the same period before assuming anything is broken.</p>\n\n<h2 class=\"sec\">The freshness stamp, and how to read it honestly</h2>\n<p>The header carries a \"Data as of\" chip. It shows the <strong>oldest</strong> feed among those the current screen actually reads, not the newest, and that is deliberate: a stale channel can never hide behind a fresh one sitting next to it.</p>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">Green</div><div class=\"a-val\"><p>Everything this screen reads was refreshed within about three hours.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Amber</div><div class=\"a-val\"><p>Something is up to a day behind. Usable, but say so if you are quoting it.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Red</div><div class=\"a-val\"><p>More than a day behind, or a feed reported an error. Check Connectors before using the number.</p></div></div>\n</div>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>A healthy feed that simply had no sales still counts as fresh. \"We checked and there was nothing\" is a success, not a failure, so a quiet channel does not turn the chip red.</p></div>\n"
+},
+{
+"id":"roles",
+"title":"Roles & What You Can See",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Odo has its own access list, separate from every other LOT app. Being an admin in Garage or Redline gives you nothing here.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Access model</div><div class=\"g-val\">Per-system, managed on Admin.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Default</div><div class=\"g-val\">No role means no access at all.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Most restricted</div><div class=\"g-val\">P&amp;L: Super Admin only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Kill switch</div><div class=\"g-val\">A role can be switched off without deleting it.</div></div>\n</div>\n\n<h2 class=\"sec\">The roles</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Role</th><th>Can open</th></tr></thead>\n  <tbody>\n    <tr><td><span class=\"role ch\">Channels</span></td><td>Every reporting screen: Dashboard, Live, Performance, Channels, Marketing, Funnel, Products, Inventory, Dyno. Not P&amp;L.</td></tr>\n    <tr><td><span class=\"role ops\">Sales Ops</span></td><td>The above, plus the Pipeline screens that keep data flowing: Mapping, Uploads, Connectors.</td></tr>\n    <tr><td><span class=\"role adm\">Admin</span></td><td>The above, plus Admin: who has access, and channel configuration.</td></tr>\n    <tr><td><span class=\"role sa\">Super Admin</span></td><td>Everything, and the only role that can open <strong>P&amp;L</strong>.</td></tr>\n  </tbody>\n</table>\n\n<h2 class=\"sec\">Why P&amp;L is walled off</h2>\n<p>P&amp;L carries product cost, margin, marketing spend and staff cost. That is the most commercially sensitive data in Odo, so it sits behind the single narrowest gate in the app rather than behind an ordinary permission. If you can see revenue but not margin, that is the design working, not a misconfiguration.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Screenshots leak permissions. A P&amp;L figure pasted into a channel thread is visible to everyone in it, whatever their Odo role. Quote revenue freely; treat cost and margin as need-to-know.</p></div>\n"
+}
+]
+},
+{
+"part":"The Definitions",
+"subtitle":"Read this part before quoting any Odo number. Most disagreements between Odo and a channel report are definition differences, not errors.",
+"chapters":[
+{
+"id":"def-revenue",
+"title":"Gross, Net and the Revenue Ladder",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">This is the chapter that settles most arguments. Odo and the Channels team both say \"gross\" and mean opposite ends of the same ladder. Neither is wrong; they are different rungs.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Odo&rsquo;s headline</div><div class=\"g-val\"><strong>Net revenue, ex-GST.</strong></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Odo&rsquo;s gross</div><div class=\"g-val\">Before discounts, tax still inside.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Channels&rsquo; gross</div><div class=\"g-val\">Usually after returns and tax.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Rule</div><div class=\"g-val\">Name the rung, not just the word.</div></div>\n</div>\n\n<h2 class=\"sec\">The ladder, top to bottom</h2>\n<p>Every revenue figure in Odo is one of these rungs. Read down the list and stop where your question is:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Rung</th><th>What it is</th></tr></thead>\n  <tbody>\n    <tr><td><strong>Gross</strong></td><td>The full order value <strong>before discounts</strong>, with <strong>GST still inside it</strong>. This is the widest number Odo holds.</td></tr>\n    <tr><td>&#8722; Discounts</td><td>Coupon codes, promotions and order-level discounts.</td></tr>\n    <tr><td>&#8722; Cancellations</td><td>The whole order removed, dated to when it was placed.</td></tr>\n    <tr><td>&#8722; Returns</td><td>Refunds and RTOs, dated to when they came back.</td></tr>\n    <tr><td>&#8722; GST</td><td>Tax stripped out, so what is left is the taxable base.</td></tr>\n    <tr><td><strong>= Net revenue</strong></td><td><strong>The headline.</strong> What LOT actually earned, excluding tax.</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>Net is the metric.</strong> Gross exists so channels can be compared on the same basis and so the ladder has a starting point. The business does not work off gross, and a gross figure quoted as \"revenue\" will overstate what was earned.</p></div>\n\n<h2 class=\"sec\">Why Odo&rsquo;s gross includes tax</h2>\n<p>Channels report differently: some quote prices with tax inside, some without. If Odo copied each channel's own convention, the channels could not be added together or compared. So every channel is normalised to the same tax-inclusive basis on the way in, the real tax is captured separately, and tax is stripped once at the end. That is why the top of the ladder looks larger than you might expect, and why the bottom is trustworthy.</p>\n\n<h2 class=\"sec\">Translating between Odo and a channel report</h2>\n<p>When someone hands you a figure, ask which of these it is before comparing:</p>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">\"Gross\" from a channel</div><div class=\"a-val\"><p>Usually already net of returns and tax. That is close to <strong>Odo's net</strong>, not Odo's gross. Compare it to net.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">\"Total sales\" from a portal</div><div class=\"a-val\"><p>Almost always tax-inclusive and before returns. Closest to <strong>Odo's gross</strong>, though timing will still differ.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">\"Settlement\" or \"payout\"</div><div class=\"a-val\"><p>Neither rung. That is money received after the platform took its fees, and Odo does not treat it as revenue.</p></div></div>\n</div>\n\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>A reconciliation that is out by roughly the tax rate is a definition mismatch, not a data problem. A reconciliation out by a few percent is usually timing. A reconciliation out by a lot is worth reporting.</p></div>\n\n<h2 class=\"sec\">One known simplification</h2>\n<p>The tax strip currently uses a single 18% rate. That is correct for the overwhelming majority of LOT revenue, but the L.O.T Build range is taxed at 5%, so its net is understated slightly. The amount is small and known. If you are reporting on L.O.T Build specifically rather than on the business as a whole, say that the net is conservative.</p>\n"
+},
+{
+"id":"def-orders",
+"title":"Orders, Units and AOV",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Orders and units are not interchangeable, and the difference has caused a real reconciliation dispute. This chapter says exactly which one each Odo figure is.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Order</div><div class=\"g-val\">One customer purchase, any number of items.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Unit</div><div class=\"g-val\">One physical item sold.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">AOV</div><div class=\"g-val\">Gross &divide; orders.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Cancelled</div><div class=\"g-val\"><strong>Orders</strong>, never units.</div></div>\n</div>\n\n<h2 class=\"sec\">Which figures are orders, and which are units</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Figure</th><th>Counts</th></tr></thead>\n  <tbody>\n    <tr><td>Total Orders</td><td><strong>Orders.</strong> Non-cancelled, with free replacements removed.</td></tr>\n    <tr><td>Units</td><td><strong>Units.</strong> The quantity across the lines on those orders.</td></tr>\n    <tr><td>AOV</td><td><strong>Gross &divide; orders.</strong> Not net, and not per unit.</td></tr>\n    <tr><td>Cancelled</td><td><strong>Orders.</strong> See the warning below.</td></tr>\n    <tr><td>Returns</td><td>Return events, with their own value.</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>Odo's cancellation figure is ORDERS, and it cannot be converted to units.</strong> Amazon writes the quantity down to zero on a cancelled line in the report we receive, so the units are simply not in the data. If a channel report gives cancelled <em>units</em> and Odo gives cancelled <em>orders</em>, the two will not agree and no amount of arithmetic on our side will make them. This is a known limit, not a bug, and the figures should never be presented as if they measure the same thing.</p></div>\n\n<h2 class=\"sec\">Free replacements are excluded from orders and AOV</h2>\n<p>When a customer receives a faulty item and we ship another, that replacement arrives in the feed as an order worth zero. Counting it as an order would quietly drag AOV down every month for something that is a fulfilment event rather than a sale.</p>\n<p>So replacements are <strong>removed</strong> from Total Orders and from AOV, and shown on their own tile instead. Nothing is hidden: the count is visible, it is just not mixed into the sales figures.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>This changed part-way through the year. An AOV you reconciled against before the change will be lower than today's figure for the same month, and today's is the intended one. If you keep a historical comparison, re-baseline it once rather than treating the gap as an error.</p></div>\n\n<h2 class=\"sec\">Why AOV uses gross rather than net</h2>\n<p>AOV is a basket-size measure: it answers \"how much does a typical customer put in the cart?\". That question is about the order as placed, before we net off returns that happen weeks later and before tax is stripped. Using net would mix a basket question with a settlement question and make the trend hard to read.</p>\n"
+},
+{
+"id":"def-returns",
+"title":"Cancellations, Returns and RTO",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Three different things reduce revenue and they are counted separately, on different dates. Mixing them up double-counts.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Cancellation</div><div class=\"g-val\">Never shipped. Dated to the order.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Return</div><div class=\"g-val\">Shipped, came back. Dated to the refund.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">RTO</div><div class=\"g-val\">Never accepted. Counted as a return.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Rule</div><div class=\"g-val\">An order is only ever one of these.</div></div>\n</div>\n\n<h2 class=\"sec\">The three, precisely</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">Cancellation</div><div class=\"a-val\"><p>The order was stopped before it went anywhere. The whole order is excluded, and the exclusion lands on the date the order was <strong>placed</strong>. So a cancellation today changes a past day's figure.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Return</div><div class=\"a-val\"><p>The customer received the goods and sent them back, and a refund was issued. Counted on the date of the <strong>refund</strong>, not the sale, because that is when the money went out.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">RTO</div><div class=\"a-val\"><p>Return to origin: the parcel went out but the customer never took delivery. <strong>An RTO is a return.</strong> It is netted off on the date the parcel came back.</p></div></div>\n</div>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>An RTO on a cash-on-delivery order has no refund, because no money was ever collected.</strong> That is exactly why it used to fall through the ladder: it was not cancelled, so it was not excluded, and there was no refund to net off. Goods that came back were being counted as revenue. RTOs are now netted properly. If you have historical figures from before that fix, they overstate revenue on COD-heavy channels.</p></div>\n\n<h2 class=\"sec\">Why a cancelled order is not also a return</h2>\n<p>A cancelled order sometimes carries a refund record too. Counting both would remove the same money twice, so Odo takes the cancellation and ignores the refund on that order. Similarly, when an RTO also has a genuine refund, the refund wins, because it carries the real date and the real amount.</p>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>Because returns land on the refund date and cancellations land on the order date, a month's revenue keeps moving for a while after the month ends. That settling is normal. It is also why the most recent two weeks should be treated as provisional in any trend you publish.</p></div>\n"
+},
+{
+"id":"def-sale",
+"title":"What Counts as a Sale on Each Channel",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">\"A sale\" does not mean the same event on every channel, because LOT does not have the same commercial relationship with every channel. This chapter says what Odo counts, channel by channel.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Default</div><div class=\"g-val\">The consumer&rsquo;s purchase.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Exception</div><div class=\"g-val\">Outright buyers: our sale to them.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Grain</div><div class=\"g-val\">Date &times; channel &times; product.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Day</div><div class=\"g-val\">IST, not UTC.</div></div>\n</div>\n\n<h2 class=\"sec\">Two kinds of channel</h2>\n<p>Everything turns on who owns the stock when the consumer buys it.</p>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">We sell to the consumer</div><div class=\"a-val\"><p>Website, Amazon, and the quick-commerce platforms. The stock is ours until a shopper buys it, so <strong>the consumer purchase is the sale</strong> and that is what Odo counts.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">They buy from us outright</div><div class=\"a-val\"><p>Flipkart Managed, General Trade, Modern Trade, Peeko. They purchase stock on a PO and then sell it on their own account. <strong>Our sale to them is the sale</strong>, and Odo counts the confirmed sales order.</p></div></div>\n</div>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>For an outright buyer, Odo shows <strong>nothing</strong> about what they subsequently sold to shoppers. That is not a gap in the data; we genuinely do not receive it and it is not ours to count. If someone asks \"how is Flipkart selling through?\", Odo cannot answer that question, and no screen in it should be read as if it can.</p></div>\n\n<h2 class=\"sec\">Channel by channel</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Channel</th><th>What Odo counts as the sale</th></tr></thead>\n  <tbody>\n    <tr><td>Website</td><td>The Shopify order.</td></tr>\n    <tr><td>Amazon</td><td>The marketplace order.</td></tr>\n    <tr><td>Quick-commerce (Blinkit, Zepto, Instamart)</td><td>Units sold as reported by the platform, uploaded from their seller portal.</td></tr>\n    <tr><td>Flipkart Managed</td><td><strong>The purchase order.</strong> Flipkart buys outright.</td></tr>\n    <tr><td>General Trade / Modern Trade</td><td>The confirmed sales order.</td></tr>\n    <tr><td>Peeko</td><td>The confirmed sales order. Outright purchase, same as the above.</td></tr>\n    <tr><td>Cred, Firstcry</td><td>The consumer order, via our fulfilment system.</td></tr>\n    <tr><td>Ozi</td><td><strong>Not in Odo.</strong> Self-reported monthly at MIS time, so there is no feed to read.</td></tr>\n  </tbody>\n</table>\n\n<h2 class=\"sec\">Flipkart changed, and it was not a broken feed</h2>\n<p>Flipkart used to be a marketplace where LOT was the seller, so consumer orders flowed to us. They now buy outright. Consumer sales therefore stopped reaching our systems in June by design, and Odo's Flipkart number switched to the purchase order. Anyone looking at a long Flipkart trend will see the basis change mid-year. It is a commercial change, not a data one.</p>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>The day boundary is <strong>IST</strong>. A sale placed at 11pm on the 3rd belongs to the 3rd, not the 4th. Channel portals often report in their own timezone, which is a common source of small day-level differences at month ends.</p></div>\n"
+},
+{
+"id":"def-excluded",
+"title":"What Is Deliberately Left Out",
+"route":"",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Some real money is deliberately kept out of Odo's totals. Each exclusion is a decision, not an oversight, and knowing them prevents a fruitless hunt for a missing number.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">Accessories</div><div class=\"g-val\">Shown, but outside every total.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Replacements</div><div class=\"g-val\">Out of orders and AOV.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Unmapped SKUs</div><div class=\"g-val\">Held back until identified.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Ozi</div><div class=\"g-val\">Not fed in at all.</div></div>\n</div>\n\n<h2 class=\"sec\">Accessories and others</h2>\n<p>Gift wrapping, spare parts and paid repairs are bundled onto a single line on the Dashboard and are <strong>deliberately not counted</strong> in Website revenue or units. They are real money, but they are not product sales, and folding them in would inflate per-variant figures and restate months of already-published numbers.</p>\n<p>So a figure appearing on that line and not in the totals is correct behaviour. It is a memo, shown so nothing is hidden.</p>\n\n<h2 class=\"sec\">Unmapped SKUs</h2>\n<p>When a channel sends a product code Odo does not recognise, the sale is held in a queue rather than guessed at. It is excluded from the totals until a human says which product it is, and the moment they do, the history backfills automatically.</p>\n<p>This is why a channel figure can rise retrospectively: somebody resolved a mapping, and revenue that was always real became attributable. Most of the queue is zero-value replacement and spare-part codes that will never be mapped; only a minority carries value.</p>\n\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>A product name that Odo does not recognise is not always an unregistered product. LOT has sometimes sold the <strong>same</strong> item under a different name on a different channel, because margins differed by channel. Before concluding a SKU was never set up, ask whether it is an old alias.</p></div>\n\n<h2 class=\"sec\">Multi-channel fulfilment</h2>\n<p>A number of Amazon rows are orders Amazon fulfilled on our behalf that were placed somewhere else, and they arrive valued at zero. Revenue is unaffected, because zero is correct, but they do lift Amazon's <strong>unit</strong> count slightly and drag its average selling price down. This is known and currently accepted.</p>\n\n<h2 class=\"sec\">Settlement, fees and payouts</h2>\n<p>What a platform actually pays us is not revenue. Fees and settlements appear in P&amp;L as costs, not as a reduction of the top line. If you are reconciling a bank credit to Odo, expect a gap the size of the platform's commission, and expect it to be legitimate.</p>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p>Every exclusion here is a recorded decision. If one of them looks like a bug and you are tempted to \"fix\" it, raise it first. Several have been re-argued and re-confirmed more than once, and reversing one silently would move numbers the business has already published.</p></div>\n"
+}
+]
+},
+{
+"part":"Overview",
+"subtitle":"The screens you open first.",
+"chapters":[
+{
+"id":"dashboard",
+"title":"Dashboard",
+"route":"/",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">The landing screen: how the business is trading right now, across every channel at once, with the biggest movers called out.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">One view of all channels.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span> <span class=\"role ops\">Sales Ops</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Hourly.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading the tiles</h2>\n<p>The headline figures follow the ladder in <em>Gross, Net and the Revenue Ladder</em>. Net is the one to quote. Comparisons are against the equivalent previous period, so a 30-day view compares to the 30 days before it, not to last calendar month.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>The <strong>Accessories and others</strong> line is a memo and sits outside every total on this screen. Adding it to the revenue tile will not reconcile with anything.</p></div>\n\n<h2 class=\"sec\">Product search</h2>\n<p>The product table can be searched directly, which is usually faster than going to Products when you have a specific SKU in mind.</p>\n\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>If a channel looks unexpectedly flat, check its trailing baseline before raising it. A drop from an unusually high week is a return to normal, not a collapse. This has been mistaken for a broken feed more than once.</p></div>\n"
+},
+{
+"id":"live",
+"title":"Live",
+"route":"/live",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Near-real-time Website orders. An order placed on the site appears here within seconds, which makes this the screen to watch during a launch, a campaign or a suspected outage.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Website trading, right now.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span> <span class=\"role ops\">Sales Ops</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Seconds, via webhook.</div></div>\n</div>\n\n<h2 class=\"sec\">Website only</h2>\n<p>Live covers the Website and nothing else. Marketplaces do not push orders to us as they happen, so a quiet Live screen says nothing at all about Amazon or quick-commerce.</p>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>Live is fed by a different mechanism from the hourly figures, so Live and the Dashboard can differ for a short while. Live is ahead, not more correct: the hourly calculation is what settles cancellations and returns.</p></div>\n\n<h2 class=\"sec\">Today window and the product table</h2>\n<p>The Today window shows the day so far in IST, and the searchable product table shows what is actually moving. During a launch this is the fastest way to see whether the thing you launched is the thing selling.</p>\n"
+}
+]
+},
+{
+"part":"Sales",
+"subtitle":"Performance over time, channel by channel, plus marketing and the funnel.",
+"chapters":[
+{
+"id":"performance",
+"title":"Performance",
+"route":"/performance",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Revenue over time with the full net ladder laid out, so you can see exactly where gross became net.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">The trend, and the ladder behind it.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Hourly.</div></div>\n</div>\n\n<h2 class=\"sec\">This is the screen to reconcile from</h2>\n<p>Because Performance shows each rung of the ladder rather than only the headline, it is the right screen to open when your figure and someone else's disagree. Walk down the rungs together and the difference usually names itself: a discount treatment, a returns date, or tax.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>The most recent two weeks are provisional. Late orders, cancellations and refunds are still settling, so a fortnight-old figure will firm up. Do not read a dip at the right-hand edge of the chart as a trend.</p></div>\n"
+},
+{
+"id":"channels",
+"title":"Channels",
+"route":"/channels",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">The same revenue cut by channel family, with a page per family so each can be read on its own terms.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Per-channel performance.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Families</div><div class=\"g-val\">Website, Amazon, Flipkart, Quick-comm, GT/MT, Long-tail, Other.</div></div>\n</div>\n\n<h2 class=\"sec\">Families, not individual channels</h2>\n<p>Channels are grouped into families so the pages stay readable and so marketing spend can be attributed sensibly. Long-tail covers Cred, Firstcry and Peeko; Quick-comm covers Blinkit, Zepto and Instamart.</p>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p>Read each family alongside <em>What Counts as a Sale on Each Channel</em>. Flipkart and GT/MT show <strong>our sale to the buyer</strong>, not consumer sell-through, so comparing them like-for-like against Website is comparing two different events.</p></div>\n"
+},
+{
+"id":"marketing",
+"title":"Marketing",
+"route":"/marketing",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Advertising spend by platform, alongside the revenue it sits against.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Spend by platform, over time.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Sources</div><div class=\"g-val\">Meta, Google, Amazon Ads, Amazon DSP.</div></div>\n</div>\n\n<h2 class=\"sec\">Sponsored and DSP are separate lenses</h2>\n<p>Amazon Sponsored and Amazon DSP are reported separately and <strong>must never be added together</strong>. They can target the same products, so summing them double-counts the same commercial activity.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Spend is platform-reported and revenue is order-reported, and they settle on different clocks. A same-day ratio of the two is noisy. Compare over a week or more.</p></div>\n"
+},
+{
+"id":"funnel",
+"title":"Funnel",
+"route":"/funnel",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Website conversion: sessions in, orders out, and the things that moved it.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Website conversion rate.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Scope</div><div class=\"g-val\">Website only.</div></div>\n</div>\n\n<h2 class=\"sec\">Two session counts, deliberately</h2>\n<p>Sessions are available from both the analytics tag and the storefront itself, and the two never agree exactly because they count differently. Odo shows the conversion rate against both rather than picking a winner, so you can see how much of a change is real and how much is measurement.</p>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>Recent days are provisional here too. Orders settle and session data is revised, so the last fortnight will move.</p></div>\n\n<h2 class=\"sec\">Stock markers</h2>\n<p>The timeline marks when a product went out of stock, because an unexplained conversion dip is very often an availability problem rather than a demand one. These markers are Website-scoped.</p>\n"
+}
+]
+},
+{
+"part":"Catalog",
+"subtitle":"Per-product performance, margin, and stock.",
+"chapters":[
+{
+"id":"products",
+"title":"Products",
+"route":"/products/drr",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Performance by product rather than by channel: what is selling, how fast, and where.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Per-product sales and run rate.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Sub-pages</div><div class=\"g-val\">Cross-channel, and P&amp;L by product.</div></div>\n</div>\n\n<h2 class=\"sec\">Cross-channel</h2>\n<p>Daily run rate per product across every channel, which is the view for spotting a product accelerating or dying without having to open each channel in turn.</p>\n\n<h2 class=\"sec\">P&amp;L by product</h2>\n<p>Margin per product. It opens on Gross Margin across all channels; picking a single channel extends it through contribution margin, because fees and advertising only mean something once you know which channel you are talking about.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>A product flagged <strong>no cost</strong> has no standard cost recorded, so its margin reads 100% and is wrong. Treat those rows as unknown rather than excellent. A handful of live products are currently in that state.</p></div>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>The <strong>Account-level (unattributable)</strong> row holds fees and spend that belong to the channel but pin to no single product. It exists so the columns still add up to the channel P&amp;L, and it is never spread across products, because doing so would invent per-product costs.</p></div>\n"
+},
+{
+"id":"pnl",
+"title":"P&L",
+"route":"/pnl/overall",
+"roles":[
+"sa"
+],
+"html":"<p class=\"lead\">The full profit and loss: revenue down to contribution, per channel and overall. This is the most restricted screen in Odo.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Revenue through to margin.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read, plus manual cost entry.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role sa\">Super Admin</span> only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Grain</div><div class=\"g-val\">Monthly, by channel family.</div></div>\n</div>\n\n<h2 class=\"sec\">The lines</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">GMV</div><div class=\"a-val\"><p>Gross less discounts. The top of the P&amp;L.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">RTO and Refund</div><div class=\"a-val\"><p>Goods that came back, split so an RTO is not double-counted against a refund.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Taxes</div><div class=\"a-val\"><p>GST separated out.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">COGS</div><div class=\"a-val\"><p>Units multiplied by standard cost.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Logistics and Platform fee</div><div class=\"a-val\"><p>Settlement-derived where a channel provides it, manually entered where it does not.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">CAC</div><div class=\"a-val\"><p>Advertising spend attributed to the channel family.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Brand marketing and SG&amp;A</div><div class=\"a-val\"><p>Company-level costs, entered manually.</p></div></div>\n</div>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>Standard cost is manual and can go stale.</strong> COGS is only as good as the last time somebody updated the cost table, and it has not been revised in several months. Check the cost basis before quoting a margin, especially a margin that looks unusually healthy.</p></div>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Fees are dated to <strong>settlement</strong> while sales are dated to the <strong>sale</strong>. A month's fees can therefore trail its revenue. This is deliberate and consistent across the P&amp;L screens, but it makes a single month's margin noisier than a quarter's.</p></div>\n\n<h2 class=\"sec\">Manual lines</h2>\n<p>Where a channel gives us no fee or logistics feed, the figure is typed in per month. A blank is genuinely blank, not zero cost, so a channel showing no logistics may simply be unentered.</p>\n"
+},
+{
+"id":"inventory",
+"title":"Inventory",
+"route":"/inventory",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Stock levels and out-of-stock history, so a sales dip can be checked against availability.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Stock now, and when it ran out.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Website every 5 minutes; Amazon hourly.</div></div>\n</div>\n\n<h2 class=\"sec\">Watch and History</h2>\n<p>Watch is the current position. History is the record of when a product went out of stock and came back, which is what turns \"sales fell\" into \"we had nothing to sell\".</p>\n\n<div class=\"callout note\"><div class=\"c-title\">&#9432; Note</div><p>Out of stock is confirmed across two consecutive readings rather than one, so a momentary blip during a restock does not register as an outage.</p></div>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Stock alerting and the funnel stock markers are currently <strong>Website only</strong>. Amazon stock is captured but does not raise alerts, so an Amazon stockout will not notify anyone.</p></div>\n"
+}
+]
+},
+{
+"part":"Pipeline",
+"subtitle":"Where the data comes from, and what to do when a number looks wrong.",
+"chapters":[
+{
+"id":"connectors",
+"title":"Connectors",
+"route":"/connectors",
+"roles":[
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Every feed into Odo, its health, and the buttons to re-run it. This is the first screen to open when a number looks wrong.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Feed health and manual re-runs.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ops\">Sales Ops</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Schedule</div><div class=\"g-val\">Hourly, automatically.</div></div>\n</div>\n\n<h2 class=\"sec\">What OK actually means</h2>\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>A green tick means \"we checked this feed and the run succeeded\". It does not mean data arrived.</strong> A channel that genuinely sold nothing shows green, correctly. So green plus a suspiciously flat chart is not a contradiction, and it is not proof the feed is fine either. Check the row count and the last sale date, not just the tick.</p></div>\n\n<h2 class=\"sec\">The buttons</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Refresh.</span> Runs the feed now from where it left off. Safe to press: re-running a period cannot double-count.</li>\n  <li><span class=\"s-title\">Backfill.</span> Re-walks a longer history. Slower, for when a period needs rebuilding.</li>\n  <li><span class=\"s-title\">Disable.</span> Stops the feed running on schedule. Use sparingly, and remember it will then go stale silently.</li>\n</ol>\n\n<h2 class=\"sec\">Unmapped counts</h2>\n<p>Each connector shows how many product codes it has seen that Odo cannot identify. A rising count means revenue is being held out of the totals, so it is worth clearing. See <em>Mapping</em>.</p>\n"
+},
+{
+"id":"mapping",
+"title":"Mapping",
+"route":"/mapping",
+"roles":[
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">The queue of product codes a channel sent that Odo could not match to a product. Until they are resolved, those sales sit outside every total.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Identify unknown channel SKUs.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ops\">Sales Ops</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Effect</div><div class=\"g-val\">Resolving backfills history automatically.</div></div>\n</div>\n\n<h2 class=\"sec\">Mapping one</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Find the row.</span> It shows the channel, the code the channel sent, the units and the value being held.</li>\n  <li><span class=\"s-title\">Search the variant.</span> Type the product name and pick the exact variant.</li>\n  <li><span class=\"s-title\">Map.</span> The history recalculates immediately, so past months change too.</li>\n</ol>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p><strong>Do not guess a variant.</strong> Mapping to the wrong colour books real revenue against a product that never sold it, and because the fix backfills, the error backfills too. If a line does not name a colour and the product has more than one, ask the person who owns that channel.</p></div>\n\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>Most of the queue is zero-value: replacement, creator-shipment and spare-part codes that are deliberately never mapped. Sort by value and work the rows that carry money.</p></div>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>An unfamiliar name is not always a new product. LOT has sold the same item under a different name on a different channel because margins differed. Check for an alias before assuming a SKU was never registered.</p></div>\n"
+},
+{
+"id":"uploads",
+"title":"Uploads",
+"route":"/uploads",
+"roles":[
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Where the feeds that have no API get their data: a file, uploaded by hand.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Manual data in.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ops\">Sales Ops</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Re-upload</div><div class=\"g-val\">Safe: replaces, does not add.</div></div>\n</div>\n\n<h2 class=\"sec\">What gets uploaded</h2>\n<p>Quick-commerce sales come from the platforms' own seller reports, and courier freight invoices come in as a file. Both replace the period they cover rather than adding to it, so re-uploading a corrected file is the normal way to fix a mistake.</p>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Upload the right period. A file covering a shorter window than you think will replace the period it covers, which can look like sales disappearing.</p></div>\n"
+},
+{
+"id":"dyno",
+"title":"Dyno",
+"route":"/dyno",
+"roles":[
+"ch",
+"ops",
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">A working area for testing views and cuts of the data that do not yet have a home on a permanent screen.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Exploration, not reporting.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role ch\">Channels</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Stability</div><div class=\"g-val\">Changes without notice.</div></div>\n</div>\n\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>Dyno is a sandbox. Views here can change or disappear, and they are not guaranteed to follow the definitions in this manual. <strong>Do not build a recurring report on a Dyno screen.</strong> If a cut here is useful enough to repeat, ask for it to be built properly.</p></div>\n"
+}
+]
+},
+{
+"part":"Admin",
+"subtitle":"Access and channel configuration.",
+"chapters":[
+{
+"id":"admin",
+"title":"Admin",
+"route":"/admin",
+"roles":[
+"adm",
+"sa"
+],
+"html":"<p class=\"lead\">Who can open Odo, what each of them can see, and the per-channel settings that decide how a channel is counted.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Access and channel configuration.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span> <span class=\"role sa\">Super Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Default</div><div class=\"g-val\">No role means no access.</div></div>\n</div>\n\n<h2 class=\"sec\">Access</h2>\n<p>Odo's access list is its own. Granting someone a role here gives them nothing in any other LOT app, and their access elsewhere gives them nothing here. A role can be switched off with the active flag rather than deleted, which preserves the record of who had what.</p>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p>Super Admin is the only role that can open P&amp;L, and P&amp;L carries cost, margin and staff cost. Grant it deliberately and rarely.</p></div>\n\n<h2 class=\"sec\">Channel settings</h2>\n<p>The setting that most affects the numbers decides <strong>whether a channel's sales order is the revenue event</strong>. Turn it on for a buyer who purchases outright, such as Flipkart Managed, General Trade or Peeko. Leave it off for a platform where we sell to the consumer and count the consumer order instead.</p>\n\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p>Getting that setting wrong <strong>double-counts or hides an entire channel</strong>. Turning it on for a platform we already count consumer sales from would count the same goods twice. If you are not certain which kind of channel it is, ask before changing it.</p></div>\n"
+}
+]
+}
+]
+}

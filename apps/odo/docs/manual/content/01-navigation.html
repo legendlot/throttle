@@ -1,0 +1,34 @@
+<p class="lead">Odo signs in with your Legend of Toys Google account. What you see in the left rail depends on your role, so two people can open the same link and get different screens.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Sign in</div><div class="g-val">Google, legendoftoys.com only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Address</div><div class="g-val">odo.legendoftoys.com</div></div>
+  <div class="g-cell"><div class="g-lbl">Search</div><div class="g-val"><span class="kbd">&#8984;</span> <span class="kbd">K</span></div></div>
+  <div class="g-cell"><div class="g-lbl">On a phone</div><div class="g-val">Same screens, five tabs along the bottom.</div></div>
+</div>
+
+<h2 class="sec">Getting around</h2>
+<p>The left rail groups every screen under five headings, and they follow the shape of the data rather than the shape of the org:</p>
+<table class="tbl">
+  <thead><tr><th>Group</th><th>What lives there</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Overview</strong></td><td>Dashboard and Live. Where you land, and what is happening right now.</td></tr>
+    <tr><td><strong>Sales</strong></td><td>Performance, Channels, Marketing, Funnel. Revenue over time and where it came from.</td></tr>
+    <tr><td><strong>Catalog</strong></td><td>Products, P&amp;L, Inventory. The same money cut by product instead of by channel.</td></tr>
+    <tr><td><strong>Pipeline</strong></td><td>Dyno, Mapping, Connectors, Uploads. The plumbing behind every other screen.</td></tr>
+    <tr><td><strong>Admin</strong></td><td>Access and channel configuration.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">The date range applies to the screen you are on</h2>
+<p>Most screens carry a range picker with <code>Today</code>, <code>7D</code>, <code>30D</code>, <code>90D</code>, <code>MTD</code>, <code>Last mo</code> and <code>FY</code> shortcuts. The range does not follow you between screens, so if two screens disagree, check that both are set to the same period before assuming anything is broken.</p>
+
+<h2 class="sec">The freshness stamp, and how to read it honestly</h2>
+<p>The header carries a "Data as of" chip. It shows the <strong>oldest</strong> feed among those the current screen actually reads, not the newest, and that is deliberate: a stale channel can never hide behind a fresh one sitting next to it.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Green</div><div class="a-val"><p>Everything this screen reads was refreshed within about three hours.</p></div></div>
+  <div class="a-row"><div class="a-key">Amber</div><div class="a-val"><p>Something is up to a day behind. Usable, but say so if you are quoting it.</p></div></div>
+  <div class="a-row"><div class="a-key">Red</div><div class="a-val"><p>More than a day behind, or a feed reported an error. Check Connectors before using the number.</p></div></div>
+</div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>A healthy feed that simply had no sales still counts as fresh. "We checked and there was nothing" is a success, not a failure, so a quiet channel does not turn the chip red.</p></div>

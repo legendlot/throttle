@@ -1,0 +1,21 @@
+<p class="lead">The queue of product codes a channel sent that Odo could not match to a product. Until they are resolved, those sales sit outside every total.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Identify unknown channel SKUs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role ops">Sales Ops</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Effect</div><div class="g-val">Resolving backfills history automatically.</div></div>
+</div>
+
+<h2 class="sec">Mapping one</h2>
+<ol class="steps">
+  <li><span class="s-title">Find the row.</span> It shows the channel, the code the channel sent, the units and the value being held.</li>
+  <li><span class="s-title">Search the variant.</span> Type the product name and pick the exact variant.</li>
+  <li><span class="s-title">Map.</span> The history recalculates immediately, so past months change too.</li>
+</ol>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>Do not guess a variant.</strong> Mapping to the wrong colour books real revenue against a product that never sold it, and because the fix backfills, the error backfills too. If a line does not name a colour and the product has more than one, ask the person who owns that channel.</p></div>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>Most of the queue is zero-value: replacement, creator-shipment and spare-part codes that are deliberately never mapped. Sort by value and work the rows that carry money.</p></div>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>An unfamiliar name is not always a new product. LOT has sold the same item under a different name on a different channel because margins differed. Check for an alias before assuming a SKU was never registered.</p></div>

@@ -1,0 +1,22 @@
+<p class="lead">Three different things reduce revenue and they are counted separately, on different dates. Mixing them up double-counts.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Cancellation</div><div class="g-val">Never shipped. Dated to the order.</div></div>
+  <div class="g-cell"><div class="g-lbl">Return</div><div class="g-val">Shipped, came back. Dated to the refund.</div></div>
+  <div class="g-cell"><div class="g-lbl">RTO</div><div class="g-val">Never accepted. Counted as a return.</div></div>
+  <div class="g-cell"><div class="g-lbl">Rule</div><div class="g-val">An order is only ever one of these.</div></div>
+</div>
+
+<h2 class="sec">The three, precisely</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Cancellation</div><div class="a-val"><p>The order was stopped before it went anywhere. The whole order is excluded, and the exclusion lands on the date the order was <strong>placed</strong>. So a cancellation today changes a past day's figure.</p></div></div>
+  <div class="a-row"><div class="a-key">Return</div><div class="a-val"><p>The customer received the goods and sent them back, and a refund was issued. Counted on the date of the <strong>refund</strong>, not the sale, because that is when the money went out.</p></div></div>
+  <div class="a-row"><div class="a-key">RTO</div><div class="a-val"><p>Return to origin: the parcel went out but the customer never took delivery. <strong>An RTO is a return.</strong> It is netted off on the date the parcel came back.</p></div></div>
+</div>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>An RTO on a cash-on-delivery order has no refund, because no money was ever collected.</strong> That is exactly why it used to fall through the ladder: it was not cancelled, so it was not excluded, and there was no refund to net off. Goods that came back were being counted as revenue. RTOs are now netted properly. If you have historical figures from before that fix, they overstate revenue on COD-heavy channels.</p></div>
+
+<h2 class="sec">Why a cancelled order is not also a return</h2>
+<p>A cancelled order sometimes carries a refund record too. Counting both would remove the same money twice, so Odo takes the cancellation and ignores the refund on that order. Similarly, when an RTO also has a genuine refund, the refund wins, because it carries the real date and the real amount.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Because returns land on the refund date and cancellations land on the order date, a month's revenue keeps moving for a while after the month ends. That settling is normal. It is also why the most recent two weeks should be treated as provisional in any trend you publish.</p></div>

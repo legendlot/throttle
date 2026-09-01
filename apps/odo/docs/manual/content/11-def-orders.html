@@ -1,0 +1,31 @@
+<p class="lead">Orders and units are not interchangeable, and the difference has caused a real reconciliation dispute. This chapter says exactly which one each Odo figure is.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Order</div><div class="g-val">One customer purchase, any number of items.</div></div>
+  <div class="g-cell"><div class="g-lbl">Unit</div><div class="g-val">One physical item sold.</div></div>
+  <div class="g-cell"><div class="g-lbl">AOV</div><div class="g-val">Gross &divide; orders.</div></div>
+  <div class="g-cell"><div class="g-lbl">Cancelled</div><div class="g-val"><strong>Orders</strong>, never units.</div></div>
+</div>
+
+<h2 class="sec">Which figures are orders, and which are units</h2>
+<table class="tbl">
+  <thead><tr><th>Figure</th><th>Counts</th></tr></thead>
+  <tbody>
+    <tr><td>Total Orders</td><td><strong>Orders.</strong> Non-cancelled, with free replacements removed.</td></tr>
+    <tr><td>Units</td><td><strong>Units.</strong> The quantity across the lines on those orders.</td></tr>
+    <tr><td>AOV</td><td><strong>Gross &divide; orders.</strong> Not net, and not per unit.</td></tr>
+    <tr><td>Cancelled</td><td><strong>Orders.</strong> See the warning below.</td></tr>
+    <tr><td>Returns</td><td>Return events, with their own value.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>Odo's cancellation figure is ORDERS, and it cannot be converted to units.</strong> Amazon writes the quantity down to zero on a cancelled line in the report we receive, so the units are simply not in the data. If a channel report gives cancelled <em>units</em> and Odo gives cancelled <em>orders</em>, the two will not agree and no amount of arithmetic on our side will make them. This is a known limit, not a bug, and the figures should never be presented as if they measure the same thing.</p></div>
+
+<h2 class="sec">Free replacements are excluded from orders and AOV</h2>
+<p>When a customer receives a faulty item and we ship another, that replacement arrives in the feed as an order worth zero. Counting it as an order would quietly drag AOV down every month for something that is a fulfilment event rather than a sale.</p>
+<p>So replacements are <strong>removed</strong> from Total Orders and from AOV, and shown on their own tile instead. Nothing is hidden: the count is visible, it is just not mixed into the sales figures.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>This changed part-way through the year. An AOV you reconciled against before the change will be lower than today's figure for the same month, and today's is the intended one. If you keep a historical comparison, re-baseline it once rather than treating the gap as an error.</p></div>
+
+<h2 class="sec">Why AOV uses gross rather than net</h2>
+<p>AOV is a basket-size measure: it answers "how much does a typical customer put in the cart?". That question is about the order as placed, before we net off returns that happen weeks later and before tax is stripped. Using net would mix a basket question with a settlement question and make the trend hard to read.</p>

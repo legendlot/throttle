@@ -1,0 +1,37 @@
+<p class="lead">"A sale" does not mean the same event on every channel, because LOT does not have the same commercial relationship with every channel. This chapter says what Odo counts, channel by channel.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Default</div><div class="g-val">The consumer&rsquo;s purchase.</div></div>
+  <div class="g-cell"><div class="g-lbl">Exception</div><div class="g-val">Outright buyers: our sale to them.</div></div>
+  <div class="g-cell"><div class="g-lbl">Grain</div><div class="g-val">Date &times; channel &times; product.</div></div>
+  <div class="g-cell"><div class="g-lbl">Day</div><div class="g-val">IST, not UTC.</div></div>
+</div>
+
+<h2 class="sec">Two kinds of channel</h2>
+<p>Everything turns on who owns the stock when the consumer buys it.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">We sell to the consumer</div><div class="a-val"><p>Website, Amazon, and the quick-commerce platforms. The stock is ours until a shopper buys it, so <strong>the consumer purchase is the sale</strong> and that is what Odo counts.</p></div></div>
+  <div class="a-row"><div class="a-key">They buy from us outright</div><div class="a-val"><p>Flipkart Managed, General Trade, Modern Trade, Peeko. They purchase stock on a PO and then sell it on their own account. <strong>Our sale to them is the sale</strong>, and Odo counts the confirmed sales order.</p></div></div>
+</div>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>For an outright buyer, Odo shows <strong>nothing</strong> about what they subsequently sold to shoppers. That is not a gap in the data; we genuinely do not receive it and it is not ours to count. If someone asks "how is Flipkart selling through?", Odo cannot answer that question, and no screen in it should be read as if it can.</p></div>
+
+<h2 class="sec">Channel by channel</h2>
+<table class="tbl">
+  <thead><tr><th>Channel</th><th>What Odo counts as the sale</th></tr></thead>
+  <tbody>
+    <tr><td>Website</td><td>The Shopify order.</td></tr>
+    <tr><td>Amazon</td><td>The marketplace order.</td></tr>
+    <tr><td>Quick-commerce (Blinkit, Zepto, Instamart)</td><td>Units sold as reported by the platform, uploaded from their seller portal.</td></tr>
+    <tr><td>Flipkart Managed</td><td><strong>The purchase order.</strong> Flipkart buys outright.</td></tr>
+    <tr><td>General Trade / Modern Trade</td><td>The confirmed sales order.</td></tr>
+    <tr><td>Peeko</td><td>The confirmed sales order. Outright purchase, same as the above.</td></tr>
+    <tr><td>Cred, Firstcry</td><td>The consumer order, via our fulfilment system.</td></tr>
+    <tr><td>Ozi</td><td><strong>Not in Odo.</strong> Self-reported monthly at MIS time, so there is no feed to read.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Flipkart changed, and it was not a broken feed</h2>
+<p>Flipkart used to be a marketplace where LOT was the seller, so consumer orders flowed to us. They now buy outright. Consumer sales therefore stopped reaching our systems in June by design, and Odo's Flipkart number switched to the purchase order. Anyone looking at a long Flipkart trend will see the basis change mid-year. It is a commercial change, not a data one.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The day boundary is <strong>IST</strong>. A sale placed at 11pm on the 3rd belongs to the 3rd, not the 4th. Channel portals often report in their own timezone, which is a common source of small day-level differences at month ends.</p></div>

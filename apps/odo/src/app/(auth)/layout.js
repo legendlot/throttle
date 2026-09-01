@@ -5,7 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
 import {
   LayoutDashboard, BarChart3, Store, Megaphone, Filter, Package, Landmark, Boxes,
-  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search, Radio, Menu, X,
+  Gauge, Share2, Cable, Upload, Shield, LogOut, PanelLeftClose, Search, Radio, Menu, X, BookOpen,
 } from 'lucide-react';
 import { FreshnessProvider, FreshnessChip, useFreshness } from '../../components/Freshness.js';
 import { feedStatus } from '../../lib/freshness.js';
@@ -43,6 +43,12 @@ const NAV = [
   ] },
   { label: 'Admin', items: [
     { route: '/admin',       label: 'Admin',       icon: Shield,          perm: 'salesops_admin' },
+  ] },
+  // System Manual sits LAST and is deliberately ungated: it is the definitions reference, and the
+  // people most likely to misread a number are the ones with the fewest permissions. Every other
+  // LOT app carries the same tab (CORE.md, S105).
+  { label: 'Help', items: [
+    { route: '/manual',      label: 'System Manual', icon: BookOpen,      perm: 'sales_view' },
   ] },
 ];
 

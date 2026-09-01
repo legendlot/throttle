@@ -1,0 +1,83 @@
+{
+  "title": "Odo",
+  "title_accent": "Operations Manual",
+  "subtitle": "What every number on the dashboard means, how it is calculated, and where it comes from.",
+  "version": "1.0.0",
+  "date": "2026-09-01",
+  "app_url": "odo.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "accent": "#F2CD1A",
+  "accent_soft": "#F2CD1A",
+  "roles": {
+    "ch":  { "label": "Channels", "name": "Channels Team", "desc": "Reads the numbers and reports them onward. Needs the definitions above all." },
+    "ops": { "label": "Sales Ops", "name": "Sales Ops", "desc": "Keeps the feeds healthy: mapping, uploads, connectors." },
+    "adm": { "label": "Admin", "name": "Admin", "desc": "Manages access and channel configuration." },
+    "sa":  { "label": "Super Admin", "name": "Super Admin", "desc": "The only role that can open P&L. Sees cost, margin and SG&A." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Odo is, how to get around, and what your role can open.",
+      "chapters": [
+        { "id": "intro", "title": "Welcome to Odo", "file": "00-introduction.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "roles", "title": "Roles & What You Can See", "file": "02-roles.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "The Definitions",
+      "subtitle": "Read this part before quoting any Odo number. Most disagreements between Odo and a channel report are definition differences, not errors.",
+      "chapters": [
+        { "id": "def-revenue", "title": "Gross, Net and the Revenue Ladder", "file": "10-def-revenue.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "def-orders", "title": "Orders, Units and AOV", "file": "11-def-orders.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "def-returns", "title": "Cancellations, Returns and RTO", "file": "12-def-returns.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "def-sale", "title": "What Counts as a Sale on Each Channel", "file": "13-def-sale.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "def-excluded", "title": "What Is Deliberately Left Out", "file": "14-def-excluded.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "Overview",
+      "subtitle": "The screens you open first.",
+      "chapters": [
+        { "id": "dashboard", "title": "Dashboard", "route": "/", "file": "20-dashboard.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "live", "title": "Live", "route": "/live", "file": "21-live.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "Sales",
+      "subtitle": "Performance over time, channel by channel, plus marketing and the funnel.",
+      "chapters": [
+        { "id": "performance", "title": "Performance", "route": "/performance", "file": "30-performance.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "channels", "title": "Channels", "route": "/channels", "file": "31-channels.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "marketing", "title": "Marketing", "route": "/marketing", "file": "32-marketing.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "funnel", "title": "Funnel", "route": "/funnel", "file": "33-funnel.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "Catalog",
+      "subtitle": "Per-product performance, margin, and stock.",
+      "chapters": [
+        { "id": "products", "title": "Products", "route": "/products/drr", "file": "40-products.html", "roles": ["ch","ops","adm","sa"] },
+        { "id": "pnl", "title": "P&L", "route": "/pnl/overall", "file": "41-pnl.html", "roles": ["sa"] },
+        { "id": "inventory", "title": "Inventory", "route": "/inventory", "file": "42-inventory.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "Pipeline",
+      "subtitle": "Where the data comes from, and what to do when a number looks wrong.",
+      "chapters": [
+        { "id": "connectors", "title": "Connectors", "route": "/connectors", "file": "50-connectors.html", "roles": ["ops","adm","sa"] },
+        { "id": "mapping", "title": "Mapping", "route": "/mapping", "file": "51-mapping.html", "roles": ["ops","adm","sa"] },
+        { "id": "uploads", "title": "Uploads", "route": "/uploads", "file": "52-uploads.html", "roles": ["ops","adm","sa"] },
+        { "id": "dyno", "title": "Dyno", "route": "/dyno", "file": "53-dyno.html", "roles": ["ch","ops","adm","sa"] }
+      ]
+    },
+    {
+      "part": "Admin",
+      "subtitle": "Access and channel configuration.",
+      "chapters": [
+        { "id": "admin", "title": "Admin", "route": "/admin", "file": "60-admin.html", "roles": ["adm","sa"] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+<p class="lead">Odo has its own access list, separate from every other LOT app. Being an admin in Garage or Redline gives you nothing here.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Access model</div><div class="g-val">Per-system, managed on Admin.</div></div>
+  <div class="g-cell"><div class="g-lbl">Default</div><div class="g-val">No role means no access at all.</div></div>
+  <div class="g-cell"><div class="g-lbl">Most restricted</div><div class="g-val">P&amp;L: Super Admin only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Kill switch</div><div class="g-val">A role can be switched off without deleting it.</div></div>
+</div>
+
+<h2 class="sec">The roles</h2>
+<table class="tbl">
+  <thead><tr><th>Role</th><th>Can open</th></tr></thead>
+  <tbody>
+    <tr><td><span class="role ch">Channels</span></td><td>Every reporting screen: Dashboard, Live, Performance, Channels, Marketing, Funnel, Products, Inventory, Dyno. Not P&amp;L.</td></tr>
+    <tr><td><span class="role ops">Sales Ops</span></td><td>The above, plus the Pipeline screens that keep data flowing: Mapping, Uploads, Connectors.</td></tr>
+    <tr><td><span class="role adm">Admin</span></td><td>The above, plus Admin: who has access, and channel configuration.</td></tr>
+    <tr><td><span class="role sa">Super Admin</span></td><td>Everything, and the only role that can open <strong>P&amp;L</strong>.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Why P&amp;L is walled off</h2>
+<p>P&amp;L carries product cost, margin, marketing spend and staff cost. That is the most commercially sensitive data in Odo, so it sits behind the single narrowest gate in the app rather than behind an ordinary permission. If you can see revenue but not margin, that is the design working, not a misconfiguration.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Screenshots leak permissions. A P&amp;L figure pasted into a channel thread is visible to everyone in it, whatever their Odo role. Quote revenue freely; treat cost and margin as need-to-know.</p></div>
