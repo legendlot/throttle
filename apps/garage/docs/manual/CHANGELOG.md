@@ -15,6 +15,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
   **50** per bag. Flagged as a fallback, not a house standard, since real sizes vary by
   product and several recent products use 25.
 
+## [1.19.1] - 2026-09-01
+
+### Fixed
+- **Job Work**: corrected the pre-cutover figure from "roughly 7,400 tops" to "roughly 3,450".
+  The original filtered outstanding PO lines by vendor rather than by part, so it counted 3,982
+  units of non-top lines as tops. The point of the callout is unchanged: material is out at the
+  painters and none of it appears on the screen.
+
 ## [1.19.0] - 2026-09-01
 
 ### Added
