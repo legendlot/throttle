@@ -85,12 +85,14 @@ const defer = () => { let r, j; const p = new Promise((res, rej) => { r = res; j
     d.resolve(null);
   });
 
-  // ⭐ THE REGRESSION TEST FOR THE BUG THAT SHIPPED. The first version kept the slot in a
-  // module-level closure, which passes every test above — in node there is only ever one
-  // module instance. On the deployed build there are TWO: Next's app router inlined this
-  // module into both the `layout` and `page` chunks, so each side deduped against itself and
-  // the duplicate request still fired (measured 2026-09-01: 2 calls, 1ms apart). Requiring
-  // the module a second time reproduces that, and only a globalThis-anchored slot survives it.
+  // ⭐ THE REGRESSION TEST FOR THE HAZARD THAT MOTIVATED THE globalThis SLOT. A module-level
+  // closure passes every test above — in node there is only ever ONE module instance. On the
+  // deployed build there are TWO: Next's app router inlines this module into both the `layout`
+  // and `page` chunks (verified 2026-09-01 by fetching the chunks and finding the dedupe's
+  // fingerprint in each), so a closure slot would give each side its own and neither would ever
+  // see the other's request. Requiring the module a second time reproduces exactly that.
+  // ⚠️ This guards a REAL structural hazard, not an observed production failure — see the
+  // provenance note in dedupeInFlight.js before citing it as a bug that fired.
   await t('TWO module instances still share one slot (the bundler-duplication bug)', async () => {
     delete require.cache[require.resolve('./dedupeInFlight.js')];
     const second = require('./dedupeInFlight.js');
