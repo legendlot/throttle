@@ -88,10 +88,11 @@ export default function ReceivingPage() {
   // FBU run-model refinement (S180): link an FBU receipt to an open outsourced run → job-work
   // GRN + auto-close. The picker only shows when the declared format is FBU.
   const [newExtRun, setNewExtRun]         = useState('');
+  const [newFbuKind, setNewFbuKind]       = useState('');   // '' | 'jobwork' | 'purchase'
   const [extRuns,   setExtRuns]           = useState([]);
 
   useEffect(() => {
-    if (newFormat !== 'fbu') { setExtRuns([]); setNewExtRun(''); return; }
+    if (newFormat !== 'fbu') { setExtRuns([]); setNewExtRun(''); setNewFbuKind(''); return; }
     garageFetch('getOpenOutsourcedRuns', {}, session)
       .then(d => setExtRuns(Array.isArray(d?.runs) ? d.runs : []))
       .catch(() => setExtRuns([]));
@@ -184,7 +185,7 @@ export default function ReceivingPage() {
   function resetNewForm() {
     setNewSup(''); setNewPO(''); setNewDate(todayISO());
     setNewBoxes(''); setNewWeight(''); setNewOrigin('China');
-    setNewFormat('parts'); setNewNotes(''); setNewExtRun('');
+    setNewFormat('parts'); setNewNotes(''); setNewExtRun(''); setNewFbuKind('');
     setShowNewForm(false);
   }
 
@@ -205,6 +206,18 @@ export default function ReceivingPage() {
     // Supplier is derived from the PO (never free-typed), so a missing supplier = a PO with no vendor.
     if (!newPO.trim()) { showToast('Select a PO — receiving requires a linked purchase order', 'error'); return; }
     if (!newSup.trim()) { showToast('That PO has no supplier set — fix the PO first', 'error'); return; }
+    // RULE-EXT-001 / ITC-04: an FBU receipt is either a job-work return (materials we sent out,
+    // built and returned — must reconcile to an EXT run) or an outright purchase of built units.
+    // Both used to land with ext_run_no NULL, so the answer and the absence of an answer were the
+    // same value — which is why the link had never once been made. Force the choice.
+    if (newFormat === 'fbu') {
+      if (!newFbuKind) {
+        showToast('Say whether these are a job-work return or purchased units', 'error'); return;
+      }
+      if (newFbuKind === 'jobwork' && !newExtRun) {
+        showToast('Pick the outsourced run these units came back against', 'error'); return;
+      }
+    }
     setNewSubmitting(true);
     try {
       const res = await workerFetch('postShipment', {
@@ -216,7 +229,8 @@ export default function ReceivingPage() {
           total_weight: parseFloat(newWeight) || null,
           origin:       newOrigin,
           receive_format: newFormat,
-          ext_run_no:   newFormat === 'fbu' ? (newExtRun || null) : null,
+          fbu_kind:     newFormat === 'fbu' ? newFbuKind : null,
+          ext_run_no:   newFormat === 'fbu' && newFbuKind === 'jobwork' ? (newExtRun || null) : null,
           notes:        newNotes.trim() || null,
         }
       }, session);
@@ -1125,13 +1139,40 @@ export default function ReceivingPage() {
                   <button style={newFormat === 'fbu'   ? btnPri : btnSec} onClick={() => setNewFormat('fbu')}>FBU Units</button>
                 </div>
               </div>
-              {newFormat === 'fbu' && extRuns.length > 0 && (
+              {/* ⚠️ Renders whenever the format is FBU — NOT gated on extRuns.length. It used to be,
+                  so when no run was open the control vanished entirely and the receiver could not
+                  know the link existed. A silently absent field is worse than an empty one. */}
+              {newFormat === 'fbu' && (
                 <div style={{ marginBottom: 10 }}>
-                  <span style={lbl}>Link outsourced run · optional</span>
-                  <select style={inp} value={newExtRun} onChange={e => setNewExtRun(e.target.value)}>
-                    <option value="">— Purchased FBU (no link) —</option>
-                    {extRuns.map(r => <option key={r.run_no} value={r.run_no}>{r.run_no} · {r.product} ({r.status})</option>)}
-                  </select>
+                  <span style={lbl}>Where did these units come from? · required</span>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                    <button
+                      style={newFbuKind === 'jobwork' ? btnPri : btnSec}
+                      onClick={() => setNewFbuKind('jobwork')}
+                    >Job-work return</button>
+                    <button
+                      style={newFbuKind === 'purchase' ? btnPri : btnSec}
+                      onClick={() => { setNewFbuKind('purchase'); setNewExtRun(''); }}
+                    >Purchased built units</button>
+                  </div>
+                  {newFbuKind === 'jobwork' && (
+                    <div style={{ marginTop: 8 }}>
+                      {extRuns.length > 0 ? (
+                        <select style={inp} value={newExtRun} onChange={e => setNewExtRun(e.target.value)}>
+                          <option value="">— Select the outsourced run —</option>
+                          {extRuns.map(r => <option key={r.run_no} value={r.run_no}>{r.run_no} · {r.product} ({r.status})</option>)}
+                        </select>
+                      ) : (
+                        <p style={{ margin: 0, fontSize: 12, color: '#b45309' }}>
+                          No outsourced run is open to link to. Raise or issue the run first, or
+                          record this as purchased units.
+                        </p>
+                      )}
+                      <p style={{ margin: '6px 0 0', fontSize: 11, opacity: .7 }}>
+                        Links the returned units to the materials sent out, for ITC-04.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
               <div style={{ marginBottom: 12 }}>
