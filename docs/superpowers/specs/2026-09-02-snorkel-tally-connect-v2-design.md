@@ -16,8 +16,9 @@ Three things landed on 2026-09-02 that the first spec could not have known:
    and that everything else was buildable. Both halves turned out false — see §2.
 2. **Afshaan widened the scope twice in one session** — first to "manual push behind a button", then
    to **payment requests, i.e. the purchase side**. v1 is a sales-only design.
-3. **The real ledger master arrived** (`Master.xlsx`, 1,999 ledgers / 65 groups, exported 1-Apr-23 →
-   1-Sep-26) and disproved the premise that ledger names can be composed. See §5.
+3. **The real ledger master arrived** (`Master.xlsx`, **1,999 ledgers under 88 group rows**, of which 65 directly contain ledgers;
+   exported 1-Apr-23 → 1-Sep-26. NB the parse keys on bold=group, and Tally's own footer row
+   `83 Group(s)` parses as an empty group — ignore it) and disproved the premise that ledger names can be composed. See §5.
 
 ⭐ **The governing sentence for this build, from Afshaan:**
 > *"There should be enough backstops or enough checks built into the system so that we're not just
@@ -165,10 +166,46 @@ Same on the sales side: `Karnataka Interstate Sales 18%` · `Haryana Interstate 
 **and** `Offline Sales` / `Shopify Sales` (channel-named) **and** `Fair Sales` / `Amazon Sales Return`.
 This is Afshaan's *"sometimes it is different, sometimes it is based on some other logic"* made concrete.
 
-### 5.1 Fraternitas has SIX GST registrations; Snorkel models ONE
+### 5.0 ⛔ The PARTY ledger — the mapping this document originally forgot
+
+*Added by the S335 hostile review, which caught its own omission.* `PARTYLEDGERNAME` appears in
+**every voucher of every type**, so it is the most-used mapping here, and v2 shipped without it.
+
+**Measured 2026-09-02 against `Master.xlsx` (denominator: 161 active GT/MT partners):**
+
+| | Count | Share |
+|---|---|---|
+| `sales_partners.name` matches a Tally ledger **exactly** | **148** | 91% |
+| Matches only after normalising case/punctuation | 3 | 2% |
+| **No Tally ledger at all** | **10** | 6% |
+
+⭐ **91% exact is the good news — the party map can be auto-seeded and then reviewed, not hand-built.**
+The other two rows are the danger:
+
+- **Normalised-only** are not all cosmetic: `Wonderland Toys` → `WONDER LAND TOYS` is a word split, not
+  a case difference. `Ananya Kids Mall` → `ANANYA KIDS MALL` and `Poonam Trading` → `POONAM TRADING` are.
+  ⛔ **Never auto-accept a normalised match** — resolve each one explicitly, because normalisation that
+  is right 3 times will be wrong the 4th and nothing will say so.
+- ⛔ **The 10 with no ledger are the "brute write" hazard in its purest form.** A Tally import naming a
+  party ledger that does not exist does not politely fail — depending on import settings it **creates
+  the ledger**, under a default group, silently. Ten duplicate customer ledgers in the books, each
+  accruing real balances, is exactly the outcome Afshaan's backstop requirement exists to prevent.
+  They include `SMART BABY` — which is also the one live GSTIN blocker (§8.4), so it fails twice.
+- ⚠️ **Group names do not tell you what a group holds.** `Warehouse Charges` (483 ledgers) is *vendor*
+  party ledgers, not charges; `QuickCom - Zepto` (612) is Zepto's per-warehouse customer entities.
+  Do not infer ledger type from its group.
+
+**Therefore:** the party map is a first-class column of the mapping table (§10.3), seeded from
+`Master.xlsx`, with every non-exact row defaulting to **unmapped → refuses to push** (backstop 1),
+never to a guess and never to auto-create.
+
+### 5.1 Tally carries SIX state GST ledger sets; Snorkel models ONE
 
 Tally carries GST + sales groups for **Karnataka (29), Haryana (06), Maharashtra (27), Punjab (03),
 Telangana (36), West Bengal (19)**, with interbranch transfer ledgers between them.
+⚠️ **That six separate GST *registrations* exist is an INFERENCE from the ledger structure, not a
+verified fact** — the interbranch ledgers make it very likely, but confirm with Mahesh (§9.1 Q2)
+before designing around it.
 `store.company_addresses` holds exactly one row with a GSTIN — Karnataka `29AAFCF7834H1ZA` — and the
 invoice/confirmation pages compute intra-vs-interstate against it.
 
@@ -245,7 +282,9 @@ as such rather than leaving it as an independent multi-session build.
 
 Each one exists because of a specific failure this system can produce silently.
 
-1. **Refuse on missing mapping. No default ledger, ever.** A fallback ledger is how a thousand wrong
+1. **Refuse on missing mapping. No default ledger, and NEVER let Tally auto-create a ledger** (§5.0).
+   A fallback or an auto-created party ledger is how a thousand wrong postings happen quietly.
+   *(original wording:* refuse on missing mapping, no default ledger, ever*)* A fallback ledger is how a thousand wrong
    postings happen quietly. Missing mapping = the document does not push, and says why.
 2. **Dry-run before every send.** The operator sees the exact voucher — every ledger line, every
    amount, Dr/Cr — before anything leaves Snorkel. Step 1 gets this free by rendering the file.
@@ -316,16 +355,19 @@ settled-unregistered partners as blockers.
 4. For purchases: the `category_key` → expense-ledger map, who decides input-GST eligibility, and
    where TDS is determined. (§6)
 5. Does Tally accept a GST sales voucher against an unregistered (B2C) party ledger? (§8.4)
+6. **The 10 GT/MT partners with no Tally ledger (§5.0) — create them in Tally, or are they duplicates
+   of ledgers under another name?** Includes `SMART BABY`. Must be settled before any push, or the
+   import creates them silently.
 
 ### 9.2 Afshaan
-6. **Cutover date.** Never chosen (v1 §4.6). `tally_push_readiness` now shows exactly what each date pulls in.
-7. **Which channels moved to outright purchase, and from when.** (§8.1–8.2)
-8. Does `EVENTS` (`channel_type = 'other'`) push?
-9. How the 61 FY26-27 credit notes cut over. (§8.3)
-10. When receipts move into Snorkel — a finance workflow change, not code.
+7. **Cutover date.** Never chosen (v1 §4.6). `tally_push_readiness` now shows exactly what each date pulls in.
+8. **Which channels moved to outright purchase, and from when.** (§8.1–8.2)
+9. Does `EVENTS` (`channel_type = 'other'`) push?
+10. How the 61 FY26-27 credit notes cut over. (§8.3)
+11. When receipts move into Snorkel — a finance workflow change, not code.
 
 ### 9.3 cocloud / PrEm Infotech
-11. A persistent, reachable, always-on instance? Gold or TallyPrime Server? (§2.1)
+12. A persistent, reachable, always-on instance? Gold or TallyPrime Server? (§2.1)
 
 ---
 
@@ -333,10 +375,11 @@ settled-unregistered partners as blockers.
 
 1. ~~`tally_voucher_no` identity column~~ ✅ shipped (v1, `snorkel_tally_voucher_identity_v1`)
 2. ~~Channel allow-list + precondition report~~ ✅ shipped (`snorkel_tally_push_gate_v1`)
-3. **Ledger mapping table + finance-facing UI in Snorkel.** The piece Afshaan asked for by name:
+3. **Ledger mapping table + finance-facing UI in Snorkel — INCLUDING the party map (§5.0).** The piece Afshaan asked for by name:
    *"provide a manual mapping which we can see in a UI that surfaces that mapping, so if at all
    something needs to change, we can change it in Snorkel itself."* Serves all four voucher types.
-   Seed it from `Master.xlsx`. **Startable once §9.1 Q1 is answered.**
+   Seed it from `Master.xlsx` — the party half auto-seeds at 91% exact (§5.0); the 13 non-exact GT/MT
+   rows are a finance review queue, not a build blocker. **Startable once §9.1 Q1 is answered.**
 4. **Voucher builder + dry-run preview** for `Sales`. No transport.
 5. **Step 1 transport: file export.** Build against Tally's `L: Sample Excel File` schema.
 6. Fix the fulfilment predicate in `tally_push_readiness` (§4).
