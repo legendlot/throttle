@@ -21,6 +21,8 @@ export default function POListPage() {
   const { showToast } = useToast();
   const router = useRouter();
   const [rows, setRows] = useState([]);
+  // Non-null only when the worker says the read was cut short: { total, fetched, limit }.
+  const [truncation, setTruncation] = useState(null);
   const [pendingInward, setPendingInward] = useState(0);
   const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
   const [search, setSearch] = useState('');
@@ -38,7 +40,11 @@ export default function POListPage() {
         garageFetch('getPOs', params, session),
         garageFetch('getPendingInward', {}, session).catch(() => []),
       ]);
-      setRows(Array.isArray(pos) ? pos : []);
+      // getPOs returns { rows, total, fetched, limit, truncated } as of S334. The array
+      // fallback keeps this working against an older worker rather than silently rendering
+      // an empty list if the two ever deploy out of step.
+      setRows(Array.isArray(pos) ? pos : (pos?.rows ?? []));
+      setTruncation(Array.isArray(pos) ? null : (pos?.truncated ? pos : null));
       setPendingInward(Array.isArray(inward) ? inward.length : 0);
     } catch (e) {
       showToast(e.message || 'Failed to load purchase orders', 'error');
@@ -80,6 +86,19 @@ export default function POListPage() {
   // that gate — the recurring way a permission gets taught to one surface and not the next.
   // The value column is written as the RESTRICTED marker for those users, never the number.
   function exportCsv() {
+    // ⚠️ The whole point of the truncation signal: this file gets TOTALLED in a spreadsheet,
+    // where a short total reads as authoritative. So a partial export is confirmed first and
+    // then carries the fact in its FILENAME — that is the only part of the warning that
+    // survives the file being saved, renamed in a folder, or emailed on (S334).
+    if (truncation) {
+      const ok = window.confirm(
+        `This list is PARTIAL.\n\n` +
+        `${truncation.total} purchase orders match your filters, but only the first ` +
+        `${truncation.limit} were loaded. Any total you calculate from this file will be ` +
+        `too low.\n\nExport the partial list anyway?`
+      );
+      if (!ok) return;
+    }
     const canChina = !!perms?.po_china;
     const cols = ['PO Number', 'Revision', 'Type', 'Source', 'Vendor', 'Vendor Code', 'Lines',
       'Currency', 'Value', 'Value (INR approx)', 'Expected', 'Raised by', 'Status'];
@@ -103,7 +122,9 @@ export default function POListPage() {
     // 05:30 IST, toISOString() still reads the previous UTC day, so an early-morning
     // download would be stamped yesterday. The three sibling exports in this app all use
     // this helper; matching them is the point.
-    a.download = `lot-purchase-orders-${todayStr()}.csv`;
+    a.download = truncation
+      ? `lot-purchase-orders-PARTIAL-${filteredRows.length}-of-${truncation.total}-${todayStr()}.csv`
+      : `lot-purchase-orders-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -129,7 +150,22 @@ export default function POListPage() {
         <Kpi label="China share" value={kpi.chinaShare} sub="of open value" tone="blue" format={(v) => Math.round(v) + '%'} />
       </div>
 
-      <Panel title="Purchase Orders" count={filtered ? `${filteredRows.length} of ${rows.length}` : rows.length}
+      {truncation && (
+        <div style={{
+          margin: '0 0 12px', padding: '10px 14px', borderRadius: 8,
+          background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
+          color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
+        }}>
+          <strong>Showing the first {truncation.limit} of {truncation.total} purchase orders.</strong>{' '}
+          The KPI tiles above and any export are calculated from the loaded rows only, so they
+          under-report. Narrow the filters to bring the list under {truncation.limit}.
+        </div>
+      )}
+
+      <Panel title="Purchase Orders"
+        count={filtered
+          ? `${filteredRows.length} of ${rows.length}${truncation ? ` (of ${truncation.total})` : ''}`
+          : (truncation ? `${rows.length} of ${truncation.total}` : rows.length)}
         action={
           <div className="filters">
             <input className="sel" data-search-primary type="text" placeholder="Search PO / vendor · /" value={search} onChange={(e) => setSearch(e.target.value)} style={{ fontFamily: 'var(--font-mono)', minWidth: 180 }} />

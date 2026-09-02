@@ -178,8 +178,9 @@ async function sb(path, opts = {}) {
     },
   });
   const text = await res.text();
-  try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
-  catch(e) { return { ok: res.ok, status: res.status, data: text }; }
+  const range = res.headers.get('content-range');
+  try { return { ok: res.ok, status: res.status, data: JSON.parse(text), range }; }
+  catch(e) { return { ok: res.ok, status: res.status, data: text, range }; }
 }
 
 // ── Public schema helper ───────────────────────────────────────
@@ -195,16 +196,31 @@ async function sbPublic(path, opts = {}) {
     },
   });
   const text = await res.text();
-  try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
-  catch(e) { return { ok: res.ok, status: res.status, data: text }; }
+  const range = res.headers.get('content-range');
+  try { return { ok: res.ok, status: res.status, data: JSON.parse(text), range }; }
+  catch(e) { return { ok: res.ok, status: res.status, data: text, range }; }
 }
 
-async function query(table, params = '') {
-  return sb(`/rest/v1/${table}${params}`);
+async function query(table, params = '', opts = {}) {
+  return sb(`/rest/v1/${table}${params}`, opts);
 }
-async function queryPublic(table, params = '') {
-  return sbPublic(`/rest/v1/${table}${params}`);
+async function queryPublic(table, params = '', opts = {}) {
+  return sbPublic(`/rest/v1/${table}${params}`, opts);
 }
+
+// PostgREST sets `Content-Range: <first>-<last>/<total>` and only fills <total> when the
+// request asked for it via `Prefer: count=exact`; otherwise it is `*`. Returns null when
+// no exact count was requested or the header is malformed — callers must handle null
+// rather than treating it as zero.
+function totalFromRange(range) {
+  const part = String(range || '').split('/')[1];
+  const n = Number(part);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Page size for the PO list read. Sized against PostgREST's `db-max-rows` (5,000 here),
+// which clamps every response regardless of this value — see CORE.md.
+const PO_PAGE_LIMIT = 2000;
 async function insert(table, body, single = false) {
   return sb(`/rest/v1/${table}`, {
     method: 'POST', body: JSON.stringify(body),
@@ -1196,8 +1212,14 @@ export default {
             });
             const recent = await queryPublic('ean_pool',
               `?status=eq.assigned&order=assigned_at.desc&limit=20&select=ean,assigned_product_code,assigned_at`);
+            // ⚠️ This asked for `count=exact` and then counted the returned array instead,
+            // which PostgREST clamps at db-max-rows (5,000) — so a pool larger than that
+            // reported exactly 5000 and looked like a real number (fixed 2026-09-02, S334).
+            const availTotal = totalFromRange(avail.range);
             return ok({
-              available_count: Array.isArray(avail.data) ? avail.data.length : 0,
+              available_count: availTotal !== null
+                ? availTotal
+                : (Array.isArray(avail.data) ? avail.data.length : 0),
               recent_assignments: recent.ok ? (recent.data || []) : [],
             });
           }
@@ -1357,15 +1379,16 @@ export default {
             // 2000 is chosen against the real constraint, not plucked: PostgREST clamps every
             // response to the project's `db-max-rows` (5,000 — CORE.md), so anything above
             // that is fiction, and 2000 is ~4 years of headroom at the measured rate while
-            // staying well clear. ⚠️ This is a REPRIEVE, NOT the fix — the read still has no
-            // total and still cannot say it was cut. Real paging is tracked in BACKLOG
-            // [snorkel]; do not close that item on the strength of this line.
-            let filter = '?order=created_at.desc&limit=2000';
+            // staying well clear.
+            // 2026-09-02 (S334): the read now asks PostgREST for an exact count and returns it,
+            // so the cap can no longer pass as a complete answer — see the return shape below.
+            let filter = `?order=created_at.desc&limit=${PO_PAGE_LIMIT}`;
             if (status) filter += `&status=eq.${encodeURIComponent(status)}`;
             if (source) filter += `&source=eq.${encodeURIComponent(source)}`;
             if (type)   filter += `&order_type=eq.${encodeURIComponent(type)}`;
-            const r = await query('po_summary', filter);
+            const r = await query('po_summary', filter, { prefer: 'count=exact' });
             if (!r.ok) return err(r.data);
+            const fetched = Array.isArray(r.data) ? r.data.length : 0;
             const canChina = canViewChina(P);
             const filteredRows = (r.data || []).filter(row =>
               !(row.status === 'Soft' && !canChina)
@@ -1386,7 +1409,14 @@ export default {
               ...row,
               raised_by_name: row.raised_by_user_id ? (nameMap[row.raised_by_user_id] || null) : null,
             }));
-            return ok(rows);
+            // ⚠️ `total` counts rows matching the DB filter BEFORE the China/Soft permission
+            // filter above, so for a user without China rights it is legitimately LARGER than
+            // rows.length on a complete, untruncated read. It is the truncation signal, NOT
+            // "how many POs you may see" — never render it as a visible-row count.
+            // Truncation is therefore measured against the RAW fetch (`fetched`), not `rows`.
+            const total     = totalFromRange(r.range);
+            const truncated = total === null ? fetched >= PO_PAGE_LIMIT : total > fetched;
+            return ok({ rows, total, fetched, limit: PO_PAGE_LIMIT, truncated });
           }
 
           case 'getPO': {

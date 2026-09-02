@@ -19,6 +19,7 @@ export default function ProcurementOverviewPage() {
 
   const [rrRows, setRrRows] = useState([]);
   const [poRows, setPoRows] = useState([]);
+  const [poTruncated, setPoTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -30,7 +31,11 @@ export default function ProcurementOverviewPage() {
         garageFetch('getPOs', {}, session),
       ]);
       setRrRows(Array.isArray(rrs) ? rrs : []);
-      setPoRows(Array.isArray(pos) ? pos : []);
+      // ⚠️ getPOs returns { rows, … } as of S334. Without the `.rows` fallback this reads
+      // as "not an array" and every PO KPI on this page silently renders 0 — the exact
+      // failure mode the truncation work exists to prevent, one level up.
+      setPoRows(Array.isArray(pos) ? pos : (pos?.rows ?? []));
+      setPoTruncated(Array.isArray(pos) ? false : !!pos?.truncated);
     } catch (e) {
       showToast(e.message || 'Failed to load procurement overview', 'error');
     } finally {
@@ -112,9 +117,12 @@ export default function ProcurementOverviewPage() {
 
       <div className="kpi-row">
         <Kpi label="Open Requests" value={kpis.pendingRR} sub="reorder queue" tone="yellow" onClick={() => router.push('/procurement/reorders')} />
-        <Kpi label="Open POs" value={kpis.openPO} sub="in flight" tone="blue" onClick={() => router.push('/procurement/pos')} />
-        <Kpi label="To Approve" value={kpis.pendingApproval} sub="awaiting sign-off" tone="orange" onClick={() => router.push('/procurement/pos')} />
-        <Kpi label="Arriving · 14d" value={kpis.arriving} sub="next 14 days" tone="green" onClick={() => router.push('/procurement/pos')} />
+        {/* These three are counted from the loaded PO page. When that read is truncated the
+            counts are floors, not totals — say so in `sub` rather than showing a bare number
+            that reads as complete (S334). */}
+        <Kpi label="Open POs" value={kpis.openPO} sub={poTruncated ? 'in flight · partial' : 'in flight'} tone="blue" onClick={() => router.push('/procurement/pos')} />
+        <Kpi label="To Approve" value={kpis.pendingApproval} sub={poTruncated ? 'awaiting sign-off · partial' : 'awaiting sign-off'} tone="orange" onClick={() => router.push('/procurement/pos')} />
+        <Kpi label="Arriving · 14d" value={kpis.arriving} sub={poTruncated ? 'next 14 days · partial' : 'next 14 days'} tone="green" onClick={() => router.push('/procurement/pos')} />
       </div>
 
       <div className="ov-2col">

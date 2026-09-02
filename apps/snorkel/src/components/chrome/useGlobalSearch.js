@@ -57,7 +57,11 @@ export function useGlobalSearch(session, perms) {
       if (e.perm && perms && !perms[e.perm]) { out[e.key] = []; return; }
       try {
         const rows = await garageFetch(e.action, {}, session);
-        out[e.key] = Array.isArray(rows) ? rows : [];
+        // This loader is generic across every entity action, so it must tolerate BOTH the
+        // bare-array shape and the paged `{ rows, total, truncated }` shape that list
+        // handlers are moving to (getPOs first, S334). Without this a converted handler
+        // makes its entity silently unsearchable rather than erroring.
+        out[e.key] = Array.isArray(rows) ? rows : (rows?.rows ?? []);
       } catch { out[e.key] = []; }
     }));
     cache.current = out;
