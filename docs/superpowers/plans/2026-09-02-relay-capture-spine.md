@@ -1096,10 +1096,21 @@ Insert immediately **after** the closing `}` of the `/web/` block (`index.js:291
 - [ ] **Step 3: Verify the worker still parses**
 
 ```bash
-cd commsops-worker && node --check src/index.js && node --check src/forms.js
+cd commsops-worker && cp src/index.js /tmp/idx.mjs && node --check /tmp/idx.mjs && rm /tmp/idx.mjs
+cd commsops-worker && node --check src/forms.js
+cd commsops-worker && node -e "require('./src/form-widget.js'); require('./src/forms.js'); console.log('modules resolve')"
 ```
 
-Expected: no output (both files parse).
+Expected: no output from the two checks, then `modules resolve`.
+
+⛔ **DO NOT use `node --check src/index.js` — it CANNOT pass in this repo, and it fails on the
+pristine file too.** `index.js` is real ESM (`export { JourneyWorkflow }` at line 4) while
+`package.json` declares `"type": "commonjs"`, so `--check` parses it as CommonJS and always throws
+`SyntaxError: Unexpected token 'export'`. Confirmed 2026-09-02 by extracting the pre-branch copy and
+reproducing it. The `.mjs` copy above is the working equivalent. **Do not "fix" `package.json`** —
+that changes how a live worker is parsed and is far outside this task.
+⚠️ `--check` is syntax-only either way: it does NOT resolve `require` targets, which is why the
+third command exists. Task 8 must be done BEFORE this task or the new require points at nothing.
 
 - [ ] **Step 4: Commit**
 
