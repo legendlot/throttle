@@ -29,6 +29,8 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   const { showToast } = useToast();
   const router = useRouter();
   const [rows, setRows] = useState([]);
+  // Non-null only when the worker says the read was cut short: { total, fetched, limit }.
+  const [truncation, setTruncation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
@@ -42,6 +44,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       const s = await getValidSession();
       const data = await garageFetch('getPaymentRequests', { scope }, s);
       setRows(data?.requests || []);
+      setTruncation(data?.truncated ? data : null);
       setSel(new Set());
     } catch (e) {
       showToast(e.message || 'Failed to load', 'error');
@@ -82,6 +85,17 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   return (
     <>
       <PageHead title={title} sub={sub} />
+
+      {truncation && (
+        <div style={{
+          margin: '0 0 16px', padding: '10px 14px', borderRadius: 8,
+          background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
+          color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
+        }}>
+          <strong>Showing the first {truncation.limit} of {truncation.total} requests.</strong>{' '}
+          The counts below cover the loaded rows only. Filter by status to narrow the list.
+        </div>
+      )}
 
       {/* Raising a request is the whole point of the page — one tap from the phone tab, never
           buried in the nav sheet. */}

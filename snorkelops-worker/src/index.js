@@ -218,9 +218,15 @@ function totalFromRange(range) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Page size for the PO list read. Sized against PostgREST's `db-max-rows` (5,000 here),
-// which clamps every response regardless of this value — see CORE.md.
-const PO_PAGE_LIMIT = 2000;
+// Page sizes for the list reads that return a total alongside the page. All are sized against
+// PostgREST's `db-max-rows` (5,000 here), which clamps every response regardless — see CORE.md.
+// ⚠️ The payment limits were originally sized against a phantom "~50-60 requests/week"; the real
+// rate inside Snorkel was ZERO because the module was never announced. Mahesh announced it and
+// locked #payments on 2026-09-02, so real volume starts now — which is why these two stopped
+// being theoretical and got the same treatment as getPOs (S334).
+const PO_PAGE_LIMIT  = 2000;
+const PAY_PAGE_LIMIT = 400;
+const FIN_PAGE_LIMIT = 300;
 async function insert(table, body, single = false) {
   return sb(`/rest/v1/${table}`, {
     method: 'POST', body: JSON.stringify(body),
@@ -908,7 +914,7 @@ export default {
             if (!canPayRequest(P)) return err('No permission', 403);
             const scope  = url.searchParams.get('scope') || 'mine';
             const status = url.searchParams.get('status') || '';
-            let q = '?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=400';
+            let q = `?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=${PAY_PAGE_LIMIT}`;
             // A plain requester sees only their own. Approver/executor/super-admin see the queues.
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (scope === 'mine' || !privileged) q += `&requested_by_user_id=eq.${userId}`;
@@ -925,9 +931,13 @@ export default {
             }
             if (pinned) q += `&status=eq.${pinned}`;
             else if (status) q += `&status=eq.${encodeURIComponent(status)}`;
-            const r = await query('payment_requests', q);
+            const r = await query('payment_requests', q, { prefer: 'count=exact' });
             if (!r.ok) return err(r.data);
-            return ok({ requests: r.data, scope, privileged });
+            const fetched   = Array.isArray(r.data) ? r.data.length : 0;
+            const total     = totalFromRange(r.range);
+            const truncated = total === null ? fetched >= PAY_PAGE_LIMIT : total > fetched;
+            return ok({ requests: r.data, scope, privileged,
+                        total, fetched, limit: PAY_PAGE_LIMIT, truncated });
           }
 
           case 'getPaymentRequest': {
@@ -969,10 +979,15 @@ export default {
             if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission', 403);
             const r = await query('payment_requests',
               '?status=eq.approved&select=*,payee:payment_payees(id,payee_code,name,payee_type)' +
-              '&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=300');
+              `&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
+              { prefer: 'count=exact' });
             if (!r.ok) return err(r.data);
             const rows = r.data || [];
-            if (!rows.length) return ok({ requests: [], banks: {}, documents: {} });
+            const finTotal     = totalFromRange(r.range);
+            const finTruncated = finTotal === null ? rows.length >= FIN_PAGE_LIMIT : finTotal > rows.length;
+            const finMeta = { total: finTotal, fetched: rows.length,
+                              limit: FIN_PAGE_LIMIT, truncated: finTruncated };
+            if (!rows.length) return ok({ requests: [], banks: {}, documents: {}, ...finMeta });
 
             const payeeIds = [...new Set(rows.map(x => x.payee_id).filter(Boolean))];
             const reqIds   = rows.map(x => x.id);
@@ -993,7 +1008,7 @@ export default {
             }
             const documents = {};
             if (dz.ok) for (const d of dz.data) (documents[d.request_id] ||= []).push(d);
-            return ok({ requests: rows, banks, documents });
+            return ok({ requests: rows, banks, documents, ...finMeta });
           }
 
           case 'getPaymentNotifications': {

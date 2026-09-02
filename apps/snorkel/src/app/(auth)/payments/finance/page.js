@@ -32,6 +32,8 @@ export default function FinanceQueuePage() {
   const { showToast } = useToast();
   const router = useRouter();
   const [d, setD] = useState({ requests: [], banks: {}, documents: {} });
+  // Non-null only when the worker says the read was cut short: { total, fetched, limit }.
+  const [truncation, setTruncation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
   const [refs, setRefs] = useState({});
@@ -45,6 +47,9 @@ export default function FinanceQueuePage() {
       const s = await getValidSession();
       const data = await garageFetch('getFinanceQueue', {}, s);
       setD({ requests: data?.requests || [], banks: data?.banks || {}, documents: data?.documents || {} });
+      // ⚠️ Sharpest case of the truncation class: the money total below is a SUM. A cut list
+      // under-reports what finance actually owes, and a short total reads as authoritative.
+      setTruncation(data?.truncated ? data : null);
     } catch (e) {
       showToast(e.message || 'Failed to load', 'error');
     } finally { firstLoadDone.current = true; setLoading(false); }
@@ -95,9 +100,20 @@ export default function FinanceQueuePage() {
       <PageHead title="Finance Queue"
         sub="Approved and unpaid, most urgent first. Everything needed to pay is on the card — bank details included." />
 
+      {truncation && (
+        <div style={{
+          margin: '0 0 14px', padding: '10px 14px', borderRadius: 8,
+          background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
+          color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
+        }}>
+          <strong>Showing the first {truncation.limit} of {truncation.total} approved requests.</strong>{' '}
+          The Value total below covers only these {truncation.fetched} — the real amount owed is higher.
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <Kpi label="To pay" value={rows.length} />
-        <Kpi label="Value" value={money(total)} />
+        <Kpi label="To pay" value={truncation ? `${rows.length} of ${truncation.total}` : rows.length} />
+        <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={money(total)} />
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
       </div>
 
