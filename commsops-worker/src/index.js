@@ -2870,7 +2870,9 @@ export default {
       const origin = request.headers.get('Origin') || '';
       const cors = BW.corsHeaders(origin);
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-      const withCors = (resp) => { for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v); return resp; };
+      // ⚠️ NOT a set-only loop — see BW.makeWithCors. `ok()`/`err()` carry the module-level
+      // wildcard, so a disallowed origin needs the ACAO header DELETED, not merely left unset.
+      const withCors = BW.makeWithCors(cors);
 
       if (url.pathname === '/web/session' && request.method === 'POST') {
         const b = await request.json().catch(() => ({}));
@@ -2928,16 +2930,10 @@ export default {
       const origin = request.headers.get('Origin') || '';
       const cors = BW.corsHeaders(origin);
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-      // ⚠️ THE DELETE IS LOAD-BEARING — do not simplify this to the /web/ block's version.
-      // `ok()`/`err()` build their Response from the module-level CORS const, which carries
-      // `Access-Control-Allow-Origin: *`. For a DISALLOWED origin `corsHeaders` returns {}, so a
-      // set-only loop leaves that wildcard in place and the origin scoping does nothing.
-      // Measured 2026-09-02: origin `https://evil.example` came back with `ACAO: *`.
-      const withCors = (resp) => {
-        if (!Object.keys(cors).length) { resp.headers.delete('Access-Control-Allow-Origin'); return resp; }
-        for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v);
-        return resp;
-      };
+      // ⚠️ THE DELETE IS LOAD-BEARING — see BW.makeWithCors, which now owns this for both public
+      // blocks. It was duplicated here and in /web/ (set-only there, which was the bug); one
+      // definition so a security control cannot drift between two copies.
+      const withCors = BW.makeWithCors(cors);
 
       if (url.pathname === '/f/submit' && request.method === 'POST') {
         // ⚠️ AN EXPLICIT ORIGIN REFUSAL, NOT JUST ABSENT CORS HEADERS. `corsHeaders` returns

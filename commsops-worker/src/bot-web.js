@@ -14,6 +14,24 @@ function corsHeaders(origin) {
     : {};
 }
 
+// Applies origin-scoped CORS to a Response, for the PUBLIC blocks (`/web/*`, `/f/*`).
+// ⚠️ THE DELETE IS LOAD-BEARING — a set-only loop is NOT equivalent. `ok()`/`err()` in index.js
+// build their Response from that file's module-level `CORS` const, which carries
+// `Access-Control-Allow-Origin: *`. For a disallowed origin `corsHeaders()` returns `{}`, so a
+// set-only loop leaves the wildcard in place and the allow-list enforces nothing.
+// Measured 2026-09-02: origin `https://evil.example` came back `ACAO: *` on `/web/*`.
+// ⚠️ CORS is enforced by the BROWSER, so this stops a page, never curl — a public route that must
+// actually refuse still needs its own origin check in the handler (see `/f/submit`).
+// Pinned by test/web-cors-origin.test.js.
+function makeWithCors(cors) {
+  const scoped = Object.keys(cors).length > 0;
+  return (resp) => {
+    if (!scoped) { resp.headers.delete('Access-Control-Allow-Origin'); return resp; }
+    for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v);
+    return resp;
+  };
+}
+
 async function loadSession(env, id) {
   if (!id || !/^[0-9a-f-]{36}$/.test(id)) return null;
   const r = await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(id)}&select=*&limit=1`, env);
@@ -98,4 +116,4 @@ async function floodCheck(env, sessionId) {
   return (r.ok ? r.data.length : 0) <= MAX_TURNS_PER_MIN;
 }
 
-module.exports = { corsHeaders, loadSession, loadDefinition, runTurn, floodCheck, MAX_TEXT, ALLOWED_ORIGINS };
+module.exports = { corsHeaders, makeWithCors, loadSession, loadDefinition, runTurn, floodCheck, MAX_TEXT, ALLOWED_ORIGINS };
