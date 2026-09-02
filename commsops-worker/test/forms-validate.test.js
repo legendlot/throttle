@@ -122,5 +122,13 @@ t('no dedupe_keys -> null, so every submission is kept', () => {
   assert.equal(dedupeKey(f, v), null);
 });
 
+t('identity precedence is email-first, so adding a phone later does not fork the key', () => {
+  const emailOnly = validateSubmission(FORM, { email: 'a@b.com', product_code: 'SKU1' });
+  const withPhone = validateSubmission(FORM, { email: 'a@b.com', phone: '7709991011', product_code: 'SKU1' });
+  assert.equal(dedupeKey(FORM, emailOnly), dedupeKey(FORM, withPhone),
+    'adding a phone must not change the key, or the same person dedupes twice');
+  assert.equal(dedupeKey(FORM, withPhone), 'back-in-stock:a@b.com:SKU1');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
