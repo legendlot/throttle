@@ -429,10 +429,11 @@ function BulkGrnPanel({ session, onSuccess }) {
       onSuccess();
     } catch (e) {
       const msg = e.message || 'GRN submission failed — check connection and retry';
-      // Wrong-code guard: worker blocks a receipt onto a superseded/discontinued/finished-car
-      // code with a `GRN_CODE_GUARD:` message. Offer an informed override (re-submit force=true).
-      if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
-        const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
+      // Worker guards that block the post but offer an informed override (re-submit force=true):
+      //   GRN_CODE_GUARD — receipt onto a superseded / discontinued / finished-car code
+      //   GRN_PO_GUARD   — vendor receipt with no PO reference, which strands the PO open forever
+      if (!force && /^GRN_(CODE|PO)_GUARD:/.test(msg)) {
+        const clean = msg.replace(/^GRN_(CODE|PO)_GUARD:\s*/, '');
         setSubmitting(false);
         if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return submit(true);
         return;
@@ -618,7 +619,7 @@ function FbuGrnPanel({ session, onSuccess }) {
     setGrnDate(todayISO());
   }
 
-  async function submit() {
+  async function submit(force = false) {
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
@@ -629,15 +630,17 @@ function FbuGrnPanel({ session, onSuccess }) {
       }
     }
     setSubmitting(true);
+    // Hoisted out of the try so the catch can tell "nothing created yet" from "part-way
+    // through the loop" — the difference decides whether a retry is safe.
+    const created = [];
     try {
-      const created = [];
       for (const l of lines) {
         const res = await workerFetch('postFbuGRN', {
           data: { product: l.product, variant: l.variant || null, color: l.color || null,
                   qty_received: parseInt(l.units),
                   qty_rejected: parseInt(l.rejected) || 0,
                   reject_reason: (l.rejectReason || '').trim() || null,
-                  grn_date: grnDate, supplier, po_ref: poRef }
+                  grn_date: grnDate, supplier, po_ref: poRef, force }
         }, session);
         created.push(res.data.grn_no);
         if (res.data.warning) showToast(res.data.warning, 'warning');
@@ -646,7 +649,18 @@ function FbuGrnPanel({ session, onSuccess }) {
       clearForm();
       onSuccess();
     } catch (e) {
-      showToast(e.message || 'FBU GRN failed', 'error');
+      const msg = e.message || 'FBU GRN failed';
+      // Missing-PO guard: vendor receipt with no PO reference. `supplier`/`po_ref` are
+      // form-level, so this can only ever trip on the FIRST line, before anything is created.
+      // ⛔ The created.length check keeps it that way — never re-run the loop once GRNs
+      // exist, or every earlier line would be posted a second time.
+      if (!force && created.length === 0 && /^GRN_PO_GUARD:/.test(msg)) {
+        const clean = msg.replace(/^GRN_PO_GUARD:\s*/, '');
+        setSubmitting(false);
+        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return submit(true);
+        return;
+      }
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -929,10 +943,11 @@ function PartsGrnPanel({ session, onSuccess }) {
       onSuccess();
     } catch (e) {
       const msg = e.message || 'GRN submission failed — check connection and retry';
-      // Wrong-code guard: worker blocks a receipt onto a superseded/discontinued/finished-car
-      // code with a `GRN_CODE_GUARD:` message. Offer an informed override (re-submit force=true).
-      if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
-        const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
+      // Worker guards that block the post but offer an informed override (re-submit force=true):
+      //   GRN_CODE_GUARD — receipt onto a superseded / discontinued / finished-car code
+      //   GRN_PO_GUARD   — vendor receipt with no PO reference, which strands the PO open forever
+      if (!force && /^GRN_(CODE|PO)_GUARD:/.test(msg)) {
+        const clean = msg.replace(/^GRN_(CODE|PO)_GUARD:\s*/, '');
         setSubmitting(false);
         if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return submit(true);
         return;
