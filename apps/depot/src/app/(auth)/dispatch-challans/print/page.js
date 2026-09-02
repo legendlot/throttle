@@ -172,6 +172,11 @@ function PrintInner() {
             <strong>Dispatched To:</strong> {h.to_name ? <>{h.to_name}, </> : null}
             <span style={{ whiteSpace: 'pre-line' }}>{h.to_address}</span>
             {h.to_gstin && <> · <strong>GSTIN:</strong> {h.to_gstin}</>}
+            {/* Internal reference only, rendered like `purpose` — conditional, so a challan
+                to a non-vendor prints exactly as it always has. The recipient's legal
+                name/address/GSTIN above remain the authoritative block for GST purposes;
+                this never replaces them. */}
+            {h.vendor_code && <> · <strong>Vendor Code:</strong> {h.vendor_code}</>}
           </div>
           <div>
             <strong>Dispatched From:</strong> <span style={{ whiteSpace: 'pre-line' }}>{h.from_address}</span>

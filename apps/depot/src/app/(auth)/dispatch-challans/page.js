@@ -146,7 +146,18 @@ export default function DeliveryChallansPage() {
                     style={{ cursor: 'pointer', transition: 'background 100ms' }}>
                     <td className="num" style={{ ...tdBase, fontWeight: 600, color: 'var(--yellow)' }}>{r.challan_no}</td>
                     <td className="num" style={{ ...tdBase, color: 'var(--t2)' }}>{fmtDate(r.challan_date)}</td>
-                    <td style={{ ...tdBase, color: 'var(--t1)' }}>{r.to_name || '—'}</td>
+                    {/* Vendor shown as a sub-line rather than its own column, deliberately:
+                        the vendor QUALIFIES the recipient, and a dedicated column would be
+                        empty on all 144 existing challans. It is searchable either way —
+                        the worker's `q` filter covers vendor_code alongside challan_no/to_name. */}
+                    <td style={{ ...tdBase, color: 'var(--t1)' }}>
+                      {r.to_name || '—'}
+                      {r.vendor_code && (
+                        <div className="num" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: 2 }}>
+                          {r.vendor_code}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ ...tdBase, color: 'var(--t2)', fontSize: 12.5 }}>{r.purpose || '—'}</td>
                     <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t1)' }}>{fmt(r.total_quantity)}</td>
                     <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t1)', fontWeight: 600 }}>{inr(r.total_amount)}</td>

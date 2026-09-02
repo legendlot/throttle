@@ -237,6 +237,14 @@ function DetailInner() {
               GSTIN: {h.to_gstin}
             </div>
           )}
+          {/* Absent on every challan raised before 2026-09-02, and legitimately absent
+              forever on anything going to LOT HQ or a customer — so render nothing rather
+              than an empty "Vendor: —" row that would read as missing data. */}
+          {h.vendor_code && (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>
+              Vendor: {h.vendor_code}
+            </div>
+          )}
         </Panel>
       </div>
 

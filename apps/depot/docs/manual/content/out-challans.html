@@ -8,12 +8,13 @@
 </div>
 
 <h2 class="sec">The register</h2>
-<p>The list shows Challan No., Date, Dispatched To, Purpose, Qty, Total (₹), <strong>EWB</strong> and Status. Filter by status (with live counts), search by number or recipient, and set a from/to date range. Status badges: Draft (neutral), Issued (green), Cancelled (red). The EWB column reads <span class="mono">—</span> if no e-way bill is needed, a blue number when one is recorded, or an amber <span class="mono">Required</span> when needed but missing. Click any row to open that challan&rsquo;s detail page.</p>
+<p>The list shows Challan No., Date, Dispatched To, Purpose, Qty, Total (₹), <strong>EWB</strong> and Status. Filter by status (with live counts), search by number, recipient <em>or vendor code</em>, and set a from/to date range. Where a challan is linked to a vendor, that vendor&rsquo;s code appears in small type under the recipient name. Status badges: Draft (neutral), Issued (green), Cancelled (red). The EWB column reads <span class="mono">—</span> if no e-way bill is needed, a blue number when one is recorded, or an amber <span class="mono">Required</span> when needed but missing. Click any row to open that challan&rsquo;s detail page.</p>
 
 <h2 class="sec">Creating a challan</h2>
 <ol class="steps">
   <li><span class="s-title">+ New Challan.</span> This opens a fresh challan form. Set the date, purpose (Material transfer, Job work, Sample, Return for repair&hellip;) and GST rate.</li>
   <li><span class="s-title">From &amp; To.</span> Pick the dispatching company address (prefilled, editable) and enter the recipient&rsquo;s name, address and GSTIN.</li>
+  <li><span class="s-title">Vendor (optional).</span> If the challan is going to a vendor, search the vendor master in the <strong>Vendor</strong> box above the recipient fields. Picking one <em>fills in</em> the name, address and GSTIN for you &mdash; it does not lock them, so edit any of the three afterwards if the goods are going to a site address rather than the vendor&rsquo;s registered one. <span class="mono">&times; unlink vendor</span> removes the link and keeps whatever you typed. Leave the box empty whenever the recipient is not a vendor &mdash; LOT HQ, a customer or a one-off &mdash; which is how every challan worked before this box existed and is still perfectly normal.</li>
   <li><span class="s-title">Goods supplied.</span> Add a line per item (search a product to auto-fill its description and HSN, or type freehand) with quantity, unit and rate. Amounts total automatically.</li>
   <li><span class="s-title">Transport &amp; e-way bill (optional).</span> Add mode, vehicle and transporter, and EWB number/date if you have one.</li>
   <li><span class="s-title">Save as Draft or Issue Challan.</span> Saving as draft lets you review later; issuing locks it from edits. The number is assigned on save.</li>

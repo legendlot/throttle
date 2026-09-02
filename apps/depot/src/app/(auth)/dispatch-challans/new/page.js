@@ -17,7 +17,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Panel } from '@throttle/ui';
+import { Spinner, useToast, Panel, Combobox } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { Plus, Trash2, Search, AlertTriangle, Info } from 'lucide-react';
 
@@ -99,6 +99,12 @@ function NewChallanInner() {
   const [toName, setToName]       = useState('');
   const [toAddress, setToAddress] = useState('');
   const [toGstin, setToGstin]     = useState('');
+  // Optional vendor link (Piyush, 2026-09-02). ⛔ The three free-text fields above remain the
+  // authoritative recipient record and stay editable — picking a vendor only PREFILLS them.
+  // A challan may go to a non-vendor (LOT HQ, a customer): 30 distinct recipients today, and
+  // all 144 existing challans predate this field. Never make it required.
+  const [vendorCode, setVendorCode] = useState('');
+  const [vendors, setVendors]       = useState([]);
 
   // ⚠️ Starts EMPTY on purpose (S308). It used to default to 'Material transfer', and the
   // default did the choosing: 128 of 128 challans since 2026-06-02 carry it and `Job work` has
@@ -133,6 +139,11 @@ function NewChallanInner() {
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
         setAddresses(list);
+        // Vendor master for the optional recipient picker. Failing to load it must NEVER
+        // block the form — the free-text recipient path is the primary one and works alone.
+        garageFetch('getVendors', {}, session)
+          .then(vs => { if (!cancelled) setVendors(Array.isArray(vs) ? vs : []); })
+          .catch(() => {});
         // Prefer the registered office or first active row as default From —
         // but NOT when editing (the loaded challan's From must win).
         const def = list.find(a => a.is_registered_office) || list[0];
@@ -169,6 +180,7 @@ function NewChallanInner() {
         setFromId('');
         setFromName(h.from_name || ''); setFromAddress(h.from_address || ''); setFromGstin(h.from_gstin || '');
         setToName(h.to_name || ''); setToAddress(h.to_address || ''); setToGstin(h.to_gstin || '');
+        setVendorCode(h.vendor_code || '');
         setPurpose(h.purpose || ''); setNotes(h.notes || '');
         setTransportMode(h.transport_mode || 'Road'); setVehicleNumber(h.vehicle_number || ''); setTransporterName(h.transporter_name || '');
         setEwbNumber(h.ewb_number || ''); setEwbDate(h.ewb_date ? String(h.ewb_date).slice(0, 10) : '');
@@ -271,6 +283,9 @@ function NewChallanInner() {
         to_name:          toName.trim(),
         to_address:       toAddress.trim(),
         to_gstin:         toGstin.trim() || null,
+        // Always sent, even when blank. The worker guards this field with `!== undefined`
+        // (its neighbours use `?? null`), so an explicit '' → null is how unlinking works.
+        vendor_code:      vendorCode || null,
         purpose:          purpose || null,
         notes:            notes.trim() || null,
         transport_mode:   transportMode || null,
@@ -424,6 +439,42 @@ function NewChallanInner() {
         </Panel>
 
         <Panel header="Dispatched To">
+          <div style={{ marginBottom: 10 }}>
+            <span style={lbl}>Vendor (optional — fills the fields below)</span>
+            {/* `portal` is required: this sits inside a bordered Panel, and without it the
+                dropdown is clipped by the panel's bounds. Same reason as the DI form. */}
+            <Combobox
+              portal
+              value={vendorCode}
+              onChange={(v, opt) => {
+                setVendorCode(v || '');
+                // Prefill, never lock. The operator can still edit all three fields after
+                // picking — a challan often goes to a vendor's site rather than their
+                // registered address, and the printed block must be able to say so.
+                if (opt) {
+                  setToName(opt.vendor_name || '');
+                  setToAddress(opt.address || '');
+                  setToGstin(opt.gstin || '');
+                }
+              }}
+              options={vendors.map(v => ({
+                value: v.vendor_code,
+                label: v.vendor_name,
+                hint:  v.vendor_code,
+                search: v.category || '',
+                vendor_name: v.vendor_name, address: v.address, gstin: v.gstin,
+              }))}
+              placeholder="Search the vendor master… (leave blank for LOT HQ, a customer, or a one-off)"
+            />
+            {vendorCode && (
+              <button
+                onClick={() => setVendorCode('')}
+                style={{ marginTop: 5, background: 'transparent', border: 'none', padding: 0,
+                         color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>
+                × unlink vendor (keeps the typed address)
+              </button>
+            )}
+          </div>
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Recipient Name *</span>
             <input ref={(el) => { fieldRefs.current.toName = el; }} type="text" value={toName} onChange={(e) => setToName(e.target.value)}
