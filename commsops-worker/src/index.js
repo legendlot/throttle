@@ -2707,8 +2707,16 @@ export default {
   // been a runtime ReferenceError behind a green build (the PATTERN-226 shape). Cloudflare
   // always passes it as the third argument, so widening the signature is additive.
   async fetch(request, env, ctx) {
-    if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(request.url);
+    // ⚠️ THE PATH EXCLUSION IS LOAD-BEARING, and this check MUST stay below `url`.
+    // This used to be the first line of fetch(), which meant it answered EVERY preflight with the
+    // wildcard `CORS` before the path was known — making the origin-scoped OPTIONS handlers in the
+    // `/web/` and `/f/` blocks below unreachable dead code, and both allow-lists decorative for
+    // preflight. Measured live 2026-09-02 (S332): `OPTIONS /web/message` from `https://evil.example`
+    // returned 200 + `ACAO: *`. Token-authed routes keep the wildcard — it is correct for them.
+    if (request.method === 'OPTIONS' && !url.pathname.startsWith('/web/') && !url.pathname.startsWith('/f/')) {
+      return new Response(null, { headers: CORS });
+    }
 
     // ── The short-link host is a REDIRECT host, not an API host ─────────────────────────
     // `lottoys.in` (env.LINK_HOST) exists only to serve /r/<code>. Everything else on it —
