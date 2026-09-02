@@ -38,9 +38,10 @@ const SUPPORTED = new Set(['image/jpeg', 'image/png']);
 // ── SHOPIFY SERVES THE FULL-RESOLUTION ORIGINAL, AND IT IS 5-8x OVER META'S CAP ──────────────
 // This is the measured cause of the residual 131053 trickle (S332, 2026-09-02). Browse/cart
 // abandonment templates take their header from the event's `product_image_url`, which is the raw
-// Shopify variant asset. Measured over 30 days: 46 of 47 attributable 131053 failures were assets
-// above MAX_BYTES — 7.2MB, 10.6MB, 14.2MB, 26.5MB, 26.6MB and one at 42.8MB. Every one returned
-// 200 with a SUPPORTED mime, so nothing upstream looked broken; they were simply enormous.
+// Shopify variant asset. Measured over 30 days (n=48 failures; 43 resolve to an asset url, 12
+// distinct): 42 of those 43 were assets above MAX_BYTES — 7.2MB, 10.6MB, 14.2MB, 26.5MB, 26.6MB
+// and one at 42.8MB. Every one returned 200 with a SUPPORTED mime, so nothing upstream looked
+// broken; they were simply enormous. (The remaining 5 have no resolvable asset url.)
 // uploadMedia refused them as `too_large` -> null -> the caller sent `image:{link}` -> Meta ran the
 // same oversized fetch itself and failed it ASYNCHRONOUSLY as 131053, losing the message.
 // ⚠️ So the failure was DETERMINISTIC PER VARIANT, not the "~0.4% noise" it was filed as: any

@@ -16,6 +16,7 @@
 //  - The doc's own disclaimer says these payloads may not match the live wire shape, so
 //    the handler still captures any UNMAPPED / errored event to comms.webhook_captures.
 const SHOP = require('./shopify.js'); // reuse normalizePhone (E.164, +91 default)
+const WAM = require('./wa-media.js');  // canonical Shopify CDN resize (S332)
 
 // Shopflo event name — snake `event_name`, or camel `eventName` (store_page_view).
 function eventName(body) {
@@ -212,12 +213,18 @@ function checkoutUrlSuffix(url) {
 // underground_blue_1 measured 25.24 MB → 1.72 MB at width=1200, ample for a phone-screen header.
 // Only Shopify CDN hosts are touched; any other URL is returned untouched (we cannot assume a
 // third-party host honours `width`, and a bogus param could break an otherwise-working link).
-const CDN_IMAGE_WIDTH = 1200;
+// ⭐ ONE IMPLEMENTATION, in wa-media.js. This used to carry its own copy, and the copies drifted in
+// the way that matters: this one matched ONLY `cdn.shopify.com`, so the storefront's
+// `www.legendoftoys.com/cdn/shop/...` shape — which the shopify_pixel path emits — fell straight
+// through unresized. Measured 2026-09-02 (S332): the SAME asset is 26.6MB via cdn.shopify.com and
+// 42.8MB via the storefront host. Delegating also picks up the `height=` guard.
+// ⚠️ This is ingest-time shaping (it keeps the STORED event url small). It is NOT the safety net —
+// cdnImage reaches only 1 of the 3 writers of `product_image_url` (shopify-webhooks.js:79 and
+// shopflo-webhooks.js:128-137 do not call it), so the load-bearing resize is the one at the upload
+// boundary in wa-media.js. Do not drop that on the strength of this.
 function cdnImage(url) {
   if (!url || typeof url !== 'string') return url || null;
-  if (!/^https?:\/\/[^/]*cdn\.shopify\.com\//i.test(url)) return url;
-  if (/[?&]width=/i.test(url)) return url;                 // already constrained — leave it
-  return url + (url.includes('?') ? '&' : '?') + `width=${CDN_IMAGE_WIDTH}`;
+  return WAM.cdnFetchUrl(url);
 }
 
 // cartLink(cartVariantIds) → a Shopify CART PERMALINK that rebuilds the shopper's cart.

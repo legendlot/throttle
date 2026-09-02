@@ -1,8 +1,8 @@
 // Shopify CDN resize on the WhatsApp media-header upload path (S332, 2026-09-02).
 //
 // WHY THIS EXISTS. Browse/cart abandonment templates take their header from the event's
-// `product_image_url` — the raw Shopify variant asset. Measured live over 30 days: 46 of 47
-// attributable `wa_131053` failures were assets over MAX_BYTES (7.2MB / 10.6MB / 14.2MB /
+// `product_image_url` — the raw Shopify variant asset. Measured live over 30 days (n=48; 43
+// resolve to an asset url): 42 of those 43 were assets over MAX_BYTES (7.2MB / 10.6MB / 14.2MB /
 // 26.5MB / 26.6MB / 42.8MB), all HTTP 200 with a supported mime. uploadMedia refused them as
 // `too_large`, the send fell back to `image:{link}`, and Meta ran the same oversized fetch itself
 // and failed it asynchronously as 131053. Deterministic per variant, not the ~0.4% noise it was
@@ -10,11 +10,22 @@
 const assert = require('assert');
 const WAM = require('../src/wa-media.js');
 
+// ⚠️ MUST await `fn()`. A sync try/catch around an async body catches NOTHING: the body's
+// rejection escapes as an unhandled rejection while this helper has already logged `ok` and
+// incremented `pass`. Caught by hostile review 2026-09-02 (S332) — an assertion that was
+// genuinely failing printed `ok`, and the run only went red because node happened to crash on
+// the unhandled rejection AFTER the summary line would have claimed success.
 let pass = 0, fail = 0;
-const t = (name, fn) => {
-  try { fn(); pass++; console.log('  ok  ', name); }
-  catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
-};
+const tests = [];
+const t = (name, fn) => tests.push([name, fn]);
+async function run() {
+  for (const [name, fn] of tests) {
+    try { await fn(); pass++; console.log('  ok  ', name); }
+    catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
+  }
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
 
 const CDN = 'https://cdn.shopify.com/s/files/1/0669/4721/9508/files/track_pink.webp?v=1784635676';
 const STORE = 'https://www.legendoftoys.com/cdn/shop/files/track_pink.webp?v=1784635676';
@@ -101,7 +112,27 @@ t('the rewrite is fetch-only — it does not become the cache key', async () => 
   } finally { globalThis.fetch = realFetch; A.sbComms = realSb; }
 });
 
-setTimeout(() => {
-  console.log(`\n  ${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
-}, 100);
+// ── The ingest-time helper must be the SAME implementation (S332 hostile review) ──────────────
+// `shopflo.js` shipped its own copy on 2026-07-27 and the two drifted: that copy matched only
+// `cdn.shopify.com`, so the storefront `/cdn/shop/` shape the shopify_pixel path emits fell
+// through unresized. These assertions fail if anyone re-forks it.
+const SHOPFLO = require('../src/shopflo.js');
+
+t('shopflo.cdnImage delegates to the same helper', () => {
+  assert.strictEqual(SHOPFLO.cdnImage(CDN), WAM.cdnFetchUrl(CDN));
+  assert.strictEqual(SHOPFLO.cdnImage(STORE), WAM.cdnFetchUrl(STORE));
+});
+
+t('shopflo.cdnImage now covers the storefront host it used to miss', () => {
+  const out = SHOPFLO.cdnImage(STORE);
+  assert.ok(out.includes('width=1200'), `storefront host not resized: ${out}`);
+});
+
+t('shopflo.cdnImage keeps its null/non-string contract', () => {
+  assert.strictEqual(SHOPFLO.cdnImage(null), null);
+  assert.strictEqual(SHOPFLO.cdnImage(undefined), null);
+  assert.strictEqual(SHOPFLO.cdnImage(''), null);
+  assert.strictEqual(SHOPFLO.cdnImage('https://other.example/a.png'), 'https://other.example/a.png');
+});
+
+run();

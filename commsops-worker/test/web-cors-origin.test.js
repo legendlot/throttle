@@ -10,11 +10,22 @@
 const assert = require('assert');
 const BW = require('../src/bot-web.js');
 
+// ⚠️ MUST await `fn()`. A sync try/catch around an async body catches NOTHING: the body's
+// rejection escapes as an unhandled rejection while this helper has already logged `ok` and
+// incremented `pass`. Caught by hostile review 2026-09-02 (S332) — an assertion that was
+// genuinely failing printed `ok`, and the run only went red because node happened to crash on
+// the unhandled rejection AFTER the summary line would have claimed success.
 let pass = 0, fail = 0;
-const t = (name, fn) => {
-  try { fn(); pass++; console.log('  ok  ', name); }
-  catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
-};
+const tests = [];
+const t = (name, fn) => tests.push([name, fn]);
+async function run() {
+  for (const [name, fn] of tests) {
+    try { await fn(); pass++; console.log('  ok  ', name); }
+    catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
+  }
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
 
 // Verbatim from index.js:41-48 — the wildcard is the whole point, so the test must carry it.
 const CORS = {
@@ -72,5 +83,4 @@ t('the response body is untouched', async () => {
   assert.strictEqual(resp.headers.get('Content-Type'), 'application/json');
 });
 
-console.log(`\n  ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+run();
