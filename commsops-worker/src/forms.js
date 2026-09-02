@@ -70,4 +70,29 @@ function dedupeKey(form, v) {
   return [form.slug, identity, ...keys.map((k) => v.payload[k] || '')].join(':');
 }
 
-module.exports = { validateSubmission, dedupeKey };
+const TURNSTILE_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
+// ⚠️ FAILS CLOSED on every abnormal path — empty token, network error, non-200, missing
+// secret. This is the only thing standing between the open internet and a profile write,
+// and a challenge that passes when it cannot reach its verifier is not a challenge at all.
+// (Same posture as gate.js's suppression/freq-cap reads: an unreadable check BLOCKS.)
+async function verifyTurnstile(env, token, ip) {
+  if (!env || !env.TURNSTILE_SECRET) return false;
+  if (!token) return false;
+  try {
+    const body = new URLSearchParams({ secret: env.TURNSTILE_SECRET, response: token });
+    if (ip) body.set('remoteip', ip);
+    const r = await fetch(TURNSTILE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    if (!r.ok) return false;
+    const j = await r.json();
+    return j && j.success === true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { validateSubmission, dedupeKey, verifyTurnstile };
