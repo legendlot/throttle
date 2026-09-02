@@ -314,9 +314,13 @@ export default function NewPaymentRequestPage() {
         <Modal onClose={() => { setDupWarn(null); router.push('/payments'); }} title="Raised — but check this">
           <div style={{ padding: 16, maxWidth: 520 }}>
             <p style={{ marginTop: 0 }}>
-              <b>{dupWarn.request_no}</b> was raised. {dupWarn.dupes.length || dupWarn.po_overdrawn
-                ? 'A couple of things are worth a look before it moves on:'
-                : 'One thing is worth a look before it moves on:'}
+              <b>{dupWarn.request_no}</b> was raised. {
+                // count the sections actually rendered below — saying "a couple of things" above a
+                // single warning reads as a bug in the page
+                [dupWarn.dupes.length > 0, !!dupWarn.po_warning, !!dupWarn.po_overdrawn]
+                  .filter(Boolean).length > 1
+                  ? 'A couple of things are worth a look before it moves on:'
+                  : 'One thing is worth a look before it moves on:'}
             </p>
 
             {dupWarn.dupes.length > 0 && (

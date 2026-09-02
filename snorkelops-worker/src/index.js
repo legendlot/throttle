@@ -2694,8 +2694,15 @@ export default {
               if (poCur === reqCur) {
                 const [lines, prior] = await Promise.all([
                   query('po_lines', `?po_number=eq.${poRef}&select=total_value`),
+                  // ⚠️ BOTH `rejected` AND `cancelled` are excluded, and the pair is the whole point:
+                  // neither is a commitment against the PO, so counting one would inflate consumption
+                  // and fire the warning on a PO with budget left. (`neq.rejected` alone was the first
+                  // draft — caught in this session's hostile review; `PAY-0001`, the only row in the
+                  // table, is cancelled, so the very first real use would have over-counted.)
+                  // `pending_approval`, `approved`, `submitted` and `paid` all DO count — an
+                  // in-flight request is money already spoken for.
                   query('payment_requests',
-                    `?linked_po_number=eq.${poRef}&status=neq.rejected&request_type=eq.payment&select=request_no,amount_to_pay`),
+                    `?linked_po_number=eq.${poRef}&status=not.in.(rejected,cancelled)&request_type=eq.payment&select=request_no,amount_to_pay`),
                 ]);
                 const poValue   = lines.ok ? lines.data.reduce((s, l) => s + Number(l.total_value || 0), 0) : 0;
                 const priorPaid = prior.ok ? prior.data.reduce((s, p) => s + Number(p.amount_to_pay || 0), 0) : 0;
