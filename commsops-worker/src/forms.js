@@ -48,6 +48,10 @@ function validateSubmission(form, body) {
   if (!channels.length) channels = [email && 'email', phone && 'whatsapp'].filter(Boolean);
   // Never record consent for a channel we cannot reach.
   channels = channels.filter((c) => (c === 'email' ? !!email : !!phone));
+  // ⚠️ DEDUPE. `consent` is an append-only ledger, so a repeated channel is a repeated
+  // ROW: `channels: Array(500).fill('email')` in one public POST wrote 500 identical
+  // opted_in rows. A Set is the whole fix; insertion order survives it, so email stays first.
+  channels = [...new Set(channels)];
   if (!channels.length) return { ok: false, error: 'no_usable_channel' };
 
   return {
@@ -129,23 +133,65 @@ async function handleFormSubmit(env, request) {
     return { ok: false, error: v.error, status: 400 };
   }
 
-  const identifiers = [];
-  if (v.email) identifiers.push({ type: 'email', value: v.email, is_verified: false });
-  if (v.phone) identifiers.push({ type: 'phone', value: v.phone, is_verified: false });
+  // ⚠️ EXACTLY ONE identifier goes to resolve_identity. NEVER both.
+  //
+  // `phone` and `email` are BOTH strong types in comms.resolve_identity (0049). Hand it two
+  // strong identifiers that resolve to two DIFFERENT existing profiles and it calls
+  // merge_profiles: identifiers/events/consent/suppressions are reassigned and the losing
+  // profile row is DELETED. `is_verified` is stored but never consulted in that decision, so
+  // `is_verified:false` buys nothing here. On an unauthenticated endpoint that is a stranger
+  // holding a destructive merge primitive — and it does not even need an attacker: a SHARED
+  // HOUSEHOLD PHONE (two family members, two emails, one WhatsApp number) fuses two real
+  // customer profiles and deletes one.
+  //
+  // Same rule and the same reason as bot-web.js:78-80. Email first because dedupeKey()'s
+  // identity precedence is email-first, so the resolved profile and the dedupe key agree.
+  const primary = v.email ? { type: 'email', value: v.email, is_verified: false }
+                          : { type: 'phone', value: v.phone, is_verified: false };
+  const secondary = v.email && v.phone
+    ? { type: 'phone', value: v.phone, is_verified: false } : null;
 
   const key = dedupeKey(form, v);
 
   // Event first — ingest resolves/creates the profile and runs journey-trigger matching.
   // ⚠️ This EMITS; it does not send. A journey a human activated is the only sender.
   const r = await ingest(env, {
-    identifiers,
+    identifiers: [primary],
     name: 'form_submitted',
     properties: { form: v.slug, kind: form.kind, channels: v.channels, source_url: v.source_url, ...v.payload },
     source: 'website_form',
     idempotency_key: key ? `form:${key}` : null,
   });
-  if (!r.ok) return { ok: false, error: r.error, status: 400 };
+  // ⚠️ `r.error` is raw PostgREST text — constraint names, and the failing row itself
+  // ("Key (idempotency_key)=(form:bis:a@b.com:SKU1) already exists"), i.e. the submitter's
+  // own email echoed to whoever made the request. This endpoint is unauthenticated, so the
+  // detail goes to the log (`wrangler tail | grep form_ingest_failed`) and the caller gets a
+  // generic 502. 502, not 400: the submission was well-formed; OUR write is what failed.
+  if (!r.ok) {
+    console.log('form_ingest_failed', JSON.stringify({ form: v.slug, error: r.error }));
+    return { ok: false, error: 'capture_failed', status: 502 };
+  }
   const profileId = r.profile_id;
+
+  // The OTHER identifier is attached directly, never through the resolver, so it can never
+  // force a merge (see the `primary`/`secondary` note above).
+  // ⚠️ `on_conflict=type,value` is REQUIRED, exactly as on form_submissions below: the unique
+  // constraint here is identifiers_type_value_uniq (0001), and without naming it PostgREST
+  // infers the PRIMARY KEY — a fresh uuid — so ignore-duplicates never fires and a phone that
+  // already belongs to SOMEONE ELSE raises a raw 23505 instead of being quietly left alone.
+  // Leaving it alone is the point: we attach an identifier, we never steal one.
+  if (secondary) {
+    const ir = await A.sbComms('/rest/v1/identifiers?on_conflict=type,value', env, {
+      method: 'POST',
+      headers: { Prefer: 'resolution=ignore-duplicates' },
+      body: JSON.stringify({
+        profile_id: profileId, type: secondary.type, value: secondary.value,
+        is_verified: false, source: 'website_form',
+      }),
+    });
+    // Best-effort: a missing secondary identifier is a lesser fault than losing the capture.
+    A.checkWrite('form_identifier_attach_failed', ir, { form: v.slug, type: secondary.type });
+  }
 
   const needsConfirm = form.requires_confirmation === true;
   const confirmToken = needsConfirm ? crypto.randomUUID().replace(/-/g, '') : null;
@@ -172,16 +218,31 @@ async function handleFormSubmit(env, request) {
   // ⚠️ `on_conflict` IS REQUIRED, not decoration. Without it PostgREST infers the PRIMARY KEY,
   // which is a fresh uuid on every insert — so no conflict is ever detected, ignore-duplicates
   // never fires, and the unique index raises a raw 23505 instead of a silent no-op.
-  await A.sbComms(key ? '/rest/v1/form_submissions?on_conflict=form_id,dedupe_key'
-                      : '/rest/v1/form_submissions', env, {
+  const sr = await A.sbComms(key ? '/rest/v1/form_submissions?on_conflict=form_id,dedupe_key'
+                                 : '/rest/v1/form_submissions', env, {
     method: 'POST',
     headers: key ? { Prefer: 'resolution=ignore-duplicates' } : {},
     body: JSON.stringify({
       form_id: form.id, profile_id: profileId, payload: v.payload, dedupe_key: key,
+      // ⚠️ The channels the customer actually CHOSE (migration 0060). Not derivable later:
+      // field presence is not choice, and handleFormConfirm used to guess from presence and
+      // opt people into a channel they had declined. Persist the choice, read the choice.
+      channels: v.channels,
       source_url: v.source_url, ip_hash: await hashIp(ip), turnstile_ok: true,
       confirm_token: confirmToken,
     }),
   });
+  // ⚠️ NOT fire-and-forget. On the back-in-stock path the consent row is already written, and
+  // the submission row is where that consent's DPDP evidence lives — a discarded failure here
+  // leaves a consent claim with no evidence and tells the customer it worked. On the confirmed
+  // path the confirm_token is lost, so the link in their email can never resolve. Either way
+  // the caller must hear about it.
+  if (!sr || sr.ok !== true) {
+    console.log('form_submission_insert_failed', JSON.stringify({
+      form: v.slug, status: sr?.status ?? null, detail: sr?.data ?? null,
+    }));
+    return { ok: false, error: 'capture_failed', status: 502 };
+  }
 
   return { ok: true, submitted: true, slug: v.slug, channels: v.channels };
 }
@@ -211,7 +272,18 @@ async function handleFormConfirm(env, token) {
     consent_copy_version: sub.forms?.consent_copy_version ?? null,
     submitted_at: sub.submitted_at || null, confirmed_at: now, turnstile_ok: true,
   };
-  const channels = [sub.payload?.email && 'email', sub.payload?.phone && 'whatsapp'].filter(Boolean);
+  // ⚠️ The channels the customer CHOSE, as persisted at capture (migration 0060). Deriving
+  // them from field PRESENCE fabricates consent: someone who typed both an email and a phone
+  // but ticked only `email` got a whatsapp/marketing/opted_in row they never asked for. One
+  // row per channel actually chosen, never a blanket row.
+  const stored = Array.isArray(sub.channels)
+    ? sub.channels.filter((c) => ['email', 'whatsapp'].includes(c)) : [];
+  // This fallback exists ONLY for submission rows written BEFORE migration 0060 added the
+  // column (they have channels = NULL and there is nothing else to read). Every row written
+  // after it takes the branch above. Do not extend this path.
+  const channels = stored.length
+    ? [...new Set(stored)]
+    : [sub.payload?.email && 'email', sub.payload?.phone && 'whatsapp'].filter(Boolean);
   for (const channel of channels) {
     await recordConsent(env, {
       profile_id: sub.profile_id, channel, purpose: 'marketing', state: 'opted_in',

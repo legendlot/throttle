@@ -26,6 +26,14 @@ function formWidgetJs(slug, workerBase, siteKey) {
   var wa=f.wa, phone=f.phone;
   wa.addEventListener('change',function(){ phone.style.display=wa.checked?'block':'none'; });
   var token='';
+  // ⚠️ A TURNSTILE TOKEN IS SINGLE-USE. Spend it, and the next submit sends a spent token and
+  // gets challenge_failed forever until a full page reload — so a customer who mistypes their
+  // email, reads 'bad_email', fixes it and resubmits was permanently bricked by their own typo.
+  // Reset after EVERY response, success or failure: the widget must always hold a fresh token.
+  function resetChallenge(){
+    token='';
+    try{ if(window.turnstile && window.turnstile.reset) window.turnstile.reset(); }catch(e){}
+  }
   // Turnstile renders itself; the token is the only thing the worker trusts.
   var ts=document.createElement('script');
   ts.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -44,10 +52,12 @@ function formWidgetJs(slug, workerBase, siteKey) {
     fetch(BASE+'/f/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
       .then(function(r){return r.json();})
       .then(function(j){
+        resetChallenge();
         msg.textContent = j && j.ok ? "You're on the list. We'll let you know." : 'Sorry, that did not go through.';
+        // Disabled ONLY on genuine success. A failed submit must stay retryable.
         if(j && j.ok) f.querySelector('button').disabled=true;
       })
-      .catch(function(){ msg.textContent='Sorry, that did not go through.'; });
+      .catch(function(){ resetChallenge(); msg.textContent='Sorry, that did not go through.'; });
   });
 })();`;
 }

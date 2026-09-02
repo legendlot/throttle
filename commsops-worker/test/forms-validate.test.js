@@ -70,6 +70,24 @@ t('a channel we cannot reach is dropped, never recorded', () => {
   assert.deepEqual(r.channels, ['email'], 'whatsapp must be dropped when no phone was given');
 });
 
+// ── F3: channels are DEDUPED ──────────────────────────────────────────────────
+// ⚠️ `consent` is an append-only ledger, so a duplicated channel is a duplicated ROW. One
+// anonymous POST could write hundreds of identical opted_in rows into DPDP evidence.
+t('a channel repeated 500 times collapses to one — not 500 consent rows', () => {
+  const r = validateSubmission(FORM, { email: 'a@b.com', product_code: 'X', channels: new Array(500).fill('email') });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.channels, ['email'],
+    '500 entries here become 500 identical rows in the append-only consent ledger');
+});
+
+t('deduping keeps every distinct channel, in first-seen order', () => {
+  const r = validateSubmission(FORM, { email: 'a@b.com', phone: '7709991011', product_code: 'X',
+    channels: ['whatsapp', 'email', 'whatsapp', 'email'] });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.channels, ['whatsapp', 'email'],
+    'dedupe must not drop a real choice, nor reorder what the customer picked');
+});
+
 t('payload carries only declared field keys', () => {
   const r = validateSubmission(FORM, { email: 'a@b.com', product_code: 'X', evil: 'drop me' });
   assert.equal(r.ok, true);
