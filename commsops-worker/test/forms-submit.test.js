@@ -121,6 +121,61 @@ const wrote = (writes, frag) => writes.filter((w) => w.path.includes(frag));
     assert.ok(wrote(writes, '/form_submissions')[0].body.confirm_token, 'must mint a confirm token');
   });
 
+  // ── confirmation ───────────────────────────────────────────────────────────
+  const { handleFormConfirm } = require('../src/forms.js');
+
+  await t('confirming stamps confirmed_at and writes the consent row', async () => {
+    const writes = [];
+    A.sbComms = async (path, env, o = {}) => {
+      const method = o.method || 'GET';
+      if (method !== 'GET') writes.push({ path, method, body: o.body ? JSON.parse(o.body) : null });
+      if (path.startsWith('/rest/v1/form_submissions')) {
+        return { ok: true, data: [{ id: 'S1', form_id: 'F1', profile_id: 'P1', confirmed_at: null,
+          payload: { email: 'a@b.com' }, source_url: null,
+          submitted_at: '2026-09-02T09:00:00Z',
+          forms: { slug: 'news', consent_copy_version: 3 } }] };
+      }
+      if (path.startsWith('/rest/v1/consent')) return { ok: true, data: [] };
+      return { ok: true, data: [] };
+    };
+    const r = await handleFormConfirm(ENV, 'tok123');
+    assert.equal(r.ok, true);
+    const c = writes.filter((w) => w.path.includes('/consent'))[0].body;
+    assert.equal(c.state, 'opted_in');
+    assert.equal(c.purpose, 'marketing', 'a confirmed ENROLMENT is marketing, unlike a requested alert');
+    assert.ok(c.evidence.confirmed_at, 'evidence must carry BOTH timestamps');
+    assert.ok(c.evidence.submitted_at);
+    assert.ok(writes.some((w) => w.method === 'PATCH' && w.body.confirmed_at));
+  });
+
+  await t('an unknown token is refused and writes nothing', async () => {
+    const writes = [];
+    A.sbComms = async (path, env, o = {}) => {
+      if ((o.method || 'GET') !== 'GET') writes.push({ path });
+      return { ok: true, data: [] };
+    };
+    const r = await handleFormConfirm(ENV, 'nope');
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'invalid_token');
+    assert.equal(writes.length, 0);
+  });
+
+  await t('confirming twice is idempotent — no second consent row', async () => {
+    const writes = [];
+    A.sbComms = async (path, env, o = {}) => {
+      if ((o.method || 'GET') !== 'GET') writes.push({ path });
+      if (path.startsWith('/rest/v1/form_submissions')) {
+        return { ok: true, data: [{ id: 'S1', form_id: 'F1', profile_id: 'P1',
+          confirmed_at: '2026-09-02T10:00:00Z', payload: { email: 'a@b.com' },
+          forms: { slug: 'news', consent_copy_version: 3 } }] };
+      }
+      return { ok: true, data: [] };
+    };
+    const r = await handleFormConfirm(ENV, 'tok123');
+    assert.equal(r.ok, true);
+    assert.equal(writes.filter((w) => w.path.includes('/consent')).length, 0);
+  });
+
   A.sbComms = origSb; globalThis.fetch = origFetch;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

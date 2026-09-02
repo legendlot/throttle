@@ -186,4 +186,43 @@ async function handleFormSubmit(env, request) {
   return { ok: true, submitted: true, slug: v.slug, channels: v.channels };
 }
 
-module.exports = { validateSubmission, dedupeKey, verifyTurnstile, handleFormSubmit };
+// The second half of confirmed opt-in. Until this runs, a marketing enrolment has a
+// submission row and NO consent row, so it cannot be sent to by anything.
+//
+// ⚠️ The consent written here is `marketing`, not `service`: the person is enrolling in
+// ongoing sends, which is exactly what `marketing` gates (purposes.js needsOptIn). Only a
+// single alert the customer requested is `service`.
+async function handleFormConfirm(env, token) {
+  const tok = String(token || '').trim();
+  if (!tok) return { ok: false, error: 'invalid_token', status: 400 };
+
+  const sr = await A.sbComms(
+    `/rest/v1/form_submissions?confirm_token=eq.${A.enc(tok)}` +
+    `&select=*,forms(slug,consent_copy_version)&limit=1`, env);
+  const sub = sr.ok ? sr.data?.[0] : null;
+  if (!sub) return { ok: false, error: 'invalid_token', status: 404 };
+
+  // Idempotent: a second click is a no-op, not a second consent row.
+  if (sub.confirmed_at) return { ok: true, confirmed: true, already: true };
+
+  const now = new Date().toISOString();
+  const evidence = {
+    form: sub.forms?.slug || null, source_url: sub.source_url || null,
+    consent_copy_version: sub.forms?.consent_copy_version ?? null,
+    submitted_at: sub.submitted_at || null, confirmed_at: now, turnstile_ok: true,
+  };
+  const channels = [sub.payload?.email && 'email', sub.payload?.phone && 'whatsapp'].filter(Boolean);
+  for (const channel of channels) {
+    await recordConsent(env, {
+      profile_id: sub.profile_id, channel, purpose: 'marketing', state: 'opted_in',
+      source: `website_form:${sub.forms?.slug || 'unknown'}`, evidence, captured_at: now,
+    });
+  }
+
+  await A.sbComms(`/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ confirmed_at: now }),
+  });
+  return { ok: true, confirmed: true };
+}
+
+module.exports = { validateSubmission, dedupeKey, verifyTurnstile, handleFormSubmit, handleFormConfirm };
