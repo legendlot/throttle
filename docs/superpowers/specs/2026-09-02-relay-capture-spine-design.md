@@ -56,7 +56,7 @@ in-conversation adapter is what makes that P1 closable, which is why it is in th
 | Ordering | Pipe first, builder at sub-project 4 | |
 | Abuse model | Turnstile + confirmed opt-in for marketing | See §6 |
 | Notify channel | Email and WhatsApp both offered, **email default** | See the caveat below |
-| Alert purpose | New `product_alert` purpose | See §6 |
+| Alert purpose | Semantics: suppression + quiet hours honoured, frequency cap bypassed | ⛔ Implemented by **reusing the existing `service` purpose**, not by adding one — see §6 |
 | Sending posture | Capture never sends; a human activates a journey | See §7 |
 
 ⚠️ **Email-default carries a measurement caveat, recorded because it will be asked later.** LOT's email
@@ -163,15 +163,37 @@ sub-project 3 with no channel to send on**, since consent is per-channel and can
 submission that never asked. `/subscribe` already models this shape as a `channels[]` array
 (`subscribe.js:22-46`) — follow it.
 
-**New purpose `product_alert`.** Verified 2026-09-02, the live vocabulary is `marketing` and `transactional`
-only, and a stock alert is cleanly neither. Marked `transactional` it would bypass quiet hours (a 2am stock
-alert); marked `marketing` the frequency cap could silently eat an alert the customer explicitly requested.
-`product_alert` **honours hard suppression and quiet hours, bypasses the frequency cap**. It is a new value
-in the purpose vocabulary rather than a new state, so the blast radius is the send gate only — and it keeps
-the consent log honest, which is what DPDP actually rests on.
+**Purpose: reuse the existing `service`. Do NOT add `product_alert`.**
 
-⚠️ Per CORE.md's count-reconciliation rule: **grep every reader of `purpose` and reconcile the count**
-before shipping this, rather than assuming the gate is the only one.
+⛔ **CORRECTED 2026-09-02, before any code was written.** This section originally specified a new
+`product_alert` purpose, on the stated basis that "the live vocabulary is `marketing` and `transactional`
+only". **That was measured from consent-row DATA, not from code, and it was wrong.** `src/purposes.js`
+defines five — `marketing`, `influencer_outreach`, `service`, `utility`, `transactional` — and one of them
+already has the exact semantics chosen here.
+
+`service` (added S274), verbatim from `gate.js:181-183`: *"bypasses consent + frequency cap + send budget,
+RESPECTS quiet hours and (like every purpose, without exception) suppression."* That is precisely
+"honours hard suppression and quiet hours, bypasses the frequency cap". Its stated definition —
+*"a message the CUSTOMER'S OWN action triggered, sent to the person who just interacted with us"*
+(`gate.js:172-173`) — describes a requested back-in-stock alert exactly, and its canonical example is the
+CSAT survey, i.e. sub-project 5 of this decomposition.
+
+**So a back-in-stock notify sends with `purpose: 'service'`**, and the consent row we write is DPDP
+evidence rather than a gate input. Adding a sixth purpose would duplicate `service` in a file whose own
+header exists because purposes had already been got wrong once.
+
+⚠️ **Two things an implementer must know about `service`:**
+1. **It gets no opt-out withdrawal check.** The `2a` withdrawal block (`gate.js:225-233`) is gated on
+   `isOutreach` only, so a customer who opted out of *marketing* still receives a `service` send. For an
+   alert they explicitly asked for this is the behaviour we want — but it is inherited, not chosen, so do
+   not assume a withdrawal protects here.
+2. **`service` was never added to the test-send allow-list in `index.js`, so a `service` test send is
+   coerced to `transactional` to this day** (documented in `purposes.js`, S274 residual, PATTERN-218).
+   That will affect testing the notify at sub-project 3. Fix it there or file it; do not silently rely on
+   test sends behaving like real ones.
+
+⚠️ Per CORE.md's count-reconciliation rule, this correction is *itself* the product of grepping every
+reader of `purpose` rather than trusting a measurement. Keep doing that.
 
 ## 7. Sending posture — capture never sends
 
