@@ -9,6 +9,9 @@
 // ⚠️ NOTHING HERE SENDS. Capture writes rows and emits an event; a human activating a
 // journey is the only thing that ever produces a message. One switch, in one place.
 const SHOP = require('./shopify.js');
+const A = require('./auth.js');
+const { ingest } = require('./ingest.js');
+const { recordConsent } = require('./consent.js');
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -95,4 +98,92 @@ async function verifyTurnstile(env, token, ip) {
   }
 }
 
-module.exports = { validateSubmission, dedupeKey, verifyTurnstile };
+// A stable, non-reversible client hint for abuse triage. NOT an identifier and never joined
+// on — a raw IP in a jsonb column is PII we have no use for.
+async function hashIp(ip) {
+  if (!ip) return null;
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
+  return [...new Uint8Array(buf)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function handleFormSubmit(env, request) {
+  let body; try { body = await request.json(); } catch { return { ok: false, error: 'bad_json', status: 400 }; }
+  const slug = String((body && body.form) || '').toLowerCase().trim();
+  if (!slug) return { ok: false, error: 'form_required', status: 400 };
+
+  // ⚠️ ORDER MATTERS. The challenge is verified BEFORE the form is even looked up, so an
+  // unchallenged request cannot use this endpoint to probe which form slugs exist.
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (!(await verifyTurnstile(env, body.turnstile_token, ip))) {
+    return { ok: false, error: 'challenge_failed', status: 403 };
+  }
+
+  const fr = await A.sbComms(
+    `/rest/v1/forms?slug=eq.${A.enc(slug)}&active=is.true&select=*&limit=1`, env);
+  const form = fr.ok ? fr.data?.[0] : null;
+  if (!form) return { ok: false, error: 'form_not_found', status: 404 };
+
+  const v = validateSubmission(form, body);
+  if (!v.ok) {
+    if (v.error === 'honeypot') return { ok: true, submitted: true };   // lie to bots
+    return { ok: false, error: v.error, status: 400 };
+  }
+
+  const identifiers = [];
+  if (v.email) identifiers.push({ type: 'email', value: v.email, is_verified: false });
+  if (v.phone) identifiers.push({ type: 'phone', value: v.phone, is_verified: false });
+
+  const key = dedupeKey(form, v);
+
+  // Event first — ingest resolves/creates the profile and runs journey-trigger matching.
+  // ⚠️ This EMITS; it does not send. A journey a human activated is the only sender.
+  const r = await ingest(env, {
+    identifiers,
+    name: 'form_submitted',
+    properties: { form: v.slug, kind: form.kind, channels: v.channels, source_url: v.source_url, ...v.payload },
+    source: 'website_form',
+    idempotency_key: key ? `form:${key}` : null,
+  });
+  if (!r.ok) return { ok: false, error: r.error, status: 400 };
+  const profileId = r.profile_id;
+
+  const needsConfirm = form.requires_confirmation === true;
+  const confirmToken = needsConfirm ? crypto.randomUUID().replace(/-/g, '') : null;
+
+  // Consent NOW only when this is a single requested alert. An ongoing marketing enrolment
+  // writes nothing until the person confirms — an unconfirmed submission must never become
+  // a sendable audience.
+  if (!needsConfirm) {
+    const evidence = {
+      form: v.slug, source_url: v.source_url, consent_copy_version: form.consent_copy_version,
+      turnstile_ok: true, ua: request.headers.get('user-agent') || null,
+      at: new Date().toISOString(),
+    };
+    for (const channel of v.channels) {
+      // `service`, not `marketing`: gate.js:181 — bypasses consent + frequency cap, RESPECTS
+      // quiet hours and suppression. Exactly the semantics a requested alert wants.
+      await recordConsent(env, {
+        profile_id: profileId, channel, purpose: 'service', state: 'opted_in',
+        source: `website_form:${v.slug}`, evidence,
+      });
+    }
+  }
+
+  // ⚠️ `on_conflict` IS REQUIRED, not decoration. Without it PostgREST infers the PRIMARY KEY,
+  // which is a fresh uuid on every insert — so no conflict is ever detected, ignore-duplicates
+  // never fires, and the unique index raises a raw 23505 instead of a silent no-op.
+  await A.sbComms(key ? '/rest/v1/form_submissions?on_conflict=form_id,dedupe_key'
+                      : '/rest/v1/form_submissions', env, {
+    method: 'POST',
+    headers: key ? { Prefer: 'resolution=ignore-duplicates' } : {},
+    body: JSON.stringify({
+      form_id: form.id, profile_id: profileId, payload: v.payload, dedupe_key: key,
+      source_url: v.source_url, ip_hash: await hashIp(ip), turnstile_ok: true,
+      confirm_token: confirmToken,
+    }),
+  });
+
+  return { ok: true, submitted: true, slug: v.slug, channels: v.channels };
+}
+
+module.exports = { validateSubmission, dedupeKey, verifyTurnstile, handleFormSubmit };
