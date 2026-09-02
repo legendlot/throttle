@@ -99,10 +99,16 @@ CREATE TABLE comms.form_submissions (
   submitted_at  timestamptz NOT NULL DEFAULT now()
 );
 
--- Partial UNIQUE: enforces per-(form, identity, product) dedupe in the DB, so a race between
--- two concurrent submits cannot create two rows. NULL dedupe_key rows are always distinct.
+-- UNIQUE, and deliberately NOT partial. Enforces per-(form, identity, product) dedupe in the
+-- DB so two concurrent submits cannot both land.
+-- ⛔ DO NOT ADD `WHERE dedupe_key IS NOT NULL`. It looks harmless and it breaks the upsert:
+-- a PARTIAL index cannot be inferred by `ON CONFLICT (form_id, dedupe_key)`, which is the only
+-- form PostgREST's `on_conflict=` can emit — proved 2026-09-02, it raises
+-- `42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+-- The WHERE also buys nothing: Postgres already treats NULLs as distinct in a unique index, so
+-- unlimited NULL-dedupe_key rows (surveys, forms with no dedupe_keys) are permitted either way.
 CREATE UNIQUE INDEX form_submissions_dedupe_idx
-  ON comms.form_submissions (form_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+  ON comms.form_submissions (form_id, dedupe_key);
 CREATE INDEX form_submissions_profile_idx
   ON comms.form_submissions (profile_id, submitted_at DESC);
 
@@ -372,8 +378,19 @@ t('same person, same product -> identical keys', () => {
 });
 
 t('phone-only identity keys on the phone', () => {
-  const v = validateSubmission(FORM, { phone: '7709991011', product_code: 'SKU1' });
-  assert.equal(dedupeKey(FORM, v), 'back-in-stock:+917709991011:SKU1');
+  // ⚠️ FORM requires email, so a phone-only body would be REJECTED and dedupeKey would then be
+  // handed {ok:false} with no .payload. Use a form where email is optional (caught 2026-09-02
+  // by running this suite against the implementation — it threw a TypeError).
+  const F = { ...FORM, fields: FORM.fields.map((f) => (f.key === 'email' ? { ...f, required: false } : f)) };
+  const v = validateSubmission(F, { phone: '7709991011', product_code: 'SKU1' });
+  assert.equal(v.ok, true, 'fixture must validate before a key can be derived');
+  assert.equal(dedupeKey(F, v), 'back-in-stock:+917709991011:SKU1');
+});
+
+t('dedupeKey refuses an invalid submission instead of throwing', () => {
+  const bad = validateSubmission(FORM, { product_code: 'SKU1' });   // no email -> {ok:false}
+  assert.equal(bad.ok, false);
+  assert.equal(dedupeKey(FORM, bad), null, 'must not read .payload off a rejected submission');
 });
 
 t('no dedupe_keys -> null, so every submission is kept', () => {
@@ -404,6 +421,9 @@ In `commsops-worker/src/forms.js`, add above `module.exports`:
 // An empty dedupe_keys means "never dedupe" (null), which the partial UNIQUE index treats
 // as always-distinct — correct for a survey, where every response is its own row.
 function dedupeKey(form, v) {
+  // Defensive: the handler only calls this after v.ok, but a rejected submission has no
+  // .payload and reading through it throws a TypeError rather than failing cleanly.
+  if (!v || !v.ok || !v.payload) return null;
   const keys = Array.isArray(form.dedupe_keys) ? form.dedupe_keys : [];
   if (!keys.length) return null;
   const identity = v.email || v.phone;
@@ -423,7 +443,7 @@ module.exports = { validateSubmission, dedupeKey };
 cd commsops-worker && node test/forms-validate.test.js
 ```
 
-Expected: `14 passed, 0 failed`.
+Expected: `15 passed, 0 failed`.
 
 - [ ] **Step 5: Commit**
 
@@ -807,7 +827,11 @@ async function handleFormSubmit(env, request) {
     }
   }
 
-  await A.sbComms('/rest/v1/form_submissions', env, {
+  // ⚠️ `on_conflict` IS REQUIRED, not decoration. Without it PostgREST infers the PRIMARY KEY,
+  // which is a fresh uuid on every insert — so no conflict is ever detected, ignore-duplicates
+  // never fires, and the unique index raises a raw 23505 instead of a silent no-op.
+  await A.sbComms(key ? '/rest/v1/form_submissions?on_conflict=form_id,dedupe_key'
+                      : '/rest/v1/form_submissions', env, {
     method: 'POST',
     headers: key ? { Prefer: 'resolution=ignore-duplicates' } : {},
     body: JSON.stringify({
@@ -833,7 +857,7 @@ module.exports = { validateSubmission, dedupeKey, verifyTurnstile, handleFormSub
 cd commsops-worker && node test/forms-validate.test.js && node test/forms-turnstile.test.js && node test/forms-submit.test.js
 ```
 
-Expected: `14 passed`, `6 passed`, `8 passed`, all with `0 failed`.
+Expected: `15 passed`, `6 passed`, `8 passed`, all with `0 failed`.
 
 - [ ] **Step 5: Commit**
 
@@ -1024,7 +1048,16 @@ Insert immediately **after** the closing `}` of the `/web/` block (`index.js:291
       const origin = request.headers.get('Origin') || '';
       const cors = BW.corsHeaders(origin);
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-      const withCors = (resp) => { for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v); return resp; };
+      // ⚠️ THE DELETE IS LOAD-BEARING — do not simplify this to the /web/ block's version.
+      // `ok()`/`err()` build their Response from the module-level CORS const, which carries
+      // `Access-Control-Allow-Origin: *`. For a DISALLOWED origin `corsHeaders` returns {}, so a
+      // set-only loop leaves that wildcard in place and the origin scoping does nothing.
+      // Measured 2026-09-02: origin `https://evil.example` came back with `ACAO: *`.
+      const withCors = (resp) => {
+        if (!Object.keys(cors).length) { resp.headers.delete('Access-Control-Allow-Origin'); return resp; }
+        for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v);
+        return resp;
+      };
 
       if (url.pathname === '/f/submit' && request.method === 'POST') {
         // ⚠️ AN EXPLICIT ORIGIN REFUSAL, NOT JUST ABSENT CORS HEADERS. `corsHeaders` returns
