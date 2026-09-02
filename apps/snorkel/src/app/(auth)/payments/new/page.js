@@ -110,8 +110,13 @@ export default function NewPaymentRequestPage() {
         } }, s);
       }
 
-      if (res.duplicate_of?.length) {
-        setDupWarn({ request_no: res.request_no, dupes: res.duplicate_of, status: res.status });
+      // The request is ALWAYS raised — these are advisories shown after the fact, never blocks.
+      if (res.duplicate_of?.length || res.po_warning || res.po_overdrawn) {
+        setDupWarn({
+          request_no: res.request_no, status: res.status,
+          dupes: res.duplicate_of || [],
+          po_warning: res.po_warning, po_overdrawn: res.po_overdrawn,
+        });
       } else {
         showToast(
           res.needs_approval
@@ -309,20 +314,54 @@ export default function NewPaymentRequestPage() {
         <Modal onClose={() => { setDupWarn(null); router.push('/payments'); }} title="Raised — but check this">
           <div style={{ padding: 16, maxWidth: 520 }}>
             <p style={{ marginTop: 0 }}>
-              <b>{dupWarn.request_no}</b> was raised. Another request already exists against this payee
-              and invoice number:
+              <b>{dupWarn.request_no}</b> was raised. {dupWarn.dupes.length || dupWarn.po_overdrawn
+                ? 'A couple of things are worth a look before it moves on:'
+                : 'One thing is worth a look before it moves on:'}
             </p>
-            <ul style={{ fontSize: 13, color: 'var(--t2)' }}>
-              {dupWarn.dupes.map(d => (
-                <li key={d.request_no}>
-                  {d.request_no} — {d.amount_to_pay} by {d.requested_by_name || 'someone'}
-                </li>
-              ))}
-            </ul>
-            <p style={{ fontSize: 13, color: 'var(--t2)' }}>
-              That is fine for a genuine part-payment or re-bill. If it is a duplicate, cancel yours
-              from My Requests.
-            </p>
+
+            {dupWarn.dupes.length > 0 && (
+              <>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>
+                  Another request already exists against this payee and invoice number:
+                </p>
+                <ul style={{ fontSize: 13, color: 'var(--t2)' }}>
+                  {dupWarn.dupes.map(d => (
+                    <li key={d.request_no}>
+                      {d.request_no} — {d.amount_to_pay} by {d.requested_by_name || 'someone'}
+                    </li>
+                  ))}
+                </ul>
+                <p style={{ fontSize: 13, color: 'var(--t2)' }}>
+                  That is fine for a genuine part-payment or re-bill. If it is a duplicate, cancel yours
+                  from My Requests.
+                </p>
+              </>
+            )}
+
+            {dupWarn.po_warning && (
+              <p style={{ fontSize: 13, color: 'var(--t2)' }}>{dupWarn.po_warning} Worth confirming
+                it is the PO you meant — a Soft PO is not committed yet, and a Closed one is already
+                settled.
+              </p>
+            )}
+
+            {dupWarn.po_overdrawn && (
+              <>
+                <p style={{ fontSize: 13, marginBottom: 4 }}>
+                  This takes the PO past its own value:
+                </p>
+                <ul style={{ fontSize: 13, color: 'var(--t2)' }}>
+                  <li>{dupWarn.po_overdrawn.po_number} is worth {dupWarn.po_overdrawn.po_value.toLocaleString('en-IN')}</li>
+                  <li>already requested: {dupWarn.po_overdrawn.already_requested.toLocaleString('en-IN')}
+                    {dupWarn.po_overdrawn.prior_requests.length > 0
+                      && ` (${dupWarn.po_overdrawn.prior_requests.join(', ')})`}</li>
+                  <li>this request: {dupWarn.po_overdrawn.this_request.toLocaleString('en-IN')}</li>
+                </ul>
+                <p style={{ fontSize: 13, color: 'var(--t2)' }}>
+                  Normal for an advance or a vendor over-bill. If it is not, check the PO before Finance pays it.
+                </p>
+              </>
+            )}
             <Btn kind="primary" onClick={() => { setDupWarn(null); router.push('/payments'); }}>Got it</Btn>
           </div>
         </Modal>

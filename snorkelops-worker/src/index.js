@@ -896,9 +896,19 @@ export default {
             // A plain requester sees only their own. Approver/executor/super-admin see the queues.
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (scope === 'mine' || !privileged) q += `&requested_by_user_id=eq.${userId}`;
-            if (scope === 'approvals') q += '&status=eq.pending_approval';
-            if (scope === 'finance')   q += '&status=eq.approved';
-            if (status) q += `&status=eq.${encodeURIComponent(status)}`;
+            // ⚠️ `scope` PINS a status. An explicit `status=` used to be ANDed on top of that pin,
+            // emitting TWO contradictory `status=eq.` filters — PostgREST ANDs them into an
+            // always-false predicate and returns an empty list with HTTP 200 and no error. A silent
+            // lie is worse than a rejection, so the two are now mutually exclusive: say which you mean.
+            // (No caller sent both — the UI passes `scope` only — so this was a trap for the next one.)
+            const pinned = scope === 'approvals' ? 'pending_approval'
+                         : scope === 'finance'   ? 'approved'
+                         : null;
+            if (pinned && status && status !== pinned) {
+              return err(`scope=${scope} already filters status=${pinned}; drop the explicit status= or use scope=mine`, 400);
+            }
+            if (pinned) q += `&status=eq.${pinned}`;
+            else if (status) q += `&status=eq.${encodeURIComponent(status)}`;
             const r = await query('payment_requests', q);
             if (!r.ok) return err(r.data);
             return ok({ requests: r.data, scope, privileged });
@@ -2650,13 +2660,53 @@ export default {
             const cat = await query('payment_categories',
               `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1&select=*`);
             if (!cat.ok || !cat.data[0]) return err('Unknown category');
+            let po_warning = null, po_overdrawn = null;
             if (cat.data[0].po_required && type === 'payment') {
               if (!d.linked_po_number) {
                 return err(`A PO is required for ${cat.data[0].label}. Raise one under Procurement → POs, or pick a different category.`);
               }
+              const poRef = encodeURIComponent(d.linked_po_number);
               const po = await query('purchase_orders',
-                `?po_number=eq.${encodeURIComponent(d.linked_po_number)}&select=po_number&limit=1`);
+                `?po_number=eq.${poRef}&select=po_number,status,currency&limit=1`);
               if (!po.ok || !po.data[0]) return err(`PO ${d.linked_po_number} not found`);
+
+              // ⛔ EXISTENCE WAS THE ONLY CHECK until 2026-09-02 (S332) — `select=po_number` did not
+              // even fetch the status, so a **Cancelled** PO passed the gate and a payment could be
+              // raised against a PO that commercially does not exist. Cancelled is now refused.
+              // Soft and Closed only WARN: a Soft PO can still be promoted, and a Closed one can
+              // legitimately carry a final payment. Do not harden those into blocks.
+              const poStatus = po.data[0].status;
+              if (poStatus === 'Cancelled') {
+                return err(`PO ${d.linked_po_number} is Cancelled and cannot carry a payment. Link a live PO, or pick a category that does not require one.`);
+              }
+              if (poStatus === 'Soft' || poStatus === 'Closed') {
+                po_warning = `PO ${d.linked_po_number} is ${poStatus}.`;
+              }
+
+              // Over-consumption WARNING, never a block — same rule as the duplicate-invoice warning
+              // below. Part-payments, advances and genuine vendor over-billing all legitimately push
+              // the total past the PO value; the spec asked to surface it, not to police it.
+              // ⚠️ Skipped when the PO and the request are in different currencies — there is no FX
+              // rate in this schema (see the threshold note below) and a cross-currency comparison
+              // would fire a confidently wrong warning. Silence beats a false alarm here.
+              const poCur  = (po.data[0].currency || 'INR').toUpperCase();
+              const reqCur = (d.currency || 'INR').toUpperCase();
+              if (poCur === reqCur) {
+                const [lines, prior] = await Promise.all([
+                  query('po_lines', `?po_number=eq.${poRef}&select=total_value`),
+                  query('payment_requests',
+                    `?linked_po_number=eq.${poRef}&status=neq.rejected&request_type=eq.payment&select=request_no,amount_to_pay`),
+                ]);
+                const poValue   = lines.ok ? lines.data.reduce((s, l) => s + Number(l.total_value || 0), 0) : 0;
+                const priorPaid = prior.ok ? prior.data.reduce((s, p) => s + Number(p.amount_to_pay || 0), 0) : 0;
+                if (poValue > 0 && priorPaid + amount > poValue) {
+                  po_overdrawn = {
+                    po_number: d.linked_po_number, po_value: poValue,
+                    already_requested: priorPaid, this_request: amount,
+                    prior_requests: prior.ok ? prior.data.map(p => p.request_no) : [],
+                  };
+                }
+              }
             }
 
             // Threshold IN FORCE AT SUBMIT, stamped on the row. Editing the threshold later must
@@ -2719,6 +2769,7 @@ export default {
             return ok({
               id: created?.id, request_no, status: created?.status,
               needs_approval: needsApproval, threshold, duplicate_of,
+              po_warning, po_overdrawn,
             });
           }
 
