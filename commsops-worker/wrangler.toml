@@ -35,6 +35,12 @@ LINK_HOST = "lottoys.in"
 # (same account powering the website/Shopflo), so the keys are production keys.
 CASHFREE_ENV = "production"
 
+# Turnstile SITE key for the /f/* public capture surface (S331 SP1). PUBLIC BY DESIGN — it is
+# embedded in the widget JS every visitor downloads, so it is a var, not a secret. Its private
+# half is the TURNSTILE_SECRET wrangler secret; an unset secret fails the challenge CLOSED, which
+# disables capture rather than opening it.
+TURNSTILE_SITE_KEY = "0x4AAAAAAEk4E0k_n904j-jG"
+
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
