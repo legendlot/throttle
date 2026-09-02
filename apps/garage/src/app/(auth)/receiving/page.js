@@ -456,9 +456,11 @@ export default function ReceivingPage() {
 
       // The worker stamps the boxes ONLY on a confirmed delivery, so a Slack outage
       // leaves the inward still reportable rather than silently swallowing it — which
-      // is why this reads the reply instead of assuming success. `csv` is used only
-      // when the reports bot token is set; otherwise the worker posts `text` via the
-      // webhook and ignores it. (Channel is whatever the webhook/token is pointed at.)
+      // is why this reads the reply instead of assuming success. `text` posts as the
+      // message and `csv` attaches as the file, both via the reports bot; the Incoming
+      // Webhook fallback was deleted 2026-09-02 (S332), so a failure now returns Slack's
+      // own error in `message` (surfaced in the toast below) instead of degrading to a
+      // text-only post that still stamped the boxes. (Channel = SLACK_REPORTS_CHANNEL_ID.)
       const r = await workerFetch('sendInwardVarianceReport',
         { data: { shipment_id: currentShipmentId, mark_ids: ids, text, csv: varianceReportCsv(varReport) } }, session);
 
