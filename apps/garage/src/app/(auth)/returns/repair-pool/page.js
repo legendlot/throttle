@@ -140,6 +140,27 @@ export default function RepairIssuePage() {
             </select>
           </div>
           <button style={btnSecondary} onClick={loadRuns} disabled={busy}>↻</button>
+          {/* Run-request consolidation: the ad-hoc parts request already accepts a
+              repair_run_id, but only via a manual dropdown in Redline — so the operator had to
+              leave Garage, find the Ad Hoc Parts tab and re-pick this run by hand. Deep-link it.
+              Opens in a NEW TAB deliberately: this is a scan station, and navigating away
+              mid-issue would cost the operator their place in the queue. */}
+          <a
+            href={runId
+              ? `https://redline.legendoftoys.com/new-run?tab=adhoc&repair_run_id=${encodeURIComponent(runId)}`
+              : undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              ...btnSecondary,
+              display: 'inline-flex', alignItems: 'center', textDecoration: 'none',
+              opacity: runId ? 1 : 0.45,
+              pointerEvents: runId ? 'auto' : 'none',
+            }}
+            title={runId
+              ? 'Request ad-hoc parts against this repair run (opens in Redline)'
+              : 'Select a repair run first'}
+          >Request parts from run</a>
           <div style={{ flex: 1 }} />
           <div>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>New run line</span>

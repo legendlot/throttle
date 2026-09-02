@@ -84,6 +84,19 @@ export default function NewRunPage() {
   const [cat, setCat]   = useState(null);     // getProductCatalogue
   const [vendors, setVendors] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [deepLinkRunId, setDeepLinkRunId] = useState('');
+
+  // Deep link from Garage → Returns → Repair Pool ("Request parts from run"): land straight
+  // on Ad Hoc Parts with the repair run preselected, instead of making the operator switch
+  // app, find the tab and re-pick the run by hand.
+  // ⚠️ Read from window.location, NOT useSearchParams — this page is statically prerendered
+  // and useSearchParams would force a Suspense boundary or a dynamic render to build at all.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('tab') === 'adhoc') setTab('adhoc');
+    const rid = q.get('repair_run_id');
+    if (rid) setDeepLinkRunId(rid);
+  }, []);
 
   useEffect(() => {
     if (!allowed) return;
@@ -98,6 +111,10 @@ export default function NewRunPage() {
   // Ad Hoc Parts is a PRODUCTION-only request (store_head excluded) — gated on ad_hoc_request.
   const showAdhoc = hasPermission(perms, 'ad_hoc_request');
   const tabs = showAdhoc ? [...TABS, { id: 'adhoc', label: 'Ad Hoc Parts', icon: 'filePlus' }] : TABS;
+  // A deep link can name the adhoc tab before perms have loaded, or for someone who lacks
+  // ad_hoc_request entirely. Fall back to the default tab rather than render an empty shell
+  // with no tab highlighted; once perms arrive, a permitted user lands on adhoc as intended.
+  const effTab = (tab === 'adhoc' && !showAdhoc) ? 'fresh' : tab;
 
   if (!allowed) {
     return (
@@ -114,16 +131,16 @@ export default function NewRunPage() {
       <div style={{ maxWidth: 780 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
           {tabs.map(t => (
-            <button key={t.id} style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>
+            <button key={t.id} style={tabBtn(effTab === t.id)} onClick={() => setTab(t.id)}>
               <Icon name={t.icon} size={14} />{t.label}
             </button>
           ))}
         </div>
-        {tab === 'fresh'      && <ProductionForm key="fresh" runType="in-house" cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-        {tab === 'outsourced' && <ProductionForm key="ext" runType="outsourced" cat={cat} products={products} vendors={vendors} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-        {tab === 'repair'     && <RepairForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-        {tab === 'repack'     && <RepackForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-        {tab === 'adhoc' && showAdhoc && <AdHocPartsForm products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} />}
+        {effTab === 'fresh'      && <ProductionForm key="fresh" runType="in-house" cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {effTab === 'outsourced' && <ProductionForm key="ext" runType="outsourced" cat={cat} products={products} vendors={vendors} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {effTab === 'repair'     && <RepairForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {effTab === 'repack'     && <RepackForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {effTab === 'adhoc' && showAdhoc && <AdHocPartsForm products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} initialRepairRunId={deepLinkRunId} />}
       </div>
       <RecentRuns session={session} perms={perms} />
     </div>
@@ -377,7 +394,7 @@ function RepackForm({ cat, products, session, toast, busy, setBusy, router }) {
 }
 
 // ── Ad Hoc Parts (production-only parts request) ──────────────
-function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
+function AdHocPartsForm({ products, session, toast, busy, setBusy, initialRepairRunId = '' }) {
   const [mode, setMode] = useState('bom');
   const [product, setProduct] = useState('');
   const [category, setCategory] = useState('');
@@ -387,7 +404,10 @@ function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
   const [shift, setShift] = useState('Morning');
   const [date, setDate] = useState(() => todayStr());
   const [repairRuns, setRepairRuns] = useState([]);
-  const [repairRunId, setRepairRunId] = useState('');
+  // Preselected by the Garage repair-pool deep link. The run still has to appear in the
+  // `planned,active` list below for the Combobox to resolve a label; a run outside that set
+  // leaves the field blank rather than showing a dangling id, which is the safe failure.
+  const [repairRunId, setRepairRunId] = useState(initialRepairRunId);
   const [mat, setMat] = useState(null);
 
   useEffect(() => {
