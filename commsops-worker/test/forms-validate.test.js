@@ -77,5 +77,50 @@ t('payload carries only declared field keys', () => {
   assert.equal(r.payload.product_code, 'X');
 });
 
+// ── dedupeKey ────────────────────────────────────────────────────────────────
+// ⚠️ THE BUG THIS EXISTS TO PREVENT: keying on identity alone. The same customer
+// legitimately asks to be notified about five different SKUs, and a
+// `form:<slug>:<email>` key would silently swallow four of them.
+const { dedupeKey } = require('../src/forms.js');
+
+t('dedupe key includes the declared dedupe field', () => {
+  const v = validateSubmission(FORM, { email: 'a@b.com', product_code: 'SKU1' });
+  assert.equal(dedupeKey(FORM, v), 'back-in-stock:a@b.com:SKU1');
+});
+
+t('same person, different product -> different keys', () => {
+  const a = validateSubmission(FORM, { email: 'a@b.com', product_code: 'SKU1' });
+  const b = validateSubmission(FORM, { email: 'a@b.com', product_code: 'SKU2' });
+  assert.notEqual(dedupeKey(FORM, a), dedupeKey(FORM, b));
+});
+
+t('same person, same product -> identical keys', () => {
+  const a = validateSubmission(FORM, { email: 'a@b.com', product_code: 'SKU1' });
+  const b = validateSubmission(FORM, { email: 'A@B.com', product_code: 'SKU1' });
+  assert.equal(dedupeKey(FORM, a), dedupeKey(FORM, b));
+});
+
+t('phone-only identity keys on the phone', () => {
+  // ⚠️ FORM requires email, so a phone-only body would be REJECTED and dedupeKey would then be
+  // handed {ok:false} with no .payload. Use a form where email is optional (caught 2026-09-02
+  // by running this suite against the implementation — it threw a TypeError).
+  const F = { ...FORM, fields: FORM.fields.map((f) => (f.key === 'email' ? { ...f, required: false } : f)) };
+  const v = validateSubmission(F, { phone: '7709991011', product_code: 'SKU1' });
+  assert.equal(v.ok, true, 'fixture must validate before a key can be derived');
+  assert.equal(dedupeKey(F, v), 'back-in-stock:+917709991011:SKU1');
+});
+
+t('dedupeKey refuses an invalid submission instead of throwing', () => {
+  const bad = validateSubmission(FORM, { product_code: 'SKU1' });   // no email -> {ok:false}
+  assert.equal(bad.ok, false);
+  assert.equal(dedupeKey(FORM, bad), null, 'must not read .payload off a rejected submission');
+});
+
+t('no dedupe_keys -> null, so every submission is kept', () => {
+  const f = { ...FORM, dedupe_keys: [] };
+  const v = validateSubmission(f, { email: 'a@b.com', product_code: 'SKU1' });
+  assert.equal(dedupeKey(f, v), null);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

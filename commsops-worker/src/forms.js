@@ -53,4 +53,21 @@ function validateSubmission(form, body) {
   };
 }
 
-module.exports = { validateSubmission };
+// The identity+content key that makes a submission distinct.
+//
+// ⚠️ IDENTITY ALONE IS WRONG. Back-in-stock is per-PRODUCT: one customer notifying on five
+// SKUs is five legitimate submissions, and a key of `slug:email` would collapse them to one
+// and silently lose four alerts. `dedupe_keys` names the content fields that participate.
+// An empty dedupe_keys means "never dedupe" (null), which the partial UNIQUE index treats
+// as always-distinct — correct for a survey, where every response is its own row.
+function dedupeKey(form, v) {
+  // Defensive: the handler only calls this after v.ok, but a rejected submission has no
+  // .payload and reading through it throws a TypeError rather than failing cleanly.
+  if (!v || !v.ok || !v.payload) return null;
+  const keys = Array.isArray(form.dedupe_keys) ? form.dedupe_keys : [];
+  if (!keys.length) return null;
+  const identity = v.email || v.phone;
+  return [form.slug, identity, ...keys.map((k) => v.payload[k] || '')].join(':');
+}
+
+module.exports = { validateSubmission, dedupeKey };
