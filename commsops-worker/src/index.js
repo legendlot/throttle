@@ -28,6 +28,8 @@ const BOTS = require('./bots.js');
 const BE = require('./bot-engine.js');
 const BW = require('./bot-web.js');
 const WIDGET = require('./bot-widget.js');
+const FORMS = require('./forms.js');
+const FWIDGET = require('./form-widget.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
@@ -2913,6 +2915,60 @@ export default {
         const r = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(sid)}&step_type=eq.agent_reply&id=gt.${after}&select=id,result&order=id.asc&limit=50`, env);
         return withCors(ok({ messages: (r.ok ? r.data : []).map((x) => ({ id: x.id, text: x.result?.text, agent_name: x.result?.agent_name })), status: session.status }));
       }
+      return withCors(err('not_found', 404));
+    }
+
+    // ── Public forms (S331, SP1) — commsops' FIRST unauthenticated public WRITE surface.
+    // ⚠️ MUST use BW.corsHeaders (origin-scoped), NEVER the global CORS const at the top of
+    // this file — that one is `Access-Control-Allow-Origin: '*'`, which is fine for a
+    // token-authed route and wrong for an open one. Same posture as the /web/ block above.
+    // ⚠️ Nothing in here sends. Capture emits `form_submitted`; a journey a human activated
+    // is the only thing that ever produces a message.
+    if (url.pathname.startsWith('/f/')) {
+      const origin = request.headers.get('Origin') || '';
+      const cors = BW.corsHeaders(origin);
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+      // ⚠️ THE DELETE IS LOAD-BEARING — do not simplify this to the /web/ block's version.
+      // `ok()`/`err()` build their Response from the module-level CORS const, which carries
+      // `Access-Control-Allow-Origin: *`. For a DISALLOWED origin `corsHeaders` returns {}, so a
+      // set-only loop leaves that wildcard in place and the origin scoping does nothing.
+      // Measured 2026-09-02: origin `https://evil.example` came back with `ACAO: *`.
+      const withCors = (resp) => {
+        if (!Object.keys(cors).length) { resp.headers.delete('Access-Control-Allow-Origin'); return resp; }
+        for (const [k, v] of Object.entries(cors)) resp.headers.set(k, v);
+        return resp;
+      };
+
+      if (url.pathname === '/f/submit' && request.method === 'POST') {
+        // ⚠️ AN EXPLICIT ORIGIN REFUSAL, NOT JUST ABSENT CORS HEADERS. `corsHeaders` returns
+        // {} for a disallowed origin, but the handler would still RUN and still WRITE —
+        // CORS is enforced by the browser, so it stops a page, never curl. The spec's
+        // "origin not allowed -> zero rows" only holds if we refuse here, so we do.
+        // Turnstile remains the real control; this is defence in depth, not the wall.
+        if (origin && !BW.ALLOWED_ORIGINS.has(origin)) return withCors(err('bad_origin', 403));
+        const r = await FORMS.handleFormSubmit(env, request);
+        return withCors(r.ok ? ok(r) : err(r.error, r.status || 400));
+      }
+
+      // A human clicking a link in their inbox — returns HTML, not JSON, and deliberately
+      // carries no CORS requirement of its own.
+      if (url.pathname === '/f/confirm' && request.method === 'GET') {
+        const r = await FORMS.handleFormConfirm(env, url.searchParams.get('t'));
+        const msg = r.ok ? 'You are subscribed. Thank you!' : 'This confirmation link is not valid.';
+        return new Response(
+          `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">` +
+          `<body style="font:16px system-ui;padding:3rem;text-align:center">${msg}</body>`,
+          { status: r.ok ? 200 : 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+
+      // The widget script — a plain script-tag target, no auth, cacheable.
+      // MUST stay inside this /f/ block, above the closing 404.
+      if (url.pathname === '/f/widget.js' && request.method === 'GET') {
+        return new Response(
+          FWIDGET.formWidgetJs(url.searchParams.get('form'), `https://${url.hostname}`, env.TURNSTILE_SITE_KEY || ''),
+          { headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=300' } });
+      }
+
       return withCors(err('not_found', 404));
     }
 
