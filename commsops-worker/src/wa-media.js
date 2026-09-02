@@ -35,6 +35,34 @@ const MAX_BYTES = 5 * 1024 * 1024;
 
 const SUPPORTED = new Set(['image/jpeg', 'image/png']);
 
+// ── SHOPIFY SERVES THE FULL-RESOLUTION ORIGINAL, AND IT IS 5-8x OVER META'S CAP ──────────────
+// This is the measured cause of the residual 131053 trickle (S332, 2026-09-02). Browse/cart
+// abandonment templates take their header from the event's `product_image_url`, which is the raw
+// Shopify variant asset. Measured over 30 days: 46 of 47 attributable 131053 failures were assets
+// above MAX_BYTES — 7.2MB, 10.6MB, 14.2MB, 26.5MB, 26.6MB and one at 42.8MB. Every one returned
+// 200 with a SUPPORTED mime, so nothing upstream looked broken; they were simply enormous.
+// uploadMedia refused them as `too_large` -> null -> the caller sent `image:{link}` -> Meta ran the
+// same oversized fetch itself and failed it ASYNCHRONOUSLY as 131053, losing the message.
+// ⚠️ So the failure was DETERMINISTIC PER VARIANT, not the "~0.4% noise" it was filed as: any
+// variant whose image exceeds the cap failed 100% of the time it was sent.
+//
+// Shopify's CDN resizes on demand via `width=`. 1200px sits above WhatsApp's 1125px recommended
+// header width and brought all 12 measured assets under 2.3MB (the 42.8MB one to 1.86MB).
+// ⚠️ Both host shapes must match — the SAME asset measured 26.6MB via `cdn.shopify.com` and
+// 42.8MB via the storefront's `/cdn/shop/` path, and both appear in live events.
+// ⚠️ Never clobber a width/height the caller already chose, and never touch a non-Shopify host.
+const HEADER_WIDTH = 1200;
+function cdnFetchUrl(assetUrl) {
+  try {
+    const u = new URL(assetUrl);
+    const isShopify = u.hostname === 'cdn.shopify.com' || u.pathname.startsWith('/cdn/shop/');
+    if (!isShopify) return assetUrl;
+    if (u.searchParams.has('width') || u.searchParams.has('height')) return assetUrl;
+    u.searchParams.set('width', String(HEADER_WIDTH));
+    return u.toString();
+  } catch { return assetUrl; }   // unparseable -> leave it exactly as given
+}
+
 // cacheLookup / cacheStore are separated so the send path can be unit-tested without a DB.
 async function cacheLookup(env, assetUrl, phoneNumberId) {
   const q = `/rest/v1/wa_media_cache?asset_url=eq.${A.enc(assetUrl)}`
@@ -81,18 +109,21 @@ function skip(reason, detail) {
 
 async function uploadMedia(env, assetUrl, phoneNumberId) {
   let bytes, mime;
+  // The CACHE KEY stays the original assetUrl — same logical asset, so a resized fetch must not
+  // fragment the cache or change what `applyMediaIds` matches on.
+  const fetchUrl = cdnFetchUrl(assetUrl);
   try {
-    const res = await fetch(assetUrl);
-    if (!res.ok) return skip('asset_fetch_failed', { assetUrl, status: res.status });
+    const res = await fetch(fetchUrl);
+    if (!res.ok) return skip('asset_fetch_failed', { assetUrl, fetchUrl, status: res.status });
     mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     // NB this is the SERVED content-type, not the file extension. A `.webp` URL that Shopify
     // serves as image/png passes; a `.jpg` served as application/octet-stream does not.
-    if (!SUPPORTED.has(mime)) return skip('unsupported_mime', { assetUrl, mime });
+    if (!SUPPORTED.has(mime)) return skip('unsupported_mime', { assetUrl, fetchUrl, mime });
     const buf = await res.arrayBuffer();
-    if (!buf || buf.byteLength === 0) return skip('empty_asset', { assetUrl });
-    if (buf.byteLength > MAX_BYTES) return skip('too_large', { assetUrl, bytes: buf.byteLength, max: MAX_BYTES });
+    if (!buf || buf.byteLength === 0) return skip('empty_asset', { assetUrl, fetchUrl });
+    if (buf.byteLength > MAX_BYTES) return skip('too_large', { assetUrl, fetchUrl, bytes: buf.byteLength, max: MAX_BYTES });
     bytes = buf;
-  } catch (e) { return skip('asset_fetch_threw', { assetUrl, error: String(e?.message || e) }); }
+  } catch (e) { return skip('asset_fetch_threw', { assetUrl, fetchUrl, error: String(e?.message || e) }); }
 
   try {
     const form = new FormData();
@@ -240,6 +271,6 @@ async function fetchInboundMedia(env, mediaId) {
 }
 
 module.exports = {
-  resolveMediaId, applyMediaIds, invalidate, MAX_AGE_MS, MAX_BYTES,
+  resolveMediaId, applyMediaIds, invalidate, MAX_AGE_MS, MAX_BYTES, cdnFetchUrl, HEADER_WIDTH,
   uploadInlineMedia, fetchInboundMedia, sendKindFor,
 };
