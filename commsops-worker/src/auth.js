@@ -54,8 +54,33 @@ function sbProfile(profile) {
         profile, rows: data.length, path: safe.slice(0, 300),
       }));
     }
-    return { ok: res.ok, status: res.status, data };
+    // `range` rides along so a caller that asked for `Prefer: count=exact` can read the real
+    // population out of `Content-Range` instead of counting the returned array — which PostgREST
+    // clamps at db-max-rows and which therefore reports a plausible-looking wrong number.
+    // Purely additive: every existing caller destructures {ok,status,data} and is unaffected.
+    // ⚠️ Guarded, not `res.headers.get(...)` directly. This helper runs inside live send paths and
+    // webhooks, and the file's whole posture is to log rather than throw — a response object
+    // without `headers` must degrade to "no count available", never take a send path down. It is
+    // also what keeps the existing fetch stubs (which return only {ok,status,text}) working.
+    const range = res.headers && typeof res.headers.get === 'function'
+      ? res.headers.get('content-range') : null;
+    return { ok: res.ok, status: res.status, data, range };
   };
+}
+
+// PostgREST sets `Content-Range: <first>-<last>/<total>`, and only fills <total> when the request
+// asked for it via `Prefer: count=exact`; otherwise it is `*`. Returns null when no exact count was
+// requested or the header is malformed — callers MUST handle null rather than treating it as zero.
+// Ported from snorkelops (S334), including both traps it records:
+//   ⚠️ `Number('')` and `Number('   ')` are both 0, not NaN, so a malformed `0-24/` would report a
+//      real-looking population of ZERO. Reject blanks BEFORE coercing.
+//   ⚠️ Asking for count=exact and then counting `data.length` anyway is the actual bug that was
+//      shipped there — the array is capped, the header is not.
+function totalFromRange(range) {
+  const part = String(range || '').split('/')[1];
+  if (part == null || String(part).trim() === '') return null;
+  const n = Number(part);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 const sbComms = sbProfile('comms');
 const sbStore = sbProfile('store');
@@ -133,7 +158,7 @@ const canAdmin        = p => can(p, 'relay_admin');
 const canSuperAdmin   = p => can(p, 'relay_super_admin');
 
 module.exports = {
-  sbProfile, sbComms, sbStore, enc, verifyJWT, checkWrite, DB_MAX_ROWS,
+  sbProfile, sbComms, sbStore, enc, verifyJWT, checkWrite, DB_MAX_ROWS, totalFromRange,
   canView, canSegment, canTemplate, canBuild, canActivate, canApprove,
   canConsentAdmin, canConnector, canAdmin, canSuperAdmin,
 };

@@ -1,0 +1,45 @@
+<p class="lead">Everyone Relay will not send to, and why. A suppression is the hardest block in the system &mdash; it stops <em>every</em> message on that channel, order updates included.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing who is blocked, and lifting a block when it is wrong.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly a read screen. One action: lift.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Consent admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Channels</div><div class="g-val">Email, WhatsApp, SMS.</div></div>
+</div>
+
+<h2 class="sec">What a suppression actually does</h2>
+<p>It is the first check in the send gate, and it is absolute. A suppressed address or number receives nothing on that channel &mdash; not marketing, not order confirmations, not shipping updates. This is what makes it different from an opt-out, which only stops marketing.</p>
+<p>That is also why this screen exists. When someone asks &ldquo;why did this customer never get their order confirmation?&rdquo;, a suppression is the most common answer, and until now the only way to check was to ask an engineer.</p>
+
+<h2 class="sec">The reasons, and what they mean</h2>
+<div class="tbl">
+  <table>
+    <thead><tr><th>Reason</th><th>Where it comes from</th><th>Lift it?</th></tr></thead>
+    <tbody>
+      <tr><td><code>hard_bounce</code></td><td>The mail provider told us the address does not exist.</td><td>Only if you know the address is genuinely valid.</td></tr>
+      <tr><td><code>complaint</code></td><td>The recipient marked one of our emails as spam.</td><td>Rarely. See the warning below.</td></tr>
+      <tr><td><code>wa_undeliverable_&hellip;</code></td><td>WhatsApp rejected delivery three times in a row.</td><td>Usually pointless &mdash; see below.</td></tr>
+      <tr><td><code>gdpr_redact</code></td><td>A legal erasure request.</td><td><b>Never.</b> The button is not offered.</td></tr>
+      <tr><td><code>manual</code></td><td>Somebody added it by hand.</td><td>Yes, if it was a mistake.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 class="sec">A long list here is normal</h2>
+<p>The first reaction to seeing thousands of rows is that something is broken. For the largest group, the opposite is true.</p>
+<p>A WhatsApp number is suppressed only on its <b>third</b> consecutive hard failure. That threshold is deliberate: roughly one in thirteen numbers that fail once will go on to deliver perfectly well later, so suppressing after a single failure would quietly cut off reachable customers to save a fraction of a message. The retries are how the genuinely dead numbers get found.</p>
+<p>So a count that grows is the mechanism doing its job. The only figure worth investigating is one that <em>stops falling</em> over a period of months.</p>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Lifting a <code>complaint</code> block is the riskiest thing on this screen. That person told their mail provider our message was spam. Sending to them again risks the sender reputation that every other customer&rsquo;s email depends on &mdash; including order confirmations.</p></div>
+
+<h2 class="sec">Lifting a block</h2>
+<p>Find the row, press <b>Lift block</b>, and confirm. The block is removed immediately and the person becomes reachable again on that channel.</p>
+<p>Every lift is recorded against your name in the <b>Lifted</b> tab, with what the block was and when it was removed. That tab is the <em>only</em> record that the block ever existed &mdash; lifting deletes the original row &mdash; so it is worth a look before you assume a customer was never blocked at all.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>There is no &ldquo;clear all&rdquo;, and that is deliberate. Bulk-lifting would re-admit thousands of known-dead addresses to every future send in one click, undoing the mechanism described above. Blocks come off one at a time, with a name against each.</p></div>
+
+<h2 class="sec">Finding one person</h2>
+<p>Search matches on the email address or phone number. You can also narrow by channel, or by an exact reason. If you are looking at a single customer, the <b>Contacts</b> screen shows the same blocks on their record alongside everything else about them &mdash; that is usually the faster route.</p>
+
+<h2 class="sec">Exporting</h2>
+<p><b>Export CSV</b> downloads every row matching the filters you have applied, not just the page on screen. If the export is ever truncated you are told so and asked to narrow the filters &mdash; a short file is never handed over as if it were complete.</p>

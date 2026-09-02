@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
   Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2, FlaskConical,
-  BookOpen,
+  BookOpen, ShieldOff,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -62,6 +62,10 @@ export const NAV_GROUPS = [
       { id: 'admin-settings',   label: 'Approval & Caps',   route: '/admin/settings',   icon: SlidersHorizontal, requires: 'relay_super_admin' },
       { id: 'admin-senders',    label: 'Sender Identities', route: '/admin/senders',    icon: AtSign,            requires: 'connector_channel_manage' },
       { id: 'admin-connectors', label: 'Connectors',        route: '/admin/connectors', icon: Cable,             requires: 'connector_channel_manage' },
+      // `data_consent_admin`, not `relay_view`: every action on this page (lifting a block) is
+      // gated on it in the worker, so showing it to a viewer would be a page whose only control
+      // 403s. Same key the per-contact Delivery-blocks panel uses to decide whether to offer Lift.
+      { id: 'admin-suppressions', label: 'Suppressions',    route: '/suppressions',     icon: ShieldOff,         requires: 'data_consent_admin' },
     ],
   },
 ];

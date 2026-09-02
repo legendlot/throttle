@@ -454,21 +454,51 @@ async function handleGet(url, auth, env) {
       // Matching is on VALUE, never profile_id: the Shopify redact path writes rows with no
       // profile_id at all, so a profile_id-keyed lookup would silently miss exactly the
       // suppressions that matter most.
+      // S336 — the admin list finally exists, so this had to learn to PAGE. The old shape read
+      // `limit=500` with no offset and returned no total, which was fine while the table held 0
+      // rows (it was built empty, deliberately) and is not fine now: `comms.suppressions` holds
+      // **3,380 rows** (measured 2026-09-02), so an unfiltered read silently returned the newest
+      // 500 and looked complete. Same class as the db-max-rows trap in auth.js, one order down.
       const values = (url.searchParams.get('values') || '').split(',').map((v) => v.trim()).filter(Boolean);
       const q = (url.searchParams.get('q') || '').trim();
-      let path = '/rest/v1/suppressions?select=*&order=created_at.desc&limit=500';
+      const channel = (url.searchParams.get('channel') || '').trim();
+      const reason = (url.searchParams.get('reason') || '').trim();
+      // Default stays 500 so the per-contact panel (which passes `values`) is byte-identical.
+      const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '500', 10) || 500, 1), 500);
+      const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10) || 0, 0);
+      // ⚠️ Tie-break on the PK. `created_at` alone is NOT unique here — the webhook paths insert
+      // in batches and 1,582 of these rows were written by one mechanism — so paging on it alone
+      // would drop and repeat rows across page boundaries (CORE.md's paging rule).
+      let path = `/rest/v1/suppressions?select=*&order=created_at.desc,id.desc&limit=${limit}&offset=${offset}`;
       if (values.length) {
         path += `&value=in.(${values.map((v) => `"${v.replace(/"/g, '')}"`).join(',')})`;
       } else if (q) {
         path += `&value=ilike.*${A.enc(q)}*`;
       }
-      const r = await A.sbComms(path, env);
+      if (channel) path += `&channel=eq.${A.enc(channel)}`;
+      if (reason) path += `&reason=eq.${A.enc(reason)}`;
+      const r = await A.sbComms(path, env, { prefer: 'count=exact' });
       if (!r.ok) return err('db_error', 500);
       // Recent lifts ride along so the contact detail can show "this WAS blocked and was
-      // lifted", which is otherwise invisible once the suppression row is gone.
+      // lifted", which is otherwise invisible once the suppression row is gone. `suppression_lifts`
+      // is the ONLY record a block ever existed — removeSuppression hard-DELETEs the suppression —
+      // so the admin list pages this too rather than only ever showing the global newest 100.
+      const liftsLimit = Math.min(Math.max(parseInt(url.searchParams.get('lifts_limit') || '100', 10) || 100, 1), 500);
+      const liftsOffset = Math.max(parseInt(url.searchParams.get('lifts_offset') || '0', 10) || 0, 0);
       const lr = await A.sbComms(
-        '/rest/v1/suppression_lifts?select=*&order=lifted_at.desc&limit=100', env);
-      return ok({ suppressions: r.data || [], lifts: (lr.ok && lr.data) || [] });
+        `/rest/v1/suppression_lifts?select=*&order=lifted_at.desc,id.desc&limit=${liftsLimit}&offset=${liftsOffset}`,
+        env, { prefer: 'count=exact' });
+      // ⚠️ Read the TOTAL out of Content-Range, never `data.length` — the array is capped by the
+      // limit above and would report the page size as the population (the S334 snorkelops bug).
+      // `totalFromRange` returns null on a malformed header; null means "unknown", not zero, so
+      // the UI must not render it as a count.
+      return ok({
+        suppressions: r.data || [],
+        lifts: (lr.ok && lr.data) || [],
+        total: A.totalFromRange(r.range),
+        lifts_total: lr.ok ? A.totalFromRange(lr.range) : null,
+        limit, offset,
+      });
     }
 
     case 'getMediaLibrary': {          // S251 — the shared image library

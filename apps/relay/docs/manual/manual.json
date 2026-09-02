@@ -2,8 +2,8 @@
   "title": "Relay",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to every screen in Relay, the system that talks to customers.",
-  "version": "1.5.0",
-  "date": "2026-08-26",
+  "version": "1.6.0",
+  "date": "2026-09-02",
   "app_url": "relay.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#F2CD1A",
@@ -343,6 +343,16 @@
           "title": "Connectors",
           "route": "/admin/connectors",
           "file": "54-admin-connectors.html",
+          "roles": [
+            "adm",
+            "sadm"
+          ]
+        },
+        {
+          "id": "adm-suppressions",
+          "title": "Suppressions",
+          "route": "/suppressions",
+          "file": "55-suppressions.html",
           "roles": [
             "adm",
             "sadm"
