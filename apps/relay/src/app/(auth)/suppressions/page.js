@@ -16,10 +16,10 @@
 // one-strike numbers later deliver fine (reference/decisions.md, "786 under-threshold numbers").
 // A "clear all" button here would silently undo that and re-admit thousands of dead numbers to
 // every future send. Lifting is one row at a time, on purpose, and it is recorded against a name.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
-import { useToast } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
 import {
   ShieldOff, Search, Download, ChevronLeft, ChevronRight, History, Undo2, X,
 } from 'lucide-react';
@@ -85,7 +85,10 @@ export default function SuppressionsPage() {
   const [reasonDraft, setReasonDraft] = useState('');
   const [applied, setApplied] = useState({ q: '', channel: '', reason: '' });
 
-  const firstLoad = useRef(false);
+  // NB no `firstLoadDone` ref here, deliberately, and the CORE.md rule it exists for is still
+  // honoured: the filter inputs live in the Panel's `action` slot, so the loading branch replaces
+  // the TABLE only and can never unmount a box someone is typing into. The spinner is additionally
+  // initial-load only (`rows === null`), so a background reload does not blank the table either.
   const canLift = !perms || perms.data_consent_admin;
 
   const load = useCallback(async (f, off, v) => {
@@ -108,7 +111,12 @@ export default function SuppressionsPage() {
         if (f.reason) params.reason = f.reason;
       }
       const r = await garageFetch('getSuppressions', params, session);
-      setRows(Array.isArray(r?.suppressions) ? r.suppressions : []);
+      // In the lifted view the suppressions side is asked for `limit=1` purely to keep this to one
+      // round trip — writing that single row into `rows` would flash it as a stale one-row table on
+      // the way back to Active. Keep whatever Active last held, but resolve null → [] so the
+      // initial-load spinner cannot stick if someone switches tabs before the first read returns.
+      if (v === 'lifted') setRows((prev) => prev ?? []);
+      else setRows(Array.isArray(r?.suppressions) ? r.suppressions : []);
       setLifts(Array.isArray(r?.lifts) ? r.lifts : []);
       // `total` is null when the header was missing or malformed. Keep the null — the UI says
       // "unknown", because rendering it as 0 would read as "nobody is blocked" on a table with
@@ -120,7 +128,7 @@ export default function SuppressionsPage() {
       setLoadError(true);
       setRows([]);
       showToast(e.message || 'Could not load suppressions', 'error');
-    } finally { firstLoad.current = true; }
+    }
   }, [showToast]);
 
   // Keyed on userId, NOT session: onAuthStateChange re-fires on every tab switch and a real token
@@ -181,6 +189,28 @@ export default function SuppressionsPage() {
     setBusy(true);
     try {
       const session = await getValidSession();
+      // ⚠️ Export what is ON SCREEN. This used to always export active suppressions, so pressing
+      // Export while the Lifted tab was showing silently downloaded a different dataset than the
+      // one being looked at — a file that is wrong in the one way a CSV can never be caught being
+      // wrong, because nobody re-checks a download against the page. (Caught by hostile review.)
+      if (view === 'lifted') {
+        const allLifts = [];
+        let lo = 0;
+        for (;;) {
+          const r = await garageFetch('getSuppressions',
+            { limit: '1', lifts_limit: '500', lifts_offset: String(lo) }, session);
+          const batch = Array.isArray(r?.lifts) ? r.lifts : [];
+          allLifts.push(...batch);
+          if (batch.length < 500 || allLifts.length >= EXPORT_CAP) break;
+          lo += 500;
+        }
+        downloadCsv('relay-suppressions-lifted',
+          ['channel', 'value', 'original_reason', 'original_blocked_at', 'lifted_at', 'lifted_by', 'note'],
+          allLifts.map((l) => [l.channel, l.value, l.original_reason, l.original_created_at,
+            l.lifted_at, l.lifted_by, l.note]));
+        showToast(`Exported ${allLifts.length.toLocaleString()} lifted blocks`, 'success');
+        return;
+      }
       const all = [];
       let off = 0;
       // Page until a short page arrives — the same rule CORE.md records for any read that can
@@ -208,15 +238,26 @@ export default function SuppressionsPage() {
     } finally { setBusy(false); }
   }
 
+  // `rows` starts null and only becomes [] once a read has returned. Those two states MUST render
+  // differently here: "no rows yet" during the initial load would otherwise render the empty state,
+  // and on this page the empty state reads "Nobody is blocked" — the most confidently wrong
+  // sentence the screen can show, on a table with 3,380 rows in it. (Caught by hostile review.)
+  // `rows === null` is precisely "no read has returned yet" — it is set to an array (possibly
+  // empty) by both the success and the failure path, so this cannot stick. A ref would be wrong
+  // here: reading one during render does not re-render when it flips.
+  const loading = rows === null;
   const list = view === 'lifted' ? lifts : rows;
   const count = view === 'lifted' ? liftsTotal : total;
   const filtered = !!(applied.q || applied.channel || applied.reason);
   const shownFrom = offset + 1;
   const shownTo = offset + (list?.length || 0);
   const hasPrev = offset > 0;
-  // Trust the page size, not the total: `count` can legitimately be null (unknown), and a next
-  // button that depends on a number we may not have would disappear exactly when it is needed.
-  const hasNext = (list?.length || 0) >= PAGE;
+  // Prefer the real total when we have it — a full last page would otherwise offer a Next that
+  // lands on an empty table. Fall back to the page size when `count` is null (unknown), because a
+  // Next that depends on a number we may not have would disappear exactly when it is needed.
+  const hasNext = count != null
+    ? offset + PAGE < count
+    : (list?.length || 0) >= PAGE;
 
   const tab = (id, label, icon) => (
     <Btn onClick={() => { setView(id); setOffset(0); }}
@@ -292,7 +333,9 @@ export default function SuppressionsPage() {
           </div>
         ) : null}
       >
-        {loadError ? (
+        {loading ? (
+          <div style={{ padding: '28px 0' }}><Spinner /></div>
+        ) : loadError ? (
           <EmptyState icon="alert" title="Could not load suppressions" hint="Refresh to try again." />
         ) : !list?.length ? (
           <EmptyState
@@ -315,7 +358,7 @@ export default function SuppressionsPage() {
             </thead>
             <tbody>
               {lifts.map((l) => (
-                <tr key={`${l.channel}:${l.value}:${l.lifted_at}`} style={{ borderTop: '1px solid var(--line)' }}>
+                <tr key={l.id} style={{ borderTop: '1px solid var(--line)' }}>
                   <td style={{ padding: '8px', color: 'var(--t2)' }}>{l.channel}</td>
                   <td style={{ padding: '8px' }} className="mono">{l.value}</td>
                   <td style={{ padding: '8px' }}>
