@@ -111,6 +111,19 @@ const wrote = (writes, frag) => writes.filter((w) => w.path.includes(frag));
     await handleFormSubmit(ENV, req({ form: 'back-in-stock', turnstile_token: 'tok', email: 'a@b.com', product_code: 'SKU1' }));
     assert.equal(wrote(writes, '/events')[0].body.idempotency_key, 'form:back-in-stock:a@b.com:SKU1');
     assert.equal(wrote(writes, '/form_submissions')[0].body.dedupe_key, 'back-in-stock:a@b.com:SKU1');
+    const sub = wrote(writes, '/form_submissions')[0];
+    assert.ok(sub.path.includes('on_conflict=form_id,dedupe_key'),
+      'without on_conflict PostgREST infers the PK (a fresh uuid) and dedupe silently never fires');
+  });
+
+  await t('a failed challenge does not even LOOK UP the form (no slug probing)', async () => {
+    const reads = [];
+    A.sbComms = async (path) => { reads.push(path); return { ok: true, data: [] }; };
+    turnstile(false);
+    const r = await handleFormSubmit(ENV, req({ form: 'back-in-stock', turnstile_token: 'bad', email: 'a@b.com', product_code: 'SKU1' }));
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'challenge_failed');
+    assert.equal(reads.length, 0, 'the form lookup must happen AFTER the challenge, or an unchallenged caller can probe which slugs exist');
   });
 
   await t('a confirmation-required form writes NO consent row at capture', async () => {
