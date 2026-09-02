@@ -208,10 +208,16 @@ capping, quiet hours and reporting come free rather than being rebuilt.
 
 **Outcome → `comms.events`. Transcript → never `comms.events`.**
 
-`comms.events` is 951,344 rows / 896 MB and its `properties` payload is **max 1,984 bytes, avg 481**. A
-5–20 KB transcript is 5–20× the largest payload that has ever existed there. Worse, `getProfile` does
-`select=*` on the last **50** events (`index.js:361`), so fifty transcript rows turn a ~25 KB contact
-page into multiple MB.
+`comms.events` is **953,901 rows / 900 MB** and its `properties` payload is **max 3,802 bytes, avg 471,
+p99 1,243** (re-measured 2026-09-02 by hostile review). A 5–20 KB transcript is **1.3–5× the largest
+payload that has ever existed** there and **4–16× the p99**. Worse, `getProfile` does `select=*` on the
+last **50** events (`index.js:361`), so fifty transcript rows turn a ~25 KB contact page into multiple MB.
+
+⚠️ **Corrected in place: an earlier draft of this section said "max 1,984 bytes" and attributed the
+widest payload to `whatsapp_inbound`. Both were wrong** — they came from a subagent and were taken on
+trust. Re-derived directly: the max is **3,802 bytes** on a **`shopflo_order_completed`** row (3,798
+characters, so this is not a chars-vs-bytes artefact). The conclusion is unchanged and the margin is
+still decisive, but do not quote the old figures.
 
 Proposed, mirroring `bot_sessions`/`bot_session_steps` and `comms.messages`:
 
