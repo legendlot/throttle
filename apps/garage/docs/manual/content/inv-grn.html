@@ -17,6 +17,10 @@
   </tbody>
 </table>
 
+<h2 class="sec">Vendor receipts need a PO reference</h2>
+<p>If you name a <strong>supplier that is on the vendor master</strong> and leave <strong>PO Reference</strong> empty, the GRN is refused with a message naming the vendor. This is not fussiness: the receipt is matched back to its purchase order by that reference alone, so a vendor GRN without one leaves the PO showing as never received &mdash; permanently. That is what stranded 49 POs before this check existed.</p>
+<p>Two things it deliberately does <em>not</em> do. It never asks for a PO on an <strong>internal return</strong> &mdash; <span class="mono">Line Flush</span> parts coming back off the line are supposed to have no PO, and they post exactly as before. And it can be <strong>overridden</strong>: if a vendor genuinely delivered with no PO (a free replacement, a sample), choose <strong>Post anyway</strong>. Do that rather than typing a made-up reference, which is worse than a recorded blank. <span class="callout">An override is logged against the GRN with the vendor&rsquo;s name, so it stays auditable.</span></p>
+
 <h2 class="sec">Booking a Bulk (BOM) GRN</h2>
 <ol class="steps">
   <li><span class="s-title">Pick the product and enter units received.</span> The bill of materials loads into a table, each part pre-filled with its expected quantity (BOM qty &times; units).</li>
