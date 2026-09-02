@@ -1,6 +1,8 @@
 # Relay voice channel — AI bot calls via LimeChat (design)
 
-> **Date:** 2026-09-02 (S336) · **System:** Relay (`commsops`) · **Status:** design draft, not approved, nothing built
+> **Date:** 2026-09-02 (S336) · **System:** Relay (`commsops`) · **Status:** design draft, nothing built
+> **Revised same day** after Afshaan's scope + phasing calls: voice engine ONLY (§1.1), and Phase 0 is
+> deliberately LimeChat-triggered and capture-only (§1.2, §12.1). Phase 0 blocks on Q1 alone.
 > **Origin:** Pruthvi, #bugs 2026-09-02 19:09 IST (ts `1788356379.455359`) — the entire written requirement is one paragraph, no thread, no vendor doc.
 > **Backlog:** to be filed as `[relay] [build]` pointing here.
 > **Supersedes nothing.** Collides with the LIVE `COD → Prepaid (C2P)` journey — see §7.
@@ -33,10 +35,37 @@ as SMS/RCS has TrustSignal and email has Resend. That framing is the whole desig
 the cost defensible: ~1.5 of the ~10–12 days is LimeChat-specific; the rest is channel work that a second
 voice vendor would reuse for free.
 
-⭐ **The expensive mistake to avoid: do not let LimeChat trigger its own calls off Shopflo.** They have a
-native Shopflo checkout integration and would happily read COD orders directly. If they do, Relay's send
-gate — suppression, consent, frequency cap, quiet hours, campaign exclusions — is bypassed for the one
-channel that is the most intrusive and the most regulated. Every trigger must originate in Relay.
+### 1.1 Scope — voice engine only (Afshaan, 2026-09-02)
+
+⛔ **We are taking their voice engine and nothing else.** LOT owns its WABA and will keep sending its own
+WhatsApp messages, so: **no LimeChat WhatsApp inbox, no WhatsApp Calling, no LimeChat helpdesk/ticketing.**
+Their calls run on telephony (Exotel or Knowlarity). This removes the WABA-conflict risk in §3.4 by
+decision rather than by mitigation, and keeps CS on Pitstop.
+
+### 1.2 Trigger ownership — the end state, and the deliberate interim
+
+The **end state** is that every trigger originates in Relay: it decides who gets contacted, the send gate
+(suppression → consent → freq cap → quiet hours → exclusions) applies to voice as it does to every other
+channel, and LimeChat executes. That is the whole point of §4.
+
+⭐ **But Phase 0 deliberately does not do that** (Afshaan, 2026-09-02):
+
+> *"I want to do it in the least disruptive manner. If that means that LimeChat fires directly from
+> Shopflo triggers and whatnot, and we have to use the two surfaces for a few days, that is perfectly
+> fine — as long as we are able to capture all the details that we need for a final integration."*
+
+So LimeChat may trigger off its own native Shopflo integration to begin with. **The single condition is
+total capture:** every call and every outcome must reach `comms.voice_calls`, including calls Relay did
+not ask for, so nothing is lost before the trigger moves. A `voice_calls` row must therefore tolerate a
+NULL `campaign_id`/`journey_id`/`enrolment_id` and an `origin` of `vendor_triggered`.
+
+⚠️ **Two consequences of Phase 0 to accept knowingly, not discover later.** (a) The send gate does not
+apply to vendor-triggered calls — suppression, frequency cap and quiet hours are LimeChat's behaviour, not
+ours, for that window. (b) The live C2P journey keeps running, so a COD order can receive **both** a bot
+call and the C2P WhatsApp ask (§7). Both are time-boxed by choice; neither is a defect.
+
+⚠️ **Open, and Afshaan's to answer:** does LimeChat integrate with Shopflo directly for the trigger, or
+does Relay sit in between from day one? Phase 0 assumes direct. See §11 Q13.
 
 ---
 
@@ -134,11 +163,13 @@ Cancellation Tags. Outputs, verbatim:
   Pitstop directly. ⛔ **Use them as a voice engine only.** The call nodes carry an optional **`CRM
   Inbox`** field — **leave it unset**, because setting it pulls conversations into their console and
   fragments CS across two systems, which is exactly what Afshaan ruled out.
-- **WhatsApp Calling is a live conflict risk.** They market an "exclusive Meta partnership" and ship a
-  `Start WhatsApp Call` node; their WhatsApp inboxes run on 360Dialog / Cloud API / Sinch. **LOT's WABA
-  is already bound to commsops.** Putting LimeChat on our WABA is where this breaks something live.
-  Plain telephony (their **Exotel** / **Knowlarity** inboxes) avoids the WABA entirely — and Exotel is
-  already in our stack (436 rows in `store.cs_calls`).
+- ✅ **WhatsApp Calling — RULED OUT by decision, 2026-09-02 (§1.1), so the risk is closed.** For the
+  record of why it would have been one: they market an "exclusive Meta partnership" and ship a
+  `Start WhatsApp Call` node, and their WhatsApp inboxes run on 360Dialog / Cloud API / Sinch, while
+  **LOT's WABA is already bound to commsops** — two systems on one WABA is where this would have broken
+  something live. Plain telephony (their **Exotel** / **Knowlarity** inboxes) avoids the WABA entirely,
+  and Exotel is already in our stack (436 rows in `store.cs_calls`). **Do not revisit WhatsApp Calling
+  without re-opening the WABA question first.**
 - **One irreducible exception to the single-pane goal:** the Voice Agent roster is server-fetched from
   LimeChat and the persona lives there. Relay can pass a per-call `Custom Prompt`, but agent authoring
   stays in their console. Everything else should be invisible to LOT agents.
@@ -259,9 +290,11 @@ and fire nothing, silently.
 
 ## 9. What NOT to do
 
-- ⛔ Do not let LimeChat trigger calls off Shopflo. Relay owns the decision (§1).
+- ⚠️ Do not let LimeChat trigger calls off Shopflo **in the end state** — Relay owns the decision (§1.2).
+  **Phase 0 deliberately allows it**, time-boxed, on condition of total capture. Do not "fix" it early.
 - ⛔ Do not set the `CRM Inbox` field on the call nodes (§3.4).
-- ⛔ Do not put LimeChat on LOT's WABA (§3.4).
+- ⛔ Do not put LimeChat on LOT's WABA, and do not enable WhatsApp Calling (§1.1).
+- ⛔ Do not adopt their WhatsApp inbox — LOT sends its own WhatsApp from its own WABA (§1.1).
 - ⛔ Do not adopt their helpdesk/ticketing — Pitstop owns inbound CS.
 - ⛔ Do not store transcripts in `comms.events.properties` (§5).
 - ⛔ Do not copy `sales.connector_*` wholesale: those connectors are **pull** (cursor, window,
@@ -310,6 +343,9 @@ and fire nothing, silently.
 10. **Voice replaces C2P, precedes it, or C2P becomes the unresolved-call fallback?** (§7)
 11. **Transcript visibility** — if yes to Q9, who may read one? (R2 needs a fresh decision.)
 12. Does the bot write the order state change, or does Relay? (R7)
+13. **Does LimeChat integrate with Shopflo directly for the trigger, or does Relay sit in between from
+    day one?** Phase 0 assumes direct (§1.2). Afshaan, 2026-09-02: *"whether a direct integration works
+    with Shopflo or we need to put a relay in between is a question that we need to answer."*
 
 ---
 
@@ -327,12 +363,27 @@ and fire nothing, silently.
 
 ⭐ **The channel is the work; the vendor is a plug.** A second voice vendor later costs ~1.5 days, not 12.
 
-**Phasing.** V1 = **outcomes only, no transcripts** (removes R2 + R3, ~2 days saved) on **one** flow, with
-the send gate and silence detection in from the start — never bolted on. Transcripts are v2 behind an
-explicit PII decision. The journey-exclusions item (§7) ships **before or with** v1, not after.
+### 12.1 Phasing — least-disruptive first (Afshaan, 2026-09-02)
 
-⛔ **Nothing starts until Q1 and Q8 are answered.** Q1 determines the inbound contract; Q8 determines what
-is being built at all.
+| Phase | Trigger | Relay's job | Ships |
+|---|---|---|---|
+| **0 — capture only** | **LimeChat**, off its own Shopflo integration | Receive and store every call + outcome. Nothing else changes; C2P keeps running. | Inbound route + scoped token + `comms.voice_calls` + status mapping + silence detection. **~3.5–4 days.** |
+| **1 — Relay triggers** | **Relay** via `cvf-events`, behind the send gate | Owns who is called and when; voice becomes a real channel | Outbound adapter + consent channel + quiet-hours row + journey send-step + exclusions. **~5–7 days.** |
+| **2 — transcripts** | unchanged | Turns table, retention, and a read gate | Only behind an explicit PII decision (R2/R3). |
+
+⭐ **Phase 0 is the whole near-term ask and it is genuinely small.** It is also the phase that makes
+Phase 1 safe: by the time Relay takes the trigger, we already hold real outcome data to model against
+rather than a guess at their vocabulary.
+
+⭐ **Build Phase 0 as if the trigger were already ours.** `origin` (`relay` | `vendor_triggered`) and a
+nullable enrolment link are the only two things that let Phase 0 rows and Phase 1 rows live in one table.
+Getting that wrong is the one thing in Phase 0 that would need a migration later.
+
+⚠️ Phase 0 does **not** need the journey-exclusions item; Phase 1 does, and it should ship before or
+with it (§7).
+
+⛔ **Phase 0 does not start until Q1 is answered** — it determines the inbound contract, and it is the
+one thing we cannot design around. **Q8 and Q13** shape Phase 1 and can be answered in parallel.
 
 ---
 
