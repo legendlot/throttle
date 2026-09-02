@@ -153,7 +153,7 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     assert.equal(r.error, 'unsupported_event');
   });
 
-  await t('protocol-relative product_image_url is normalized to https (WA header needs absolute)', async () => {
+  await t('protocol-relative product_image_url is normalized to https AND resized (WA header needs absolute + under 5MB)', async () => {
     const cap = {}; const restore = stubDb(cap);
     const stubbed = A.sbComms;
     let ingestedProps = null;
@@ -165,7 +165,16 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     await handlePixel(ENV, req({ token: 'tok', event: 'product_viewed', client_id: 'cid-known',
       properties: { product_name: 'X', product_handle: 'x', product_image_url: '//www.legendoftoys.com/cdn/shop/files/x.webp' } }));
     restore();
-    assert.equal(ingestedProps?.product_image_url, 'https://www.legendoftoys.com/cdn/shop/files/x.webp');
+    // The https normalisation this test was written for — unchanged, and still the load-bearing half:
+    // Meta's WA media header requires an absolute url.
+    assert.ok(ingestedProps?.product_image_url?.startsWith('https://www.legendoftoys.com/cdn/shop/files/x.webp'),
+      `lost the https normalisation: ${ingestedProps?.product_image_url}`);
+    // ⭐ NEW in S332 and asserted here because the ORDER is the whole point: the resize runs AFTER
+    // the protocol fix, so a pixel url arrives absolute AND width-capped. Resizing first would be a
+    // silent no-op (`new URL('//host/…')` throws) and the storefront-host originals — up to 42.8MB,
+    // 12 of the 30-day 131053 failures — would keep reaching Meta at full resolution.
+    assert.equal(ingestedProps?.product_image_url,
+      'https://www.legendoftoys.com/cdn/shop/files/x.webp?width=1200');
   });
 
   await t('product_viewed lookup ERROR fails closed (dropped, not minted)', async () => {

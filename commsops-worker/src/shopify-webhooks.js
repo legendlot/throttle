@@ -184,6 +184,12 @@ async function handlePixel(env, request) {
   // absolute https URL, so normalize here (server-side, so the pasted pixel needn't change).
   if (typeof props.product_image_url === 'string' && props.product_image_url.startsWith('//'))
     props.product_image_url = 'https:' + props.product_image_url;
+  // ⚠️ MUST run AFTER the protocol-relative fix above — `new URL('//cdn.shopify.com/…')` throws,
+  // so resizing first would silently no-op on exactly the pixel urls that need it. The pixel is
+  // the source of the storefront-host shape (`www.legendoftoys.com/cdn/shop/…`) that the old
+  // cdn.shopify.com-only regex missed, and 12 of the 30-day 131053 failures came through here.
+  // S332, 2026-09-02.
+  props.product_image_url = SF.cdnImage(props.product_image_url);
   // CART PERMALINK on pixel add_to_cart (2026-07-29). The pixel carries `variant_id` +
   // `quantity` — everything needed to build the same `/cart/<variant>:<qty>` permalink the
   // Shopflo path emits — but never built it: measured 0 of 4,119 pixel add_to_cart events had

@@ -12,6 +12,7 @@
 // the webhook that carries the order.
 const A = require('./auth.js');
 const { pickVariantImage, variantImageIndex } = require('./shopflo.js');
+const { cdnFetchUrl } = require('./wa-media.js');   // canonical Shopify CDN resize (S332)
 
 const STOREFRONT_CATALOG_URL = 'https://www.legendoftoys.com/products.json?limit=250';
 
@@ -28,7 +29,7 @@ async function fetchCatalog() {
   catch (e) { console.log('catalog_parse_failed', e?.message || String(e)); return null; }
 }
 
-async function resolveVariantImage(env, variantIdsCsv, primaryName) {
+async function resolveVariantImageRaw(env, variantIdsCsv, primaryName) {
   const ids = String(variantIdsCsv || '').split(',')
     .map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
   if (!ids.length) return null;
@@ -60,4 +61,14 @@ async function resolveVariantImage(env, variantIdsCsv, primaryName) {
   }
 }
 
-module.exports = { fetchCatalog, resolveVariantImage, STOREFRONT_CATALOG_URL };
+// ⚠️ RESIZE AT THE RESOLVER, NOT AT THE CALL SITES. This function feeds `product_image_url` for
+// BOTH the Shopify order path (shopify-webhooks.js:78) and the Shopflo add_to_cart backfill
+// (shopflo-webhooks.js:137), and `cdnImage` was wired into neither — which is how full-resolution
+// originals (up to 42.8MB) reached the WhatsApp header and failed as 131053. Wrapping the resolver
+// covers every caller, including any future one. S332, 2026-09-02.
+// `cdnFetchUrl` is null-safe and leaves non-Shopify hosts untouched, so the null contract holds.
+async function resolveVariantImage(env, variantIdsCsv, primaryName) {
+  return cdnFetchUrl(await resolveVariantImageRaw(env, variantIdsCsv, primaryName));
+}
+
+module.exports = { fetchCatalog, resolveVariantImage, resolveVariantImageRaw, STOREFRONT_CATALOG_URL };

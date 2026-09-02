@@ -69,7 +69,7 @@ async function capture(env, request, body) {
 // Worker fetch has none and egresses from a datacenter IP, which storefronts challenge/403).
 const { fetchCatalog } = require('./variant-images.js');
 
-async function resolveProductImage(env, namesCsv) {
+async function resolveProductImageRaw(env, namesCsv) {
   const title = String(namesCsv || '').split(',')[0].trim();
   if (!title) return null;
   try {
@@ -91,6 +91,12 @@ async function resolveProductImage(env, namesCsv) {
     console.log('product_image_resolve_error', e?.message || String(e));
     return null;
   }
+}
+
+// ⚠️ Same reasoning as resolveVariantImage: resize at the RESOLVER so every caller is covered.
+// This one feeds the checkout_abandoned backfill (:129). S332, 2026-09-02.
+async function resolveProductImage(env, namesCsv) {
+  return FLO.cdnImage(await resolveProductImageRaw(env, namesCsv));
 }
 
 // Per-VARIANT image for the add_to_cart header — keyed on the variant id Shopflo sends,
