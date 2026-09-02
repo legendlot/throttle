@@ -106,13 +106,17 @@ export default function FinanceQueuePage() {
           background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
           color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
         }}>
-          <strong>Showing the first {truncation.limit} of {truncation.total} approved requests.</strong>{' '}
+          <strong>
+            {truncation.total != null
+              ? `Showing the first ${truncation.limit} of ${truncation.total} approved requests.`
+              : `Showing the first ${truncation.limit} approved requests — there are more.`}
+          </strong>{' '}
           The Value total below covers only these {truncation.fetched} — the real amount owed is higher.
         </div>
       )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <Kpi label="To pay" value={truncation ? `${rows.length} of ${truncation.total}` : rows.length} />
+        <Kpi label="To pay" value={truncation?.total != null ? `${rows.length} of ${truncation.total}` : (truncation ? `${rows.length}+` : rows.length)} />
         <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={money(total)} />
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
       </div>

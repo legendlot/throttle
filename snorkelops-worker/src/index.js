@@ -214,8 +214,13 @@ async function queryPublic(table, params = '', opts = {}) {
 // rather than treating it as zero.
 function totalFromRange(range) {
   const part = String(range || '').split('/')[1];
+  // ⚠️ `Number('')` and `Number('   ')` are both **0**, not NaN — so a malformed header like
+  // `0-24/` or `0-24/   ` would return a real-looking population of ZERO rather than "unknown"
+  // (the S289 `Number('') === 0` class). Reject blanks BEFORE the coercion, and require a
+  // non-negative integer: a negative or fractional total is not a row count.
+  if (part == null || String(part).trim() === '') return null;
   const n = Number(part);
-  return Number.isFinite(n) ? n : null;
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 // Page sizes for the list reads that return a total alongside the page. All are sized against

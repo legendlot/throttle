@@ -92,7 +92,11 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
           background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
           color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
         }}>
-          <strong>Showing the first {truncation.limit} of {truncation.total} requests.</strong>{' '}
+          <strong>
+            {truncation.total != null
+              ? `Showing the first ${truncation.limit} of ${truncation.total} requests.`
+              : `Showing the first ${truncation.limit} requests — there are more.`}
+          </strong>{' '}
           The counts below cover the loaded rows only. Filter by status to narrow the list.
         </div>
       )}

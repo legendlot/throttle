@@ -91,11 +91,15 @@ export default function POListPage() {
     // then carries the fact in its FILENAME — that is the only part of the warning that
     // survives the file being saved, renamed in a folder, or emailed on (S334).
     if (truncation) {
+      // ⚠️ `total` is null when Content-Range could not be read — the fail-safe path still sets
+      // truncated=true. Never interpolate it raw: it renders the literal word "null" in a
+      // template string (and nothing at all in JSX). Say what we actually know instead.
       const ok = window.confirm(
         `This list is PARTIAL.\n\n` +
-        `${truncation.total} purchase orders match your filters, but only the first ` +
-        `${truncation.limit} were loaded. Any total you calculate from this file will be ` +
-        `too low.\n\nExport the partial list anyway?`
+        (truncation.total != null
+          ? `${truncation.total} purchase orders match your filters, but only the first ${truncation.limit} were loaded. `
+          : `More purchase orders match your filters than the first ${truncation.limit} that were loaded. `) +
+        `Any total you calculate from this file will be too low.\n\nExport the partial list anyway?`
       );
       if (!ok) return;
     }
@@ -123,7 +127,7 @@ export default function POListPage() {
     // download would be stamped yesterday. The three sibling exports in this app all use
     // this helper; matching them is the point.
     a.download = truncation
-      ? `lot-purchase-orders-PARTIAL-${filteredRows.length}-of-${truncation.total}-${todayStr()}.csv`
+      ? `lot-purchase-orders-PARTIAL-${filteredRows.length}${truncation.total != null ? `-of-${truncation.total}` : ''}-${todayStr()}.csv`
       : `lot-purchase-orders-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
@@ -156,7 +160,11 @@ export default function POListPage() {
           background: 'var(--warn-bg, #fff7ed)', border: '1px solid var(--warn-br, #fdba74)',
           color: 'var(--warn-fg, #9a3412)', fontSize: 13, lineHeight: 1.5,
         }}>
-          <strong>Showing the first {truncation.limit} of {truncation.total} purchase orders.</strong>{' '}
+          <strong>
+            {truncation.total != null
+              ? `Showing the first ${truncation.limit} of ${truncation.total} purchase orders.`
+              : `Showing the first ${truncation.limit} purchase orders — there are more.`}
+          </strong>{' '}
           The KPI tiles above and any export are calculated from the loaded rows only, so they
           under-report. Narrow the filters to bring the list under {truncation.limit}.
         </div>
@@ -164,8 +172,8 @@ export default function POListPage() {
 
       <Panel title="Purchase Orders"
         count={filtered
-          ? `${filteredRows.length} of ${rows.length}${truncation ? ` (of ${truncation.total})` : ''}`
-          : (truncation ? `${rows.length} of ${truncation.total}` : rows.length)}
+          ? `${filteredRows.length} of ${rows.length}${truncation?.total != null ? ` (of ${truncation.total})` : (truncation ? '+' : '')}`
+          : (truncation?.total != null ? `${rows.length} of ${truncation.total}` : (truncation ? `${rows.length}+` : rows.length))}
         action={
           <div className="filters">
             <input className="sel" data-search-primary type="text" placeholder="Search PO / vendor · /" value={search} onChange={(e) => setSearch(e.target.value)} style={{ fontFamily: 'var(--font-mono)', minWidth: 180 }} />
