@@ -34,7 +34,10 @@ const ENV = { TURNSTILE_SECRET: 's3cret' };
   });
 
   await t('a non-200 from siteverify fails CLOSED', async () => {
-    globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
+    // ⚠️ The body deliberately says success:true. If the `!r.ok` guard were deleted, this
+    // would return TRUE — which is exactly the regression this test exists to catch. A mock
+    // returning {} passes with or without the guard and therefore proves nothing.
+    globalThis.fetch = async () => ({ ok: false, json: async () => ({ success: true }) });
     assert.equal(await verifyTurnstile(ENV, 'tok', '1.2.3.4'), false);
   });
 
