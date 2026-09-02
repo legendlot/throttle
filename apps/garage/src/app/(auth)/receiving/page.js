@@ -145,7 +145,11 @@ export default function ReceivingPage() {
       ]);
       setShipments(shipmentsData || []);
       setUpcoming(upcomingData   || []);
-      setPOs(posData             || []);
+      // ⛔ getPOs returns { rows, total, fetched, limit, truncated } as of S333 — it used to
+      // return a bare array. `posData || []` would set the OBJECT as state, and `pos.find`
+      // (:194) / `pos.filter(...).map` (:1111) below would then throw and white-screen the
+      // receiving screen. Truthiness is not a type check.
+      setPOs(Array.isArray(posData) ? posData : (posData?.rows ?? []));
     } catch (e) {
       showToast('Failed to load shipments: ' + e.message, 'error');
     } finally {

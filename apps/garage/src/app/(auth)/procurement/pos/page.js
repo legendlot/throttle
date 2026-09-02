@@ -75,6 +75,7 @@ export default function POListPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
+  const [poMeta, setPoMeta] = useState(null);   // { total, fetched, limit, truncated } — S333
   const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -88,7 +89,11 @@ export default function POListPage() {
       if (filters.source) params.source = filters.source;
       if (filters.order_type) params.order_type = filters.order_type;
       const pos = await garageFetch('getPOs', params, session);
-      setRows(Array.isArray(pos) ? pos : []);
+      // ⛔ This was `Array.isArray(pos) ? pos : []`, which fails CLOSED: getPOs now returns
+      // { rows, total, fetched, limit, truncated } (S333), and the old line would have
+      // rendered an EMPTY list with no error at all. Normalise, never discard.
+      setRows(Array.isArray(pos) ? pos : (pos?.rows ?? []));
+      setPoMeta(Array.isArray(pos) ? null : (pos ?? null));
     } catch (e) {
       showToast(e.message || 'Failed to load purchase orders', 'error');
     } finally {
@@ -127,6 +132,19 @@ export default function POListPage() {
           Read-only reference list.
         </p>
       </div>
+
+      {/* Truncation notice (S333). Renders ONLY when the worker says the read was cut, so
+          it is silent in the normal case. ⚠️ Deliberately does NOT print `total` as a count
+          of POs: total is measured BEFORE the China/Soft permission filter, so for a user
+          without China rights it is legitimately larger than what they may see. */}
+      {poMeta?.truncated && (
+        <div style={{ background: 'rgba(226,140,33,.1)', border: '1px solid rgba(255,178,90,.45)', borderRadius: 4, padding: '12px 16px', marginBottom: 16, fontSize: 12.5, color: 'var(--t1)', lineHeight: 1.5 }}>
+          <strong style={{ color: '#ffb25a' }}>This list is incomplete.</strong>{' '}
+          It shows the {poMeta.fetched} most recent purchase orders, which is the maximum this
+          screen loads at once — older POs exist and are not shown here. Narrow the filters,
+          or use Snorkel for the full list.
+        </div>
+      )}
 
       {/* Migration notice — POs are now created and managed in Snorkel. */}
       <div style={{ background: 'rgba(33,60,226,.1)', border: '1px solid rgba(123,147,255,.35)', borderRadius: 4, padding: '12px 16px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
