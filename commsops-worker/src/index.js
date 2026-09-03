@@ -1214,7 +1214,14 @@ async function handlePost(body, auth, env) {
       // granting a whole domain, and letting them in through the back door would widen the
       // allowlist far past "exact addresses only".
       if ('test_allowlist' in patch) {
-        const raw = Array.isArray(patch.test_allowlist) ? patch.test_allowlist : [];
+        // ⛔ REFUSE a non-array rather than coercing it. The first cut of this read
+        // `Array.isArray(x) ? x : []`, which turns a null/string/garbage value into an EMPTY
+        // LIST and writes it — silently wiping every entry on a control that governs who can
+        // receive test sends, with a 200 back. Found in this session's own hostile review.
+        // An explicit clear is still available and unambiguous: send `[]`.
+        if (!Array.isArray(patch.test_allowlist))
+          return err('test_allowlist must be an array (send [] to clear it)', 422);
+        const raw = patch.test_allowlist;
         const seen = new Set();
         const out = [];
         for (const v of raw) {
