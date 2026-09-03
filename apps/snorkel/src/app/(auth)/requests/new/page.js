@@ -108,13 +108,24 @@ export default function NewRequestPage() {
   async function submit() {
     if (!title.trim()) { showToast('Title required', 'error'); return; }
     if (!details.trim()) { showToast('Say why you need this', 'error'); return; }
-    // Validate lines here so the requester is told which row is wrong, rather than
-    // getting the worker's generic rejection after a round trip.
-    const filled = lines.filter(l => l.part_code || l.description.trim() || l.qty !== '');
-    for (let i = 0; i < filled.length; i++) {
-      const l = filled[i];
-      if (!(Number(l.qty) > 0)) { showToast(`Line ${i + 1}: quantity must be more than zero`, 'error'); return; }
-      if (!l.part_code && !l.description.trim()) { showToast(`Line ${i + 1}: pick an item or describe it`, 'error'); return; }
+    // Validate here so the requester is told which row is wrong rather than getting the
+    // worker's generic rejection after a round trip.
+    //
+    // ⚠️ A row carrying NEITHER a part code NOR a description is an empty row someone
+    // added and did not fill — it is IGNORED, not rejected. The first cut of this
+    // blocked the submit on any row with anything typed in it, so clicking "Add item"
+    // and entering only a qty was an inescapable dead end (Afshaan hit it 2026-09-03,
+    // first real use of the form). There is nothing to lose by dropping such a row:
+    // you cannot order "2 of nothing".
+    //
+    // The index is the row's position ON SCREEN, not its position among the kept rows —
+    // otherwise "Row 2" points at the wrong line as soon as an empty row precedes it.
+    const filled = [];
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (!l.part_code && !l.description.trim()) continue;
+      if (!(Number(l.qty) > 0)) { showToast(`Row ${i + 1}: enter a quantity`, 'error'); return; }
+      filled.push(l);
     }
     setSubmitting(true);
     try {
@@ -185,16 +196,27 @@ export default function NewRequestPage() {
 
         {lines.length > 0 && (
           <div style={{ overflowX: 'auto' }}>
-            <table className="tbl" style={{ width: '100%', minWidth: 720 }}>
+            {/* Number inputs render spinner arrows that sit INSIDE the field and eat the
+                last character — "500" showed as "5(" and "pcs" as "pc" at the first
+                column widths (Afshaan, 2026-09-03). Suppress the spinners and give the
+                numeric columns room; a qty you cannot read is worse than a wide table,
+                and the container scrolls horizontally anyway. */}
+            <style>{`
+              .req-lines input[type=number]::-webkit-outer-spin-button,
+              .req-lines input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+              .req-lines input[type=number] { -moz-appearance: textfield; }
+              .req-lines input { width: 100%; min-width: 0; box-sizing: border-box; }
+            `}</style>
+            <table className="tbl req-lines" style={{ width: '100%', minWidth: 880 }}>
               <thead>
                 <tr>
-                  <th style={{ minWidth: 210 }}>Item</th>
-                  <th style={{ minWidth: 180 }}>Description</th>
-                  <th className="num" style={{ width: 90 }}>Qty</th>
-                  <th style={{ width: 80 }}>Unit</th>
-                  <th className="num" style={{ width: 110 }}>Est. price</th>
-                  <th className="num" style={{ width: 90 }}>Tax</th>
-                  <th className="num" style={{ width: 110 }}>Line total</th>
+                  <th style={{ minWidth: 200 }}>Item</th>
+                  <th style={{ minWidth: 170 }}>Description</th>
+                  <th className="num" style={{ width: 110 }}>Qty</th>
+                  <th style={{ width: 100 }}>Unit</th>
+                  <th className="num" style={{ width: 130 }}>Est. price</th>
+                  <th className="num" style={{ width: 80 }}>Tax</th>
+                  <th className="num" style={{ width: 120 }}>Line total</th>
                   <th style={{ width: 40 }} />
                 </tr>
               </thead>
