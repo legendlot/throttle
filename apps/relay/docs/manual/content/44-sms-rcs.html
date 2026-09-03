@@ -48,3 +48,8 @@
 <p>The test box takes a phone number (10 digits; SMS is India-only so +91 is fixed). Tests reach approved test numbers only, work at any hour, and skip the marketing gates &mdash; but the <em>carrier</em> still enforces its own sending hours on promotional routes, so a 2&nbsp;a.m. test can show as failed with a &ldquo;time&rdquo; error. That is the carrier, not the template.</p>
 
 <div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A campaign to an RCS audience reaches the people opted in to SMS marketing &mdash; check the <strong>will receive</strong> number before promising reach. It is a fraction of a WhatsApp audience, and that is expected.</p></div>
+
+<h2 class="sec">Correcting an RCS vendor binding</h2>
+<p>An RCS template carries the id of the creative registered at the vendor. Once set, the field is read-only &mdash; a stray keystroke there would silently point the template at something that does not exist.</p>
+<p>If the id is <em>wrong</em>, click <strong>Unbind</strong> beside it. The field clears and becomes editable, so you can either type the corrected id and save (a straight rebind), or save it empty to leave the template unbound.</p>
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Unbinding only takes effect when you <strong>Save</strong>. It is refused if the template is attached to a live campaign, and an <em>active</em> RCS template cannot be saved without a binding at all &mdash; set its status back to draft first.</p></div>

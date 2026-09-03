@@ -7,6 +7,15 @@
   <div class="g-cell"><div class="g-lbl">Runs</div><div class="g-val">Continuously, one enrolment per customer.</div></div>
 </div>
 
+<h2 class="sec">Working with nodes on the canvas</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Add</div><div class="a-val"><p>The buttons above the canvas add a step of that type. Drag from a dot on a node&rsquo;s right edge to another node to connect them.</p></div></div>
+  <div class="a-row"><div class="a-key">Replicate</div><div class="a-val"><p>Click a node, then <strong>Replicate</strong> in the panel below. You get a copy with the same settings, offset slightly. <strong>The copy is not wired to anything</strong> &mdash; connect it yourself.</p></div></div>
+  <div class="a-row"><div class="a-key">Delete</div><div class="a-val"><p><strong>Delete node</strong> in the same panel, or select the node and press Backspace or Delete. Deleting also removes the connections into and out of it.</p></div></div>
+</div>
+<p>Replicate is for building a branch that differs in one detail &mdash; a second send with different copy, a second wait with a different delay. Copying rather than rebuilding keeps the settings you already got right.</p>
+<div class="callout"><div class="c-title">Note</div><p>Both actions only appear on a journey you can edit. Open an <em>active</em> journey and the canvas is read-only, so neither button shows &mdash; pause it first, or work on a draft.</p></div>
+
 <h2 class="sec">The parts of a journey</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Trigger</div><div class="a-val"><p>The event that starts it, for example <code>checkout_abandoned</code>. Optionally narrowed by a filter, so it only fires for certain values.</p></div></div>

@@ -12,6 +12,15 @@
 
 <div class="callout danger"><div class="c-title">&#9940; Important</div><p>Switching test mode off arms the entire system at once, including every active journey. Do it deliberately, tell the team, and check the Overview screen afterwards to confirm the state you intended.</p></div>
 
+<h2 class="sec">The two allowlists</h2>
+<p>Two separate lists decide who a test send may reach, and they are edited in the same place but owned by different people.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Allowlist</div><div class="a-val"><p>The policy list. Accepts a whole domain with a leading <code>@</code>, or an exact email. While test mode is on, only these addresses receive anything.</p></div></div>
+  <div class="a-row"><div class="a-key">Test-send allowlist</div><div class="a-val"><p>Exact emails and phone numbers only &mdash; no <code>@domain</code> patterns. The Send-test buttons on Templates and Campaigns <em>add</em> to this list automatically, so it grows on its own as people test.</p></div></div>
+</div>
+<p>A test send may only ever reach someone on one of these two lists, <strong>even when test mode is off</strong>. That is deliberate: a test send carries arbitrary, unapproved content.</p>
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Removing a number from the Test-send allowlist stops that person&rsquo;s test sends working immediately. If a colleague reports &ldquo;my test send is refused&rdquo;, check here first &mdash; the same number written two ways (<code>9876543210</code> and <code>+919876543210</code>) counts as two different entries, and only the exact form used in the Send-test box will match.</p></div>
+
 <h2 class="sec">Send governance</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Approval threshold</div><div class="a-val"><p>Marketing campaigns above this audience size need an Approver. Below it, they approve themselves. Judged on the number that will actually receive, after exclusions.</p></div></div>
