@@ -125,7 +125,9 @@ export default function ReportsPage() {
       lines.push(`${r.name},${r.total},${r.replacement || 0},${r.refund || 0},${r.repair || 0}`);
     }
     lines.push('');
-    lines.push('By Agent,Total,Closed,Avg close (days)');
+    // Raised and Closed are on different date bases (raised-in-window vs closed-in-window) —
+    // the header says so, because a CSV outlives the screen that explained it.
+    lines.push('By Agent,Raised in range,Closed in range,Avg close (days)');
     for (const r of data.by_agent) {
       lines.push(`${r.name},${r.total},${r.closed},${r.avg_close_days ?? ''}`);
     }
@@ -845,7 +847,13 @@ function BreakdownTable({ rows, variant }) {
       <thead>
         <tr>
           <Th>{variant === 'agent' ? 'Agent' : 'Name'}</Th>
-          <Th align="right">Total</Th>
+          {/* ⚠️ On the agent variant these two columns are on DIFFERENT date bases as of
+              2026-09-03, so they must not both read as plain counts of one set. "Raised" is
+              tickets raised in the window and assigned to them; "Closed" is tickets they closed
+              in the window, whenever those were raised. Closed can therefore legitimately EXCEED
+              Raised for anyone clearing backlog — labelling it "Total" made that read as a fault.
+              % Share stays a share of raised. */}
+          <Th align="right">{variant === 'agent' ? 'Raised' : 'Total'}</Th>
           {variant !== 'agent' ? (
             <>
               <Th align="right">Replace</Th>

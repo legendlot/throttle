@@ -1631,17 +1631,60 @@ async function getStageRules(params, auth, env) {
   });
 }
 
+// Ranged, PAGED cs_tickets fetch for the reports panels. `col` is the date column the range
+// applies to — `created_at` for raised-side panels, `closed_at` for closed-side ones.
+// ⚠️ MUST STAY PAGED. PostgREST caps every response at the project's db-max-rows (5,000)
+// regardless of the URL's own `limit`, with no error and no header saying so — the previous
+// `limit=20000` here was silently a 5,000 ceiling. Ordered by `id` (unique) so page boundaries
+// can neither drop nor repeat a row. Same fix as getSupportAnalytics carries.
+const REPORTS_SELECT = 'id,created_at,closed_at,disposition,issue_category,product,platform,'
+  + 'assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr';
+
+async function fetchTicketsRanged(col, from, to, env) {
+  const PAGE = 1000;
+  const MAX_ROWS = 50000;
+  const rows = [];
+  let truncated = false;
+  for (let offset = 0; ; offset += PAGE) {
+    const r = await sb(
+      `/rest/v1/cs_tickets?${col}=gte.${encodeURIComponent(from)}&${col}=lte.${encodeURIComponent(to)}`
+      + `&select=${REPORTS_SELECT}&order=id.asc&limit=${PAGE}&offset=${offset}`,
+      env,
+    );
+    if (!r.ok) return null;
+    const page = r.data || [];
+    for (const x of page) rows.push(x);
+    if (page.length < PAGE) break;
+    // The hard stop must ANNOUNCE itself — breaking silently here rebuilds the exact bug this
+    // loop replaced, one order of magnitude up: a capped result that looks complete.
+    if (offset + PAGE >= MAX_ROWS) { truncated = true; break; }
+  }
+  return { rows, truncated };
+}
+
 async function getReports(params, auth, env) {
   const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
   const to   = params.get('to')   || new Date().toISOString();
 
-  // Fetch all tickets in range — single query, light columns
-  const res = await sb(
-    `/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}&select=created_at,closed_at,disposition,issue_category,product,platform,assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr&limit=20000`,
-    env,
-  );
-  if (!res.ok) return err('Failed to load reports data', 500);
-  const rows = res.data || [];
+  // ⭐ TWO ranged fetches, deliberately — this is a SEMANTIC SPLIT, not an optimisation.
+  // Raised-side panels (monthly trend, disposition, issue category, product, platform, cost,
+  // and each agent's `total`) range on created_at: they answer "what came in during the window".
+  // Closed-side metrics (each agent's `closed` and `avg_close_days`) range on closed_at: they
+  // answer "what was finished during the window". These are different populations and a single
+  // row set cannot produce both — a ticket raised before the window and closed inside it is
+  // absent from the created_at set entirely, so no re-counting within it can ever find them.
+  // Measured 2026-09-03 over 30 days: 3,900 raised of which 3,642 have since closed, against
+  // 4,441 actually closed in window. The 799-ticket gap is exactly that population, and it is
+  // why "resolved (30d)" moves 3,642 -> 4,441 (+22%). Nothing improved — the old number counted
+  // the wrong set. Afshaan, 2026-09-03: "Closure should count on the day closed."
+  // NB the Overview dashboard's own `resolved_today` (getOverviewSummary) has ALWAYS ranged on
+  // closed_at, so before this change today and week/month disagreed with each other by design.
+  const [raised, closed] = await Promise.all([
+    fetchTicketsRanged('created_at', from, to, env),
+    fetchTicketsRanged('closed_at',  from, to, env),
+  ]);
+  if (!raised || !closed) return err('Failed to load reports data', 500);
+  const rows = raised.rows;
 
   // Conversations handled alongside tickets raised (Pruthvi #bugs 2026-07-25,
   // clarified in-thread: not every conversation becomes a ticket — shipment and
@@ -1695,21 +1738,36 @@ async function getReports(params, auth, env) {
     byPlatform[platform].total++;
     byPlatform[platform][disp] = (byPlatform[platform][disp] || 0) + 1;
 
-    // by agent
+    // by agent — RAISED side only. `total` = tickets raised in the window and assigned to them.
+    // `closed` is deliberately NOT counted here; it is a closed-side metric and comes from the
+    // closed_at-ranged set below. Counting it here is the defect this change fixes.
     const agentName = r.assigned_agent_name || '— unassigned —';
     byAgent[agentName] = byAgent[agentName] || { name: agentName, total: 0, closed: 0, total_close_days: 0 };
     byAgent[agentName].total++;
-    if (r.closed_at) {
-      byAgent[agentName].closed++;
-      byAgent[agentName].total_close_days += (new Date(r.closed_at).getTime() - new Date(r.created_at).getTime()) / (24*60*60*1000);
-    }
 
     totalReturnCost      += Number(r.return_cost_inr || 0);
     totalReplacementCost += Number(r.replacement_cost_inr || 0);
     totalRefundAmount    += Number(r.refund_amount_inr || 0);
   }
 
-  // Finalise agent averages
+  // CLOSED side — ranged on closed_at, so a ticket raised before the window but closed inside it
+  // is counted here and an agent clearing old backlog finally gets credit on the day they cleared
+  // it. The agent sets are a UNION: someone can close tickets in a window with none raised to
+  // them in it (total 0, closed > 0) and vice versa, so seed the row from whichever side is first.
+  for (const r of closed.rows) {
+    const agentName = r.assigned_agent_name || '— unassigned —';
+    byAgent[agentName] = byAgent[agentName] || { name: agentName, total: 0, closed: 0, total_close_days: 0 };
+    byAgent[agentName].closed++;
+    if (r.created_at) {
+      byAgent[agentName].total_close_days
+        += (new Date(r.closed_at).getTime() - new Date(r.created_at).getTime()) / (24*60*60*1000);
+    }
+  }
+
+  // Finalise agent averages. ⚠️ `avg_close_days` now averages over tickets CLOSED in the window
+  // (raised whenever), not tickets raised in the window that have since closed. That is the
+  // correct closed-side duration, and it moves the number — an old ticket cleared today now
+  // lands in today's average, where before it landed in the average of the week it was raised.
   for (const k of Object.keys(byAgent)) {
     const a = byAgent[k];
     a.avg_close_days = a.closed ? +(a.total_close_days / a.closed).toFixed(1) : null;
@@ -1717,14 +1775,25 @@ async function getReports(params, auth, env) {
   }
 
   return ok({
-    range: { from, to, total_rows: rows.length },
+    // `total_rows` stays the RAISED count — the Reports page reads it as its "Tickets raised" KPI
+    // and its CSV writes it under that name, so it must not silently become something else.
+    // The closed count is additive and named for what it is.
+    range: {
+      from, to,
+      total_rows:   rows.length,
+      raised_rows:  rows.length,
+      closed_rows:  closed.rows.length,
+      truncated:    raised.truncated || closed.truncated,
+    },
     conversations,   // { total, handled, outbound_only, no_history } | null
     monthly_trend: Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month)),
     by_disposition: Object.entries(byDisposition).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_issue_category: Object.entries(byIssueCategory).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_product:  Object.values(byProduct).sort((a, b) => b.total - a.total),
     by_platform: Object.values(byPlatform).sort((a, b) => b.total - a.total),
-    by_agent:    Object.values(byAgent).sort((a, b) => b.total - a.total),
+    // Tie-break on `closed` — an agent who closed backlog in the window but had nothing raised
+    // to them in it has total 0, and would otherwise sort to the bottom despite being the point.
+    by_agent:    Object.values(byAgent).sort((a, b) => (b.total - a.total) || (b.closed - a.closed)),
     cost_summary: {
       return_cost_inr:      +totalReturnCost.toFixed(2),
       replacement_cost_inr: +totalReplacementCost.toFixed(2),
