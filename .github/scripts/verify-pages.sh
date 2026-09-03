@@ -51,25 +51,82 @@ note()  { echo "::notice title=Pages::$*"  >&2; }
 warn()  { echo "::warning title=Pages::$*" >&2; }
 fail()  { echo "::error title=Pages::$*"   >&2; }
 
+# ⛔ THE RACE THIS SCRIPT USED TO LOSE, AND THE WHOLE REASON IT WATCHES A SHA NOW.
+#
+# It polled `${API}/latest` and asked only "is the newest Pages build green?" — never "is the
+# newest Pages build MINE?". Pages does not create the build for a push instantly, so the first
+# probe lands while /latest is still the PREVIOUS, successful build. The script reads `built`,
+# announces "the push is genuinely live", and exits 0. Pages then builds our commit and errors.
+#
+# Measured 2026-08-06 on relay: Action green, gh-pages holding the new chunk, Pages build
+# `errored` with duration 0 — live served the previous day's bundle for ~25 minutes with nothing
+# red anywhere. The verifier did not miss the failure; it reported success BEFORE the failure
+# existed, which is worse, because the retry/rebuild machinery below never got a chance to run.
+#
+# Fix: resolve the gh-pages HEAD sha we just pushed, then evaluate ONLY the build whose `commit`
+# equals it. A green build for someone else's commit is now "still pending", not proof.
+# Verified 2026-09-03: `pages/builds[].commit` is the full gh-pages sha and matches
+# `commits/gh-pages.sha` exactly.
+EXPECTED_SHA="$(curl -sS \
+  -H "Authorization: Bearer ${GH_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/repos/${TARGET}/commits/gh-pages" 2>/dev/null \
+  | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("sha") or "")
+except Exception: print("")' 2>/dev/null)"
+
+if [ -n "$EXPECTED_SHA" ]; then
+  note "${TARGET}: watching gh-pages commit ${EXPECTED_SHA:0:8} — a build for any other commit does not count."
+else
+  # Never harden a monitoring gap into an outage: if we cannot read the sha we fall back to the
+  # old newest-build behaviour, but say plainly that the race is back for this run.
+  warn "${TARGET}: could not resolve the gh-pages HEAD sha; falling back to the NEWEST build, which can race (a previous green build may be reported as ours). Give DEPLOY_TOKEN contents access to remove this."
+fi
+
 # Echoes "<http_code>|<status>|<error_message>"
+# `status` is the status of OUR build; "pending_ours" means Pages has not created it yet.
 probe() {
   local body code
   body="$(curl -sS -w $'\n%{http_code}' \
     -H "Authorization: Bearer ${GH_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${API}/latest" 2>/dev/null)" || { echo "000||curl failed"; return; }
+    "${API}?per_page=20" 2>/dev/null)" || { echo "000||curl failed"; return; }
   code="$(printf '%s' "$body" | tail -n1)"
   body="$(printf '%s' "$body" | sed '$d')"
-  local status msg
-  status="$(printf '%s' "$body" | python3 -c 'import sys,json
-try: print(json.load(sys.stdin).get("status") or "")
-except Exception: print("")' 2>/dev/null)"
-  msg="$(printf '%s' "$body" | python3 -c 'import sys,json
+  local parsed
+  parsed="$(printf '%s' "$body" | EXPECTED_SHA="$EXPECTED_SHA" python3 -c '
+import sys, json, os
+want = os.environ.get("EXPECTED_SHA") or ""
 try:
-    d=json.load(sys.stdin); e=d.get("error") or {}
-    print((e.get("message") or d.get("message") or "").replace("\n"," "))
-except Exception: print("")' 2>/dev/null)"
+    builds = json.load(sys.stdin)
+    if not isinstance(builds, list): raise ValueError
+except Exception:
+    print("|"); sys.exit()
+# newest-first, so the FIRST match is the most recent build of our commit — which is what we
+# want after a re-request, since a rebuild produces a second build for the same sha.
+pick = None
+if want:
+    for b in builds:
+        if (b.get("commit") or "") == want:
+            pick = b; break
+    if pick is None:
+        print("pending_ours|"); sys.exit()
+else:
+    pick = builds[0] if builds else None
+    if pick is None:
+        print("pending_ours|"); sys.exit()
+err = pick.get("error") or {}
+msg = (err.get("message") or "").replace("\n", " ")
+# ⚠️ Plain concatenation, NOT an f-string with escaped quotes. `f"{d.get(\"k\")}"` is a syntax
+# error on Python < 3.12, and with stderr suppressed it fails silently: the parse returns empty,
+# empty reads as "pending", and the verifier polls to timeout on a build that is already green.
+# Cost one full 300s false timeout while testing this very fix on 2026-09-03.
+status = pick.get("status") or ""
+print(status + "|" + msg)
+' 2>/dev/null)"
+  local status="${parsed%%|*}" msg="${parsed#*|}"
   echo "${code}|${status}|${msg}"
 }
 
@@ -113,11 +170,15 @@ settle() {
                echo "errored"; return ;;
       building|queued|"")
                sleep "$SLEEP"; continue ;;
+      # Pages has not created OUR build yet. This is the state that used to be invisible: the
+      # newest build was someone else's green one and the script called it a pass. Keep waiting.
+      pending_ours)
+               sleep "$SLEEP"; continue ;;
       *)       warn "${TARGET}: unrecognised Pages status '${status}'; treating as pending."
                sleep "$SLEEP"; continue ;;
     esac
   done
-  warn "${TARGET}: Pages build did not finish within $((budget * SLEEP))s. Not failing the deploy — check https://github.com/${TARGET}/deployments"
+  warn "${TARGET}: no COMPLETED Pages build for ${EXPECTED_SHA:0:8} within $((budget * SLEEP))s. Not failing the deploy (a monitoring gap must not become an outage) — but LIVE MAY BE STALE: check https://github.com/${TARGET}/deployments"
   echo "timeout"
 }
 
