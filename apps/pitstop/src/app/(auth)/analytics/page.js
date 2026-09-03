@@ -7,11 +7,12 @@
    channel + support channel, top sub-categories, monthly product +
    category trends. One getSupportAnalytics call (gated cs_reports_view).
    Spec: docs/superpowers/specs/2026-07-16-pitstop-support-analytics-dashboard-design.md
+   S339 (Pruthvi #bugs 2026-09-03): dimension filters + sort + CSV export.
    ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, Download } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { KpiCard, Panel, selectStyle, inputStyle } from '../../../components/kit/index.js';
 import { TrendChart } from '../../../components/kit/Chart.js';
@@ -31,6 +32,35 @@ function presetRange(preset) {
   return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
 }
 
+// The five dimensions the worker filters on, in filter-bar order. Keys match the
+// query params getSupportAnalytics reads and the keys in its `filter_options`.
+const DIMS = [
+  ['product',         'Product'],
+  ['issue_category',  'Issue category'],
+  ['product_line',    'Product line'],
+  ['sale_channel',    'Sale channel'],
+  ['support_channel', 'Support channel'],
+];
+
+const SORTS = [
+  ['count_desc', 'Most first'],
+  ['count_asc',  'Fewest first'],
+  ['name_asc',   'A–Z'],
+];
+// One comparator for every ranked panel AND the product matrix, so "A–Z" cannot mean
+// something different in two places on the same screen.
+function sortBy(sort, nameOf, countOf) {
+  if (sort === 'name_asc')  return (a, b) => String(nameOf(a)).localeCompare(String(nameOf(b)));
+  if (sort === 'count_asc') return (a, b) => countOf(a) - countOf(b) || String(nameOf(a)).localeCompare(String(nameOf(b)));
+  return (a, b) => countOf(b) - countOf(a) || String(nameOf(a)).localeCompare(String(nameOf(b)));
+}
+const sortRanked = (rows, sort) => [...(rows || [])].sort(sortBy(sort, r => r.name, r => r.count));
+
+const csvEsc = (v) => {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 export default function AnalyticsPage() {
   const { session, perms } = useAuth();
   const canView = !!perms?.cs_reports_view;
@@ -38,6 +68,8 @@ export default function AnalyticsPage() {
   const [preset, setPreset] = useState('mtd');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  const [filters, setFilters] = useState({});   // dim key → selected value ('' = all)
+  const [sort, setSort] = useState('count_desc');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -48,16 +80,111 @@ export default function AnalyticsPage() {
     return { from: isoStart(r.from), to: isoEnd(r.to) };
   }, [preset, customFrom, customTo]);
 
+  // Serialised so the effect re-runs on a filter change without depending on object identity.
+  const filterKey = useMemo(
+    () => DIMS.map(([k]) => `${k}=${filters[k] || ''}`).join('&'),
+    [filters],
+  );
+
   useEffect(() => {
     if (!session || !canView) { setLoading(false); return; }
     let alive = true;
     setLoading(true);
-    csopsGet('getSupportAnalytics', { from: range.from, to: range.to }, session)
+    const args = { from: range.from, to: range.to };
+    for (const [k] of DIMS) if (filters[k]) args[k] = filters[k];
+    csopsGet('getSupportAnalytics', args, session)
       .then(d => { if (alive) { setData(d); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, canView, range.from, range.to]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, canView, range.from, range.to, filterKey]);
+
+  // Options come from the range BEFORE the dimension filters, so picking a product does
+  // not collapse the category list. A value that is selected but absent (the range moved
+  // under it) is still listed — otherwise the control silently blanks and reads as "All"
+  // while the dashboard is still filtered by it.
+  function optionsFor(key) {
+    const opts = data?.filter_options?.[key] || [];
+    const sel = filters[key];
+    return sel && !opts.includes(sel) ? [sel, ...opts] : opts;
+  }
+
+  const activeCount = DIMS.filter(([k]) => filters[k]).length;
+
+  function exportCsv() {
+    if (!data) return;
+    const fromD = range.from.slice(0, 10), toD = range.to.slice(0, 10);
+    const L = [];
+    L.push(`Pitstop Support Analytics,${fromD} to ${toD}`);
+    // The active cohort travels WITH the file — same reason the Reports CSV carries its
+    // basis and channel: a spreadsheet opened next week must not be ambiguous about which
+    // slice it is, or someone reads a filtered export as the whole month.
+    for (const [k, label] of DIMS) L.push(`${label},${csvEsc(filters[k] || 'All')}`);
+    L.push(`Sorted by,${csvEsc(SORTS.find(s => s[0] === sort)?.[1] || sort)}`);
+    L.push(`Complaints in this cohort,${data.range?.total ?? 0}`);
+    L.push(`Complaints in date range (before filters),${data.range?.range_total ?? data.range?.total ?? 0}`);
+    L.push('');
+    const k = data.kpis || {};
+    L.push('KPI,Value');
+    L.push(`Total complaints,${k.total ?? 0}`);
+    L.push(`Within 3 days of purchase,${k.within_3d ?? 0}`);
+    L.push(`After 3 days of purchase,${k.after_3d ?? 0}`);
+    L.push(`Ageing unknown (no purchase date),${k.ageing_unknown ?? 0}`);
+    L.push('');
+
+    const m = data.by_product_matrix;
+    if (m?.products?.length) {
+      const cats = m.categories || [];
+      const prods = [...m.products].sort(sortBy(sort, p => p.product, p => p.total));
+      L.push('Complaints by Product (rows = product, columns = issue category)');
+      L.push(['Product', 'Total', ...cats].map(csvEsc).join(','));
+      for (const p of prods) L.push([p.product, p.total, ...cats.map(c => p.cats[c] || 0)].map(csvEsc).join(','));
+      L.push(['TOTAL', prods.reduce((s, p) => s + p.total, 0),
+        ...cats.map(c => prods.reduce((s, p) => s + (p.cats[c] || 0), 0))].map(csvEsc).join(','));
+      L.push('');
+    }
+
+    const ranked = [
+      ['By Issue Category', data.by_issue_category, true],
+      ['Top Issue Sub-categories', data.top_subcategories, false],
+      ['By Product Line (LOT line)', data.by_product_line, true],
+      ['By Sale Channel', data.by_sale_channel, true],
+      ['By Support Channel', data.by_support_channel, true],
+    ];
+    for (const [title, rows, showPct] of ranked) {
+      if (!rows?.length) continue;
+      L.push(title);
+      L.push(showPct ? 'Name,Count,% of total' : 'Name,Count');
+      for (const r of sortRanked(rows, sort)) {
+        L.push(showPct ? [r.name, r.count, r.pct].map(csvEsc).join(',') : [r.name, r.count].map(csvEsc).join(','));
+      }
+      L.push('');
+    }
+
+    for (const [title, series] of [['Monthly Product Trend', data.monthly_product_trend],
+                                  ['Monthly Category Trend', data.monthly_category_trend]]) {
+      if (!series?.length) continue;
+      const totals = {};
+      for (const row of series) for (const kk of Object.keys(row)) {
+        if (kk === 'month' || kk === 'total') continue;
+        totals[kk] = (totals[kk] || 0) + row[kk];
+      }
+      const dims = Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([n]) => n);
+      L.push(title);
+      L.push(['Month', 'Total', ...dims].map(csvEsc).join(','));
+      for (const row of series) L.push([row.month, row.total, ...dims.map(d => row[d] || 0)].map(csvEsc).join(','));
+      L.push('');
+    }
+
+    const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pitstop-support-analytics-${fromD}-to-${toD}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   if (!canView) return <EmptyState icon={<BarChart3 size={28} />} title="No access" message="You need the reports permission to view analytics." />;
 
@@ -83,17 +210,50 @@ export default function AnalyticsPage() {
             <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} style={inputStyle} />
           </>
         )}
+
+        <div style={{ flex: 1 }} />
+
+        <select value={sort} onChange={e => setSort(e.target.value)} style={selectStyle} title="Sort every ranked panel and the product table">
+          {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+        <button onClick={exportCsv} disabled={!data} style={exportBtn}>
+          <Download size={13} strokeWidth={1.75} /> Export CSV
+        </button>
+      </div>
+
+      {/* Dimension filters */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {DIMS.map(([key, label]) => (
+          <select key={key} value={filters[key] || ''} style={selectStyle}
+            onChange={e => setFilters(f => ({ ...f, [key]: e.target.value }))}>
+            <option value="">{label}: All</option>
+            {optionsFor(key).map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        ))}
+        {activeCount > 0 && (
+          <>
+            <button onClick={() => setFilters({})} style={clearBtn}>Clear {activeCount} filter{activeCount > 1 ? 's' : ''}</button>
+            {data?.range && (
+              <span style={{ fontSize: 12, color: 'var(--t3)' }}>
+                <strong style={{ color: 'var(--t1)' }}>{data.range.total}</strong> of {data.range.range_total ?? data.range.total} complaints in range
+              </span>
+            )}
+          </>
+        )}
       </div>
 
       {error && <div style={{ padding: 12, background: 'var(--bad-bg)', color: 'var(--bad-fg)', borderRadius: 8, fontSize: 13 }}>{error}</div>}
       {loading ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div>
         : !data ? <EmptyState icon={<BarChart3 size={28} />} title="No data" message="No complaints in this range." />
-        : <Dashboard data={data} />}
+        : (data.range?.total ?? 0) === 0 && activeCount > 0
+          ? <EmptyState icon={<BarChart3 size={28} />} title="No complaints match these filters"
+              message="Nothing in this date range matches every filter you picked. Clear one and try again." />
+        : <Dashboard data={data} sort={sort} />}
     </div>
   );
 }
 
-function Dashboard({ data }) {
+function Dashboard({ data, sort }) {
   const k = data.kpis || {};
   return (
     <>
@@ -107,20 +267,20 @@ function Dashboard({ data }) {
 
       {/* Product × issue-category matrix */}
       <Panel title="Complaints by Product" sub="rows = product · columns = issue category">
-        <ProductMatrix matrix={data.by_product_matrix} />
+        <ProductMatrix matrix={data.by_product_matrix} sort={sort} />
       </Panel>
 
       {/* By issue category + top sub-categories */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-        <Panel title="Complaints by Issue Category"><RankedList rows={data.by_issue_category} showPct /></Panel>
-        <Panel title="Top Issue Sub-categories"><RankedList rows={data.top_subcategories} /></Panel>
+        <Panel title="Complaints by Issue Category"><RankedList rows={data.by_issue_category} sort={sort} showPct /></Panel>
+        <Panel title="Top Issue Sub-categories"><RankedList rows={data.top_subcategories} sort={sort} /></Panel>
       </div>
 
       {/* Product line + channels */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-        <Panel title="By Product Line (LOT line)"><RankedList rows={data.by_product_line} showPct /></Panel>
-        <Panel title="By Sale Channel"><RankedList rows={data.by_sale_channel} showPct /></Panel>
-        <Panel title="By Support Channel"><RankedList rows={data.by_support_channel} showPct /></Panel>
+        <Panel title="By Product Line (LOT line)"><RankedList rows={data.by_product_line} sort={sort} showPct /></Panel>
+        <Panel title="By Sale Channel"><RankedList rows={data.by_sale_channel} sort={sort} showPct /></Panel>
+        <Panel title="By Support Channel"><RankedList rows={data.by_support_channel} sort={sort} showPct /></Panel>
       </div>
 
       {/* Monthly trends */}
@@ -134,12 +294,15 @@ function Dashboard({ data }) {
   );
 }
 
-function ProductMatrix({ matrix }) {
+function ProductMatrix({ matrix, sort }) {
   if (!matrix || !matrix.products?.length) return <Empty />;
   const cats = matrix.categories || [];
-  const max = Math.max(1, ...matrix.products.flatMap(p => cats.map(c => p.cats[c] || 0)));
-  const totals = cats.map(c => matrix.products.reduce((s, p) => s + (p.cats[c] || 0), 0));
-  const grand = matrix.products.reduce((s, p) => s + p.total, 0);
+  // Sorting only reorders rows — the column set, the totals row and the heat scale are
+  // all computed over the same products either way, so no number moves with the sort.
+  const products = [...matrix.products].sort(sortBy(sort, p => p.product, p => p.total));
+  const max = Math.max(1, ...products.flatMap(p => cats.map(c => p.cats[c] || 0)));
+  const totals = cats.map(c => products.reduce((s, p) => s + (p.cats[c] || 0), 0));
+  const grand = products.reduce((s, p) => s + p.total, 0);
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
@@ -151,7 +314,7 @@ function ProductMatrix({ matrix }) {
           </tr>
         </thead>
         <tbody>
-          {matrix.products.map(p => (
+          {products.map(p => (
             <tr key={p.product}>
               <td style={tdL}>{p.product}</td>
               <td style={{ ...tdR, fontWeight: 700 }}>{p.total}</td>
@@ -172,12 +335,15 @@ function ProductMatrix({ matrix }) {
   );
 }
 
-function RankedList({ rows, showPct }) {
+function RankedList({ rows, showPct, sort }) {
   if (!rows || !rows.length) return <Empty />;
+  // Bar width stays relative to the largest value in the panel, not the first row, so
+  // "Fewest first" does not make the smallest item render as a full-width bar.
   const max = Math.max(1, ...rows.map(r => r.count));
+  const ordered = sortRanked(rows, sort);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-      {rows.map(r => (
+      {ordered.map(r => (
         <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ flex: '0 0 42%', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.name}>{r.name}</span>
           <div style={{ flex: 1, height: 8, background: 'var(--surface-2)', borderRadius: 4, overflow: 'hidden' }}>
@@ -237,6 +403,17 @@ function heat(v, max) {
   const a = 0.08 + (v / max) * 0.4;
   return `rgba(123, 147, 255, ${a.toFixed(3)})`;
 }
+
+const exportBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--f-ui)', fontSize: 12,
+  fontWeight: 600, padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+  background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--t2)',
+};
+const clearBtn = {
+  fontFamily: 'var(--f-ui)', fontSize: 11.5, fontWeight: 600, padding: '5px 10px',
+  borderRadius: 'var(--radius-sm)', cursor: 'pointer', background: 'transparent',
+  border: '1px solid var(--border)', color: 'var(--t3)',
+};
 
 const thL = { textAlign: 'left', padding: '7px 10px', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t3)', borderBottom: '1px solid var(--border)', position: 'sticky', left: 0, background: 'var(--surface)' };
 const thR = { textAlign: 'right', padding: '7px 10px', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };

@@ -1811,12 +1811,37 @@ const SUPPORT_CHANNEL_LABELS = {
   whatsapp: 'WhatsApp', email: 'Email', instagram: 'Instagram', messenger: 'Messenger',
   web: 'Web', sheet: 'Imported', other: 'Other',
 };
+// The five filterable dimensions, each derived ONCE here and used for both the option
+// lists and the filtering. Two of them (product line, support channel) are derived, not
+// columns, so a PostgREST-side filter could not express them — and deriving the option
+// list separately from the filter is exactly how a measurement and its implementation end
+// up defining the same set differently. One function, both callers.
+function analyticsDims(r, lineOf) {
+  return {
+    product:         r.product || '—',
+    issue_category:  r.issue_category || 'Uncategorised',
+    product_line:    lineOf[r.product] || 'Unclassified',
+    sale_channel:    r.platform || 'Unknown',
+    support_channel: r.auto_created || r.intake_channel === 'phone' || r.intake_channel === 'call'
+      ? 'Calls'
+      : (SUPPORT_CHANNEL_LABELS[r.intake_channel] || (r.intake_channel ? r.intake_channel : 'Unknown')),
+  };
+}
+const ANALYTICS_DIM_KEYS = ['product', 'issue_category', 'product_line', 'sale_channel', 'support_channel'];
+
 async function getSupportAnalytics(params, auth, env) {
   // Default range = current month-to-date (IST). Presets/custom come from the page.
   const nowIstIso = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
   const monthStartIso = new Date(`${nowIstIso.slice(0, 7)}-01T00:00:00+05:30`).toISOString();
   const from = params.get('from') || monthStartIso;
   const to   = params.get('to')   || new Date().toISOString();
+
+  // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
+  const want = {};
+  for (const k of ANALYTICS_DIM_KEYS) {
+    const v = params.get(k);
+    if (v) want[k] = v;
+  }
 
   const scope = await visibilityFilters(params, auth, env);
   if (!scope) return err('Unknown department slug', 404);
@@ -1831,17 +1856,51 @@ async function getSupportAnalytics(params, auth, env) {
     `issue_category=not.is.null`,
     ...scope,
   ];
-  const [tRes, catRes, pmRes] = await Promise.all([
-    sb(`/rest/v1/cs_tickets?${filters.join('&')}&select=created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created&limit=20000`, env, { headers: { Prefer: 'count=exact' } }),
+  const SELECT = 'id,created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created';
+  const [catRes, pmRes] = await Promise.all([
     sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,sort_order&order=sort_order.asc`, env),
     sbPublic(`/rest/v1/product_master?select=product,product_line&product_line=not.is.null&limit=2000`, env),
   ]);
-  if (!tRes.ok) return err(`Failed to load analytics data: ${JSON.stringify(tRes.data)}`, tRes.status);
-  const rows = tRes.data || [];
+
+  // ⚠️ PAGED, and it must stay paged. PostgREST caps EVERY response at the project's
+  // db-max-rows (5,000) regardless of the URL's own `limit` — the previous `limit=20000`
+  // was silently a 5,000 ceiling with no error and no header saying so. At 2,716 complaints
+  // YTD (measured 2026-09-03) the widest range still fits, but this feeds a CSV export now,
+  // and an export that stops at 5,000 rows while looking complete is worse than no export.
+  // Ordered by `id` (unique) so page boundaries can neither drop nor repeat a row.
+  const PAGE = 1000;
+  const allRows = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const pageRes = await sb(
+      `/rest/v1/cs_tickets?${filters.join('&')}&select=${SELECT}&order=id.asc&limit=${PAGE}&offset=${offset}`,
+      env,
+    );
+    if (!pageRes.ok) return err(`Failed to load analytics data: ${JSON.stringify(pageRes.data)}`, pageRes.status);
+    const page = pageRes.data || [];
+    for (const r of page) allRows.push(r);
+    if (page.length < PAGE) break;
+    if (offset + PAGE >= 50000) break;      // hard stop; 18x today's YTD volume
+  }
 
   // product → LOT line map (seeded on product_master.product_line)
   const lineOf = {};
   for (const r of (pmRes.data || [])) if (r.product) lineOf[r.product] = r.product_line;
+
+  // Option lists come from the date-scoped rows BEFORE the dimension filters, so the
+  // dropdowns keep offering the other choices once one is picked (filtering by product
+  // must not empty the category list down to that product's own categories).
+  const optionSets = Object.fromEntries(ANALYTICS_DIM_KEYS.map(k => [k, new Set()]));
+  const filteredRows = [];
+  for (const r of allRows) {
+    const d = analyticsDims(r, lineOf);
+    for (const k of ANALYTICS_DIM_KEYS) optionSets[k].add(d[k]);
+    if (ANALYTICS_DIM_KEYS.every(k => !want[k] || want[k] === d[k])) filteredRows.push(r);
+  }
+  const filter_options = Object.fromEntries(
+    ANALYTICS_DIM_KEYS.map(k => [k, [...optionSets[k]].sort((a, b) => a.localeCompare(b))]),
+  );
+  const rangeTotal = allRows.length;
+  const rows = filteredRows;
   // issue-category display order (catalog sort_order); dedup preserving order
   const catSeen = new Set(); const catOrderAll = [];
   for (const r of (catRes.data || [])) if (r.category && !catSeen.has(r.category)) { catSeen.add(r.category); catOrderAll.push(r.category); }
@@ -1863,22 +1922,14 @@ async function getSupportAnalytics(params, auth, env) {
       else kpis.ageing_unknown++;     // complaint dated before purchase = anomaly
     }
 
-    const product = r.product || '—';
-    const cat = r.issue_category || 'Uncategorised';
+    const { product, issue_category: cat, product_line: line, sale_channel: sale, support_channel: sup } =
+      analyticsDims(r, lineOf);
     catsPresent.add(cat);
 
     byCategory[cat] = (byCategory[cat] || 0) + 1;
-
-    const line = lineOf[r.product] || 'Unclassified';
-    byLine[line] = (byLine[line] || 0) + 1;
-
-    const sale = r.platform || 'Unknown';
-    bySale[sale] = (bySale[sale] || 0) + 1;
-
-    const sup = r.auto_created || r.intake_channel === 'phone' || r.intake_channel === 'call'
-      ? 'Calls'
-      : (SUPPORT_CHANNEL_LABELS[r.intake_channel] || (r.intake_channel ? r.intake_channel : 'Unknown'));
-    bySupport[sup] = (bySupport[sup] || 0) + 1;
+    byLine[line]    = (byLine[line]    || 0) + 1;
+    bySale[sale]    = (bySale[sale]    || 0) + 1;
+    bySupport[sup]  = (bySupport[sup]  || 0) + 1;
 
     const sub = r.issue_subcategory || r.issue_subcategory_custom;
     if (sub) bySub[sub] = (bySub[sub] || 0) + 1;
@@ -1907,7 +1958,12 @@ async function getSupportAnalytics(params, auth, env) {
   ];
 
   return ok({
-    range: { from, to, total: rows.length },
+    // `total` is the filtered count (what every panel is built from); `range_total` is the
+    // date range before the dimension filters, so the page can say "86 of 2,716" rather
+    // than leaving a filtered dashboard indistinguishable from a quiet month.
+    range: { from, to, total: rows.length, range_total: rangeTotal },
+    filter_options,
+    applied_filters: want,
     kpis,
     by_product_matrix: {
       categories,
