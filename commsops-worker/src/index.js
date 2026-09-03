@@ -2702,24 +2702,33 @@ async function runScheduled(env) {
 // re-run — a swept row is no longer 'queued', so the next tick simply finds nothing. Alerts only
 // when the volume implies a systemic failure rather than the occasional evicted isolate; the 35
 // found on 2026-09-03 had accumulated over 23 days, i.e. ~1.5/day is the background rate.
-const STRANDED_ALERT_AT = 100;
-
 async function sweepStrandedQueued(env) {
   const r = await A.sbComms(SQ.buildSweepQuery(Date.now(), A.enc), env);
   const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
   const out = SQ.summarize(rows);
   if (!rows.length) return out;
+
+  // ⚠️ sbComms RESOLVES {ok:false} on a non-2xx — it never throws — and `out` was computed from the
+  // SELECT above, BEFORE this write. So the write result must be read explicitly: without this the
+  // log would claim N rows swept and the alert would fire while the rows were still queued, and the
+  // next tick would repeat it forever. Caught in the S340 hostile review (same class as the
+  // deliverability alert fixed earlier in that session: an alert that can never clear itself).
   const ids = rows.map((x) => x.id).join(',');
-  A.checkWrite('stranded_queued_sweep_failed',
-    await A.sbComms(`/rest/v1/messages?id=in.(${ids})`, env,
-      { method: 'PATCH', body: JSON.stringify(SQ.patchBody()) }),
-    { swept: out.swept });
-  // A spike means the fan-out is losing rows in bulk, which the per-row sweep would otherwise
-  // hide by quietly cleaning up after it — the whole point is that this class used to be silent.
-  if (out.swept >= STRANDED_ALERT_AT) {
-    await AL.alert(env, `⚠️ *Relay — ${out.swept} stranded sends swept*\nRows left at 'queued' by a `
-      + `fan-out that ended mid-send: ${JSON.stringify(out.by)}. They were marked skipped, NOT re-sent. `
-      + `Check /journeys + campaign fan-out for a run that died.`);
+  const w = await A.sbComms(`/rest/v1/messages?id=in.(${ids})`, env,
+    { method: 'PATCH', body: JSON.stringify(SQ.patchBody()) });
+  A.checkWrite('stranded_queued_sweep_failed', w, { swept: out.swept });
+  if (!w.ok) return { ...out, swept: 0, found: out.swept, write_failed: true };
+
+  // A spike means the fan-out is losing rows in bulk, which the per-row sweep would otherwise hide
+  // by quietly cleaning up after it — the whole point is that this class used to be silent.
+  // Throttled on its OWN settings column so it can never mask the deliverability or journey alerts.
+  const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=stranded_alert_at&limit=1', env);
+  const lastAlertMs = s.ok && s.data?.[0]?.stranded_alert_at
+    ? new Date(s.data[0].stranded_alert_at).getTime() : 0;
+  if (SQ.shouldAlert({ swept: out.swept, wrote: true, lastAlertMs, nowMs: Date.now() })) {
+    await AL.alert(env, SQ.alertText(out));
+    await A.sbComms('/rest/v1/settings?id=eq.1', env,
+      { method: 'PATCH', body: JSON.stringify({ stranded_alert_at: nowIso() }) });
   }
   return out;
 }

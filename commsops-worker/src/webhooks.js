@@ -303,8 +303,13 @@ async function handleTrustsignalRcs(env, body) {
     // exactly as the WhatsApp inbound path does (wa-webhooks.js handleInbound). The emitted
     // `rcs_user_response` event is what a journey `wait_response` step awaits by name.
     if (ev.user_response) {
+      // ⚠️ normalizePhone is NOT a validator — it returns '+' for input '+' and for '+abc', and
+      // '+123' for the number 123. A truthiness check alone therefore lets junk through to
+      // resolve_identity and MINT A PROFILE from it. Require a real E.164 shape. Caught in the
+      // S340 hostile review; pre-fix these reached only a dead console.log, so the fix that made
+      // this branch write to the DB is what gave them teeth.
       const phone = SHOP.normalizePhone(ev.phone);
-      if (!phone) {
+      if (!phone || !/^\+\d{10,15}$/.test(phone)) {
         console.log('rcs_user_response_no_phone',
           JSON.stringify({ tlmsgid: ev.tlmsgid, response_type: ev.response_type, at: ev.at }));
         continue;
@@ -314,10 +319,16 @@ async function handleTrustsignalRcs(env, body) {
         name: 'rcs_user_response',
         occurred_at: ev.at,
         source: 'trustsignal_webhook',
-        // tlmsgid is the vendor's own message reference, so it is stable per postback. Without
-        // one there is no safe key and the event inserts unconditionally (ingest treats a null
-        // key as always-insert) — a redelivery would double-count, which is why it is logged.
-        idempotency_key: ev.tlmsgid ? `trustsignal:rcs:user_response:${ev.tlmsgid}` : undefined,
+        // ⚠️ The key includes `at`, NOT tlmsgid alone. The vendor's own reference calls tlmsgid the
+        // MESSAGE reference — so two different replies by the same customer to the same message
+        // would share it, and ingest() uses resolution=ignore-duplicates, which would DROP the
+        // second reply silently (a lost customer response, not a duplicate suppressed). Keying on
+        // tlmsgid+timestamp still absorbs a webhook redelivery, which repeats both values, while
+        // keeping genuinely distinct replies distinct. Caught in the S340 hostile review; no live
+        // postback exists yet to settle which reading of tlmsgid is right, so this errs toward
+        // keeping data. Without a tlmsgid there is no safe key and the event always inserts.
+        idempotency_key: ev.tlmsgid
+          ? `trustsignal:rcs:user_response:${ev.tlmsgid}:${ev.at}` : undefined,
         properties: { channel: 'rcs', postback: ev.postback, response_type: ev.response_type,
                       tlmsgid: ev.tlmsgid, camp_id: ev.camp_id },
       }).catch((e) => { console.log('rcs_user_response_ingest_error', e?.message || String(e)); return null; });
@@ -325,9 +336,14 @@ async function handleTrustsignalRcs(env, body) {
       // its failure modes and never throws, so the .catch above only ever sees a network-layer
       // rejection. Without this line a failed insert is completely silent — no event row, no log,
       // and a 200 back to the vendor so it never redelivers.
+      // ⚠️ Do NOT log res.error verbatim: ingest() builds 'resolve_failed:' + the PostgREST error
+      // body, whose `details` can echo the p_identifiers payload — i.e. the customer's phone into
+      // Cloudflare logs. Log a short classifier instead. Caught in the S340 hostile review.
       if (!res || res.ok === false)
-        console.log('rcs_user_response_ingest_failed',
-          JSON.stringify({ tlmsgid: ev.tlmsgid, error: res?.error || null }));
+        console.log('rcs_user_response_ingest_failed', JSON.stringify({
+          tlmsgid: ev.tlmsgid,
+          error_kind: String(res?.error || 'unknown').split(':')[0].slice(0, 40),
+        }));
       if (!ev.tlmsgid)
         console.log('rcs_user_response_no_tlmsgid', JSON.stringify({ phone_present: true, at: ev.at }));
       continue;

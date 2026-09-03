@@ -1,0 +1,12 @@
+-- 0065: per-alert throttle column for the stranded-queued sweep (S340, 2026-09-03).
+--
+-- Every alert in commsops gets its OWN throttle column, deliberately: settings.last_alert_at is
+-- the deliverability spike watch and settings.journey_alert_at the journey send-health watch, so
+-- that one alert firing can never mask another (index.js already documents this for the journey
+-- watch). The stranded-queued sweep is the third such alert and needs the same isolation.
+--
+-- Why it needs a throttle at all: the sweep alerts when it clears >= STRANDED_ALERT_AT rows in one
+-- tick. A fan-out that keeps stranding rows in bulk would otherwise page every 5 minutes, which is
+-- the same alert-fatigue failure this session fixed for the deliverability watch (that one had no
+-- recency window and paged hourly for 8 days on a frozen population).
+ALTER TABLE comms.settings ADD COLUMN IF NOT EXISTS stranded_alert_at timestamptz;

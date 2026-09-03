@@ -7,6 +7,12 @@ const A = require('./auth.js');
 // stranded-queued sweep must wait strictly longer than this before declaring a row abandoned —
 // sweeping inside this window would kill sends that are still in progress. See
 // stranded-queued.js, which asserts that relationship at load time.
+// ⚠️ THIS IS NOT THE ONLY COPY OF THE 10-MINUTE WINDOW — exporting it unified 2 of 4 sites, not
+// all of them. The same literal is hardcoded in deployed SQL, TWICE inside `comms.campaign_excluded`
+// and again in `comms.campaign_excluded_batch` (`m.status = 'queued' AND m.queued_at >= now() -
+// interval '10 minutes'`), where they decide whether a queued row counts as "already contacted".
+// Changing the value here does NOT change those; they need a migration. Caught in the S340 hostile
+// review as a PATTERN-218 residual against this session's own "so nothing drifts" claim.
 const IN_FLIGHT_MS = 10 * 60 * 1000;
 const { renderEmail, renderWhatsapp, renderSms, renderRcs, checkRcsFallbackLink } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');

@@ -13,6 +13,7 @@ const t = (n, f) => { try { f(); pass++; console.log('  ok  ', n); }
                       catch (e) { fail++; console.log('  FAIL', n, '\n        ', e.message); } };
 
 const enc = encodeURIComponent;
+const SQ_MIN = DW.MIN_SIGNAL;
 const rows = (spec) => Object.entries(spec).flatMap(([status, n]) =>
   Array.from({ length: n }, () => ({ status, provider_status: null })));
 
@@ -94,6 +95,13 @@ t('failed and bounced both count as failures', () => {
 t('garbage rows never throw', () => {
   assert.strictEqual(DW.evaluate(null).alert, false);
   assert.strictEqual(DW.evaluate([null, undefined, {}]).alert, false);
+  // ⚠️ The line above returns at the MIN_SIGNAL guard and never reaches the row-level `m &&`
+  // checks — it passed vacuously and would still pass with those guards deleted (S340 hostile
+  // review). This one has enough rows to actually walk them.
+  const many = Array(SQ_MIN + 5).fill(null);
+  assert.strictEqual(DW.evaluate(many).alert, false, 'null rows must not throw or count as failures');
+  const mixed = Array(SQ_MIN + 5).fill(null).map((_, i) => (i % 2 ? null : { status: 'bounced' }));
+  assert.ok(DW.evaluate(mixed).failed > 0, 'real rows among nulls must still be counted');
 });
 
 // ── the message ──────────────────────────────────────────────────────────────────────────────

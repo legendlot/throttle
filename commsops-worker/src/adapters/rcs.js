@@ -142,7 +142,15 @@ function one(p) {
   // transaction_id as our provider_message_id (see :85), and this payload has none — a lookup on
   // tlmsgid matches nothing. Dropping `phone` here is what left the handler with no way to
   // attribute a postback at all (fixed 2026-09-03, S340 — see webhooks.js).
-  if (wt === 'rcs_user_response' || ev === 'user_response' || p.postback) {
+  // ⛔ `p.postback` is checked ONLY as a last resort, and deliberately NOT before the typed
+  // branches below. It is an undocumented field (the vendor's reference lists `response` for a
+  // User Response, never `postback`), so a delivery/click/fallback payload that happened to carry
+  // one used to be classified as a user_response and have its STATUS UPDATE SILENTLY DISCARDED.
+  // That ordering was pre-existing and harmless while the handler only logged; once S340 made this
+  // branch write a profile event it became consequential, so the fallback moved to the bottom of
+  // the classifier (see the `p.postback` clause after the status branches). Caught in the S340
+  // hostile review.
+  if (wt === 'rcs_user_response' || ev === 'user_response') {
     return { provider_message_id: txid || p.tlmsgid || null, user_response: true,
              postback: p.postback || p.response || null, at,
              phone: p.phone || p.from || p.msisdn || null,
@@ -172,6 +180,18 @@ function one(p) {
   // `credit` on this status describes the RCS attempt, not the SMS leg.
   if (status === 'nonrcs') {
     return { provider_message_id: txid, fallback_flip: true, at, cost: null, sms_status: null, reason: null };
+  }
+
+  // Last-resort user_response detection — an undocumented `postback` on a payload that carried NO
+  // recognisable status. Kept as a net for a vendor variant that omits webhook_type, but placed
+  // AFTER every typed branch so it can never swallow a real delivery/click/fallback event (S340).
+  if (!status && p.postback) {
+    return { provider_message_id: txid || p.tlmsgid || null, user_response: true,
+             postback: p.postback, at,
+             phone: p.phone || p.from || p.msisdn || null,
+             response_type: p.response_type || p.mtype || null,
+             tlmsgid: p.tlmsgid || null,
+             camp_id: p.camp_id || null };
   }
 
   if (!status) return null;

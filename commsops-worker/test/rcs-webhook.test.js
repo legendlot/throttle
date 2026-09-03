@@ -124,7 +124,10 @@ const RCS_MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile
     assert.strictEqual(ev.body.properties.response_type, 'text');
     assert.strictEqual(ev.body.properties.tlmsgid, 'msg_987654321');
     assert.strictEqual(ev.body.properties.camp_id, 'camp_7');
-    assert.strictEqual(ev.body.idempotency_key, 'trustsignal:rcs:user_response:msg_987654321');
+    // key = tlmsgid + the event timestamp (S340 review: tlmsgid alone is the MESSAGE reference, so
+    // it would collide across two distinct replies to the same message and drop the second)
+    assert.strictEqual(ev.body.idempotency_key,
+      'trustsignal:rcs:user_response:msg_987654321:2026-09-03T11:15:30Z');
   });
 
   await t('the postback is attributed by PHONE, not by provider_message_id', async () => {
@@ -150,6 +153,42 @@ const RCS_MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile
     });
     assert.ok(!calls.some((c) => c.path.startsWith('/rest/v1/events')),
       'inserted an event with no profile attribution');
+  });
+
+  await t('S340 review: a DELIVERED carrying a stray postback is still a status, not a user_response', async () => {
+    // pre-fix the classifier checked `p.postback` before the typed branches, so this payload was
+    // read as a user_response and its delivered status was silently discarded — harmless while the
+    // handler only logged, consequential once it wrote a profile event.
+    const calls = stubResolving({ ...RCS_MSG });
+    await handleTrustsignalRcs({}, { webhook_type: 'rcs_message', transaction_id: 'tx1',
+      status: 'delivered', route: 'rcs', postback: 'stray' });
+    const patch = calls.find((c) => c.method === 'PATCH');
+    assert.ok(patch, 'the delivered status was swallowed by the postback branch');
+    assert.strictEqual(patch.body.status, 'delivered');
+    assert.ok(!calls.some((c) => c.path.startsWith('/rest/v1/events')),
+      'wrote a user_response event for a delivery status');
+  });
+
+  await t('S340 review: a junk phone is refused, not minted into a profile', async () => {
+    for (const junk of ['+', '+abc', '12345']) {
+      const calls = stubResolving(null);
+      await handleTrustsignalRcs({}, { webhook_type: 'rcs_user_response', response: 'x',
+        tlmsgid: 'm1', phone: junk, st: '2026-09-03T11:15:30Z' });
+      assert.ok(!calls.some((c) => c.path.startsWith('/rest/v1/rpc/resolve_identity')),
+        `phone ${JSON.stringify(junk)} reached resolve_identity and would mint a profile`);
+    }
+  });
+
+  await t('S340 review: the idempotency key includes the timestamp, so a 2nd reply is not dropped', async () => {
+    const calls = stubResolving(null);
+    await handleTrustsignalRcs({}, { webhook_type: 'rcs_user_response', response: 'first',
+      tlmsgid: 'same-msg', phone: '+919999999999', st: '2026-09-03T11:00:00Z' });
+    await handleTrustsignalRcs({}, { webhook_type: 'rcs_user_response', response: 'second',
+      tlmsgid: 'same-msg', phone: '+919999999999', st: '2026-09-03T11:05:00Z' });
+    const keys = calls.filter((c) => c.path.startsWith('/rest/v1/events')).map((c) => c.body.idempotency_key);
+    assert.strictEqual(keys.length, 2);
+    assert.notStrictEqual(keys[0], keys[1],
+      'two distinct replies to the same message share a key — the second is silently dropped');
   });
 
   await t('a status event still resolves by provider_message_id (no regression from the reorder)', async () => {
