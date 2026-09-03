@@ -127,7 +127,8 @@ function AuthLayoutInner({ children }) {
         onOpenPalette={() => setPaletteOpen(true)}
       />
       <div className="main-wrap">
-        <ContextBar groups={navGroups} pathname={pathname} onNav={onNav} />
+        <ContextBar groups={navGroups} pathname={pathname} onNav={onNav}
+          onSearch={() => setPaletteOpen(true)} />
         <main className="main">{children}</main>
       </div>
       <CommandPalette

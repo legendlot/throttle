@@ -3,8 +3,9 @@
 // The page title lives in each page (PageHead), not here.
 import { matchActive } from './navMatch.js';
 import { AppLauncher } from '@throttle/ui';
+import { Search } from 'lucide-react';
 
-export function ContextBar({ groups, pathname, onNav }) {
+export function ContextBar({ groups, pathname, onNav, onSearch }) {
   const match = matchActive(groups, pathname);
   const group = match?.group;
   const activeRoute = match?.item?.route;
@@ -33,6 +34,14 @@ export function ContextBar({ groups, pathname, onNav }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
         <span className="tb-live"><span className="tb-dot" />LIVE</span>
+        {/* Snorkel's search box lives INSIDE the sidebar, which is display:none at ≤767px — so on
+            a phone there was nowhere to type. This bar survives on mobile; the button opens the
+            search row below it. Desktop never renders it (.mob-search) — the sidebar box is there. */}
+        {onSearch && (
+          <button className="mob-search" onClick={onSearch} title="Search" aria-label="Search">
+            <Search size={18} strokeWidth={1.75} />
+          </button>
+        )}
         <AppLauncher current="snorkel" />
       </div>
     </div>

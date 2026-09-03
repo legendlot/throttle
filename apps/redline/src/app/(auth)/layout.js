@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth, hasPermission } from '@throttle/auth';
 import { Spinner, useSearchShortcut } from '@throttle/ui';
-import { Menu, X, LogOut } from 'lucide-react';
+import { Menu, X, LogOut, Search } from 'lucide-react';
 import { usePendingCounts } from '../../hooks/usePendingCounts.js';
 import { RedlineSidebar, RedlineTopbar, CommandPalette } from '../../components/kit/index.js';
 import { NAV_PRIMARY, NAV_SETUP, NAV_MANUAL } from '../../lib/nav.js';
@@ -82,7 +82,16 @@ function AuthLayoutInner({ children }) {
         onLogout={signOut}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <RedlineTopbar refreshing={refreshing} lastRefreshed={lastRefreshed} />
+        {/* The ⌘K palette is keyboard-only, and the rail that used to reach it is hidden at
+            ≤767px — so on a phone the palette was unreachable. This button is the touch door to
+            it (mobile-only via .mob-search; desktop keeps the shortcut). */}
+        <RedlineTopbar refreshing={refreshing} lastRefreshed={lastRefreshed}
+          right={
+            <button className="mob-search" onClick={() => setCmdkOpen(true)}
+              title="Search (⌘K)" aria-label="Search">
+              <Search size={18} strokeWidth={1.75} />
+            </button>
+          } />
         <main className="rl-main" style={{ flex: 1, overflowY: 'auto', padding: '22px 26px' }}>
           {children}
         </main>

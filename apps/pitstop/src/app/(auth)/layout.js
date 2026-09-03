@@ -123,6 +123,12 @@ function AuthLayoutInner({ children }) {
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <PitstopTopbar refreshing={refreshing} lastRefreshed={lastRefreshed} badge={topbarBadge}>
+          {/* Touch door to the ⌘K palette: the rail that used to reach it is hidden at ≤767px,
+              so on a phone the palette had no trigger at all. Mobile-only via .mob-search. */}
+          <button className="mob-search" onClick={() => setCmdkOpen(true)}
+            title="Search (⌘K)" aria-label="Search">
+            <Icon name="search" size={18} />
+          </button>
           <PresenceToggle session={session} />
           <DeptSwitcher />
           <AppLauncher current="pitstop" />

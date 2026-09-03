@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, useSearchShortcut } from '@throttle/ui';
-import { Menu, X, LogOut } from 'lucide-react';
+import { Menu, X, LogOut, Search } from 'lucide-react';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { Sidebar } from '../../components/chrome/Sidebar.js';
 import { ContextBar } from '../../components/chrome/ContextBar.js';
@@ -27,6 +27,8 @@ function AuthLayoutInner({ children }) {
 
   // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation) ─
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Mobile-only: the sidebar's search box is display:none at ≤767px, so this row is the way in.
+  const [mobileSearch, setMobileSearch] = useState(false);
   useEffect(() => { setSheetOpen(false); }, [pathname]);
 
   useSearchShortcut(); // "/" focuses the sidebar search ([data-search-primary])
@@ -73,7 +75,18 @@ function AuthLayoutInner({ children }) {
         onSearch={setSearch}
       />
       <div className="main-wrap">
-        <ContextBar groups={navGroups} pathname={pathname} onNav={onNav} />
+        <ContextBar groups={navGroups} pathname={pathname} onNav={onNav}
+          onSearch={() => setMobileSearch(v => !v)} />
+        {mobileSearch && (
+          <div className="cb-searchrow">
+            <Search size={15} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search POs, vendors, partners" aria-label="Search" />
+            <button onClick={() => { setSearch(''); setMobileSearch(false); }} aria-label="Close search">
+              <X size={15} />
+            </button>
+          </div>
+        )}
         <main className="main">{children}</main>
       </div>
 

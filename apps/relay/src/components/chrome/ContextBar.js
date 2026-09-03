@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { matchActive } from './navMatch.js';
 import { crumbFor } from '../../lib/nav.js';
 import { AppLauncher } from '@throttle/ui';
+import { Search } from 'lucide-react';
 
 function istNow() {
   try {
@@ -16,7 +17,7 @@ function istNow() {
   } catch { return ''; }
 }
 
-export function ContextBar({ groups, pathname, onNav }) {
+export function ContextBar({ groups, pathname, onNav, onSearch }) {
   const match = matchActive(groups, pathname);
   const group = match?.group;
   const activeRoute = match?.item?.route;
@@ -52,6 +53,14 @@ export function ContextBar({ groups, pathname, onNav }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
         <span className="tb-live"><span className="tb-dot" />LIVE · UPDATED {now} IST</span>
+        {/* The ⌘K palette is keyboard-only and the sidebar that reached it is hidden at ≤767px,
+            so on a phone it had no trigger. This bar survives on mobile; the button does not
+            render on desktop (.mob-search), where the shortcut is unchanged. */}
+        {onSearch && (
+          <button className="mob-search" onClick={onSearch} title="Search (⌘K)" aria-label="Search">
+            <Search size={18} strokeWidth={1.75} />
+          </button>
+        )}
         <AppLauncher current="relay" />
       </div>
     </div>

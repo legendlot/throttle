@@ -459,7 +459,9 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
 .gs-sec{font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .gs-go{width:14px;height:14px;color:var(--text-4);opacity:0;flex-shrink:0;transition:opacity .12s,transform .12s}
 .gs-row:hover .gs-go{opacity:1;transform:translateX(2px);color:var(--accent)}
-@media(max-width:720px){.gs-panel{left:12px!important;right:12px;width:auto}.gs-backdrop{left:0!important}}
+/* 767px, NOT 720px: `.sb` hides at 767, so a 720 breakpoint left 721-767px anchoring the
+   panel to a rail that is no longer rendered (S341). Keep these two numbers equal. */
+@media(max-width:767px){.gs-panel{left:12px!important;right:12px;width:auto}.gs-backdrop{left:0!important}}
 
 /* ---- responsive ---- */
 @media(max-width:1080px){.ov-2col{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}}
@@ -486,7 +488,7 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
   /* The root clip. Without this the rules below only remove chrome from page 1. */
   html, body { height: auto !important; overflow: visible !important; }
   /* .cb covers the AppLauncher waffle too — it renders inside the context bar. */
-  .sb, .cb, .gs-backdrop, .gs-panel { display: none !important; }
+  .sb, .cb, .cb-searchrow, .gs-backdrop, .gs-panel { display: none !important; }
   /* ⚠️ The S304 mobile shell below is FIXED-POSITION, so it paints over the SAME
      strip of every printed page and silently eats whatever line lands there — it
      is not merely cosmetic. Reported by Prarthi 2026-08-26: SO-0401's invoice
@@ -556,4 +558,42 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
   /* 16px inputs stop iOS Safari's focus auto-zoom (native-picker dates exempt) */
   .main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
   .main select, .main textarea { font-size: 16px !important; }
+}
+
+/* ── mobile search affordance (S341, 2026-09-03) ───────────────────────────────────────────
+   The rail/sidebar that used to hold the search box (or reach the ⌘K palette) is display:none
+   at ≤767px, so on a phone the search was unreachable — no button, and no keyboard to press
+   ⌘K on. This button lives in the chrome that DOES survive on mobile. Desktop never renders
+   it: the sidebar box and the shortcut are unchanged there. Pattern copied from Garage/Odo,
+   which kept a topbar search button and so never lost the affordance. */
+.mob-search { display: none; }
+@media (max-width: 767px) {
+  .mob-search {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; flex: none;
+    background: none; border: none; border-radius: 7px; cursor: pointer;
+    color: var(--t3, var(--text-3, #8b8b8b));
+  }
+  .mob-search:active { background: rgba(127,127,127,.16); }
+}
+
+/* Snorkel's search input lives inside `.sb`, which is display:none at ≤767px — so on a phone
+   there was nowhere to type at all. The ContextBar survives, and its button toggles this row. */
+.cb-searchrow { display: none; }
+@media (max-width: 767px) {
+  .cb-searchrow {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border-2);
+    background: var(--surface-2);
+  }
+  .cb-searchrow input {
+    flex: 1; min-width: 0; background: none; border: none; outline: none;
+    font: inherit; font-size: 14px; color: var(--text-1);
+  }
+  .cb-searchrow input::placeholder { color: var(--text-4); }
+  .cb-searchrow > button {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0; flex: none;
+    background: none; border: none; border-radius: 6px; cursor: pointer; color: var(--text-3);
+  }
 }

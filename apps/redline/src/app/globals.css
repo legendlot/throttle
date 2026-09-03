@@ -316,3 +316,20 @@ button { font-family: inherit; }
   .rl-funnel::-webkit-scrollbar { display: none; }
   .rl-funnel > button { min-width: 150px; }
 }
+
+/* ── mobile search affordance (S341, 2026-09-03) ───────────────────────────────────────────
+   The rail/sidebar that used to hold the search box (or reach the ⌘K palette) is display:none
+   at ≤767px, so on a phone the search was unreachable — no button, and no keyboard to press
+   ⌘K on. This button lives in the chrome that DOES survive on mobile. Desktop never renders
+   it: the sidebar box and the shortcut are unchanged there. Pattern copied from Garage/Odo,
+   which kept a topbar search button and so never lost the affordance. */
+.mob-search { display: none; }
+@media (max-width: 767px) {
+  .mob-search {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; flex: none;
+    background: none; border: none; border-radius: 7px; cursor: pointer;
+    color: var(--t3, var(--text-3, #8b8b8b));
+  }
+  .mob-search:active { background: rgba(127,127,127,.16); }
+}
