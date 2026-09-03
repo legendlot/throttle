@@ -17,6 +17,12 @@ import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 import BotBuilder from '@/components/bot-builder/BotBuilder.js';
 
+// Monotonic suffix for replicated node ids. Date.now() alone collides when a node is
+// duplicated twice inside the same millisecond, and a duplicate id silently overwrites
+// the first twin in toDefinition()'s `steps` map — same reason JourneyCanvas carries
+// its own `seq` for addStep().
+let dupSeq = 0;
+
 // React Flow touches window — client-only.
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -377,6 +383,34 @@ export default function JourneysPage() {
     setNodesRaw((ns) => ns.filter((n) => n.id !== selected));
     setEdges((es) => es.filter((e) => e.source !== selected && e.target !== selected));
     setSelected(null);
+  }
+  // Duplicate the selected step with its config, DELIBERATELY unconnected (Pruthvi,
+  // #bugs 2026-07-15). Copying the outcome edges too would silently fan the source's
+  // next step a second inbound edge — the author wants a second variant to wire up,
+  // not a parallel branch they did not draw. toDefinition() derives `outcomes` purely
+  // from the edge list, so a node with no edges compiles as a terminal step and the
+  // existing lint flags it if they forget to wire it.
+  function replicateSelected() {
+    const src = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID);
+    if (!src) return;
+    // Reuse the SOURCE's id prefix rather than deriving one from config.type: node ids
+    // are opaque keys (toDefinition writes them verbatim; only __trigger is special),
+    // and the prefix came from the palette key, which type alone cannot reconstruct —
+    // set_attr and order_modify both carry type 'action'.
+    const prefix = String(src.id).replace(/_[a-z0-9]+$/i, '') || 'step';
+    const id = `${prefix}_${Date.now().toString(36)}${(dupSeq++).toString(36)}`;
+    const node = {
+      ...src,
+      id,
+      selected: false,
+      position: { x: (src.position?.x || 0) + 48, y: (src.position?.y || 0) + 48 },
+      // Deep clone: several step configs carry arrays/objects (buttons, awaited,
+      // check) and a shallow copy would leave the twin sharing them, so editing one
+      // would silently edit the other. Config is JSON-only by construction.
+      data: { ...src.data, config: JSON.parse(JSON.stringify(src.data?.config || {})) },
+    };
+    setNodesRaw((ns) => [...ns, node]);
+    setSelected(id);
   }
 
   async function save() {
@@ -765,7 +799,8 @@ export default function JourneysPage() {
             onSelect={setSelected} readOnly={busy || !editable} />
           <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates} senders={senders}
             eventDefs={eventDefs}
-            onChange={updateSelectedConfig} onDelete={deleteSelected} disabled={busy || !editable} />
+            onChange={updateSelectedConfig} onDelete={deleteSelected} onReplicate={replicateSelected}
+            disabled={busy || !editable} />
         </Panel>
 
         <Panel title="Lifecycle" pad infoWidth={340} info={<>

@@ -74,6 +74,7 @@ export default function SettingsPage() {
   const confirm = useConfirm();
   const [form, setForm] = useState({});
   const [allowText, setAllowText] = useState('');
+  const [testAllowText, setTestAllowText] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // S268 — per-channel quiet windows. Separate table, separate save, so a validation failure
@@ -92,6 +93,7 @@ export default function SettingsPage() {
       setSavedCourierFrom(s?.courier_emit_from || null);
       setForm(s || {});
       setAllowText(Array.isArray(s?.test_mode_allow) ? s.test_mode_allow.join('\n') : '');
+      setTestAllowText(Array.isArray(s?.test_allowlist) ? s.test_allowlist.join('\n') : '');
       // `time` comes back as HH:MM:SS; the input wants HH:MM.
       setQuiet((Array.isArray(q) ? q : []).map((r) => ({
         ...r, start_time: String(r.start_time || '').slice(0, 5), end_time: String(r.end_time || '').slice(0, 5),
@@ -220,6 +222,10 @@ export default function SettingsPage() {
       });
       payload.test_mode = form.test_mode !== false; // fail-safe: anything but explicit false = ON
       payload.test_mode_allow = allowText.split('\n').map((s) => s.trim().toLowerCase()).filter(Boolean);
+      // NOT lower-cased here, unlike test_mode_allow: this list holds phone numbers as well as
+      // emails, and the worker lower-cases emails only (matching addTestAllowlist) before it
+      // dedupes. Sending a pre-mangled list would just disagree with the add path.
+      payload.test_allowlist = testAllowText.split('\n').map((s) => s.trim()).filter(Boolean);
       // jsonb, not one of the flat FIELDS — null means "no account floor, auto-derive".
       payload.utm_defaults = form.utm_defaults || null;
       // Emit watermarks + the segment-entry cap (S254). Sent only when present so a partial
@@ -280,6 +286,29 @@ export default function SettingsPage() {
                     value={allowText}
                     onChange={(e) => setAllowText(e.target.value)}
                     placeholder={'@legendoftoys.com\nsomeone@example.com'}
+                    disabled={saving}
+                  />
+                </div>
+                {/* S337: the builder-managed twin of the list above. Send-test flows APPEND to
+                    it via addTestAllowlist, and until now nothing could view or remove an
+                    entry — so it only ever grew (22 entries by 2026-09-03, one number present
+                    twice in two formats). Kept as a SEPARATE field rather than merged into the
+                    allowlist above: that one is super-admin policy and accepts @domain
+                    patterns, this one is exact addresses added by builders. */}
+                <div className="perm-row" style={{ alignItems: 'flex-start' }}>
+                  <div className="perm-l">
+                    <span className="perm-lbl">Test-send allowlist</span>
+                    <span className="perm-key">
+                      One per line, exact email or phone — no “@domain” patterns (those go in the Allowlist above).
+                      Added automatically by the Send-test flows; edit here to remove. Test sends may only ever reach this list ∪ the Allowlist, even when sends are OPEN.
+                    </span>
+                  </div>
+                  <textarea
+                    className="f-inp mono"
+                    style={{ width: 280, minHeight: 84, resize: 'vertical' }}
+                    value={testAllowText}
+                    onChange={(e) => setTestAllowText(e.target.value)}
+                    placeholder={'someone@example.com\n+919876543210'}
                     disabled={saving}
                   />
                 </div>

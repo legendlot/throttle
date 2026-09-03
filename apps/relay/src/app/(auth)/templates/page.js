@@ -181,7 +181,7 @@ function emptyTemplate() {
 // authored + approved on Sigmo (RCS Settings › Templates); what Relay owns is which vendor
 // template this row sends, the param slots (csparams index order — positional at the vendor,
 // NEVER alphabetical), the mandatory SMS fallback leg, and the optional tracked-link variable.
-function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, smsTemplates,
+function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setProviderTemplateId, onUnbind, smsTemplates,
                      session, templateRowId, onBound }) {
   const { showToast } = useToast();
   const confirm = useConfirm();
@@ -330,9 +330,26 @@ function RcsEditor({ rcs, setRcs, variables, disabled, providerTemplateId, setPr
           <div className="kv-k">Vendor template id</div>
           {/* Read-only once bound — a stray keystroke here would silently rebind the row to a
               template that doesn't exist. Rebinding is deliberate: duplicate the row instead. */}
-          <input className="f-inp mono" value={providerTemplateId || ''}
-            disabled={disabled || !!providerTemplateId}
-            onChange={(e) => setProviderTemplateId(e.target.value.trim())} placeholder="73he0n5x33x" />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input className="f-inp mono" value={providerTemplateId || ''}
+              disabled={disabled || !!providerTemplateId}
+              onChange={(e) => setProviderTemplateId(e.target.value.trim())} placeholder="73he0n5x33x"
+              style={{ flex: 1, minWidth: 0 }} />
+            {/* S337: an id typed in error used to be unfixable except by duplicating the row.
+                Clearing it here only stages the unbind — it takes effect on Save, which is
+                where the bound-to-a-live-campaign guard runs. */}
+            {!disabled && !!providerTemplateId && onUnbind && (
+              <button className="btn" type="button" onClick={onUnbind}
+                title="Clear this vendor binding. Takes effect when you Save; refused if the template is bound to a live campaign.">
+                Unbind
+              </button>
+            )}
+          </div>
+          {!providerTemplateId && (
+            <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+              Unbound — Save to apply, or type a corrected vendor id to rebind instead.
+            </div>
+          )}
         </div>
         <div className="ff">
           <div className="kv-k">Type</div>
@@ -1058,7 +1075,14 @@ export default function TemplatesPage() {
       // showed VENDOR: APPROVED) and was dropped on Save; the list truthfully read the row
       // as "not submitted" (Pruthvi, #bugs 2026-08-17). The worker writes it for rcs rows
       // only and never clears a stored binding on a blank.
-      ...(t.channel === 'rcs' ? { provider_template_id: (t.provider_template_id || '').trim() || null } : {}),
+      ...(t.channel === 'rcs' ? {
+        provider_template_id: (t.provider_template_id || '').trim() || null,
+        // S337: the worker carries a stored binding forward on a blank (deliberate — a stale
+        // tab must not wipe a live binding), so clearing the field is not enough to unbind.
+        // The explicit flag rides only when Unbind was pressed AND nothing was retyped after,
+        // so re-binding to a corrected id in the same edit is a plain rebind, not an unbind.
+        ...(t._unbindRcs && !(t.provider_template_id || '').trim() ? { unbind_provider_template: true } : {}),
+      } : {}),
     };
   }
 
@@ -1223,6 +1247,10 @@ export default function TemplatesPage() {
         : saved?.noop ? 'No changes to save'
         : 'Template saved (new version)', 'success');
       if (saved?.id && !t.id) set('id', saved.id);
+      // The unbind is spent once the worker has applied it. Leaving the flag armed would make
+      // every later save on this row re-send it, which is harmless today (the column is already
+      // null) but would silently fight a rebind made from another tab.
+      if (t._unbindRcs) set('_unbindRcs', false);
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
     finally {
@@ -1593,6 +1621,7 @@ export default function TemplatesPage() {
             disabled={saving || !canEdit}
             providerTemplateId={t.provider_template_id}
             setProviderTemplateId={(v) => set('provider_template_id', v)}
+            onUnbind={() => setT((prev) => ({ ...prev, provider_template_id: null, _unbindRcs: true }))}
             session={session} templateRowId={t.id}
             onBound={(pid, status, varParams) => setT((prev) => ({ ...prev,
               provider_template_id: pid,

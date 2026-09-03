@@ -1176,6 +1176,13 @@ async function handlePost(body, auth, env) {
       const allowed = ['approval_required_marketing', 'approval_audience_threshold',
         'frequency_cap_per_day', 'frequency_cap_window_hours', 'quiet_hours_start',
         'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow',
+        // S337: test_allowlist was WRITE-ONLY-BY-APPEND. addTestAllowlist (canBuild) could add
+        // an exact address from the Send-test flows, but nothing could ever view or remove one,
+        // so the list only grew — 22 entries by 2026-09-03, including the same number twice in
+        // two formats. Exposing it here makes removal a super-admin act while ADDING stays on
+        // the builder perm, which is the right asymmetry: adding widens a test-only allowlist,
+        // removing can silently break a colleague's test sends.
+        'test_allowlist',
         'daily_send_budget',
         'payment_links_enabled', 'c2p_cod_fee', 'c2p_prepaid_discount_pct', 'wa_media_id_enabled',
         // "Wrong number" redirect (S245) — read by csops on every relay-transported inbound.
@@ -1199,6 +1206,32 @@ async function handlePost(body, auth, env) {
       if ('wa_media_id_enabled' in patch) patch.wa_media_id_enabled = (patch.wa_media_id_enabled === true);
       // Normalized by the same helper the send path uses, so what is stored is what will be sent.
       if ('utm_defaults' in patch) patch.utm_defaults = J.sanitizeUtm(patch.utm_defaults);
+      // test_allowlist: normalize to EXACTLY what addTestAllowlist would have written, or the
+      // two paths disagree about what "the same address" is and testRecipientAllowed's
+      // includes() check silently misses. Emails lower-cased, phones kept verbatim (the send
+      // path matches them as typed), blanks dropped, duplicates collapsed. @domain patterns are
+      // refused here too — they belong on test_mode_allow, which is the super-admin surface for
+      // granting a whole domain, and letting them in through the back door would widen the
+      // allowlist far past "exact addresses only".
+      if ('test_allowlist' in patch) {
+        const raw = Array.isArray(patch.test_allowlist) ? patch.test_allowlist : [];
+        const seen = new Set();
+        const out = [];
+        for (const v of raw) {
+          const s = String(v || '').trim();
+          if (!s) continue;
+          if (s.startsWith('@')) return err('domain_patterns_belong_on_test_mode_allow', 422);
+          const isEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+          const digits = s.replace(/[^\d]/g, '');
+          const isPhone = !isEmail && digits.length >= 8 && digits.length <= 15;
+          if (!isEmail && !isPhone) return err(`test_allowlist entry must be an email or phone: ${s}`, 422);
+          const norm = isEmail ? s.toLowerCase() : s;
+          if (seen.has(norm)) continue;
+          seen.add(norm);
+          out.push(norm);
+        }
+        patch.test_allowlist = out;
+      }
       // C2P PRICING — validate to exactly the range journey-workflow's `c2p_prepaid` branch will
       // accept, so a bad value is refused HERE with a clear error rather than silently failing
       // every conversion later as `c2p_pricing_unavailable`. Mirrors that fail-closed check.
@@ -1243,6 +1276,12 @@ async function handlePost(body, auth, env) {
       const r = await A.sbComms('/rest/v1/settings?id=eq.1', env, {
         method: 'PATCH', body: JSON.stringify(patch),
       });
+      // Bust the 60s settings cache when a TEST-GATING key changed. addTestAllowlist already
+      // does this for the add path (S230) because a blocked resend has to work immediately;
+      // removal needs it more, not less — without it a just-removed address stays sendable
+      // for up to a minute, which is the wrong direction to be stale in. Scoped to these keys
+      // rather than every save: the rest are read-mostly and the cache is there on purpose.
+      if (r.ok && ['test_allowlist', 'test_mode_allow', 'test_mode'].some((k) => k in patch)) G._clearSettingsCache();
       return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
     }
     case 'saveSenderIdentity': {
@@ -1382,10 +1421,18 @@ async function handlePost(body, auth, env) {
         // is Meta-owned via submit, SMS's comes from the mirror action. Bind/replace only:
         // absent or blank carries the stored value, so a stale tab cannot CLEAR a live binding
         // (the waba_id lesson, one field over).
-        const nextPtid = (channel === 'rcs'
-            && typeof body.provider_template_id === 'string' && body.provider_template_id.trim())
-          ? body.provider_template_id.trim()
-          : (cur.data?.[0]?.provider_template_id ?? null);
+        // BIND / REPLACE only — a blank carries the stored id forward, so a stale tab cannot
+        // wipe a live binding (S293). ⚠️ Consequence, fixed in S337: an id typed in ERROR was
+        // then unfixable except by duplicating the template. `unbind_provider_template: true`
+        // is the explicit escape hatch — deliberately a distinct flag rather than loosening
+        // the blank rule, so clearing a binding stays an act you have to mean.
+        const wantsUnbind = channel === 'rcs' && body.unbind_provider_template === true;
+        const nextPtid = wantsUnbind
+          ? null
+          : ((channel === 'rcs'
+              && typeof body.provider_template_id === 'string' && body.provider_template_id.trim())
+            ? body.provider_template_id.trim()
+            : (cur.data?.[0]?.provider_template_id ?? null));
         // NO-OP ON NO CHANGES. `version` was bumped on EVERY save, so simply opening a
         // template and pressing Save inflated it — live rows had reached v5–v7 on a handful
         // of real edits, which makes the version meaningless exactly when you need it (which

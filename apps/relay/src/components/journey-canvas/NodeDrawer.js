@@ -2,7 +2,7 @@
 // Config form for the selected canvas node. Pure controlled component:
 // receives the node's config + templates list, calls onChange(partial) / onDelete().
 import { useState, useEffect } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Copy } from 'lucide-react';
 import { Combobox } from '@throttle/ui';
 import { eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 
@@ -105,7 +105,7 @@ function DurationInput({ value, onChange, disabled }) {
   );
 }
 
-export default function NodeDrawer({ nodeId, config, templates, senders, onChange, onDelete, disabled, eventDefs }) {
+export default function NodeDrawer({ nodeId, config, templates, senders, onChange, onDelete, onReplicate, disabled, eventDefs }) {
   if (!nodeId || !config) return null;
   // Defaulted through normalizeEventDefs so the drawer still renders a usable list if it is
   // ever mounted without the prop (fallback set), never an empty picker.
@@ -119,9 +119,17 @@ export default function NodeDrawer({ nodeId, config, templates, senders, onChang
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <strong style={{ textTransform: 'capitalize' }}>{t} · <span className="mono dim" style={{ fontSize: 11 }}>{nodeId}</span></strong>
         {!disabled && (
-          <button className="btn" type="button" onClick={onDelete} style={{ color: '#DE2A2A' }}>
-            <Trash2 size={14} /> Delete node
-          </button>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {onReplicate && (
+              <button className="btn" type="button" onClick={onReplicate}
+                title="Duplicate this step with its settings. The copy is not wired to anything.">
+                <Copy size={14} /> Replicate
+              </button>
+            )}
+            <button className="btn" type="button" onClick={onDelete} style={{ color: '#DE2A2A' }}>
+              <Trash2 size={14} /> Delete node
+            </button>
+          </div>
         )}
       </div>
 
