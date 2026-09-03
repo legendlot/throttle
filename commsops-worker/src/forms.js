@@ -223,6 +223,28 @@ async function handleFormSubmit(env, request) {
   const needsConfirm = form.requires_confirmation === true;
   const confirmToken = needsConfirm ? crypto.randomUUID().replace(/-/g, '') : null;
 
+  // ⚠️ REPEAT-SUBMIT SHORT-CIRCUIT (S342). The `on_conflict` insert below correctly refuses a
+  // duplicate SUBMISSION — but the consent loop runs BEFORE it and unconditionally, so N submits
+  // produced 1 submission row and N identical `opted_in` consent rows. Measured live on the first
+  // real end-to-end test (2026-09-03): two submits of the same email+product left one submission
+  // and TWO `website_form:back-in-stock` consent rows.
+  // The customer's consent STATE was never wrong (`latestConsent` reads the newest, and both rows
+  // say opted_in) — but `consent` is an append-only evidence ledger, so duplicates inflate any
+  // count of "who opted in via this form" and muddy the audit trail. Same class as the S331
+  // within-request fix (`channels: Array(500).fill('email')` → a Set); this is the across-request
+  // half that fix could not see.
+  // ⚠️ A read-then-act check is deliberately NOT presented as a guarantee: two simultaneous FIRST
+  // submits can still both pass it, which is exactly today's behaviour — strictly no worse, never
+  // better than the UNIQUE index, which remains the real control. The transactional fix is
+  // capture-spine residual (e).
+  if (key) {
+    const dupe = await A.sbComms(
+      `/rest/v1/form_submissions?form_id=eq.${A.enc(form.id)}&dedupe_key=eq.${A.enc(key)}&select=id&limit=1`, env);
+    // Fail OPEN on an unreadable check: this is a de-duplication nicety, not a security control,
+    // and refusing a genuine first submission because a SELECT failed would lose a real signup.
+    if (dupe.ok && dupe.data?.[0]) return { ok: true, deduped: true };
+  }
+
   // Consent NOW only when this is a single requested alert. An ongoing marketing enrolment
   // writes nothing until the person confirms — an unconfirmed submission must never become
   // a sendable audience.

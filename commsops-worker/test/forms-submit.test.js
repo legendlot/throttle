@@ -31,7 +31,16 @@ function mockDb(writes, opts = {}) {
     if (path.includes('resolve_identity')) return { ok: true, data: 'P1' };
     if (path.startsWith('/rest/v1/events')) return { ok: true, data: [{ id: 'E1' }] };
     if (path.startsWith('/rest/v1/consent')) return { ok: true, data: [] };
-    if (path.startsWith('/rest/v1/form_submissions')) return { ok: true, data: [{ id: 'S1' }] };
+    // ⚠️ TWO DIFFERENT CALLS hit this table and they must not share one answer (S342).
+    // The GET is the repeat-submit dupe check — answering it with a row makes EVERY submission
+    // look like a duplicate and silently short-circuits the whole write path. Only the POST is
+    // the insert. (An over-broad stub hid a new code path here; the same thing happened to
+    // forms-turnstile's DOM stub in the same session.)
+    if (path.startsWith('/rest/v1/form_submissions')) {
+      return method === 'POST'
+        ? { ok: true, data: [{ id: 'S1' }] }   // the insert
+        : { ok: true, data: [] };              // dupe check: nothing on file yet
+    }
     if (path.startsWith('/rest/v1/profiles')) return { ok: true, data: [{ attributes: {} }] };
     return { ok: true, data: [] };
   };
