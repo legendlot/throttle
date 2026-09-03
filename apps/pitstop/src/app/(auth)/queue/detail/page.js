@@ -410,6 +410,10 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
             disabled={advancing}
           />
         )}
+        {/* Only when Advance is not already the close button — otherwise it is a duplicate. */}
+        {isAdmin && !t.closed_at && nextStage !== 'closed' && !t.closure_requested_at && (
+          <CloseNowButton ticket={t} session={session} onAdvanced={onRefresh} />
+        )}
       </div>
     </div>
     </>
@@ -438,6 +442,49 @@ function AdvanceButton({ label, ticket, nextStage, session, onAdvanced }) {
   );
 }
 
+// "Close now" — the mid-flight close (2026-09-03, Afshaan's one-click-close ask).
+//
+// ⚠️ The ask was read for months as "build a Close modal". IT ALREADY EXISTED, and so did the
+// backend: `closeTicket` in csops is a complete, deliberately-designed unilateral close —
+// it was fixed in S318 and then had ZERO CALLERS in this app. The gap was never the modal or
+// the handler, it was the button between them. Measured before building: a query/no_action
+// ticket was already 3 clicks (its ladder is just intake→closed), while a `replacement`
+// ticket was 8 rungs ≈ 17 clicks with gate fields in the way. This closes that gap.
+//
+// ⛔ Do NOT "fix" this instead by adding 'closed' to allowedTransitions — that was the obvious
+// move and it is wrong twice over: it would let anyone with cs_ticket_manage skip every stage
+// gate on every ticket, and it would break closeTicket's own `pipelineAllowsClose` derivation,
+// which would then always be true and silently drop the admin requirement for a mid-flight close.
+//
+// Shown only when the pipeline does NOT already offer close (otherwise the Advance button IS
+// the close button and a second one is noise), and only to admins — mid-flight close is
+// cs_ticket_admin server-side. A non-admin mid-flight still has no route; `requestTicketClosure`
+// is only reachable at the last rung. That gap is real but out of scope here — flagged, not built.
+function CloseNowButton({ ticket, session, onAdvanced }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  return (
+    <>
+      <button onClick={() => setModalOpen(true)}
+        title="Close this ticket now, keeping its disposition"
+        style={{ padding: '9px 15px', fontSize: 12, borderRadius: 'var(--radius-sm)',
+                 border: '1px solid var(--border-2)', background: 'transparent',
+                 color: 'var(--t2)', cursor: 'pointer', fontWeight: 600 }}>
+        Close now
+      </button>
+      <AdvanceModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        ticket={ticket}
+        targetStage="closed"
+        session={session}
+        onAdvanced={() => { setModalOpen(false); onAdvanced(); }}
+        isAdmin
+        directClose
+      />
+    </>
+  );
+}
+
 // Ticket close outcomes. 'resolved' leads because it is the common case; everything
 // below it is an operational close. Must stay in lockstep with ALLOWED_CLOSED_REASONS
 // in csops-worker/src/index.js.
@@ -453,12 +500,20 @@ const TICKET_CLOSE_OUTCOMES = [
   ['other',        'Other (add a note)'],
 ];
 
-function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced, isAdmin }) {
+// `directClose` = the mid-flight "Close now" route (2026-09-03). It reuses this modal
+// wholesale rather than adding a second screen — the same reasoning the closure-approval
+// route already follows. Only the submit target differs: `closeTicket` instead of
+// `advanceStage`, because `closed` is deliberately NOT a SIDE_EXIT in allowedTransitions
+// and advanceStage would 422 from any stage but the one immediately before it.
+function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced, isAdmin, directClose = false }) {
   // Closure approval (Pruthvi, 2026-08-18). An admin still closes directly — this is an
   // extra route for people who cannot, not a queue everyone joins. Same modal either way,
   // so nobody has to learn a second screen; only the note requirement, the button and the
   // action differ.
-  const needsApproval = targetStage === 'closed' && !isAdmin;
+  // A direct close never routes through the approval queue: closeTicket does its own
+  // permission split server-side (cs_ticket_manage when the pipeline already allows close,
+  // cs_ticket_admin + a reason when it does not), so restating it here could only drift.
+  const needsApproval = targetStage === 'closed' && !isAdmin && !directClose;
   const [form, setForm] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -526,7 +581,13 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced,
           patch[f.name] = f.type === 'number' ? Number(v) : v;
         }
       }
-      if (needsApproval) {
+      if (directClose) {
+        await csopsPost('closeTicket', {
+          ticket_id: ticket.id,
+          reason: patch.closed_reason,
+          note: patch.closed_note,
+        }, session);
+      } else if (needsApproval) {
         await csopsPost('requestTicketClosure', {
           ticket_id: ticket.id,
           reason: patch.closed_reason,
