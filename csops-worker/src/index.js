@@ -1005,6 +1005,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setThreadTags':        return setThreadTags(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
+    case 'undoCalledBack':           return undoCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendWaReply':              return sendWaReply(body, auth, env);
@@ -4446,12 +4447,41 @@ async function markCalledBack(body, auth, env) {
       called_back_at: new Date().toISOString(),
       called_back_by_user_id: auth.userId,
       called_back_note: note || null,
-      // Clear the flag as well as stamping the time - the queue filters on
-      // needs_callback, so leaving it set keeps a handled call in the worklist.
-      needs_callback: false,
+      // ⚠️ This deliberately does NOT clear `needs_callback` any more (2026-09-03).
+      // The old code did, with the comment "the queue filters on needs_callback, so
+      // leaving it set keeps a handled call in the worklist" - that was WRONG. Both
+      // readers of the flag already AND `called_back_at=is.null`: the callback tab
+      // (~4356) and the `unanswered_awaiting_callback` KPI (~4415). So the stamp alone
+      // drains the worklist and the flag write was redundant - and it was the one part
+      // of this action that could not be reversed, because nothing records what the
+      // flag was before. Dropping it makes undoCalledBack() an exact inverse.
     }),
   });
   if (!r.ok) return err(`mark called-back failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ call: r.data?.[0] });
+}
+
+// Reverse markCalledBack(). A mis-click used to be permanent: the row left the
+// abandoned/missed worklist the moment it was stamped and no writer anywhere set
+// `called_back_at` back to null, so the only trace was on All Calls.
+//
+// Nulling the three columns is a complete inverse *because* markCalledBack no longer
+// touches `needs_callback` (see above). ⚠️ Rows stamped BEFORE that change still carry
+// `needs_callback=false`, so undoing one of those returns it to the missed/abandoned
+// tab but not to the callback tab - the flag it lost was never recorded anywhere.
+async function undoCalledBack(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { call_id } = body;
+  if (!call_id) return err('call_id required');
+  const r = await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(call_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      called_back_at: null,
+      called_back_by_user_id: null,
+      called_back_note: null,
+    }),
+  });
+  if (!r.ok) return err(`undo called-back failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ call: r.data?.[0] });
 }
 

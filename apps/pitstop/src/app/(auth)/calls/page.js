@@ -332,6 +332,15 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
     catch (e) { alert(e.message); }
   }
 
+  // The inverse of markCalled(). Both the abandoned and missed tabs exclude
+  // `called_back_at`-stamped rows, so a mis-click drops the call out of the worklist
+  // the agent is working - this is the only way back without going via All Calls.
+  async function undoCalled() {
+    setMenuOpen(false);
+    try { await csopsPost('undoCalledBack', { call_id: call.id }, session); onAction(); }
+    catch (e) { alert(e.message); }
+  }
+
   // One-click close for a call that needed nothing.
   //
   // No new endpoint: updateTicket already fast-closes on disposition 'query'
@@ -436,6 +445,12 @@ function CallRow({ call, session, onAction, focused, onMouseEnter }) {
             )}
             {ticketNo && call.needs_callback && !call.called_back_at && (
               <MenuItem icon={<CheckCheck size={12} />} label="Mark Called Back" onClick={markCalled} />
+            )}
+            {/* ⚠️ Only reachable from All Calls (and any tab not keyed on called_back_at):
+                the abandoned, missed and callback tabs all exclude stamped rows, so a
+                mis-clicked row leaves the worklist immediately. All Calls is the way back. */}
+            {call.called_back_at && (
+              <MenuItem icon={<Undo2 size={12} />} label="Undo called back" onClick={undoCalled} />
             )}
             {ticketNo && call.ticket_id && !closed && (
               <MenuItem icon={<CircleCheck size={12} />} label="Nothing needed — close" onClick={nothingNeeded} />
