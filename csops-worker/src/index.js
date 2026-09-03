@@ -2060,13 +2060,30 @@ async function getCallReports(params, auth, env) {
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
   const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
 
-  const select = 'created_at,direction,status,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at';
-  const r = await sb(
-    `/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}${deptClause}&select=${select}&limit=20000`,
-    env,
-  );
-  if (!r.ok) return err('Failed to load call reports', 500);
-  const rows = r.data || [];
+  const select = 'id,created_at,direction,status,provider,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at';
+  // ⚠️ PAGED, and it MUST stay paged. This was `limit=20000`, which PostgREST silently caps at
+  // the project's db-max-rows (5,000) — no error, no header. Measured 2026-09-03: 19,736 calls
+  // exist and the DEFAULT range on this report is year-to-date, i.e. all of them. So the calls
+  // report has been rendering 5,000 of 19,736 — roughly a quarter of reality — on the view it
+  // opens with, and every total, rate, trend and per-agent row on it was computed from that
+  // truncated set. Ordered by `id` (unique) so page boundaries neither drop nor repeat a row.
+  const PAGE = 1000;
+  const MAX_ROWS = 50000;
+  const rows = [];
+  let truncated = false;
+  for (let offset = 0; ; offset += PAGE) {
+    const r = await sb(
+      `/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}${deptClause}`
+      + `&select=${select}&order=id.asc&limit=${PAGE}&offset=${offset}`,
+      env,
+    );
+    if (!r.ok) return err('Failed to load call reports', 500);
+    const page = r.data || [];
+    for (const c of page) rows.push(c);
+    if (page.length < PAGE) break;
+    // The hard stop must ANNOUNCE itself, or it rebuilds the bug this loop replaced.
+    if (offset + PAGE >= MAX_ROWS) { truncated = true; break; }
+  }
 
   // Resolve account + dept lookups in parallel for label-friendly grouping
   const [acctR, deptR] = await Promise.all([
@@ -2075,6 +2092,22 @@ async function getCallReports(params, auth, env) {
   ]);
   const acctById = Object.fromEntries((acctR.data || []).map(a => [a.id, a]));
   const deptById = Object.fromEntries((deptR.data || []).map(d => [d.id, d]));
+
+  // ⭐ AN INCOMING CALL "REACHED AN AGENT" IFF IT IS answered AND HAS AN AGENT ON IT.
+  // `status` alone cannot be trusted for incoming calls, and the MyOperator era is the proof:
+  // it recorded 'missed' in one very narrow case that almost never fired, so it wrote
+  // status='answered' on essentially every inbound call it ever logged. Measured 2026-09-03:
+  // 7,793 MyOperator incoming calls, of which only 3,463 have an agent — so 4,330 calls that
+  // nobody picked up were being counted as answered, and the whole MyOperator period reports
+  // 45 missed calls in total. Pruthvi approved correcting the historical figure (#bugs
+  // 1788429685, "1. Yes.", 2026-09-03).
+  // ⚠️ INCOMING ONLY. For an OUTGOING call, 'answered' means the CUSTOMER picked up — an agent
+  // is definitionally on it — so requiring an agent there would measure something else entirely.
+  // Exotel writes honest statuses, and the rule is a no-op for it (694 of 695 answered inbound
+  // calls carry an agent), so this is one uniform rule rather than a per-provider special case.
+  // ⚠️ "Did not reach an agent" is NOT the same as "we failed to answer" — it includes IVR
+  // drop-offs and hang-ups before routing. Label it for what it measures, never as blame.
+  const reachedAgent = (c) => c.status === 'answered' && !!c.agent_user_id;
 
   let total = 0, answered = 0, missed = 0, abandoned = 0, totalDur = 0, durCount = 0;
   const daily = {}, byAccount = {}, byDepartment = {}, byAgent = {}, byHour = Array(24).fill(0);
@@ -2093,11 +2126,11 @@ async function getCallReports(params, auth, env) {
     const day = istDateStr(c.created_at);
     if (day) {
       daily[day] = daily[day] || { date: day, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
-      if (c.direction === 'incoming') { daily[day].in_total++; if (c.status === 'answered') daily[day].in_answered++; }
+      if (c.direction === 'incoming') { daily[day].in_total++; if (reachedAgent(c)) daily[day].in_answered++; }
       else if (c.direction === 'outgoing') { daily[day].out_total++; if (c.status === 'answered') daily[day].out_answered++; }
     }
 
-    if (c.direction === 'incoming') { incoming_total++; if (c.status === 'answered') incoming_answered++; }
+    if (c.direction === 'incoming') { incoming_total++; if (reachedAgent(c)) incoming_answered++; }
     else if (c.direction === 'outgoing') { outgoing_total++; if (c.status === 'answered') outgoing_answered++; }
 
     const acct = c.myop_account_id ? acctById[c.myop_account_id] : null;
@@ -2128,7 +2161,9 @@ async function getCallReports(params, auth, env) {
     };
     if (c.status === 'answered') byAgent[agentName].answered_calls++;
     if (c.direction === 'incoming') {
-      if (c.status === 'answered') byAgent[agentName].incoming_answered++;
+      // reachedAgent, not status — see the rule above. An inbound call the provider logged as
+      // 'answered' with nobody on it is not this agent's answered call; it is nobody's.
+      if (reachedAgent(c)) byAgent[agentName].incoming_answered++;
     } else if (c.direction === 'outgoing') {
       byAgent[agentName].outgoing_total++;
       if (c.status === 'answered') byAgent[agentName].outgoing_answered++;
@@ -2162,15 +2197,23 @@ async function getCallReports(params, auth, env) {
   }
 
   return ok({
-    range: { from, to },
+    range: { from, to, rows: rows.length, truncated },
     totals: {
+      // ⚠️ `answered` / `missed` / `abandoned` are the PROVIDER'S OWN status words, counted raw
+      // and across both directions. They are kept because other readers use them, but for the
+      // MyOperator era `missed` is the false 45 — do NOT put it on screen as the inbound
+      // headline. `incoming_not_reached` below is the honest inbound figure.
       total, answered, missed, abandoned,
       answer_rate_pct: total > 0 ? Math.round((answered / total) * 100) : null,
       avg_duration_seconds: durCount > 0 ? Math.round(totalDur / durCount) : null,
+      incoming_reached: incoming_answered,
+      incoming_not_reached: incoming_total - incoming_answered,
     },
     daily: Object.values(daily).sort((a, b) => a.date.localeCompare(b.date)),
     by_direction: {
-      incoming: { total: incoming_total, answered: incoming_answered, answer_rate_pct: incoming_total > 0 ? Math.round((incoming_answered / incoming_total) * 100) : null },
+      // `answered` here now means REACHED AN AGENT (see reachedAgent above), so the inbound
+      // answer rate is a real answer rate rather than a restatement of how many rows exist.
+      incoming: { total: incoming_total, answered: incoming_answered, not_reached: incoming_total - incoming_answered, answer_rate_pct: incoming_total > 0 ? Math.round((incoming_answered / incoming_total) * 100) : null },
       outgoing: { total: outgoing_total, answered: outgoing_answered, answer_rate_pct: outgoing_total > 0 ? Math.round((outgoing_answered / outgoing_total) * 100) : null },
     },
     by_account:    Object.values(byAccount).map(finishAccount).sort((a, b) => b.total - a.total),

@@ -589,9 +589,17 @@ function CallsPanel({ data }) {
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
         <KpiCard label="Total calls"  value={data.totals.total.toLocaleString()}    sub={`${data.range.from.slice(0,10)} → ${data.range.to.slice(0,10)}`} tone="var(--info-fg)" size={25} />
-        <KpiCard label="Answered"     value={data.totals.answered.toLocaleString()} tone="var(--ok-fg)"  size={25} />
-        <KpiCard label="Missed"       value={data.totals.missed.toLocaleString()}   tone={data.totals.missed > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
-        <KpiCard label="Answer rate"  value={data.totals.answer_rate_pct != null ? `${data.totals.answer_rate_pct}%` : '—'} tone="var(--warn-fg)" size={25} />
+        {/* ⚠️ These two were "Answered" (provider status, both directions) and "Missed"
+            (totals.missed). Missed was FALSE for the whole MyOperator era — that system only
+            wrote 'missed' in one narrow case that almost never fired, so it logged 45 missed
+            calls in total while 4,330 inbound calls never reached anybody. They now show the
+            inbound reality: reached an agent, and did not. "Didn't reach an agent" is
+            deliberately not called "missed" — it includes IVR drop-offs and hang-ups before
+            routing, so it is not all our failure to answer. Corrected 2026-09-03, approved by
+            Pruthvi (#bugs 1788429685). */}
+        <KpiCard label="Reached an agent" value={data.totals.incoming_reached?.toLocaleString() ?? '—'} sub="inbound" tone="var(--ok-fg)"  size={25} />
+        <KpiCard label="Didn't reach an agent" value={data.totals.incoming_not_reached?.toLocaleString() ?? '—'} sub="inbound — incl. IVR drop-offs" tone={data.totals.incoming_not_reached > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
+        <KpiCard label="Inbound answer rate"  value={data.by_direction?.incoming?.answer_rate_pct != null ? `${data.by_direction.incoming.answer_rate_pct}%` : '—'} tone="var(--warn-fg)" size={25} />
         <KpiCard label="Avg duration" value={fmtMMSS(data.totals.avg_duration_seconds)} tone="var(--accent)" size={25} />
       </div>
 
