@@ -315,11 +315,13 @@ function Dashboard({ data, sort }) {
         <Panel title="By Support Channel"><RankedList rows={data.by_support_channel} sort={sort} showPct /></Panel>
       </div>
 
-      {/* Monthly trends */}
-      <Panel title="Monthly Product Issue Trend">
+      {/* Trend panels. The HEADING follows the grain too — a weekly table under a panel
+          headed "Monthly" is the same error as a weekly CSV headed "Monthly", and the
+          heading is the part someone screenshots. */}
+      <Panel title={`${data.trend_grain === 'week' ? 'Weekly' : 'Monthly'} Product Issue Trend`}>
         <TrendBlock series={data.monthly_product_trend} dimLabel="Product" grain={data.trend_grain} />
       </Panel>
-      <Panel title="Monthly Category Trend">
+      <Panel title={`${data.trend_grain === 'week' ? 'Weekly' : 'Monthly'} Category Trend`}>
         <TrendBlock series={data.monthly_category_trend} dimLabel="Issue category" grain={data.trend_grain} />
       </Panel>
     </>
