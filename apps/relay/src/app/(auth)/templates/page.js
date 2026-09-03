@@ -1454,6 +1454,10 @@ export default function TemplatesPage() {
       if (s?.status) { set('approval_status', s.status); showToast(`Meta status: ${s.status}`, 'success'); }
       else showToast('No status from Meta yet', 'error');
       load();
+      // S338: the readiness banner (`shape`) is a separate check and was left showing a stale
+      // `meta_status_pending` finding next to a fresh APPROVED badge (seen live 2026-09-03). A
+      // status change is exactly what invalidates it, so re-run it here.
+      if (s?.status) runShapeCheck(t.id);
     } catch (e) { showToast(e.message || 'Sync failed', 'error'); }
     finally { setSubmitting(false); }
   }
