@@ -6341,6 +6341,15 @@ async function relayWaIngestInbound(m, env) {
     await maybeWrongNumberRedirect(thread, m, phone, linkedTicketId, env);
   } catch (e) { console.error('[relay-wa] wrong-number redirect failed', e?.message || e); }
 
+  // Out-of-hours auto-reply. Same contract as the redirect above: flag-gated (DEFAULT OFF),
+  // once per thread per 24h, and wrapped so a failure can never lose the customer's message.
+  // ⚠️ Ordering is deliberate — a wrong-number contact should get the redirect, not "we are
+  // closed". The redirect ends that conversation, so it runs first, and this one's 24h key
+  // spans BOTH tags so the same inbound can never produce two automated messages.
+  try {
+    await maybeOutOfHoursAutoreply(thread, linkedTicketId, env);
+  } catch (e) { console.error('[relay-wa] out-of-hours autoreply failed', e?.message || e); }
+
   if (effectiveTicketId) {
     await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
       ticket_id: effectiveTicketId, field_name: 'wa_message_received', old_value: null,
@@ -6633,6 +6642,129 @@ async function maybeWrongNumberRedirect(thread, m, phone, ticketId, env) {
       thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text',
       waba_phone_number_id: thread.waba_phone_number_id || null,   // which LOT number this left from
       body: text, template_name: WRONG_NUMBER_TAG,
+      provider_message_id: msg.provider_message_id || null, status: msg.status || 'sent',
+      is_internal: false, sent_by_user_id: null, sent_by_name: 'Relay (auto)',
+      sent_at: new Date().toISOString(),
+    }),
+  }).catch(() => {});
+  return { sent: true };
+}
+
+// ─── Out-of-hours auto-reply ────────────────────────────────────────────────────────
+// Pruthvi's own answer (2026-08-26, `1787684420.845189`) to "what happens when nobody is
+// online": "send an automated message saying we are closed for the day and the team shall
+// connect with you the next day".
+//
+// Built line-for-line on maybeWrongNumberRedirect above — same send seam (commsops /send, so
+// it passes the suppression → consent → freq-cap → quiet-hours → channel-rule gate like any
+// customer send), same once-per-thread-per-24h key stamped on `template_name`, same
+// 'Relay (auto)' authorship on the persisted row. Deliberately NOT a bespoke Pitstop send path.
+//
+// ⚠️ DEFAULT OFF. Config lives in `store.settings` as key/value rows — NOT in `comms.settings`
+// where the wrong-number redirect keeps its config, because that table is the Relay lane's and
+// this needed no DDL at all. Turn it on with:
+//   update store.settings set value='true' where key='pitstop.ooo_autoreply_enabled';
+const OOO_AUTOREPLY_TAG = 'out_of_hours_autoreply';   // template_name marker + the 24h key
+const OOO_DEFAULT_TEXT = 'Thanks for writing in! Our team is offline for the day. '
+  + 'We have your message and someone will get back to you the next working day.';
+
+async function oooAutoreplyConfig(env) {
+  const r = await sb(`/rest/v1/settings?key=in.(pitstop.ooo_autoreply_enabled,pitstop.ooo_autoreply_text)`
+    + `&select=key,value`, env);
+  if (!r.ok) return null;
+  const m = Object.fromEntries((r.data || []).map(x => [x.key, x.value]));
+  return {
+    enabled: String(m['pitstop.ooo_autoreply_enabled'] || '').toLowerCase() === 'true',
+    text: m['pitstop.ooo_autoreply_text'] || OOO_DEFAULT_TEXT,
+  };
+}
+
+// "Is ANYBODY on shift right now?" — deliberately the union of every active agent shift and
+// every active department shift, not a per-agent question. If even one person is rostered we
+// are open, and an auto-reply saying we are closed would be a lie.
+//
+// ⚠️ This asks about the ROSTER, never about presence. `cs_agent_presence` is unusable here:
+// every row reads status='online' including agents last seen 48 days ago (S318), and keying an
+// outbound customer message on a stale heartbeat would send "we are closed" during business
+// hours the moment everyone's tab went idle. Roster is the honest signal for this claim.
+//
+// Fails CLOSED: any error, or no shifts configured at all, returns true (= we are open =
+// send nothing). A silent config problem must never start messaging customers.
+async function anyoneOnShiftNow(env) {
+  try {
+    const [agentShifts, deptShifts] = await Promise.all([
+      sb(`/rest/v1/cs_agent_shifts?is_active=is.true&select=start_min,end_min,working_days,is_active`, env),
+      sb(`/rest/v1/cs_shifts?is_active=is.true&select=start_min,end_min,working_days,is_active`, env),
+    ]);
+    if (!agentShifts.ok || !deptShifts.ok) return true;
+    const all = [...(agentShifts.data || []), ...(deptShifts.data || [])];
+    if (!all.length) return true;
+    const now = istNow();
+    return all.some(s => inShiftWindow(s, now));
+  } catch { return true; }
+}
+
+// Returns {sent}|{skipped}|{error}. Never throws — the caller must not lose an inbound message
+// because an auto-reply failed.
+async function maybeOutOfHoursAutoreply(thread, ticketId, env) {
+  const cfg = await oooAutoreplyConfig(env);
+  if (!cfg?.enabled) return { skipped: 'disabled' };
+  if (!thread?.customer_phone || !thread?.waba_phone_number_id) return { skipped: 'not_whatsapp' };
+
+  if (await anyoneOnShiftNow(env)) return { skipped: 'in_hours' };
+
+  // Once per thread per 24h — three messages overnight get one reply, not three.
+  //
+  // ⚠️ The key spans BOTH auto-message tags, not just this one. The wrong-number redirect runs
+  // immediately before this in the same inbound path, and a per-tag key would let a wrong-number
+  // contact arriving out of hours receive the redirect AND "we are closed" back to back — two
+  // automated messages for one inbound, which is exactly what "exactly one auto-reply" rules out.
+  // Whichever fires first wins for the next 24h.
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const recent = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}`
+    + `&template_name=in.(${OOO_AUTOREPLY_TAG},${WRONG_NUMBER_TAG})`
+    + `&created_at=gte.${encodeURIComponent(since)}&select=id&limit=1`, env);
+  if (recent.data?.[0]) return { skipped: 'already_auto_messaged_24h' };
+
+  // The beginning of the thread-ownership rail the bots work will need — it does NOT exist yet
+  // anywhere else (checked 2026-09-03). Do not key it on `assigned_agent_id`: cs_autoassign_thread
+  // stamps that on arrival, so it cannot tell "a human picked this up" from "the router did, 40ms
+  // ago". An agent-AUTHORED outbound is the signal that a person is actually handling the thread.
+  const humanSince = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+  const human = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}`
+    + `&direction=eq.outbound&sent_by_user_id=not.is.null`
+    + `&created_at=gte.${encodeURIComponent(humanSince)}&select=id&limit=1`, env);
+  if (human.data?.[0]) return { skipped: 'human_active' };
+
+  let resp, data;
+  try {
+    resp = await callWorker(env.COMMSOPS, env, '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        phoneNumberId: thread.waba_phone_number_id,   // answer on the number they wrote to
+        // Free-text, not a template: the inbound that triggered this just opened the 24h window
+        // (the caller stamps customer_window_until immediately before calling us).
+        template: { content: { text_body: cfg.text } },
+        dedupKey: `pitstop:ooo:${thread.id}:${Math.floor(Date.now() / 3600000)}`,
+        source: 'pitstop_out_of_hours_autoreply',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) { return { error: `send_failed:${e.message}` }; }
+  const msg = data?.data || data?.message || data || {};
+  if (!resp.ok || data?.ok === false || msg.status === 'failed')
+    return { error: `send_rejected:${msg.reason || resp.status}` };
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text',
+      waba_phone_number_id: thread.waba_phone_number_id || null,
+      body: cfg.text, template_name: OOO_AUTOREPLY_TAG,
       provider_message_id: msg.provider_message_id || null, status: msg.status || 'sent',
       is_internal: false, sent_by_user_id: null, sent_by_name: 'Relay (auto)',
       sent_at: new Date().toISOString(),
