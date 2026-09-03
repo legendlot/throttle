@@ -1869,7 +1869,9 @@ async function getSupportAnalytics(params, auth, env) {
   // and an export that stops at 5,000 rows while looking complete is worse than no export.
   // Ordered by `id` (unique) so page boundaries can neither drop nor repeat a row.
   const PAGE = 1000;
+  const MAX_ROWS = 50000;
   const allRows = [];
+  let truncated = false;
   for (let offset = 0; ; offset += PAGE) {
     const pageRes = await sb(
       `/rest/v1/cs_tickets?${filters.join('&')}&select=${SELECT}&order=id.asc&limit=${PAGE}&offset=${offset}`,
@@ -1879,7 +1881,9 @@ async function getSupportAnalytics(params, auth, env) {
     const page = pageRes.data || [];
     for (const r of page) allRows.push(r);
     if (page.length < PAGE) break;
-    if (offset + PAGE >= 50000) break;      // hard stop; 18x today's YTD volume
+    // ⚠️ The hard stop must ANNOUNCE itself. Breaking silently here would rebuild the exact
+    // bug this loop replaced, one order of magnitude up: a capped result that looks complete.
+    if (offset + PAGE >= MAX_ROWS) { truncated = true; break; }
   }
 
   // product → LOT line map (seeded on product_master.product_line)
@@ -1961,7 +1965,7 @@ async function getSupportAnalytics(params, auth, env) {
     // `total` is the filtered count (what every panel is built from); `range_total` is the
     // date range before the dimension filters, so the page can say "86 of 2,716" rather
     // than leaving a filtered dashboard indistinguishable from a quiet month.
-    range: { from, to, total: rows.length, range_total: rangeTotal },
+    range: { from, to, total: rows.length, range_total: rangeTotal, truncated },
     filter_options,
     applied_filters: want,
     kpis,

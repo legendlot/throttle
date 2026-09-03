@@ -62,8 +62,11 @@ const sortRanked = (rows, sort) => [...(rows || [])].sort(sortBy(sort, r => r.na
 const istDay = (iso) => new Date(Date.parse(iso) + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
 const csvEsc = (v) => {
-  const s = v == null ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = v == null ? '' : String(v);
+  // A product or category beginning = + - @ is executed as a formula by Excel/Sheets.
+  // Prefix an apostrophe so it renders as the text it is.
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 export default function AnalyticsPage() {
@@ -118,17 +121,24 @@ export default function AnalyticsPage() {
   const activeCount = DIMS.filter(([k]) => filters[k]).length;
 
   function exportCsv() {
-    if (!data) return;
-    const fromD = istDay(range.from), toD = istDay(range.to);
+    if (!data || loading) return;
+    // ⚠️ EVERY line of the header comes from `data`, never from the live controls.
+    // `data` holds the PREVIOUS payload until a refetch resolves, so reading `range` and
+    // `filters` here stamped the new date range and new filters onto the old numbers —
+    // precisely the mislabelling the cohort header exists to prevent. The worker returns
+    // `range.from/to` and `applied_filters` for exactly this; use them.
+    const fromD = istDay(data.range?.from || range.from), toD = istDay(data.range?.to || range.to);
+    const applied = data.applied_filters || {};
     const L = [];
     L.push(`Pitstop Support Analytics,${fromD} to ${toD}`);
     // The active cohort travels WITH the file — same reason the Reports CSV carries its
     // basis and channel: a spreadsheet opened next week must not be ambiguous about which
     // slice it is, or someone reads a filtered export as the whole month.
-    for (const [k, label] of DIMS) L.push(`${label},${csvEsc(filters[k] || 'All')}`);
+    for (const [k, label] of DIMS) L.push(`${label},${csvEsc(applied[k] || 'All')}`);
     L.push(`Sorted by,${csvEsc(SORTS.find(s => s[0] === sort)?.[1] || sort)}`);
     L.push(`Complaints in this cohort,${data.range?.total ?? 0}`);
     L.push(`Complaints in date range (before filters),${data.range?.range_total ?? data.range?.total ?? 0}`);
+    if (data.range?.truncated) L.push(csvEsc('INCOMPLETE — this range hit the 50,000-row ceiling; narrow the dates'));
     L.push('');
     const k = data.kpis || {};
     L.push('KPI,Value');
@@ -142,7 +152,7 @@ export default function AnalyticsPage() {
     if (m?.products?.length) {
       const cats = m.categories || [];
       const prods = [...m.products].sort(sortBy(sort, p => p.product, p => p.total));
-      L.push('Complaints by Product (rows = product, columns = issue category)');
+      L.push(csvEsc('Complaints by Product (rows = product, columns = issue category)'));
       L.push(['Product', 'Total', ...cats].map(csvEsc).join(','));
       for (const p of prods) L.push([p.product, p.total, ...cats.map(c => p.cats[c] || 0)].map(csvEsc).join(','));
       L.push(['TOTAL', prods.reduce((s, p) => s + p.total, 0),
@@ -152,14 +162,14 @@ export default function AnalyticsPage() {
 
     const ranked = [
       ['By Issue Category', data.by_issue_category, true],
-      ['Top Issue Sub-categories', data.top_subcategories, false],
+      ['Top Issue Sub-categories (top 20 by volume)', data.top_subcategories, false],
       ['By Product Line (LOT line)', data.by_product_line, true],
       ['By Sale Channel', data.by_sale_channel, true],
       ['By Support Channel', data.by_support_channel, true],
     ];
     for (const [title, rows, showPct] of ranked) {
       if (!rows?.length) continue;
-      L.push(title);
+      L.push(csvEsc(title));
       L.push(showPct ? 'Name,Count,% of total' : 'Name,Count');
       for (const r of sortRanked(rows, sort)) {
         L.push(showPct ? [r.name, r.count, r.pct].map(csvEsc).join(',') : [r.name, r.count].map(csvEsc).join(','));
@@ -176,7 +186,7 @@ export default function AnalyticsPage() {
         totals[kk] = (totals[kk] || 0) + row[kk];
       }
       const dims = Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([n]) => n);
-      L.push(title);
+      L.push(csvEsc(title));
       L.push(['Month', 'Total', ...dims].map(csvEsc).join(','));
       for (const row of series) L.push([row.month, row.total, ...dims.map(d => row[d] || 0)].map(csvEsc).join(','));
       L.push('');
@@ -221,7 +231,7 @@ export default function AnalyticsPage() {
         <select value={sort} onChange={e => setSort(e.target.value)} style={selectStyle} title="Sort every ranked panel and the product table">
           {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
-        <button onClick={exportCsv} disabled={!data} style={exportBtn}>
+        <button onClick={exportCsv} disabled={!data || loading} style={exportBtn}>
           <Download size={13} strokeWidth={1.75} /> Export CSV
         </button>
       </div>
@@ -247,6 +257,11 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {data?.range?.truncated && (
+        <div style={{ padding: 12, background: 'var(--warn-bg)', color: 'var(--warn-fg)', borderRadius: 8, fontSize: 13 }}>
+          This range hit the 50,000-row ceiling, so the figures below and any export are incomplete. Narrow the dates.
+        </div>
+      )}
       {error && <div style={{ padding: 12, background: 'var(--bad-bg)', color: 'var(--bad-fg)', borderRadius: 8, fontSize: 13 }}>{error}</div>}
       {loading ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div>
         : !data ? <EmptyState icon={<BarChart3 size={28} />} title="No data" message="No complaints in this range." />
@@ -278,7 +293,7 @@ function Dashboard({ data, sort }) {
       {/* By issue category + top sub-categories */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
         <Panel title="Complaints by Issue Category"><RankedList rows={data.by_issue_category} sort={sort} showPct /></Panel>
-        <Panel title="Top Issue Sub-categories"><RankedList rows={data.top_subcategories} sort={sort} /></Panel>
+        <Panel title="Top Issue Sub-categories" sub="top 20 by volume"><RankedList rows={data.top_subcategories} sort={sort} /></Panel>
       </div>
 
       {/* Product line + channels */}
