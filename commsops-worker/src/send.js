@@ -2,6 +2,12 @@
 // Idempotent via dedup_key. On gate-fail writes a skipped/suppressed messages row
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
+// How long a freshly reserved 'queued' row is treated as a live in-flight send (dedup: a newer
+// attempt must NOT double-send while the first is still running). EXPORTED because the
+// stranded-queued sweep must wait strictly longer than this before declaring a row abandoned —
+// sweeping inside this window would kill sends that are still in progress. See
+// stranded-queued.js, which asserts that relationship at load time.
+const IN_FLIGHT_MS = 10 * 60 * 1000;
 const { renderEmail, renderWhatsapp, renderSms, renderRcs, checkRcsFallbackLink } = require('./render.js');
 const { tagLinks, resolveUtm } = require('./tracking.js');
 const LINKS = require('./links.js');   // Phase-B /r/<code> minting for redirect-backed buttons
@@ -299,7 +305,6 @@ async function send(env, opts) {
   // ADOPTED so the retry can run. Review 2026-07-21 finding C1: burning the key on any
   // outcome turned every transient failure into a silent permanent loss.
   const SENT_LIKE = new Set(['sent', 'delivered', 'opened', 'clicked', 'bounced']);
-  const IN_FLIGHT_MS = 10 * 60 * 1000;
   if (opts.dedupKey) {
     const reserve = await A.sbComms('/rest/v1/messages?on_conflict=dedup_key', env, {
       method: 'POST',
@@ -661,4 +666,4 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
            provider_message_id: res.provider_message_id || null };
 }
 
-module.exports = { send, getActiveSender, pickSender, waWindowOpen, mintLinkVariable };
+module.exports = { send, getActiveSender, pickSender, waWindowOpen, mintLinkVariable, IN_FLIGHT_MS };

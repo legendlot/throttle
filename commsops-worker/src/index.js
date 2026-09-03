@@ -14,6 +14,7 @@ const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.
 const WATPL = require('./wa-templates.js');
 const SEG = require('./segment-entry.js');
 const DW = require('./deliverability-window.js');   // email alert windowing + threshold (S340)
+const SQ = require('./stranded-queued.js');         // fan-out abandoned-row sweep (S340)
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
@@ -2633,6 +2634,16 @@ async function runScheduled(env) {
   try { await checkJourneySendHealth(env); }
   catch (e) { console.log('journey_health_error', e?.message || String(e)); }
 
+  // 2d. stranded-queued sweep — send.js reserves a row at 'queued' and finalize() closes it; if
+  // the worker dies BETWEEN the two the row stays 'queued' forever and is invisible to every rate
+  // that filters on real outcomes, so the failure reports nothing. 35 such rows were found by hand
+  // on 2026-09-03 spanning 2026-08-09 → 09-01 across email/campaign, whatsapp/campaign AND
+  // whatsapp/journey. This is what stops the next batch accumulating silently. Never re-sends.
+  try {
+    const sq = await sweepStrandedQueued(env);
+    if (sq.swept) console.log('stranded_queued_sweep', JSON.stringify(sq));
+  } catch (e) { console.log('stranded_queued_sweep_error', e?.message || String(e)); }
+
   // (J1) Lifetime cap: auto-exit enrolments older than their journey's max_duration.
   // We signal the parked instance so it ends cleanly via #park → 'expired'.
   try {
@@ -2687,6 +2698,32 @@ async function runScheduled(env) {
 // An idle or thin window is SILENCE, never an alert. The windowing, the threshold and the alert
 // text all live in ./deliverability-window.js so they can be unit-tested — this function is only
 // the I/O around them. Do not re-inline them.
+// Mark rows the fan-out abandoned mid-send. Bounded per tick (the query caps at 500) and safe to
+// re-run — a swept row is no longer 'queued', so the next tick simply finds nothing. Alerts only
+// when the volume implies a systemic failure rather than the occasional evicted isolate; the 35
+// found on 2026-09-03 had accumulated over 23 days, i.e. ~1.5/day is the background rate.
+const STRANDED_ALERT_AT = 100;
+
+async function sweepStrandedQueued(env) {
+  const r = await A.sbComms(SQ.buildSweepQuery(Date.now(), A.enc), env);
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  const out = SQ.summarize(rows);
+  if (!rows.length) return out;
+  const ids = rows.map((x) => x.id).join(',');
+  A.checkWrite('stranded_queued_sweep_failed',
+    await A.sbComms(`/rest/v1/messages?id=in.(${ids})`, env,
+      { method: 'PATCH', body: JSON.stringify(SQ.patchBody()) }),
+    { swept: out.swept });
+  // A spike means the fan-out is losing rows in bulk, which the per-row sweep would otherwise
+  // hide by quietly cleaning up after it — the whole point is that this class used to be silent.
+  if (out.swept >= STRANDED_ALERT_AT) {
+    await AL.alert(env, `⚠️ *Relay — ${out.swept} stranded sends swept*\nRows left at 'queued' by a `
+      + `fan-out that ended mid-send: ${JSON.stringify(out.by)}. They were marked skipped, NOT re-sent. `
+      + `Check /journeys + campaign fan-out for a run that died.`);
+  }
+  return out;
+}
+
 async function checkDeliverabilitySpike(env) {
   const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=last_alert_at&limit=1', env);
   const last = s.ok && s.data?.[0]?.last_alert_at ? new Date(s.data[0].last_alert_at).getTime() : 0;
