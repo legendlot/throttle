@@ -15,8 +15,9 @@
 # Both were fixed the same way: re-request the Pages build. So this script detects
 # and then applies exactly that remediation, in the same run that caused it.
 #
-# Usage:  bash .github/scripts/verify-pages.sh <owner/repo>
-# Needs:  GH_TOKEN with Pages access to <owner/repo>.
+# Usage:  bash .github/scripts/verify-pages.sh <owner/repo> [publish_dir] [live_url]
+# Needs:  GH_TOKEN with Pages access to <owner/repo> for the API path + auto-remediation.
+#         WITHOUT a token it still verifies, tokenlessly, from publish_dir + live_url.
 #
 # ⚠️ FAIL-SOFT ON AUTH, BY DESIGN. If the token cannot read the Pages API this warns
 # and exits 0. A monitoring gap must never become a deployment outage — the deploy
@@ -45,39 +46,73 @@ summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMM
 # PATTERN-168 guard from every app at once, with all 11 runs still green. That is the guard
 # failing the same way it exists to catch. Now the token can die and detection continues.
 #
-# Method: every `_next/static/...` asset the LIVE index.html references must exist in the
-# directory we just published. A stale site references at least one chunk filename that this
-# build no longer contains (Next content-hashes them). If nothing changed in a deploy, every
-# name matches — and that is correct, live IS serving this build.
+# Method: every `_next/static/...` asset the LIVE page references must exist in the directory we
+# just published. A stale site references at least one chunk filename this build no longer
+# contains (Next content-hashes them). If nothing changed, every name matches — correct, live IS
+# serving this build.
+#
+# ⚠️ KNOW WHAT THIS DOES AND DOES NOT PROVE — the first version of this comment overstated it.
+# It checks only the assets referenced by the ONE page at LIVE_URL. For pitstop that is 15 assets
+# and exactly **1 of the 24** app-route chunks, because index.html pulls the shared runtime plus
+# its own route. So it reliably catches a wholly stale deploy (shared runtime/layout changed), and
+# it will NOT catch a deploy whose only change is confined to another route's chunk.
+# It is a smoke test that the site is serving THIS build, not proof that every route is current.
+# That is still strictly better than the behaviour it replaced — which was to skip the check
+# entirely and exit 0 — but do not read a pass here as "every page is live".
 live_probe() {
   [ -n "$PUBLISH_DIR" ] && [ -n "$LIVE_URL" ] && [ -d "$PUBLISH_DIR" ] || { echo "unavailable"; return; }
-  local html refs missing=0 total=0
-  html="$(curl -sS --max-time 20 -H 'Cache-Control: no-cache' "$LIVE_URL" 2>/dev/null)" || { echo "unavailable"; return; }
+  local html refs missing=0 total=0 tmp
+  tmp="$(mktemp)"
+  curl -sS --max-time 20 -H 'Cache-Control: no-cache' "$LIVE_URL" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; echo "unavailable"; return; }
+  html="$(cat "$tmp")"
+
+  # STRONGEST SIGNAL FIRST: is the served HTML byte-identical to the file we published?
+  # Verified 2026-09-03 that GitHub Pages serves a static export's index.html verbatim (live
+  # bytes == gh-pages blob bytes, 9,906 both). An exact match is proof; the asset-set check
+  # below is only the weaker fallback for when it does not match.
+  if [ -f "${PUBLISH_DIR}/index.html" ] && cmp -s "$tmp" "${PUBLISH_DIR}/index.html"; then
+    rm -f "$tmp"; echo "live:exact"; return
+  fi
+  rm -f "$tmp"
   # ⚠️ MUST end in .js/.css. Without that anchor the pattern also matches the bare directory
   # prefix `/_next/static/chunks/app/` that Next emits for dynamic imports — which is not a file,
   # so it counted as "missing" and EVERY deploy reported STALE. Caught in test 2026-09-03; it
   # would have turned this monitoring improvement into a fleet-wide red-run outage, which is the
   # one thing this script's design forbids.
-  refs="$(printf '%s' "$html" | grep -oE '/_next/static/[A-Za-z0-9_./-]+\.(js|css)' | sort -u)"
+  # ⚠️ PARENTHESES ARE REQUIRED IN THIS CLASS. Next emits route-group chunks under literal
+  # `(auth)` directories — 21 of pitstop's 24 app chunks. Without `()` the match simply FAILS at
+  # the paren and, because the pattern is anchored to `.js|.css`, the asset is **silently
+  # skipped** rather than reported missing. Measured on `queue/detail/index.html`: the old class
+  # captured 0 of its 2 route-group assets, the new one captures both.
+  # ⭐ So the bug was a QUIETLY WEAKER CHECK, not a false failure — the opposite of what I first
+  # assumed and wrote here. Worth stating plainly: the `.js|.css` anchor added earlier is what
+  # made it benign, so the two fixes interact, and removing that anchor would turn this into the
+  # fleet-wide false-STALE outage it was mistaken for.
+  refs="$(printf '%s' "$html" | grep -oE '/_next/static/[A-Za-z0-9_./()@%-]+\.(js|css)' | sort -u)"
   [ -z "$refs" ] && { echo "unavailable"; return; }
   while IFS= read -r ref; do
     total=$((total + 1))
     [ -f "${PUBLISH_DIR}${ref}" ] || missing=$((missing + 1))
   done <<< "$refs"
-  if [ "$missing" -eq 0 ]; then echo "live:$total"; else echo "stale:$missing/$total"; fi
+  if [ "$missing" -eq 0 ]; then echo "live:assets:$total"; else echo "stale:$missing/$total"; fi
 }
 
 # Poll before concluding STALE. Pages and the CDN take a moment to serve a fresh push, and a
 # transient mismatch must not turn into a red run — this path has no API access to remediate
 # with, so a false "stale" is pure cost. A single clean read is enough to pass.
 live_check() {
+  # ⚠️ BUDGET MATCHES $MAX_POLLS (300s), NOT a shorter one. Measured 2026-09-03 across 120 Pages
+  # builds on all 12 targets: median 23.7s, p90 35.9s, MAX 184s — and CDN propagation sits on top
+  # of that. An earlier 105s budget would have red-run a healthy but slow deploy roughly 1 build
+  # in 120, i.e. ~10% of 12-app push waves, with no remediation path and a summary line telling
+  # the reader to re-request builds. A false red here is pure cost, so be patient.
   local i out
-  for ((i = 1; i <= 8; i++)); do
+  for ((i = 1; i <= MAX_POLLS; i++)); do
     out="$(live_probe)"
     case "$out" in
       live:*|unavailable) echo "$out"; return ;;
     esac
-    [ "$i" -lt 8 ] && sleep "$SLEEP"
+    [ "$i" -lt "$MAX_POLLS" ] && sleep "$SLEEP"
   done
   echo "$out"
 }
@@ -121,14 +156,17 @@ fail()  { echo "::error title=Pages::$*"   >&2; }
 # equals it. A green build for someone else's commit is now "still pending", not proof.
 # Verified 2026-09-03: `pages/builds[].commit` is the full gh-pages sha and matches
 # `commits/gh-pages.sha` exactly.
-EXPECTED_SHA="$(curl -sS \
-  -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  "https://api.github.com/repos/${TARGET}/commits/gh-pages" 2>/dev/null \
-  | python3 -c 'import sys,json
-try: print(json.load(sys.stdin).get("sha") or "")
-except Exception: print("")' 2>/dev/null)"
+EXPECTED_SHA=""
+if [ -n "$GH_TOKEN" ]; then
+  EXPECTED_SHA="$(curl -sS \
+    -H "Authorization: Bearer ${GH_TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/repos/${TARGET}/commits/gh-pages" 2>/dev/null \
+    | python3 -c 'import sys,json
+  try: print(json.load(sys.stdin).get("sha") or "")
+  except Exception: print("")' 2>/dev/null)"
+fi
 
 if [ -z "$GH_TOKEN" ]; then
   :   # no token: the API path is skipped entirely below, nothing to warn about here
@@ -138,6 +176,7 @@ else
   # Never harden a monitoring gap into an outage: if we cannot read the sha we fall back to the
   # old newest-build behaviour, but say plainly that the race is back for this run.
   warn "${TARGET}: could not resolve the gh-pages HEAD sha; falling back to the NEWEST build, which can race (a previous green build may be reported as ours). Give DEPLOY_TOKEN contents access to remove this."
+  summary "⚠️ **${TARGET}** — could not resolve the gh-pages sha, so this run fell back to the NEWEST Pages build and **the race is back for this run**. \`DEPLOY_TOKEN\` needs contents read on the target repo."
 fi
 
 # Echoes "<http_code>|<status>|<error_message>"
@@ -235,6 +274,7 @@ settle() {
     esac
   done
   warn "${TARGET}: no COMPLETED Pages build for ${EXPECTED_SHA:0:8} within $((budget * SLEEP))s. Not failing the deploy (a monitoring gap must not become an outage) — but LIVE MAY BE STALE: check https://github.com/${TARGET}/deployments"
+  summary "⚠️ **${TARGET}** — no completed Pages build for \`${EXPECTED_SHA:0:8}\` within $((budget * SLEEP))s. This is the 2026-07-23 shape (gh-pages updated, Pages never built it); the tokenless live check runs next. https://github.com/${TARGET}/deployments"
   echo "timeout"
 }
 
@@ -250,13 +290,21 @@ fi
 # unavailable — no token, expired token, missing Pages scope — fall through to the tokenless
 # live check instead of shrugging and exiting 0. This is what stops a lapsed DEPLOY_TOKEN from
 # silently disarming PATTERN-168 across all 11 app deploys with every run still green.
-if [ "$result" = "skipped" ]; then
+if [ "$result" = "skipped" ] || [ "$result" = "timeout" ]; then
   lc="$(live_check)"
   case "$lc" in
-    live:*)
-      note "${TARGET}: Pages API unavailable, but the LIVE SITE is serving this build (${lc#live:} assets matched). Verified without a credential."
-      summary "✅ **${TARGET}** — Pages API unavailable; verified tokenless against the live site (${lc#live:} assets matched)."
-      summary "> ⚠️ \`DEPLOY_TOKEN\` could not read the Pages API. Deploys are fine and detection still works, but **remediation (auto re-requesting a failed Pages build) is disabled** until it is renewed."
+    live:exact)
+      note "${TARGET}: the live page is BYTE-IDENTICAL to the index.html we just published. Verified without a credential."
+      summary "✅ **${TARGET}** — verified tokenless: the live page is byte-identical to the published index.html."
+      summary "> ⚠️ The Pages API was unavailable. Deploys are fine and detection still works, but **remediation (auto re-requesting a failed Pages build) is disabled** — check \`DEPLOY_TOKEN\`."
+      exit 0 ;;
+    live:assets:*)
+      # Weaker: index.html differs from ours but every asset it names exists in this build.
+      # ⚠️ This canNOT distinguish "stale by one leaf route" — the root document references only
+      # 1 of pitstop's 24 route chunks, so a deploy whose only change is inside another route
+      # matches everything. Passing, but say so rather than calling it verified.
+      note "${TARGET}: live page is NOT byte-identical to ours, but all ${lc##*:} assets it references exist in this build. Weak pass."
+      summary "⚠️ **${TARGET}** — weak tokenless pass: the live page differs from the published index.html, though all ${lc##*:} assets it references exist in this build. A deploy whose only change is inside a single route cannot be detected this way."
       exit 0 ;;
     stale:*)
       fail "${TARGET}: LIVE IS STALE — ${lc#stale:} assets referenced by the live page are absent from what we just published, and the Pages API is unavailable so this cannot be auto-remediated."
