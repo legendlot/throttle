@@ -42,8 +42,14 @@ vendor in the path (measured from `comms.sender_identities`, 2026-09-03):
 
 And the inbound path is not theoretical — it is carrying real volume **today**:
 
-- **7,918 inbound messages / 1,986 distinct threads in the last 7 days** (`store.cs_wa_messages`,
-  `direction='inbound'`). The support number alone is ~4,370 messages / 682 threads.
+- **5,045 inbound WhatsApp messages / 1,075 distinct threads in the last 7 days**
+  (`store.cs_wa_messages`, `direction='inbound'`, **`channel='whatsapp'`**).
+  ⚠️ **CORRECTED 2026-09-03 by the S342 hostile review — this first read 7,918 / 1,986, which is the
+  OMNICHANNEL total.** `cs_wa_messages` is the shared inbox table: the same 7 days hold instagram
+  1,934 · email 881 · messenger 29. **36% of the original figure was not WhatsApp.** The conclusion
+  (delete plan step 1) is unaffected, and the support-number figure below was always channel-correct
+  because it filters on `waba_phone_number_id`.
+  The support number alone is ~4,377 messages / 682 threads.
 - **47 active WhatsApp templates**, authored through Relay's own `/templates` UI and submitted to Meta
   via `waSubmitTemplate()`.
 - The **24-hour session window** — which the plan lists as a top risk — is already modelled:
