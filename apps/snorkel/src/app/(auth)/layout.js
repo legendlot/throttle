@@ -76,7 +76,7 @@ function AuthLayoutInner({ children }) {
       />
       <div className="main-wrap">
         <ContextBar groups={navGroups} pathname={pathname} onNav={onNav}
-          onSearch={() => setMobileSearch(v => !v)} />
+          onSearch={() => setMobileSearch(v => { if (v) setSearch(''); return !v; })} />
         {mobileSearch && (
           <div className="cb-searchrow">
             <Search size={15} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
