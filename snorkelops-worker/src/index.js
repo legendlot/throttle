@@ -502,6 +502,33 @@ function applyPartHsnDefaults(lines, master) {
   });
 }
 
+// ⭐ The REQUEST-side resolver, and it is deliberately NOT applyPartHsnDefaults.
+//
+// applyPartHsnDefaults fills HSN/GST only when the client left them blank — correct
+// for a PO, where procurement may legitimately override a rate per PO (see
+// reference/decisions.md, the vendor-HSN answer given to Joseph).
+//
+// A REQUEST is the opposite case. Afshaan, 2026-09-03: the requester never types the
+// tax %. So whatever the client sent is IGNORED and the master wins outright — the
+// requester is not merely spared typing it, they are never the source of it. That
+// also means a tampered or stale client payload cannot put a wrong rate on a line.
+//
+// A line with no part_code is a genuinely new item: HSN/GST stay NULL and the line is
+// flagged for procurement to confirm. That is the ONLY free-type path.
+function resolveRequestLineTax(lines, master) {
+  return (lines || []).map((l) => {
+    const m = l.part_code ? master.get(l.part_code) : null;
+    return {
+      ...l,
+      hsn_code: m?.hsn ?? null,
+      gst_percent: m?.gst ?? null,
+      // Flagged when we could not resolve a rate: no part code at all, or a part
+      // whose master row carries no HSN. Both need a human before this becomes a PO.
+      needs_hsn_review: !m || m.gst == null,
+    };
+  });
+}
+
 // Corrections flow back onto the part. Keyed on part_code, so — unlike the product
 // side — this touches exactly one row and no family fan-out is involved.
 async function syncPartHsnToMaster(lines, master, actor, actorRole, poNumber) {
@@ -1305,6 +1332,34 @@ export default {
             return ok([...seen.values()]);
           }
 
+          // ⭐ Deliberately UNGUARDED, to match postRequest — "anyone with a
+          // @legendoftoys.com login may file a request" (see that handler). getPartHsnMap
+          // is gated on canView and getProductHsnMap on canSalesView, so feeding the
+          // request form from either would 403 for exactly the non-Snorkel employees the
+          // form exists for. Relaxing THOSE was the wrong fix: they return the part master.
+          //
+          // This returns only what a picker needs and nothing else — no cost, no vendor,
+          // no stock, no category. The rate it hands back is ADVISORY, for display and
+          // live totals; the value actually stored is re-resolved server-side at insert
+          // by resolveRequestLineTax, so a stale or edited response here cannot land a
+          // wrong rate on a line.
+          case 'getRequestItemOptions': {
+            const partsR = await query('material_master',
+              '?is_active=eq.true&select=part_code,part_name,product&order=part_code.asc&limit=5000');
+            if (!partsR.ok) return err(partsR.data);
+            const master = await partHsnMasterAll();
+            return ok((partsR.data || []).map((p) => {
+              const m = master.get(p.part_code);
+              return {
+                part_code: p.part_code,
+                part_name: p.part_name || '',
+                product: p.product || '',
+                hsn_code: m?.hsn ?? null,
+                gst_percent: m?.gst ?? null,
+              };
+            }));
+          }
+
           case 'getHsnRates': {
             const r = await query('hsn_gst_rates',
               `?select=hsn_code,description,gst_percent&order=hsn_code.asc`);
@@ -1544,7 +1599,26 @@ export default {
             if (mine === '1' && userId) filter += `&requested_by_user_id=eq.${userId}`;
             const r = await query('po_requests', filter);
             if (!r.ok) return err(r.data);
-            return ok(r.data);
+            // Line COUNT per request, not the lines themselves — this list returns up to
+            // 300 rows and the queue only needs to show that a request is itemised. One
+            // batched IN query, never a per-row await (BUSINESS_RULES.md).
+            const nos = (r.data || []).map(x => x.request_no).filter(Boolean);
+            const counts = new Map();
+            if (nos.length) {
+              const lr = await query('po_request_lines',
+                `?request_no=in.(${nos.map(n => `"${n}"`).join(',')})&select=request_no,needs_hsn_review&limit=5000`);
+              for (const l of ((lr.ok && lr.data) || [])) {
+                const c = counts.get(l.request_no) || { lines: 0, needs_hsn_review: 0 };
+                c.lines += 1;
+                if (l.needs_hsn_review) c.needs_hsn_review += 1;
+                counts.set(l.request_no, c);
+              }
+            }
+            return ok((r.data || []).map(x => ({
+              ...x,
+              line_count: counts.get(x.request_no)?.lines || 0,
+              needs_hsn_review: counts.get(x.request_no)?.needs_hsn_review || 0,
+            })));
           }
 
           case 'getRequest': {
@@ -1558,7 +1632,17 @@ export default {
                 `?po_number=eq.${encodeURIComponent(r.data[0].linked_po_number)}&select=po_number,status,vendor_name&limit=1`);
               linkedPo = pr.data?.[0] || null;
             }
-            return ok({ request: r.data[0], linked_po: linkedPo });
+            // Lines (S340). Legitimately EMPTY for every request filed before line items
+            // existed — the detail page keeps rendering `details` as prose for those.
+            // ⛔ But a FAILED read must not be flattened into that same empty array. A new
+            // table is invisible to PostgREST until the schema cache reloads and it fails
+            // SILENTLY — reads come back not-found with no error anywhere (CORE.md, S239).
+            // Swallowing it here would render an itemised request as a legacy one and
+            // look exactly like a correct answer.
+            const rlR = await query('po_request_lines',
+              `?request_no=eq.${encodeURIComponent(no)}&order=line_no.asc`);
+            if (!rlR.ok) return err('Could not read the lines for ' + no + ': ' + JSON.stringify(rlR.data));
+            return ok({ request: r.data[0], linked_po: linkedPo, lines: rlR.data || [] });
           }
 
           // ── Payment queue (Approved POs to route / mark paid) ──
@@ -2638,13 +2722,34 @@ export default {
             // No permission key — anyone with a @legendoftoys.com login may file a request.
             const d = body.data || {};
             if (!d.title || !d.details) return err('title and details required');
+
+            // Line items (S340). Optional — a request filed by an older client, or one
+            // that genuinely is just a paragraph, still works exactly as before.
+            const rawReqLines = Array.isArray(d.lines) ? d.lines.filter(l => l && (l.description || l.part_code)) : [];
+            for (const l of rawReqLines) {
+              if (!(Number(l.qty) > 0)) return err('every line needs a qty greater than zero');
+              if (!l.description && !l.part_code) return err('every line needs a description or a part code');
+            }
+            const reqLines = rawReqLines.length
+              ? resolveRequestLineTax(rawReqLines, await partHsnMasterAll())
+              : [];
+
+            // estimated_cost is DERIVED once lines exist — the requester no longer types
+            // one guessed number for the whole request. A line with no price contributes
+            // nothing rather than blocking the sum. Falls back to the typed value only
+            // when there are no lines at all, which keeps older callers working.
+            const derivedCost = reqLines.reduce(
+              (s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
+
             const reqNo = await nextSeq('po_request', 'PR-');
             const r = await insert('po_requests', {
               request_no: reqNo,
               title: d.title, details: d.details,
               category: d.category || null,
               suggested_vendor: d.suggested_vendor || null,
-              estimated_cost: d.estimated_cost != null && d.estimated_cost !== '' ? Number(d.estimated_cost) : null,
+              estimated_cost: reqLines.length
+                ? derivedCost
+                : (d.estimated_cost != null && d.estimated_cost !== '' ? Number(d.estimated_cost) : null),
               currency: d.currency || 'INR',
               urgency: d.urgency || 'Normal',
               needed_by: d.needed_by || null,
@@ -2655,9 +2760,33 @@ export default {
               requested_by_email: authResult?.email || null,
             });
             if (!r.ok) return err('Request insert failed: ' + JSON.stringify(r.data));
+
+            // Array insert, not a loop — never loop awaits per row (BUSINESS_RULES.md).
+            if (reqLines.length) {
+              const li = await insert('po_request_lines', reqLines.map((l, i) => ({
+                request_no: reqNo,
+                line_no: i + 1,
+                part_code: l.part_code || null,
+                description: l.description || l.part_code,
+                item_type: l.item_type || 'Part',
+                qty: Number(l.qty),
+                unit: l.unit || 'pcs',
+                unit_price: l.unit_price != null && l.unit_price !== '' ? Number(l.unit_price) : null,
+                hsn_code: l.hsn_code,
+                gst_percent: l.gst_percent,
+                needs_hsn_review: l.needs_hsn_review,
+              })));
+              // The parent is already written. A failed line insert would leave a request
+              // that looks complete and silently isn't, so say so loudly rather than
+              // returning ok with the lines missing.
+              if (!li.ok) return err('Request ' + reqNo + ' was created but its lines failed to save: ' + JSON.stringify(li.data));
+            }
+
+            const flagged = reqLines.filter(l => l.needs_hsn_review).length;
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_REQUEST_CREATED', 'po_request', reqNo,
-              `PO request ${reqNo} filed — ${d.title}`, { urgency: d.urgency || 'Normal' });
-            return ok({ request_no: reqNo });
+              `PO request ${reqNo} filed — ${d.title}${reqLines.length ? ` (${reqLines.length} line${reqLines.length === 1 ? '' : 's'}${flagged ? `, ${flagged} needing HSN review` : ''})` : ''}`,
+              { urgency: d.urgency || 'Normal', lines: reqLines.length, needs_hsn_review: flagged });
+            return ok({ request_no: reqNo, lines: reqLines.length, needs_hsn_review: flagged });
           }
 
           case 'cancelRequest': {
