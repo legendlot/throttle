@@ -4,7 +4,8 @@
    templates). Prototype: redesign-reference/app/setup.jsx (Print
    tab). SINGLE/BULK · search by batch label or car UPC · required
    "Print to" printer selector. Data unchanged (getPkgScanLookup
-   lookup, postReprintJob queue).
+   lookup, postPrintCenterReprint queue — the allow-listed twin of
+   the scanner's postReprintJob, 2026-09-03).
    ════════════════════════════════════════════════════════════ */
 import { useState } from 'react';
 import { useAuth } from '@throttle/auth';
@@ -91,7 +92,9 @@ export default function PrintPage() {
     if (!selectedPrinter) { showToast('Select a printer before printing', 'warning'); return; }
     setPrintStatus(prev => ({ ...prev, [i]: 'queuing' }));
     try {
-      await workerFetch('postReprintJob', {
+      // postPrintCenterReprint, NOT the scanner's postReprintJob: same print body, but
+      // behind the JWT + store.print_reprint_access allow-list (Mrudula 2026-09-03).
+      await workerFetch('postPrintCenterReprint', {
         batch_label: row.batch_label,
         product:     row.product || '',
         model:       row.model   || '',
@@ -100,8 +103,12 @@ export default function PrintPage() {
         line:        selectedPrinter,
       }, session);
       setPrintStatus(prev => ({ ...prev, [i]: 'done' }));
+      return true;
     } catch (e) {
       setPrintStatus(prev => ({ ...prev, [i]: 'error' }));
+      // Show the refusal — a silent red dot on a 403 reads as a printer fault.
+      showToast(e.message || 'Print failed', 'error');
+      return false;
     }
   }
 
@@ -111,7 +118,9 @@ export default function PrintPage() {
     for (let i = 0; i < results.rows.length; i++) {
       if (printStatus[i] === 'done') continue;
       // eslint-disable-next-line no-await-in-loop
-      await queueReprint(i, results.rows[i]);
+      const okd = await queueReprint(i, results.rows[i]);
+      // Stop on a refusal — without this a not-allow-listed user gets one 403 toast per row.
+      if (!okd) break;
     }
   }
 

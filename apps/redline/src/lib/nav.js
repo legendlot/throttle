@@ -93,7 +93,11 @@ export const NAV_MANUAL = { id: 'manual', label: 'System Manual', icon: BookOpen
 export const NAV_SETUP = [
   { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode,   perm: 'bag_sticker' },
   { id: 'operators', label: 'Operators',     route: '/operators', icon: Users,    perm: 'users_manage' },
-  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer,  perm: 'bag_sticker' },
+  /* Print Center is an explicit allow-list (store.print_reprint_access → the resolved
+     `print_reprint` key), NOT bag_sticker — Mrudula 2026-09-03. The real control is the
+     worker guard on postPrintCenterReprint; this only hides the entry.
+     ⛔ /upc above stays on bag_sticker — the UPC Generator was left alone deliberately. */
+  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer,  perm: 'print_reprint' },
 ];
 
 /* ⌘K-only destinations — pages that exist but live outside the sidebar.
