@@ -7447,8 +7447,12 @@ function morningDistributionCap() {
 
 async function retroAssignUnownedThreads(env, perRun = RETRO_ASSIGN_PER_RUN) {
   // ⚠️ Only sweep channels the router can actually serve. `cs_autoassign_thread` resolves agents
-  // through `cs_routing_config`, which has rows for instagram / messenger / whatsapp and NONE for
-  // email — so an email thread ALWAYS returns null. Without this filter the sweep picks
+  // through `cs_routing_config` and returns null for any channel with no row there.
+  // ⚠️ UPDATED 2026-09-03: this comment used to say email had no row and "ALWAYS returns null".
+  // That is no longer true — an `email` row was added (routed to Maria via `cs_routing_agents`),
+  // so email is now in this sweep's channel list. ⚠️ The email list is a list of ONE and the row
+  // has `max_open_per_agent = NULL`, so the sweep can hand her an unbounded email backlog; cap it
+  // there if that starts to bite. Without this filter the sweep picks
   // newest-first across every channel and can spend its whole per-run budget on threads that are
   // structurally unassignable, then report `assigned: 0` and look broken. Found by running the
   // RPC by hand on the newest eligible thread, which happened to be email.

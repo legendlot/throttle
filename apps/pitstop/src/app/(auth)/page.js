@@ -95,7 +95,13 @@ export default function OverviewPage() {
     const isToday = preset === 'today';
     const callRepTot = d.ranged?.callRep?.totals;
     const resolvedRange = (d.ranged?.rep?.by_agent || []).reduce((s2, a) => s2 + (Number(a.closed) || 0), 0);
-    const answerRate = isToday ? ck.answer_rate_pct : callRepTot?.answer_rate_pct;
+    // ⚠️ INBOUND basis, matching the Calls report since 2026-09-03. `totals.answer_rate_pct`
+    // is answered/total across BOTH directions on raw provider status, which for the
+    // MyOperator era reads ~94% against the Calls tab's ~44% for the same range — two screens
+    // disagreeing about the same word. by_direction.incoming applies the reached-an-agent rule.
+    // The `today` path still uses getCallsKpis, which has not been converted — see the
+    // [pitstop] backlog item; it is a different endpoint and a separate change.
+    const answerRate = isToday ? ck.answer_rate_pct : d.ranged?.callRep?.by_direction?.incoming?.answer_rate_pct;
     const calls = isToday ? ck.total_today : callRepTot?.total;
     const callsAnswered = isToday ? ck.answered_today : callRepTot?.answered;
     const resolved = isToday ? s.resolved_today : resolvedRange;

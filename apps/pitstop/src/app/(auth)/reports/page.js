@@ -253,6 +253,16 @@ export default function ReportsPage() {
         }}>{error}</div>
       )}
 
+      {/* ⚠️ The 50,000-row hard stop MUST be visible. Both paged fetches set range.truncated
+          and, until 2026-09-03, nothing on this page read it — which rebuilt the exact bug the
+          paging replaced (a capped result that looks complete), one order of magnitude up.
+          Mirrors the analytics banner. */}
+      {(data?.range?.truncated || callData?.range?.truncated) && (
+        <div style={{ padding: 12, marginBottom: 12, background: 'var(--warn-bg)', color: 'var(--warn-fg)', borderRadius: 'var(--radius-md)', fontSize: 13 }}>
+          This range hit the 50,000-row ceiling, so the figures below and any export are incomplete. Narrow the dates.
+        </div>
+      )}
+
       {view === 'tickets' && (
         loading || !data ? (
           <Spinner />
@@ -886,13 +896,20 @@ function BreakdownTable({ rows, variant }) {
                 <Td align="right" mono color={TYPE_COLORS.replacement}>{r.replacement || 0}</Td>
                 <Td align="right" mono color={TYPE_COLORS.refund}>{r.refund || 0}</Td>
                 <Td align="right" mono color={TYPE_COLORS.repair}>{r.repair || 0}</Td>
-                <Td align="right" mono>{((r.total / total) * 100).toFixed(1)}%</Td>
+                {/* Same guard as the agent variant below — this array cannot currently be
+                    non-empty with a zero total, but the two cells are the same class and
+                    fixing one of two is how the class survives. */}
+                <Td align="right" mono>{total ? `${((r.total / total) * 100).toFixed(1)}%` : '—'}</Td>
               </>
             ) : (
               <>
                 <Td align="right" mono>{r.closed}</Td>
                 <Td align="right" mono>{r.avg_close_days != null ? `${r.avg_close_days}d` : '—'}</Td>
-                <Td align="right" mono>{((r.total / total) * 100).toFixed(1)}%</Td>
+                {/* ⚠️ Guarded since 2026-09-03. `by_agent` is now seeded from BOTH the raised
+                    and the closed row sets, so a range with 0 raised and >=1 closed produces
+                    rows whose totals are all 0 — 0/0 rendered "NaN%" on every line. Before the
+                    split the array was empty in that case and this never ran. */}
+                <Td align="right" mono>{total ? `${((r.total / total) * 100).toFixed(1)}%` : '—'}</Td>
               </>
             )}
           </tr>
