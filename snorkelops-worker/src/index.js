@@ -2273,6 +2273,18 @@ export default {
             if (d.status === 'Accepted' || d.status === 'Approved') {
               return err('Use the Accept / Final Approve actions for those transitions', 400);
             }
+            // Cancellation is an AUDITED transition and this is not the door to it.
+            // `cancelPO` requires a reason, stores it in cancellation_reason, writes a
+            // po_revisions row and an activity-log entry, and (S340) refuses a Closed PO
+            // that has receipts against it. Every one of those is skipped if the status
+            // is written straight through here — same state, none of the record.
+            // Found 2026-09-03 (S340) while building the Closed-PO escape hatch: the
+            // guard was being built on cancelPO while this handler sat wide open beside
+            // it. The only caller in the codebase sends 'Sent'
+            // (PODetailClient.js:202), so nothing legitimate is broken by closing it.
+            if (d.status === 'Cancelled') {
+              return err('Use the Cancel action — a cancellation must carry a reason and be audited', 400);
+            }
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
               return err('China PO status changes require po_china permission', 403);
             }
