@@ -237,12 +237,39 @@ async function handleFormSubmit(env, request) {
   // submits can still both pass it, which is exactly today's behaviour — strictly no worse, never
   // better than the UNIQUE index, which remains the real control. The transactional fix is
   // capture-spine residual (e).
+  // ⛔ THE SHORT-CIRCUIT IS CHANNEL-AWARE, AND THAT IS NOT A REFINEMENT — IT IS THE WHOLE
+  // CORRECTNESS OF IT (S342 hostile review, finding 1). `dedupeKey()` is
+  // `[slug, email||phone, ...dedupe_keys]` — **channels are NOT in it**. So a customer who
+  // submitted with email only, then comes back on the SAME product and ticks "Also tell me on
+  // WhatsApp", produces the SAME key. A key-only short-circuit returned early, skipped the
+  // consent loop, and left the profile holding a phone identifier (attached above this block)
+  // with NO whatsapp consent — `runGate` would then refuse the alert while the widget said
+  // "You're on the list". Silently unreachable on a channel they explicitly asked for.
+  // So: skip ONLY when the stored row already covers every channel being asked for now.
+  // Otherwise fall through and record consent for the NEW channels only — never re-writing the
+  // ones already on file, which is what the dedupe exists to prevent.
+  let consentChannels = v.channels;
+  let alreadyOnFile = null;
   if (key) {
     const dupe = await A.sbComms(
-      `/rest/v1/form_submissions?form_id=eq.${A.enc(form.id)}&dedupe_key=eq.${A.enc(key)}&select=id&limit=1`, env);
+      `/rest/v1/form_submissions?form_id=eq.${A.enc(form.id)}&dedupe_key=eq.${A.enc(key)}`
+      + `&select=id,channels&limit=1`, env);
     // Fail OPEN on an unreadable check: this is a de-duplication nicety, not a security control,
     // and refusing a genuine first submission because a SELECT failed would lose a real signup.
-    if (dupe.ok && dupe.data?.[0]) return { ok: true, deduped: true };
+    if (dupe.ok && Array.isArray(dupe.data) && dupe.data[0]) {
+      alreadyOnFile = dupe.data[0];
+      const had = new Set(Array.isArray(alreadyOnFile.channels) ? alreadyOnFile.channels : []);
+      const added = v.channels.filter((c) => !had.has(c));
+      if (!added.length) return { ok: true, deduped: true };
+      consentChannels = added;
+      // Widen the stored record to the union, so the row reflects what the customer actually
+      // asked for. Without this the submission says `['email']` forever while a whatsapp
+      // consent row exists — two sources of truth disagreeing about the same request.
+      A.checkWrite('form_channels_widen_failed', await A.sbComms(
+        `/rest/v1/form_submissions?id=eq.${A.enc(alreadyOnFile.id)}`, env, {
+          method: 'PATCH', body: JSON.stringify({ channels: [...had, ...added] }),
+        }), { submission_id: alreadyOnFile.id, added });
+    }
   }
 
   // Consent NOW only when this is a single requested alert. An ongoing marketing enrolment
@@ -254,7 +281,7 @@ async function handleFormSubmit(env, request) {
       turnstile_ok: true, ua: request.headers.get('user-agent') || null,
       at: new Date().toISOString(),
     };
-    for (const channel of v.channels) {
+    for (const channel of consentChannels) {
       // `service`, not `marketing`: gate.js §S274 'service' — bypasses consent + frequency cap, RESPECTS
       // quiet hours and suppression. Exactly the semantics a requested alert wants.
       await recordConsent(env, {

@@ -74,12 +74,18 @@ const ENV = { TURNSTILE_SECRET: 's3cret' };
       setAttribute: (k, v) => { hostAttrs[k] = v; },
       querySelector: (sel) => (sel === 'form' ? form : sel === '.lotf-msg' ? msg : { id: 'ts-box' }),
     };
+    // ⚠️ Selector-aware: `script[data-lotf-ts]` is the single-api.js-load guard (S342) and must
+    // start absent, or the widget waits on a script that never loads and never renders.
+    let tsScript = null;
     const documentStub = {
       // S342: the widget initialises EVERY host, so it selects with querySelectorAll now.
       querySelectorAll: () => [host],
-      querySelector: () => host,
-      createElement: () => (state.script = { onload: null }),
-      head: { appendChild() {} },
+      querySelector: (sel) => (String(sel).includes('data-lotf-ts') ? tsScript : host),
+      createElement: () => (state.script = {
+        onload: null, setAttribute() {},
+        addEventListener(type, h) { if (type === 'load') this.onload = h; },
+      }),
+      head: { appendChild(el) { tsScript = el; } },
     };
     const windowStub = {
       turnstile: {
@@ -96,7 +102,10 @@ const ENV = { TURNSTILE_SECRET: 's3cret' };
     const src = formWidgetJs('back-in-stock', 'https://w.dev', 'SITEKEY');
     new Function('window', 'document', 'location', 'fetch', src)(
       windowStub, documentStub, { href: 'https://shop/p/1' }, fetchStub);
-    state.script.onload();                 // Turnstile's api.js arrives
+    // ⚠️ S342: api.js is loaded ONCE per page and only when `window.turnstile` is absent. This
+    // stub provides turnstile up front, so the widget renders immediately and no script element
+    // is created — driving `onload` is only needed when one was.
+    if (state.script && state.script.onload) state.script.onload();  // Turnstile's api.js arrives
     return { state, button, msg, form,
       solve: (t) => state.render.callback(t),
       submit: async () => { state.submit({ preventDefault() {} }); await new Promise((r) => setTimeout(r, 0)); } };

@@ -33,11 +33,16 @@ function makeHost() {
 }
 function run(hostCount, scriptCopies) {
   const hosts = Array.from({ length: hostCount }, makeHost);
+  // ⚠️ SELECTOR-AWARE, deliberately. A stub that answers every selector with the same object is
+  // how three separate suites broke this session: it silently satisfies code paths it was never
+  // written for. `script[data-lotf-ts]` is the single-load guard and must start absent.
+  let tsScript = null;
   const document = {
     querySelectorAll: () => hosts,
-    querySelector: () => hosts[0] || null,
-    createElement: () => ({ set onload(_) {}, style: {} }),
-    head: { appendChild() {} }, body: { appendChild() {} },
+    querySelector: (sel) => (String(sel).includes('data-lotf-ts') ? tsScript : (hosts[0] || null)),
+    createElement: () => ({ set onload(_) {}, style: {}, addEventListener() {},
+      setAttribute() {}, getAttribute: () => null }),
+    head: { appendChild(el) { tsScript = el; } }, body: { appendChild() {} },
   };
   const js = formWidgetJs('back-in-stock', 'https://x.workers.dev', 'KEY');
   const fn = new Function('document', 'window', 'location', 'fetch', js);

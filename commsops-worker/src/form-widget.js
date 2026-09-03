@@ -41,17 +41,30 @@ function formWidgetJs(slug, workerBase, siteKey) {
   // gets challenge_failed forever until a full page reload — so a customer who mistypes their
   // email, reads 'bad_email', fixes it and resubmits was permanently bricked by their own typo.
   // Reset after EVERY response, success or failure: the widget must always hold a fresh token.
+  // ⚠️ RESET BY WIDGET ID, NOT BARE (S342 hostile review, finding 7). \`turnstile.reset()\` with no
+  // argument resets the FIRST widget on the page. With multi-host init there can be N, so a bare
+  // reset in the quick-buy drawer would reset the MAIN PDP widget and leave the drawer's own token
+  // spent — which is verbatim the brick the note above says this function prevents. Capture the id
+  // \`render()\` returns and reset exactly ours.
+  var wid=null;
   function resetChallenge(){
     token='';
-    try{ if(window.turnstile && window.turnstile.reset) window.turnstile.reset(); }catch(e){}
+    try{ if(window.turnstile && window.turnstile.reset) window.turnstile.reset(wid||undefined); }catch(e){}
   }
   // Turnstile renders itself; the token is the only thing the worker trusts.
-  var ts=document.createElement('script');
-  ts.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-  ts.async=true; ts.defer=true;
-  ts.onload=function(){ if(window.turnstile) window.turnstile.render(host.querySelector('.lotf-ts'),
-    {sitekey:SITEKEY, callback:function(t){ token=t; }}); };
-  document.head.appendChild(ts);
+  // ⚠️ ONE api.js for the page, not one per host — N copies is N script tags and N loads.
+  function withTurnstile(cb){
+    if(window.turnstile) return cb();
+    var prior=document.querySelector('script[data-lotf-ts]');
+    if(prior){ prior.addEventListener('load',cb); return; }
+    var ts=document.createElement('script');
+    ts.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    ts.async=true; ts.defer=true; ts.setAttribute('data-lotf-ts','1');
+    ts.addEventListener('load',cb);
+    document.head.appendChild(ts);
+  }
+  withTurnstile(function(){ if(window.turnstile) wid=window.turnstile.render(host.querySelector('.lotf-ts'),
+    {sitekey:SITEKEY, callback:function(t){ token=t; }}); });
   f.addEventListener('submit',function(e){
     e.preventDefault();
     msg.textContent='Sending...';

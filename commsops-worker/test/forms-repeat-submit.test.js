@@ -24,23 +24,35 @@ const FORM = {
   fields: [
     { key: 'product_code', type: 'hidden', required: true },
     { key: 'email', type: 'email', required: true },
+    { key: 'phone', type: 'tel', required: false },
   ],
 };
 
 // `existing` models whether a submission with this dedupe key is ALREADY in the table.
-function db({ existing = false, dupeReadFails = false } = {}) {
-  const w = { consent: 0, inserts: 0, dupeReads: 0 };
+function db({ existing = false, dupeReadFails = false, storedChannels = ['email'] } = {}) {
+  const w = { consent: 0, inserts: 0, dupeReads: 0, consentChannels: [], widened: null };
   A.sbComms = async (path, env, opts) => {
     if (path.startsWith('/rest/v1/forms')) return { ok: true, data: [FORM] };
     if (path.startsWith('/rest/v1/form_submissions?form_id=') && !opts) {
       w.dupeReads++;
-      if (dupeReadFails) return { ok: false, status: 500, data: null };
-      return { ok: true, data: existing ? [{ id: 'existing-row' }] : [] };
+      // ⚠️ data is NON-EMPTY on the failure fixture, deliberately (S342 hostile review):
+      // with `data: null` the `dupe.ok &&` guard was untested — dropping it left the suite green,
+      // because null is falsy either way. A 500 that still carries a body is the real hazard.
+      // ⚠️ The garbage body must look like a COVERING match (channels ⊇ requested), or the
+      // channel-aware fall-through masks the missing `dupe.ok` guard and the test goes vacuous
+      // again — which is exactly what happened on the first attempt at hardening this.
+      if (dupeReadFails) return { ok: false, status: 500, data: [{ id: 'garbage', channels: ['email'] }] };
+      return { ok: true, data: existing ? [{ id: 'existing-row', channels: storedChannels }] : [] };
     }
     if (path.startsWith('/rest/v1/form_submissions') && opts?.method === 'POST') {
       w.inserts++; return { ok: true, data: existing ? [] : [{ id: 'new-row' }] };
     }
-    if (path.startsWith('/rest/v1/consent')) { w.consent++; return { ok: true, data: [{}] }; }
+    if (path.startsWith('/rest/v1/consent')) {
+      w.consent++; w.consentChannels.push(JSON.parse(opts.body).channel); return { ok: true, data: [{}] };
+    }
+    if (path.startsWith('/rest/v1/form_submissions?id=') && opts?.method === 'PATCH') {
+      w.widened = JSON.parse(opts.body).channels; return { ok: true, data: [{}] };
+    }
     return { ok: true, data: [] };
   };
   return w;
@@ -84,6 +96,39 @@ const submit = () => handleFormSubmit(
     assert.equal(r.ok, true);
     assert.equal(w.consent, 1, 'must not drop a genuine first submission on a read failure');
     assert.equal(w.inserts, 1);
+  });
+
+  // ⛔ THE CASE THAT MAKES THE SHORT-CIRCUIT SAFE (hostile-review finding 1). Channels are NOT in
+  // the dedupe key, so "same key" does not mean "same request". A customer who returns and ticks
+  // WhatsApp must get a whatsapp consent row — otherwise the phone is attached, the gate refuses
+  // the alert, and the widget still says "You're on the list".
+  await t('repeat + a NEW channel is NOT short-circuited — consent for the new channel only', async () => {
+    const w = db({ existing: true, storedChannels: ['email'] });
+    const r = await handleFormSubmit(
+      { TURNSTILE_SECRET: 's', FORM_IP_HASH_SALT: 'salt' },
+      { json: async () => ({ form: 'back-in-stock', turnstile_token: 'tok', email: 'a@b.com',
+          phone: '+919876543210', product_code: 'V1', channels: ['email', 'whatsapp'] }),
+        headers: { get: () => null } });
+    assert.notEqual(r.deduped, true, 'must NOT short-circuit when a new channel is requested');
+    assert.deepEqual(w.consentChannels, ['whatsapp'],
+      'exactly the NEW channel — never re-writing the one already on file');
+  });
+
+  await t('the stored row is widened to the union, so it stops disagreeing with consent', async () => {
+    const w = db({ existing: true, storedChannels: ['email'] });
+    await handleFormSubmit(
+      { TURNSTILE_SECRET: 's', FORM_IP_HASH_SALT: 'salt' },
+      { json: async () => ({ form: 'back-in-stock', turnstile_token: 'tok', email: 'a@b.com',
+          phone: '+919876543210', product_code: 'V1', channels: ['email', 'whatsapp'] }),
+        headers: { get: () => null } });
+    assert.deepEqual(w.widened, ['email', 'whatsapp']);
+  });
+
+  await t('repeat with the SAME channels still short-circuits', async () => {
+    const w = db({ existing: true, storedChannels: ['email'] });
+    const r = await submit();
+    assert.equal(r.deduped, true);
+    assert.equal(w.consent, 0);
   });
 
   A.sbComms = orig; globalThis.fetch = origFetch;
