@@ -6,6 +6,12 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## 1.15.0 - 2026-09-03
+
+- **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than the rest of Manpower): what it's for (the scanner refuses a first punch outside every shift window and creates no row at all), the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.
+- **Print Center** documents the new named allow-list (currently 4 people) replacing the shared sticker permission, and states explicitly that the **UPC Generator** is unchanged.
+
+
 ## 1.13.0 - 2026-08-31
 
 - **QC** now documents the Day / Week / Month period picker and the range label, the

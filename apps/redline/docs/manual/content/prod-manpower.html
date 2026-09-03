@@ -26,6 +26,13 @@
   <p>Closing an open shift stamps the clock-out at the current time and can&rsquo;t be undone here. Use it to tidy up someone who forgot to clock out <em>today</em>, or to close out someone who genuinely left early (they can&rsquo;t scan out before their shift ends &mdash; see Shifts). The duration is calculated from it.</p>
 </div>
 
+<div class="callout note">
+  <div class="c-title">&#9432; Add attendance (from 3 Sep 2026)</div>
+  <p>Normally a person&rsquo;s first badge scan of the day creates their attendance row. If that first scan falls <strong>more than 60 minutes before their shift starts, or any time after it ends</strong>, the scanner refuses it and tells them to see a supervisor &mdash; and, until now, that day simply never got a record. <strong>Add attendance</strong>, in the Attendance toolbar, is how you put it right afterwards.</p>
+  <p>Fill in the operator, the date, a required <strong>Clock in</strong> time, and an optional <strong>Clock out</strong> and note. You cannot backdate more than <strong>7 days</strong>, and you cannot pick a future date; either is refused with a message. You also cannot add a second row for someone who already has one on that day &mdash; the refusal names the person and the date. If the times you enter still fall outside every shift, the row is created anyway with no shift attached: that is expected, not a fault, because the whole point of this screen is to cover exactly that gap.</p>
+  <p>Only a smaller group can see this button than can otherwise manage the floor here, because an attendance row is payroll input. If you don&rsquo;t see <strong>Add attendance</strong>, you don&rsquo;t hold that extra access; ask an admin.</p>
+</div>
+
 <h2 class="sec">Dispatch</h2>
 <p>The same attendance view, filtered to the <strong>Dispatch</strong> team. Dispatch runs two shifts that overlap in the middle of the day, so each dispatcher is given a <strong>home shift</strong> (set on the Shifts tab) that decides which shift a scan belongs to. Everything else matches the Attendance tab &mdash; clock times, late/OT, streak, day status and Close Shift.</p>
 

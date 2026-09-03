@@ -6,6 +6,11 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.21.0 - 2026-09-03
+
+- **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than general Manpower access): what it's for, the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.
+
+
 ## 1.16.0 - 2026-08-31
 
 - **Receiving** gains "Bags that never got a label": the per-line **N unlabelled** badge,

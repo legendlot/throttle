@@ -1,5 +1,10 @@
 # Changelog — Depot Operations Manual
 
+## 1.10.0 — 2026-09-03
+
+- **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than general floor-management access): what it's for, the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.
+
+
 ## 1.5.1 — 2026-08-25 (Session 308)
 House-style sweep: removed every em dash from the chapter copy (Reports, Unit Restock,
 Dispatch Scan Stations), replacing them with commas, colons, semicolons or parentheses as the
