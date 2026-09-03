@@ -5,6 +5,9 @@ import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download, Phone, Users } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { KpiCard, btnGhost } from '../../../components/kit/index.js';
+// TrendChart is deliberately NOT re-exported from kit/index.js (it pulls ~110KB of recharts),
+// so it is imported directly — same as the analytics page does.
+import { TrendChart } from '../../../components/kit/Chart.js';
 import { dateStr } from '@throttle/domain';
 
 function toIsoStart(date) {
@@ -607,10 +610,74 @@ function CallsPanel({ data }) {
         <CallsBreakdown rows={data.by_agent || []} variant="agent" />
       </Panel>
 
-      <Panel title="Hourly distribution">
+      <Panel title="Call volume trend">
+        <CallTrend daily={data.daily || []} />
+      </Panel>
+
+      <Panel title="Hourly distribution (IST)">
         <HourlyBars hourly={data.hourly || []} />
       </Panel>
     </>
+  );
+}
+
+// Call volume over time — the first of the four reporting-suite sections (Afshaan, 2026-09-03).
+//
+// ⚠️ `data.daily` was ALREADY being computed by getCallReports and thrown away: nothing in this
+// file read it. So this is rendering existing data, not a new query.
+//
+// Day / week / month is rolled up HERE rather than server-side on purpose — the payload is one
+// row per day (≤366 for a year), so a second grain parameter on the handler would buy nothing
+// and give the two grains two places to disagree.
+function CallTrend({ daily }) {
+  const [grain, setGrain] = useState('day');
+  const rows = useMemo(() => {
+    const src = [...(daily || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    if (grain === 'day') return src.map(d => ({ ...d, bucket: d.date }));
+    const acc = new Map();
+    for (const d of src) {
+      // Dates are IST-bucketed by the worker, so `new Date(d.date)` is parsed as UTC midnight
+      // and only ever used for arithmetic here — no further timezone shifting.
+      let key;
+      if (grain === 'month') key = (d.date || '').slice(0, 7);
+      else {
+        const dt = new Date(`${d.date}T00:00:00Z`);
+        const dow = (dt.getUTCDay() + 6) % 7;            // Monday-start week
+        dt.setUTCDate(dt.getUTCDate() - dow);
+        key = dt.toISOString().slice(0, 10);
+      }
+      const cur = acc.get(key) || { bucket: key, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
+      cur.in_total += d.in_total || 0;   cur.in_answered += d.in_answered || 0;
+      cur.out_total += d.out_total || 0; cur.out_answered += d.out_answered || 0;
+      acc.set(key, cur);
+    }
+    return [...acc.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+  }, [daily, grain]);
+
+  if (!rows.length) return <div style={{ fontSize: 12.5, color: 'var(--t3)' }}>No calls in range.</div>;
+
+  const series = [
+    { key: 'in_total',    name: 'Inbound',           color: 'info',   kind: 'area' },
+    { key: 'in_answered', name: 'Inbound answered',  color: 'ok',     kind: 'line' },
+    { key: 'out_total',   name: 'Outbound',          color: 'accent', kind: 'line' },
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        {['day', 'week', 'month'].map(g => (
+          <button key={g} onClick={() => setGrain(g)}
+            style={{ padding: '4px 10px', fontSize: 11.5, borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                     textTransform: 'capitalize', fontWeight: grain === g ? 700 : 500,
+                     border: `1px solid ${grain === g ? 'var(--accent)' : 'var(--border-2)'}`,
+                     background: grain === g ? 'var(--accent)' : 'transparent',
+                     color: grain === g ? '#fff' : 'var(--t2)' }}>
+            {g}
+          </button>
+        ))}
+      </div>
+      <TrendChart data={rows} xKey="bucket" series={series} height={240}
+        xLabel={grain === 'month' ? 'Month' : grain === 'week' ? 'Week beginning' : 'Day'} showLegend />
+    </div>
   );
 }
 

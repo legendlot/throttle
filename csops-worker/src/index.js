@@ -1958,7 +1958,10 @@ async function getCallReports(params, auth, env) {
     if (c.status === 'abandoned') abandoned++;
     if (c.duration_seconds && c.duration_seconds > 0) { totalDur += c.duration_seconds; durCount++; }
 
-    const day = (c.created_at || '').slice(0, 10);
+    // ⚠️ IST, not UTC. `created_at.slice(0,10)` is the UTC date, so every call between
+    // 00:00 and 05:30 IST was being counted on the PREVIOUS day — the out-of-hours tail,
+    // which is exactly the population the callback and abandoned-call work cares about.
+    const day = istDateStr(c.created_at);
     if (day) {
       daily[day] = daily[day] || { date: day, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
       if (c.direction === 'incoming') { daily[day].in_total++; if (c.status === 'answered') daily[day].in_answered++; }
@@ -2005,7 +2008,11 @@ async function getCallReports(params, auth, env) {
     if (c.duration_seconds && c.duration_seconds > 0) { byAgent[agentName].total_dur += c.duration_seconds; byAgent[agentName].dur_count++; }
     if (c.ticket_id) byAgent[agentName].tickets_opened++;
 
-    const h = new Date(c.created_at).getHours();
+    // ⚠️ `new Date(...).getHours()` returns the WORKER's local hour, and a Cloudflare Worker
+    // runs in UTC — so this histogram was labelled 0–23 while holding UTC buckets, shifting
+    // the whole distribution 5h30m earlier. A 14:00 IST call was being drawn at 08:00, which
+    // makes the busiest hour of the day land in the middle of the night on screen.
+    const h = istHour(c.created_at);
     if (Number.isFinite(h)) byHour[h]++;
   }
 
@@ -2110,6 +2117,23 @@ async function getCsAgents(_params, _auth, env) {
 const PRESENCE_FRESH_MS = 10 * 60 * 1000;
 
 // Current IST wall-clock: minutes past midnight + ISO day-of-week (1=Mon..7=Sun).
+// IST date/hour for a stored timestamp. LOT reports in IST and never UTC, and a Cloudflare
+// Worker's local clock is UTC — so neither `iso.slice(0,10)` nor `new Date(iso).getHours()`
+// gives a business-correct bucket. Shift by +5:30 and read the UTC fields, the same trick
+// istNow() below already uses.
+function istShifted(iso) {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t + 5.5 * 3600 * 1000) : null;
+}
+function istDateStr(iso) {
+  const d = istShifted(iso);
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+function istHour(iso) {
+  const d = istShifted(iso);
+  return d ? d.getUTCHours() : NaN;
+}
+
 function istNow() {
   const d = new Date(Date.now() + 5.5 * 3600 * 1000);
   const min = d.getUTCHours() * 60 + d.getUTCMinutes();
