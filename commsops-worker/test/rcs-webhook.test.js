@@ -91,6 +91,75 @@ const RCS_MSG = { id: 'm1', status: 'sent', to_address: '+919876543210', profile
     assert.ok(!calls.some((c) => c.method === 'PATCH' || c.method === 'POST'), 'wrote for unknown id');
   });
 
+  // ── User_response (suggested-reply postback) — S340 ──────────────────────────────────────
+  // THE REGRESSION THESE GUARD: the postback handler used to sit BELOW the message lookup. A
+  // user_response carries no transaction_id (only tlmsgid) while send() stores transaction_id as
+  // provider_message_id, so the lookup missed, `if (!row) continue` fired, and every postback was
+  // dropped — including before the diagnostic log meant to reveal the payload shape. `stub(null)`
+  // reproduces exactly that condition: NO message row is resolvable, and the event must still land.
+  const stubResolving = (row, profileId = 'p-resolved') => {
+    const calls = [];
+    A.sbComms = async (path, env, opts) => {
+      calls.push({ path, method: opts?.method || 'GET', body: opts?.body ? JSON.parse(opts.body) : null });
+      if (path.startsWith('/rest/v1/messages?provider_message_id=')) return { ok: true, data: row ? [row] : [] };
+      if (path.startsWith('/rest/v1/rpc/resolve_identity')) return { ok: true, data: profileId };
+      return { ok: true, data: [{}] };
+    };
+    return calls;
+  };
+
+  await t('documented user_response emits rcs_user_response EVEN WITH NO RESOLVABLE MESSAGE ROW', async () => {
+    const calls = stubResolving(null);
+    await handleTrustsignalRcs({}, {
+      phone: '+919999999999', mtype: 'text', response: 'Yes, send me the offer',
+      status: 'received', from: '+919999999999', st: '2026-09-03T11:15:30Z',
+      response_type: 'text', webhook_type: 'rcs_user_response',
+      tlmsgid: 'msg_987654321', camp_id: 'camp_7',
+    });
+    const ev = calls.find((c) => c.path.startsWith('/rest/v1/events'));
+    assert.ok(ev, 'postback produced no event — it was dropped, which is the original bug');
+    assert.strictEqual(ev.body.name, 'rcs_user_response');
+    assert.strictEqual(ev.body.profile_id, 'p-resolved');
+    assert.strictEqual(ev.body.properties.postback, 'Yes, send me the offer');
+    assert.strictEqual(ev.body.properties.response_type, 'text');
+    assert.strictEqual(ev.body.properties.tlmsgid, 'msg_987654321');
+    assert.strictEqual(ev.body.properties.camp_id, 'camp_7');
+    assert.strictEqual(ev.body.idempotency_key, 'trustsignal:rcs:user_response:msg_987654321');
+  });
+
+  await t('the postback is attributed by PHONE, not by provider_message_id', async () => {
+    const calls = stubResolving(null);
+    await handleTrustsignalRcs({}, {
+      phone: '9999999999', response: 'Tell me more', webhook_type: 'rcs_user_response',
+      tlmsgid: 'msg_1', st: '2026-09-03T11:15:30Z',
+    });
+    const rpc = calls.find((c) => c.path.startsWith('/rest/v1/rpc/resolve_identity'));
+    assert.ok(rpc, 'identity was never resolved');
+    // bare 10-digit normalises to E.164 +91 via shopify.normalizePhone
+    assert.deepStrictEqual(rpc.body.p_identifiers, [{ type: 'phone', value: '+919999999999' }]);
+    // and it must NOT have gone looking for a message row it can never find
+    assert.ok(!calls.some((c) => c.path.startsWith('/rest/v1/messages?provider_message_id=')),
+      'user_response still hit the message lookup that used to swallow it');
+  });
+
+  await t('a postback with no usable phone is logged and dropped, never inserted unattributed', async () => {
+    const calls = stubResolving(null);
+    await handleTrustsignalRcs({}, {
+      response: 'orphan', webhook_type: 'rcs_user_response', tlmsgid: 'msg_2',
+      st: '2026-09-03T11:15:30Z',
+    });
+    assert.ok(!calls.some((c) => c.path.startsWith('/rest/v1/events')),
+      'inserted an event with no profile attribution');
+  });
+
+  await t('a status event still resolves by provider_message_id (no regression from the reorder)', async () => {
+    const calls = stubResolving({ ...RCS_MSG });
+    await handleTrustsignalRcs({}, { transaction_id: 'tx1', status: 'delivered', route: 'rcs' });
+    const patch = calls.find((c) => c.method === 'PATCH');
+    assert.ok(patch, 'ordinary DLR stopped being applied');
+    assert.strictEqual(patch.body.status, 'delivered');
+  });
+
   A.sbComms = orig;
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);

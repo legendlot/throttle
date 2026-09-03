@@ -2,6 +2,9 @@
 const A = require('./auth.js');
 const emailAdapter = require('./adapters/email.js');
 const { applyOptOut } = require('./optout.js');
+const { ingest } = require('./ingest.js');
+const SHOP = require('./shopify.js');   // normalizePhone (E.164, +91 default) — RCS postbacks
+                                        // are attributable only by phone; see handleTrustsignalRcs
 
 // Canonical message status is monotonic — an out-of-order webhook must never regress it
 // (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
@@ -288,6 +291,48 @@ const rcsUpgrade = (from, to) => (RCS_RANK[to] ?? 0) >= (RCS_RANK[from] ?? 0) ||
 async function handleTrustsignalRcs(env, body) {
   const events = require('./adapters/rcs.js').parseStatusWebhook(body);
   for (const ev of events) {
+    // ⭐ User_response (suggested-reply postback) is handled HERE, BEFORE the message lookup
+    // below, because it cannot survive it. The vendor's payload reference is explicit that this
+    // event carries NO transaction_id — only `tlmsgid`, a message-log reference — while send()
+    // stores transaction_id as our provider_message_id (adapters/rcs.js:85). So the lookup below
+    // matched nothing and `if (!row) continue` dropped EVERY postback on the floor — including
+    // before the diagnostic log that was supposed to let the payload shape accumulate, which is
+    // why none ever did. Measured 2026-09-03 (S340): RCS live at 6,464 sends/30d, zero postbacks
+    // ever recorded. Do NOT move this below the lookup again.
+    // `phone` is the only attribution key, so ingest() resolves-or-creates the profile from it,
+    // exactly as the WhatsApp inbound path does (wa-webhooks.js handleInbound). The emitted
+    // `rcs_user_response` event is what a journey `wait_response` step awaits by name.
+    if (ev.user_response) {
+      const phone = SHOP.normalizePhone(ev.phone);
+      if (!phone) {
+        console.log('rcs_user_response_no_phone',
+          JSON.stringify({ tlmsgid: ev.tlmsgid, response_type: ev.response_type, at: ev.at }));
+        continue;
+      }
+      const res = await ingest(env, {
+        identifiers: [{ type: 'phone', value: phone }],
+        name: 'rcs_user_response',
+        occurred_at: ev.at,
+        source: 'trustsignal_webhook',
+        // tlmsgid is the vendor's own message reference, so it is stable per postback. Without
+        // one there is no safe key and the event inserts unconditionally (ingest treats a null
+        // key as always-insert) — a redelivery would double-count, which is why it is logged.
+        idempotency_key: ev.tlmsgid ? `trustsignal:rcs:user_response:${ev.tlmsgid}` : undefined,
+        properties: { channel: 'rcs', postback: ev.postback, response_type: ev.response_type,
+                      tlmsgid: ev.tlmsgid, camp_id: ev.camp_id },
+      }).catch((e) => { console.log('rcs_user_response_ingest_error', e?.message || String(e)); return null; });
+      // Same PATTERN-218 trap the WA inbound path documents: ingest() returns {ok:false} on all
+      // its failure modes and never throws, so the .catch above only ever sees a network-layer
+      // rejection. Without this line a failed insert is completely silent — no event row, no log,
+      // and a 200 back to the vendor so it never redelivers.
+      if (!res || res.ok === false)
+        console.log('rcs_user_response_ingest_failed',
+          JSON.stringify({ tlmsgid: ev.tlmsgid, error: res?.error || null }));
+      if (!ev.tlmsgid)
+        console.log('rcs_user_response_no_tlmsgid', JSON.stringify({ phone_present: true, at: ev.at }));
+      continue;
+    }
+
     if (!ev.provider_message_id) continue;
     const cur = await A.sbComms(
       `/rest/v1/messages?provider_message_id=eq.${A.enc(ev.provider_message_id)}` +
@@ -360,13 +405,9 @@ async function handleTrustsignalRcs(env, body) {
       continue;
     }
 
-    // User_response (suggested-reply postback) → journey branching is build step 10. Log the
-    // real payload shape until then — the field names in the parser are inferred, and these
-    // lines are how they get verified before any branching logic depends on them.
-    if (ev.user_response) {
-      console.log('rcs_user_response', JSON.stringify({ message_id: row.id, postback: ev.postback, at: ev.at }));
-      continue;
-    }
+    // (User_response is handled at the top of this loop — it can never reach here, because it
+    // carries no transaction_id and so never resolves a `row`. That was the bug: this block sat
+    // below the lookup and never executed. Fixed S340; do not re-add a second handler here.)
 
     if (!ev.canonical_status) {
       console.log('rcs_unknown_status', JSON.stringify({ raw: ev.raw_status, message_id: row.id }));

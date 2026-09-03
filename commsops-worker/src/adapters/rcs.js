@@ -136,11 +136,19 @@ function one(p) {
   const credit = p.credit ?? p.sms_cost ?? null;
   const cost = credit == null || !Number.isFinite(Number(credit)) ? null : Number(credit);
 
-  // User_response — carries NO transaction_id; tlmsgid references the message log. Journey
-  // branching is build step 10; the handler logs these so real shapes accumulate first.
+  // User_response — carries NO transaction_id; tlmsgid references the message log.
+  // ⚠️ `phone` is the ONLY usable attribution key on this event, which is why it is carried here.
+  // The handler cannot resolve a user_response by provider_message_id: send() stores
+  // transaction_id as our provider_message_id (see :85), and this payload has none — a lookup on
+  // tlmsgid matches nothing. Dropping `phone` here is what left the handler with no way to
+  // attribute a postback at all (fixed 2026-09-03, S340 — see webhooks.js).
   if (wt === 'rcs_user_response' || ev === 'user_response' || p.postback) {
     return { provider_message_id: txid || p.tlmsgid || null, user_response: true,
-             postback: p.postback || p.response || null, at };
+             postback: p.postback || p.response || null, at,
+             phone: p.phone || p.from || p.msisdn || null,
+             response_type: p.response_type || p.mtype || null,
+             tlmsgid: p.tlmsgid || null,
+             camp_id: p.camp_id || null };
   }
 
   // The SMS fallback leg's DLR — flip + the surviving leg's own terminal status in one event.
