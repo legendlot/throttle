@@ -1,8 +1,8 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '@throttle/auth';
+import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Badge, ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { AddAttendanceModal, Badge, ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
 import { countPresent } from '@throttle/domain';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -86,6 +86,9 @@ export default function ManpowerPage() {
   const [activeTab, setActiveTab] = useState('store');
 
   const canManageFloor = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve);
+  // Manual attendance add is payroll input (RULE-COST-001) and is gated on its OWN key —
+  // canManageFloor above is far wider than the people who may write an attendance row.
+  const canAddAttendance = hasPermission(perms, 'attendance_manage');
 
   if (perms && !perms.dashboard) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted</div>;
@@ -113,7 +116,7 @@ export default function ManpowerPage() {
       />
 
       {activeTab === 'store'      && <StoreActivitiesTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance' && <AttendanceTab session={session} canManageFloor={canManageFloor} />}
+      {activeTab === 'attendance' && <AttendanceTab session={session} canManageFloor={canManageFloor} canAddAttendance={canAddAttendance} />}
       {activeTab === 'shifts'     && <ShiftsTab session={session} canManageFloor={canManageFloor} />}
     </div>
   );
@@ -502,7 +505,7 @@ function ActivityHistoryModal({ target, date, session, onClose }) {
 // Worker: getOperatorAttendance (team:'store') + getAttendanceStats + setDayStatus
 // + closeAttendanceShift. All canManageFloor-gated. Mirrors Redline's attendance.
 // ═══════════════════════════════════════════════════════════════════════════
-function AttendanceTab({ session, canManageFloor }) {
+function AttendanceTab({ session, canManageFloor, canAddAttendance }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [rows, setRows] = useState([]);
@@ -513,6 +516,11 @@ function AttendanceTab({ session, canManageFloor }) {
   const [savingStatus, setSavingStatus] = useState({}); // attendance_id → bool
   const [selected, setSelected] = useState(() => new Set()); // attendance_ids picked for bulk close
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  // Store operators for the manual-add picker. This tab lists ATTENDANCE ROWS, so it has no
+  // operator list of its own (Redline/Depot get one from their page) — fetched lazily when
+  // the modal is first opened, never on mount, so the tab's normal load is untouched.
+  const [addOperators, setAddOperators] = useState([]);
 
   const load = useCallback(async () => {
     if (!session || !canManageFloor || !date) return;
@@ -559,6 +567,18 @@ function AttendanceTab({ session, canManageFloor }) {
   }
   function toggleAll() {
     setSelected(allOpenSelected ? new Set() : new Set(openRows.map((r) => r.id)));
+  }
+
+  async function openAdd() {
+    setAddOpen(true);
+    if (addOperators.length) return;
+    try {
+      const res = await workerFetch('getOperators', { data: { status: 'active' } }, session);
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setAddOperators(list);
+    } catch (e) {
+      showToast(e.message || 'Failed to load operators', 'error');
+    }
   }
 
   async function confirmBulkClose() {
@@ -630,6 +650,12 @@ function AttendanceTab({ session, canManageFloor }) {
             {selected.size > 0 && (
               <button style={{ ...btnSecondary, fontSize: 11 }} onClick={() => setBulkOpen(true)} disabled={closing}>
                 Close {selected.size} shift{selected.size === 1 ? '' : 's'}
+              </button>
+            )}
+            {canAddAttendance && (
+              <button style={{ ...btnSecondary, fontSize: 11 }} onClick={openAdd} disabled={loading}
+                title="Manually add an attendance row (operator outside every shift window)">
+                + Add attendance
               </button>
             )}
             <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
@@ -734,6 +760,23 @@ function AttendanceTab({ session, canManageFloor }) {
           )}
         </div>
       </div>
+
+      {/* Shared with Redline + Depot (packages/ui) — a payroll-write form kept in one place. */}
+      {addOpen && (
+        <AddAttendanceModal
+          operators={addOperators}
+          team={STORE_TEAM}
+          defaultDate={date}
+          onClose={() => setAddOpen(false)}
+          onSubmit={async (data) => (await workerFetch('addAttendanceRow', { data }, session))?.data || {}}
+          onSaved={(saved) => {
+            setAddOpen(false);
+            // If the row was written for another day, jump the view to it so the
+            // supervisor sees what they just created rather than an unchanged list.
+            if (saved.date !== date) { setSelected(new Set()); setDate(saved.date); } else load();
+          }}
+        />
+      )}
 
       <ConfirmModal
         open={bulkOpen}

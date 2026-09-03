@@ -26,3 +26,4 @@ export { ProgressBar } from './ProgressBar.js';
 export { ProductTag } from './ProductTag.js';
 export { AppLauncher } from './AppLauncher.js';
 export { useEscapeClose, useSearchShortcut, useListNav } from './hooks.js';
+export { AddAttendanceModal } from './AddAttendanceModal.js';

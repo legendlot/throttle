@@ -10,9 +10,9 @@
    params and business rules unchanged; chrome only.
    ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth } from '@throttle/auth';
+import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, Modal, Spinner, useToast } from '@throttle/ui';
+import { AddAttendanceModal, ConfirmModal, Modal, Spinner, useToast } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import {
@@ -196,6 +196,9 @@ export default function ManpowerPage() {
   }, []);
 
   const canManageFloor = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve);
+  // Manual attendance add is payroll input (RULE-COST-001) and is gated on its OWN key —
+  // canManageFloor above is far wider than the people who may write an attendance row.
+  const canAddAttendance = hasPermission(perms, 'attendance_manage');
 
   useEffect(() => {
     if (!session || !canManageFloor) return;
@@ -241,7 +244,7 @@ export default function ManpowerPage() {
       </div>
 
       {activeTab === 'live'        && <LiveViewTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} canAddAttendance={canAddAttendance} operators={allOperators} />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
@@ -532,7 +535,7 @@ function FlatSection({ label, accent, rows, sub }) {
 // AttendanceTab — daily clock-in/out view with close-shift action.
 // Worker: getOperatorAttendance + closeAttendanceShift (canManageFloor gate).
 // ═══════════════════════════════════════════════════════════════════════════
-function AttendanceTab({ session, canManageFloor, operators, team }) {
+function AttendanceTab({ session, canManageFloor, canAddAttendance, operators, team }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [rows, setRows] = useState([]);
@@ -543,6 +546,7 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [savingStatus, setSavingStatus] = useState({}); // attendance_id → bool (day_status save in flight)
+  const [addOpen, setAddOpen] = useState(false);
 
   // employee_id lookup — attendance rows don't include it.
   const opMap = useMemo(() => {
@@ -704,6 +708,12 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
               Close {openVisible.length} open
             </button>
           )}
+          {canAddAttendance && (
+            <button style={smallGhost} onClick={() => setAddOpen(true)} disabled={loading}
+              title="Manually add an attendance row (operator outside every shift window)">
+              <Icon name="clock" size={13} /> Add attendance
+            </button>
+          )}
           <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
             <Icon name="undo" size={13} /> Refresh
           </button>
@@ -828,6 +838,23 @@ function AttendanceTab({ session, canManageFloor, operators, team }) {
           </div>
         )}
       </Panel>
+
+      {/* Shared with Depot + Garage (packages/ui) — a payroll-write form kept in one place. */}
+      {addOpen && (
+        <AddAttendanceModal
+          operators={operators}
+          team={team}
+          defaultDate={date}
+          onClose={() => setAddOpen(false)}
+          onSubmit={async (data) => (await workerFetch('addAttendanceRow', { data }, session))?.data || {}}
+          onSaved={(saved) => {
+            setAddOpen(false);
+            // If the row was written for another day, jump the view to it so the
+            // supervisor sees what they just created rather than an unchanged list.
+            if (saved.date !== date) setDate(saved.date); else load();
+          }}
+        />
+      )}
 
       <ConfirmModal
         open={bulkOpen}
