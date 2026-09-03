@@ -501,9 +501,16 @@ export default function JourneysPage() {
 
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
-  // Read live (review M12): render ONLY while test mode is on or unknown (settings still
-  // loading, or the fetch failed) — never hardcoded, and unknown fails toward showing it.
-  const gateBanner = settings?.test_mode === false ? null : (
+  // Read live (review M12): render ONLY while test mode is on or unknown (the fetch failed)
+  // — never hardcoded, and unknown still fails toward SHOWING it.
+  // ⚠️ S337: `loading` added to the test, and it is NOT a loosening of that fail-safe. Before
+  // this, "unknown" included the ordinary first paint, so every visit flashed "Relay must not
+  // send to real customers until sign-off" for ~4s while settings loaded — a false statement
+  // (test_mode has been false for months and Relay sends at scale) shown on every page load,
+  // which is how a real control gets read as noise. A FAILED fetch still leaves loading=false
+  // with settings=null and still shows the banner, so the only case that changed is the one
+  // where we simply do not know YET.
+  const gateBanner = (loading || settings?.test_mode === false) ? null : (
     <div className="info-bar" style={{ background: 'rgba(242,205,26,.07)', borderColor: 'var(--accent-bd)' }}>
       <AlertTriangle size={16} style={{ color: 'var(--accent)' }} />
       <span><strong>Internal testing only.</strong> Relay must not send to real customers until sign-off. Validate with an internal-staff segment first.</span>

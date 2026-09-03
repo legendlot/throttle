@@ -122,7 +122,7 @@ function mapCustomer(n) {
   }
 
   return { identifiers: idents, display_name: first || full || null,
-    city: n.defaultAddress?.city || null, locale: null, attributes: attrs, consent };
+    city: n.defaultAddress?.city || null, attributes: attrs, consent };
 }
 
 // ── webhook (REST JSON) mappers ──────────────────────────────────────────────
@@ -177,7 +177,7 @@ function mapCustomerRest(c) {
     }
   }
   return { identifiers: idents, display_name: first || full || null,
-    city: c.default_address?.city || null, locale: null, attributes: attrs, consent };
+    city: c.default_address?.city || null, attributes: attrs, consent };
 }
 
 // Identifiers from an order/checkout contact block (weaker is_verified than a

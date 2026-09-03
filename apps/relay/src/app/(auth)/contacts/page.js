@@ -348,7 +348,7 @@ export default function ContactsPage() {
           <div className="po-head-l">
             <Btn onClick={() => { setView('list'); setDetail(null); }}><ArrowLeft size={14} /> Back to contacts</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{p.display_name || 'Contact'}</span>
-            {(p.city || p.locale) && <Badge label={[p.city, p.locale].filter(Boolean).join(' · ')} tone="gray" />}
+            {p.city && <Badge label={p.city} tone="gray" />}
           </div>
           <div className="po-head-r">
             <Btn onClick={() => loadDetail(p.id)} disabled={detailLoading}><RefreshCw size={14} /> Refresh</Btn>

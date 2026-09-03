@@ -97,11 +97,15 @@ const OPS_BY_TYPE = {
 const DATE_OPS = ['before_days', 'within_days'];
 
 // Attributes that exist in the picker but resolve to NULL on every profile — measured
-// 2026-08-15. `first` was never a real attribute at all, and `locale` is a real column that
-// is empty on all 180,713 rows. Both match nobody in any operator, exactly like the
-// `email_clicked` event the header comment above records. Kept as a NAMED list rather than
-// silently dropped, so the warning can say WHY instead of the row just looking fine.
-const EMPTY_ATTRS = { first: 'is not a real attribute', locale: 'is empty on every profile' };
+// 2026-08-15. `first` was never a real attribute at all. Such rows match nobody in any
+// operator, exactly like the `email_clicked` event the header comment above records. Kept as a
+// NAMED list rather than silently dropped, so the warning can say WHY instead of the row just
+// looking fine.
+// ⚠️ `locale` was the second entry and is GONE as of S337 (2026-09-03) — the column itself was
+// dropped (migration 0061) rather than kept as a permanent special-case: it was non-null on 0 of
+// 217,136 profiles and both Shopify mappers hardcoded `locale: null`, so no backfill could ever
+// have survived a sync. Do not re-add it here; there is no column to warn about.
+const EMPTY_ATTRS = { first: 'is not a real attribute' };
 
 // ── ABSENT IS NOT ZERO, and on this data most profiles are absent ─────────────────────────────
 //
@@ -122,8 +126,8 @@ const EMPTY_ATTRS = { first: 'is not a real attribute', locale: 'is empty on eve
 //   SELECT k, count(*) FROM comms.profiles p,
 //     LATERAL jsonb_object_keys(coalesce(p.attributes,'{}'::jsonb)) k GROUP BY k;
 // Re-measure before editing — a wrong figure here either cries wolf or misses the case.
-// Only `attributes` keys are listed; display_name/city/locale are promoted COLUMNS and are not
-// resolved through this path.
+// Only `attributes` keys are listed; display_name/city are promoted COLUMNS and are not
+// resolved through this path. (`locale` was a third such column, dropped S337.)
 const ATTR_COVERAGE = {
   lifetime_orders: 47.0,
   total_spent: 47.0,

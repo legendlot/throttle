@@ -699,6 +699,13 @@ async function processQueueMessage(env, body) {
   // RPC per send, so the cap still holds exactly; gate.js's two module-level caches are
   // read-mostly with a TTL, so the worst case is a few duplicate settings fetches on a cold
   // cache; and send() keeps all per-send state on its own opts object.
+  // ⚠️ EVERY JUSTIFICATION IN THE NOTE ABOVE IS A WHATSAPP JUSTIFICATION (Meta 131048/130429,
+  // per-number throughput, Supabase capacity). This pool is CHANNEL-AGNOSTIC and email's vendor
+  // ceiling is two orders of magnitude tighter — Resend allows 10 req/s — so "we have never once
+  // been rate-limited" was true of WhatsApp and false of email: 2,556 emails were lost to 429s
+  // across three campaign days in August (S337). Email is now paced + retried inside
+  // `adapters/email.js`, which is where a PER-CHANNEL limit belongs — do not encode one here.
+  // Before raising this number, ask which channel's ceiling you have actually checked.
   const SEND_CONCURRENCY = 8;
   let pageErrors = 0;
   // ⚠️ The pool works a FILTERED COPY; `recs` itself must stay untouched — the continuation

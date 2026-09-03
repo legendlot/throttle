@@ -2,6 +2,40 @@
 // Contract: send(rendered,env) → {provider_message_id,status,raw};
 //           parseStatusWebhook(payload) → [{provider_message_id,canonical_status,at,reason}].
 
+// ── Resend rate limiting (S337) ────────────────────────────────────────────────────────────
+// ⛔ RESEND ALLOWS 10 REQUESTS/SECOND AND WE HAD NO PACING AT ALL, so campaign fan-out simply
+// outran it. Measured 2026-09-03: **2,556 emails were never sent** across three campaign days
+// (22 Aug 1,209 · 23 Aug 633 · 26 Aug 714), every one failing with Resend's
+// "Too many requests. You can only make 10 requests per second." — one per distinct address,
+// i.e. 2,556 customers silently received nothing while the campaign reported itself sent.
+//
+// ⚠️ WHY IT WAS MISSED: campaigns.js's SEND_CONCURRENCY was tuned entirely against WHATSAPP
+// constraints — the long note there reasons about Meta 131048/130429, per-number throughput and
+// Supabase capacity, and concludes "we have never once been rate-limited". That is true OF
+// WHATSAPP. Email rides the same pool with a vendor ceiling two orders of magnitude tighter, and
+// nothing in that analysis was ever re-run for it. A per-channel limit belongs in the channel
+// adapter, not in a shared pool constant — which is why the fix lives here and protects EVERY
+// email path (campaigns, journeys, transactional, test sends), not just the campaign fan-out.
+//
+// Pacing is per-isolate. The broadcast consumer is max_batch_size=1 and self-chains, so campaign
+// pages run one isolate at a time and this is the dominant case; concurrent journey/transactional
+// isolates can still collectively exceed 10/s, which is what the 429 retry below is for.
+const RESEND_MIN_INTERVAL_MS = 120;      // ~8.3/s — deliberate headroom under the 10/s ceiling
+const RESEND_MAX_RETRIES = 3;
+let nextSlotAt = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Reserve the next send slot. Claiming `nextSlotAt` BEFORE awaiting is what makes this work under
+// concurrency: every caller takes a distinct slot at claim time, so N concurrent senders serialise
+// into an evenly spaced queue rather than all sleeping the same interval and firing together.
+async function paceResend() {
+  const now = Date.now();
+  const at = Math.max(now, nextSlotAt);
+  nextSlotAt = at + RESEND_MIN_INTERVAL_MS;
+  if (at > now) await sleep(at - now);
+}
+
 async function send(rendered, env) {
   const body = {
     from: rendered.from,                    // "Legend of Toys <hello@comms.legendoftoys.com>"
@@ -18,18 +52,32 @@ async function send(rendered, env) {
     };
   }
   let res, data;
-  try {
-    res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    data = await res.json().catch(() => ({}));
-  } catch (e) {
-    // A network failure must surface as a failed RESULT — a throw here escapes send() with no
-    // messages row and (pre-Task-1) a permanently burned dedup key (review H2).
-    return { provider_message_id: null, status: 'failed',
-             reason: `resend_network:${String(e?.message || e).slice(0, 140)}`, raw: null };
+  for (let attempt = 0; ; attempt++) {
+    await paceResend();
+    try {
+      res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (e) {
+      // A network failure must surface as a failed RESULT — a throw here escapes send() with no
+      // messages row and (pre-Task-1) a permanently burned dedup key (review H2).
+      return { provider_message_id: null, status: 'failed',
+               reason: `resend_network:${String(e?.message || e).slice(0, 140)}`, raw: null };
+    }
+    // 429 is RETRYABLE and used to be recorded as a permanent failure — that is how 2,556 sends
+    // became 2,556 customers who got nothing. Retry a bounded number of times, honouring
+    // Retry-After when Resend sends it, then fall through and report the failure honestly.
+    if (res.status !== 429 || attempt >= RESEND_MAX_RETRIES) break;
+    const ra = Number(res.headers.get('retry-after'));
+    // Exponential backoff when the header is absent/garbage; capped so one recipient can never
+    // stall a whole campaign page inside the invocation budget.
+    const waitMs = Number.isFinite(ra) && ra > 0
+      ? Math.min(ra * 1000, 5000)
+      : Math.min(250 * (2 ** attempt), 2000);
+    await sleep(waitMs);
   }
   return {
     provider_message_id: data?.id || null,
