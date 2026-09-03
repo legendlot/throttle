@@ -8,7 +8,7 @@
 </div>
 
 <h2 class="sec">Three tabs</h2>
-<p><strong>Tickets</strong> shows total cases and the three cost lines (return logistics, replacement units, refund payouts), a monthly trend chart coloured by outcome, and breakdowns by product, platform and agent (with each agent&rsquo;s average days-to-close). <strong>Calls</strong> shows total, answered and missed calls, answer rate and average duration, with breakdowns by department, account, direction and agent, plus an hourly distribution. <strong>Agents</strong> is the conversation report: per-agent queries, replies, closures and response times across every channel.</p>
+<p><strong>Tickets</strong> shows total cases and the three cost lines (return logistics, replacement units, refund payouts), a monthly trend chart coloured by outcome, and a breakdown by product, platform and agent. The agent table&rsquo;s first column is <strong>Raised</strong>, not the old &ldquo;Total&rdquo;. <strong>Calls</strong> shows total inbound calls, <strong>Reached an agent</strong> and <strong>Didn&rsquo;t reach an agent</strong>, an <strong>Inbound answer rate</strong>, and average duration, with breakdowns by department, account, direction and agent, plus an hourly distribution. <strong>Agents</strong> is the conversation report: a <strong>Queries</strong> KPI card sits above a per-agent table of <strong>Assigned</strong>, <strong>Handled</strong> and <strong>Open</strong>, plus replies, closures and response times across every channel.</p>
 <p>On the Agents tab, hover any column heading (dotted underline) or summary card for its exact definition &mdash; the wording was agreed with the CS team, so what you read is what the number means.</p>
 <p>The Agents tab has a <strong>Business hours only</strong> tickbox, and it is <strong>on by default</strong>: response and resolution clocks run only during each agent&rsquo;s own rostered shift, so overnight and days off are not counted against anyone. Untick it for the around-the-clock view &mdash; the same figures with the clock never stopping &mdash; which is the customer&rsquo;s experience of the wait rather than the agent&rsquo;s. The basis in use is named under each time card and in the CSV export.</p>
 
@@ -16,6 +16,22 @@
   <div class="c-title">&#9888; Resolution changed meaning on 24 August 2026</div>
   <p><strong>Resolution</strong> is now <em>Resolved &divide; Queries</em>: conversations genuinely resolved, as a share of queries raised. It previously counted <em>every</em> closure &mdash; including spam and duplicates &mdash; which overstated the rate by roughly three times. If you compare against a figure from before this date, expect a sharp drop; the earlier number was the inflated one. The old closure-based series still appears in the CSV export as &ldquo;Closed rate %&rdquo;.</p>
 </div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Queries column removed from the Agents table</div>
+  <p>The per-agent table on the Agents tab no longer has a <strong>Queries</strong> column &mdash; <strong>Assigned</strong>, <strong>Handled</strong> and <strong>Open</strong> remain. The <strong>Queries</strong> KPI card above the table stays: Resolution rate and Resolve rate still divide by it.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">Raised can be lower than Closed, and that is fine</div>
+  <p>On the Tickets tab, the agent table&rsquo;s <strong>Raised</strong> column counts tickets raised in the range and assigned to that agent; <strong>Closed</strong> counts tickets they closed in the range, whenever those were originally raised. An agent clearing older backlog closes more than was raised to them in the same window &mdash; that is not a fault, it is how the two columns are defined.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; &ldquo;Missed&rdquo; is now &ldquo;Didn&rsquo;t reach an agent&rdquo;</div>
+  <p>The Calls tab&rsquo;s <strong>Answered</strong> and <strong>Missed</strong> cards are now <strong>Reached an agent</strong> and <strong>Didn&rsquo;t reach an agent</strong> (both inbound), alongside a new <strong>Inbound answer rate</strong>. The old &ldquo;Missed&rdquo; figure was wrong for the MyOperator era: that system recorded a call as missed in one rare case only, so it showed 45 missed calls for the whole period while 4,330 inbound calls never reached anybody. <strong>Didn&rsquo;t reach an agent</strong> also includes people who hung up in the phone menu before routing, so it is not all calls the team failed to answer.</p>
+</div>
+
 <p>Set the From and To dates at the top; changing either refetches immediately.</p>
 
 <h3>What the resolution time is made of</h3>
@@ -38,7 +54,8 @@
 
 <div class="callout warn">
   <div class="c-title">&#9888; Closing discipline is usually the bigger half</div>
-  <p>Measured across 1,780 conversations closed in the week to 25 August 2026: of <strong>42.7 hours</strong> to close, only <strong>4.3 hours (10%)</strong> was waiting on the customer, while <strong>28.1 hours (66%)</strong> was waiting to be closed. So a long &ldquo;time to close&rdquo; is usually not customers being slow &mdash; it is conversations finishing and staying open. Closing promptly is what moves this number.</p>
+  <p>Measured across <strong>7,118 conversations</strong> in the settled 30-day window (24&times;7 basis, measured 2026-09-03): of <strong>51.7 hours</strong> to close, <strong>12.9 hours (25%)</strong> was waiting on the customer, <strong>22.1 hours (43%)</strong> was waiting to be closed, and <strong>16.7 hours (32%)</strong> was active handling. So a long &ldquo;time to close&rdquo; is still usually not customers being slow &mdash; it is conversations finishing and staying open, which remains the largest single component and still runs well above the customer-wait share. Closing promptly is what moves this number.</p>
+  <p>An earlier reading of this cohort (creation-dated, conversations closed in the week to 25 August 2026, showing 66%) has been superseded: it was taken while that cohort was still maturing and understated waiting-on-customer while overstating waiting-to-be-closed. Use the 30-day figures above.</p>
 </div>
 
 <div class="callout">

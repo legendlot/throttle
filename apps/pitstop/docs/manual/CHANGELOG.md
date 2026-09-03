@@ -3,6 +3,23 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.0] - 2026-09-03
+### Changed
+- **Support Analytics** — Filters go from five to six: added **Agent** (with **Unassigned** as
+  its own option). Added the **Trend: monthly / Trend: weekly** control above the two trend
+  charts; weekly buckets are week-commencing Monday and the choice carries through the panel
+  headings, the table's first column, the chart axis and the CSV export.
+- **Reports** — Tickets tab: the agent table's first column is now **Raised**, not **Total**,
+  and a new callout explains why Closed can legitimately exceed it. Calls tab: **Answered** /
+  **Missed** are now **Reached an agent** / **Didn't reach an agent**, plus a new **Inbound
+  answer rate**; a callout explains the old Missed figure undercounted badly in the MyOperator
+  era. Agents tab: the **Queries** column is gone from the per-agent table (Assigned, Handled,
+  Open remain); the **Queries** KPI card above the table is unchanged.
+- **Closing discipline** callout re-measured on a settled 30-day window (7,118 conversations,
+  24x7 basis): 51.7h to close, 12.9h (25%) on customer, 22.1h (43%) waiting to be closed, 16.7h
+  (32%) active handling. Supersedes the 25 August week-to-date figures, which were taken before
+  that cohort had matured.
+
 ## [1.18.0] - 2026-09-03
 ### Added
 - **Support Analytics** — a new chapter for `/analytics`, live since 2026-07-16 but never
