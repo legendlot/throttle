@@ -799,7 +799,7 @@ export default {
         releaseUnworkableThreads(env)
           .then(r => { if (r?.released) console.warn('[release-unworkable]', JSON.stringify(r)); else console.log('[release-unworkable]', JSON.stringify(r)); })
           .catch(e => console.error('[release-unworkable] error', e))
-          .then(() => retroAssignUnownedThreads(env))
+          .then(() => retroAssignUnownedThreads(env, morningDistributionCap()))
           .then(
             r => console.log('[retro-assign]', JSON.stringify(r)),
             e => console.error('[retro-assign] error', e),
@@ -7414,7 +7414,38 @@ async function releaseUnworkableThreads(env) {
   return { ok: true, checked: open.data.length, released: orphans.length, by_former_owner: byOwner, scan_capped: open.data.length >= SCAN_CAP };
 }
 
-async function retroAssignUnownedThreads(env) {
+// MORNING DISTRIBUTION (Pruthvi's ask, Afshaan's call 2026-09-03): "conversations received
+// during OOO hours can then be equally distributed among the agents the following day once
+// everyone is back."
+//
+// ⭐ THE EQUAL-DISTRIBUTION PART ALREADY EXISTED — `cs_autoassign_thread` picks the LEAST-LOADED
+// eligible agent, so anything it hands out is balanced by construction. What was missing is
+// THROUGHPUT AND TIMING: the sweep does 10 threads per 10-minute tick (60/hour) against ~97
+// overnight threads, so the backlog trickled out across the morning, and in the meantime agents
+// claimed threads themselves — `sendWaReplyViaRelay` stamps `assigned_agent_id` when an agent
+// replies, so whoever opens a thread first owns it.
+//
+// That self-selection is what the measurement shows. Overnight threads, 14 days to 2026-09-03,
+// 731 of them: Dhiraj 31.7% · Sunitha 30.0% · Pruthvi 14.2% · Kavya 13.0% · Maria 2.2% ·
+// Bhavani 0.3% · never assigned 8.6%. An even split across the five working agents is ~20%.
+// Median time to an owner was 13.9h.
+//
+// So the fix is to get the backlog OUT before the picking starts, not to write a new balancer.
+// Between 10:00 and 12:00 IST the per-tick cap rises so the overnight queue is distributed in
+// the first ticks after the roster opens. Window not single-tick: agents must be present for the
+// RPC to place anything, and they do not all log in at 10:00 sharp.
+const MORNING_DISTRIBUTION_START_MIN = 600;    // 10:00 IST — earliest shift start on the roster
+const MORNING_DISTRIBUTION_END_MIN   = 720;    // 12:00 IST
+const MORNING_ASSIGN_PER_RUN = 60;
+
+function morningDistributionCap() {
+  const { min } = istNow();
+  return (min >= MORNING_DISTRIBUTION_START_MIN && min < MORNING_DISTRIBUTION_END_MIN)
+    ? MORNING_ASSIGN_PER_RUN
+    : RETRO_ASSIGN_PER_RUN;
+}
+
+async function retroAssignUnownedThreads(env, perRun = RETRO_ASSIGN_PER_RUN) {
   // ⚠️ Only sweep channels the router can actually serve. `cs_autoassign_thread` resolves agents
   // through `cs_routing_config`, which has rows for instagram / messenger / whatsapp and NONE for
   // email — so an email thread ALWAYS returns null. Without this filter the sweep picks
@@ -7435,7 +7466,7 @@ async function retroAssignUnownedThreads(env) {
     + `and(last_message_at.is.null,created_at.gte.${encodeURIComponent(cutoff)}))`
     + `&select=id,channel,last_message_at,created_at`
     + `&order=last_message_at.desc.nullslast,created_at.desc`
-    + `&limit=${RETRO_ASSIGN_PER_RUN}`;
+    + `&limit=${perRun}`;
   const r = await sb(q, env);
   if (!r.ok || !Array.isArray(r.data)) {
     return { ok: false, reason: JSON.stringify(r.data)?.slice(0, 200) };
@@ -7458,7 +7489,8 @@ async function retroAssignUnownedThreads(env) {
   // agent claimed between this sweep's SELECT and its RPC call comes back as a uuid the sweep did
   // not hand out. Calling that "assigned" would over-report the sweep's own effect by the number
   // of human claims in the window. The count is honest about what it measures instead.
-  return { ok: true, candidates: threads.length, owned_after: owned, skipped };
+  return { ok: true, candidates: threads.length, owned_after: owned, skipped,
+           per_run: perRun, morning: perRun !== RETRO_ASSIGN_PER_RUN };
 }
 
 // ── Relay sending-pipeline watchdog (S318) ───────────────────────────────────
