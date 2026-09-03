@@ -3097,11 +3097,18 @@ export default {
       // carries no CORS requirement of its own.
       if (url.pathname === '/f/confirm' && request.method === 'GET') {
         const r = await FORMS.handleFormConfirm(env, url.searchParams.get('t'));
-        const msg = r.ok ? 'You are subscribed. Thank you!' : 'This confirmation link is not valid.';
+        // ⚠️ A TRANSIENT FAILURE IS NOT AN INVALID LINK, and telling the customer it is
+        // guarantees they never click again (S342). `confirm_failed` means the DB write did
+        // not land and the claim was rolled back — the link is still good and clicking again
+        // is exactly the right action, so the copy must say so.
+        const retryable = !r.ok && r.error === 'confirm_failed';
+        const msg = r.ok ? 'You are subscribed. Thank you!'
+          : retryable ? 'Something went wrong on our side — please click the link again.'
+            : 'This confirmation link is not valid.';
         return new Response(
           `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">` +
           `<body style="font:16px system-ui;padding:3rem;text-align:center">${msg}</body>`,
-          { status: r.ok ? 200 : 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+          { status: r.ok ? 200 : (retryable ? 503 : 400), headers: { 'Content-Type': 'text/html; charset=utf-8' } });
       }
 
       // The widget script — a plain script-tag target, no auth, cacheable.

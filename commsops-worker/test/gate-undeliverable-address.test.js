@@ -101,7 +101,10 @@ const DELIVERABLE = [
     _clearSettingsCache();
     const g = await runGate({}, { profileId: 'P', channel: 'sms', purpose: 'utility',
       to: 'noemail@dvara.com' });
-    assert.notEqual(g.reason, 'undeliverable_address');
+    // Assert the POSITIVE, not merely "not that reason" — a negative assertion would stay
+    // green if a future change blocked SMS entirely for some unrelated reason.
+    assert.equal(g.pass, true);
+    assert.equal(g.reason, undefined);
   });
 
   A.sbComms = orig;

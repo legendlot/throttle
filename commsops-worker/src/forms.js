@@ -129,7 +129,10 @@ async function verifyTurnstile(env, token, ip) {
 async function hashIp(ip, env) {
   if (!ip) return null;
   const salt = env && env.FORM_IP_HASH_SALT;
-  if (!salt) return null;
+  // Log once rather than degrading in silence: with no salt we store nothing, which on the
+  // wire is indistinguishable from "no IP was sent". A fumbled rotation or a fresh environment
+  // would otherwise kill abuse triage with no signal anywhere.
+  if (!salt) { console.log('form_ip_hash_salt_missing', JSON.stringify({ had_ip: true })); return null; }
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${ip}`));
   return [...new Uint8Array(buf)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -230,7 +233,7 @@ async function handleFormSubmit(env, request) {
       at: new Date().toISOString(),
     };
     for (const channel of v.channels) {
-      // `service`, not `marketing`: gate.js:181 — bypasses consent + frequency cap, RESPECTS
+      // `service`, not `marketing`: gate.js §S274 'service' — bypasses consent + frequency cap, RESPECTS
       // quiet hours and suppression. Exactly the semantics a requested alert wants.
       await recordConsent(env, {
         profile_id: profileId, channel, purpose: 'service', state: 'opted_in',
@@ -311,13 +314,20 @@ async function handleFormConfirm(env, token) {
   if (!Array.isArray(claim.data) || claim.data.length === 0)
     return { ok: true, confirmed: true, already: true };
 
-  // ⚠️ RESIDUAL, AND IT IS THE SAME DEFECT AS (e) IN THE SP1 REVIEW — not a new one introduced
-  // by this reordering. Claiming first means a failure in the consent loop below leaves the
-  // submission marked confirmed with consent missing, where the old order risked duplicate
-  // consent rows instead. This ordering is the better half of the trade (a duplicate opt-in
-  // row is invisible to `latestConsent` but pollutes the evidence log, and the window is now
-  // far narrower), but neither order is correct — only a transaction is. The genuine fix is
-  // the RPC tracked as capture-spine residual (e); when it lands, it subsumes this block.
+  // ⚠️ CLAIMING FIRST INTRODUCES A FAILURE THE OLD ORDER DID NOT HAVE, AND IT MUST BE UNDONE
+  // EXPLICITLY — this block is the undo. (Found by the S342 hostile review, which correctly
+  // rejected an earlier comment here claiming the reordering was simply "the better half of
+  // the trade". It is not, unless the rollback below exists.)
+  //   old order: crash between the consent writes and the PATCH → `confirmed_at` stays NULL,
+  //              so the customer's next click re-runs the whole thing. Self-healing, at the
+  //              cost of a duplicate opt-in row.
+  //   new order: crash between the claim and the consent writes → `confirmed_at` is SET with
+  //              no consent recorded, the next click short-circuits on `already`, and the
+  //              customer is told "You are subscribed" while nothing evidences it. Consent is
+  //              lost silently and permanently — strictly worse than a duplicate row.
+  // So: on ANY consent-write failure, release the claim. The link stays clickable and the
+  // customer can complete the enrolment. Only a transaction removes the window entirely —
+  // that is capture-spine residual (e), which subsumes this whole block when it lands.
   const evidence = {
     form: sub.forms?.slug || null, source_url: sub.source_url || null,
     consent_copy_version: sub.forms?.consent_copy_version ?? null,
@@ -335,11 +345,28 @@ async function handleFormConfirm(env, token) {
   const channels = stored.length
     ? [...new Set(stored)]
     : [sub.payload?.email && 'email', sub.payload?.phone && 'whatsapp'].filter(Boolean);
+  // ⚠️ The result is CHECKED, not discarded. `recordConsent` returns `{ok:false}` on any 4xx/5xx
+  // rather than throwing, so a bare `await` here would report "You are subscribed" on a write
+  // that never landed — below this file's own bar, which already logs the lesser
+  // `form_identifier_attach_failed` on the submit path.
+  let consentOk = true;
   for (const channel of channels) {
-    await recordConsent(env, {
+    const cr = A.checkWrite('form_consent_write_failed', await recordConsent(env, {
       profile_id: sub.profile_id, channel, purpose: 'marketing', state: 'opted_in',
       source: `website_form:${sub.forms?.slug || 'unknown'}`, evidence, captured_at: now,
-    });
+    }), { submission_id: sub.id, form: sub.forms?.slug || null, channel });
+    if (!cr || cr.ok !== true) consentOk = false;
+  }
+
+  if (!consentOk) {
+    // Release the claim (see the note above). Conditioned on `confirmed_at=eq.<our timestamp>`
+    // so this can only ever unclaim OUR OWN stamp — never a later, successful confirm that
+    // raced in behind us.
+    A.checkWrite('form_confirm_rollback_failed', await A.sbComms(
+      `/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}&confirmed_at=eq.${A.enc(now)}`, env, {
+        method: 'PATCH', body: JSON.stringify({ confirmed_at: null }),
+      }), { submission_id: sub.id });
+    return { ok: false, error: 'confirm_failed', status: 502 };
   }
 
   // (no PATCH here any more — the conditional claim above already stamped `confirmed_at`)

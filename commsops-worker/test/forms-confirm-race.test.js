@@ -87,6 +87,44 @@ function makeDb({ claimedAlready = false } = {}) {
     assert.equal(consentWrites, 0, 'must not record consent it cannot evidence');
   });
 
+  // ⭐ THE CASE THE FIRST CUT OF THIS FILE MISSED, and the S342 hostile review caught:
+  // it tested a failed CLAIM but never a failed CONSENT WRITE. Claiming the row first means a
+  // failure after the claim leaves `confirmed_at` set with no consent — and the customer's
+  // next click then short-circuits on `already` and tells them they are subscribed. The old
+  // ordering was self-healing here; this ordering only is if the claim is released.
+  await t('consent-write failure RELEASES the claim, so the link stays clickable', async () => {
+    const patches = [];
+    A.sbComms = async (path, env, opts) => {
+      if (path.startsWith('/rest/v1/form_submissions?confirm_token=')) return { ok: true, data: [SUB] };
+      if (path.startsWith('/rest/v1/form_submissions?id=') && opts?.method === 'PATCH') {
+        patches.push(JSON.parse(opts.body));
+        return { ok: true, data: [{ ...SUB }] };
+      }
+      if (path.startsWith('/rest/v1/consent')) return { ok: false, status: 500, data: null };
+      return { ok: true, data: [] };
+    };
+    const r = await handleFormConfirm({}, 'tok');
+    assert.equal(r.ok, false, 'must not report success when consent was not written');
+    assert.equal(r.error, 'confirm_failed');
+    assert.equal(patches.length, 2, 'expected a claim PATCH and a rollback PATCH');
+    assert.equal(patches[1].confirmed_at, null, 'the claim must be rolled back to NULL');
+  });
+
+  await t('the rollback can only unclaim OUR OWN stamp, never a later confirm', async () => {
+    const paths = [];
+    A.sbComms = async (path, env, opts) => {
+      if (path.startsWith('/rest/v1/form_submissions?confirm_token=')) return { ok: true, data: [SUB] };
+      if (path.startsWith('/rest/v1/form_submissions?id=') && opts?.method === 'PATCH') {
+        paths.push(path); return { ok: true, data: [{ ...SUB }] };
+      }
+      if (path.startsWith('/rest/v1/consent')) return { ok: false, status: 500, data: null };
+      return { ok: true, data: [] };
+    };
+    await handleFormConfirm({}, 'tok');
+    assert.ok(paths[1].includes('confirmed_at=eq.'),
+      `rollback was unconditional and could clobber a later confirm: ${paths[1]}`);
+  });
+
   // ── (b) the salt ───────────────────────────────────────────────────────────
   // Driven through the public submit path, since hashIp is private.
   // ⚠️ An earlier cut of these two guarded every assertion behind `if (stored)` — and `stored`

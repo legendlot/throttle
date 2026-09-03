@@ -98,10 +98,20 @@ function resolveQuietWindow(rows, channel, settings) {
 // ── Undeliverable email shapes (S342) ───────────────────────────────────────────
 // ⚠️ THE MEASUREMENT THAT JUSTIFIES THIS, and the one to re-run before widening it:
 // over ALL email history these three rules matched 2,684 send attempts, of which
-// **0 were ever delivered** and 2,540 bounced (measured 2026-09-03). Against the last real
-// sending window (22–26 Aug) they are 2,524 of 4,602 bounces — **54.85%** — so refusing them
-// takes the bounce rate from 14.30% to 7.04% on the same window (denominator = 32,187
-// delivery attempts, i.e. rows that actually left; `failed` rows never did and are excluded).
+// **0 ever reached delivered, opened or clicked** and 2,540 bounced (measured 2026-09-03).
+// Against the last real sending window (22–26 Aug) they are 2,525 of 4,602 bounces —
+// **54.87%** — so refusing them takes the bounce rate from 14.30% to 7.04% on the same window
+// (2,077 residual bounces / 29,517 residual attempts).
+//
+// ⚠️ DENOMINATOR, because there are two and they differ by one row: attempts here means
+// `status IN ('delivered','bounced','opened','sent','clicked')` = **32,186**, NOT
+// `sent_at IS NOT NULL` = 32,187. The extra row is a `failed` one that carries a `sent_at`,
+// so "sent_at is not null" does NOT mean "it left". Re-measure with the status list.
+// ⚠️ And `status` is a RANKED single field (see test/status-rank.test.js): a delivered message
+// that was later opened reads `opened`, so counting only `status='delivered'` understates
+// delivery. Real-address delivery in-window is 92.47%, not the 90.36% a delivered-only count
+// gives. That grain error does not touch the safety claim above — the matched set is 0 across
+// delivered, opened AND clicked.
 // The residual 7.04% is real addresses bouncing and is NOT addressed here.
 //
 // ⛔ EVERY RULE HERE MUST BE STRUCTURAL, NEVER STATISTICAL. The bar for adding one is
@@ -129,7 +139,8 @@ function isUndeliverableEmail(to) {
   if (_RESERVED_TLDS.some((t) => domain.endsWith(t))) return true;
   // 2. Shopify's placeholder convention when a phone-only customer has no email: the local part
   //    is `noemail…` on an otherwise REAL domain (`noemail_ph_num_9198…@gmail.com`), so the
-  //    domain check above cannot catch it — 877 attempts, 0 delivered, 871 bounced.
+  //    domain check above cannot catch it — 878 attempts, 0 delivered, 872 bounced (the 877/871
+  //    first written here missed the bare `noemail@` local that `local === 'noemail'` catches).
   //    ⚠️ Deliberately NOT a bare `startsWith('noemail')`: that would also swallow a real
   //    `noemailer@…`, which is not undeliverable by construction and so fails this block's own
   //    bar. Anchoring to the separator costs nothing — measured 2026-09-03, the tight form

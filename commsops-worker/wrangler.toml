@@ -50,6 +50,12 @@ TURNSTILE_SITE_KEY = "0x4AAAAAAEk4E0k_n904j-jG"
 # RESEND_WEBHOOK_SECRET    (M5)
 # SLACK_WEBHOOK_ALERTS     (M9 — Slack Incoming Webhook → #relay-alerts; same convention as throttleops SLACK_WEBHOOK_OPS/_TEAM. Optional: alerts no-op if unset.)
 # TURNSTILE_SECRET         (S331 — Cloudflare Turnstile siteverify secret for the public /f/* capture surface. Its absence fails the challenge CLOSED, so an unset secret disables capture rather than opening it.)
+# FORM_IP_HASH_SALT        (S342 — keys the /f/* submission `ip_hash`. An unsalted SHA-256 of an IPv4 is
+#                           reversible by brute force (2^32 inputs), so this is what makes the column
+#                           non-reversible. ⚠️ Absence FAILS CLOSED AND SILENTLY: no hash is stored and the
+#                           row looks exactly like "no IP was sent" — forms.js logs `form_ip_hash_salt_missing`
+#                           so it is at least greppable. Rotating it makes old hashes incomparable with new
+#                           ones, which is acceptable for a triage hint but nothing may depend on stability.)
 
 # Broadcast fan-out (M6) — throttled campaign sends, respects the 50-subrequest limit.
 [[queues.producers]]
