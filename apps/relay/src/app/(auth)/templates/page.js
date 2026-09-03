@@ -671,6 +671,9 @@ function SmsEditor({ sms, setSms, variables, disabled, providerTemplateId, sessi
 export default function TemplatesPage() {
   // `choose` here is this page's own — the identifier it used to reference belonged to
   // RcsEditor, so the hardened delete path below threw ReferenceError (S322).
+  // S338: this component never called useConfirm(), so every `confirm({...})` below fell through to
+  // the NATIVE window.confirm with an object → "[object Object]" (seen live on Submit to Meta, 2026-09-03).
+  const confirm = useConfirm();
   const choose = useChoose();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
