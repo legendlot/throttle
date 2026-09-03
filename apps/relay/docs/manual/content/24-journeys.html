@@ -44,6 +44,10 @@
 
 <div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Deactivating a journey stops new enrolments <em>and</em> stops customers already inside it. It is a real stop, not a &ldquo;let the current ones finish&rdquo;. That is usually what you want in an emergency, but be aware that half-finished journeys will not resume if you switch it back on.</p></div>
 
+<h2 class="sec">Exclusions</h2>
+<p>A journey carries the same three exclusion rules a campaign does, set once in Settings for the whole journey: don&rsquo;t send to chosen segments, don&rsquo;t send to anyone already reached by chosen campaigns, and don&rsquo;t send to anyone contacted recently on the same channel. They are checked <em>each time a message is about to go out</em>, never when someone enrols, so a customer who receives a broadcast on day two of a five-day journey is held back from the steps that follow.</p>
+<p>A person the rules match is skipped for that message only &mdash; they stay in the journey and carry straight on to the next step, exactly as they would after any other skip. Nobody is ever removed from a journey by an exclusion.</p>
+
 <h2 class="sec">Quiet hours inside a journey</h2>
 <p>When a journey step lands in quiet hours, the message is held and retried at the boundary rather than dropped. A customer whose order ships at 23:00 gets the message in the morning, not never.</p>
 

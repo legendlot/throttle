@@ -12,6 +12,8 @@ const AL = require('./alerts.js');
 const LINKS = require('./links.js');
 const GATE = require('./gate.js');   // S268 — per-channel quiet window, so the park boundary
                                      // and the gate that produced the skip share one resolver
+const EX = require('./exclusions.js');   // S338b — the SAME exclusion block campaigns carry,
+                                        // read off comms.journeys' identically named columns
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -172,6 +174,26 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return { exitRules: Array.isArray(row.exit_rules) ? row.exit_rules : [], maxDuration: row.max_duration || '30 days' };
     });
     const expiresAt = new Date(Date.parse(enrolledAt || new Date().toISOString()) + (G.durationToMs(jcfg.maxDuration) || 2592000000)).toISOString();
+
+    // S338b — journey-level exclusions (segments · named campaigns · same-channel contacted-within-N
+    // hours), evaluated at SEND time per send step, NEVER at enrolment (decisions §S338b).
+    //
+    // Loaded LAZILY and memoized: a journey with no send step must not pay a select, and a journey
+    // with five send steps must not pay five. `step.do` is keyed by a CONSTANT name, so a Workflow
+    // replay is served from the cached result — the same reason load-journey-cfg is its own step.
+    let exclusionArgs = null;
+    const loadExclusions = async () => {
+      if (exclusionArgs) return exclusionArgs;
+      exclusionArgs = await step.do('load-journey-exclusions', async () => {
+        const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}` +
+          '&select=exclude_segment_ids,exclude_campaign_ids,exclude_contacted_hours&limit=1', env);
+        // Fail-soft to "no exclusions" exactly like load-journey-utm: exclusions are a courtesy
+        // filter, and an unreadable config must never strand or silently mute an enrolment.
+        if (!r.ok) { console.log('journey_exclusion_load_failed', journeyId, r.status); return EX.exclusionArgs({}); }
+        return EX.exclusionArgs(r.data?.[0] || {});
+      });
+      return exclusionArgs;
+    };
 
     // Register ambient exit-rule rows so an incoming customer event can find + wake this
     // parked instance (instance_id == enrolmentId). Idempotent upsert (unique index).
@@ -340,8 +362,16 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
-        const sendCtx = await ctxForSend(cur);
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, sendCtx, journeyName, journeyUtm));
+        // Exclusion check BEFORE the send (S338b). Skips this step with a logged reason; the
+        // enrolment continues to the next node — see the routing note below.
+        const excluded = await this.#excluded(env, step, s, profileId, enrolmentId, cur, await loadExclusions());
+        let res;
+        if (excluded) {
+          res = { status: 'skipped', reason: 'excluded' };
+        } else {
+          const sendCtx = await ctxForSend(cur);
+          res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, sendCtx, journeyName, journeyUtm));
+        }
         if (s.interactive) {
           // Interactive send (WA quick-reply buttons): after sending, park on the reply
           // event and route by which button was tapped (else no_reply on timeout). Inert
@@ -389,8 +419,15 @@ class JourneyWorkflow extends WorkflowEntrypoint {
               deferred = true;
             }
           }
-          const decision = G.resolveSendNext(s, finalRes, def);
-          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...finalRes, ...(deferred ? { deferred_from: 'quiet_hours' } : {}), on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
+          // An EXCLUSION always continues, whatever the step's own on_skip policy says (§S338b:
+          // "the enrolment CONTINUES to the next node — it does not end"). A step configured
+          // `on_skip: 'exit'` means "this message failing is fatal to the flow"; being held back
+          // by an audience rule is not that, and routing it through `exit` would end enrolments
+          // wholesale the first time someone set a 24h contacted-within window. Same logging and
+          // the same resolveSendNext continuation as every other skip — only the policy is pinned.
+          const routeStep = excluded ? { ...s, on_skip: 'continue' } : s;
+          const decision = G.resolveSendNext(routeStep, finalRes, def);
+          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...finalRes, ...(deferred ? { deferred_from: 'quiet_hours' } : {}), on_skip: routeStep.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
           if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
           cur = decision.next;
         }
@@ -415,6 +452,26 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       if (!cur) { await this.#end(env, step, enrolmentId, 'completed', null); return; }
     }
     await this.#end(env, step, enrolmentId, 'failed', cur);  // transition cap hit
+  }
+
+  // S338b — is this profile held back from THIS step by the journey's exclusion block?
+  // One shared predicate with campaigns (comms.campaign_excluded), so the two cannot drift; the
+  // channel is resolved the same way #doSend resolves it, since the contacted-within-N-hours rule
+  // is per channel and judging it on a different channel than the send would use is meaningless.
+  //
+  // ⚠️ FAILS OPEN — an unreadable check SENDS. Exclusions are a courtesy filter (don't re-hit
+  // someone we just messaged), NOT consent: consent, suppression and quiet hours all live in
+  // gate.js and all fail CLOSED there, and none of that is weakened by this. Failing closed here
+  // would instead silently drop legitimate journey sends every time the RPC hiccups — the exact
+  // silent-loss shape S276's skip rows exist to kill. The failure is logged, never swallowed.
+  async #excluded(env, step, s, profileId, enrolmentId, stepId, exArgs) {
+    if (!EX.hasExclusions(exArgs)) return false;   // no rules → no subrequest
+    return step.do(`excl:${stepId}`, async () => {
+      const r = await A.sbComms('/rest/v1/rpc/campaign_excluded', env, { method: 'POST',
+        body: JSON.stringify({ p_profile_id: profileId, p_channel: s.channel || 'email', ...exArgs }) });
+      if (!r.ok) { console.log('journey_exclusion_check_failed', enrolmentId, stepId, r.status); return false; }
+      return r.data === true;
+    });
   }
 
   // Resolve recipient + call the M5 send() spine. dedupKey makes a retried durable step idempotent.

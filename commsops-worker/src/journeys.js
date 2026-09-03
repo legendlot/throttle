@@ -152,6 +152,23 @@ async function compile(env, definition, journey) {
 }
 
 // Save = upsert journey header + (if definition changed) publish a NEW immutable version.
+// S338b — the journey's exclusion block, coerced server-side exactly as saveCampaign coerces a
+// campaign's (index.js): non-arrays become [], anything that is not a uuid string is DROPPED (a
+// junk id would make the RPC's `= ANY($2)` compare against garbage rather than error), and the
+// hours field is NULL unless it is a positive integer — a 0 or a stray '' means "rule off", never
+// "exclude anyone contacted in the last 0 hours". saveJourney is an ordinary authed API action
+// anyone can call directly, so the UI's own validation is not the guard.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && UUID_RE.test(x.trim())).map((x) => x.trim()) : []);
+const exclusionPatch = (b) => {
+  const hrs = Number(b.exclude_contacted_hours);
+  return {
+    exclude_segment_ids: uuidList(b.exclude_segment_ids),
+    exclude_campaign_ids: uuidList(b.exclude_campaign_ids),
+    exclude_contacted_hours: Number.isFinite(hrs) && hrs > 0 ? Math.round(hrs) : null,
+  };
+};
+
 async function saveJourney(env, body, userId) {
   const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status, exit_rules, max_duration, utm } = body;
   if (definition) {
@@ -166,6 +183,7 @@ async function saveJourney(env, body, userId) {
         reenrol_cooldown_hours: reenrol_cooldown_hours || null, status: 'draft', created_by: userId,
         exit_rules: Array.isArray(exit_rules) ? exit_rules : [],
         utm: sanitizeUtm(utm),
+        ...exclusionPatch(body),
         max_duration: max_duration || '30 days' }),
     });
     journeyId = ins.data?.[0]?.id;
@@ -180,6 +198,10 @@ async function saveJourney(env, body, userId) {
     if (exit_rules !== undefined) patch.exit_rules = Array.isArray(exit_rules) ? exit_rules : [];
     // nullable jsonb: an all-blank UI form sends null, which correctly means "inherit".
     if (utm !== undefined) patch.utm = sanitizeUtm(utm);
+    // The three exclusion columns move together — the UI always sends the whole block, and any
+    // absent/junk member coerces to "rule off" rather than being left at a stale prior value.
+    if (body.exclude_segment_ids !== undefined || body.exclude_campaign_ids !== undefined
+        || body.exclude_contacted_hours !== undefined) Object.assign(patch, exclusionPatch(body));
     if (max_duration !== undefined) patch.max_duration = max_duration || '30 days'; // coalesce: column is NOT NULL (a cleared field → default, never a 23502 that silently drops the whole PATCH)
     await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   }
@@ -380,4 +402,6 @@ async function enrol(env, { journeyId, profileId, eventId }) {
   return { ok: true, enrolment_id: enrolment.id };
 }
 
-module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol, sanitizeUtm };
+module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol, sanitizeUtm,
+  // S338b exclusions — exported for unit tests
+  exclusionPatch };

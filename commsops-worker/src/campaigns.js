@@ -9,6 +9,11 @@ const G = require('./gate.js');
 const { pickVariant } = require('./variants.js');
 const AL = require('./alerts.js');   // build-completion park alert (§9.14) — nobody is at a button there
 const R = require('./render.js');    // shared RCS→SMS fallback link contract (also send.js, index.js)
+// The three audience-exclusion rules a campaign may carry (S276), read straight off the row so
+// every caller (submit, send, fan-out, reach preview) uses the same values — a campaign past draft
+// is immutable, so these are frozen from submit onward exactly like segment/template. The reader
+// moved to exclusions.js in S338b, when journeys got the same block off identically named columns.
+const { exclusionArgs, hasExclusions } = require('./exclusions.js');
 
 // Recipients handled per consumer invocation (~8 subrequests each). Raised 12 → 36 → 75 on 2026-08-15,
 // alongside SEND_CONCURRENCY 5 → 12 (see the long note at the pool below for why that moved).
@@ -89,17 +94,6 @@ async function needsApproval(env, campaign, audienceCount) {
   return P.isMarketingSide(campaign.purpose)
       && s.approval_required_marketing !== false
       && Number(audienceCount || 0) > Number(s.approval_audience_threshold ?? 500);
-}
-
-// The three audience-exclusion rules a campaign may carry (S276). Read straight off the row so
-// every caller (submit, send, fan-out, reach preview) uses the same values — a campaign that is
-// past draft is immutable, so these are frozen from submit onward exactly like segment/template.
-function exclusionArgs(camp) {
-  return {
-    p_exclude_segments: Array.isArray(camp.exclude_segment_ids) ? camp.exclude_segment_ids : [],
-    p_exclude_campaigns: Array.isArray(camp.exclude_campaign_ids) ? camp.exclude_campaign_ids : [],
-    p_exclude_contacted_hours: camp.exclude_contacted_hours ?? null,
-  };
 }
 
 // ⚠️ Exclusion segments are read from comms.segment_members, which is materialized DELETE+INSERT
@@ -573,10 +567,8 @@ async function processQueueMessage(env, body) {
   // people); reconciliation counts distinct profiles, so duplicates are rare-path stats noise,
   // not a correctness problem.
   const exArgs = exclusionArgs(camp);
-  const hasExclusions = exArgs.p_exclude_segments.length > 0 || exArgs.p_exclude_campaigns.length > 0
-    || (exArgs.p_exclude_contacted_hours != null && exArgs.p_exclude_contacted_hours > 0);
   let excluded = new Set();
-  if (hasExclusions && recs.length) {
+  if (hasExclusions(exArgs) && recs.length) {
     const bx = await A.sbComms('/rest/v1/rpc/campaign_excluded_batch', env, {
       method: 'POST',
       body: JSON.stringify({ p_profile_ids: recs.map((x) => x.profile_id), p_channel: camp.channel,
@@ -885,5 +877,5 @@ module.exports = { getCampaign, setStatus, needsApproval, reachableCount, sendBu
   // stopped being true the moment the constant moved (5 → 75) — the test then exercised the
   // drain-the-shard branch while still claiming to test the continuation. Derive, never restate.
   SENDS_PER_MSG,
-  // S276 exclusions — exported for unit tests
+  // S276 exclusions — re-exported from exclusions.js for the unit tests that address them here
   exclusionArgs, materializeExclusions };

@@ -9,6 +9,9 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Switch, InfoDot, Stamp } from 
 import { useConfirm, useChoose } from '@/components/confirm.js';
 import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
 import { fmtDateTime, inr } from '@/components/format.js';
+// Same picker + hour presets the campaign form uses — the exclusion rules are the same rules.
+import { ExcludePicker, CONTACTED_WINDOWS } from '@/components/exclusions.js';
+import { getCampaignsShared } from '@/lib/campaignsShared.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
@@ -81,7 +84,9 @@ function emptyJourney() {
     triggerType: 'event', triggerEvent: 'checkout_started', triggerSegmentId: '',
     triggerFilter: [], triggerRequiresIdentifier: '',
     reenrolment: 'once_while_active', reenrolCooldown: 24,
-    max_duration: '30 days', exit_rules: [], versions: [], utm: null };
+    max_duration: '30 days', exit_rules: [], versions: [], utm: null,
+    // Journey exclusions (S338b) — one block for the whole journey, checked at every send step.
+    exclude_segment_ids: [], exclude_campaign_ids: [], exclude_contacted_hours: '' };
 }
 
 // Trigger ⇄ form mapping lives in @/lib/journeyTrigger.js — extracted S243 so the
@@ -119,6 +124,9 @@ export default function JourneysPage() {
   const [templates, setTemplates] = useState([]);
   const [senders, setSenders] = useState([]);
   const [segments, setSegments] = useState([]);
+  // Campaigns, for the "already reached by" exclusion picker (S338b). Names only — the journey
+  // never reads a campaign's config, just its id.
+  const [campaigns, setCampaigns] = useState([]);
   const [eventDefs, setEventDefs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
@@ -197,7 +205,7 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp, sg, ev, st, ov, sd] = await Promise.all([
+      const [js, tp, sg, ev, st, ov, sd, cs] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         // Archived templates are excluded from the picker (S252): archiving means
         // "retired, do not wire this up again". Templates already bound to an
@@ -218,11 +226,15 @@ export default function JourneysPage() {
         // Senders, for the send-node "send from" picker. Non-fatal: without it the picker shows
         // only "auto", which is the pre-S243 behaviour rather than a broken page.
         garageFetch('getSenderIdentities', {}, session).catch(() => null),
+        // Campaign names for the exclusion picker. Shared dedupe-in-flight fetcher, same as the
+        // campaigns screen. Non-fatal: without it that one picker shows its empty state.
+        getCampaignsShared(session).catch(() => null),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setSenders(Array.isArray(sd) ? sd.filter((s) => s.status === 'active') : []);
       setSegments(Array.isArray(sg) ? sg : []);
+      setCampaigns(Array.isArray(cs) ? cs.filter((r) => r.status !== 'draft') : []);
       setEventDefs(normalizeEventDefs(ev));
       setSettings(st || null);
       setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
@@ -337,6 +349,10 @@ export default function JourneysPage() {
       max_duration: r.max_duration || '30 days',
       exit_rules: Array.isArray(r.exit_rules) ? r.exit_rules : [],
       utm: (r.utm && typeof r.utm === 'object') ? r.utm : null,
+      exclude_segment_ids: Array.isArray(r.exclude_segment_ids) ? r.exclude_segment_ids : [],
+      exclude_campaign_ids: Array.isArray(r.exclude_campaign_ids) ? r.exclude_campaign_ids : [],
+      // '' is the "off" value the <select> below carries; null would render as an unset option.
+      exclude_contacted_hours: r.exclude_contacted_hours == null ? '' : String(r.exclude_contacted_hours),
       versions: r.versions || [],
     });
     seedCanvas(r, def);
@@ -439,6 +455,9 @@ export default function JourneysPage() {
         max_duration: (j.max_duration || '').trim() || null,
         exit_rules: (j.exit_rules || []).filter((r) => (r.event || '').trim() && (r.outcome || '').trim()),
         utm: j.utm || null,
+        exclude_segment_ids: j.exclude_segment_ids || [],
+        exclude_campaign_ids: j.exclude_campaign_ids || [],
+        exclude_contacted_hours: j.exclude_contacted_hours === '' ? null : Number(j.exclude_contacted_hours),
         definition,
       };
       if (j.id) payload.id = j.id;
@@ -790,6 +809,77 @@ export default function JourneysPage() {
               </div>
             ))}
             {editable && <Btn onClick={addExitRule} disabled={busy}><Plus size={14} /> Add exit rule</Btn>}
+          </div>
+
+          {/* ── Exclusions (S338b) ────────────────────────────────────────────────────
+              The same three rules a campaign carries, one block for the WHOLE journey.
+              Checked at SEND time on every send step (never at enrolment): a matching
+              person's step is skipped and the enrolment carries on to the next node. */}
+          <div style={{ marginTop: 14 }}>
+            <div className="kv-k" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span>Exclusions (optional)</span>
+              <InfoDot label="About journey exclusions">
+                <p>Anyone matching a rule below is <b>skipped for that message only</b> — they stay
+                in the journey and carry on to the next step.</p>
+                <p>Checked when each message is about to go out, not when someone enrols, so a
+                person contacted mid-journey is still held back from the steps that follow.</p>
+              </InfoDot>
+            </div>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))' }}>
+              <div>
+                <div className="kv-k" style={{ fontSize: 12 }}>Don&apos;t send to these segments</div>
+                {editable
+                  ? <ExcludePicker
+                      options={segments}
+                      selected={j.exclude_segment_ids || []}
+                      onToggle={(id) => set('exclude_segment_ids',
+                        (j.exclude_segment_ids || []).includes(id)
+                          ? j.exclude_segment_ids.filter((x) => x !== id)
+                          : [...(j.exclude_segment_ids || []), id])}
+                      disabled={busy}
+                      empty="No segments yet."
+                      renderLabel={(sg) => `${sg.name} (${sg.kind})`} />
+                  : <div className="kv-v">{(j.exclude_segment_ids || []).length
+                      ? j.exclude_segment_ids.map((id) => segments.find((sg) => sg.id === id)?.name || id).join(', ')
+                      : <span className="dim">—</span>}</div>}
+              </div>
+
+              <div>
+                <div className="kv-k" style={{ fontSize: 12 }}>Already reached by these campaigns</div>
+                {editable
+                  ? <ExcludePicker
+                      options={campaigns}
+                      selected={j.exclude_campaign_ids || []}
+                      onToggle={(id) => set('exclude_campaign_ids',
+                        (j.exclude_campaign_ids || []).includes(id)
+                          ? j.exclude_campaign_ids.filter((x) => x !== id)
+                          : [...(j.exclude_campaign_ids || []), id])}
+                      disabled={busy}
+                      empty="No sent or sending campaigns to exclude yet."
+                      renderLabel={(r) => `${r.name} · ${r.channel} · ${r.status}`} />
+                  : <div className="kv-v">{(j.exclude_campaign_ids || []).length
+                      ? j.exclude_campaign_ids.map((id) => campaigns.find((r) => r.id === id)?.name || id).join(', ')
+                      : <span className="dim">—</span>}</div>}
+                <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                  Counts any channel — a campaign has only one.
+                </div>
+              </div>
+
+              <div>
+                <div className="kv-k" style={{ fontSize: 12 }}>Recently contacted</div>
+                {editable
+                  ? <select className="f-inp" value={j.exclude_contacted_hours} disabled={busy}
+                      onChange={(e) => set('exclude_contacted_hours', e.target.value)}>
+                      {CONTACTED_WINDOWS.map((w) => <option key={w.v} value={w.v}>{w.label}</option>)}
+                    </select>
+                  : <div className="kv-v">{j.exclude_contacted_hours
+                      ? `Contacted within ${j.exclude_contacted_hours}h` : <span className="dim">—</span>}</div>}
+                <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                  Judged per step, on that step&apos;s own channel. Counts messages actually sent —
+                  gate-skipped attempts excluded.
+                </div>
+              </div>
+            </div>
           </div>
         </Panel>
 
