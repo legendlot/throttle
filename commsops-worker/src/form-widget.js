@@ -11,9 +11,20 @@ function formWidgetJs(slug, workerBase, siteKey) {
   const key = JSON.stringify(String(siteKey || ''));
   return `(function(){
   var SLUG=${s}, BASE=${base}, SITEKEY=${key};
-  var host=document.querySelector('[data-lot-form="'+SLUG+'"]');
-  if(!host) return;
+  // ⚠️ querySelectorALL, and an idempotence guard, both load-bearing (S342). Found by the
+  // storefront lane on the real theme: Focal renders the product form THREE times in the raw
+  // HTML (main + quick-buy drawer + quick-buy popover templates). Only one host is in the live
+  // DOM on a sold-out PDP today, but if a quick-buy surface is ever instantiated a second host
+  // AND a second copy of this script appear — and the old querySelector-singular meant the
+  // second copy re-initialised the FIRST host, wiping a customer's half-typed email and
+  // orphaning its Turnstile widget. Init every host, exactly once each.
+  var hosts=document.querySelectorAll('[data-lot-form="'+SLUG+'"]');
+  if(!hosts.length) return;
   var Y='#F2CD1A';
+  for(var hi=0;hi<hosts.length;hi++) initHost(hosts[hi]);
+  function initHost(host){
+  if(host.getAttribute('data-lotf-init')==='1') return;   // already wired by an earlier copy
+  host.setAttribute('data-lotf-init','1');
   host.innerHTML='<form style="display:flex;flex-direction:column;gap:8px;max-width:340px;font:14px system-ui">'
     +'<input name="email" type="email" required placeholder="Email address" style="padding:10px;border:1px solid #ccc;border-radius:6px">'
     +'<label style="display:flex;gap:6px;align-items:center"><input name="wa" type="checkbox"><span>Also tell me on WhatsApp</span></label>'
@@ -59,6 +70,7 @@ function formWidgetJs(slug, workerBase, siteKey) {
       })
       .catch(function(){ resetChallenge(); msg.textContent='Sorry, that did not go through.'; });
   });
+  }
 })();`;
 }
 
