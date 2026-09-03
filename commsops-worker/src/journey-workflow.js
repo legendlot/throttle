@@ -372,7 +372,12 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           const sendCtx = await ctxForSend(cur);
           res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, sendCtx, journeyName, journeyUtm));
         }
-        if (s.interactive) {
+        // An EXCLUDED interactive step must NOT enter the reply-wait: #interactiveBranch maps a
+        // send that never went out to `no_reply`, which on the live C2P journey applies the
+        // No-Response tag to someone we deliberately did not message (hostile review, S338).
+        // It takes the plain skip path below instead — same log row, `next` handle or a natural
+        // end if the step has none.
+        if (s.interactive && !excluded) {
           // Interactive send (WA quick-reply buttons): after sending, park on the reply
           // event and route by which button was tapped (else no_reply on timeout). Inert
           // while WA is not live — the send skips → no_reply, no parking.
@@ -419,15 +424,17 @@ class JourneyWorkflow extends WorkflowEntrypoint {
               deferred = true;
             }
           }
-          // An EXCLUSION always continues, whatever the step's own on_skip policy says (§S338b:
-          // "the enrolment CONTINUES to the next node — it does not end"). A step configured
-          // `on_skip: 'exit'` means "this message failing is fatal to the flow"; being held back
-          // by an audience rule is not that, and routing it through `exit` would end enrolments
-          // wholesale the first time someone set a 24h contacted-within window. Same logging and
-          // the same resolveSendNext continuation as every other skip — only the policy is pinned.
-          const routeStep = excluded ? { ...s, on_skip: 'continue' } : s;
+          // An EXCLUSION never ENDS an enrolment (§S338b: "the enrolment CONTINUES to the next
+          // node — it does not end"). A step configured `on_skip: 'exit'` means "this message
+          // failing is fatal to the flow"; being held back by an audience rule is not that, and
+          // routing it through `exit` would end enrolments wholesale the first time someone set a
+          // 24h contacted-within window. ONLY `exit` is overridden: `advance` (jump past a
+          // wait_response whose message never went out) applies MORE to an exclusion, not less —
+          // pinning it to `continue` would park the enrolment on a reply-wait for a message that
+          // was never sent and log a fabricated `timeout` (hostile review, S338).
+          const routeStep = (excluded && (s.on_skip || 'continue') === 'exit') ? { ...s, on_skip: 'continue' } : s;
           const decision = G.resolveSendNext(routeStep, finalRes, def);
-          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...finalRes, ...(deferred ? { deferred_from: 'quiet_hours' } : {}), on_skip: routeStep.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
+          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...finalRes, ...(deferred ? { deferred_from: 'quiet_hours' } : {}), ...(s.interactive ? { interactive: true } : {}), on_skip: routeStep.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
           if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
           cur = decision.next;
         }

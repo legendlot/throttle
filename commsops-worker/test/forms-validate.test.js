@@ -148,8 +148,6 @@ t('identity precedence is email-first, so adding a phone later does not fork the
   assert.equal(dedupeKey(FORM, withPhone), 'back-in-stock:a@b.com:SKU1');
 });
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
 
 // S338 — a checkbox is a boolean, not free text. `String(false)` is 'false' (truthy), which used to
 // satisfy `required` on an untick and store "false" as consent evidence.
@@ -173,3 +171,17 @@ t('a ticked checkbox normalises to "true" and an unticked optional one is not st
   assert.equal(r.ok, true);
   assert.equal('agree' in r.payload, false);
 });
+
+
+t('a multi-select checkbox (with options) keeps its list value and is not coerced to a boolean', () => {
+  const F = { ...FORM, fields: [...FORM.fields, { key: 'colours', label: 'Colours', type: 'checkbox', required: true, options: ['red', 'blue'] }] };
+  const r = validateSubmission(F, { email: 'a@b.com', product_code: 'X', colours: ['red', 'blue'] });
+  assert.equal(r.ok, true);
+  assert.equal(r.payload.colours, 'red,blue');
+  const none = validateSubmission(F, { email: 'a@b.com', product_code: 'X', colours: [] });
+  assert.equal(none.ok, false);
+  assert.equal(none.error, 'missing_field:colours');
+});
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

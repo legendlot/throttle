@@ -62,5 +62,17 @@ t('saveJourney coercion: uuids only, positive integer hours, everything else off
   assert.equal(exclusionPatch({ exclude_contacted_hours: 6.7 }).exclude_contacted_hours, 7);
 });
 
+
+// S338 hostile review — a settings-only save must not publish a byte-identical journey version.
+{
+  const J = require('../src/journeys.js');
+  const a = { steps: { s1: { type: 'send', channel: 'whatsapp', on_skip: null }, s2: { type: 'end' } }, start: 's1' };
+  const b = { start: 's1', steps: { s2: { type: 'end' }, s1: { on_skip: null, channel: 'whatsapp', type: 'send' } } };
+  t('sameDefinition is key-order independent', () => assert.equal(J.sameDefinition(a, b), true));
+  t('sameDefinition sees a real change', () => assert.equal(J.sameDefinition(a, { ...b, start: 's2' }), false));
+  t('sameDefinition treats undefined vs null field as equal after a jsonb round-trip', () =>
+    assert.equal(J.sameDefinition({ x: undefined, y: 1 }, { x: null, y: 1 }), true));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -160,6 +160,13 @@ async function compile(env, definition, journey) {
 // anyone can call directly, so the UI's own validation is not the guard.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const uuidList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && UUID_RE.test(x.trim())).map((x) => x.trim()) : []);
+// Key-order-independent equality for a compiled journey definition (jsonb round-trips re-order
+// object keys, so JSON.stringify on the raw objects would call every re-save "changed").
+const canon = (v) => Array.isArray(v) ? '[' + v.map(canon).join(',') + ']'
+  : (v && typeof v === 'object') ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}'
+  : JSON.stringify(v === undefined ? null : v);
+const sameDefinition = (a, b) => canon(a) === canon(b);
+
 const exclusionPatch = (b) => {
   const hrs = Number(b.exclude_contacted_hours);
   return {
@@ -207,7 +214,12 @@ async function saveJourney(env, body, userId) {
   }
   if (definition) {
     const cur = await A.sbComms(
-      `/rest/v1/journey_versions?journey_id=eq.${A.enc(journeyId)}&select=version&order=version.desc&limit=1`, env);
+      `/rest/v1/journey_versions?journey_id=eq.${A.enc(journeyId)}&select=version,definition&order=version.desc&limit=1`, env);
+    // S338: a settings-only save (exclusions, exit rules…) used to publish a byte-identical
+    // version and bump active_version on every LIVE journey it touched — the editor always
+    // sends `definition`. Compare canonically (jsonb re-orders keys) and skip the no-op publish.
+    if (cur.ok && cur.data?.[0] && sameDefinition(cur.data[0].definition, definition))
+      return { ok: true, journey_id: journeyId, version_unchanged: true };
     const nextV = Number(cur.data?.[0]?.version || 0) + 1;
     const ins = await A.sbComms('/rest/v1/journey_versions', env, {
       method: 'POST', headers: { Prefer: 'return=representation' },
@@ -403,5 +415,5 @@ async function enrol(env, { journeyId, profileId, eventId }) {
 }
 
 module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol, sanitizeUtm,
-  // S338b exclusions — exported for unit tests
-  exclusionPatch };
+  // S338b exclusions + no-op publish guard — exported for unit tests
+  exclusionPatch, sameDefinition };

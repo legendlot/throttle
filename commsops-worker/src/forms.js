@@ -35,7 +35,9 @@ function validateSubmission(form, body) {
     // fail `required` (String(false) is 'false', which is truthy — an untick would otherwise
     // satisfy a required "I agree to receive…" box and store "false" as consent evidence).
     // Ticked normalises to 'true' so the stored evidence has one shape.
-    if (f.type === 'checkbox') val = /^(true|on|1|yes)$/i.test(val) ? 'true' : '';
+    // A checkbox WITH `options` is a multi-select list (schema: `options?`), not a boolean —
+    // it keeps its comma-joined values; an empty array is empty.
+    if (f.type === 'checkbox' && !f.options) val = (Array.isArray(raw) ? raw.length > 0 : /^(true|on|1|yes)$/i.test(val)) ? 'true' : '';
     if (f.required && !val) return { ok: false, error: `missing_field:${f.key}` };
     if (val) payload[f.key] = val;
   }
