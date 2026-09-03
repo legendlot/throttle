@@ -150,3 +150,26 @@ t('identity precedence is email-first, so adding a phone later does not fork the
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+// S338 — a checkbox is a boolean, not free text. `String(false)` is 'false' (truthy), which used to
+// satisfy `required` on an untick and store "false" as consent evidence.
+t('an unticked required checkbox is rejected, however the client encodes the untick', () => {
+  const F = { ...FORM, fields: [...FORM.fields, { key: 'agree', label: 'I agree', type: 'checkbox', required: true }] };
+  for (const untick of [false, 'false', 'off', '0', '']) {
+    const r = validateSubmission(F, { email: 'a@b.com', product_code: 'X', agree: untick });
+    assert.equal(r.ok, false, `untick ${JSON.stringify(untick)} should fail`);
+    assert.equal(r.error, 'missing_field:agree');
+  }
+});
+
+t('a ticked checkbox normalises to "true" and an unticked optional one is not stored', () => {
+  const F = { ...FORM, fields: [...FORM.fields, { key: 'agree', label: 'I agree', type: 'checkbox', required: false }] };
+  for (const tick of [true, 'true', 'on', '1']) {
+    const r = validateSubmission(F, { email: 'a@b.com', product_code: 'X', agree: tick });
+    assert.equal(r.ok, true, `tick ${JSON.stringify(tick)} should pass`);
+    assert.equal(r.payload.agree, 'true');
+  }
+  const r = validateSubmission(F, { email: 'a@b.com', product_code: 'X', agree: false });
+  assert.equal(r.ok, true);
+  assert.equal('agree' in r.payload, false);
+});

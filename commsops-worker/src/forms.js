@@ -30,7 +30,12 @@ function validateSubmission(form, body) {
   const payload = {};
   for (const f of fields) {
     const raw = body[f.key];
-    const val = raw === undefined || raw === null ? '' : String(raw).trim().slice(0, 2000);
+    let val = raw === undefined || raw === null ? '' : String(raw).trim().slice(0, 2000);
+    // A checkbox is a boolean, not free text: `false` / 'false' / 'off' / '0' is UNTICKED and must
+    // fail `required` (String(false) is 'false', which is truthy — an untick would otherwise
+    // satisfy a required "I agree to receive…" box and store "false" as consent evidence).
+    // Ticked normalises to 'true' so the stored evidence has one shape.
+    if (f.type === 'checkbox') val = /^(true|on|1|yes)$/i.test(val) ? 'true' : '';
     if (f.required && !val) return { ok: false, error: `missing_field:${f.key}` };
     if (val) payload[f.key] = val;
   }
