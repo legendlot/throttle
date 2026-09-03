@@ -1080,17 +1080,45 @@ async function getTickets(params, auth, env) {
   else if (tab === 'closed')       filters.push(`closed_at=not.is.null`);
   else if (tab === 'escalated')    filters.push(`stage=eq.escalated`);
 
-  // Optional explicit filters (override tab presets if both present)
+  // ⚠️ This comment used to say "override tab presets if both present". It was FALSE —
+  // the presets above and the explicit filters below are BOTH pushed onto `filters` and
+  // PostgREST ANDs them, so a tab that pins a column plus a contradicting explicit value
+  // is an always-false predicate: HTTP 200, empty list, no explanation. Same shape as the
+  // snorkel getPaymentRequests trap (already fixed there). Reject instead of lying.
   const disposition = params.get('disposition');
   if (disposition) filters.push(`disposition=eq.${encodeURIComponent(disposition)}`);
   const category = params.get('category');
   if (category) filters.push(`issue_category=eq.${encodeURIComponent(category)}`);
   const platform = params.get('platform');
   if (platform) filters.push(`platform=eq.${encodeURIComponent(platform)}`);
+
+  // A tab that pins `stage` may still be NARROWED by an explicit stage inside its set
+  // (logistics + stage=picked_up is a legitimate, useful query and ANDs correctly).
+  // Only a value OUTSIDE the pinned set is the contradiction worth rejecting.
+  const STAGE_PINS = {
+    awaiting:   ['awaiting_evidence'],
+    logistics:  ['pickup_scheduled', 'picked_up', 'at_warehouse'],
+    inspection: ['inspected'],
+    resolution: ['replacement_dispatched', 'refund_initiated', 'refund_completed',
+                 'handed_to_production', 'repaired_ready', 'repair_dispatched'],
+    escalated:  ['escalated'],
+  };
   const stage = params.get('stage');
-  if (stage) filters.push(`stage=eq.${encodeURIComponent(stage)}`);
+  if (stage) {
+    const pinned = STAGE_PINS[tab];
+    if (pinned && !pinned.includes(stage)) {
+      return err(`tab=${tab} already filters stage to ${pinned.join('|')}; stage=${stage} can never match. Drop one.`, 400);
+    }
+    filters.push(`stage=eq.${encodeURIComponent(stage)}`);
+  }
+
   const agent = params.get('agent');
-  if (agent) filters.push(`assigned_agent_id=eq.${encodeURIComponent(agent)}`);
+  if (agent) {
+    if (tab === 'my' && agent !== auth.userId) {
+      return err(`tab=my already filters to your own tickets; agent=${agent} can never match. Drop one.`, 400);
+    }
+    filters.push(`assigned_agent_id=eq.${encodeURIComponent(agent)}`);
+  }
   const createdBy = params.get('created_by');
   if (createdBy) filters.push(`created_by_user_id=eq.${encodeURIComponent(createdBy)}`);
   const tagFilter = params.get('tag');                       // tag facet (S163)
@@ -4359,7 +4387,18 @@ async function getCalls(params, auth, env) {
   else if (ticketState === 'closed') filters.push(`ticket.closed_at=not.is.null`);
 
   if (direction) filters.push(`direction=eq.${encodeURIComponent(direction)}`);
-  if (status)    filters.push(`status=eq.${encodeURIComponent(status)}`);
+
+  // The `missed` and `abandoned` tabs pin `status`, and this line ANDs the Status
+  // dropdown's value onto it — so "Abandoned tab + Status: Missed" was an always-false
+  // predicate returning an empty list with no explanation, reachable in the UI today
+  // (tabs at calls/page.js:242, Status select at :255). Reject rather than lie.
+  if (status) {
+    const pinnedStatus = (tab === 'missed' || tab === 'abandoned') ? tab : null;
+    if (pinnedStatus && status !== pinnedStatus) {
+      return err(`tab=${tab} already filters status=${pinnedStatus}; status=${status} can never match. Drop one.`, 400);
+    }
+    filters.push(`status=eq.${encodeURIComponent(status)}`);
+  }
 
   if (account) {
     // Resolve slug → id

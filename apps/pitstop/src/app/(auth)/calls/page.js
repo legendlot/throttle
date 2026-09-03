@@ -252,7 +252,15 @@ export default function CallsPage() {
           />
         </form>
         <FilterSelect label="Direction" value={direction} onChange={v => setParam('direction', v)} options={[['','All'],['incoming','In'],['outgoing','Out']]} />
-        <FilterSelect label="Status"    value={status}    onChange={v => setParam('status', v)}    options={[['','All'],['answered','Answered'],['missed','Missed'],['abandoned','Abandoned']]} />
+        {/* The missed/abandoned tabs already pin `status` worker-side, so offering the
+            other values here builds a query that can never match. The worker now rejects
+            that combination with a 400; this keeps the user from constructing it at all. */}
+        <FilterSelect label="Status"    value={status}    onChange={v => setParam('status', v)}
+          options={
+            activeTab === 'missed'    ? [['','All'],['missed','Missed']]
+          : activeTab === 'abandoned' ? [['','All'],['abandoned','Abandoned']]
+          : [['','All'],['answered','Answered'],['missed','Missed'],['abandoned','Abandoned']]
+          } />
       </div>
 
       {/* Errors */}
