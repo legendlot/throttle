@@ -95,6 +95,51 @@ function resolveQuietWindow(rows, channel, settings) {
   return { startMin: gs * 60, endMin: ge * 60, source: 'global' };
 }
 
+// ── Undeliverable email shapes (S342) ───────────────────────────────────────────
+// ⚠️ THE MEASUREMENT THAT JUSTIFIES THIS, and the one to re-run before widening it:
+// over ALL email history these three rules matched 2,684 send attempts, of which
+// **0 were ever delivered** and 2,540 bounced (measured 2026-09-03). Against the last real
+// sending window (22–26 Aug) they are 2,524 of 4,602 bounces — **54.85%** — so refusing them
+// takes the bounce rate from 14.30% to 7.04% on the same window (denominator = 32,187
+// delivery attempts, i.e. rows that actually left; `failed` rows never did and are excluded).
+// The residual 7.04% is real addresses bouncing and is NOT addressed here.
+//
+// ⛔ EVERY RULE HERE MUST BE STRUCTURAL, NEVER STATISTICAL. The bar for adding one is
+// "this address cannot receive mail by construction", not "these bounce a lot" — a
+// bounce-rate heuristic would eventually silence a real customer, which is far worse than a
+// bounce. Each rule below is either an RFC-reserved name or a known placeholder convention,
+// and the 0-of-2,684 delivery figure is the check that it stayed that way.
+const _RESERVED_TLDS = ['.invalid', '.test', '.example', '.localhost'];
+const _RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+// A no-reply SENDER address, harvested into the customer list by mistake (e.g. a courier's
+// noreply@ ingested from a forwarded mail). Exact local-part match only — a substring test
+// would match a real person whose address merely contains the letters.
+const _NOREPLY_LOCALS = ['noreply', 'no-reply', 'no_reply', 'donotreply', 'do-not-reply'];
+
+function isUndeliverableEmail(to) {
+  if (!to) return false;
+  const a = String(to).trim().toLowerCase();
+  const at = a.lastIndexOf('@');
+  if (at < 1) return false;                       // not an address shape; let the adapter reject it
+  const local = a.slice(0, at), domain = a.slice(at + 1);
+  // 1. RFC 2606 / 6761 reserved — reserved precisely so they can never resolve. Covers
+  //    Shopify Magic Checkout's `…@noemail.magic-checkout.invalid` (1,804 attempts, 0 delivered)
+  //    and every `@example.com` placeholder.
+  if (_RESERVED_DOMAINS.includes(domain)) return true;
+  if (_RESERVED_TLDS.some((t) => domain.endsWith(t))) return true;
+  // 2. Shopify's placeholder convention when a phone-only customer has no email: the local part
+  //    is `noemail…` on an otherwise REAL domain (`noemail_ph_num_9198…@gmail.com`), so the
+  //    domain check above cannot catch it — 877 attempts, 0 delivered, 871 bounced.
+  //    ⚠️ Deliberately NOT a bare `startsWith('noemail')`: that would also swallow a real
+  //    `noemailer@…`, which is not undeliverable by construction and so fails this block's own
+  //    bar. Anchoring to the separator costs nothing — measured 2026-09-03, the tight form
+  //    matches all 2,682 attempts the loose one did, with 0 caught only by the loose prefix.
+  if (local === 'noemail' || /^noemail[._-]/.test(local)) return true;
+  // 3. A no-reply sender address (see note above).
+  if (_NOREPLY_LOCALS.includes(local)) return true;
+  return false;
+}
+
 // Test-mode allowlist match: '@domain' = suffix match, else exact email. Case-insensitive.
 // Phone numbers get typed the way people read them — "+91 70191 03926", "+91-7019103926" —
 // while the allow-list entry is compact. Exact equality made FORMATTING decide whether the gate
@@ -151,6 +196,14 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
   // use the builder-managed test_allowlist — it already passed the 0a lock above.)
   if (settings.test_mode !== false && !testModeAllows(to, isTest ? testUnion(settings) : settings.test_mode_allow))
     return { pass: false, reason: 'test_mode_blocked' };
+
+  // 0c. UNDELIVERABLE ADDRESS SHAPE — an address that structurally cannot receive mail.
+  // Ahead of suppression because it needs no I/O, and it applies to EVERY purpose: unlike
+  // consent / freq cap / quiet hours (which transactional and utility bypass), a placeholder
+  // address cannot receive an order confirmation either. Bouncing it is pure sender-reputation
+  // damage for zero reach, so there is no purpose for which attempting it is correct.
+  if (channel === 'email' && isUndeliverableEmail(to))
+    return { pass: false, reason: 'undeliverable_address' };
 
   // 1. suppression — overrides everything. FAIL CLOSED: an unreadable suppression list is a
   //    blocked send, not a free pass (review 2026-07-21 H1 — the one gate that must never fail open).
@@ -355,6 +408,9 @@ async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
 }
 
 module.exports = { runGate, getSettings, inQuietHours, testModeAllows, testRecipientAllowed, testUnion,
+  // S342 — exported for unit tests and for any audience-build path that wants to drop these
+  // BEFORE they cost a queued row. The gate is the enforcement point; this is the predicate.
+  isUndeliverableEmail,
   // S268 per-channel quiet hours — exported for the journey park boundary + unit tests.
   getChannelQuietHours, resolveQuietWindow, inQuietWindow, toMinutes, istMinutes,
   _clearSettingsCache: () => { _settingsCache = null; _cqhCache = null; } };
