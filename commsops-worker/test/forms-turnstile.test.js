@@ -64,11 +64,19 @@ const ENV = { TURNSTILE_SECRET: 's3cret' };
       querySelector: (sel) => (sel === 'button' ? button : null),
     };
     const msg = { textContent: '' };
+    // ⚠️ `getAttribute` must answer BOTH keys: `data-product` (the payload) and, since S342,
+    // `data-lotf-init` (the once-only guard). Returning a truthy value for every attribute would
+    // make the widget think it was already initialised and silently render nothing.
+    const hostAttrs = { 'data-product': 'GH-PB-49' };
     const host = {
-      innerHTML: '', getAttribute: () => 'GH-PB-49',
+      innerHTML: '',
+      getAttribute: (k) => (k in hostAttrs ? hostAttrs[k] : null),
+      setAttribute: (k, v) => { hostAttrs[k] = v; },
       querySelector: (sel) => (sel === 'form' ? form : sel === '.lotf-msg' ? msg : { id: 'ts-box' }),
     };
     const documentStub = {
+      // S342: the widget initialises EVERY host, so it selects with querySelectorAll now.
+      querySelectorAll: () => [host],
       querySelector: () => host,
       createElement: () => (state.script = { onload: null }),
       head: { appendChild() {} },
