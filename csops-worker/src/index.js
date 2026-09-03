@@ -7564,7 +7564,37 @@ async function metaHandleMessage(channel, ev, env) {
     }
   }
 
-  const att = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
+  const rawAtt = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
+
+  // ⚠️ CONTENT-FREE GENERIC TEMPLATE — what the "empty IG template envelopes" actually are.
+  // Sampled 2026-09-03 over the 10 days of rows (75 of them, 65 threads, ~50/week and steady):
+  // EVERY one is `attachments[0] = {type:'template', payload:{generic:{elements:[]}}}` with no
+  // `text` key on the message at all — 62 inbound, 13 echoes of our OWN outbound. No url, no
+  // title, no elements: there is nothing in it to render. They are companions, not messages —
+  // 74 of 75 land within 60s of a real message and all 75 sit in threads carrying real inbound
+  // text, so NOTHING IS BEING LOST by dropping them.
+  //
+  // Storing them cost two things: a blank bubble in the agent's inbox, and — worse — the
+  // inbound branch below stamps `last_inbound_at` and reopens the conversation, so a
+  // content-free envelope marked a thread UNREAD WITH NOTHING TO READ and reordered the inbox.
+  //
+  // Deliberately narrow: only `template` with an explicitly EMPTY `generic.elements` and no
+  // url/title. A generic template that carries elements, or any other attachment type, is
+  // untouched. Stated from the observed payload only — no cause paraphrased from Meta's docs
+  // (the S262/S263 precedent: doing that put copy on screen telling agents a failing send would work).
+  const isEmptyGenericTemplate =
+    rawAtt?.type === 'template' &&
+    !rawAtt?.payload?.url && !rawAtt?.payload?.title &&
+    Array.isArray(rawAtt?.payload?.generic?.elements) &&
+    rawAtt.payload.generic.elements.length === 0;
+
+  // Drop the attachment, not the event: if Meta ever sends one of these ALONGSIDE text, the
+  // text still lands as a normal message. Only a wholly content-free event is skipped.
+  const att = isEmptyGenericTemplate ? null : rawAtt;
+  // Narrow on purpose: ONLY this shape short-circuits. Any other content-free event keeps
+  // whatever behaviour it had, so this cannot silently swallow a payload I have not measured.
+  if (isEmptyGenericTemplate && !msg.text) return;
+
   let kind = 'text', mediaUrl = null, attTitle = null;
   if (att) {
     kind = metaAttachmentKind(att.type);           // never Meta's raw type — see the map
