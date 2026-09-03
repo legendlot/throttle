@@ -110,9 +110,24 @@ async function handleStatuses(env, payload) {
       // A MEDIA error is the one failure that can be caused by our own cached media id going
       // bad (Meta expires uploaded media after ~30 days, and an id is only valid for the phone
       // number that uploaded it). Drop that number's cache so the next send re-uploads instead
-      // of replaying a dead id. Harmless when the send used a link — the cache is then empty
-      // for that number, and re-uploading is cheap. Best-effort: never fail the webhook, which
-      // must 200 or Meta redelivers.
+      // of replaying a dead id.
+      // ⚠️ THIS OVER-INVALIDATES, KNOWINGLY — `invalidate()` deletes EVERY row for the phone
+      // number (wa-media.js:94-98), not just the asset that failed, so one bad asset evicts every
+      // working media id on that number. Accepted by Afshaan 2026-09-03 (S340) — see
+      // reference/decisions.md. Measured that day: 47 × wa_131053 in 30 days against 283,960 WA
+      // sends (0.017%), and comms.wa_media_cache held 86 rows across 2 numbers (~43 assets each),
+      // so the ceiling is ~2,000 wasted re-uploads/month. Cost is round trips only —
+      // `resolveMediaId` re-uploads on a miss (wa-media.js:154-167), so no message is lost.
+      // ⛔ Do NOT restore the previous claim here that this is "harmless when the send used a
+      // link — the cache is then empty for that number". That is false and was the reasoning
+      // that hid the behaviour: an asset which can never upload falls back to a link-send, THEN
+      // 131053s, and the cache is precisely NOT empty at that point.
+      // Fixing it properly needs the failing asset's identity, which the webhook does not carry
+      // (parseStatusWebhook gives code / recipient_id / phone_number_id only) and `template_id`
+      // cannot supply either, because applyMediaIds resolves the url from the RENDERED header
+      // per recipient (wa-media.js:171-186). It requires persisting the resolved asset_url per
+      // message at send time — a schema + send-path change, deliberately not done.
+      // Best-effort: never fail the webhook, which must 200 or Meta redelivers.
       if (typeof u.reason === 'string' && /^wa_13105[23]/.test(u.reason)) {
         await WAM.invalidate(env, u.phone_number_id || null);
       }
