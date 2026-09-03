@@ -111,9 +111,26 @@ async function verifyTurnstile(env, token, ip) {
 
 // A stable, non-reversible client hint for abuse triage. NOT an identifier and never joined
 // on — a raw IP in a jsonb column is PII we have no use for.
-async function hashIp(ip) {
+//
+// ⛔ THE WORD "NON-REVERSIBLE" WAS FALSE UNTIL S342, AND THE REASON IS WORTH KEEPING.
+// A plain SHA-256 of an IP is not a one-way function in any useful sense: the entire IPv4
+// space is 2^32 values, so an attacker with the column simply hashes all 4.3 billion and
+// reads the addresses straight back — minutes on a laptop. Truncating to 8 bytes does not
+// help; it only adds collisions. A hash is only non-reversible when the INPUT space is large,
+// and an IP's is tiny. So the digest is keyed with a secret salt, which is what actually
+// makes it irreversible to anyone without `FORM_IP_HASH_SALT`.
+//
+// ⚠️ FAILS CLOSED, deliberately: with no salt configured we store NOTHING rather than quietly
+// falling back to the reversible form. Losing an abuse-triage hint is recoverable; silently
+// persisting de-anonymisable PII under a comment promising the opposite is not.
+// ⚠️ Rotating the salt makes existing hashes incomparable with new ones (same IP, different
+// value). That is acceptable — this is a triage hint with no historical claim on it — but it
+// means the column must never be used for anything that assumes stability across a rotation.
+async function hashIp(ip, env) {
   if (!ip) return null;
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
+  const salt = env && env.FORM_IP_HASH_SALT;
+  if (!salt) return null;
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${ip}`));
   return [...new Uint8Array(buf)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -235,7 +252,7 @@ async function handleFormSubmit(env, request) {
       // field presence is not choice, and handleFormConfirm used to guess from presence and
       // opt people into a channel they had declined. Persist the choice, read the choice.
       channels: v.channels,
-      source_url: v.source_url, ip_hash: await hashIp(ip), turnstile_ok: true,
+      source_url: v.source_url, ip_hash: await hashIp(ip, env), turnstile_ok: true,
       confirm_token: confirmToken,
     }),
   });
@@ -274,6 +291,33 @@ async function handleFormConfirm(env, token) {
   if (sub.confirmed_at) return { ok: true, confirmed: true, already: true };
 
   const now = new Date().toISOString();
+
+  // ⚠️ THE CHECK ABOVE IS NOT WHAT MAKES THIS IDEMPOTENT — THE WRITE BELOW IS (S342).
+  // A read-then-check cannot serialise anything: two concurrent confirms (a double-click, a
+  // mail client prefetching the link, a retry after a timeout) both read `confirmed_at` as
+  // NULL, both fall past that early return, and both write a full set of consent rows.
+  // So CLAIM THE ROW FIRST with a conditional update and let Postgres arbitrate. The loser
+  // matches zero rows and answers exactly as a later click does.
+  const claim = await A.sbComms(
+    `/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}&confirmed_at=is.null`, env, {
+      method: 'PATCH', body: JSON.stringify({ confirmed_at: now }),
+    });
+  // Fail closed: an unwritable submission row must not go on to record consent it cannot
+  // evidence. The customer can click again — the link is still valid, since nothing was set.
+  if (!claim.ok) return { ok: false, error: 'confirm_failed', status: 502 };
+  // `Prefer: return=representation` is the sbProfile default, so an empty array means the
+  // `is.null` condition matched nothing: another request confirmed between our read and our
+  // write, and it owns the consent rows.
+  if (!Array.isArray(claim.data) || claim.data.length === 0)
+    return { ok: true, confirmed: true, already: true };
+
+  // ⚠️ RESIDUAL, AND IT IS THE SAME DEFECT AS (e) IN THE SP1 REVIEW — not a new one introduced
+  // by this reordering. Claiming first means a failure in the consent loop below leaves the
+  // submission marked confirmed with consent missing, where the old order risked duplicate
+  // consent rows instead. This ordering is the better half of the trade (a duplicate opt-in
+  // row is invisible to `latestConsent` but pollutes the evidence log, and the window is now
+  // far narrower), but neither order is correct — only a transaction is. The genuine fix is
+  // the RPC tracked as capture-spine residual (e); when it lands, it subsumes this block.
   const evidence = {
     form: sub.forms?.slug || null, source_url: sub.source_url || null,
     consent_copy_version: sub.forms?.consent_copy_version ?? null,
@@ -298,9 +342,7 @@ async function handleFormConfirm(env, token) {
     });
   }
 
-  await A.sbComms(`/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}`, env, {
-    method: 'PATCH', body: JSON.stringify({ confirmed_at: now }),
-  });
+  // (no PATCH here any more — the conditional claim above already stamped `confirmed_at`)
   return { ok: true, confirmed: true };
 }
 
