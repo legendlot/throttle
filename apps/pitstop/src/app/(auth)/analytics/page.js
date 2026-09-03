@@ -56,6 +56,11 @@ function sortBy(sort, nameOf, countOf) {
 }
 const sortRanked = (rows, sort) => [...(rows || [])].sort(sortBy(sort, r => r.name, r => r.count));
 
+// `range.from/to` are ISO instants for IST midnight/end-of-day, so slicing them to 10 chars
+// yields the UTC date — a September MTD export labelled itself "2026-08-31 to …", a day early,
+// because 1 Sep 00:00 IST is 31 Aug 18:30 UTC. Shift into IST before taking the calendar date.
+const istDay = (iso) => new Date(Date.parse(iso) + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+
 const csvEsc = (v) => {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -114,7 +119,7 @@ export default function AnalyticsPage() {
 
   function exportCsv() {
     if (!data) return;
-    const fromD = range.from.slice(0, 10), toD = range.to.slice(0, 10);
+    const fromD = istDay(range.from), toD = istDay(range.to);
     const L = [];
     L.push(`Pitstop Support Analytics,${fromD} to ${toD}`);
     // The active cohort travels WITH the file — same reason the Reports CSV carries its
