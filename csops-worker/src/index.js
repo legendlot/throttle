@@ -7481,19 +7481,28 @@ async function retroAssignUnownedThreads(env, perRun = RETRO_ASSIGN_PER_RUN) {
   // Sequential, not Promise.all: the RPC picks the LEAST-LOADED agent, and concurrent calls all
   // read the same pre-assignment load and pile onto the same person. Ten serial calls is a
   // rounding error against a 10-minute tick, and it keeps the balancing honest.
-  let owned = 0, skipped = 0;
+  // ⚠️ `errored` is counted SEPARATELY from `skipped`, and the distinction is the whole point.
+  // This used to be `.catch(() => null)` collapsing into one `skipped` bucket, so a thrown
+  // request — a subrequest ceiling, a transport failure — was indistinguishable from the RPC
+  // legitimately returning null because no agent was eligible. That matters more since the
+  // morning cap went 10 -> 60: the failure mode a reader would be sent to diagnose (presence)
+  // is not the one that would actually be happening.
+  let owned = 0, skipped = 0, errored = 0;
   for (const t of threads) {
-    const a = await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
+    let a = null;
+    try { a = await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
       method: 'POST', body: JSON.stringify({ p_thread_id: t.id }),
-    }).catch(() => null);
-    if (a?.ok && a.data) owned += 1; else skipped += 1;
+    }); } catch { errored += 1; continue; }
+    if (a?.ok && a.data) owned += 1;
+    else if (!a?.ok) errored += 1;
+    else skipped += 1;
   }
   // ⚠️ `owned_after`, not `assigned`. cs_autoassign_thread returns the EXISTING assignee when a
   // thread is already owned (`IF v_assigned IS NOT NULL THEN RETURN v_assigned`), so a thread an
   // agent claimed between this sweep's SELECT and its RPC call comes back as a uuid the sweep did
   // not hand out. Calling that "assigned" would over-report the sweep's own effect by the number
   // of human claims in the window. The count is honest about what it measures instead.
-  return { ok: true, candidates: threads.length, owned_after: owned, skipped,
+  return { ok: true, candidates: threads.length, owned_after: owned, skipped, errored,
            per_run: perRun, morning: perRun !== RETRO_ASSIGN_PER_RUN };
 }
 
