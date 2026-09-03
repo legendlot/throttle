@@ -1894,9 +1894,29 @@ function analyticsDims(r, lineOf) {
     support_channel: r.auto_created || r.intake_channel === 'phone' || r.intake_channel === 'call'
       ? 'Calls'
       : (SUPPORT_CHANNEL_LABELS[r.intake_channel] || (r.intake_channel ? r.intake_channel : 'Unknown')),
+    // The agent a complaint is ATTRIBUTED to, not who resolved it — this is ticket-grain, and a
+    // ticket carries one assignee. Unassigned is a real and interesting bucket here (it is where
+    // complaints go to be forgotten), so it gets a label rather than being dropped from the list.
+    agent: r.assigned_agent_name || '— unassigned —',
   };
 }
-const ANALYTICS_DIM_KEYS = ['product', 'issue_category', 'product_line', 'sale_channel', 'support_channel'];
+const ANALYTICS_DIM_KEYS = ['product', 'issue_category', 'product_line', 'sale_channel', 'support_channel', 'agent'];
+
+// Trend bucket for an IST date string (YYYY-MM-DD). Month -> 'YYYY-MM'; week -> the
+// week-commencing MONDAY as 'YYYY-MM-DD'. Monday because the floor's week runs Mon–Sat
+// (RULE-ATT-001 working days) and a Sunday-start week would split every working week.
+// ⚠️ Parsed as UTC on purpose: `cd` is ALREADY an IST calendar date, so re-interpreting it
+// in any other zone would shift the day and drop calls into the wrong week.
+function trendBucket(istDateStr, grain) {
+  if (!istDateStr) return null;
+  if (grain !== 'week') return istDateStr.slice(0, 7);
+  const t = Date.parse(`${istDateStr}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  const dow = (d.getUTCDay() + 6) % 7;          // 0 = Monday
+  d.setUTCDate(d.getUTCDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
 
 async function getSupportAnalytics(params, auth, env) {
   // Default range = current month-to-date (IST). Presets/custom come from the page.
@@ -1904,6 +1924,10 @@ async function getSupportAnalytics(params, auth, env) {
   const monthStartIso = new Date(`${nowIstIso.slice(0, 7)}-01T00:00:00+05:30`).toISOString();
   const from = params.get('from') || monthStartIso;
   const to   = params.get('to')   || new Date().toISOString();
+
+  // Trend grain (Pruthvi asked for weekly; monthly was all there was). Anything but an
+  // explicit 'week' stays monthly, so an old cached page keeps the shape it expects.
+  const grain = params.get('grain') === 'week' ? 'week' : 'month';
 
   // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
   const want = {};
@@ -1925,7 +1949,7 @@ async function getSupportAnalytics(params, auth, env) {
     `issue_category=not.is.null`,
     ...scope,
   ];
-  const SELECT = 'id,created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created';
+  const SELECT = 'id,created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created,assigned_agent_name';
   const [catRes, pmRes] = await Promise.all([
     sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,sort_order&order=sort_order.asc`, env),
     sbPublic(`/rest/v1/product_master?select=product,product_line&product_line=not.is.null&limit=2000`, env),
@@ -2011,12 +2035,13 @@ async function getSupportAnalytics(params, auth, env) {
     const pm = prodMap[product] || (prodMap[product] = { product, total: 0, cats: {} });
     pm.total++; pm.cats[cat] = (pm.cats[cat] || 0) + 1;
 
-    // monthly trends
-    const mo = (cd || '').slice(0, 7);
-    if (mo) {
-      const mp = monthProd[mo] || (monthProd[mo] = { month: mo, total: 0 });
+    // Trends, bucketed by the requested grain. `bucket` is a month (YYYY-MM) or a
+    // week-commencing Monday (YYYY-MM-DD) — see trendBucket. Both sort correctly as strings.
+    const bkt = trendBucket(cd, grain);
+    if (bkt) {
+      const mp = monthProd[bkt] || (monthProd[bkt] = { bucket: bkt, total: 0 });
       mp.total++; mp[product] = (mp[product] || 0) + 1;
-      const mc = monthCat[mo] || (monthCat[mo] = { month: mo, total: 0 });
+      const mc = monthCat[bkt] || (monthCat[bkt] = { bucket: bkt, total: 0 });
       mc.total++; mc[cat] = (mc[cat] || 0) + 1;
     }
   }
@@ -2047,8 +2072,12 @@ async function getSupportAnalytics(params, auth, env) {
     by_sale_channel: rank(bySale),
     by_support_channel: rank(bySupport),
     top_subcategories: Object.entries(bySub).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 20),
-    monthly_product_trend: Object.values(monthProd).sort((a, b) => a.month.localeCompare(b.month)),
-    monthly_category_trend: Object.values(monthCat).sort((a, b) => a.month.localeCompare(b.month)),
+    // Key names kept as `monthly_*` deliberately — they are the established contract and the
+    // grain is now carried explicitly rather than encoded in the name. Each row is keyed
+    // `bucket`, not `month`, because it is no longer always a month.
+    trend_grain: grain,
+    monthly_product_trend: Object.values(monthProd).sort((a, b) => a.bucket.localeCompare(b.bucket)),
+    monthly_category_trend: Object.values(monthCat).sort((a, b) => a.bucket.localeCompare(b.bucket)),
   });
 }
 

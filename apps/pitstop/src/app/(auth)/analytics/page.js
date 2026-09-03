@@ -40,6 +40,7 @@ const DIMS = [
   ['product_line',    'Product line'],
   ['sale_channel',    'Sale channel'],
   ['support_channel', 'Support channel'],
+  ['agent',           'Agent'],
 ];
 
 const SORTS = [
@@ -78,6 +79,7 @@ export default function AnalyticsPage() {
   const [customTo, setCustomTo] = useState('');
   const [filters, setFilters] = useState({});   // dim key → selected value ('' = all)
   const [sort, setSort] = useState('count_desc');
+  const [grain, setGrain] = useState('month');   // trend bucket: 'month' | 'week'
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -98,7 +100,7 @@ export default function AnalyticsPage() {
     if (!session || !canView) { setLoading(false); return; }
     let alive = true;
     setLoading(true);
-    const args = { from: range.from, to: range.to };
+    const args = { from: range.from, to: range.to, grain };
     for (const [k] of DIMS) if (filters[k]) args[k] = filters[k];
     csopsGet('getSupportAnalytics', args, session)
       .then(d => { if (alive) { setData(d); setError(null); } })
@@ -106,7 +108,7 @@ export default function AnalyticsPage() {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, canView, range.from, range.to, filterKey]);
+  }, [session, canView, range.from, range.to, filterKey, grain]);
 
   // Options come from the range BEFORE the dimension filters, so picking a product does
   // not collapse the category list. A value that is selected but absent (the range moved
@@ -177,18 +179,22 @@ export default function AnalyticsPage() {
       L.push('');
     }
 
-    for (const [title, series] of [['Monthly Product Trend', data.monthly_product_trend],
-                                  ['Monthly Category Trend', data.monthly_category_trend]]) {
+    // The export must SAY which grain it is — a weekly file headed "Monthly" is the kind of
+    // thing that gets quoted in a meeting a month later.
+    const grainWord  = data.trend_grain === 'week' ? 'Weekly' : 'Monthly';
+    const bucketHead = data.trend_grain === 'week' ? 'Week of' : 'Month';
+    for (const [title, series] of [[`${grainWord} Product Trend`, data.monthly_product_trend],
+                                  [`${grainWord} Category Trend`, data.monthly_category_trend]]) {
       if (!series?.length) continue;
       const totals = {};
       for (const row of series) for (const kk of Object.keys(row)) {
-        if (kk === 'month' || kk === 'total') continue;
+        if (kk === 'bucket' || kk === 'total') continue;
         totals[kk] = (totals[kk] || 0) + row[kk];
       }
       const dims = Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([n]) => n);
       L.push(csvEsc(title));
-      L.push(['Month', 'Total', ...dims].map(csvEsc).join(','));
-      for (const row of series) L.push([row.month, row.total, ...dims.map(d => row[d] || 0)].map(csvEsc).join(','));
+      L.push([bucketHead, 'Total', ...dims].map(csvEsc).join(','));
+      for (const row of series) L.push([row.bucket, row.total, ...dims.map(d => row[d] || 0)].map(csvEsc).join(','));
       L.push('');
     }
 
@@ -245,6 +251,12 @@ export default function AnalyticsPage() {
             {optionsFor(key).map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         ))}
+        {/* Trend grain. Sits with the filters because it changes what the trend panels mean,
+            not merely how they look — the tables and the CSV re-head themselves from it. */}
+        <select value={grain} style={selectStyle} onChange={e => setGrain(e.target.value)}>
+          <option value="month">Trend: monthly</option>
+          <option value="week">Trend: weekly</option>
+        </select>
         {activeCount > 0 && (
           <>
             <button onClick={() => setFilters({})} style={clearBtn}>Clear {activeCount} filter{activeCount > 1 ? 's' : ''}</button>
@@ -305,10 +317,10 @@ function Dashboard({ data, sort }) {
 
       {/* Monthly trends */}
       <Panel title="Monthly Product Issue Trend">
-        <TrendBlock series={data.monthly_product_trend} dimLabel="Product" />
+        <TrendBlock series={data.monthly_product_trend} dimLabel="Product" grain={data.trend_grain} />
       </Panel>
       <Panel title="Monthly Category Trend">
-        <TrendBlock series={data.monthly_category_trend} dimLabel="Issue category" />
+        <TrendBlock series={data.monthly_category_trend} dimLabel="Issue category" grain={data.trend_grain} />
       </Panel>
     </>
   );
@@ -377,13 +389,17 @@ function RankedList({ rows, showPct, sort }) {
   );
 }
 
-// Monthly trend: total-cases line chart + the full month × dimension table (sheet-faithful).
-function TrendBlock({ series, dimLabel }) {
+// Trend: total-cases chart + the full bucket × dimension table (sheet-faithful).
+// `bucket` is a month (YYYY-MM) or a week-commencing Monday (YYYY-MM-DD) — the worker says
+// which via trend_grain, and the column header follows it so the table can never be read
+// as months when it is weeks.
+function TrendBlock({ series, dimLabel, grain }) {
   if (!series || series.length === 0) return <Empty />;
-  // union of dimension keys across months, ordered by total desc; top 8 as chart series.
+  const bucketLabel = grain === 'week' ? 'Week of' : 'Month';
+  // union of dimension keys across buckets, ordered by total desc; top 8 as chart series.
   const totalsByDim = {};
   for (const row of series) for (const kk of Object.keys(row)) {
-    if (kk === 'month' || kk === 'total') continue;
+    if (kk === 'bucket' || kk === 'total') continue;
     totalsByDim[kk] = (totalsByDim[kk] || 0) + row[kk];
   }
   const dims = Object.entries(totalsByDim).sort((a, b) => b[1] - a[1]).map(([n]) => n);
@@ -391,20 +407,20 @@ function TrendBlock({ series, dimLabel }) {
   const chartSeries = chartDims.map((d, i) => ({ key: d, name: d, color: SERIES_COLORS[i % SERIES_COLORS.length], kind: 'area', stackId: 'a' }));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <TrendChart data={series} xKey="month" series={chartSeries} height={240} xLabel="Month" showLegend />
+      <TrendChart data={series} xKey="bucket" series={chartSeries} height={240} xLabel={bucketLabel} showLegend />
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
           <thead>
             <tr>
-              <th style={thL}>Month</th>
+              <th style={thL}>{bucketLabel}</th>
               <th style={thR}>Total</th>
               {dims.map(d => <th key={d} style={thR} title={d}>{abbr(d)}</th>)}
             </tr>
           </thead>
           <tbody>
             {series.map(row => (
-              <tr key={row.month}>
-                <td style={tdL}>{row.month}</td>
+              <tr key={row.bucket}>
+                <td style={tdL}>{row.bucket}</td>
                 <td style={{ ...tdR, fontWeight: 700 }}>{row.total}</td>
                 {dims.map(d => <td key={d} style={tdR}>{row[d] || ''}</td>)}
               </tr>

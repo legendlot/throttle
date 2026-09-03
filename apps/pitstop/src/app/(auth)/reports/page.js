@@ -192,9 +192,9 @@ export default function ReportsPage() {
     lines.push('Assigned/Handled/Resolved/Closed counted on,The day the activity happened');
     lines.push('Queries/Open/Answered/rates/averages counted on,The day the conversation was raised');
     lines.push('');
-    lines.push('Agent,Assigned,Handled,Queries,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Avg waiting on customer (min),Avg waiting to be closed (min),Waiting on us,Waiting on customer');
+    lines.push('Agent,Assigned,Handled,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Avg waiting on customer (min),Avg waiting to be closed (min),Waiting on us,Waiting on customer');
     for (const r of agentData.by_agent) {
-      lines.push([r.name, r.assigned, r.handled, r.queries, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
+      lines.push([r.name, r.assigned, r.handled, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
         r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
         r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
         wt ? wByAgent.get(r.agent_id || r.name)?.avg_customer_wait_min : '',
@@ -519,7 +519,6 @@ function AgentsPanel({ data, wait }) {
                 <Th>Agent</Th>
                 <Th align="right" tip={TIPS.assigned}>Assigned</Th>
                 <Th align="right" tip={TIPS.handled}>Handled</Th>
-                <Th align="right" tip={TIPS.queries}>Queries</Th>
                 <Th align="right" tip={TIPS.open}>Open</Th>
                 <Th align="right" tip={TIPS.resolved}>Resolved</Th>
                 <Th align="right" tip={TIPS.closed_ops}>Closed (ops)</Th>
@@ -541,7 +540,6 @@ function AgentsPanel({ data, wait }) {
                   <Td color="var(--t1)">{r.name}</Td>
                   <Td mono align="right">{(r.assigned ?? 0).toLocaleString()}</Td>
                   <Td mono align="right" color={(r.handled ?? 0) > 0 ? 'var(--t1)' : 'var(--t3)'}>{(r.handled ?? 0).toLocaleString()}</Td>
-                  <Td mono align="right" color="var(--t1)">{r.queries.toLocaleString()}</Td>
                   <Td mono align="right">{r.open.toLocaleString()}</Td>
                   <Td mono align="right" color={r.resolved > 0 ? 'var(--ok-fg)' : 'var(--t3)'}>{(r.resolved ?? 0).toLocaleString()}</Td>
                   <Td mono align="right">{(r.closed_ops ?? 0).toLocaleString()}</Td>
