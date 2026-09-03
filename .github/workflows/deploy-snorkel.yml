@@ -59,4 +59,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/snorkel
+        run: bash .github/scripts/verify-pages.sh legendlot/snorkel apps/snorkel/out https://snorkel.legendoftoys.com/

@@ -59,4 +59,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/podium
+        run: bash .github/scripts/verify-pages.sh legendlot/podium apps/podium/out https://podium.legendoftoys.com/

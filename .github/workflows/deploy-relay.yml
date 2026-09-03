@@ -59,4 +59,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/relay
+        run: bash .github/scripts/verify-pages.sh legendlot/relay apps/relay/out https://relay.legendoftoys.com/

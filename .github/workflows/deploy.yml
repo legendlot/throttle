@@ -60,4 +60,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh ${{ github.repository }}
+        run: bash .github/scripts/verify-pages.sh ${{ github.repository }} apps/throttle/out https://throttle.legendoftoys.com/

@@ -25,8 +25,62 @@
 
 set -uo pipefail
 
-TARGET="${1:?usage: verify-pages.sh <owner/repo>}"
-: "${GH_TOKEN:?GH_TOKEN not set}"
+TARGET="${1:?usage: verify-pages.sh <owner/repo> [publish_dir] [live_url]}"
+PUBLISH_DIR="${2:-}"
+LIVE_URL="${3:-}"
+: "${GH_TOKEN:=}"
+
+# Job-summary output. The Actions log is only read when someone already suspects a problem;
+# the summary is on the run page. Everything that degrades this check writes a line here, so
+# "the fleet quietly stopped being verified" is visible without reading 11 logs.
+summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$*" >> "$GITHUB_STEP_SUMMARY"; return 0; }
+
+# ── Tokenless ground truth ────────────────────────────────────────────────────────────────
+# Asks the only question that actually matters — "is the live site serving the build we just
+# made?" — over plain HTTPS, with NO credential at all.
+#
+# This exists because the Pages API path is credential-shaped and the credential is a classic
+# PAT that will expire. The API check fail-softs to `skipped` on 401/403 BY DESIGN (a monitoring
+# gap must not become a deploy outage), which means a lapsed token silently removed the
+# PATTERN-168 guard from every app at once, with all 11 runs still green. That is the guard
+# failing the same way it exists to catch. Now the token can die and detection continues.
+#
+# Method: every `_next/static/...` asset the LIVE index.html references must exist in the
+# directory we just published. A stale site references at least one chunk filename that this
+# build no longer contains (Next content-hashes them). If nothing changed in a deploy, every
+# name matches — and that is correct, live IS serving this build.
+live_probe() {
+  [ -n "$PUBLISH_DIR" ] && [ -n "$LIVE_URL" ] && [ -d "$PUBLISH_DIR" ] || { echo "unavailable"; return; }
+  local html refs missing=0 total=0
+  html="$(curl -sS --max-time 20 -H 'Cache-Control: no-cache' "$LIVE_URL" 2>/dev/null)" || { echo "unavailable"; return; }
+  # ⚠️ MUST end in .js/.css. Without that anchor the pattern also matches the bare directory
+  # prefix `/_next/static/chunks/app/` that Next emits for dynamic imports — which is not a file,
+  # so it counted as "missing" and EVERY deploy reported STALE. Caught in test 2026-09-03; it
+  # would have turned this monitoring improvement into a fleet-wide red-run outage, which is the
+  # one thing this script's design forbids.
+  refs="$(printf '%s' "$html" | grep -oE '/_next/static/[A-Za-z0-9_./-]+\.(js|css)' | sort -u)"
+  [ -z "$refs" ] && { echo "unavailable"; return; }
+  while IFS= read -r ref; do
+    total=$((total + 1))
+    [ -f "${PUBLISH_DIR}${ref}" ] || missing=$((missing + 1))
+  done <<< "$refs"
+  if [ "$missing" -eq 0 ]; then echo "live:$total"; else echo "stale:$missing/$total"; fi
+}
+
+# Poll before concluding STALE. Pages and the CDN take a moment to serve a fresh push, and a
+# transient mismatch must not turn into a red run — this path has no API access to remediate
+# with, so a false "stale" is pure cost. A single clean read is enough to pass.
+live_check() {
+  local i out
+  for ((i = 1; i <= 8; i++)); do
+    out="$(live_probe)"
+    case "$out" in
+      live:*|unavailable) echo "$out"; return ;;
+    esac
+    [ "$i" -lt 8 ] && sleep "$SLEEP"
+  done
+  echo "$out"
+}
 
 API="https://api.github.com/repos/${TARGET}/pages/builds"
 MAX_POLLS=20        # x 15s = up to 5 minutes
@@ -76,7 +130,9 @@ EXPECTED_SHA="$(curl -sS \
 try: print(json.load(sys.stdin).get("sha") or "")
 except Exception: print("")' 2>/dev/null)"
 
-if [ -n "$EXPECTED_SHA" ]; then
+if [ -z "$GH_TOKEN" ]; then
+  :   # no token: the API path is skipped entirely below, nothing to warn about here
+elif [ -n "$EXPECTED_SHA" ]; then
   note "${TARGET}: watching gh-pages commit ${EXPECTED_SHA:0:8} — a build for any other commit does not count."
 else
   # Never harden a monitoring gap into an outage: if we cannot read the sha we fall back to the
@@ -183,10 +239,38 @@ settle() {
 }
 
 echo "Verifying GitHub Pages actually published for ${TARGET}…" >&2
-result="$(settle | tail -n1)"
+if [ -n "$GH_TOKEN" ]; then
+  result="$(settle | tail -n1)"
+else
+  warn "${TARGET}: no GH_TOKEN — skipping the Pages API and relying on the tokenless live check."
+  result="skipped"
+fi
+
+# ⭐ A SKIPPED API CHECK IS NO LONGER A SKIPPED VERIFICATION. Whenever the credential path is
+# unavailable — no token, expired token, missing Pages scope — fall through to the tokenless
+# live check instead of shrugging and exiting 0. This is what stops a lapsed DEPLOY_TOKEN from
+# silently disarming PATTERN-168 across all 11 app deploys with every run still green.
+if [ "$result" = "skipped" ]; then
+  lc="$(live_check)"
+  case "$lc" in
+    live:*)
+      note "${TARGET}: Pages API unavailable, but the LIVE SITE is serving this build (${lc#live:} assets matched). Verified without a credential."
+      summary "✅ **${TARGET}** — Pages API unavailable; verified tokenless against the live site (${lc#live:} assets matched)."
+      summary "> ⚠️ \`DEPLOY_TOKEN\` could not read the Pages API. Deploys are fine and detection still works, but **remediation (auto re-requesting a failed Pages build) is disabled** until it is renewed."
+      exit 0 ;;
+    stale:*)
+      fail "${TARGET}: LIVE IS STALE — ${lc#stale:} assets referenced by the live page are absent from what we just published, and the Pages API is unavailable so this cannot be auto-remediated."
+      summary "❌ **${TARGET}** — live site is STALE (${lc#stale:} assets missing) and the Pages API is unreachable. Re-request the build: https://github.com/${TARGET}/deployments"
+      exit 1 ;;
+    *)
+      warn "${TARGET}: Pages API unavailable AND the live check could not run (no publish_dir/url, or the site did not respond). NOT VERIFIED."
+      summary "⚠️ **${TARGET}** — **not verified this run.** The Pages API was unreachable and the tokenless live check could not run. Renew \`DEPLOY_TOKEN\`, or pass publish_dir + live_url to verify-pages.sh."
+      exit 0 ;;
+  esac
+fi
 
 case "$result" in
-  built|skipped|timeout)
+  built|timeout)
     exit 0 ;;
   errored)
     attempt=0

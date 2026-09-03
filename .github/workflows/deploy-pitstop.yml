@@ -59,4 +59,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/pitstop
+        run: bash .github/scripts/verify-pages.sh legendlot/pitstop apps/pitstop/out https://pitstop.legendoftoys.com/

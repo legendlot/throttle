@@ -63,4 +63,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/odo
+        run: bash .github/scripts/verify-pages.sh legendlot/odo apps/odo/out https://odo.legendoftoys.com/

@@ -63,4 +63,4 @@ jobs:
       - name: Verify GitHub Pages published
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: bash .github/scripts/verify-pages.sh legendlot/manifest
+        run: bash .github/scripts/verify-pages.sh legendlot/manifest apps/manifest/out https://manifest.legendoftoys.com/
