@@ -1,0 +1,28 @@
+-- 0062 — repair the FOUR functions that referenced comms.profiles.locale (S337, 2026-09-03)
+--
+-- ⛔ THIS IS THE CLEANUP FOR A REGRESSION 0061 CAUSED, AND THE LESSON IS THE POINT:
+-- dropping a column was verified against the WORKER SOURCE (`grep -rn locale commsops-worker/`),
+-- which came back clean — every profile SELECT is `select=*` or names other columns. But four
+-- SQL FUNCTION BODIES referenced it, and **no code grep reaches a function body stored in the
+-- database**. Live effect: /contacts returned 500 and rendered "No contacts yet" against 217,156
+-- real profiles, and every Shopify `customers/*` webhook threw.
+--
+-- ⭐ THE CHECK THAT WOULD HAVE CAUGHT IT, run BEFORE any column drop:
+--   SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+--   WHERE p.prokind='f' AND p.prosrc ~* '\m<column>\M';
+--   -- plus information_schema.views for view definitions.
+-- It found exactly the four below in one query. A grep of the app + worker found zero.
+--
+-- Blast radius while broken (~8 minutes, 07:44–07:52 IST 2026-09-03):
+--   · comms.profiles_list  → /contacts list dead (the visible symptom)
+--   · comms.shopify_apply_customers → customers/create + customers/update webhooks threw.
+--     ✅ NOT data loss: applyMapped throws, the handler does not catch, so the endpoint
+--     returned non-2xx and Shopify retries (19 attempts / 48h). Retries now succeed.
+--   · comms._attr → segment attribute resolution for city/display_name.
+--   · profiles_list(integer) → legacy overload, no live caller.
+--
+-- Bodies are preserved verbatim apart from the locale references. Full text as applied lives in
+-- the Supabase migration `comms_drop_locale_fix_dependent_functions`; this file is the record.
+-- Re-verify after any future change:  SELECT count(*) FROM pg_proc p JOIN pg_namespace n
+--   ON n.oid=p.pronamespace WHERE n.nspname IN ('comms','public','store')
+--   AND p.prokind='f' AND p.prosrc ~* '\mlocale\M';   -- must be 0
