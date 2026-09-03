@@ -2444,15 +2444,46 @@ export default {
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
               return err('China PO cancel requires po_china permission', 403);
             }
+            // A Closed PO is cancellable ONLY as an audited escape hatch, and only when
+            // nothing was ever inwarded against it. Siddu hit the dead end on IN-CMP-0295
+            // (10,000 ordered, 0 received) on 2026-09-03 and needed a DB edit to get out.
+            // Closed-with-zero-receipts is NOT an anomaly — 83 of 84 Closed POs look like
+            // that (measured 2026-09-03), because services and consumables are finished
+            // outside the receiving flow. The dangerous case is the other one.
+            //
+            // ⚠️ Until now this handler had NO status check at all — the UI gate at
+            // PODetailClient.js:312 was the only thing standing between the API and
+            // cancelling a Closed PO with goods received against it. Both guards live
+            // here now; the UI is the affordance, not the control.
+            //
+            // Statuses before Closed (incl. Partially Received) are deliberately
+            // untouched: cancelling the remainder of a partly-received PO is a normal,
+            // existing flow and this must not start blocking it.
+            if (po.status === 'Cancelled') return err('This PO is already cancelled');
+            if (po.status === 'Closed') {
+              // Explicit opt-in, so a stray or older client cannot fall into the escape
+              // hatch by accident — it has to say it means to cancel a Closed PO.
+              if (!d.allow_closed) {
+                return err('This PO is Closed. Re-send with allow_closed to cancel it anyway.', 409);
+              }
+              const rec = await query('po_lines',
+                `?po_number=eq.${encodeURIComponent(d.po_number)}&qty_received=gt.0&select=line_no&limit=1`);
+              if (!rec.ok) return err('Could not verify receipts against this PO — not cancelling');
+              if (rec.data[0]) {
+                return err('Cannot cancel — goods were received against this PO. Raise a return or a debit note instead.', 409);
+              }
+            }
+            const closedOverride = po.status === 'Closed';
             await update('purchase_orders',
               { status: 'Cancelled', cancellation_reason: d.reason, updated_at: new Date().toISOString() },
               `po_number=eq.${encodeURIComponent(d.po_number)}`);
             await insert('po_revisions', {
               po_number: d.po_number, revision: po.revision, changed_by: postRole,
-              change_summary: `Cancelled: ${d.reason}`,
+              change_summary: `Cancelled${closedOverride ? ' (Closed override — 0 received)' : ''}: ${d.reason}`,
             });
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_CANCELLED', 'PO', d.po_number,
-              `PO ${d.po_number} cancelled — ${d.reason||'no reason given'}`, { reason: d.reason });
+              `PO ${d.po_number} cancelled${closedOverride ? ' from Closed (0 received)' : ''} — ${d.reason||'no reason given'}`,
+              { reason: d.reason, from_status: po.status, closed_override: closedOverride });
             return ok({ po_number: d.po_number, status: 'Cancelled' });
           }
 

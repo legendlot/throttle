@@ -281,7 +281,16 @@ export default function PODetailPage() {
     if (!cancelReason.trim()) { showToast('Reason required', 'error'); return; }
     setCancelSubmitting(true);
     try {
-      await workerFetch('cancelPO', { data: { po_number: po.po_number, reason: cancelReason.trim() } }, session);
+      // allow_closed is the explicit opt-in the worker demands before it will cancel a
+      // Closed PO. Only ever sent from the "Cancel anyway" door, which itself requires
+      // zero receipts — the worker re-checks both, this is not the control.
+      await workerFetch('cancelPO', {
+        data: {
+          po_number: po.po_number,
+          reason: cancelReason.trim(),
+          ...(status === 'Closed' ? { allow_closed: true } : {}),
+        },
+      }, session);
       showToast(`${po.po_number} cancelled`, 'success');
       setCancelOpen(false);
       setCancelReason('');
@@ -310,6 +319,12 @@ export default function PODetailPage() {
   const canSend         = status === 'Approved' && !!perms?.po_create;
   const canAmend        = !isSoft && ['Draft', 'Accepted', 'Approved', 'Sent'].includes(status) && !!perms?.po_create;
   const canCancel       = !['Closed', 'Cancelled'].includes(status) && !!perms?.po_create;
+  // The escape hatch (2026-09-03, Afshaan). A Closed PO used to be a dead end —
+  // Siddu needed IN-CMP-0295 cancelled to raise a replacement and had to ask for a
+  // DB edit. The original guard is NOT loosened: Closed still blocks `canCancel`,
+  // and this second, narrower door only opens when nothing was ever received.
+  const hasReceipts     = lines.some(l => (parseFloat(l.qty_received) || 0) > 0);
+  const canCancelClosed = status === 'Closed' && !hasReceipts && !!perms?.po_create;
   const canPromote      = isSoft && !!perms?.po_china;
   const canPay          = status === 'Approved' && !!perms?.payment_route;
   const payStatus       = po.payment_status || 'none';
@@ -340,6 +355,7 @@ export default function PODetailPage() {
           {canAmend        && <Btn onClick={openAddLine} disabled={actionLoading}><Plus size={14} /> Add Line</Btn>}
           {canAmend        && <Btn onClick={openAmend} disabled={actionLoading}><Pencil size={14} /> Amend</Btn>}
           {canCancel       && <Btn onClick={() => setCancelOpen(true)} disabled={actionLoading} style={{ borderColor: 'var(--red)', color: 'var(--red-fg)' }}>Cancel</Btn>}
+          {canCancelClosed && <Btn onClick={() => setCancelOpen(true)} disabled={actionLoading} style={{ borderColor: 'var(--red)', color: 'var(--red-fg)' }}>Cancel anyway</Btn>}
         </div>
       </div>
 
@@ -505,6 +521,7 @@ export default function PODetailPage() {
           onClose={() => !cancelSubmitting && setCancelOpen(false)}
           onSubmit={submitCancel}
           submitting={cancelSubmitting}
+          fromClosed={status === 'Closed'}
         />
       )}
     </div>
@@ -716,7 +733,7 @@ function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting 
   );
 }
 
-function CancelModal({ poNumber, reason, setReason, onClose, onSubmit, submitting }) {
+function CancelModal({ poNumber, reason, setReason, onClose, onSubmit, submitting, fromClosed }) {
   useEscapeClose(true, () => { if (!submitting) onClose(); });
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
@@ -724,6 +741,12 @@ function CancelModal({ poNumber, reason, setReason, onClose, onSubmit, submittin
         <h3 style={{ margin: 0, marginBottom: 12, color: 'var(--yellow)', fontSize: 14, fontFamily: 'var(--cond)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
           Cancel {poNumber}
         </h3>
+        {fromClosed && (
+          <div style={{ border: '1px solid var(--red)', color: 'var(--red-fg)', borderRadius: 4, padding: '6px 8px', marginBottom: 10, fontSize: 12 }}>
+            This PO is <b>Closed</b>. Nothing was received against it, so it can still be
+            cancelled — the reason is recorded on the PO and in its revision history.
+          </div>
+        )}
         <span style={labelStyle}>Reason *</span>
         <textarea
           value={reason}
