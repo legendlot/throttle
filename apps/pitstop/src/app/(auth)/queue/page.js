@@ -255,8 +255,21 @@ export default function QueuePage() {
           </select>
         )}
 
+          {/* Picking an agent while on My Queue used to AND `assigned_agent_id=eq.<me>` with
+              `=eq.<them>` and return an always-empty list with no explanation; the worker now
+              rejects that pair outright. `my` is the DEFAULT tab, so leaving it to the 400 would
+              put an error banner on the landing view. Choosing an agent plainly means "show me
+              their queue", so move off `my` to All Open instead of failing. */}
         {canFilterByAgent && (
-          <select value={agentFilter} onChange={e => setParam('agent', e.target.value)} title="Filter by the agent handling the ticket" style={selectStyle}>
+          <select value={agentFilter}
+            onChange={e => {
+              const v = e.target.value;
+              const params = new URLSearchParams(searchParams);
+              if (v) params.set('agent', v); else params.delete('agent');
+              if (v && activeTab === 'my') params.set('tab', 'open');
+              router.push(`/queue?${params.toString()}`);
+            }}
+            title="Filter by the agent handling the ticket" style={selectStyle}>
             <option value="">All agents</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
           </select>

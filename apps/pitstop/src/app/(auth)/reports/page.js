@@ -632,7 +632,12 @@ function CallsPanel({ data }) {
 function CallTrend({ daily }) {
   const [grain, setGrain] = useState('day');
   const rows = useMemo(() => {
-    const src = [...(daily || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    // Filter to well-formed dates first. `new Date('nullT00:00:00Z').toISOString()` THROWS a
+    // RangeError, and a throw inside useMemo white-screens the whole Calls tab — a malformed
+    // row must cost one bar, not the page. The worker only emits YYYY-MM-DD, so this is a belt.
+    const src = (daily || [])
+      .filter(d => typeof d?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.date))
+      .sort((a, b) => a.date.localeCompare(b.date));
     if (grain === 'day') return src.map(d => ({ ...d, bucket: d.date }));
     const acc = new Map();
     for (const d of src) {

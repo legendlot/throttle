@@ -6693,8 +6693,12 @@ const OOO_DEFAULT_TEXT = 'Thanks for writing in! Our team is offline for the day
   + 'We have your message and someone will get back to you the next working day.';
 
 async function oooAutoreplyConfig(env) {
-  const r = await sb(`/rest/v1/settings?key=in.(pitstop.ooo_autoreply_enabled,pitstop.ooo_autoreply_text)`
-    + `&select=key,value`, env);
+  // ⚠️ Reads the whole table (5 rows) and filters in JS rather than sending
+  // `key=in.(pitstop.ooo_autoreply_enabled,…)`. The keys contain DOTS, and a PostgREST filter
+  // that mis-parses would return `ok` with zero rows — which reads as "disabled" and would make
+  // this a silent dud that never sends even after the flag is set. There is no cheap way to
+  // prove that filter from here, so the risk is removed instead of reasoned about.
+  const r = await sb(`/rest/v1/settings?select=key,value`, env);
   if (!r.ok) return null;
   const m = Object.fromEntries((r.data || []).map(x => [x.key, x.value]));
   return {
@@ -6731,9 +6735,11 @@ async function anyoneOnShiftNow(env) {
 // Returns {sent}|{skipped}|{error}. Never throws — the caller must not lose an inbound message
 // because an auto-reply failed.
 async function maybeOutOfHoursAutoreply(thread, ticketId, env) {
+  // Free in-memory checks before any DB round-trip — this runs on EVERY inbound message.
+  if (!thread?.customer_phone || !thread?.waba_phone_number_id) return { skipped: 'not_whatsapp' };
+
   const cfg = await oooAutoreplyConfig(env);
   if (!cfg?.enabled) return { skipped: 'disabled' };
-  if (!thread?.customer_phone || !thread?.waba_phone_number_id) return { skipped: 'not_whatsapp' };
 
   if (await anyoneOnShiftNow(env)) return { skipped: 'in_hours' };
 
@@ -6770,6 +6776,12 @@ async function maybeOutOfHoursAutoreply(thread, ticketId, env) {
       body: JSON.stringify({
         channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
         phoneNumberId: thread.waba_phone_number_id,   // answer on the number they wrote to
+        // ⚠️ `utility` BYPASSES QUIET HOURS in the commsops gate, and that is deliberate here,
+        // not an oversight: this is a direct reply to a message the customer sent seconds ago,
+        // so a 03:00 inbound gets a 03:00 acknowledgement. It never initiates contact, and the
+        // whole point is that they are writing when nobody is on shift. Hard suppression still
+        // applies. Do NOT "fix" this to `marketing` — that would hold the reply until 09:00 and
+        // deliver "we are closed for the day" the following morning, which is worse than silence.
         // Free-text, not a template: the inbound that triggered this just opened the 24h window
         // (the caller stamps customer_window_until immediately before calling us).
         template: { content: { text_body: cfg.text } },
@@ -7709,17 +7721,6 @@ async function metaHandleMessage(channel, ev, env) {
     if (exists.data?.[0]) return;   // idempotent
   }
 
-  const thread = await metaFindOrCreateThread(channel, extUserId, accountId, env);
-  if (!thread) return;
-
-  if (!thread.customer_handle) {
-    const handle = await resolveMetaHandle(extUserId, channel, env);
-    if (handle) {
-      await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ customer_handle: handle }) }).catch(() => {});
-      thread.customer_handle = handle;
-    }
-  }
-
   const rawAtt = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
 
   // ⚠️ CONTENT-FREE GENERIC TEMPLATE — what the "empty IG template envelopes" actually are.
@@ -7746,10 +7747,26 @@ async function metaHandleMessage(channel, ev, env) {
 
   // Drop the attachment, not the event: if Meta ever sends one of these ALONGSIDE text, the
   // text still lands as a normal message. Only a wholly content-free event is skipped.
-  const att = isEmptyGenericTemplate ? null : rawAtt;
   // Narrow on purpose: ONLY this shape short-circuits. Any other content-free event keeps
   // whatever behaviour it had, so this cannot silently swallow a payload I have not measured.
   if (isEmptyGenericTemplate && !msg.text) return;
+
+  // ⚠️ THIS RUNS BEFORE metaFindOrCreateThread ON PURPOSE. Sitting below it, the guard still
+  // created a thread (and resolved a handle over the Graph API) for an event it then dropped,
+  // which could leave a brand-new thread with ZERO messages in the inbox — a worse artefact
+  // than the blank bubble it replaced. Decide to drop the event before spending any write.
+  const thread = await metaFindOrCreateThread(channel, extUserId, accountId, env);
+  if (!thread) return;
+
+  if (!thread.customer_handle) {
+    const handle = await resolveMetaHandle(extUserId, channel, env);
+    if (handle) {
+      await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ customer_handle: handle }) }).catch(() => {});
+      thread.customer_handle = handle;
+    }
+  }
+
+  const att = isEmptyGenericTemplate ? null : rawAtt;
 
   let kind = 'text', mediaUrl = null, attTitle = null;
   if (att) {
