@@ -2,8 +2,8 @@
 "title":"Pitstop",
 "title_accent":"Operations Manual",
 "subtitle":"The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
-"version":"1.17.0",
-"date":"2026-09-01",
+"version":"1.18.0",
+"date":"2026-09-03",
 "app_url":"pitstop.legendoftoys.com",
 "owner":"Legend of Toys",
 "pdf":"/manual/Pitstop-Operations-Manual.pdf",
@@ -151,6 +151,16 @@
 "part":"Analyze",
 "subtitle":"Cross-cutting reports on tickets and calls.",
 "chapters":[
+{
+"id":"analytics",
+"title":"Support Analytics",
+"route":"/analytics",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Support Analytics is the &ldquo;what are people complaining about&rdquo; screen: it counts <strong>complaints</strong>, not every ticket, and breaks them down by product, issue, product line and channel over a date range. Open it to spot a pattern, not to reconcile totals against Reports.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Complaint analytics: what, on what product, from where.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; CSV export.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Range</div><div class=\"g-val\">Today / MTD / Last month / This year / Custom.</div></div>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">Complaints only, not every ticket</div>\n  <p>This screen counts tickets that have been given an <strong>issue category</strong>. A general question or a call with no category attached is not a complaint and is left out. That is deliberate, and it means the totals here will not match the Tickets tab on Reports, which counts every case. If a number here looks low next to Reports, this is why.</p>\n</div>\n\n<h2 class=\"sec\">KPI band</h2>\n<p>Four figures at the top: <strong>Total Complaints</strong>, <strong>Within 3 Days</strong> and <strong>After 3 Days</strong> (of purchase), and <strong>Ageing Unknown</strong>. Ageing is the complaint date minus the purchase date; &ldquo;unknown&rdquo; means there is no purchase date on file for that ticket, so its age cannot be worked out.</p>\n\n<h2 class=\"sec\">Filters, sort and the &ldquo;X of Y&rdquo; counter</h2>\n<p>Five filters sit under the date range: <strong>Product</strong>, <strong>Issue category</strong>, <strong>Product line</strong>, <strong>Sale channel</strong> and <strong>Support channel</strong>. They combine &mdash; pick a product and a channel together and the screen narrows to complaints matching both. Each dropdown&rsquo;s options come from the whole date range, not from what the other filters have already narrowed to, so choosing a product never empties the issue-category list.</p>\n<p>As soon as any filter is on, a counter appears next to <strong>Clear filters</strong>: &ldquo;<strong>X</strong> of Y complaints in range.&rdquo; That way a filtered view is never mistaken for a quiet month &mdash; the second number is what the date range holds before the filters are applied.</p>\n<p>A single <strong>sort</strong> control (Most first / Fewest first / A&ndash;Z) reorders every ranked panel on the page and the product table together, so the same order applies everywhere at once.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; &ldquo;Top Issue Sub-categories&rdquo; is the top 20 by volume</div>\n  <p>That panel only ever holds the twenty biggest sub-categories in the range &mdash; it says so on screen. Sorting it reorders those twenty; it does not reveal sub-categories outside the top 20, however the sort is set.</p>\n</div>\n\n<h2 class=\"sec\">Panels</h2>\n<p>Below the KPI band: a <strong>Complaints by Product</strong> matrix (rows are products, columns are issue categories, darker cells are higher counts), then ranked panels for <strong>By Issue Category</strong>, <strong>Top Issue Sub-categories</strong>, <strong>By Product Line</strong>, <strong>By Sale Channel</strong> and <strong>By Support Channel</strong>, and finally two monthly trend charts with their full month-by-dimension tables underneath: <strong>Monthly Product Issue Trend</strong> and <strong>Monthly Category Trend</strong>.</p>\n\n<h2 class=\"sec\">Export CSV</h2>\n<p>The <strong>Export CSV</strong> button downloads exactly what is on screen: every panel, in one file. The top of the file records which filters were active, how the panels were sorted, the complaint count for the filtered cohort and the count for the whole date range before filters &mdash; so a spreadsheet opened next week is never ambiguous about which slice of complaints it holds.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; A very wide range can be marked incomplete</div>\n  <p>If a date range holds more than 50,000 complaints, the screen shows a warning that the figures below and any export are incomplete, and asks you to narrow the dates. The CSV carries the same warning if you export anyway. This cannot happen at today&rsquo;s volumes, but if you ever see the banner, that is what it means.</p>\n</div>\n\n<p>This screen needs the reports permission (the same one Reports uses), so it is visible to Lead and Admin only.</p>\n"
+},
 {
 "id":"reports",
 "title":"Reports",

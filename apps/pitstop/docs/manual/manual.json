@@ -2,8 +2,8 @@
   "title": "Pitstop",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
-  "version": "1.17.0",
-  "date": "2026-09-01",
+  "version": "1.18.0",
+  "date": "2026-09-03",
   "app_url": "pitstop.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -147,6 +147,16 @@
       "part": "Analyze",
       "subtitle": "Cross-cutting reports on tickets and calls.",
       "chapters": [
+        {
+          "id": "analytics",
+          "title": "Support Analytics",
+          "route": "/analytics",
+          "file": "analyze-analytics.html",
+          "roles": [
+            "lead",
+            "adm"
+          ]
+        },
         {
           "id": "reports",
           "title": "Reports",

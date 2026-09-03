@@ -3,6 +3,17 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.18.0] - 2026-09-03
+### Added
+- **Support Analytics** — a new chapter for `/analytics`, live since 2026-07-16 but never
+  previously documented. Placed before Reports in the Analyze part (Analytics is the
+  complaint-shape screen, Reports is the performance screen). Explains that it counts
+  complaints (tickets with an issue category), not every ticket, so its totals will not match
+  Reports. Covers today's (S339) additions: the five combinable dimension filters and their
+  "X of Y complaints in range" counter, the single sort control shared by every ranked panel
+  and the product table, the "top 20 by volume" caveat on sub-categories, the Export CSV button
+  and its self-labelling header, and the 50,000-row range warning.
+
 ## [1.14.0] - 2026-08-28
 ### Added
 - **Post Comments** — a new chapter for the new Comments screen. Covers the ten-minute sync (and
