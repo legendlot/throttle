@@ -212,12 +212,48 @@ function NewPOPage() {
   // Side-by-side: when arriving from a PO request, load it to show alongside the form.
   const requestParam = searchParams?.get('request') || null;
   const [linkedRequest, setLinkedRequest] = useState(null);
+  // S340: the request now carries LINE ITEMS. getRequest has always returned the whole
+  // payload; this page just threw the lines away, which is the step that made
+  // procurement re-key a request into a PO by hand — the exact loop the request-lines
+  // build exists to close.
+  const [linkedRequestLines, setLinkedRequestLines] = useState([]);
   useEffect(() => {
     if (!session || !requestParam) return;
     garageFetch('getRequest', { request_no: requestParam }, session)
-      .then((res) => setLinkedRequest(res?.request || null))
+      .then((res) => {
+        setLinkedRequest(res?.request || null);
+        setLinkedRequestLines(Array.isArray(res?.lines) ? res.lines : []);
+      })
       .catch(() => {});
   }, [session, requestParam]);
+
+  // Prefill the PO's lines from the request, ONCE, on arriving at the form.
+  // Timing matters: choosing a category calls setLineItems([]) on its way to step
+  // 'form', so this cannot run in the fetch above — it would be wiped. It runs on the
+  // render after the step change, when lineItems is genuinely empty.
+  // The ref resets when the user leaves the form (e.g. backs out and picks a different
+  // category, which clears the lines again) so they are not left with an empty grid,
+  // while a deliberate deletion of every line inside the form is respected.
+  const requestPrefillRef = useRef(false);
+  useEffect(() => {
+    if (step !== 'form') { requestPrefillRef.current = false; return; }
+    if (requestPrefillRef.current || !linkedRequestLines.length) return;
+    requestPrefillRef.current = true;
+    setLineItems(linkedRequestLines.map((l) => ({
+      part_code: l.part_code || '',
+      description: l.description || '',
+      item_type: l.item_type || 'Part',
+      qty_ordered: l.qty != null ? String(l.qty) : '',
+      unit: l.unit || 'pcs',
+      // The requester's ESTIMATE. Procurement prices the PO — this is a starting point,
+      // not a committed price, and it stays editable like any other line.
+      unit_price: l.unit_price != null ? String(l.unit_price) : '',
+      // Carried through, but the server re-applies applyPartHsnDefaults on postPO, and
+      // procurement may legitimately override a rate per PO (unlike on the request side).
+      hsn_code: l.hsn_code || '',
+      gst_percent: l.gst_percent != null ? String(l.gst_percent) : '',
+    })));
+  }, [step, linkedRequestLines]);
 
   // Lazy caches
   useEffect(() => {
