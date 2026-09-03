@@ -22,10 +22,18 @@
 <h2 class="sec">Opening a request</h2>
 <p>Click any row to open it. The detail screen shows everything that was filed and what can be done now, which depends on your role and the request&rsquo;s status:</p>
 <ul>
-  <li><strong>Make PO from request</strong> <span class="role proc">Procurement</span> &mdash; starts a new purchase order with the request shown alongside, so you can copy the details across.</li>
+  <li><strong>Make PO from request</strong> <span class="role proc">Procurement</span> &mdash; starts a new purchase order with the request shown alongside. If the request has item lines, they prefill the PO&rsquo;s lines automatically (see New Purchase Order); otherwise copy the details across by hand.</li>
   <li><strong>Reject</strong> <span class="role proc">Procurement</span> &mdash; declines the request; a reason is required and is shown back to the requester.</li>
   <li><strong>Cancel request</strong> &mdash; only the person who filed it can withdraw their own pending request.</li>
 </ul>
+
+<h2 class="sec">Reading a request&rsquo;s items</h2>
+<p>Any request filed with item lines shows an <strong>Items</strong> table on its detail screen: part code (or &ldquo;new item&rdquo; if none was picked), description, quantity, unit, estimated price, HSN, GST and a line total, with a subtotal, estimated tax and estimated total beneath it. A warning banner names how many lines have no tax rate resolved, so procurement knows which to confirm before turning the request into a PO. These prices are the requester&rsquo;s estimate, not a quote.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Older requests still read as prose</div>
+  <p>Requests filed before item lines existed have no Items table &mdash; they show only the &ldquo;What&rsquo;s needed&rdquo; description, exactly as before. Nothing about them changed; the new table only appears once a request has lines.</p>
+</div>
 
 <div class="callout note">
   <div class="c-title">&#9432; Accepting the PO closes the loop</div>

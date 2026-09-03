@@ -224,7 +224,11 @@ function NewPOPage() {
         setLinkedRequest(res?.request || null);
         setLinkedRequestLines(Array.isArray(res?.lines) ? res.lines : []);
       })
-      .catch(() => {});
+      // ⛔ Not a silent catch. getRequest now returns a real error when it cannot read the
+      // request's lines (rather than pretending there are none), and swallowing it here
+      // would make the side panel vanish and the prefill not happen with no explanation —
+      // procurement would re-key the lines by hand and never know why.
+      .catch((e) => showToast(e.message || `Could not load request ${requestParam}`, 'error'));
   }, [session, requestParam]);
 
   // Prefill the PO's lines from the request, ONCE, on arriving at the form.
@@ -238,6 +242,13 @@ function NewPOPage() {
   useEffect(() => {
     if (step !== 'form') { requestPrefillRef.current = false; return; }
     if (requestPrefillRef.current || !linkedRequestLines.length) return;
+    // ⚠️ `lineItems.length` is load-bearing and its absence was a real race, not a
+    // theoretical one. getRequest is now strictly slower (it makes an extra
+    // po_request_lines round trip), so a user can reach the form, start typing lines,
+    // and THEN have the fetch resolve — at which point this effect would re-fire with
+    // the ref still false and replace everything they had typed. The earlier comment
+    // here claimed "it runs when lineItems is genuinely empty"; nothing enforced that.
+    if (lineItems.length) { requestPrefillRef.current = true; return; }
     requestPrefillRef.current = true;
     setLineItems(linkedRequestLines.map((l) => ({
       part_code: l.part_code || '',
@@ -253,7 +264,7 @@ function NewPOPage() {
       hsn_code: l.hsn_code || '',
       gst_percent: l.gst_percent != null ? String(l.gst_percent) : '',
     })));
-  }, [step, linkedRequestLines]);
+  }, [step, linkedRequestLines, lineItems.length]);
 
   // Lazy caches
   useEffect(() => {

@@ -3,6 +3,24 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.10.0] - 2026-09-03
+### Added
+- New Request: line items. "What do you need?" renamed "Why do you need it?" (context
+  only); a new Items panel with a per-line part picker, qty, unit, est. price and a
+  read-only auto-filled Tax column; live subtotal/est. tax/est. total; the request-level
+  Estimated cost field disappears once a line is added.
+- PO Requests: request detail now shows an Items table (mirrors the new-request lines)
+  with a warning for lines with no tax rate resolved; older, line-less requests still
+  read as prose.
+- New Purchase Order: a request's item lines now prefill the PO's lines (part, description,
+  qty, unit, requester's estimated price) when raising a PO from a request; still fully
+  editable, still procurement's price to set.
+- PO Detail: a "Cancel anyway" button on a Closed PO with zero receipts, opening the
+  normal cancel dialog with a reason requirement and a notice explaining the exception.
+### Changed
+- New Request and PO Requests chapters call out that HSN/GST auto-fill depends on the
+  part master, which as of this writing resolves a rate for only a small share of parts.
+
 ## [1.4.2] - 2026-08-17
 ### Changed
 - Cover subtitle now says "sales orders" in the module list (missed in 1.4.1's rename).

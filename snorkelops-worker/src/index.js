@@ -513,8 +513,14 @@ function applyPartHsnDefaults(lines, master) {
 // requester is not merely spared typing it, they are never the source of it. That
 // also means a tampered or stale client payload cannot put a wrong rate on a line.
 //
-// A line with no part_code is a genuinely new item: HSN/GST stay NULL and the line is
-// flagged for procurement to confirm. That is the ONLY free-type path.
+// THREE outcomes, not two — the middle one is the common case and an earlier version of
+// this comment denied it existed:
+//   1. part resolves to an HSN *and* a rate  -> both set, needs_hsn_review false
+//   2. part has an HSN but that HSN has no row in hsn_gst_rates -> hsn_code IS SET,
+//      gst_percent NULL, flagged. This is 60 of the 76 hsn-carrying parts today
+//      (measured 2026-09-03), i.e. the branch most flagged lines actually take.
+//   3. no part_code, or a part absent from the master -> both NULL, flagged.
+// Flagged means "procurement must confirm the rate", never "the HSN is missing".
 function resolveRequestLineTax(lines, master) {
   return (lines || []).map((l) => {
     const m = l.part_code ? master.get(l.part_code) : null;
@@ -1605,9 +1611,21 @@ export default {
             const nos = (r.data || []).map(x => x.request_no).filter(Boolean);
             const counts = new Map();
             if (nos.length) {
+              // Escape embedded quotes and encode, matching the hardened precedent
+              // elsewhere in this file rather than hand-rolling a second, weaker one.
+              const inList = nos.map(n => `"${String(n).replace(/"/g, '""')}"`).join(',');
               const lr = await query('po_request_lines',
-                `?request_no=in.(${nos.map(n => `"${n}"`).join(',')})&select=request_no,needs_hsn_review&limit=5000`);
-              for (const l of ((lr.ok && lr.data) || [])) {
+                `?request_no=in.(${encodeURIComponent(inList)})&select=request_no,needs_hsn_review&limit=5000`);
+              // ⛔ Do NOT swallow a failed read into zeroes. `line_count: 0` on every row
+              // reads as "no request is itemised" — a confident wrong answer, and exactly
+              // what the getRequest handler below refuses to do for the same table.
+              if (!lr.ok) return err('Could not read request line counts: ' + JSON.stringify(lr.data));
+              // 5,000 is PostgREST's db-max-rows here, so a full page means the counts
+              // are truncated and some requests would under-report (CORE.md).
+              if (Array.isArray(lr.data) && lr.data.length >= 5000) {
+                return err('Too many request lines to count in one page — this listing needs paging');
+              }
+              for (const l of (lr.data || [])) {
                 const c = counts.get(l.request_no) || { lines: 0, needs_hsn_review: 0 };
                 c.lines += 1;
                 if (l.needs_hsn_review) c.needs_hsn_review += 1;
@@ -2562,11 +2580,26 @@ export default {
               if (!d.allow_closed) {
                 return err('This PO is Closed. Re-send with allow_closed to cancel it anyway.', 409);
               }
-              const rec = await query('po_lines',
-                `?po_number=eq.${encodeURIComponent(d.po_number)}&qty_received=gt.0&select=line_no&limit=1`);
-              if (!rec.ok) return err('Could not verify receipts against this PO — not cancelling');
-              if (rec.data[0]) {
-                return err('Cannot cancel — goods were received against this PO. Raise a return or a debit note instead.', 409);
+              // ⚠️ TWO receipt records, not one, and checking only the first is a live
+              // hazard. `po_lines.qty_received` is NOT written back on every inwarding
+              // path: measured 2026-09-03, **44 POs carry GRN receipts while their
+              // po_lines.qty_received is still 0** (e.g. IN-CMP-0044 — GRN-082 received
+              // 200, po_lines says 0). None of those 44 is Closed *today*, which is
+              // exactly what makes it latent rather than visible — POs do get force-closed
+              // outside the receiving flow (see store.safety_po_force_closed_2026_09_01),
+              // and the first one that is would have been cancellable here with the goods
+              // physically in the building.
+              const [rec, grn] = await Promise.all([
+                query('po_lines',
+                  `?po_number=eq.${encodeURIComponent(d.po_number)}&qty_received=gt.0&select=line_no&limit=1`),
+                query('grn_register',
+                  `?po_reference=eq.${encodeURIComponent(d.po_number)}&qty_received=gt.0&select=grn_no&limit=1`),
+              ]);
+              if (!rec.ok || !grn.ok) return err('Could not verify receipts against this PO — not cancelling');
+              if (rec.data[0] || grn.data[0]) {
+                return err('Cannot cancel — goods were received against this PO'
+                  + (grn.data[0] ? ` (${grn.data[0].grn_no})` : '')
+                  + '. Raise a return or a debit note instead.', 409);
               }
             }
             const closedOverride = po.status === 'Closed';
@@ -2725,10 +2758,32 @@ export default {
 
             // Line items (S340). Optional — a request filed by an older client, or one
             // that genuinely is just a paragraph, still works exactly as before.
-            const rawReqLines = Array.isArray(d.lines) ? d.lines.filter(l => l && (l.description || l.part_code)) : [];
+            // Normalise BEFORE validating. This endpoint has no permission key, so a
+            // hand-rolled call is a first-class input, not a theoretical one.
+            // ⚠️ trim() here is the 4th line-write site: the other three trim `unit`
+            // (added in 63b94022, S294, because dirty units corrupted per-piece
+            // derivation). Shipping a 4th that did not would be PATTERN-218 — a rule
+            // taught to N−1 of N sites — and would silently falsify the backlog's own
+            // claim that "snorkelops now trims unit at all 3 line-write sites".
+            const rawReqLines = (Array.isArray(d.lines) ? d.lines : [])
+              .filter(l => l && typeof l === 'object')
+              .map(l => ({
+                part_code:   String(l.part_code ?? '').trim(),
+                description: String(l.description ?? '').trim(),
+                item_type:   String(l.item_type ?? '').trim() || 'Part',
+                qty:         Number(l.qty),
+                unit:        String(l.unit ?? '').trim() || 'pcs',
+                unit_price:  (l.unit_price === '' || l.unit_price == null) ? null : Number(l.unit_price),
+              }))
+              .filter(l => l.description || l.part_code);
             for (const l of rawReqLines) {
-              if (!(Number(l.qty) > 0)) return err('every line needs a qty greater than zero');
-              if (!l.description && !l.part_code) return err('every line needs a description or a part code');
+              // Number.isFinite, not `> 0`: Infinity passes `> 0` and JSON.stringify()s
+              // to `null`, which violates the NOT NULL on qty AFTER the parent row is
+              // already written. Same for NaN.
+              if (!Number.isFinite(l.qty) || l.qty <= 0) return err('every line needs a quantity greater than zero');
+              if (l.unit_price !== null && (!Number.isFinite(l.unit_price) || l.unit_price < 0)) {
+                return err('a line price cannot be negative');
+              }
             }
             const reqLines = rawReqLines.length
               ? resolveRequestLineTax(rawReqLines, await partHsnMasterAll())
@@ -2738,8 +2793,14 @@ export default {
             // one guessed number for the whole request. A line with no price contributes
             // nothing rather than blocking the sum. Falls back to the typed value only
             // when there are no lines at all, which keeps older callers working.
-            const derivedCost = reqLines.reduce(
+            // ⚠️ 0 is NOT the same as "no estimate". Every unpriced line contributes 0, so
+            // an itemised request with no prices at all derives 0 — and 0 is `!= null`, so
+            // the queue, the request detail and the PO side panel would all print "INR 0"
+            // where a prose request correctly prints "—". The requester cannot even correct
+            // it: the Estimated cost field is hidden once a line exists. Fall back to NULL.
+            const derivedCostRaw = reqLines.reduce(
               (s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
+            const derivedCost = derivedCostRaw > 0 ? derivedCostRaw : null;
 
             const reqNo = await nextSeq('po_request', 'PR-');
             const r = await insert('po_requests', {
@@ -2766,6 +2827,8 @@ export default {
               const li = await insert('po_request_lines', reqLines.map((l, i) => ({
                 request_no: reqNo,
                 line_no: i + 1,
+                // Already trimmed and coerced above; '' becomes NULL rather than reaching
+                // the column as an empty string.
                 part_code: l.part_code || null,
                 description: l.description || l.part_code,
                 item_type: l.item_type || 'Part',

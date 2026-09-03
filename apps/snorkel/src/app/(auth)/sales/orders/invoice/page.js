@@ -61,12 +61,20 @@ function InvoiceInner() {
       catch { el.textContent = 'QR unavailable'; }
       setQrReady(true);
     };
-    if (window.QRCode) { draw(); return; }
+    // ⚠️ WATCHDOG. A stalled CDN request (hung connection, captive portal, a proxy that
+    // swallows it) fires NEITHER onload NOR onerror, so qrReady would stay false forever
+    // and this invoice would never auto-print at all. That is a worse regression than
+    // printing without the QR — auto-printing is the page's whole purpose, and gating it
+    // on a third-party script with no time limit hands that purpose to the network.
+    // Cap the wait: after 4s, print with whatever the box shows.
+    const watchdog = setTimeout(() => setQrReady(true), 4000);
+    if (window.QRCode) { draw(); return () => clearTimeout(watchdog); }
     const s = document.createElement('script');
     s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
     s.onload = draw;
     s.onerror = () => { el.textContent = 'QR unavailable'; setQrReady(true); };
     document.body.appendChild(s);
+    return () => clearTimeout(watchdog);
   }, [qr]);
 
   // ⚠️ This page AUTO-PRINTS, which the confirmation does not — so the QR's async

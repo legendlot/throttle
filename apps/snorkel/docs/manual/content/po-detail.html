@@ -21,6 +21,12 @@
 </ol>
 <p>Two more buttons are available while a PO is live: <strong>Amend</strong> (edit the header or shipping details, with a required change note that is logged as a new revision) and <strong>Cancel</strong> (stop the PO, with a required reason). <strong>Print PO</strong> opens a clean, printable copy in a new tab.</p>
 
+<div class="callout note">
+  <div class="c-title">&#9432; A Closed PO with nothing received can still be cancelled (from 3 Sep 2026)</div>
+  <p>Once a PO is <strong>Closed</strong>, the ordinary Cancel button disappears, exactly as before. But if <em>nothing was ever received against it</em>, a red <strong>Cancel anyway</strong> button appears instead. It opens the same cancel dialog, with a notice explaining the PO is Closed and eligible, and still requires a reason, which is recorded on the PO and in its Revision History.</p>
+  <p>A Closed PO that HAS receipts stays a dead end on this screen: raise a return or a debit note instead of cancelling it. Before this button existed, cancelling such a PO meant asking for a direct database edit.</p>
+</div>
+
 <div class="callout danger">
   <div class="c-title">&#9940; Accept and Approve are two different people&rsquo;s jobs</div>
   <p>Acceptance is procurement saying the PO is correct; final approval is the senior sign-off to actually commit the spend. They are intentionally separate buttons held by separate roles. On China POs the approver must not be the person who raised the PO, four eyes on our biggest orders.</p>

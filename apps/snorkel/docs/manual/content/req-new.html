@@ -8,26 +8,43 @@
 </div>
 
 <h2 class="sec">Filling it in</h2>
-<p>Only two fields are required: a short <strong>Title</strong> and the <strong>What do you need?</strong> description. Everything else is optional but helps procurement act faster.</p>
+<p>Only two fields are required: a short <strong>Title</strong> and <strong>Why do you need it?</strong>. Everything else is optional but helps procurement act faster &mdash; and listing the items below is what stops this ending up back in a spreadsheet.</p>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Title <span style="color:#c01f1f">*</span></div><div class="a-val"><p>A one-line summary, e.g. &ldquo;20&times; ceiling fans for the new floor.&rdquo;</p></div></div>
-  <div class="a-row"><div class="a-key">What do you need? <span style="color:#c01f1f">*</span></div><div class="a-val"><p>The detail: items, quantities, specs, links, and why. The more specific, the better.</p></div></div>
+  <div class="a-row"><div class="a-key">Why do you need it? <span style="color:#c01f1f">*</span></div><div class="a-val"><p>Context procurement can act on: what it is for, specs, links, any deadline behind the date below. This is <em>not</em> where the items themselves go any more &mdash; list those in the Items panel.</p></div></div>
   <div class="a-row"><div class="a-key">Category</div><div class="a-val"><p>A loose grouping (Office, Consumable, Component, Machine&hellip;).</p></div></div>
   <div class="a-row"><div class="a-key">Suggested vendor</div><div class="a-val"><p>If you know who to buy from, say so. Procurement decides the final supplier.</p></div></div>
-  <div class="a-row"><div class="a-key">Est. cost &amp; currency</div><div class="a-val"><p>A rough figure if you have one, in INR, USD, CNY or EUR.</p></div></div>
+  <div class="a-row"><div class="a-key">Estimated cost</div><div class="a-val"><p>Only shown while the Items panel is empty. As soon as you add a line, this field disappears and your total is worked out from the item rows instead.</p></div></div>
   <div class="a-row"><div class="a-key">Urgency</div><div class="a-val"><p>Low, Normal, High or Urgent. Urgent items stand out in the list.</p></div></div>
   <div class="a-row"><div class="a-key">Needed by</div><div class="a-val"><p>The date you need it in hand, if there is a deadline.</p></div></div>
   <div class="a-row"><div class="a-key">Notes</div><div class="a-val"><p>Anything else worth saying.</p></div></div>
 </div>
 
+<h2 class="sec">The Items panel</h2>
+<p>Below the request details is an <strong>Items</strong> panel where you list what you actually need, one row per item. Click <strong>Add item</strong> for a blank row, and the bin icon to remove one. A row you add and leave completely empty (no part, no description) is simply dropped when you submit &mdash; it will not block you or show up as an error.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Item</div><div class="a-val"><p>Search and pick a part code if one exists. Picking a part fills in the description and the tax rate for you &mdash; you never type an HSN code or a GST rate yourself. No part code for what you need? Leave it blank and describe it; procurement will confirm the rate for that line.</p></div></div>
+  <div class="a-row"><div class="a-key">Description</div><div class="a-val"><p>Auto-filled from the part name when you pick one; edit or type it freely for an item with no part code.</p></div></div>
+  <div class="a-row"><div class="a-key">Qty &amp; Unit</div><div class="a-val"><p>How many, and in what unit (pcs by default).</p></div></div>
+  <div class="a-row"><div class="a-key">Est. price</div><div class="a-val"><p>Your best guess at the unit price. A line with a quantity but no price is left out of the total, and the panel tells you how many lines that is.</p></div></div>
+  <div class="a-row"><div class="a-key">Tax</div><div class="a-val"><p>Read-only. Filled automatically from the part you picked; shows a dash when no rate can be resolved.</p></div></div>
+  <div class="a-row"><div class="a-key">Line total</div><div class="a-val"><p>Qty &times; est. price, updating as you type.</p></div></div>
+</div>
+<p>As you add lines, a running <strong>Subtotal</strong>, <strong>Estimated tax</strong> and <strong>Estimated total</strong> appear beneath the table. This is an estimate, not a quote: procurement still prices the purchase order.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Most items will show a dash in the Tax column today</div>
+  <p>The tax column can only fill in what the part master already holds. As of this writing, an HSN code is set on a small fraction of active parts and fewer still resolve to a GST rate &mdash; so seeing &ldquo;&mdash;&rdquo; in Tax is expected for most lines, not a fault in the form. This is a data gap the team is closing, not something you need to work around: leave the field blank and move on.</p>
+</div>
+
 <h2 class="sec">Submitting</h2>
 <ol class="steps">
-  <li><span class="s-title">Write a clear title and description.</span> These are the two things procurement reads first.</li>
-  <li><span class="s-title">Add cost, urgency and a needed-by date</span> if you know them, so your request can be prioritised.</li>
+  <li><span class="s-title">Write a clear title and the &ldquo;why.&rdquo;</span> These are the first things procurement reads.</li>
+  <li><span class="s-title">Add an item row for each thing you need,</span> picking a part where you can. Add cost, urgency and a needed-by date if you know them, so your request can be prioritised.</li>
   <li><span class="s-title">Click Submit Request.</span> Snorkel gives it a number (like <code>PR-0142</code>) and opens the request so you can watch its progress.</li>
 </ol>
 
 <div class="callout tip">
   <div class="c-title">&#10003; You do not need to know how to buy it</div>
-  <p>Leave vendors, prices and part codes to procurement if you are unsure. A good description of <em>what</em> and <em>why</em> is far more useful than a guess at the supplier.</p>
+  <p>Leave vendors, HSN codes and GST rates to procurement if you are unsure. A good description of <em>what</em> and <em>why</em>, plus a rough item list, is far more useful than a guess at the supplier.</p>
 </div>
