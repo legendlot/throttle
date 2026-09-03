@@ -13,6 +13,7 @@ const RCSTPL = require('./rcs-templates.js');
 const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
 const WATPL = require('./wa-templates.js');
 const SEG = require('./segment-entry.js');
+const DW = require('./deliverability-window.js');   // email alert windowing + threshold (S340)
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
@@ -2669,27 +2670,35 @@ async function runScheduled(env) {
   } catch (e) { console.log('j1_wait_sweep_error', e?.message || String(e)); }
 }
 
+// Deliverability spike watch — the last 100 real email outcomes WITHIN A RECENCY WINDOW.
+// ⛔ THE WINDOW IS THE WHOLE POINT. DO NOT REMOVE IT, and do not "simplify" it back to a bare
+// order+limit. Until 2026-09-03 (S340) this query had NO time filter: it took the last 100 email
+// rows by queued_at regardless of age, so the moment sending went quiet the SAME rows were
+// re-scored every hour, forever, and the alert fired indefinitely on a frozen population.
+// Live case that forced this fix: Relay last sent email on 2026-08-26, and on 2026-09-03 it was
+// still paging hourly with a byte-identical "23/100 of recent email sends failed/bounced (23%)" —
+// which was a 72-SECOND slice (13:54:55→13:56:07) of the tail of an 8-day-old campaign: 13 hard
+// bounces + 10 soft, with 77 DELIVERED alongside them. Seven pages in one day, none actionable.
+// ⭐ The structural defect, worth naming because it is the reusable lesson: with no window the
+// check cannot distinguish "nothing is sending" from "everything is failing", so once the last
+// window's rate sat above the threshold it could only ever be a false alarm — an alert that can
+// never clear itself is not a monitor. The sibling journey watch below always had its own
+// last-hour window; this one was simply written without one.
+// An idle or thin window is SILENCE, never an alert. The windowing, the threshold and the alert
+// text all live in ./deliverability-window.js so they can be unit-tested — this function is only
+// the I/O around them. Do not re-inline them.
 async function checkDeliverabilitySpike(env) {
   const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=last_alert_at&limit=1', env);
   const last = s.ok && s.data?.[0]?.last_alert_at ? new Date(s.data[0].last_alert_at).getTime() : 0;
   if (Date.now() - last < 3600 * 1000) return;   // rate-limit: once per hour
 
-  // last 100 REAL send outcomes (exclude skipped/suppressed/queued — those aren't deliverability)
-  const r = await A.sbComms(
-    '/rest/v1/messages?channel=eq.email&status=in.(sent,delivered,opened,clicked,bounced,failed)' +
-    '&order=queued_at.desc&limit=100&select=status,provider_status', env);
+  const r = await A.sbComms(DW.buildQuery(Date.now(), A.enc), env);
   const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
-  if (rows.length < 20) return;   // too little signal
-  const complaints = rows.filter((m) => m.provider_status === 'email.complained').length;
-  const failed = rows.filter((m) => m.status === 'failed' || m.status === 'bounced').length;
-  const rate = failed / rows.length;
-  if (rate > 0.10 || complaints > 0) {
-    await AL.alert(env,
-      `⚠️ *Relay — deliverability alert*\n${failed}/${rows.length} of recent email sends failed/bounced (${Math.round(rate * 100)}%)` +
-      `${complaints ? `, ${complaints} spam complaint(s)` : ''}. Check /analytics.`);
-    await A.sbComms('/rest/v1/settings?id=eq.1', env,
-      { method: 'PATCH', body: JSON.stringify({ last_alert_at: nowIso() }) });
-  }
+  const ev = DW.evaluate(rows);
+  if (!ev.alert) return;
+  await AL.alert(env, DW.alertText(ev));
+  await A.sbComms('/rest/v1/settings?id=eq.1', env,
+    { method: 'PATCH', body: JSON.stringify({ last_alert_at: nowIso() }) });
 }
 
 // Journey send-health watch (≤1 alert/hour via settings.journey_alert_at — its own
