@@ -10,6 +10,24 @@ import { fmtDate } from '@/lib/snorkelui';   // NOT '@/lib/sales' — it has nev
 function fmtDateLocal(raw) { return fmtDate(raw); }
 function money(n) { return Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+// upi://pay deep link, ported from the order confirmation (Mahesh, #finance-all
+// 1786946223.654949 — the payment block was asked for on SALE INVOICES and only
+// the confirmation ever had it). Rendered ONLY when a upi_id is seeded on the
+// default bank row, so an unseeded table omits the QR rather than drawing a
+// broken one. Amount and note are prefilled to THIS invoice: a scan pays the
+// invoice total exactly, against the invoice number.
+function upiPayload(bank, seller, order) {
+  if (!bank?.upi_id) return null;
+  const p = new URLSearchParams({
+    pa: bank.upi_id,
+    pn: bank.legal_name || seller?.legal_name || 'Legend of Toys',
+    am: Number(order?.grand_total || 0).toFixed(2),
+    cu: 'INR',
+    tn: order?.invoice_no || order?.order_no || '',
+  });
+  return `upi://pay?${p.toString()}`;
+}
+
 function InvoiceInner() {
   const { session } = useAuth();
   const sp = useSearchParams();
@@ -17,6 +35,7 @@ function InvoiceInner() {
   const [d, setD] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [qrReady, setQrReady] = useState(false);
 
   const load = useCallback(async () => {
     if (!session || !id) return;
@@ -29,14 +48,43 @@ function InvoiceInner() {
   }, [session, id]);
 
   useEffect(() => { load(); }, [load]);
+
+  const qr = d ? upiPayload(d.bank, d.seller, d.order) : null;
+
+  // CDN qrcodejs in-page — the same no-npm-dep pattern the confirmation uses.
   useEffect(() => {
-    if (d && d.order?.invoice_generated) { const t = setTimeout(() => window.print(), 500); return () => clearTimeout(t); }
-  }, [d]);
+    if (!qr) return;
+    const el = document.getElementById('inv-qr');
+    if (!el) return;
+    const draw = () => {
+      try { el.innerHTML = ''; new window.QRCode(el, { text: qr, width: 108, height: 108, correctLevel: window.QRCode.CorrectLevel.M }); }
+      catch { el.textContent = 'QR unavailable'; }
+      setQrReady(true);
+    };
+    if (window.QRCode) { draw(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = draw;
+    s.onerror = () => { el.textContent = 'QR unavailable'; setQrReady(true); };
+    document.body.appendChild(s);
+  }, [qr]);
+
+  // ⚠️ This page AUTO-PRINTS, which the confirmation does not — so the QR's async
+  // CDN load is a race here and was not there. Printing at a fixed 500ms would
+  // ship invoices with an empty payment box whenever the script was slow. Wait
+  // for the QR to resolve (drawn OR failed) before printing; an invoice with no
+  // upi_id has no QR to wait for and prints immediately as before.
+  useEffect(() => {
+    if (!d || !d.order?.invoice_generated) return;
+    if (qr && !qrReady) return;
+    const t = setTimeout(() => window.print(), 500);
+    return () => clearTimeout(t);
+  }, [d, qr, qrReady]);
 
   if (loading) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
   if (err || !d) return <div style={{ padding: 24, color: 'var(--t3)' }}>{err || 'Not found'}</div>;
 
-  const { order, partner, seller, intra, lines } = d;
+  const { order, partner, seller, bank, intra, lines } = d;
   if (!order.invoice_generated) return <div style={{ padding: 24, color: 'var(--t3)' }}>This order has no invoice yet. Generate it first.</div>;
 
   const subtotal = lines.reduce((s, l) => s + Number(l.taxable_value || 0), 0);
@@ -64,6 +112,9 @@ function InvoiceInner() {
         table.inv-lines th { background:#f0f0f0; text-align:center; }
         .num { text-align:right; font-variant-numeric: tabular-nums; }
         .totline { display:flex; justify-content:space-between; padding:2px 0; }
+        .pay-box { border:1px solid #333; padding:8px; display:flex; gap:12px; align-items:flex-start; break-inside: avoid; page-break-inside: avoid; }
+        .pay-kv { display:flex; gap:6px; }
+        .pay-kv span:first-child { color:#666; min-width:88px; display:inline-block; }
         .print-hint { text-align:center; margin:16px 0; }
         /* A financial document must never lose a line to a page boundary. break-inside
            on the row keeps a line whole (it moves to the next page instead of splitting);
@@ -153,6 +204,28 @@ function InvoiceInner() {
           <div className="totline" style={{ borderTop: '1px solid #333', marginTop: 4, paddingTop: 4, fontSize: 14 }}><span><b>Grand Total</b></span><b>{inr(grand)}</b></div>
         </div>
       </div>
+
+      {bank && (
+        <div style={{ marginTop: 12 }}>
+          <div className="inv-label" style={{ marginBottom: 4 }}>Payment Details</div>
+          <div className="pay-box">
+            <div style={{ flex: 1 }}>
+              {bank.legal_name && <div className="pay-kv"><span>Account Name</span><span><b>{bank.legal_name}</b></span></div>}
+              {bank.bank_name  && <div className="pay-kv"><span>Bank</span><span>{bank.bank_name}{bank.branch ? ` — ${bank.branch}` : ''}</span></div>}
+              {bank.account_no && <div className="pay-kv"><span>Account No</span><span><b>{bank.account_no}</b></span></div>}
+              {bank.ifsc       && <div className="pay-kv"><span>IFSC</span><span><b>{bank.ifsc}</b></span></div>}
+              {bank.swift      && <div className="pay-kv"><span>SWIFT</span><span>{bank.swift}</span></div>}
+              {bank.upi_id     && <div className="pay-kv"><span>UPI</span><span>{bank.upi_id}</span></div>}
+            </div>
+            {qr && (
+              <div style={{ textAlign: 'center' }}>
+                <div id="inv-qr" style={{ width: 108, height: 108 }} />
+                <div style={{ fontSize: 9, color: '#666', marginTop: 2 }}>Scan to pay</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 40 }}>
         <div style={{ fontSize: 10, color: '#666', maxWidth: 360 }}>
