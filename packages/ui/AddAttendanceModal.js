@@ -75,7 +75,9 @@ export function AddAttendanceModal({ operators, team, defaultDate, onSubmit, onS
   const opOptions = useMemo(
     () => (operators || [])
       .filter((op) => (op.status || 'active') === 'active')
-      .filter((op) => !team || (op.team || '') === team)
+      // `team` is NULL on some operators (4 active store ones, measured 2026-09-03) while
+      // `department` is always set — fall back so a caller passing team='store' still sees them.
+      .filter((op) => !team || (op.team || op.department || '') === team)
       .map((op) => ({
         value: op.id,
         label: op.name,
