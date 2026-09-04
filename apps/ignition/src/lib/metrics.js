@@ -32,7 +32,14 @@ export function isMetricApplicable(metric, platform) {
   return true;
 }
 
-const num = (v) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
+// S348 hostile review: `Number(' ') === 0`, `Number(false) === 0`, `Number([]) === 0` — a whitespace-only
+// or non-scalar value must read as NOT entered, never as an entered zero (it would pass every
+// "!= null" check, e.g. metricsCompleteness' Likes / Followers gained).
+const num = (v) => {
+  if (v == null || typeof v === 'boolean' || Array.isArray(v) || typeof v === 'object') return null;
+  const s = typeof v === 'string' ? v.trim() : v;
+  return s === '' || !Number.isFinite(Number(s)) ? null : Number(s);
+};
 const pct = (n, d) => (n == null || !d ? null : Math.round((n / d) * 10000) / 100);
 
 // The raw metrics Reann lists, in her order. `key` matches both the DB column and metric_gaps.
@@ -159,7 +166,7 @@ export function liveDataWarnings(e = {}, platform) {
 // retired `completed` stage is NOT resurrected by this.
 //
 // ⚠️ Views uses `> 0`, not "not null" — the same trap liveDataWarnings documents above: of the live
-// deals, **none has views NULL and 18 sit at views = 0**, so a null test would mark all 18 complete
+// deals, **none has views NULL and 19 of 205 sit at views = 0** (measured 2026-09-04), so a null test would mark all 19 complete
 // while their numbers have never been typed. `total_cost` is a GENERATED column and therefore never
 // null, so it gets the same `> 0` treatment for the same reason. Likes and Followers gained take a
 // plain null test: a genuine zero is a real, entered answer for both.
