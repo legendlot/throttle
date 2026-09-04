@@ -69,6 +69,11 @@ export default function ReportsPage() {
   const [callData, setCallData] = useState(null);
   const [agentData, setAgentData] = useState(null);
   const [waitData, setWaitData] = useState(null);   // S319 breakdown — own RPC, own request
+  // Daily trend (S349b) — its own request, its own error: a slow or failed trend costs only its
+  // panel, exactly as the wait breakdown does. Never touches `loading` or `error`.
+  const [dailyData, setDailyData] = useState(null);
+  const [dailyErr, setDailyErr] = useState(null);
+  const [dailyMetric, setDailyMetric] = useState('queries');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -154,6 +159,12 @@ export default function ReportsPage() {
       csopsGet('getConversationWaitBreakdown', args, session)
         .then(d => { if (alive) setWaitData(d); })
         .catch(() => { if (alive) setWaitData(null); });
+      // The daily trend is the same report per IST day (worker fans out, capped at 62 days), so it
+      // takes the SAME args — filters and basis included — and cannot disagree with the KPIs.
+      setDailyData(null); setDailyErr(null);
+      csopsGet('getAgentConversationDaily', args, session)
+        .then(d => { if (alive) setDailyData(d); })
+        .catch(e => { if (alive) { setDailyData(null); setDailyErr(e.message); } });
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -270,6 +281,18 @@ export default function ReportsPage() {
         wt ? wByAgent.get(r.agent_id || r.name)?.avg_close_lag_min : '',
         r.waiting_agent, r.waiting_customer].map(esc).join(','));
     }
+    // Daily trend (S349b) — every metric, one row per day for the team, then per agent. Only when
+    // the panel actually loaded: an absent block is honest, a block of blanks reads as zeros.
+    if (dailyData?.days?.length) {
+      const M = dailyData.metrics || [];
+      lines.push('');
+      lines.push(`Daily trend (${dailyData.range?.business_hours ? 'business hours' : '24x7'}),${dailyData.days.length} days`);
+      lines.push(['Day', 'Agent', ...M.map(m => m.label + (m.kind === 'minutes' ? ' (min)' : m.kind === 'pct' ? ' %' : ''))].map(esc).join(','));
+      for (const d of dailyData.days) lines.push([d.day, 'All agents', ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
+      for (const a of (dailyData.by_agent || [])) {
+        for (const d of a.days) lines.push([d.day, a.name, ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
+      }
+    }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -316,6 +339,13 @@ export default function ReportsPage() {
             <span>To</span>
             <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateInput} />
           </div>
+          {/* The one range Pruthvi said he would open every morning (2026-08-26): a rolling week.
+              A preset rather than a default — the Tickets tab's YTD default is what finance reads. */}
+          <button onClick={() => { const d = new Date(); const f = new Date(d); f.setDate(d.getDate() - 6);
+                                   setFrom(dateStr(f)); setTo(dateStr(d)); }}
+            style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }} title="Today and the six days before it">
+            Last 7 days
+          </button>
           <button onClick={exportCsv} disabled={view === 'agents' ? !agentData?.by_agent?.length : !data} style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
           </button>
@@ -421,6 +451,10 @@ export default function ReportsPage() {
             businessHours={businessHours} onBusinessHours={setBusinessHours}
           />
           {loading || !agentData ? <Spinner /> : <AgentsPanel data={agentData} wait={waitData} />}
+          {!loading && agentData && (
+            <DailyTrendPanel data={dailyData} error={dailyErr} metric={dailyMetric} onMetric={setDailyMetric}
+              businessHours={!!agentData.range?.business_hours} />
+          )}
         </>
       )}
     </div>
@@ -458,6 +492,64 @@ function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, c
             </span>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Daily trend (S349b) ─────────────────────────────────────────────────────────────────────
+// One line for the team, one per agent, for a metric the reader picks. The data is the Agents
+// report evaluated per IST day (worker), so every point carries the definition and date basis the
+// strip above the table documents. Agents are capped at the six busiest by handled; the rest are
+// summed into "Others" for COUNT metrics only — an average of averages is not a number anyone
+// should read, so for minutes/rates the smaller agents are simply not drawn.
+const DAILY_TOP_AGENTS = 6;
+const DAILY_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6'];
+const fmtDay = (d) => { const t = Date.parse(`${d}T00:00:00Z`); return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : d; };
+
+function DailyTrendPanel({ data, error, metric, onMetric, businessHours }) {
+  const metrics = data?.metrics || [];
+  const m = metrics.find(x => x.key === metric) || metrics[0];
+  const rows = useMemo(() => {
+    if (!data?.days?.length || !m) return [];
+    const top = (data.by_agent || []).slice(0, DAILY_TOP_AGENTS);
+    const rest = (data.by_agent || []).slice(DAILY_TOP_AGENTS);
+    return data.days.map((d, i) => {
+      const row = { day: d.day, team: d[m.key] };
+      for (const a of top) row[a.name] = a.days[i]?.[m.key] ?? null;
+      if (rest.length && m.kind === 'count') row.Others = rest.reduce((s, a) => s + (a.days[i]?.[m.key] || 0), 0);
+      return row;
+    });
+  }, [data, m]);
+  const series = useMemo(() => {
+    if (!data?.by_agent || !m) return [];
+    const top = data.by_agent.slice(0, DAILY_TOP_AGENTS);
+    const out = [{ key: 'team', name: 'All agents', color: 'var(--t1)', kind: 'line' }];
+    top.forEach((a, i) => out.push({ key: a.name, name: a.name, color: DAILY_COLORS[i % DAILY_COLORS.length], kind: 'line' }));
+    if (data.by_agent.length > DAILY_TOP_AGENTS && m.kind === 'count') out.push({ key: 'Others', name: 'Others', color: '#8b8f98', kind: 'line' });
+    return out;
+  }, [data, m]);
+  const yFmt = m?.kind === 'minutes' ? (v) => dur(v) : m?.kind === 'pct' ? (v) => `${v}%` : undefined;
+  const hidden = Math.max(0, (data?.by_agent?.length || 0) - DAILY_TOP_AGENTS);
+
+  return (
+    <div style={{ marginTop: 'var(--gap)', padding: 'var(--pad)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Daily trend · {businessHours ? 'business hours' : '24×7'}
+        </div>
+        <select value={m?.key || ''} onChange={e => onMetric(e.target.value)}
+          style={{ fontFamily: 'var(--f-ui)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+          {metrics.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
+        </select>
+        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{data.range.days} days · one line per agent, busiest {Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown{hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}</span>}
+      </div>
+      {error ? (
+        <div style={{ color: 'var(--warn-fg)', fontSize: 12.5, padding: '12px 0' }}>{error}</div>
+      ) : !data ? (
+        <Spinner />
+      ) : (
+        <TrendChart data={rows} xKey="day" series={series} xFmt={fmtDay} yFmt={yFmt} height={260} xLabel="Day" showLegend />
       )}
     </div>
   );

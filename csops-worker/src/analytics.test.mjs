@@ -198,3 +198,54 @@ test('maskPhoneForExport matches the Queue export mask: all but the last three d
 test('formatTicketNotes survives a numeric body and a garbage timestamp — one cell, not a thrown export', () => {
   assert.equal(formatTicketNotes([{ body: 5, created_at: 'garbage', created_by_name: 'X' }]), '[, X] 5');
 });
+
+// ── dailySeries (S349b) ──────────────────────────────────────────────────────
+
+import { dailySeries, DAILY_METRICS } from './analytics.js';
+
+const rep = (totals, by_agent) => ({ totals, by_agent });
+
+test('dailySeries: days come out ascending whatever order they went in, with totals picked per metric', () => {
+  const s = dailySeries([
+    { day: '2026-09-03', report: rep({ queries: 5, answered: 4, avg_frt_min: '12.5', resolve_rate: 40 }, []) },
+    { day: '2026-09-02', report: rep({ queries: 2, answered: 2, avg_frt_min: 3, resolve_rate: null }, []) },
+  ]);
+  assert.deepEqual(s.days.map(d => d.day), ['2026-09-02', '2026-09-03']);
+  assert.equal(s.days[1].queries, 5);
+  assert.equal(s.days[1].avg_frt_min, 12.5);          // numeric strings from PostgREST become numbers
+  assert.equal(s.days[0].resolve_rate, null);         // a null rate stays null, never 0
+  assert.equal(s.days[0].handled, 0);                 // an absent count is a true zero
+});
+
+test('dailySeries: every agent gets a row for every day — zeros for counts, nulls for averages — and sorts by handled', () => {
+  const s = dailySeries([
+    { day: '2026-09-01', report: rep({}, [
+      { agent_id: 'a', name: 'Maria',   handled: 3, queries: 2, avg_frt_min: 10 },
+      { agent_id: 'b', name: 'Sunitha', handled: 1, queries: 1, avg_frt_min: 5 },
+    ]) },
+    { day: '2026-09-02', report: rep({}, [
+      { agent_id: 'b', name: 'Sunitha', handled: 9, queries: 4, avg_frt_min: 7 },
+      { agent_id: null, name: '— unassigned —', handled: 0, queries: 2 },
+    ]) },
+  ]);
+  assert.deepEqual(s.by_agent.map(a => a.name), ['Sunitha', 'Maria', '— unassigned —']);
+  const maria = s.by_agent[1];
+  assert.equal(maria.handled_total, 3);
+  assert.deepEqual(maria.days.map(d => d.day), ['2026-09-01', '2026-09-02']);
+  assert.equal(maria.days[1].handled, 0);
+  assert.equal(maria.days[1].avg_frt_min, null);
+  const un = s.by_agent[2];
+  assert.equal(un.agent_id, null);
+  assert.equal(un.days[0].queries, 0);              // unassigned bucket absent on day 1 → zero, not missing
+});
+
+test('dailySeries: empty input yields empty series, never a throw', () => {
+  assert.deepEqual(dailySeries([]), { days: [], by_agent: [] });
+  assert.deepEqual(dailySeries(), { days: [], by_agent: [] });
+});
+
+test('DAILY_METRICS keys are unique and each has a kind the chart can format', () => {
+  const keys = DAILY_METRICS.map(m => m.key);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const m of DAILY_METRICS) assert.ok(['count', 'minutes', 'pct'].includes(m.kind), m.key);
+});

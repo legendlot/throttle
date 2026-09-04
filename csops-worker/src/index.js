@@ -28,7 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
-import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport } from './analytics.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 
 
@@ -906,6 +906,10 @@ async function handleGet(action, params, auth, env) {
     case 'getConversationWaitBreakdown': {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getConversationWaitBreakdown(params, auth, env);
+    }
+    case 'getAgentConversationDaily': {   // the agent report per IST day, as a trend (S349b)
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getAgentConversationDaily(params, auth, env);
     }
     case 'getSupportAnalytics': {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
@@ -1912,6 +1916,71 @@ async function getAgentConversationReport(params, auth, env) {
   });
   if (!r.ok) return err('Failed to load agent conversation report', 500);
   return ok(r.data || {});
+}
+
+// getAgentConversationDaily — the agent report, once per IST day, stacked into a trend (S349b;
+// Pruthvi #bugs 1787733817: "a daily performance view … agent and conversation on a daily basis").
+//
+// Deliberately NOT a new daily RPC. cs_agent_conversation_report is 12 KB of cohort logic whose
+// definitions must stay identical to the Tickets tab's counts (systems/pitstop.md); a second copy
+// with a GROUP BY day is exactly how the two would drift. Calling the same function per day cannot
+// drift, and one day costs ~160 ms on either basis (EXPLAIN ANALYZE, 2026-09-04), so a week is
+// seven parallel calls and a month is ~1 s. Capped at MAX_DAILY_DAYS: beyond that the honest
+// answer is "narrow the range", not a slow page.
+//
+// Each day's window is CLIPPED to the requested range (first/last day), so the daily counts sum
+// to the whole-range report exactly — the verification the page relies on.
+const MAX_DAILY_DAYS = 62;
+const DAILY_FANOUT = 8;
+async function getAgentConversationDaily(params, auth, env) {
+  const from = params.get('from') || new Date(Date.now() - 6 * 86400000).toISOString();
+  const to   = params.get('to')   || new Date().toISOString();
+  const channels = arrParam(params, 'channel');
+  const tagIds   = arrParam(params, 'tag_id');
+  const agentIds = arrParam(params, 'agent');
+  const businessHours = params.get('business_hours') === 'true';
+
+  const first = istDate(from), last = istDate(to);
+  if (!first || !last || first > last) return err('Invalid date range', 400);
+  const days = [];
+  for (let d = first; d <= last; d = istDate(new Date(`${d}T12:00:00+05:30`).getTime() + 86400000)) days.push(d);
+  if (days.length > MAX_DAILY_DAYS) {
+    return err(`The daily trend covers up to ${MAX_DAILY_DAYS} days — this range is ${days.length}. Narrow the dates.`, 400);
+  }
+
+  const fromMs = Date.parse(from), toMs = Date.parse(to);
+  const oneDay = async (day) => {
+    const dayStart = Date.parse(`${day}T00:00:00.000+05:30`);
+    const dayEnd   = Date.parse(`${day}T23:59:59.999+05:30`);
+    const r = await sb('/rest/v1/rpc/cs_agent_conversation_report', env, {
+      method: 'POST',
+      body: JSON.stringify({
+        p_from: new Date(Math.max(dayStart, fromMs)).toISOString(),
+        p_to:   new Date(Math.min(dayEnd, toMs)).toISOString(),
+        p_channels: channels, p_tag_ids: tagIds, p_agent_ids: agentIds,
+        p_business_hours: businessHours,
+      }),
+    });
+    if (!r.ok) throw new Error(`day ${day}: ${JSON.stringify(r.data)}`);
+    return { day, report: r.data || {} };
+  };
+  const dayReports = [];
+  try {
+    for (let i = 0; i < days.length; i += DAILY_FANOUT) {
+      const chunk = await Promise.all(days.slice(i, i + DAILY_FANOUT).map(oneDay));
+      dayReports.push(...chunk);
+    }
+  } catch (e) {
+    return err(`Failed to load daily agent trend (${e.message})`, 500);
+  }
+
+  const series = dailySeries(dayReports);
+  return ok({
+    range: { from, to, business_hours: businessHours, days: days.length,
+             channels, tag_ids: tagIds, agent_ids: agentIds },
+    metrics: DAILY_METRICS,
+    ...series,
+  });
 }
 
 // getConversationWaitBreakdown — what the resolution time is MADE OF (S319).

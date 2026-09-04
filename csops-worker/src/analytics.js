@@ -113,3 +113,72 @@ export function maskPhoneForExport(phone) {
   const s = String(phone);
   return s.length < 4 ? s : s.slice(0, -3) + '***';
 }
+
+// ── Agent + conversation DAILY trend (S349b, Pruthvi #bugs 1787733817 — "trend-based graphs for
+// Agent Performance, Conversation Performance … a daily performance view") ────────────────────
+//
+// The series is the EXISTING agent report evaluated once per IST day (see getAgentConversationDaily
+// in index.js), so every daily figure carries exactly the definition and date basis the Agents tab
+// already documents — queries/answered/first-reply/resolution are raised-dated, handled is
+// reply-dated, resolved/closed are closure-dated. This module only RESHAPES: N day-reports in,
+// one team series + one series per agent out. It never computes a metric itself.
+
+export const DAILY_METRICS = [
+  { key: 'queries',            label: 'Queries',         kind: 'count' },
+  { key: 'answered',           label: 'Answered',        kind: 'count' },
+  { key: 'unanswered',         label: 'Never answered',  kind: 'count' },
+  { key: 'avg_frt_min',        label: 'Avg first reply', kind: 'minutes' },
+  { key: 'avg_resolution_min', label: 'Avg resolution',  kind: 'minutes' },
+  { key: 'resolve_rate',       label: 'Resolve rate',    kind: 'pct' },
+  { key: 'handled',            label: 'Handled',         kind: 'count' },
+  { key: 'resolved',           label: 'Resolved',        kind: 'count' },
+  { key: 'assigned',           label: 'Assigned',        kind: 'count' },
+];
+const DAILY_KEYS = DAILY_METRICS.map(m => m.key);
+const isCount = (k) => DAILY_METRICS.find(m => m.key === k)?.kind === 'count';
+
+// One metrics object from a report row (totals or a by_agent row). Counts default to 0 — an agent
+// absent from a day's report did nothing that day, and 0 is the true figure. Averages and rates
+// default to null — "no conversations to average" is not "0 minutes", and a 0 would drag every
+// rolling reading down.
+function pick(row) {
+  const out = {};
+  for (const k of DAILY_KEYS) {
+    const v = row?.[k];
+    out[k] = v == null ? (isCount(k) ? 0 : null) : Number(v);
+  }
+  return out;
+}
+
+/**
+ * @param dayReports [{ day:'YYYY-MM-DD', report:{ totals, by_agent } }] in any order
+ * @returns { days:[{ day, …metrics }], by_agent:[{ agent_id, name, handled_total, days:[{ day, …metrics }] }] }
+ *          `days` sorted ascending; every agent has a row for EVERY day (zeros/nulls where absent) so a
+ *          chart can plot them on one axis without gaps; agents sorted by handled_total desc, then name.
+ */
+export function dailySeries(dayReports = []) {
+  const sorted = [...dayReports].sort((a, b) => a.day.localeCompare(b.day));
+  const days = sorted.map(({ day, report }) => ({ day, ...pick(report?.totals) }));
+
+  // Agents are keyed the way the report keys its rows: agent_id, falling back to name for the
+  // unassigned bucket (which has no id and is a real, interesting line).
+  const agents = new Map();
+  for (const { day, report } of sorted) {
+    for (const r of (report?.by_agent || [])) {
+      const key = r.agent_id || r.name;
+      const a = agents.get(key) || { agent_id: r.agent_id || null, name: r.name, byDay: {} };
+      a.byDay[day] = pick(r);
+      agents.set(key, a);
+    }
+  }
+  const by_agent = [...agents.values()].map(a => {
+    const rows = sorted.map(({ day }) => ({ day, ...(a.byDay[day] || pick(null)) }));
+    return {
+      agent_id: a.agent_id, name: a.name,
+      handled_total: rows.reduce((s, r) => s + r.handled, 0),
+      days: rows,
+    };
+  }).sort((a, b) => b.handled_total - a.handled_total || a.name.localeCompare(b.name));
+
+  return { days, by_agent };
+}
