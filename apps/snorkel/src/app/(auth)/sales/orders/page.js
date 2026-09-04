@@ -71,7 +71,10 @@ export default function SalesOrdersPage() {
     const lines = [cols.join(',')];
     for (const o of filtered) lines.push([o.order_no, o.order_date, o.partner_name, o.channel_key,
       orderStatusLabel(o.status), fulfilmentMeta(o.fulfilment_status).label, o.invoice_no, o.grand_total,
-      o.fulfilled_value, o.shortfall_value,
+      // Match the UI exactly: a cancelled order shows no fulfilment figures on screen, so
+      // it must not carry them in the export either (S344 hostile review).
+      o.status === 'cancelled' ? '' : o.fulfilled_value,
+      o.status === 'cancelled' ? '' : o.shortfall_value,
       o.amount_received, o.balance, o.due_date, o.overdue ? 'Yes' : 'No', o.payment_status].map(csvCell).join(','));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -146,7 +149,12 @@ export default function SalesOrdersPage() {
                         ) : (
                           <>
                             <div>{inr(o.fulfilled_value)}</div>
-                            {Number(o.shortfall_value) > 0 && (
+                            {/* ⚠️ Red is for SHIPPED SHORT, not "not shipped yet" (S344
+                                hostile review). Painting the full order value red on every
+                                draft and unaccepted order would put ~400 of 532 rows in red
+                                and the colour would stop meaning anything — the fulfilment
+                                badge already says nothing has gone. */}
+                            {Number(o.shortfall_value) > 0 && !o.nothing_dispatched && (
                               <div style={{ fontSize: 11, color: 'var(--red-fg)' }}>
                                 −{inr(o.shortfall_value)}
                               </div>

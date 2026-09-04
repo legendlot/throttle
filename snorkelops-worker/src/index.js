@@ -237,14 +237,18 @@ function totalFromRange(range) {
 // reads as "the vendor shorted us" rather than as a bug. So page.
 // ⚠️ `params` MUST carry an `order=` ending in a unique column (id) — a non-unique sort makes
 // page boundaries drop and repeat rows.
+// ⚠️ Returns NULL on any failed page, never a short array (S344 hostile review). Breaking
+// out of the loop on `!r.ok` would hand back 1,000 of 2,921 rows with no signal — which is
+// precisely the silent truncation this function exists to prevent, arriving by a different
+// door. Callers must treat null as "unknown" and omit the derived figure.
 async function pageAll(queryFn, table, params, pageSize = 1000) {
   const out = [];
   for (let offset = 0; ; offset += pageSize) {
     const r = await queryFn(table, `${params}&limit=${pageSize}&offset=${offset}`);
-    if (!r.ok || !Array.isArray(r.data)) break;
+    if (!r.ok || !Array.isArray(r.data)) return null;
     out.push(...r.data);
     if (r.data.length < pageSize) break;      // short page = last page
-    if (offset > 100000) break;               // belt and braces against an infinite loop
+    if (offset > 100000) return null;         // runaway: unknown, not complete
   }
   return out;
 }
@@ -418,9 +422,17 @@ async function gstRateLookup() {
   const codes = [...byCode.keys()].sort((a, b) => b.length - a.length); // most specific first
   return (hsn) => {
     const h = normHsn(hsn);
-    if (!h) return null;
+    // ⚠️ Only a plausible 4–8 digit code may prefix-resolve (S344 hostile review). Without
+    // this, ANY string prefix-matches: `4819-10` would take 4819 @18% when 481910 is 5%, and
+    // material_master already holds `4411140` (a 7-digit truncation typo) which would silently
+    // inherit 4411's rate the day that row is added. Worse, resolveRequestLineTax sets
+    // needs_hsn_review=false once a rate resolves — so a junk code would stop asking a human.
+    if (!h || !isPlausibleHsn(h)) return null;
     if (byCode.has(h)) return byCode.get(h);
-    for (const c of codes) if (c.length < h.length && h.startsWith(c)) return byCode.get(c);
+    // Prefixes only at 4/6-digit HSN boundaries — the levels the schedule actually defines.
+    for (const c of codes) {
+      if (c.length < h.length && (c.length === 4 || c.length === 6) && h.startsWith(c)) return byCode.get(c);
+    }
     return null;
   };
 }
@@ -778,11 +790,19 @@ async function salesOrderFulfilmentValues(orders, ful) {
   // Whole-table paged reads rather than a 500-id `in.()`: 527 order UUIDs would build a
   // ~19 KB URL, and the list already returns every order, so the row sets are the same.
   const [allLines, allDispatch] = await Promise.all([
+    // ⚠️ sort_order, not id. Pool-draining is order-independent in UNITS but not in VALUE:
+    // when duplicate-variant lines carry different rates (102 of 182 duplicate groups do),
+    // draining in UUID order allocates the shipped units to different lines than the detail
+    // screen does, and the two screens report different money for the same order. No live
+    // divergence yet — 0 of 142 duplicate-variant orders have shipped — but the first one
+    // to ship would show it. (S344 hostile review.)
     pageAll(query, 'sales_order_lines',
-      '?select=order_id,product,model,color,qty,rate,discount_pct,gst_pct&order=order_id.asc,id.asc'),
+      '?select=order_id,product,model,color,qty,rate,discount_pct,gst_pct,sort_order&order=order_id.asc,sort_order.asc,id.asc'),
     pageAll(queryPublic, 'dispatch_shipment_lines',
       '?select=shipment_id,product,model,color,target_qty,packed_qty&order=shipment_id.asc,id.asc'),
   ]);
+  // A failed page means UNKNOWN, not zero — omit the columns rather than under-report.
+  if (!allLines || !allDispatch) return out;
   const linesByOrder = {};
   for (const l of allLines) (linesByOrder[l.order_id] ||= []).push(l);
   const dispByShip = {};
@@ -798,16 +818,30 @@ async function salesOrderFulfilmentValues(orders, ful) {
     const shipments = all.filter(s => s.status !== 'cancelled');
     const dispatchLines = shipments.flatMap(sh => dispByShip[sh.id] || []);
     const allocated = allocateLineFulfilment(rows, shipments, dispatchLines);
-    let taxable = 0, gst = 0;
+    let taxable = 0, gst = 0, orderedTaxable = 0, orderedGst = 0;
     for (const l of allocated) {
+      const rate = Number(l.rate) || 0;
+      const disc = 1 - (Number(l.discount_pct) || 0) / 100;
+      const gstPct = (Number(l.gst_pct) || 0) / 100;
+      const ot = (Math.round(Number(l.qty)) || 0) * rate * disc;
+      orderedTaxable += ot; orderedGst += ot * gstPct;
       const sent = Math.round(Number(l.shipped_qty)) || 0;
       if (!sent) continue;
-      const t = sent * (Number(l.rate) || 0) * (1 - (Number(l.discount_pct) || 0) / 100);
+      const t = sent * rate * disc;
       taxable += t;
-      gst += t * (Number(l.gst_pct) || 0) / 100;
+      gst += t * gstPct;
     }
     const value = +(taxable + gst).toFixed(2);
-    const ordered = Number(o.grand_total) || 0;
+    // ⚠️ ORDERED IS DERIVED FROM THE LINES, NOT `grand_total` (S344 hostile review). The two
+    // are NOT the same number: 113 of 534 orders disagree by more than ₹1, 111 of them with
+    // the lines ABOVE the stored header (max ₹64,870, ₹7,85,751 in aggregate). Comparing a
+    // line-derived fulfilled value against a header total means that once one of those 111
+    // ships, Fulfilled renders ABOVE Total and the shortfall clamps to zero while units are
+    // still genuinely owed — the column would say "nothing to chase" on an order that is
+    // short. Both sides now derive the same way, so a fully-shipped order is exactly 0.
+    // ⚠️ The header/line divergence itself is a PRE-EXISTING data bug, surfaced not caused
+    // here; it is reported separately as `header_line_gap` rather than silently absorbed.
+    const ordered = +(orderedTaxable + orderedGst).toFixed(2);
     const gap = ordered - value;
     out[o.id] = {
       fulfilled_taxable: +taxable.toFixed(2),
@@ -821,6 +855,13 @@ async function salesOrderFulfilmentValues(orders, ful) {
       // ⚠️ Never negative either: over-shipping is a different conversation, and a negative
       // "shortfall" in a ₹ column reads as a credit, which it is not.
       shortfall_value: gap < 1 ? 0 : +gap.toFixed(2),
+      ordered_value: ordered,
+      // Non-zero = this order's stored grand_total disagrees with its own lines. Surfaced so
+      // the divergence is visible rather than quietly changing what the column means.
+      header_line_gap: +((Number(o.grand_total) || 0) - ordered).toFixed(2),
+      // Nothing has been dispatched at all — distinct from "shipped short". The UI uses this
+      // to avoid painting a full-value red shortfall on every draft and unaccepted order.
+      nothing_dispatched: value === 0,
     };
   }
   return out;
@@ -1920,6 +1961,20 @@ export default {
             if (poNum) {
               const data = await loadPoDocData(poNum);
               if (!data) { out.render = { po_number: poNum, error: 'PO not found' }; return ok(out); }
+              // ⛔ THE CHINA / SOFT GATE, MIRRORING getSalesPrintPOData (S344 hostile review).
+              // loadPoDocData deliberately skips request-time permission checks, and this
+              // handler's own gate (`po_request_accept` OR a super_admin payment grant) has
+              // NOTHING to do with PO visibility. Without this, a holder WITHOUT `po_china`
+              // could read a China PO's full financial strip — unit_price, total_value,
+              // payment_terms, invoice_value — via `&html=1`, or DM itself the PDF via
+              // `&test_send=1`, which cannot be un-sent. getPrintPOData refuses exactly this
+              // (`:2105` Soft, `:2117` China → stripChinaPOHeader/stripChinaPOLine).
+              // ⚠️ Latent today (every po_request_accept role also carries po_china, and both
+              // super_admin grantees are role `admin`) — one role grant away from live.
+              if (!canViewChina(P) && (data.po.source === 'China' || data.po.status === 'Soft')) {
+                out.render = { po_number: poNum, error: 'Restricted: requires po_china' };
+                return ok(out);
+              }
               const html = poPrintHtml(data);
               // ?html=1 returns the source instead of rendering — lets the exact document
               // be eyeballed in a browser without burning a Browser Run call per look.

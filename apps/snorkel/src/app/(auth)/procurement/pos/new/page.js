@@ -278,10 +278,26 @@ function NewPOPage() {
       if (def) setDeliveryAddressId(String(def.id));
     }).catch(() => {});
     garageFetch('getHsnRates', {}, session).then((d) => {
+      // ⚠️ EXACT-MATCH LOOKUP WAS WRONG HERE and this form was the site the worker fix missed
+      // (S344 hostile review, PATTERN-218). Parts carry full 8-digit HSN while hsn_gst_rates
+      // holds mostly 4-digit headings, so `map['39269099']` was undefined even though 3926
+      // @18% is right there — the form then blanked GST, unlocked the field and rendered
+      // "⚠ no known rate — enter GST manually" for exactly the 46 parts the worker fix had
+      // just taught to resolve. Same longest-prefix rule as snorkelops' gstRateLookup:
+      // exact first, then 6- then 4-digit, and only for a plausible 4–8 digit code.
+      const rows = (Array.isArray(d) ? d : []).filter(r => r.hsn_code && r.gst_percent != null);
       const map = {};
-      (Array.isArray(d) ? d : []).forEach((r) => {
-        if (r.hsn_code) map[r.hsn_code] = parseFloat(r.gst_percent);
-      });
+      rows.forEach((r) => { map[String(r.hsn_code).replace(/\s+/g, '')] = parseFloat(r.gst_percent); });
+      const codes = Object.keys(map).sort((a, b) => b.length - a.length);
+      map.__resolve = (hsn) => {
+        const h = String(hsn ?? '').replace(/\s+/g, '');
+        if (!/^\d{4,8}$/.test(h)) return null;
+        if (map[h] != null) return map[h];
+        for (const c of codes) {
+          if (c.length < h.length && (c.length === 4 || c.length === 6) && h.startsWith(c)) return map[c];
+        }
+        return null;
+      };
       setHsnMap(map);
     }).catch(() => {});
     // part -> HSN from the part master. The BOM-add path fills HSN from getBOM, i.e.
@@ -404,7 +420,7 @@ function NewPOPage() {
       ...picked.map((r) => {
         // Part master first — getBOM's hsn_code (bom_register) is empty for every part.
         const hsn = partHsnMap[r.part_code]?.hsn_code || r.hsn_code || '';
-        const gst = hsn && hsnMap[hsn] != null ? hsnMap[hsn] : '';
+        const gst = hsn && hsnMap.__resolve?.(hsn) != null ? hsnMap.__resolve(hsn) : '';
         return {
           part_code:    r.part_code,
           // Product-qualify so the vendor sees "Flare Ecomm Box", not "Ecomm Box".
@@ -1231,7 +1247,7 @@ function ManualMode({
                     }
                     if (opt.hsn_code) {
                       next.hsn_code = opt.hsn_code;
-                      if (hsnMap[opt.hsn_code] != null) next.gst_percent = String(hsnMap[opt.hsn_code]);
+                      if (hsnMap.__resolve?.(opt.hsn_code) != null) next.gst_percent = String(hsnMap.__resolve(opt.hsn_code));
                     }
                     return next;
                   }));
@@ -1313,13 +1329,13 @@ function ManualMode({
                             const next = { ...row, hsn_code: hsn };
                             // Auto-fill GST% when HSN matches a known rate; leave
                             // GST untouched (manual entry) when no match.
-                            if (hsn && hsnMap[hsn] != null) next.gst_percent = String(hsnMap[hsn]);
+                            if (hsn && hsnMap.__resolve?.(hsn) != null) next.gst_percent = String(hsnMap.__resolve(hsn));
                             return next;
                           }));
                         }}
                         style={{ ...inputStyle, width: 80, fontFamily: 'var(--mono)' }}
                       />
-                      {l.hsn_code && hsnMap[l.hsn_code] == null && (
+                      {l.hsn_code && hsnMap.__resolve?.(l.hsn_code) == null && (
                         <div style={{ fontSize: 9, color: '#fbbf24', marginTop: 3, fontFamily: 'var(--mono)', lineHeight: 1.2, maxWidth: 110 }}>
                           ⚠ no known rate — enter GST manually
                         </div>
@@ -1327,7 +1343,7 @@ function ManualMode({
                     </td>
                   )}
                   {currency === 'INR' && (() => {
-                    const locked = !!l.hsn_code && hsnMap[l.hsn_code] != null;
+                    const locked = !!l.hsn_code && hsnMap.__resolve?.(l.hsn_code) != null;
                     return (
                       <td style={tableTdStyle}>
                         <input
@@ -1336,7 +1352,7 @@ function ManualMode({
                           value={l.gst_percent ?? ''}
                           readOnly={locked}
                           onChange={(e) => updateLine(i, 'gst_percent', e.target.value)}
-                          title={locked ? `Locked: HSN ${l.hsn_code} → ${hsnMap[l.hsn_code]}%` : 'Enter GST % manually'}
+                          title={locked ? `Locked: HSN ${l.hsn_code} → ${hsnMap.__resolve?.(l.hsn_code)}%` : 'Enter GST % manually'}
                           style={{
                             ...inputStyle,
                             width: 70,
