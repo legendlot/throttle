@@ -1782,6 +1782,17 @@ export default {
               cf_browser_token_set: !!env.CF_BROWSER_TOKEN,
             };
             if (env.SLACK_BOT_TOKEN) {
+              // Token SHAPE only — never the value. An invalid_auth is almost always a
+              // paste fault (echo's trailing newline, smart quotes, the signing secret
+              // or an xapp- app-level token instead of the xoxb- bot token), and without
+              // this you cannot tell which. Prefix + length are not a usable secret.
+              const t = env.SLACK_BOT_TOKEN;
+              out.token_shape = {
+                prefix: t.slice(0, 5),
+                length: t.length,
+                has_whitespace: /\s/.test(t),
+                has_quotes: /['"`]/.test(t),
+              };
               const who = await slackApi('auth.test', {}, env);
               out.slack_auth_ok = !!who.ok;
               out.slack_bot = who.ok ? { team: who.team, bot: who.user, bot_id: who.bot_id } : null;
