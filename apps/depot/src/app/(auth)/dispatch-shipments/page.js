@@ -344,7 +344,26 @@ export default function DispatchShipmentsPage() {
           showToast(`${s.shipment_no} marked as shipped`, 'success');
           setDetailShipment(null);
           loadShipments();
-        } catch (e) { showToast(e.message || 'Failed', 'error'); }
+        } catch (e) {
+          // The worker refuses (409 SHIPMENT_PARTIAL) rather than silently closing lines that
+          // were never packed. workerFetch throws with the full body on `e.detail`.
+          if (e.message === 'SHIPMENT_PARTIAL') {
+            const dt = e.detail || {};
+            const goPartial = window.confirm(
+              `${dt.balance_units} units on ${dt.balance_lines} line(s) are not packed.\n\n` +
+              'Ship the packed units now and move the balance to a NEW shipment?');
+            if (!goPartial) return;
+            try {
+              const res = await workerFetch('markShipmentShipped', { shipment_id: s.id, partial: true }, session);
+              const r = res?.data || res;
+              showToast(`Shipped — balance moved to ${r?.balance_shipment_no || 'a new shipment'}`, 'success');
+              setDetailShipment(null);
+              loadShipments();
+            } catch (e2) { showToast(e2.message || 'Failed', 'error'); }
+            return;
+          }
+          showToast(e.message || 'Failed', 'error');
+        }
       },
     });
   }
