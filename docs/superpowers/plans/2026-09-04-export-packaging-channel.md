@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+- ⚠️ **Line numbers in this plan are anchors as of worker `73001b6`; the S349 forced-GRN commit `5b6f0e4` (plus its hostile-review fix) shifted everything after `worker.js:14849` by about +13 and after `:21031` by about +19.** Re-derive every `:NNNN` by grepping the quoted code before editing — never trust the number. App and scanner anchors were not re-derived either.
+
 - `ecom` and `retail` behaviour must stay byte-identical: `01_worker/test/channel.test.js` is not edited and must stay green.
 - Enum-CHECK rule: every CHECK widened in the SAME migration as the column/value it gates (CLAUDE.md).
 - Worker deploy sequence: edit → commit → push (must succeed) → `cd 01_worker && npx wrangler deploy`. `npx wrangler deploy --dry-run` before committing any change that adds an import.
@@ -86,9 +88,11 @@ DROP FUNCTION public.get_line_view(date, text);
 DROP FUNCTION public.get_open_runs();
 DROP FUNCTION public.get_plan_vs_actual(date, date, text);
 <paste the three edited CREATE FUNCTION bodies>
-GRANT EXECUTE ON FUNCTION public.get_line_view(date, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_open_runs() TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_plan_vs_actual(date, date, text) TO service_role;
+-- DROP silently discards the existing grants. Measured 2026-09-04: each of the three grants EXECUTE to
+-- PUBLIC, anon, authenticated, postgres, service_role — re-grant ALL of them, not just service_role.
+GRANT EXECUTE ON FUNCTION public.get_line_view(date, text)             TO PUBLIC, anon, authenticated, postgres, service_role;
+GRANT EXECUTE ON FUNCTION public.get_open_runs()                       TO PUBLIC, anon, authenticated, postgres, service_role;
+GRANT EXECUTE ON FUNCTION public.get_plan_vs_actual(date, date, text)  TO PUBLIC, anon, authenticated, postgres, service_role;
 NOTIFY pgrst, 'reload schema';
 ```
 
@@ -101,6 +105,9 @@ SELECT table_schema||'.'||table_name, column_name FROM information_schema.column
 SELECT conrelid::regclass, pg_get_constraintdef(oid) FROM pg_constraint
  WHERE conname IN ('pkg_scans_channel_check','dispatch_channels_type_check','dispatch_plan_lines_mapping_check');
 -- expect: each contains the new value
+SELECT routine_name, grantee FROM information_schema.routine_privileges
+ WHERE routine_schema='public' AND routine_name IN ('get_line_view','get_open_runs','get_plan_vs_actual') ORDER BY 1,2;
+-- expect: 5 grantees per function (PUBLIC, anon, authenticated, postgres, service_role) — same as before the DROP
 WITH now_rows AS (
   SELECT 'open_runs' AS fn, (row_to_json(r)::jsonb - 'target_export') AS row FROM public.get_open_runs() r)
 SELECT count(*) AS changed FROM now_rows n
@@ -212,6 +219,46 @@ export function splitPackagingQty(bom, wo) {
     return sum + ((Number(bom?.[col]) || 0) * (Number(wo?.[col]) || 0));
   }, 0);
 }
+
+/**
+ * Strip a channel suffix (-E / -R / -X) from a car UPC or batch label. Replaces the 21
+ * inline `replace(/-[ER]$/i, '')` sites in worker.js (hostile review S349 — a `-X` UPC would
+ * otherwise keep its suffix and miss lookup, audit, allocation and PKG_OUT).
+ */
+export const CHANNEL_SUFFIX_RE = new RegExp(`-[${CHANNEL_CODES.join('')}]$`, 'i');
+export function stripChannelSuffix(s) {
+  return typeof s === 'string' ? s.replace(CHANNEL_SUFFIX_RE, '') : s;
+}
+/** Box-label shape `LOT-<n>-<E|R|X>` — replaces the 5 inline `/^LOT-\d+-[ER]$/` detectors. */
+export const BOX_LABEL_RE = new RegExp(`^LOT-\\d+-[${CHANNEL_CODES.join('')}]$`, 'i');
+```
+
+Also widen the split predicate in the same file — it gates all three pick-math sites and an export-only BOM row (`qty_ecomm` NULL) would otherwise never be treated as split packaging and silently vanish from the picklist:
+
+```js
+export function isSplitPackagingBom(bom) {
+  return bom?.qty_ecomm != null || bom?.qty_export != null;
+}
+```
+
+Add to `test/channel-export.test.js`:
+
+```js
+import { stripChannelSuffix, BOX_LABEL_RE, isSplitPackagingBom } from '../lib/channel.js';
+test('stripChannelSuffix and BOX_LABEL_RE know -X', () => {
+  assert.equal(stripChannelSuffix('LOT-000123-E'), 'LOT-000123');
+  assert.equal(stripChannelSuffix('LOT-000123-x'), 'LOT-000123');
+  assert.equal(stripChannelSuffix('LOT-000123'),   'LOT-000123');
+  assert.equal(stripChannelSuffix(null), null);
+  assert.ok(BOX_LABEL_RE.test('LOT-4521-X'));
+  assert.ok(BOX_LABEL_RE.test('LOT-4521-E'));
+  assert.ok(!BOX_LABEL_RE.test('LOT-4521-Q'));
+});
+test('an export-only BOM row is split packaging', () => {
+  assert.equal(isSplitPackagingBom({ qty_export: 1 }), true);
+  assert.equal(isSplitPackagingBom({ qty_ecomm: null, qty_retail: 1 }), false);   // unchanged: retail-only NULL-ecomm rows were never split
+  assert.equal(isSplitPackagingBom({}), false);
+});
 ```
 
 - [ ] **Step 4: Run ALL worker tests**
@@ -261,7 +308,11 @@ Line 16 currently imports from `./lib/channel.js`; add `channelFromLabel, splitP
               const ch = channelFromLabel(tok)?.channel ?? null;
 ```
 
-- [ ] **Step 3: Grep that no `-R$` / `-E$` regex remains in worker.js**
+- [ ] **Step 3: The 21 UPC-strip sites and 5 box-label detectors (Task 3a — hostile review S349)**
+
+Run: `grep -nE -- '-\[ER\]\$' 01_worker/worker.js` → **21** hits of the form `.replace(/-[ER]$/i, '')` (measured 2026-09-04: lines ~710, 2432, 5580, 9050, 9157, 9312, 9802, 10320, 12519, 12865, 13053, 15544, 18744 and more — re-derive). Replace EVERY one with `stripChannelSuffix(x)` (import it with the others on line 16). Then `grep -nE 'LOT-\\d\+-\[ER\]' 01_worker/worker.js` → **5** box-label detectors of the form `/^LOT-\d+-[ER]$/i` (~11216, 11355, 11529, 13052 and one more); replace each regex literal with `BOX_LABEL_RE`. Re-run both greps: expected **0** hits each. Reconcile the count against the greps, not this list — a `-X` UPC that keeps its suffix at ONE missed site is invisible to lookup/audit/allocation at that site only, which is the PATTERN-218 shape.
+
+- [ ] **Step 3b: Grep that no `-R$` / `-E$` channel-DETECTION regex remains in worker.js**
 
 Run: `grep -nE "/-?\\\\?-[ER]\\$/" 01_worker/worker.js`
 Expected: no output.
