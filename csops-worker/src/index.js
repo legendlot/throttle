@@ -28,7 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
-import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket } from './analytics.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 
 
@@ -1966,7 +1966,7 @@ async function getSupportAnalytics(params, auth, env) {
 
   // Trend grain (Pruthvi asked for weekly; monthly was all there was). Anything but an
   // explicit 'week' stays monthly, so an old cached page keeps the shape it expects.
-  const grain = params.get('grain') === 'week' ? 'week' : 'month';
+  const grain = ['week', 'day'].includes(params.get('grain')) ? params.get('grain') : 'month';
 
   // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
   // MULTI-select (S344, Pruthvi #bugs 1788512544): each dimension takes a separator-joined list,
@@ -2050,18 +2050,25 @@ async function getSupportAnalytics(params, auth, env) {
   const byCategory = {}, byLine = {}, bySale = {}, bySupport = {}, bySub = {};
   const prodMap = {};                 // product → { total, cats:{cat:n} }
   const catsPresent = new Set();
-  const monthProd = {}, monthCat = {}; // month → { total, <dim>:n }
+  const monthProd = {}, monthCat = {}; // bucket → { total, <dim>:n }
+  // Ageing as a TREND, not just a KPI (S347). Ageing existed only as three headline numbers,
+  // so "is the gap between purchase and complaint moving?" — Pruthvi's actual question — could
+  // not be read off the page at all.
+  const bktAge = {};                   // bucket → { total, within_3d, after_3d, unknown }
 
   for (const r of rows) {
-    // ageing
+    // ageing. Classified ONCE into `ageBand` and consumed by both the KPI and the trend below,
+    // so the headline and the series can never disagree about what "within 3 days" means.
     const pd = r.purchase_date, cd = istDate(r.created_at);
-    if (!pd || !cd) kpis.ageing_unknown++;
+    let ageBand;
+    if (!pd || !cd) ageBand = 'ageing_unknown';
     else {
       const days = Math.floor((Date.parse(`${cd}T00:00:00Z`) - Date.parse(`${pd}T00:00:00Z`)) / 86400000);
-      if (days >= 0 && days <= 3) kpis.within_3d++;
-      else if (days > 3) kpis.after_3d++;
-      else kpis.ageing_unknown++;     // complaint dated before purchase = anomaly
+      if (days >= 0 && days <= 3) ageBand = 'within_3d';
+      else if (days > 3) ageBand = 'after_3d';
+      else ageBand = 'ageing_unknown';   // complaint dated before purchase = anomaly
     }
+    kpis[ageBand]++;
 
     const { product, issue_category: cat, product_line: line, sale_channel: sale, support_channel: sup } =
       analyticsDims(r, lineOf);
@@ -2087,6 +2094,8 @@ async function getSupportAnalytics(params, auth, env) {
       mp.total++; mp[product] = (mp[product] || 0) + 1;
       const mc = monthCat[bkt] || (monthCat[bkt] = { bucket: bkt, total: 0 });
       mc.total++; mc[cat] = (mc[cat] || 0) + 1;
+      const ma = bktAge[bkt] || (bktAge[bkt] = { bucket: bkt, total: 0, within_3d: 0, after_3d: 0, ageing_unknown: 0 });
+      ma.total++; ma[ageBand]++;
     }
   }
 
@@ -2122,6 +2131,15 @@ async function getSupportAnalytics(params, auth, env) {
     trend_grain: grain,
     monthly_product_trend: Object.values(monthProd).sort((a, b) => a.bucket.localeCompare(b.bucket)),
     monthly_category_trend: Object.values(monthCat).sort((a, b) => a.bucket.localeCompare(b.bucket)),
+    ageing_trend: Object.values(bktAge).sort((a, b) => a.bucket.localeCompare(b.bucket)),
+    // Rolling-average complaint rate. Deliberately derived from the SAME bucket series the
+    // charts above use, so the smoothed line can never disagree with the bars it sits over.
+    // The window is in BUCKETS, not days: 7 on a daily grain is a week, and on a monthly grain
+    // a 7-bucket mean would be meaningless — hence the grain-dependent window.
+    complaint_rate_trend: rollingAverage(
+      Object.values(monthCat).sort((a, b) => a.bucket.localeCompare(b.bucket)),
+      grain === 'day' ? 7 : grain === 'week' ? 4 : 3,
+    ),
   });
 }
 

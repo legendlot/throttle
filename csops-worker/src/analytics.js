@@ -39,6 +39,9 @@ export const ANALYTICS_DIM_KEYS = ['product', 'issue_category', 'product_line', 
 // in any other zone would shift the day and drop calls into the wrong week.
 export function trendBucket(istDateStr, grain) {
   if (!istDateStr) return null;
+  // 'day' is the whole IST date — Pruthvi's daily view (S347). It sorts as a string like the
+  // other two, so nothing downstream has to know which grain it is looking at.
+  if (grain === 'day') return istDateStr;
   if (grain !== 'week') return istDateStr.slice(0, 7);
   const t = Date.parse(`${istDateStr}T00:00:00Z`);
   if (!Number.isFinite(t)) return null;
@@ -46,4 +49,33 @@ export function trendBucket(istDateStr, grain) {
   const dow = (d.getUTCDay() + 6) % 7;          // 0 = Monday
   d.setUTCDate(d.getUTCDate() - dow);
   return d.toISOString().slice(0, 10);
+}
+
+// rollingAverage — the smoothed complaint-rate series (S347, Pruthvi #bugs 1787733817).
+//
+// Input is the SAME bucket series the trend charts render, so the smoothed line can never
+// disagree with the bars it sits over. Output is one row per input bucket:
+//   { bucket, count, avg }   avg = trailing mean of `count` over the last `window` buckets.
+//
+// ⚠️ The mean is over the buckets PRESENT, not over `window` — an early bucket averages the
+// 1..n it actually has. Dividing by `window` before the series is `window` long would print a
+// rising ramp at the left edge that looks like a real trend and is pure arithmetic.
+//
+// ⚠️ Gaps are NOT filled. A day with zero complaints produces no bucket upstream, so it is
+// absent rather than zero, and the mean therefore skips it. That is the honest reading of
+// "average over the last 7 points we have"; filling zeros would be a different metric and
+// would quietly depress every average across a quiet stretch.
+export function rollingAverage(series, window) {
+  if (!Array.isArray(series) || !series.length) return [];
+  const w = Math.max(1, Number(window) || 1);
+  return series.map((row, i) => {
+    const slice = series.slice(Math.max(0, i - w + 1), i + 1);
+    const sum = slice.reduce((a, r) => a + (Number(r.total) || 0), 0);
+    return {
+      bucket: row.bucket,
+      count: Number(row.total) || 0,
+      avg: +(sum / slice.length).toFixed(2),
+      window: slice.length,
+    };
+  });
 }

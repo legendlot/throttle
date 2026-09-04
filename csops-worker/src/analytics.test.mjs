@@ -102,3 +102,69 @@ test('null and malformed input return null rather than throwing or bucketing wro
   assert.equal(trendBucket('', 'week'), null);
   assert.equal(trendBucket('not-a-date', 'week'), null);
 });
+
+// ── daily grain (S347) ──────────────────────────────────────────────────────
+// Pruthvi asked for a daily/weekly/MTD/monthly switch; only month and week existed.
+
+test('day grain returns the whole IST date, so a day is never folded into its month', () => {
+  assert.equal(trendBucket('2026-09-04', 'day'), '2026-09-04');
+  assert.equal(trendBucket('2026-01-01', 'day'), '2026-01-01');
+});
+
+test('every grain sorts correctly as a plain string — the trend rows are ordered by bucket', () => {
+  const days = ['2026-09-10', '2026-09-02', '2026-09-04'].map(d => trendBucket(d, 'day'));
+  assert.deepEqual([...days].sort(), ['2026-09-02', '2026-09-04', '2026-09-10']);
+});
+
+test('an unknown grain still falls back to month rather than throwing or returning null', () => {
+  assert.equal(trendBucket('2026-09-04', 'fortnight'), '2026-09');
+  assert.equal(trendBucket('2026-09-04', undefined), '2026-09');
+});
+
+test('day grain keeps the empty-input contract', () => {
+  assert.equal(trendBucket(null, 'day'), null);
+  assert.equal(trendBucket('', 'day'), null);
+});
+
+// ── rollingAverage (S347) ───────────────────────────────────────────────────
+import { rollingAverage } from './analytics.js';
+
+test('the trailing mean is over the buckets PRESENT, not over the window width', () => {
+  // If early rows divided by the window, this would print a fake rising ramp: 1.0, 1.5, 2.0.
+  const out = rollingAverage([{ bucket: 'a', total: 3 }, { bucket: 'b', total: 3 }, { bucket: 'c', total: 3 }], 7);
+  assert.deepEqual(out.map(r => r.avg), [3, 3, 3]);
+  assert.deepEqual(out.map(r => r.window), [1, 2, 3]);
+});
+
+test('the window slides once the series is longer than it', () => {
+  const s = [1, 2, 3, 4, 5].map((n, i) => ({ bucket: `d${i}`, total: n }));
+  const out = rollingAverage(s, 3);
+  assert.deepEqual(out.map(r => r.avg), [1, 1.5, 2, 3, 4]);   // last = (3+4+5)/3
+  assert.deepEqual(out.map(r => r.window), [1, 2, 3, 3, 3]);
+});
+
+test('count is carried alongside avg, so the chart can draw bars and the line from one series', () => {
+  const out = rollingAverage([{ bucket: 'a', total: 10 }, { bucket: 'b', total: 20 }], 2);
+  assert.deepEqual(out, [
+    { bucket: 'a', count: 10, avg: 10, window: 1 },
+    { bucket: 'b', count: 20, avg: 15, window: 2 },
+  ]);
+});
+
+test('an empty or malformed series yields [] rather than throwing', () => {
+  assert.deepEqual(rollingAverage([], 7), []);
+  assert.deepEqual(rollingAverage(null, 7), []);
+  assert.deepEqual(rollingAverage(undefined, 7), []);
+});
+
+test('a missing or zero window degrades to a window of 1, never a divide-by-zero', () => {
+  const out = rollingAverage([{ bucket: 'a', total: 4 }, { bucket: 'b', total: 6 }], 0);
+  assert.deepEqual(out.map(r => r.avg), [4, 6]);
+  assert.ok(out.every(r => Number.isFinite(r.avg)));
+});
+
+test('a non-numeric total counts as zero rather than poisoning the mean with NaN', () => {
+  const out = rollingAverage([{ bucket: 'a', total: 2 }, { bucket: 'b' }, { bucket: 'c', total: 4 }], 3);
+  assert.ok(out.every(r => Number.isFinite(r.avg)));
+  assert.equal(out[2].avg, 2);   // (2 + 0 + 4) / 3
+});

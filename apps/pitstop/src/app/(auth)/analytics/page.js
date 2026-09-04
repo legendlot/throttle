@@ -221,10 +221,10 @@ export default function AnalyticsPage() {
 
     // The export must SAY which grain it is — a weekly file headed "Monthly" is the kind of
     // thing that gets quoted in a meeting a month later.
-    const grainWord  = data.trend_grain === 'week' ? 'Weekly' : 'Monthly';
-    const bucketHead = data.trend_grain === 'week' ? 'Week of' : 'Month';
-    for (const [title, series] of [[`${grainWord} Product Trend`, data.monthly_product_trend],
-                                  [`${grainWord} Category Trend`, data.monthly_category_trend]]) {
+    const grainW     = grainWord(data.trend_grain);
+    const bucketHead = bucketHeading(data.trend_grain);
+    for (const [title, series] of [[`${grainW} Product Trend`, data.monthly_product_trend],
+                                  [`${grainW} Category Trend`, data.monthly_category_trend]]) {
       if (!series?.length) continue;
       const totals = {};
       for (const row of series) for (const kk of Object.keys(row)) {
@@ -293,6 +293,7 @@ export default function AnalyticsPage() {
         <select value={grain} style={selectStyle} onChange={e => setGrain(e.target.value)}>
           <option value="month">Trend: monthly</option>
           <option value="week">Trend: weekly</option>
+          <option value="day">Trend: daily</option>
         </select>
         {activeCount > 0 && (
           <>
@@ -355,10 +356,16 @@ function Dashboard({ data, sort }) {
       {/* Trend panels. The HEADING follows the grain too — a weekly table under a panel
           headed "Monthly" is the same error as a weekly CSV headed "Monthly", and the
           heading is the part someone screenshots. */}
-      <Panel title={`${data.trend_grain === 'week' ? 'Weekly' : 'Monthly'} Product Issue Trend`}>
+      <Panel title={`${grainWord(data.trend_grain)} Product Issue Trend`}>
         <TrendBlock series={data.monthly_product_trend} dimLabel="Product" grain={data.trend_grain} />
       </Panel>
-      <Panel title={`${data.trend_grain === 'week' ? 'Weekly' : 'Monthly'} Category Trend`}>
+      <Panel title={`${grainWord(data.trend_grain)} Complaint Rate`} sub="bars = complaints raised · line = trailing average">
+        <ComplaintRateBlock series={data.complaint_rate_trend} grain={data.trend_grain} />
+      </Panel>
+      <Panel title={`${grainWord(data.trend_grain)} Ageing Trend`} sub="share of complaints raised within 3 days of purchase">
+        <AgeingTrendBlock series={data.ageing_trend} grain={data.trend_grain} />
+      </Panel>
+      <Panel title={`${grainWord(data.trend_grain)} Category Trend`}>
         <TrendBlock series={data.monthly_category_trend} dimLabel="Issue category" grain={data.trend_grain} />
       </Panel>
     </>
@@ -432,9 +439,101 @@ function RankedList({ rows, showPct, sort }) {
 // `bucket` is a month (YYYY-MM) or a week-commencing Monday (YYYY-MM-DD) — the worker says
 // which via trend_grain, and the column header follows it so the table can never be read
 // as months when it is weeks.
+// One place decides what a bucket column is CALLED, so the panel heading, the table header and
+// the CSV can never disagree about which grain a file is showing (S347).
+function bucketHeading(grain) {
+  return grain === 'day' ? 'Date' : grain === 'week' ? 'Week of' : 'Month';
+}
+function grainWord(grain) {
+  return grain === 'day' ? 'Daily' : grain === 'week' ? 'Weekly' : 'Monthly';
+}
+
+// Ageing as a TREND (S347). Ageing existed only as three headline KPIs, so "is the gap between
+// purchase and complaint moving?" could not be read off the page. Plotted as a SHARE, not a
+// count — the raw bands track total volume, so a busy month looks like a worsening one.
+function AgeingTrendBlock({ series, grain }) {
+  if (!series || series.length === 0) return <Empty />;
+  const bucketLabel = bucketHeading(grain);
+  const rows = series.map(r => ({
+    bucket: r.bucket,
+    total: r.total,
+    within_3d: r.total ? +((r.within_3d / r.total) * 100).toFixed(1) : 0,
+    after_3d: r.total ? +((r.after_3d / r.total) * 100).toFixed(1) : 0,
+    ageing_unknown: r.total ? +((r.ageing_unknown / r.total) * 100).toFixed(1) : 0,
+    raw: r,
+  }));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <TrendChart data={rows} xKey="bucket" height={240} xLabel={bucketLabel} showLegend
+        yFmt={(v) => `${v}%`}
+        series={[
+          { key: 'within_3d', name: 'Within 3 days', color: SERIES_COLORS[0], kind: 'area', stackId: 'a' },
+          { key: 'after_3d', name: 'After 3 days', color: SERIES_COLORS[1], kind: 'area', stackId: 'a' },
+          { key: 'ageing_unknown', name: 'Unknown', color: SERIES_COLORS[2], kind: 'area', stackId: 'a' },
+        ]} />
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+          <thead>
+            <tr>
+              <th style={thL}>{bucketLabel}</th><th style={thR}>Total</th>
+              <th style={thR}>Within 3d</th><th style={thR}>After 3d</th><th style={thR}>Unknown</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.bucket}>
+                <td style={tdL}>{r.bucket}</td>
+                <td style={{ ...tdR, fontWeight: 700 }}>{r.total}</td>
+                <td style={tdR}>{r.raw.within_3d} <span style={{ color: 'var(--t4)' }}>({r.within_3d}%)</span></td>
+                <td style={tdR}>{r.raw.after_3d} <span style={{ color: 'var(--t4)' }}>({r.after_3d}%)</span></td>
+                <td style={tdR}>{r.raw.ageing_unknown} <span style={{ color: 'var(--t4)' }}>({r.ageing_unknown}%)</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Rolling-average complaint rate (S347). Bars are the per-bucket count, the line is the
+// trailing mean — the point is to read the direction through the noise, which a bar chart
+// alone does not give you. `window` is in BUCKETS and is stated on the panel, because a
+// "7" that silently means months rather than days would be badly misleading.
+function ComplaintRateBlock({ series, grain }) {
+  if (!series || series.length === 0) return <Empty />;
+  const bucketLabel = bucketHeading(grain);
+  const w = series[series.length - 1]?.window ?? 0;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <TrendChart data={series} xKey="bucket" height={240} xLabel={bucketLabel} showLegend
+        series={[
+          { key: 'count', name: 'Complaints', color: SERIES_COLORS[3], kind: 'area' },
+          { key: 'avg', name: `Rolling avg (${w} ${grain === 'day' ? 'days' : grain === 'week' ? 'weeks' : 'months'})`, color: SERIES_COLORS[0], kind: 'line' },
+        ]} />
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+          <thead>
+            <tr><th style={thL}>{bucketLabel}</th><th style={thR}>Complaints</th><th style={thR}>Rolling avg</th></tr>
+          </thead>
+          <tbody>
+            {series.map(r => (
+              <tr key={r.bucket}>
+                <td style={tdL}>{r.bucket}</td>
+                <td style={{ ...tdR, fontWeight: 700 }}>{r.count}</td>
+                <td style={tdR}>{r.avg}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function TrendBlock({ series, dimLabel, grain }) {
   if (!series || series.length === 0) return <Empty />;
-  const bucketLabel = grain === 'week' ? 'Week of' : 'Month';
+  const bucketLabel = bucketHeading(grain);
   // union of dimension keys across buckets, ordered by total desc; top 8 as chart series.
   const totalsByDim = {};
   for (const row of series) for (const kk of Object.keys(row)) {
