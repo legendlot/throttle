@@ -63,7 +63,7 @@ export default function RequestsPage() {
             <table className="dt">
               <thead><tr>
                 <th>Request</th><th>Title</th><th>Category</th><th>Urgency</th>
-                <th className="num">Est. cost</th><th>Requested by</th><th>Date</th><th>Status</th><th className="num"></th>
+                <th className="num">Items</th><th className="num">Est. cost</th><th>Requested by</th><th>Date</th><th>Status</th><th className="num"></th>
               </tr></thead>
               <tbody>
                 {filtered.map((r) => (
@@ -72,6 +72,9 @@ export default function RequestsPage() {
                     <td style={{ whiteSpace: 'normal', maxWidth: 320 }}>{r.title}</td>
                     <td className="dim">{r.category || '—'}</td>
                     <td><Badge label={r.urgency || 'Normal'} tone={urgencyTone(r.urgency)} dot /></td>
+                    {/* An itemised request shows its line count; a prose request has none, and
+                        the dash is the point — it is how the queue tells the two apart. */}
+                    <td className="num mono">{r.line_count > 0 ? r.line_count : <span className="dim">—</span>}</td>
                     <td className="num mono">{r.estimated_cost != null ? inr(r.estimated_cost) : '—'}</td>
                     <td className="dim">{r.requested_by_name || '—'}</td>
                     <td className="mono dim">{fmtDateShort(r.created_at)}</td>

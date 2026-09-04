@@ -2278,6 +2278,14 @@ export default {
                 counts.set(l.request_no, c);
               }
             }
+            // `line_count` is rendered as the Items column on the requests list (S345) — it is
+            // how the queue tells an itemised request from a prose one.
+            // `needs_hsn_review` is deliberately NOT surfaced on the LIST and is not dead: the
+            // per-line flag is shown on requests/detail (page.js:77). It stays off the list
+            // because HSN coverage is 76 of 2,199 active parts (measured 2026-09-04), so the flag
+            // is true on nearly every line and a badge that fires on everything tells procurement
+            // nothing. Revisit once the material_master.hsn_code backfill lands — it costs no
+            // extra query, the aggregate rides on the same batched read above.
             return ok((r.data || []).map(x => ({
               ...x,
               line_count: counts.get(x.request_no)?.lines || 0,
