@@ -12,6 +12,16 @@ const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Ba
 const PO_CURRENCIES = ['INR', 'USD', 'RMB'];
 const PO_PAYMENT_TERMS = ['Advance', 'Credit 30', 'Credit 60', 'LC', 'TT'];
 const VENDOR_CATEGORIES = ['Packaging', 'Para', 'Components', 'Products', 'Consumables', 'Tools & Machines', 'Other'];
+// What the vendor DOES to the part. A moulder makes the unpainted part, a coater paints it
+// (§S336a) — the worker refuses a painted part code on a PO to a 'moulding' vendor, so this
+// field is the thing that catches the next moulder at onboarding. Values match the
+// store.vendors.process_type CHECK exactly.
+const VENDOR_PROCESS_TYPES = [
+  { value: 'moulding', label: 'Moulding' },
+  { value: 'painting', label: 'Painting' },
+  { value: 'assembly', label: 'Assembly' },
+  { value: 'other',    label: 'Other' },
+];
 
 const PO_CATEGORY_KEYS = [
   { key: 'fbu',         label: 'Full Units (FBU)' },
@@ -78,6 +88,7 @@ export default function VendorsPage() {
   // form fields
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
+  const [processType, setProcessType] = useState('');
   const [country, setCountry] = useState('India');
   const [location, setLocation] = useState('');
   const [curr, setCurr] = useState('INR');
@@ -122,6 +133,7 @@ export default function VendorsPage() {
   function resetForm() {
     setName('');
     setCategory('');
+    setProcessType('');
     setCountry('India');
     setLocation('');
     setCurr('INR');
@@ -158,6 +170,7 @@ export default function VendorsPage() {
       const vendor = v?.vendor || v || {};
       setName(vendor.vendor_name || '');
       setCategory(vendor.category || '');
+      setProcessType(vendor.process_type || '');
       setCountry(vendor.source_country || 'India');
       setLocation(vendor.location || '');
       setCurr(vendor.currency || 'INR');
@@ -183,11 +196,15 @@ export default function VendorsPage() {
 
   async function handleSave() {
     if (!name.trim()) { showToast('Vendor name required', 'error'); return; }
+    // Required on CREATE only. 146 existing vendors are unclassified and editing one must not
+    // force a reclassification, but nothing new gets on file without a process again.
+    if (!editingCode && !processType) { showToast('Process required — what does this vendor do to the part?', 'error'); return; }
     setSubmitting(true);
     try {
       const data = {
         vendor_name: name.trim(),
         category:    category || null,
+        process_type: processType || null,
         source_country: country,
         currency: curr,
         location: location || null,
@@ -275,7 +292,7 @@ export default function VendorsPage() {
   if (view === 'list') {
     const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const filtered = tokens.length === 0 ? vendors : vendors.filter(v => {
-      const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
+      const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.process_type || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
       return tokens.every(t => hay.includes(t));
     });
     const activeCount = vendors.filter(v => v.active).length;
@@ -308,7 +325,7 @@ export default function VendorsPage() {
           ) : (
             <table className="dt">
               <thead><tr>
-                <th>Code</th><th>Vendor</th><th>Category</th><th>Country</th><th>Contact</th>
+                <th>Code</th><th>Vendor</th><th>Category</th><th>Process</th><th>Country</th><th>Contact</th>
                 <th>Terms</th><th className="num">Lead</th><th>Status</th><th className="num"></th>
               </tr></thead>
               <tbody>
@@ -317,6 +334,7 @@ export default function VendorsPage() {
                     <td className="mono accent">{v.vendor_code}</td>
                     <td>{v.vendor_name}</td>
                     <td className="dim">{v.category || '—'}</td>
+                    <td className="dim">{processLabel(v.process_type)}</td>
                     <td><Badge label={v.source_country || '—'} tone={countryTone(v.source_country)} soft={false} /></td>
                     <td className="dim">{v.contact_name || '—'}{v.contact_phone ? ` · ${v.contact_phone}` : ''}</td>
                     <td className="mono dim">{v.payment_terms || '—'}</td>
@@ -349,6 +367,8 @@ export default function VendorsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <Field label="Vendor Name *" value={name} onChange={setName} disabled={submitting} />
             <SelectField label="Category" value={category} onChange={setCategory} options={['', ...VENDOR_CATEGORIES]} disabled={submitting} />
+            <SelectField label={editingCode ? 'Process' : 'Process *'} value={processType} onChange={setProcessType}
+              options={['', ...VENDOR_PROCESS_TYPES]} disabled={submitting} />
             <SelectField label="Source Country" value={country} onChange={setCountry} options={PO_SOURCES} disabled={submitting} />
             <Field label="Location" value={location} onChange={setLocation} disabled={submitting} />
             <SelectField label="Currency" value={curr} onChange={setCurr} options={PO_CURRENCIES} disabled={submitting} />
@@ -484,14 +504,22 @@ function Field({ label, value, onChange, type = 'text', disabled, placeholder })
   );
 }
 
+function processLabel(v) {
+  return VENDOR_PROCESS_TYPES.find((p) => p.value === v)?.label || '—';
+}
+
+// `options` takes plain strings or { value, label } — the process types need a display
+// label that differs from the stored value.
 function SelectField({ label, value, onChange, options, disabled }) {
   return (
     <div>
       <span style={labelStyle}>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={disabled}>
-        {options.map((o) => (
-          <option key={o} value={o}>{o || '—'}</option>
-        ))}
+        {options.map((o) => {
+          const val = typeof o === 'string' ? o : o.value;
+          const lab = typeof o === 'string' ? o : o.label;
+          return <option key={val} value={val}>{lab || '—'}</option>;
+        })}
       </select>
     </div>
   );

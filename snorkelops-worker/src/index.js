@@ -503,6 +503,43 @@ function duplicateMould(lines, existing) {
   return null;
 }
 
+// A moulder produces the UNPAINTED part; a coater paints it (§S336a). Ordering a painted
+// code from a moulding vendor is the defect that had Monash being sent "Painted Black
+// Asphalt Top" — one code doing both jobs. Returns [] when clean, else one
+// { part_code, unpainted_part_code } per offending line.
+// ⛔ NULL process_type is NOT a moulder: 146 of 147 vendors are unclassified (the column
+// landed 2026-09-04 and we are not forcing a bulk reclassification), so treating NULL as
+// moulding would refuse almost every PO in the system. Only an explicit 'moulding' blocks.
+// Every read here fails OPEN — a lookup that errors is not evidence of a violation, and a
+// PO must never be blocked by a Supabase hiccup.
+async function moulderPaintedPartViolations(vendorCode, lineRows) {
+  if (!vendorCode) return [];
+  const coded = (lineRows || []).filter(l => l && l.part_code);
+  if (!coded.length) return [];
+  const vR = await query('vendors',
+    `?vendor_code=eq.${encodeURIComponent(vendorCode)}&select=process_type,vendor_name&limit=1`);
+  const vendor = vR.ok ? vR.data?.[0] : null;
+  if (!vendor || vendor.process_type !== 'moulding') return [];
+  const codes = [...new Set(coded.map(l => String(l.part_code).trim()).filter(Boolean))];
+  const pR = await query('part_finish_pairs',
+    `?is_active=eq.true&painted_part_code=in.(${codes.map(encodeURIComponent).join(',')})` +
+    `&select=painted_part_code,unpainted_part_code`);
+  if (!pR.ok || !Array.isArray(pR.data)) return [];
+  const unpaintedFor = new Map(pR.data.map(p => [p.painted_part_code, p.unpainted_part_code]));
+  const out = [];
+  for (const l of coded) {
+    const pc = String(l.part_code).trim();
+    if (unpaintedFor.has(pc)) out.push({ part_code: pc, unpainted_part_code: unpaintedFor.get(pc) });
+  }
+  return out;
+}
+
+// The 409 body every po_lines write path shares, so the three sites can never drift apart.
+function moulderPaintedPartError(vendorName, violations) {
+  return err(`${vendorName} is a MOULDING vendor and cannot be sent painted part codes. `
+    + violations.map(v => `${v.part_code} is painted — order ${v.unpainted_part_code} instead`).join('; '), 409);
+}
+
 // Push corrected codes back onto every active variant of the family. Guarded so a
 // blank or a typo can never wipe/corrupt the master, and every write is logged.
 async function syncHsnToMaster(lines, master, actor, actorRole, orderNo) {
@@ -1035,8 +1072,17 @@ function err(msg, status = 400) {
 // Issuance form). ⛔ Do NOT reimplement this anywhere: two code paths minting vendor codes is the
 // duplicate-path class that keeps biting this codebase, and this one derives max+1 from LIVE DATA
 // precisely because bulk imports bypass the sequences counter.
+const VENDOR_PROCESS_TYPES = ['moulding','painting','assembly','other'];
+
 async function createVendorRow(d, createdBy) {
   if (!d || !d.vendor_name) return { ok: false, error: 'vendor_name required' };
+  // TOLERANT of a missing value on purpose: the lotops DI bridge (/bridge/vendor) mints
+  // vendors without one, and 146 live vendors are unclassified. The Snorkel form is where
+  // Process is made mandatory. A value that IS supplied must be valid — the column carries
+  // a CHECK, so a typo would 23514 at the insert with an opaque error.
+  if (d.process_type && !VENDOR_PROCESS_TYPES.includes(d.process_type)) {
+    return { ok: false, error: `process_type must be one of ${VENDOR_PROCESS_TYPES.join(', ')}` };
+  }
   const iso    = countryToISO(d.source_country || 'Other');
   const prefix = `${iso}-VND-`;
   const maxR = await query('vendors',
@@ -1047,6 +1093,7 @@ async function createVendorRow(d, createdBy) {
   const code     = `${prefix}${String(lastNum + 1).padStart(3, '0')}`;
   const r = await insert('vendors', {
     vendor_code: code, vendor_name: d.vendor_name, category: d.category || null,
+    process_type: d.process_type || null,
     source_country: d.source_country || 'India', country_iso: iso,
     location: d.location || null, contact_name: d.contact_name || null,
     contact_phone: d.contact_phone || null, contact_email: d.contact_email || null,
@@ -2738,10 +2785,17 @@ export default {
             if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.vendor_code) return err('vendor_code required');
-            const fields = ['vendor_name','category','source_country','location','contact_name',
+            // process_type stays OPTIONAL on edit — 146 vendors are unclassified and we are not
+            // forcing a bulk reclassification — but a supplied value must be a legal one.
+            if (d.process_type !== undefined && d.process_type !== null && d.process_type !== ''
+                && !VENDOR_PROCESS_TYPES.includes(d.process_type)) {
+              return err(`process_type must be one of ${VENDOR_PROCESS_TYPES.join(', ')}`, 400);
+            }
+            const fields = ['vendor_name','category','process_type','source_country','location','contact_name',
               'contact_phone','contact_email','address','payment_terms','currency','lead_time_days','notes','active'];
             const updates = { updated_at: new Date().toISOString() };
             fields.forEach(f => { if (d[f]!==undefined) updates[f]=d[f]; });
+            if (updates.process_type === '') updates.process_type = null;   // "" is not a CHECK value
             if (d.source_country) updates.country_iso = countryToISO(d.source_country);
             const r = await update('vendors', updates, `vendor_code=eq.${encodeURIComponent(d.vendor_code)}`);
             if (!r.ok) return err('Update failed');
@@ -2910,16 +2964,20 @@ export default {
             if (isSoft && !canRaiseChinaPO(P)) return err('Soft POs require po_china permission', 403);
             const dupMouldC = duplicateMould(d.lines);
             if (dupMouldC) return err('Mould ' + dupMouldC + ' is on more than one line — one PO line per mould. Each mould line brings its full part list into receiving, so a second line doubles every expected quantity (the SHP-219/221 incident). For split-colour rates, use one line at the blended rate until per-shot pricing is built.', 422);
-            const srcCode  = countryToISO(d.source||'Other');
-            const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
-            const seq      = await nextSeq('po','');
-            const poNumber = `${srcCode}-${typeCode}-${String(seq).padStart(4,'0')}`;
+            // Vendor resolved BEFORE nextSeq so the moulder guard below can refuse without
+            // burning a PO number — a rejected PO must leave no trace.
             let vendorCode = d.vendor_code || null;
             if (!vendorCode && d.vendor_name) {
               const vR = await query('vendors',
                 `?vendor_name=ilike.${encodeURIComponent(d.vendor_name)}&select=vendor_code&limit=1`);
               if (vR.ok && vR.data?.[0]?.vendor_code) vendorCode = vR.data[0].vendor_code;
             }
+            const mouldViolC = await moulderPaintedPartViolations(vendorCode, d.lines);
+            if (mouldViolC.length) return moulderPaintedPartError(d.vendor_name, mouldViolC);
+            const srcCode  = countryToISO(d.source||'Other');
+            const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
+            const seq      = await nextSeq('po','');
+            const poNumber = `${srcCode}-${typeCode}-${String(seq).padStart(4,'0')}`;
             const r = await insert('purchase_orders', {
               po_number: poNumber, revision: 0, status: isSoft ? 'Soft' : 'Draft',
               source: d.source, order_type: d.order_type, vendor_name: d.vendor_name,
@@ -3098,6 +3156,24 @@ export default {
             if (po.status === 'Soft') {
               return err('Soft POs are promoted, not amended — use Promote', 400);
             }
+            // Before the revision snapshot — a refused amendment must not bump anything.
+            // The amend can also RE-POINT the vendor, so check the code this PO will end up on.
+            const amendVendorCode = d.vendor_code !== undefined ? d.vendor_code : po.vendor_code;
+            const amendVendorName = d.vendor_name !== undefined ? d.vendor_name : po.vendor_name;
+            // ⚠️ `d.lines` is OPTIONAL here and the line rewrite below is conditional, while
+            // `vendor_code`/`vendor_name` are both in the updatable list — so an amend can
+            // re-point a PO onto a moulder WITHOUT sending a single line. Checking only
+            // `d.lines` would let exactly that through, with the painted rows already on the
+            // PO. Test the lines the PO will END UP with: the payload's when it sends them,
+            // otherwise the rows already stored.
+            let amendLinesToCheck = (Array.isArray(d.lines) && d.lines.length) ? d.lines : null;
+            if (!amendLinesToCheck) {
+              const exLinesR = await query('po_lines',
+                `?po_number=eq.${encodeURIComponent(d.po_number)}&select=part_code`);
+              amendLinesToCheck = exLinesR.ok ? (exLinesR.data || []) : [];
+            }
+            const mouldViolA = await moulderPaintedPartViolations(amendVendorCode, amendLinesToCheck);
+            if (mouldViolA.length) return moulderPaintedPartError(amendVendorName, mouldViolA);
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
             await insert('po_revisions', {
@@ -3176,6 +3252,8 @@ export default {
             if (po.status === 'Soft') {
               return err('Soft POs are promoted, not amended — use Promote', 400);
             }
+            const mouldViolL = await moulderPaintedPartViolations(po.vendor_code, newLines);
+            if (mouldViolL.length) return moulderPaintedPartError(po.vendor_name, mouldViolL);
             const curR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
             const curLines = curR.data || [];
             // Snapshot the PRE-amendment state against the OLD revision (same shape as amendPO).
