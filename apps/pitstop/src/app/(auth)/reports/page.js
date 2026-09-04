@@ -17,9 +17,27 @@ import { dateStr } from '@throttle/domain';
 // ⚠️ Verified under TZ=Asia/Kolkata (byte-identical, a no-op for the team today) and
 // TZ=America/New_York (corrected — the old code lost the first 9.5 hours of the day).
 const pad2 = (n) => String(n).padStart(2, '0');
-const istBoundary = (date, endOfDay) => {
-  const d = new Date(date);
-  return new Date(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+// ⚠️ Accepts EITHER a Date (the preset paths build Date objects) OR a 'YYYY-MM-DD' string (what
+// <input type="date"> gives us). Both callers exist, and getting this wrong broke both ways in
+// S344 before the hostile review caught it:
+//   - reading .getFullYear() straight off the argument THREW on the string path (page crash)
+//   - round-tripping the string through `new Date(s)` parses it as UTC, so in a west-of-UTC
+//     browser the calendar date moves back a day and the range starts a whole IST day early
+// A 'YYYY-MM-DD' string is ALREADY the calendar date the user picked, so slice it and never
+// re-parse it. Only a Date needs its LOCAL Y/M/D read.
+const istBoundary = (d, endOfDay) => {
+  const ymd = typeof d === 'string'
+    ? d.slice(0, 10)
+    : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return new Date(`${ymd}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+};
+// A value beginning = + - @ is executed as a formula by Excel/Sheets, and an agent name
+// containing a comma would split the cohort line into two columns. Same helper the analytics
+// export already has (hostile review S344, finding 7).
+const csvEsc = (v) => {
+  let x = v == null ? '' : String(v);
+  if (/^[=+\-@]/.test(x)) x = "'" + x;
+  return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
 };
 function toIsoStart(date) { return istBoundary(date, false); }
 function toIsoEnd(date)   { return istBoundary(date, true); }
@@ -130,8 +148,8 @@ export default function ReportsPage() {
     // Read off the RESPONSE, never the live controls — `data` holds the previous payload
     // until a refetch resolves, so the controls could stamp new filters onto old numbers.
     const applied = data.applied_filters || {};
-    lines.push(`Agent,${(applied.agent || []).join(' · ') || 'All'}`);
-    lines.push(`Support channel,${(applied.channel || []).join(' · ') || 'All'}`);
+    lines.push(`Agent,${csvEsc((applied.agent || []).join(' · ') || 'All')}`);
+    lines.push(`Support channel,${csvEsc((applied.channel || []).join(' · ') || 'All')}`);
     lines.push(`Tickets raised,${data.range.total_rows}`);
     if (data.range.range_total != null && data.range.range_total !== data.range.total_rows) {
       lines.push(`Tickets raised in range (before filters),${data.range.range_total}`);

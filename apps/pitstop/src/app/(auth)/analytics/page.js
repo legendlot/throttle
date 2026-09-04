@@ -33,8 +33,20 @@ const SERIES_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#
 // ⚠️ Verified 2026-09-04 under TZ=Asia/Kolkata and TZ=America/New_York: identical output in IST
 // (so this is a no-op for the team today) and corrected in New York.
 const pad2 = (n) => String(n).padStart(2, '0');
-const istBoundary = (d, endOfDay) =>
-  new Date(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+// ⚠️ Accepts EITHER a Date (the preset paths build Date objects) OR a 'YYYY-MM-DD' string (what
+// <input type="date"> gives us). Both callers exist, and getting this wrong broke both ways in
+// S344 before the hostile review caught it:
+//   - reading .getFullYear() straight off the argument THREW on the string path (page crash)
+//   - round-tripping the string through `new Date(s)` parses it as UTC, so in a west-of-UTC
+//     browser the calendar date moves back a day and the range starts a whole IST day early
+// A 'YYYY-MM-DD' string is ALREADY the calendar date the user picked, so slice it and never
+// re-parse it. Only a Date needs its LOCAL Y/M/D read.
+const istBoundary = (d, endOfDay) => {
+  const ymd = typeof d === 'string'
+    ? d.slice(0, 10)
+    : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return new Date(`${ymd}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+};
 function isoStart(d) { return istBoundary(d, false); }
 function isoEnd(d)   { return istBoundary(d, true); }
 

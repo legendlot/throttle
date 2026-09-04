@@ -15,6 +15,11 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'turbo.json'
+      # CI gates consumed by EVERY workflow — without these a change to the lint
+      # config or the Pages verifier would validate nothing until an unrelated
+      # app change happened to land (hostile review S344, finding 8).
+      - '.eslintrc.ci.json'
+      - '.github/scripts/**'
       - '.github/workflows/deploy-docket.yml'
   workflow_dispatch:
 

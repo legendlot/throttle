@@ -2193,8 +2193,10 @@ async function getCallReports(params, auth, env) {
     // new readers — see the direction-split fields below.
     if (c.status === 'answered') byAccount[ak].answered++;
     if (c.status === 'missed')   byAccount[ak].missed++;
-    if (c.direction === 'incoming') { byAccount[ak].incoming_total++; if (reachedAgent(c)) byAccount[ak].incoming_reached++; }
-    else                            { byAccount[ak].outgoing_total++; if (c.status === 'answered') byAccount[ak].outgoing_answered++; }
+    // `direction` is nullable despite its CHECK, so an unknown direction falls out of BOTH
+    // buckets rather than silently inflating outgoing (hostile review S344, finding 10).
+    if (c.direction === 'incoming')      { byAccount[ak].incoming_total++; if (reachedAgent(c)) byAccount[ak].incoming_reached++; }
+    else if (c.direction === 'outgoing') { byAccount[ak].outgoing_total++; if (c.status === 'answered') byAccount[ak].outgoing_answered++; }
 
     const dept = c.cs_department_id ? deptById[c.cs_department_id] : null;
     const dk = dept?.slug || '—';
@@ -2203,8 +2205,10 @@ async function getCallReports(params, auth, env) {
     // Raw provider status, kept ONLY for older cached pages — see the split fields below.
     if (c.status === 'answered') byDepartment[dk].answered++;
     if (c.status === 'missed')   byDepartment[dk].missed++;
-    if (c.direction === 'incoming') { byDepartment[dk].incoming_total++; if (reachedAgent(c)) byDepartment[dk].incoming_reached++; }
-    else                            { byDepartment[dk].outgoing_total++; if (c.status === 'answered') byDepartment[dk].outgoing_answered++; }
+    // `direction` is nullable despite its CHECK, so an unknown direction falls out of BOTH
+    // buckets rather than silently inflating outgoing (hostile review S344, finding 10).
+    if (c.direction === 'incoming')      { byDepartment[dk].incoming_total++; if (reachedAgent(c)) byDepartment[dk].incoming_reached++; }
+    else if (c.direction === 'outgoing') { byDepartment[dk].outgoing_total++; if (c.status === 'answered') byDepartment[dk].outgoing_answered++; }
     if (c.duration_seconds && c.duration_seconds > 0) { byDepartment[dk].total_dur += c.duration_seconds; byDepartment[dk].dur_count++; }
 
     const agentName = c.agent_name || '— unassigned —';

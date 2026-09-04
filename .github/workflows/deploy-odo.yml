@@ -6,6 +6,14 @@ on:
     paths:
       - 'apps/odo/**'
       - 'packages/**'
+      # Root manifests were MISSING from this filter (pre-existing, not introduced by
+      # S344): a dependency or turbo change could not rebuild this app at all.
+      - 'package.json'
+      - 'package-lock.json'
+      - 'turbo.json'
+      # CI gates consumed by every workflow.
+      - '.eslintrc.ci.json'
+      - '.github/scripts/**'
       - '.github/workflows/deploy-odo.yml'
   workflow_dispatch:
 
