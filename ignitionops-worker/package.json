@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "test": "node --test"
   },
-  "type": "commonjs",
+  "type": "module",
   "devDependencies": {
     "wrangler": "^4.83.0"
   }

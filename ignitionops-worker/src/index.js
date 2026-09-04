@@ -741,6 +741,43 @@ async function getEngagement(url, auth, env) {
   });
 }
 
+// ── Multiple videos per deal (Reann #10) — slice 3: the ROLLUP RULE ─────────────────────────
+// The deal-level metric columns on `engagements` are a worker-owned rollup of its
+// `engagement_videos` rows. Nothing else may write them (they left ENGAGEMENT_FIELDS in S351).
+// SUM metrics: null only when EVERY take is null — a real 0 on one take is a real 0.
+// post_date / video_link / follower_count_at_post MIRROR seq 1 (the primary take): they are
+// point-in-time facts, not aggregates — a later take has a different follower base.
+// metric_gaps keeps a per-video reason only where the rolled-up metric is STILL null; a reason
+// sitting behind a real number reads as "unknown" and is stale the moment a take has data.
+const VIDEO_SUM_METRICS = ['views','likes','comments','shares','reposts','saves','impressions','followers_gained'];
+const VIDEO_MIRROR_FIELDS = ['post_date','video_link','follower_count_at_post'];
+const vnum = (x) => {
+  if (x == null || typeof x === 'boolean' || typeof x === 'object') return null;
+  const s = typeof x === 'string' ? x.trim() : x;
+  return s === '' || !Number.isFinite(Number(s)) ? null : Number(s);
+};
+export function rollupVideos(videos) {
+  const rows = [...(videos || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
+  const out = {};
+  for (const k of VIDEO_SUM_METRICS) {
+    let sum = null;
+    for (const r of rows) { const n = vnum(r[k]); if (n != null) sum = (sum ?? 0) + n; }
+    out[k] = sum;
+  }
+  const first = rows[0] || {};
+  out.post_date = first.post_date || null;
+  out.video_link = first.video_link || null;
+  out.follower_count_at_post = vnum(first.follower_count_at_post);
+  const gaps = {};
+  for (const r of rows) {
+    for (const [k, reason] of Object.entries(r.metric_gaps || {})) {
+      if (out[k] == null && reason && !gaps[k]) gaps[k] = reason;
+    }
+  }
+  out.metric_gaps = gaps;
+  return out;
+}
+
 async function getEngagementVideos(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
