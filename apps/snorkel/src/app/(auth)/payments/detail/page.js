@@ -20,6 +20,8 @@ export default function PaymentRequestDetail() {
   const [busy, setBusy] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdNote, setHoldNote] = useState('');
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '' });
   const [proof, setProof] = useState([]);
@@ -180,6 +182,9 @@ export default function PaymentRequestDetail() {
               </span>} />
             )}
             {r.approved_by_name && <Row k="Approved by" v={`${r.approved_by_name} · ${fmtDateShort(r.approved_at)}`} />}
+            {r.held_by_name && <Row k={r.status === 'held' ? 'On hold' : 'Was on hold'}
+              v={`${r.held_by_name} · ${fmtDateShort(r.held_at)} — ${r.held_reason}`} />}
+            {r.released_by_name && <Row k="Hold released" v={`${r.released_by_name} · ${fmtDateShort(r.released_at)}`} />}
             {r.rejected_by_name && <Row k="Rejected" v={`${r.rejected_by_name} — ${r.rejection_note}`} />}
             {r.status === 'paid' && (
               <>
@@ -250,13 +255,23 @@ export default function PaymentRequestDetail() {
         {can.execute && r.status === 'approved' && (
           <Btn kind="primary" disabled={busy} onClick={() => setPayOpen(true)}>Mark paid</Btn>
         )}
+        {/* Hold/release mirror the worker gate (execute|super_admin). A hold is a finance PAUSE:
+            the request stays open for the requester, and it must be released before it can be paid,
+            which is why Mark paid stays approved-only. */}
+        {(can.execute || can.super_admin) && r.status === 'approved' && (
+          <Btn disabled={busy} onClick={() => setHoldOpen(true)}>Put on hold</Btn>
+        )}
+        {(can.execute || can.super_admin) && r.status === 'held' && (
+          <Btn kind="primary" disabled={busy}
+            onClick={() => act('releasePaymentRequest', { id: Number(id) }, 'Hold released')}>Release hold</Btn>
+        )}
         {/* Reject mirrors the WORKER's gate (approve|execute|super_admin) rather than a narrower
             guess. It was pinned to `can.approve && pending_approval`, which left the widened
             backend permission unreachable: finance holds `execute` not `approve`, and everything
             they read is `approved` — so nobody, not even the approver, could reject the requests
             that actually reach finance. A UI predicate narrower than its handler is a dead gate. */}
         {(can.approve || can.execute || can.super_admin)
-          && ['submitted', 'pending_approval', 'approved'].includes(r.status)
+          && ['submitted', 'pending_approval', 'approved', 'held'].includes(r.status)
           && !(can.approve && r.status === 'pending_approval') && (
           <Btn disabled={busy} onClick={() => setRejectOpen(true)}>Reject</Btn>
         )}
@@ -283,6 +298,27 @@ export default function PaymentRequestDetail() {
                   setRejectOpen(false); setRejectNote('');
                 }}>Reject</Btn>
               <Btn onClick={() => setRejectOpen(false)}>Cancel</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {holdOpen && (
+        <Modal onClose={() => setHoldOpen(false)} title="Put on hold">
+          <div style={{ padding: 16, maxWidth: 460 }}>
+            <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
+              The requester sees this reason and the request stays open on their side.
+            </p>
+            <textarea value={holdNote} onChange={e => setHoldNote(e.target.value)} rows={3}
+              style={{ width: '100%', padding: 10, fontSize: 15, borderRadius: 8,
+                       border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <Btn kind="primary" disabled={busy || !holdNote.trim()}
+                onClick={async () => {
+                  await act('holdPaymentRequest', { id: Number(id), held_reason: holdNote }, 'On hold');
+                  setHoldOpen(false); setHoldNote('');
+                }}>Put on hold</Btn>
+              <Btn onClick={() => setHoldOpen(false)}>Cancel</Btn>
             </div>
           </div>
         </Modal>

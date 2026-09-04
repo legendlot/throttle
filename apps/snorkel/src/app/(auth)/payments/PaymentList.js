@@ -8,11 +8,13 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js
 import { fmtDateShort } from '@/components/format.js';
 
 export const STATUS_TONE = {
-  submitted: 'gray', pending_approval: 'yellow', approved: 'blue',
+  submitted: 'gray', pending_approval: 'yellow', approved: 'blue', held: 'orange',
   paid: 'green', rejected: 'red', cancelled: 'gray',
 };
 export const STATUS_LABEL = {
   submitted: 'Submitted', pending_approval: 'Awaiting approval', approved: 'With Finance',
+  // a hold is a finance PAUSE, not a closure — the requester still sees the request as open
+  held: 'On hold with Finance',
   paid: 'Paid', rejected: 'Rejected', cancelled: 'Cancelled',
 };
 

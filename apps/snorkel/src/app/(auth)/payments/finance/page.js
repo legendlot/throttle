@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Modal } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { money } from '../PaymentList.js';
@@ -43,6 +43,12 @@ export default function FinanceQueuePage() {
   // was certain to 403. Paying is finance's — Mahesh and Priya (Afshaan, 2026-09-04) — so super
   // admins get the queue read-only rather than a button that lies.
   const [canExecute, setCanExecute] = useState(false);
+  // Hold/release admits execute OR super_admin (the hold belongs to Finance, not to whoever
+  // placed it), which is a WIDER gate than Mark paid — hence the second flag.
+  const [canSuperAdmin, setCanSuperAdmin] = useState(false);
+  // { row } while the hold reason is being typed; the reason is required by the worker.
+  const [holdFor, setHoldFor] = useState(null);
+  const [holdNote, setHoldNote] = useState('');
   const firstLoadDone = useRef(false);
 
   const load = useCallback(async () => {
@@ -60,6 +66,7 @@ export default function FinanceQueuePage() {
         garageFetch('getPaymentBootstrap', {}, s).catch(() => null),
       ]);
       setCanExecute(!!boot?.can?.execute);
+      setCanSuperAdmin(!!boot?.can?.super_admin);
       setD({ requests: data?.requests || [], banks: data?.banks || {}, documents: data?.documents || {} });
       // ⚠️ Sharpest case of the truncation class: the money total below is a SUM. A cut list
       // under-reports what finance actually owes, and a short total reads as authoritative.
@@ -70,12 +77,51 @@ export default function FinanceQueuePage() {
   }, [userId, showToast]);
   useEffect(() => { load(); }, [load]);
 
+  // The queue now carries two states. `ready` is the pile finance works down; `held` is parked
+  // and deliberately kept OUT of the value total, the urgent filter and the overdue count —
+  // a held request is not money finance can pay today.
+  const ready = useMemo(() => d.requests.filter(r => r.status !== 'held'), [d.requests]);
+  const held  = useMemo(() => d.requests.filter(r => r.status === 'held'), [d.requests]);
   const rows = useMemo(
-    () => (onlyUrgent ? d.requests.filter(r => r.is_urgent) : d.requests),
-    [d.requests, onlyUrgent]);
+    () => (onlyUrgent ? ready.filter(r => r.is_urgent) : ready),
+    [ready, onlyUrgent]);
 
   const total   = rows.reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
   const overdue = rows.filter(r => r.needed_by && r.needed_by < todayISO()).length;
+
+  const canHold = canExecute || canSuperAdmin;
+
+  async function hold() {
+    const r = holdFor;
+    const reason = holdNote.trim();
+    if (!r || !reason) return;
+    setBusy(r.id);
+    try {
+      const s = await getValidSession();
+      const raw = await workerFetch('holdPaymentRequest', { data: { id: r.id, held_reason: reason } }, s);
+      const res = raw?.data || raw;   // `{ ok, data }` wrapper — read the payload, not the wrapper
+      showToast(res?.held ? `${r.request_no} on hold` : 'It had already moved — refreshing',
+                res?.held ? 'success' : 'error');
+      setHoldFor(null); setHoldNote('');
+      await load();
+    } catch (e) {
+      showToast(e.message || 'Failed', 'error');
+    } finally { setBusy(null); }
+  }
+
+  async function release(r) {
+    setBusy(r.id);
+    try {
+      const s = await getValidSession();
+      const raw = await workerFetch('releasePaymentRequest', { data: { id: r.id } }, s);
+      const res = raw?.data || raw;
+      showToast(res?.released ? `${r.request_no} released` : 'It had already moved — refreshing',
+                res?.released ? 'success' : 'error');
+      await load();
+    } catch (e) {
+      showToast(e.message || 'Failed', 'error');
+    } finally { setBusy(null); }
+  }
 
   async function pay(r) {
     setBusy(r.id);
@@ -125,8 +171,8 @@ export default function FinanceQueuePage() {
         }}>
           <strong>
             {truncation.total != null
-              ? `Showing the first ${truncation.limit} of ${truncation.total} approved requests.`
-              : `Showing the first ${truncation.limit} approved requests — there are more.`}
+              ? `Showing the first ${truncation.limit} of ${truncation.total} requests in the queue.`
+              : `Showing the first ${truncation.limit} requests in the queue — there are more.`}
           </strong>{' '}
           The Value total below covers only these {truncation.fetched} — the real amount owed is higher.
         </div>
@@ -136,6 +182,7 @@ export default function FinanceQueuePage() {
         <Kpi label="To pay" value={truncation?.total != null ? `${rows.length} of ${truncation.total}` : (truncation ? `${rows.length}+` : rows.length)} />
         <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={money(total)} />
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
+        {held.length > 0 && <Kpi label="On hold" value={held.length} />}
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -147,7 +194,9 @@ export default function FinanceQueuePage() {
       {rows.length === 0 ? (
         <Panel title="Finance Queue">
           <EmptyState icon="check-check" title="All clear"
-            hint="Nothing approved is waiting to be paid." />
+            hint={held.length
+              ? `Nothing is waiting to be paid — ${held.length} request(s) are on hold below.`
+              : 'Nothing approved is waiting to be paid.'} />
         </Panel>
       ) : rows.map(r => {
         const bank = (d.banks[r.payee_id] || [])[0];
@@ -230,16 +279,77 @@ export default function FinanceQueuePage() {
                   <Btn kind="primary" disabled={busy === r.id} onClick={() => pay(r)}>
                     {busy === r.id ? 'Saving…' : 'Mark paid'}
                   </Btn>
+                  {canHold && (
+                    <Btn disabled={busy === r.id}
+                      onClick={() => { setHoldFor(r); setHoldNote(''); }}>Hold</Btn>
+                  )}
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: 'var(--t2)' }}>
-                  View only — payments are marked by finance.
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                    View only — payments are marked by finance.
+                  </span>
+                  {canHold && (
+                    <Btn disabled={busy === r.id}
+                      onClick={() => { setHoldFor(r); setHoldNote(''); }}>Hold</Btn>
+                  )}
                 </div>
               )}
             </div>
           </Panel>
         );
       })}
+
+      {/* Parked, not closed: the requester still sees these as open, so finance must be able to
+          see WHY and release them without leaving the queue. */}
+      {held.length > 0 && (
+        <Panel title={`On hold (${held.length})`}>
+          <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+            {held.map(r => (
+              <div key={r.id} style={{ display: 'grid', gap: 6, paddingBottom: 10,
+                                       borderBottom: '1px solid var(--bd)' }}>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  <b>{r.request_no}</b>
+                  <span>{r.payee?.name || 'Unknown payee'}</span>
+                  <span style={{ fontWeight: 700 }}>{money(r.amount_to_pay, r.currency)}</span>
+                  <Badge tone="orange" label="On hold" />
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--t2)' }}>
+                  Held by {r.held_by_name || '—'} · {r.held_at ? fmtDateShort(r.held_at) : '—'}
+                </div>
+                <div style={{ fontSize: 13 }}>{r.held_reason}</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Btn onClick={() => router.push(`/payments/detail?id=${r.id}`)}>Open</Btn>
+                  {canHold && (
+                    <Btn kind="primary" disabled={busy === r.id} onClick={() => release(r)}>
+                      {busy === r.id ? 'Saving…' : 'Release'}
+                    </Btn>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {holdFor && (
+        <Modal onClose={() => { if (busy !== holdFor.id) { setHoldFor(null); setHoldNote(''); } }}
+               title={`Put ${holdFor.request_no} on hold`}>
+          <div style={{ padding: 16, maxWidth: 460 }}>
+            <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
+              The requester sees this reason and the request stays open on their side.
+            </p>
+            <textarea value={holdNote} onChange={e => setHoldNote(e.target.value)} rows={3}
+              style={{ ...inp, width: '100%' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <Btn kind="primary" disabled={busy === holdFor.id || !holdNote.trim()} onClick={hold}>
+                {busy === holdFor.id ? 'Saving…' : 'Put on hold'}
+              </Btn>
+              <Btn onClick={() => { setHoldFor(null); setHoldNote(''); }}>Cancel</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

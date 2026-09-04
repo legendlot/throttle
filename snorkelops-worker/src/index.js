@@ -1597,14 +1597,18 @@ export default {
             // always-false predicate and returns an empty list with HTTP 200 and no error. A silent
             // lie is worse than a rejection, so the two are now mutually exclusive: say which you mean.
             // (No caller sent both — the UI passes `scope` only — so this was a trap for the next one.)
-            const pinned = scope === 'approvals' ? 'pending_approval'
-                         : scope === 'finance'   ? 'approved'
+            // A scope now pins a SET of statuses, and an explicit `status=` may only NARROW that set
+            // (scope=finance covers approved + held, so `status=held` is a legal narrowing).
+            const pinned = scope === 'approvals' ? ['pending_approval']
+                         : scope === 'finance'   ? ['approved', 'held']
                          : null;
-            if (pinned && status && status !== pinned) {
-              return err(`scope=${scope} already filters status=${pinned}; drop the explicit status= or use scope=mine`, 400);
+            if (pinned && status && !pinned.includes(status)) {
+              return err(`scope=${scope} already filters status=${pinned.join('|')}; drop the explicit status= or use scope=mine`, 400);
             }
-            if (pinned) q += `&status=eq.${pinned}`;
-            else if (status) q += `&status=eq.${encodeURIComponent(status)}`;
+            if (pinned) {
+              const use = status ? [status] : pinned;
+              q += use.length === 1 ? `&status=eq.${use[0]}` : `&status=in.(${use.join(',')})`;
+            } else if (status) q += `&status=eq.${encodeURIComponent(status)}`;
             const r = await query('payment_requests', q, { prefer: 'count=exact' });
             if (!r.ok) return err(r.data);
             const fetched   = Array.isArray(r.data) ? r.data.length : 0;
@@ -1652,7 +1656,10 @@ export default {
           case 'getFinanceQueue': {
             if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission', 403);
             const r = await query('payment_requests',
-              '?status=eq.approved&select=*,payee:payment_payees(id,payee_code,name,payee_type)' +
+              // `held` rides along with `approved`: a hold is a pause inside the finance queue,
+              // so finance must still see the row (and release it) without leaving this screen.
+              // The response shape is unchanged — the UI partitions by `status`.
+              '?status=in.(approved,held)&select=*,payee:payment_payees(id,payee_code,name,payee_type)' +
               `&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
               { prefer: 'count=exact' });
             if (!r.ok) return err(r.data);
@@ -3923,7 +3930,7 @@ export default {
               status: 'rejected', rejected_by_user_id: userId,
               rejected_by_name: authResult?.fullName || null, rejected_at: now,
               rejection_note: d.rejection_note, updated_at: now,
-            }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved)`);
+            }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved,held)`);
             if (!r.ok) return err('Reject failed: ' + JSON.stringify(r.data));
             const rej = (Array.isArray(r.data) ? r.data : [])[0];
             if (rej) await notify([{
@@ -3932,6 +3939,61 @@ export default {
               body: d.rejection_note,   // the reason IS the notification; a bare "rejected" is useless
             }]);
             return ok({ rejected: d.id });
+          }
+
+          // HOLD / RELEASE — a finance pause, NOT a closure (Afshaan, 2026-09-04). The requester
+          // keeps seeing the request as open ("On hold with Finance"), which is why hold does not
+          // notify anyone but them and why `markPaymentPaid` stays approved-only: a held request
+          // must be released before it can be paid. Either payment executor or a super admin may
+          // hold AND release — the hold belongs to Finance, not to whoever placed it.
+          case 'holdPaymentRequest': {
+            if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission to hold', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const reason = String(d.held_reason || '').trim();
+            if (!reason) return err('A reason is required to hold');
+            const now = new Date().toISOString();
+            const r = await update('payment_requests', {
+              status: 'held', held_by_user_id: userId,
+              held_by_name: authResult?.fullName || null, held_at: now, held_reason: reason,
+              // a re-hold must not carry the previous release stamp
+              released_by_user_id: null, released_by_name: null, released_at: null,
+              updated_at: now,
+            }, `id=eq.${encodeURIComponent(d.id)}&status=eq.approved`);
+            if (!r.ok) return err('Hold failed: ' + JSON.stringify(r.data));
+            const row = (Array.isArray(r.data) ? r.data : [])[0];
+            if (!row) return err('Only a request that is with Finance (approved) can be put on hold', 409);
+            await notify([{
+              user_id: row.requested_by_user_id, request_id: row.id, kind: 'held',
+              title: `${row.request_no} is on hold with Finance`,
+              body: reason,   // the reason IS the notification — the requester has to know what to fix
+            }]);
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_HELD', 'Payment',
+              String(d.id), `${row.request_no} held`, { reason });
+            return ok({ held: d.id });
+          }
+
+          case 'releasePaymentRequest': {
+            if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission to release', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const now = new Date().toISOString();
+            const who = authResult?.fullName || 'Finance';
+            const r = await update('payment_requests', {
+              status: 'approved', released_by_user_id: userId,
+              released_by_name: authResult?.fullName || null, released_at: now, updated_at: now,
+            }, `id=eq.${encodeURIComponent(d.id)}&status=eq.held`);
+            if (!r.ok) return err('Release failed: ' + JSON.stringify(r.data));
+            const row = (Array.isArray(r.data) ? r.data : [])[0];
+            if (!row) return err('This request is not on hold', 409);
+            await notify([{
+              user_id: row.requested_by_user_id, request_id: row.id, kind: 'released',
+              title: `${row.request_no} is back with Finance`,
+              body: [`Hold released by ${who}`, d.note || null].filter(Boolean).join(' — '),
+            }]);
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_RELEASED', 'Payment',
+              String(d.id), `${row.request_no} released`, { note: d.note || null });
+            return ok({ released: d.id });
           }
 
           case 'markPaymentPaid': {

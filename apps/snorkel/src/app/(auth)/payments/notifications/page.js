@@ -9,10 +9,12 @@ import { fmtDateShort } from '@/components/format.js';
 
 const KIND_TONE = {
   approval_needed: 'yellow', payment_needed: 'blue', approved: 'blue',
+  held: 'orange', released: 'blue',
   paid: 'green', rejected: 'red', cancelled: 'gray',
 };
 const KIND_LABEL = {
   approval_needed: 'Needs approval', payment_needed: 'Ready to pay', approved: 'Approved',
+  held: 'On hold', released: 'Back with Finance',
   paid: 'Paid', rejected: 'Rejected', cancelled: 'Cancelled',
 };
 
