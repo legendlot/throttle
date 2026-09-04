@@ -69,8 +69,8 @@ export default function ReportsPage() {
   const [callData, setCallData] = useState(null);
   const [agentData, setAgentData] = useState(null);
   const [waitData, setWaitData] = useState(null);   // S319 breakdown — own RPC, own request
-  // Daily trend (S349b) — its own request, its own error: a slow or failed trend costs only its
-  // panel, exactly as the wait breakdown does. Never touches `loading` or `error`.
+  // Trend (S349b/c) — its own request, its own effect, its own error: a slow or failed trend costs
+  // only its panel, exactly as the wait breakdown does. Never touches `loading` or `error`.
   const [dailyData, setDailyData] = useState(null);
   const [dailyErr, setDailyErr] = useState(null);
   const [dailyMetric, setDailyMetric] = useState('queries');
@@ -161,31 +161,40 @@ export default function ReportsPage() {
       csopsGet('getConversationWaitBreakdown', args, session)
         .then(d => { if (alive) setWaitData(d); })
         .catch(() => { if (alive) setWaitData(null); });
-      // The daily trend is the same report per IST day (worker fans out, capped at 62 days), so it
-      // takes the SAME args — filters and basis included — and cannot disagree with the KPIs.
-      // ⚠️ The tab OPENS on year-to-date (247 days on 2026-09-04) and the worker refuses more than
-      // 62 at daily grain — so without this the panel showed an error on every first visit until
-      // "Last 7 days" was clicked (S349b hostile review). Clamp to the LAST 62 days of the range
-      // and say so in the caption; the KPIs and table above keep the full range.
-      // Grain-aware (S349c): the cap is 62 BUCKETS, so a week grain clamps at 62 weeks and a
-      // month grain at ~62 months — year-to-date needs no clamp once the grain is coarser.
-      const dayCount = Math.round((Date.parse(toIsoStart(to)) - Date.parse(toIsoStart(from))) / 86400000) + 1;
-      const maxDays = dailyGrain === 'month' ? DAILY_MAX_DAYS * 28 : dailyGrain === 'week' ? DAILY_MAX_DAYS * 7 - 6 : DAILY_MAX_DAYS;
-      const clamped = dayCount > maxDays;
-      const dailyArgs = {
-        ...(clamped
-          ? { ...args, from: toIsoStart(new Date(Date.parse(toIsoStart(to)) - (maxDays - 1) * 86400000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)) }
-          : args),
-        grain: dailyGrain,
-      };
-      setDailyData(null); setDailyErr(null); setDailyClamped(clamped);
-      csopsGet('getAgentConversationDaily', dailyArgs, session)
-        .then(d => { if (alive) setDailyData(d); })
-        .catch(e => { if (alive) { setDailyData(null); setDailyErr(e.message); } });
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels, dailyGrain]);
+  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels]);
+
+  // The Agents trend is its OWN effect (S349c review): it shares the filters and basis with the
+  // report above, but a grain change must refetch only the trend — keyed into the main effect it
+  // re-ran the ~3 s YTD report and spinnered the whole tab for a dropdown the user just touched.
+  // Worker fans out one report per bucket, capped per grain, so the page clamps first.
+  useEffect(() => {
+    if (!session || view !== 'agents') return;
+    let alive = true;
+    const args = { from: toIsoStart(from), to: toIsoEnd(to) };
+    if (agChannels.length) args.channel = joinMulti(agChannels);
+    if (agTags.length)     args.tag_id  = joinMulti(agTags);
+    if (agAgents.length)   args.agent   = joinMulti(agAgents);
+    if (businessHours) args.business_hours = 'true';
+    // Grain-aware clamp in DAYS: 62 days · 62 weeks (62*7-6 days is exactly tight) · 24 months
+    // (24*28 days is conservative — the worker's month cap is lower because a month costs ~1.6 s).
+    const dayCount = Math.round((Date.parse(toIsoStart(to)) - Date.parse(toIsoStart(from))) / 86400000) + 1;
+    const maxDays = dailyGrain === 'month' ? MONTH_MAX_BUCKETS * 28 : dailyGrain === 'week' ? DAILY_MAX_DAYS * 7 - 6 : DAILY_MAX_DAYS;
+    const clamped = dayCount > maxDays;
+    const dailyArgs = {
+      ...(clamped
+        ? { ...args, from: toIsoStart(new Date(Date.parse(toIsoStart(to)) - (maxDays - 1) * 86400000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)) }
+        : args),
+      grain: dailyGrain,
+    };
+    setDailyData(null); setDailyErr(null); setDailyClamped(clamped);
+    csopsGet('getAgentConversationDaily', dailyArgs, session)
+      .then(d => { if (alive) setDailyData(d); })
+      .catch(e => { if (alive) { setDailyData(null); setDailyErr(e.message); } });
+    return () => { alive = false; };
+  }, [session, view, from, to, agChannels, agTags, agAgents, businessHours, dailyGrain]);
 
   function exportCsv() {
     // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
@@ -529,6 +538,7 @@ function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, c
 // should read, so for minutes/rates the smaller agents are simply not drawn.
 const DAILY_TOP_AGENTS = 6;
 const DAILY_MAX_DAYS = 62;     // mirrors csops MAX_DAILY_DAYS — the page clamps so the worker never has to refuse
+const MONTH_MAX_BUCKETS = 24;  // mirrors csops MAX_MONTH_BUCKETS
 const GRAINS = [['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']];
 function grainWord(g) {
   if (g === 'month') return { title: 'Monthly', plural: 'months', bucket: 'Month' };
@@ -594,7 +604,8 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped
         {/* Verified live 2026-09-04: queries/answered/assigned/resolved sum to the range total exactly;
             handled does NOT (1,589 vs 1,179 over 7 days) because a conversation replied to on three
             days is handled on each of them and once in the range. Say so, or the sum reads as a bug. */}
-        {m?.key === 'handled' && <span style={{ fontSize: 11.5, color: 'var(--t4)' }}>A conversation counts on every day it was replied to, so the days add up to more than the range total.</span>}
+        {m?.key === 'handled' && <span style={{ fontSize: 11.5, color: 'var(--t4)' }}>A conversation counts in every {gw.plural.slice(0, -1)} it was replied to, so the {gw.plural} add up to more than the range total.</span>}
+        {grain !== 'day' && data?.days?.length > 0 && <span style={{ fontSize: 11.5, color: 'var(--t4)' }}>The first and last {gw.plural.slice(0, -1)} cover only the part inside the selected dates.</span>}
       </div>
       {error ? (
         <div style={{ color: 'var(--warn-fg)', fontSize: 12.5, padding: '12px 0' }}>{error}</div>
@@ -944,11 +955,13 @@ function bucketOf(date, grain) {
   return date;
 }
 const CALL_SUMS = ['in_total', 'in_answered', 'out_total', 'out_answered', 'dur_sum', 'dur_count'];
-function finishCallRow(r) {
+function finishCallRow(r, isTeam) {
   return {
     ...r,
-    in_missed:    (r.in_total || 0) - (r.in_answered || 0),
-    answer_rate:  r.in_total ? +((100 * r.in_answered) / r.in_total).toFixed(1) : null,
+    // Inbound totals exist only on the team rows (a call nobody took has no agent), so the two
+    // derived inbound figures are team-only too — deriving them per agent gave negative "missed".
+    in_missed:    isTeam ? (r.in_total || 0) - (r.in_answered || 0) : null,
+    answer_rate:  isTeam && r.in_total ? +((100 * r.in_answered) / r.in_total).toFixed(1) : null,
     avg_duration: r.dur_count ? Math.round(r.dur_sum / r.dur_count) : null,
   };
 }
@@ -965,10 +978,10 @@ function foldCalls(daily = [], byAgent = [], grain) {
     return acc;
   };
   const team = fold(daily);
-  const days = [...team.keys()].sort().map(k => finishCallRow(team.get(k)));
+  const days = [...team.keys()].sort().map(k => finishCallRow(team.get(k), true));
   const by_agent = byAgent.map(a => {
     const f = fold(a.days || []);
-    const rows = days.map(d => finishCallRow(f.get(d.day) || Object.fromEntries([['day', d.day], ...CALL_SUMS.map(x => [x, 0])])));
+    const rows = days.map(d => finishCallRow(f.get(d.day) || Object.fromEntries([['day', d.day], ...CALL_SUMS.map(x => [x, 0])]), false));
     return { name: a.name, agent_id: null, handled_total: rows.reduce((s, r) => s + (r.in_answered || 0) + (r.out_answered || 0), 0), days: rows };
   }).sort((a, b) => b.handled_total - a.handled_total || a.name.localeCompare(b.name));
   return { range: { days: days.length, grain }, metrics: CALL_METRICS, days, by_agent };
@@ -977,7 +990,14 @@ function CallTrend({ daily, byAgent }) {
   const [grain, setGrain] = useState('day');
   const [metric, setMetric] = useState('in_total');
   const data = useMemo(() => foldCalls(daily, byAgent, grain), [daily, byAgent, grain]);
-  if (!data.days.length) return <div style={{ fontSize: 12.5, color: 'var(--t3)' }}>No calls in range.</div>;
+  if (!data.days.length) {
+    return (
+      <div style={{ marginTop: 'var(--gap)', padding: 'var(--pad)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Call trend</div>
+        <div style={{ fontSize: 12.5, color: 'var(--t3)' }}>No calls in range.</div>
+      </div>
+    );
+  }
   return <DailyTrendPanel data={data} metric={metric} onMetric={setMetric} grain={grain} onGrain={setGrain} title="Call trend" businessHours={null} />;
 }
 

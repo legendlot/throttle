@@ -1924,13 +1924,18 @@ async function getAgentConversationReport(params, auth, env) {
 // Deliberately NOT a new daily RPC. cs_agent_conversation_report is 12 KB of cohort logic whose
 // definitions must stay identical to the Tickets tab's counts (systems/pitstop.md); a second copy
 // with a GROUP BY day is exactly how the two would drift. Calling the same function per day cannot
-// drift, and one day costs ~160 ms on either basis (EXPLAIN ANALYZE, 2026-09-04), so a week is
-// seven parallel calls and a month is ~1 s. Capped at MAX_DAILY_DAYS: beyond that the honest
-// answer is "narrow the range", not a slow page.
+// drift. Grain (S349c): one call per BUCKET — day, Monday-week or calendar month — each clipped to
+// the range. Measured 2026-09-04 (EXPLAIN ANALYZE, business hours): one day ≈ 160 ms, one full
+// month ≈ 1.6 s (see MAX_MONTH_BUCKETS). Capped in BUCKETS per grain: beyond that the honest
+// answer is "narrow the range or coarsen the grain", not a slow page.
 //
 // Each day's window is CLIPPED to the requested range (first/last day), so the daily counts sum
 // to the whole-range report exactly — the verification the page relies on.
 const MAX_DAILY_DAYS = 62;
+// Month grain has its own cap: one full-month evaluation of the report costs ~1.6 s (EXPLAIN
+// ANALYZE, Aug 2026, business hours, 2026-09-04) against ~160 ms for a day, so 62 months would be
+// ~12 s of DB time in flight at once. 24 months is two years of monthly trend and ~5 s worst case.
+const MAX_MONTH_BUCKETS = 24;
 const DAILY_FANOUT = 8;
 async function getAgentConversationDaily(params, auth, env) {
   // Both bounds REQUIRED (review finding 10): the sibling report defaults to YTD, which this
@@ -1945,10 +1950,11 @@ async function getAgentConversationDaily(params, auth, env) {
   // the range, so a weekly average is the week's own average and never a mean of daily means.
   const grain = ['week', 'month'].includes(params.get('grain')) ? params.get('grain') : 'day';
 
-  const range = istBucketRange(from, to, grain, MAX_DAILY_DAYS);
+  const cap = grain === 'month' ? MAX_MONTH_BUCKETS : MAX_DAILY_DAYS;
+  const range = istBucketRange(from, to, grain, cap);
   if (!range.ok) {
     return range.reason === 'too_long'
-      ? err(`The trend covers up to ${MAX_DAILY_DAYS} ${grain === 'day' ? 'days' : grain + 's'} — this range is ${range.count}. Narrow the dates or pick a coarser grain.`, 400)
+      ? err(`The trend covers up to ${cap} ${grain === 'day' ? 'days' : grain + 's'} — this range is ${range.count}. Narrow the dates or pick a coarser grain.`, 400)
       : err('Invalid date range', 400);
   }
   const days = range.buckets;
@@ -2396,13 +2402,16 @@ async function getCallReports(params, auth, env) {
       // Duration as SUM + COUNT, not an average: the page folds days into weeks/months and only
       // sums fold exactly (S349c). Same rule for the per-agent rows below.
       if (c.duration_seconds && c.duration_seconds > 0) { daily[day].dur_sum += c.duration_seconds; daily[day].dur_count++; }
-      // Per-agent per-day (S349c, the Calls trend per agent). Same attribution as byAgent below:
-      // a missed call has no agent, so only answered/outbound work lands here.
-      if (c.agent_user_id || c.agent_name) {
-        const an = c.agent_name || '— unknown —';
+      // Per-agent per-day (S349c, the Calls trend per agent). EVERY call lands here, exactly as in
+      // byAgent below — a call with no agent goes to the same '— unassigned —' bucket, so the agent
+      // lines (+ Others) always sum to the team line. The S349c review measured what gating on
+      // "has an agent" cost: 1,804 of 10,438 outgoing calls YTD (17%) vanished from every agent
+      // line with no Others line to show for them, and the team's average duration measured a
+      // different population (61 s) from the agents' (82 s).
+      {
+        const an = c.agent_name || '— unassigned —';
         const da = (dailyByAgent[an] ||= {});
-        const r = da[day] || (da[day] = { date: day, in_answered: 0, out_total: 0, out_answered: 0, answered_calls: 0, dur_sum: 0, dur_count: 0 });
-        if (c.status === 'answered') r.answered_calls++;
+        const r = da[day] || (da[day] = { date: day, in_answered: 0, out_total: 0, out_answered: 0, dur_sum: 0, dur_count: 0 });
         if (c.direction === 'incoming') { if (reachedAgent(c)) r.in_answered++; }
         else if (c.direction === 'outgoing') { r.out_total++; if (c.status === 'answered') r.out_answered++; }
         if (c.duration_seconds && c.duration_seconds > 0) { r.dur_sum += c.duration_seconds; r.dur_count++; }

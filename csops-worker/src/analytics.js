@@ -229,10 +229,13 @@ export function istBucketRange(fromIso, toIso, grain = 'day', maxBuckets = 62) {
     const a = new Date(first * DAY), b = new Date(last * DAY);
     count = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth()) + 1;
   } else count = Math.floor((last - first) / (grain === 'week' ? 7 : 1)) + 1;
+  if (!Number.isFinite(count)) return { ok: false, reason: 'invalid' };   // beyond Date's range → NaN
   if (count > maxBuckets) return { ok: false, reason: 'too_long', count };
   const buckets = [];
   for (let s = first; s <= last; s = nextStart(s)) {
-    const bStart = s * DAY - IST, bEnd = nextStart(s) * DAY - IST - 1;   // IST midnight → instant
+    const nx = nextStart(s);
+    if (!Number.isFinite(nx)) return { ok: false, reason: 'invalid' };    // past Date's range (review S349c)
+    const bStart = s * DAY - IST, bEnd = nx * DAY - IST - 1;              // IST midnight → instant
     buckets.push({ bucket: ymd(s), from: new Date(Math.max(bStart, fromMs)).toISOString(), to: new Date(Math.min(bEnd, toMs)).toISOString() });
   }
   return { ok: true, buckets };

@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.23.1] - 2026-09-04
+### Changed
+- **Reports** — trend panel: caps are 62 days / 62 weeks / 24 months and a longer range clamps
+  at any grain; first and last weekly/monthly buckets are partial and the caption says so; on
+  the Calls tab an unassigned bucket carries the calls with no agent, so the agent lines add up
+  to the team line.
+
 ## [1.23.0] - 2026-09-04
 ### Changed
 - **Reports (Agents tab)** — the Daily trend panel is now a **trend panel** with a grain

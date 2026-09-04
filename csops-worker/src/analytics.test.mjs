@@ -299,3 +299,14 @@ test('istBucketRange: day grain agrees with istDayRange', () => {
   const a = istBucketRange('2026-08-30T18:30:00Z', '2026-09-02T18:29:59.999Z', 'day').buckets.map(b => b.bucket);
   assert.deepEqual(a, istDayRange('2026-08-30T18:30:00Z', '2026-09-02T18:29:59.999Z').days);
 });
+
+test('istBucketRange: a range beyond what Date can represent is invalid, never a throw', () => {
+  assert.deepEqual(istBucketRange('+275760-09-10T00:00:00Z', '+275760-09-13T00:00:00Z', 'month'), { ok: false, reason: 'invalid' });
+});
+
+test('istBucketRange: a range starting on a Sunday labels its first week by the preceding Monday', () => {
+  // 2026-09-06 is a Sunday.
+  const r = istBucketRange('2026-09-06T00:00:00+05:30', '2026-09-08T23:59:59.999+05:30', 'week');
+  assert.deepEqual(r.buckets.map(b => b.bucket), ['2026-08-31', '2026-09-07']);
+  assert.equal(r.buckets[0].from, '2026-09-05T18:30:00.000Z');   // clipped: the Sunday only
+});
