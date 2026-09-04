@@ -3,6 +3,21 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.20.0] - 2026-09-04
+### Changed
+- **Reports (Agents tab)** — Channel and Tag go from single-select to multi-select, and a new
+  multi-select **Agent** filter is added (all three combinable), replacing the single-select
+  Channel/Tag pair and no-agent-filter layout. Documents that the KPI cards and the **What the
+  resolution time is made of** wait breakdown recompute over the same filtered cohort, not
+  whole-team totals above a filtered table. Added that the CSV export records the Agent /
+  Channel / Tag cohort. Business hours checkbox unchanged.
+- **Support Analytics** — Trend grain picker gains **Trend: daily** alongside monthly/weekly.
+  Two new trend panels: **Complaint Rate** (bars = complaints per bucket, line = trailing
+  rolling average over 7/4/3 buckets on daily/weekly/monthly, window named in the legend, a
+  bucket with no complaints is absent rather than zero) and **Ageing Trend** (the three ageing
+  groups plotted as a share of each bucket rather than a raw count, so a busy month does not
+  read as a worsening one; the table shows both count and percentage).
+
 ## [1.19.0] - 2026-09-03
 ### Changed
 - **Support Analytics** — Filters go from five to six: added **Agent** (with **Unassigned** as
