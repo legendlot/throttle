@@ -1803,6 +1803,34 @@ export default {
                 out.lookup = { email, resolved: !!id, user_id: id };
               }
             }
+            // Render a real PO, and optionally deliver it — ⭐ ALWAYS AND ONLY to the
+            // CALLER's own Slack DM (authResult.email). There is deliberately no
+            // recipient parameter: a diagnostic that can message an arbitrary colleague
+            // is one fat-finger away from sending a half-built notification to the floor.
+            // This exercises the exact production path end to end (render → upload → DM).
+            const poNum = url.searchParams.get('po_number');
+            if (poNum) {
+              const data = await loadPoDocData(poNum);
+              if (!data) { out.render = { po_number: poNum, error: 'PO not found' }; return ok(out); }
+              const html = poPrintHtml(data);
+              const pdf = await renderPdfFromHtml(html, env);
+              out.render = {
+                po_number: poNum,
+                lines: data.lines.length,
+                html_bytes: html.length,
+                pdf_bytes: pdf ? pdf.length : 0,
+                is_pdf: !!pdf && pdf[0] === 0x25 && pdf[1] === 0x50 && pdf[2] === 0x44 && pdf[3] === 0x46,
+              };
+              if (url.searchParams.get('test_send') === '1' && pdf) {
+                const selfId = await slackUserIdByEmail(authResult?.email, env);
+                const dm = selfId ? await slackApi('conversations.open', { users: selfId }, env) : null;
+                const ch = dm?.ok ? dm.channel?.id : null;
+                out.test_send = { to: authResult?.email, resolved: !!selfId, dm_open: !!ch };
+                if (ch) out.test_send.delivered = await slackUploadPdfToDm(
+                  ch, pdf, `TEST-${poNum}.pdf`,
+                  `:test_tube: *Test render — ${poFormatNumber(data.po.po_number, data.po.raised_date)}*\nDiagnostic only, sent to you by you. No requester was notified.`, env);
+              }
+            }
             return ok(out);
           }
 
