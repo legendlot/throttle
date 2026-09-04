@@ -43,7 +43,23 @@
   <p>The Calls tab&rsquo;s <strong>Answered</strong> and <strong>Missed</strong> cards are now <strong>Reached an agent</strong> and <strong>Didn&rsquo;t reach an agent</strong> (both inbound), alongside a new <strong>Inbound answer rate</strong>. The old &ldquo;Missed&rdquo; figure was wrong for the MyOperator era: that system recorded a call as missed in one rare case only, so it showed 45 missed calls for the whole period while 4,330 inbound calls never reached anybody. <strong>Didn&rsquo;t reach an agent</strong> also includes people who hung up in the phone menu before routing, so it is not all calls the team failed to answer.</p>
 </div>
 
-<p>Set the From and To dates at the top; changing either refetches immediately.</p>
+<p>Set the From and To dates at the top; changing either refetches immediately. A <strong>Last 7 days</strong> button sits next to the pickers, on every tab &mdash; it sets the range to today and the six days before it, the range the CS lead opens every morning. It is a shortcut, not a default: the Tickets tab still opens on year-to-date until you click it.</p>
+
+<h3>Daily trend (Agents tab)</h3>
+<p>Below the per-agent table on the <strong>Agents</strong> tab, a <strong>Daily trend</strong> panel charts one metric per day: a line for <strong>All agents</strong> and one line per agent, for whichever metric you pick from the dropdown &mdash; Queries, Answered, Never answered, Avg first reply, Avg resolution, Resolve rate, Handled, Resolved or Assigned. It follows the same Agent, Channel and Tag filters and the same Business hours checkbox as the KPIs above it, because each point on the chart is the Agents report computed for that single day. So every number keeps the date basis the rest of this tab already documents: Queries, Answered, Never answered and the averages/rates count conversations <strong>raised</strong> that day; Handled counts the day the agent replied; Resolved counts the day it was closed; Assigned counts the day it was handed over. One consequence worth knowing: a conversation replied to on three different days is Handled on each of them, so the daily Handled figures add up to more than the Handled total for the range (checked on 4 Sep 2026: 1,589 across seven days against 1,179 for the week), whereas Queries, Answered, Assigned and Resolved add up exactly. The panel repeats this note whenever Handled is selected.</p>
+<p>Only the <strong>six busiest agents</strong> (by Handled over the range) get their own line. For a count metric (Queries, Answered, Handled, and so on) everyone else is summed into an <strong>Others</strong> line, so the total still adds up. For a minutes or rate metric (Avg first reply, Avg resolution, Resolve rate) the smaller agents are simply <strong>not drawn</strong> &mdash; the panel says so in its caption &mdash; because an average of averages is not a number anyone should read.</p>
+
+<div class="callout note">
+  <div class="c-title">Up to 62 days at daily grain</div>
+  <p>The trend plots one point per day, so a very wide range asks for a lot of points. Beyond <strong>62 days</strong> the panel shows a &ldquo;narrow the dates&rdquo; message in its own space instead of a chart &mdash; the KPIs, the table and the rest of the tab keep working normally either side of that limit.</p>
+</div>
+
+<p>The Agents tab&rsquo;s <strong>Export CSV</strong> now ends with a <strong>Daily trend</strong> block: one row per day for <strong>All agents</strong>, then one row per day per agent, with every metric as its own column (minutes and percentages labelled in the header). It is appended only when the panel has actually loaded &mdash; a failed or still-loading trend simply leaves the block off the file rather than exporting blanks that would read as zeros.</p>
+
+<div class="callout">
+  <div class="c-title">Weekly, monthly and Calls trends are not built yet</div>
+  <p>The Daily trend panel is daily grain only, and only on the Agents tab. A week/month rollup and an equivalent trend for the Calls tab are not available.</p>
+</div>
 
 <h3>What the resolution time is made of</h3>
 <p>On the <strong>Agents</strong> tab, the panel <strong>What the resolution time is made of</strong> breaks &ldquo;Avg to close&rdquo; into the parts it is actually built from. It answers the common objection that the figure is unfair because it counts time nobody was working.</p>

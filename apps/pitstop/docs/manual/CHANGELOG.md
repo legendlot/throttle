@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.22.0] - 2026-09-04
+### Changed
+- **Reports** — new **Last 7 days** button beside the From/To pickers on every tab, sets the
+  range to today and the six days before it.
+- **Reports (Agents tab)** — new **Daily trend** panel below the per-agent table: a chart with
+  one line per day for the whole team and one per agent (busiest six by Handled; the rest summed
+  into an "Others" line for count metrics, or not drawn for minutes/rate metrics), for a metric
+  chosen from a dropdown (Queries, Answered, Never answered, Avg first reply, Avg resolution,
+  Resolve rate, Handled, Resolved, Assigned). Follows the same Agent/Channel/Tag filters and
+  Business hours checkbox as the KPIs, and each day's figure keeps the date basis the tab already
+  documents. Capped at 62 days at daily grain, with a "narrow the dates" message beyond that.
+  Export CSV on the Agents tab now ends with a Daily trend block (one row per day per agent,
+  every metric as a column). Weekly/monthly grains and a Calls trend are not built yet.
+
 ## [1.21.1] - 2026-09-04
 ### Changed
 - **Support Analytics** — Export complaints: states exactly what the file carries about the

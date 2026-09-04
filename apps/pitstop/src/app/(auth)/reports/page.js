@@ -543,6 +543,10 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours }) {
           {metrics.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
         </select>
         {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{data.range.days} days · one line per agent, busiest {Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown{hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}</span>}
+        {/* Verified live 2026-09-04: queries/answered/assigned/resolved sum to the range total exactly;
+            handled does NOT (1,589 vs 1,179 over 7 days) because a conversation replied to on three
+            days is handled on each of them and once in the range. Say so, or the sum reads as a bug. */}
+        {m?.key === 'handled' && <span style={{ fontSize: 11.5, color: 'var(--t4)' }}>A conversation counts on every day it was replied to, so the days add up to more than the range total.</span>}
       </div>
       {error ? (
         <div style={{ color: 'var(--warn-fg)', fontSize: 12.5, padding: '12px 0' }}>{error}</div>
