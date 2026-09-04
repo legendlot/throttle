@@ -854,6 +854,20 @@ async function deleteEngagementVideo(body, auth, env) {
   return ok({ deleted: true, rollup });
 }
 
+// S351: post_date / video_link at deal level ARE the seq-1 take's. Keep the two in step so the
+// per-video card and the Post-live card never disagree (updateEngagement's PostLiveCard patch and
+// advanceStage's go-live patch both still write the deal). Upsert so a deal that somehow lacks its
+// seq-1 row gets one. Non-fatal by design: the deal patch has already landed.
+async function mirrorDealVideoFields(env, engagementId, patch) {
+  if (!('post_date' in patch) && !('video_link' in patch)) return;
+  const mirror = { engagement_id: engagementId, seq: 1, updated_at: nowIso() };
+  if ('post_date' in patch) mirror.post_date = patch.post_date;
+  if ('video_link' in patch) mirror.video_link = patch.video_link;
+  await sb(`/rest/v1/engagement_videos?on_conflict=engagement_id,seq`, env, {
+    method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify([mirror]),
+  });
+}
+
 async function getEngagementVideos(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
@@ -1671,12 +1685,12 @@ const ENGAGEMENT_FIELDS = [
   'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
   'utm_source','utm_medium','utm_campaign',
-  'views','likes','comments','shares','impressions','sessions','orders',
-  // Reann 2026-08-10 #1 — the four capture fields the ratio framework needs.
-  // follower_count_at_post is point-in-time and NOT backfillable (see the column comment).
-  'saves','reposts','followers_gained','follower_count_at_post',
-  // Reann #2 — per-metric "why is this blank" reasons; distinguishes a real 0 from unknown.
-  'metric_gaps',
+  // S351 (multiple videos, slice 3): views / likes / comments / shares / impressions / saves /
+  // reposts / followers_gained / follower_count_at_post / metric_gaps are PER-VIDEO now and the
+  // deal-level columns are a worker-owned rollup (recomputeVideoRollup). They are deliberately
+  // NOT in this allowlist: a PATCH here would be reverted by the next rollup, which reads to
+  // the user as "my edit didn't save". Write them via setEngagementVideo.
+  'sessions','orders',
   // 'campaign_tag' was here (Reann #7, S272) and is DELIBERATELY REMOVED (S273): campaigns are
   // now real rows via campaign_id. The column survives read-only so the old tags stay auditable —
   // leaving it writable would rebuild the second campaign list we just collapsed.
@@ -1836,6 +1850,9 @@ async function createEngagement(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const eng = r.data?.[0];
   await writeHistory(env, eng.id, 'create', null, startStage, null, auth.userId);
+  // S351: a deal created WITH a link/post date (rare, but the form allows it) gets its seq-1
+  // video row now, so "every deal has exactly one row at seq 1" holds for new deals too.
+  await mirrorDealVideoFields(env, eng.id, row);
   // Multi-product (#4): if explicit product lines were supplied, store them + roll up.
   if (Array.isArray(body.products) && body.products.length) {
     await insertEngagementProducts(env, eng.id, body.products);
@@ -1902,6 +1919,7 @@ async function updateEngagement(body, auth, env) {
     body: JSON.stringify(patch),
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await mirrorDealVideoFields(env, body.engagement_id, patch);
   await recomputeCpm(env, body.engagement_id);   // views/costs may have changed (B13)
   return ok(r.data?.[0]);
 }
@@ -2112,6 +2130,9 @@ async function advanceStage(body, auth, env) {
     body: JSON.stringify(patch),
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // Go-live carries video_link/post_date in the SAME call (the AdvanceModal), so this path writes
+  // them without going through updateEngagement — mirror seq 1 here too (PATTERN-218: 2 sites).
+  await mirrorDealVideoFields(env, body.engagement_id, patch);
 
   await writeHistory(env, body.engagement_id, 'advance_stage', from, body.to_stage, body.note || null, auth.userId);
 
