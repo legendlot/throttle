@@ -157,7 +157,16 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
     const prev = lines[i] || {};
     const wasAutoFilled = prev.cogs_inr != null && Number(prev.goodies_cost) === Number(prev.cogs_inr);
     // Touching the product field ends this row's legacy grace: from here it must resolve.
-    if (prev.__uid) { pickedRef.current.add(prev.__uid); clearRowError(prev.__uid); }
+    // ⚠️ `pickedRef` means "the Combobox committed a REAL PICK and blurred itself", and only a
+    // real pick may suppress the blur error. Adding the uid unconditionally silently DROPPED the
+    // line: Combobox.handleChange fires onChange('', null) on the first keystroke over a row whose
+    // text exactly matches an option label (true for every bare legacy name that matches a remote's
+    // label — Shadow, Ghost, Flare, Dash, Mac, Knox, Nitro, Rift, Rumble, Fang, Roxie, whose XXR
+    // rows have null model/color so label === name). That cleared product_code to '', the wrapper's
+    // capture-phase delete ran BEFORE handleChange re-added the uid, so blur saw it in pickedRef,
+    // raised no error, left `valid` true — and linesToPayload filtered the now-blank row out. One
+    // keystroke, no warning, line gone. Two keystrokes were safe, which is why it survived review.
+    if (prev.__uid) { if (opt) pickedRef.current.add(prev.__uid); clearRowError(prev.__uid); }
     setRow(i, {
       product_code: name, product_ref: code, cogs_inr: null, list_price_inr: null,
       __legacyFreeText: false,

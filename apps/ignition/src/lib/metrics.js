@@ -114,7 +114,11 @@ export const REQUIRED_METRICS = ['follower_count_at_post'];
 export function missingRequiredMetrics(values = {}, platform) {
   return REQUIRED_METRICS
     .filter(k => isMetricApplicable(k, platform))
-    .filter(k => num(values[k]) == null);
+    // ⚠️ `<= 0`, not just null. `num(0)` returns 0, so a typed or tabbed-through zero passed the
+    // gate and produced exactly the failure it exists to prevent: deriveMetrics sets base = 0,
+    // every ratio goes null via missingDenominator, and — unlike a blank — nothing on screen says
+    // anything is wrong. Nobody has 0 followers at post time.
+    .filter(k => { const v = num(values[k]); return v == null || v <= 0; });
 }
 
 // Reann 2026-09-04 #5 — "flag missing data on engagements: warning if a video is missing Cost or

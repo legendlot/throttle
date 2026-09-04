@@ -799,8 +799,15 @@ function TrackingLinkRow({ e, canEdit, session, onSaved }) {
             lives in Relay → Links. Say where it points, where it should, and where to go. */}
         {status?.target_stale && (
           <span style={{ width: '100%', marginTop: 4, padding: 8, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', fontSize: 11, lineHeight: 1.6, color: 'var(--text-1)' }}>
-            <strong>This link points at a different product.</strong> It was minted before the
-            deal's product changed, and it still sends people to{' '}
+            {/* ⚠️ Two different causes, and asserting the wrong one is worse than saying less.
+                Every stale link today (4 of 81) stores the bare store root: it was minted while
+                the deal's product was still unresolved free text, and only became "stale" when the
+                product was linked afterwards. The product never changed. Say which case it is. */}
+            <strong>This link points at a different product.</strong>{' '}
+            {status.link_target && status.link_target.replace(/\/+$/, '') === 'https://www.legendoftoys.com'
+              ? <>It was minted before this deal had a product linked, so it still sends people to the store home page</>
+              : <>It was minted before the deal's product changed, and it still sends people</>}{' '}
+            to{' '}
             <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{status.link_target}</span>{' '}
             instead of{' '}
             <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{status.resolved_target}</span>.
@@ -885,7 +892,10 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
 // `engagement` are still the only ones anything writes, and a second write surface before the
 // rollup exists would let a PATCH here be silently reverted by it later.
 function VideosCard({ videos }) {
-  if (!videos.length) return null;
+  // Every deal has a backfilled seq=1 row, so `videos.length` is never 0 — gating on it put a new
+  // "Videos" card reading "— / — / 0 views" on the 208 deals that have no video yet, which is the
+  // opposite of the intended "nothing looks new" until slice 3. Gate on real content instead.
+  if (!videos.some(v => v.video_link || v.post_date)) return null;
   return (
     <Card title="Videos">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
