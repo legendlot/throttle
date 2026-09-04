@@ -3505,7 +3505,11 @@ async function loadConnectOverlay(env, threads) {
   const missing = threads.filter(t => !byThread[t.id]);
   if (missing.length) {
     const rows = missing.map(t => ({
-      thread_id: t.id, channel: t.channel || null, status: 'new',
+      thread_id: t.id, channel: t.channel || null,
+      // Seed from real message activity, not a hardcoded 'new'. A thread that has
+      // already been replied to has plainly been worked, and hardcoding 'new' here
+      // is why 897 of 901 rows sat at 'new' while 706 threads had real replies.
+      status: t.has_reply === true ? 'working' : 'new',
       transferred_at: t.ignition_transferred_at || null,
     }));
     const ins = await sb(`/rest/v1/connects`, env, {
@@ -3513,6 +3517,21 @@ async function loadConnectOverlay(env, threads) {
       body: JSON.stringify(rows),
     });
     for (const row of (ins.ok ? ins.data || [] : [])) byThread[row.thread_id] = row;
+  }
+
+  // Converge rows that predate the seeding above: a stored 'new' whose thread has a
+  // reply becomes 'working'. `status=eq.new` is on the WRITE filter, not just the JS
+  // side, so this can never downgrade a human-set 'promoted'/'closed'/'working'.
+  // `has_reply === true` is strict: null means csops could not tell us, and unknown
+  // must leave the stored value alone.
+  const stale = threads
+    .filter(t => t.has_reply === true && byThread[t.id] && byThread[t.id].status === 'new')
+    .map(t => t.id);
+  if (stale.length) {
+    const up = await sb(`/rest/v1/connects?thread_id=in.(${stale.join(',')})&status=eq.new`, env, {
+      method: 'PATCH', body: JSON.stringify({ status: 'working', updated_at: new Date().toISOString() }),
+    });
+    if (up.ok) for (const id of stale) byThread[id].status = 'working';
   }
   return byThread;
 }

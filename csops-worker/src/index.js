@@ -10563,12 +10563,28 @@ async function bridgeGetConnects(body, env) {
   );
   const lastByThread = {};
   for (const m of (mRes.data || [])) if (!lastByThread[m.thread_id]) lastByThread[m.thread_id] = m;
+
+  // "Has this thread EVER been replied to" — Ignition derives connects.status
+  // (new -> working) from this. Deliberately NOT computed from lastByThread above:
+  // that query is a global created_at.desc slice capped at 1500, so an old reply on
+  // a quiet thread would be missed and the thread would read as never-worked. The RPC
+  // returns one row per thread, so it also cannot hit the 5,000 db-max-rows ceiling.
+  const fRes = await sb('/rest/v1/rpc/ignition_connect_reply_flags', env, {
+    method: 'POST', body: JSON.stringify({ p_thread_ids: ids }),
+  });
+  const repliedThreads = new Set(
+    (fRes.ok ? fRes.data || [] : []).filter(r => r.has_reply).map(r => r.thread_id),
+  );
+
   const out = threads.map(t => {
     const lm = lastByThread[t.id] || null;
     return {
       ...t,
       last_message: lm ? { body: lm.body, kind: lm.kind, direction: lm.direction, created_at: lm.created_at } : null,
       awaiting_reply: lm ? lm.direction === 'inbound' : false,
+      // null (not false) when the flag lookup failed, so Ignition can tell "no reply"
+      // apart from "don't know" and leave a stored status alone rather than downgrading it.
+      has_reply: fRes.ok ? repliedThreads.has(t.id) : null,
       within_customer_window: withinCustomerWindow(t),
     };
   });
@@ -10585,7 +10601,18 @@ async function bridgeGetThread(body, env) {
   if (!thread.ignition_connect) return err('Not an Ignition connect', 403);
   const mRes = await sb(
     `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.asc&limit=500`, env);
-  return ok({ thread, messages: mRes.data || [], within_customer_window: withinCustomerWindow(thread) });
+  // Same has_reply contract as bridgeGetConnects, via the same RPC rather than the
+  // messages above, so the list view and the detail view can never disagree about
+  // whether a thread has been worked (the message fetch is capped at 500).
+  const fRes = await sb('/rest/v1/rpc/ignition_connect_reply_flags', env, {
+    method: 'POST', body: JSON.stringify({ p_thread_ids: [thread_id] }),
+  });
+  const has_reply = fRes.ok ? !!(fRes.data || [])[0]?.has_reply : null;
+  return ok({
+    thread: { ...thread, has_reply },
+    messages: mRes.data || [],
+    within_customer_window: withinCustomerWindow(thread),
+  });
 }
 
 // Reply on a transferred thread → existing provider send path by channel, scope-
