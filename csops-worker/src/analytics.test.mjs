@@ -168,3 +168,29 @@ test('a non-numeric total counts as zero rather than poisoning the mean with NaN
   assert.ok(out.every(r => Number.isFinite(r.avg)));
   assert.equal(out[2].avg, 2);   // (2 + 0 + 4) / 3
 });
+
+// ── Row-level export helpers (S349) ──────────────────────────────────────────
+
+import { formatTicketNotes, maskPhoneForExport } from './analytics.js';
+
+test('formatTicketNotes: one cell, IST-stamped, author named, newlines flattened, empties dropped', () => {
+  const s = formatTicketNotes([
+    { created_at: '2026-09-04T18:00:00Z', created_by_name: 'Pruthvi', body: 'Customer sent\nvideo' },
+    { created_at: '2026-09-05T02:00:00Z', created_by_name: null, body: '   ' },
+    { created_at: null, created_by_name: 'Maria', body: 'Replaced' },
+  ]);
+  // 18:00Z is 23:30 IST on the SAME day — a UTC stamp would have put it on the 4th at 18:00.
+  assert.equal(s, '[2026-09-04 23:30 IST, Pruthvi] Customer sent / video | [, Maria] Replaced');
+});
+
+test('formatTicketNotes: no notes yields an empty string, never "null" or "undefined"', () => {
+  assert.equal(formatTicketNotes([]), '');
+  assert.equal(formatTicketNotes(), '');
+  assert.equal(formatTicketNotes([{ body: null }]), '');
+});
+
+test('maskPhoneForExport matches the Queue export mask: all but the last three digits', () => {
+  assert.equal(maskPhoneForExport('+917709991011'), '+917709991***');
+  assert.equal(maskPhoneForExport('123'), '123');
+  assert.equal(maskPhoneForExport(null), '');
+});

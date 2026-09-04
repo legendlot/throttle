@@ -79,3 +79,33 @@ export function rollingAverage(series, window) {
     };
   });
 }
+
+// ── Row-level export helpers (S349, Pruthvi #bugs 1787733817 2026-09-04) ──────────────────
+
+// Internal ticket notes flattened into ONE cell: "[YYYY-MM-DD HH:MM IST, Name] body" joined by
+// " | ". One cell because the export is one row per complaint and a note count varies; a
+// spreadsheet with a ragged tail of note columns is what people mis-sort. Empty bodies are
+// dropped; a ticket with no notes yields '' (never 'null'). Timestamp rendered in IST because
+// the team reads the file in IST and a UTC stamp puts a 23:30 note on the wrong day.
+export function formatTicketNotes(notes = []) {
+  const out = [];
+  for (const n of notes) {
+    const body = (n?.body || '').trim();
+    if (!body) continue;
+    const when = n.created_at
+      ? new Date(new Date(n.created_at).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' IST'
+      : '';
+    const who = n.created_by_name ? `, ${n.created_by_name}` : '';
+    out.push(`[${when}${who}] ${body.replace(/\s*\r?\n\s*/g, ' / ')}`);
+  }
+  return out.join(' | ');
+}
+
+// Same mask the Queue export applies (queue/page.js maskPhone): keep everything but the last
+// three digits. A row-level export leaves the building, so the two files must not disagree
+// about how much of a number they show.
+export function maskPhoneForExport(phone) {
+  if (!phone) return '';
+  const s = String(phone);
+  return s.length < 4 ? s : s.slice(0, -3) + '***';
+}

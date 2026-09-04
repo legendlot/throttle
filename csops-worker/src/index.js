@@ -28,7 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
-import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage } from './analytics.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 
 
@@ -910,6 +910,10 @@ async function handleGet(action, params, auth, env) {
     case 'getSupportAnalytics': {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getSupportAnalytics(params, auth, env);
+    }
+    case 'getSupportAnalyticsRows': {   // row-level export of the same cohort (S349)
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getSupportAnalyticsRows(params, auth, env);
     }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
@@ -1957,16 +1961,18 @@ function istDate(ts) {                       // UTC ISO → 'YYYY-MM-DD' in IST
   return new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-async function getSupportAnalytics(params, auth, env) {
+// The analytics COHORT — date range + visibility scope + the complaint universe + the dimension
+// filters — loaded once here for BOTH the dashboard (getSupportAnalytics) and the row-level
+// export (getSupportAnalyticsRows, S349). One loader, so the rows a user exports are exactly the
+// rows the panels on screen were built from; a second copy of this block is how the two would
+// drift. `select` differs per caller: the dashboard stays narrow, the export carries the text.
+// Returns { error } (an err() response) or { from, to, want, lineOf, allRows, truncated }.
+async function loadAnalyticsCohort(params, auth, env, select) {
   // Default range = current month-to-date (IST). Presets/custom come from the page.
   const nowIstIso = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
   const monthStartIso = new Date(`${nowIstIso.slice(0, 7)}-01T00:00:00+05:30`).toISOString();
   const from = params.get('from') || monthStartIso;
   const to   = params.get('to')   || new Date().toISOString();
-
-  // Trend grain (Pruthvi asked for weekly; monthly was all there was). Anything but an
-  // explicit 'week' stays monthly, so an old cached page keeps the shape it expects.
-  const grain = ['week', 'day'].includes(params.get('grain')) ? params.get('grain') : 'month';
 
   // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
   // MULTI-select (S344, Pruthvi #bugs 1788512544): each dimension takes a separator-joined list,
@@ -1981,7 +1987,7 @@ async function getSupportAnalytics(params, auth, env) {
   }
 
   const scope = await visibilityFilters(params, auth, env);
-  if (!scope) return err('Unknown department slug', 404);
+  if (!scope) return { error: err('Unknown department slug', 404) };
 
   // A "complaint" = a triaged ticket carrying an issue_category. This is the same
   // universe the team's manual sheet counts (verified 2026-07-16: issue_category
@@ -1993,11 +1999,7 @@ async function getSupportAnalytics(params, auth, env) {
     `issue_category=not.is.null`,
     ...scope,
   ];
-  const SELECT = 'id,created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created,assigned_agent_name';
-  const [catRes, pmRes] = await Promise.all([
-    sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,sort_order&order=sort_order.asc`, env),
-    sbPublic(`/rest/v1/product_master?select=product,product_line&product_line=not.is.null&limit=2000`, env),
-  ]);
+  const pmRes = await sbPublic(`/rest/v1/product_master?select=product,product_line&product_line=not.is.null&limit=2000`, env);
 
   // ⚠️ PAGED, and it must stay paged. PostgREST caps EVERY response at the project's
   // db-max-rows (5,000) regardless of the URL's own `limit` — the previous `limit=20000`
@@ -2011,10 +2013,10 @@ async function getSupportAnalytics(params, auth, env) {
   let truncated = false;
   for (let offset = 0; ; offset += PAGE) {
     const pageRes = await sb(
-      `/rest/v1/cs_tickets?${filters.join('&')}&select=${SELECT}&order=id.asc&limit=${PAGE}&offset=${offset}`,
+      `/rest/v1/cs_tickets?${filters.join('&')}&select=${select}&order=id.asc&limit=${PAGE}&offset=${offset}`,
       env,
     );
-    if (!pageRes.ok) return err(`Failed to load analytics data: ${JSON.stringify(pageRes.data)}`, pageRes.status);
+    if (!pageRes.ok) return { error: err(`Failed to load analytics data: ${JSON.stringify(pageRes.data)}`, pageRes.status) };
     const page = pageRes.data || [];
     for (const r of page) allRows.push(r);
     if (page.length < PAGE) break;
@@ -2027,6 +2029,96 @@ async function getSupportAnalytics(params, auth, env) {
   const lineOf = {};
   for (const r of (pmRes.data || [])) if (r.product) lineOf[r.product] = r.product_line;
 
+  return { from, to, want, lineOf, allRows, truncated };
+}
+
+// Does a row survive the dimension filters? Same test for the dashboard and the export.
+const inCohort = (dims, want) => ANALYTICS_DIM_KEYS.every(k => !want[k] || want[k].has(dims[k]));
+
+// getSupportAnalyticsRows — ONE ROW PER COMPLAINT for the applied cohort, with the text the
+// dashboard never carries: the issue description, the closing/inspection notes and the ticket's
+// internal notes (Pruthvi #bugs 1787733817, 2026-09-04: "the ticket description or comments
+// related to the complaint description are not visible" in the export). A separate action rather
+// than a wider SELECT on getSupportAnalytics, deliberately: the dashboard is fetched on every
+// filter change and needs none of this text, while the export is a click.
+// Same cohort loader as the dashboard, so what you export is what you were looking at.
+async function getSupportAnalyticsRows(params, auth, env) {
+  const SELECT = 'id,ticket_no,created_at,purchase_date,customer_name,customer_phone,customer_email,platform,'
+    + 'external_order_id,product,product_model,product_color,issue_category,issue_subcategory,'
+    + 'issue_subcategory_custom,issue_description,intake_channel,auto_created,assigned_agent_name,'
+    + 'stage,closed_at,closed_reason,closed_note,disposition,inspection_note';
+  const c = await loadAnalyticsCohort(params, auth, env, SELECT);
+  if (c.error) return c.error;
+
+  const rows = [];
+  for (const r of c.allRows) {
+    const d = analyticsDims(r, c.lineOf);
+    if (inCohort(d, c.want)) rows.push({ r, d });
+  }
+
+  // Internal notes, fetched in id-chunks (a 300-id `in.()` list stays well inside URL limits;
+  // YTD is ~2,700 complaints → ~9 requests, nowhere near the subrequest ceiling). Measured
+  // 2026-09-04: only 5 complaints YTD carry a note at all, so this is cheap — but the ask was
+  // "comments", and the day the team starts using notes the export must already show them.
+  const notesByTicket = {};
+  const ids = rows.map(x => x.r.id);
+  const CHUNK = 300;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const nRes = await sb(
+      `/rest/v1/cs_ticket_notes?ticket_id=in.(${chunk.join(',')})&select=ticket_id,created_at,created_by_name,body&order=created_at.asc`,
+      env,
+    );
+    if (!nRes.ok) return err(`Failed to load ticket notes: ${JSON.stringify(nRes.data)}`, nRes.status);
+    for (const n of (nRes.data || [])) (notesByTicket[n.ticket_id] ||= []).push(n);
+  }
+
+  return ok({
+    range: { from: c.from, to: c.to, total: rows.length, range_total: c.allRows.length, truncated: c.truncated },
+    applied_filters: Object.fromEntries(Object.entries(c.want).map(([k, v]) => [k, [...v]])),
+    rows: rows.map(({ r, d }) => ({
+      ticket_no:            r.ticket_no,
+      date:                 istDate(r.created_at),
+      customer_name:        r.customer_name || '',
+      // Masked the same way the Queue export masks it — the export leaves the building.
+      customer_phone:       maskPhoneForExport(r.customer_phone),
+      customer_email:       r.customer_email || '',
+      order_id:             r.external_order_id || '',
+      purchase_date:        r.purchase_date || '',
+      product:              d.product,
+      model:                r.product_model || '',
+      colour:               r.product_color || '',
+      product_line:         d.product_line,
+      issue_category:       d.issue_category,
+      issue_subcategory:    r.issue_subcategory || r.issue_subcategory_custom || '',
+      issue_description:    r.issue_description || '',
+      sale_channel:         d.sale_channel,
+      support_channel:      d.support_channel,
+      agent:                d.agent,
+      stage:                r.stage,
+      disposition:          r.disposition || '',
+      closed_at:            istDate(r.closed_at) || '',
+      closed_reason:        r.closed_reason || '',
+      closed_note:          r.closed_note || '',
+      inspection_note:      r.inspection_note || '',
+      notes:                formatTicketNotes(notesByTicket[r.id] || []),
+    })),
+  });
+}
+
+async function getSupportAnalytics(params, auth, env) {
+  // Trend grain (Pruthvi asked for weekly; monthly was all there was). Anything but an
+  // explicit 'week' stays monthly, so an old cached page keeps the shape it expects.
+  const grain = ['week', 'day'].includes(params.get('grain')) ? params.get('grain') : 'month';
+
+  const SELECT = 'id,created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created,assigned_agent_name';
+  const [catRes, c] = await Promise.all([
+    sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,sort_order&order=sort_order.asc`, env),
+    loadAnalyticsCohort(params, auth, env, SELECT),
+  ]);
+  if (c.error) return c.error;
+  const { from, to, want, lineOf, allRows, truncated } = c;
+
   // Option lists come from the date-scoped rows BEFORE the dimension filters, so the
   // dropdowns keep offering the other choices once one is picked (filtering by product
   // must not empty the category list down to that product's own categories).
@@ -2035,7 +2127,7 @@ async function getSupportAnalytics(params, auth, env) {
   for (const r of allRows) {
     const d = analyticsDims(r, lineOf);
     for (const k of ANALYTICS_DIM_KEYS) optionSets[k].add(d[k]);
-    if (ANALYTICS_DIM_KEYS.every(k => !want[k] || want[k].has(d[k]))) filteredRows.push(r);
+    if (inCohort(d, want)) filteredRows.push(r);
   }
   const filter_options = Object.fromEntries(
     ANALYTICS_DIM_KEYS.map(k => [k, [...optionSets[k]].sort((a, b) => a.localeCompare(b))]),

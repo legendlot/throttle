@@ -114,6 +114,7 @@ export default function AnalyticsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [rowsBusy, setRowsBusy] = useState(false);   // the row-level export is a second fetch
 
   const range = useMemo(() => {
     if (preset === 'custom' && customFrom && customTo) return { from: isoStart(customFrom), to: isoEnd(customTo) };
@@ -273,6 +274,60 @@ export default function AnalyticsPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Row-level export (S349, Pruthvi #bugs 1787733817 2026-09-04: "the ticket description or
+  // comments related to the complaint description are not visible"). The dashboard CSV above is
+  // AGGREGATES — it never carried a ticket, so no amount of widening it would have shown a
+  // description. This is a second file: one row per complaint in the SAME cohort the page shows,
+  // with the description, closing/inspection notes and internal notes. A separate worker call
+  // because the text is heavy and only wanted on the click, never on every filter change.
+  // ⚠️ The cohort is rebuilt from `data` (what the page RENDERED), not the live controls —
+  // same rule as exportCsv: `data` may lag a control change while a refetch is in flight.
+  async function exportRowsCsv() {
+    if (!data || loading || rowsBusy) return;
+    setRowsBusy(true);
+    try {
+      const applied = data.applied_filters || {};
+      const args = { from: data.range?.from || range.from, to: data.range?.to || range.to };
+      for (const [k] of DIMS) if (applied[k]?.length) args[k] = joinMulti(applied[k]);
+      const d = await csopsGet('getSupportAnalyticsRows', args, session);
+      const fromD = istDay(d.range?.from || args.from), toD = istDay(d.range?.to || args.to);
+      const L = [];
+      L.push(`Pitstop Support Analytics — complaint rows,${fromD} to ${toD}`);
+      for (const [k, label] of DIMS) {
+        const v = (d.applied_filters || {})[k];
+        L.push(`${label},${csvEsc(Array.isArray(v) ? (v.join(' · ') || 'All') : (v || 'All'))}`);
+      }
+      L.push(`Complaints in this cohort,${d.range?.total ?? 0}`);
+      L.push(`Complaints in date range (before filters),${d.range?.range_total ?? d.range?.total ?? 0}`);
+      if (d.range?.truncated) L.push(csvEsc('INCOMPLETE — this range hit the 50,000-row ceiling; narrow the dates'));
+      L.push('');
+      const COLS = [
+        ['ticket_no', 'Ticket'], ['date', 'Raised (IST)'], ['customer_name', 'Customer'],
+        ['customer_phone', 'Phone'], ['customer_email', 'Email'], ['order_id', 'Order ID'],
+        ['purchase_date', 'Purchase date'], ['product', 'Product'], ['model', 'Model'], ['colour', 'Colour'],
+        ['product_line', 'Product line'], ['issue_category', 'Issue category'],
+        ['issue_subcategory', 'Sub-category'], ['issue_description', 'Description'],
+        ['sale_channel', 'Sale channel'], ['support_channel', 'Support channel'], ['agent', 'Agent'],
+        ['stage', 'Stage'], ['disposition', 'Disposition'], ['closed_at', 'Closed (IST)'],
+        ['closed_reason', 'Closed reason'], ['closed_note', 'Closing note'],
+        ['inspection_note', 'Inspection note'], ['notes', 'Internal notes'],
+      ];
+      L.push(COLS.map(([, h]) => csvEsc(h)).join(','));
+      for (const r of (d.rows || [])) L.push(COLS.map(([k]) => csvEsc(r[k])).join(','));
+      const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pitstop-complaints-${fromD}-to-${toD}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRowsBusy(false);
+    }
+  }
+
   if (!canView) return <EmptyState icon={<BarChart3 size={28} />} title="No access" message="You need the reports permission to view analytics." />;
 
   const PRESETS = [['today', 'Today'], ['mtd', 'MTD'], ['last', 'Last month'], ['year', 'This year'], ['custom', 'Custom']];
@@ -303,8 +358,12 @@ export default function AnalyticsPage() {
         <select value={sort} onChange={e => setSort(e.target.value)} style={selectStyle} title="Sort every ranked panel and the product table">
           {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
         </select>
-        <button onClick={exportCsv} disabled={!data || loading} style={exportBtn}>
+        <button onClick={exportCsv} disabled={!data || loading} style={exportBtn} title="The dashboard: KPIs, tables and trends">
           <Download size={13} strokeWidth={1.75} /> Export CSV
+        </button>
+        <button onClick={exportRowsCsv} disabled={!data || loading || rowsBusy} style={exportBtn}
+          title="One row per complaint in the current cohort, with the description and notes">
+          <Download size={13} strokeWidth={1.75} /> {rowsBusy ? 'Preparing…' : 'Export complaints'}
         </button>
       </div>
 
