@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.21.0] - 2026-09-04
+### Changed
+- **Support Analytics** — new **Export complaints** button beside **Export CSV**. Documents that
+  Export CSV stays the dashboard aggregate export (KPIs, tables, trends, no individual ticket)
+  while Export complaints downloads one row per complaint in the current cohort (same date
+  range and dimension filters), including the complaint description, closing/inspection notes
+  and all internal notes, with the phone masked the same as the Queue export. Notes the
+  `pitstop-complaints-<from>-to-<to>.csv` filename, the "Preparing…" busy state, and that the
+  50,000-row incomplete warning applies to both exports.
+
 ## [1.20.0] - 2026-09-04
 ### Changed
 - **Reports (Agents tab)** — Channel and Tag go from single-select to multi-select, and a new
