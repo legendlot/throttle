@@ -808,12 +808,19 @@ async function salesOrderFulfilmentValues(orders, ful) {
     }
     const value = +(taxable + gst).toFixed(2);
     const ordered = Number(o.grand_total) || 0;
+    const gap = ordered - value;
     out[o.id] = {
       fulfilled_taxable: +taxable.toFixed(2),
       fulfilled_value: value,
-      // Never negative: over-shipping is a different conversation and a negative "shortfall"
-      // in a ₹ column reads as a credit, which it is not.
-      shortfall_value: +Math.max(0, ordered - value).toFixed(2),
+      // ⚠️ Sub-rupee gaps are SUPPRESSED, and this is not cosmetic. This value is summed
+      // per line and rounded once at the end, while grand_total was stored from per-line
+      // rounded figures — so a fully-shipped order lands a paisa or two apart. Seen live on
+      // SO-0523: "Fully fulfilled", ₹4,76,999.42 against ₹4,76,999.43, rendering a red
+      // −₹0.01 shortfall. Nobody can act on a paisa, and one spurious red number in a column
+      // people are meant to chase teaches them to ignore the whole column.
+      // ⚠️ Never negative either: over-shipping is a different conversation, and a negative
+      // "shortfall" in a ₹ column reads as a credit, which it is not.
+      shortfall_value: gap < 1 ? 0 : +gap.toFixed(2),
     };
   }
   return out;
