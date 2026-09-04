@@ -3377,6 +3377,33 @@ async function assignEngagementToCampaign(body, auth, env) {
 // Deliberately reuses getMonthlyTargets' EXACT attribution rules so the drill-down always sums to
 // the tile above it: views attribute to post_date's month, spend to post_date falling back to
 // created_at. Diverging here would produce a breakdown that silently disagrees with the total.
+// ── Slice 4: views attribute to the month EACH TAKE posted ───────────────────────────────────
+// Before this, a deal's whole views figure sat on its single post_date: take 1 on 28 Sep and take
+// 2 on 3 Oct overstated September and nothing errored. Both monthly handlers call THIS function
+// for views so the drill-down sums to the tile by construction (their own comments demand it).
+// Spend and conversions are deal-level and keep the deal post_date rule — only views move.
+export function bucketVideoViewsByMonth(engagements, videos) {
+  const n = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const byDeal = new Map();
+  for (const v of (videos || [])) {
+    if (!byDeal.has(v.engagement_id)) byDeal.set(v.engagement_id, []);
+    byDeal.get(v.engagement_id).push(v);
+  }
+  const rows = [], byMonth = {};
+  const push = (engagement_id, seq, post_date, views) => {
+    const month = String(post_date || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month) || n(views) <= 0) return;
+    rows.push({ engagement_id, seq, post_date, month, views: n(views) });
+    byMonth[month] = (byMonth[month] || 0) + n(views);
+  };
+  for (const e of (engagements || [])) {
+    const takes = byDeal.get(e.id);
+    if (takes && takes.length) for (const t of takes) push(e.id, Number(t.seq), t.post_date, t.views);
+    else push(e.id, null, e.post_date, e.views);
+  }
+  return { byMonth, rows };
+}
+
 async function getMonthlyBreakdown(url, auth, env) {
   const month = String(url.searchParams.get('month') || '').trim();
   // 'unallocated' (Reann #1) is a first-class bucket, not a month: deals whose video has not
