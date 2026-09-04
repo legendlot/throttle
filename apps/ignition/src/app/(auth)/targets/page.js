@@ -250,9 +250,9 @@ function MonthBreakdown({ month, data }) {
         empty="No posts with views this month." rows={data.views || []}
         cols={['Influencer', 'Posted', 'Views']}
         render={r => (
-          <tr key={`v-${r.engagement_id}`}>
-            <td style={cell}>{who(r)}{r.platform && <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 9 }}>{r.platform}</span>}</td>
-            <td style={{ ...cell, textAlign: 'right' }}>{r.post_date || '—'}</td>
+          <tr key={`v-${r.engagement_id}-${r.seq ?? 1}`}>
+            <td style={cell}>{who(r)}{r.seq != null && r.seq > 1 ? <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 6 }}>#{r.seq}</span> : null}{r.platform && <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 9 }}>{r.platform}</span>}</td>
+            <td style={{ ...cell, textAlign: 'right' }}>{r.take_post_date || r.post_date || '—'}</td>
             <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>{Number(r.views).toLocaleString()}</td>
           </tr>
         )}
