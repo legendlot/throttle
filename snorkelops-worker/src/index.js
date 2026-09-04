@@ -371,6 +371,40 @@ function computeSalesLine(l) {
 const normHsn = v => String(v ?? '').replace(/\s+/g, '').trim();
 const isPlausibleHsn = v => /^\d{4,8}$/.test(normHsn(v));
 
+// ── HSN → GST%: EXACT match first, then LONGEST PREFIX (S344, 2026-09-04) ──────────
+// Parts carry a full 8-digit HSN while store.hsn_gst_rates holds mostly 4-digit
+// headings, so the old exact-match `in.()` join resolved NOTHING for a correct code
+// whose parent heading was present all along: 39269099 under 3926, 73181500 under
+// 7318, 48196000 under 4819 — all three parents in the table, all three resolving to
+// null. Measured 2026-09-04: 16 of the 76 hsn-carrying parts resolved before this,
+// 62 after (46 gained with no data entry); the remaining 14 need new rate rows.
+// This is the OTHER half of the "tax column shows —" problem — a data backfill of
+// material_master.hsn_code alone would not have fixed it.
+//
+// ⚠️ LONGEST prefix, never shortest, and that ordering is load-bearing rather than
+// cosmetic: a child heading may carry a DIFFERENT rate than its parent — 481910
+// (corrugated cartons) is 5% while 4819 is 18% — so 48191010 must resolve to 5%.
+// A code is never resolved from a LONGER table entry (4819 must not inherit 481910's
+// 5%); only an exact hit or a strictly shorter prefix counts.
+// The table is ~25 rows, so one unfiltered read is cheaper than the in.() it replaces.
+async function gstRateLookup() {
+  const r = await query('hsn_gst_rates', '?select=hsn_code,gst_percent&limit=5000');
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  const byCode = new Map();
+  for (const x of rows) {
+    const c = normHsn(x.hsn_code);
+    if (c && x.gst_percent != null) byCode.set(c, Number(x.gst_percent));
+  }
+  const codes = [...byCode.keys()].sort((a, b) => b.length - a.length); // most specific first
+  return (hsn) => {
+    const h = normHsn(hsn);
+    if (!h) return null;
+    if (byCode.has(h)) return byCode.get(h);
+    for (const c of codes) if (c.length < h.length && h.startsWith(c)) return byCode.get(c);
+    return null;
+  };
+}
+
 // One cheap read of the whole active master (~146 rows) — avoids per-product lookups
 // and any PostgREST in.() quoting trouble with names like "HP desk standee".
 async function hsnMasterAll() {
@@ -385,10 +419,11 @@ async function hsnMasterAll() {
     codes.add(h);
   }
   if (codes.size) {
-    const rR = await query('hsn_gst_rates', `?hsn_code=in.(${[...codes].join(',')})&select=hsn_code,gst_percent`);
-    const gst = new Map(((rR.ok && Array.isArray(rR.data)) ? rR.data : [])
-      .map(r => [normHsn(r.hsn_code), Number(r.gst_percent)]));
-    for (const [p, v] of out) if (gst.has(v.hsn)) v.gst = gst.get(v.hsn);
+    const rateOf = await gstRateLookup();
+    for (const [, v] of out) {
+      const g = rateOf(v.hsn);
+      if (g != null) v.gst = g;
+    }
   }
   return out;
 }
@@ -482,10 +517,11 @@ async function partHsnMasterAll() {
     codes.add(h);
   }
   if (codes.size) {
-    const rr = await query('hsn_gst_rates', `?hsn_code=in.(${[...codes].join(',')})&select=hsn_code,gst_percent`);
-    const gst = new Map(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
-      .map(x => [normHsn(x.hsn_code), Number(x.gst_percent)]));
-    for (const [, v] of out) if (gst.has(v.hsn)) v.gst = gst.get(v.hsn);
+    const rateOf = await gstRateLookup();
+    for (const [, v] of out) {
+      const g = rateOf(v.hsn);
+      if (g != null) v.gst = g;
+    }
   }
   return out;
 }
@@ -516,9 +552,11 @@ function applyPartHsnDefaults(lines, master) {
 // THREE outcomes, not two — the middle one is the common case and an earlier version of
 // this comment denied it existed:
 //   1. part resolves to an HSN *and* a rate  -> both set, needs_hsn_review false
-//   2. part has an HSN but that HSN has no row in hsn_gst_rates -> hsn_code IS SET,
-//      gst_percent NULL, flagged. This is 60 of the 76 hsn-carrying parts today
-//      (measured 2026-09-03), i.e. the branch most flagged lines actually take.
+//   2. part has an HSN that resolves to no rate -> hsn_code IS SET, gst_percent NULL,
+//      flagged. ⭐ RE-MEASURED 2026-09-04 (S344), AFTER the longest-prefix fix in
+//      gstRateLookup(): this is now 14 of the 76 hsn-carrying parts, not 60 — most of
+//      that 60 were codes whose parent heading was in the table all along and which an
+//      exact-match join could not see. The remaining 14 genuinely need new rate rows.
 //   3. no part_code, or a part absent from the master -> both NULL, flagged.
 // Flagged means "procurement must confirm the rate", never "the HSN is missing".
 function resolveRequestLineTax(lines, master) {
