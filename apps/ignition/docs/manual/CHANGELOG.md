@@ -3,6 +3,17 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.11.1] - 2026-09-04
+### Fixed
+- Engagement detail: corrected the Video #1/Post-live callout. Only the posted date is a
+  shared field between the Video #1 tab and the Post-live card; the video link is edited on
+  the Video #1 tab and the Post-live card only displays it. The Post-live card's Tracking
+  link is a separate thing (the deal's UTM link, minted from Relay), not the video link.
+- Engagement detail: corrected the Followers at post date rule. It is required once ANY
+  number is entered on a take (views, likes, comments, shares, reposts, saves, impressions,
+  followers gained, organic or paid views), not unconditionally; a take with only a link and
+  posted date can be saved.
+
 ## [1.11.0] - 2026-09-04
 ### Changed
 - Engagement detail: the Performance card now holds one video per tab (Video #1, Video #2,
