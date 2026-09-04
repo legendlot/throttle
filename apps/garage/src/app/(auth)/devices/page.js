@@ -57,6 +57,9 @@ export default function DevicesPage() {
   const toast = useToast();
 
   const [rows, setRows]       = useState([]);
+  const [bindings, setBind]   = useState([]);
+  const [dryRun, setDryRun]   = useState(null);
+  const [settings, setSet]    = useState({});
   const [loading, setLoading] = useState(true);
   const [firstDone, setFirstDone] = useState(false);
   const [q, setQ]             = useState('');
@@ -68,8 +71,12 @@ export default function DevicesPage() {
     try {
       const s = await getValidSession();
       const r = await workerFetch('getDeviceHw', {}, s);
-      if (r?.ok) setRows(r.data?.devices || []);
-      else toast?.error?.(r?.error || 'Could not load devices');
+      if (r?.ok) {
+        setRows(r.data?.devices || []);
+        setBind(r.data?.bindings || []);
+        setDryRun(r.data?.dryRun || null);
+        setSet(r.data?.settings || {});
+      } else toast?.error?.(r?.error || 'Could not load devices');
     } catch (e) {
       toast?.error?.('Could not load devices: ' + e.message);
     } finally {
@@ -109,6 +116,35 @@ export default function DevicesPage() {
     a[r.status] = (a[r.status] || 0) + 1; return a;
   }, {}), [rows]);
 
+  // hw_id -> the station codes it has been used as, newest first.
+  const codesByHw = useMemo(() => {
+    const m = {};
+    for (const b of bindings) (m[b.hw_id] ||= []).push(b);
+    return m;
+  }, [bindings]);
+
+  const flipSetting = async (key, next) => {
+    try {
+      const s = await getValidSession();
+      const r = await workerFetch('setDeviceHwSetting', { data: { key, value: next } }, s);
+      if (!r?.ok) { toast?.error?.(r?.error || 'Could not change setting'); return; }
+      setSet(cur => ({ ...cur, [key]: { ...(cur[key] || { key }), value: next } }));
+      toast?.success?.(`${key} → ${next}`);
+    } catch (e) { toast?.error?.('Could not change setting: ' + e.message); }
+  };
+
+  // ⭐ Each toggle shows what it WOULD flag right now. 2026-09-03's attendance enforcement flip
+  // refused the whole floor because nobody could see the blast radius in advance; a switch here
+  // is never thrown blind. These flag only — nothing in the worker blocks on them.
+  const TOGGLES = [
+    { key: 'device_hw_roam_alert', title: 'Flag roaming devices',
+      body: 'A handset used as more than one station device code. Roaming is allowed — this is here to measure how often it actually happens before any rule is set.',
+      would: dryRun?.roaming_devices },
+    { key: 'device_hw_unbound_flag', title: 'Flag unbound devices',
+      body: 'A handset that has never claimed a station device code. Attendance and Lookup send none, so unbound does NOT mean unrecognised.',
+      would: dryRun?.unbound_devices },
+  ];
+
   // ⚠️ A spinner must never replace a surface holding unsaved input — this page has label
   // drafts, so only the FIRST load is allowed to take over the screen.
   if (loading && !firstDone) return <Spinner />;
@@ -136,6 +172,38 @@ export default function DevicesPage() {
         website sends no device ID at all, so it is simply absent — an <em>Unknown</em> device
         almost always means “the app is not installed yet”, not “an unrecognised phone”. Treat
         this as a rollout checklist until every scanner has the app.
+      </div>
+
+      {/* Toggles — OFF, and flag-only. Each carries the number it would flag today. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))',
+                    gap: 12, marginBottom: 18 }}>
+        {TOGGLES.map(t => {
+          const on = settings[t.key]?.value === 'on';
+          return (
+            <div key={t.key} style={{ border: '1px solid var(--border,#404040)', borderRadius: 10,
+                                      padding: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <strong style={{ fontSize: 14 }}>{t.title}</strong>
+                <button onClick={() => flipSetting(t.key, on ? 'off' : 'on')}
+                  style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 999,
+                           fontSize: 12, fontWeight: 800, cursor: 'pointer', border: 'none',
+                           background: on ? '#22c55e' : 'var(--border,#404040)',
+                           color: on ? '#0b1f12' : 'inherit' }}>
+                  {on ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <p style={{ fontSize: 12, opacity: .75, margin: '8px 0 10px', lineHeight: 1.5 }}>
+                {t.body}
+              </p>
+              <div style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6,
+                            background: 'rgba(242,205,26,.08)',
+                            border: '1px solid rgba(242,205,26,.25)' }}>
+                Right now this would flag <strong>{t.would ?? '—'}</strong>{' '}
+                {t.would === 1 ? 'device' : 'devices'}. Flags only — nothing is blocked.
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
@@ -168,7 +236,7 @@ export default function DevicesPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border,#404040)' }}>
-                {['Device', 'Label', 'Status', 'Last seen', 'Last action', 'Says it is', 'IP', 'Seen'].map(h => (
+                {['Device', 'Label', 'Status', 'Last seen', 'Last action', 'Used as', 'IP', 'Seen'].map(h => (
                   <th key={h} style={{ padding: '9px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -216,9 +284,18 @@ export default function DevicesPage() {
                     <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}
                         title={istStamp(r.last_seen)}>{ago(r.last_seen)}</td>
                     <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>{r.last_action || '—'}</td>
+                    {/* Binding history. >1 code = this handset has roamed between stations. */}
                     <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}
-                        title="Client-supplied — proves nothing on its own">
-                      {r.claimed_device_code || '—'}
+                        title="Station codes this handset has claimed. Client-supplied — proves nothing on its own.">
+                      {(() => {
+                        const cs = codesByHw[r.hw_id] || [];
+                        if (!cs.length) return <span style={{ opacity: .5 }}>unbound</span>;
+                        const names = cs.map(c => c.device_code).join(' → ');
+                        return cs.length > 1
+                          ? <span style={{ color: '#F2CD1A', fontWeight: 700 }}
+                                  title={names}>{cs.length} stations</span>
+                          : <span>{names}</span>;
+                      })()}
                     </td>
                     <td style={{ padding: '9px 10px', fontFamily: 'ui-monospace, monospace',
                                  whiteSpace: 'nowrap', opacity: .8 }}>{r.last_ip || '—'}</td>
