@@ -3,6 +3,25 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.23.0] - 2026-09-04
+### Changed
+- **Reports (Agents tab)** — the Daily trend panel is now a **trend panel** with a grain
+  dropdown (Daily / Weekly, weeks start Monday / Monthly); each point is the Agents report
+  computed for that whole bucket, so a weekly average is the week's own average, not an average
+  of daily averages. The 62-bucket cap now scales with grain (62 days / weeks / months), so
+  year-to-date shows in full at Weekly or Monthly grain; only Daily grain over a long range still
+  clamps to its last 62 days. The Agents CSV's trend block is now headed by the grain (Day / Week
+  beginning / Month).
+- **Reports (Calls tab)** — the old "Call volume trend" chart is replaced by the same trend
+  panel: a metric dropdown (Inbound, Reached an agent, Did not reach an agent, Inbound answer
+  rate, Outbound, Outbound answered, Avg duration) plus the Daily/Weekly/Monthly dropdown, one
+  line for all agents and one per agent for the six busiest by answered calls in both directions,
+  Others summed for count metrics. Inbound, Did not reach an agent and Inbound answer rate have
+  no per-agent meaning, so those draw the team line only. Weekly/monthly figures are folded from
+  daily sums, with the rate and average worked out per bucket so they are exact.
+- **Reports** — new **MTD** button beside **Last 7 days** on every tab, sets the range to the
+  1st of this month through today.
+
 ## [1.22.1] - 2026-09-04
 ### Changed
 - **Reports** — Daily trend: the six agents drawn are ranked by their Handled figures added up
