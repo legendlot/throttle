@@ -6,12 +6,23 @@ import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 // Multi-row product picker (#4). Each row = product (Combobox over the real product list)
 // → variant (free text) + quantity + goodies cost + shipping cost (⑥, S214).
 //
-// ⭐ NOW A COMBOBOX AGAIN (S273, Reann #2) — and the S214 objection no longer applies.
-// S214 reverted an earlier Combobox because it DISCARDED non-matching typed text on blur, so a
-// product outside the catalog vanished (Himani, 2026-07-15). Combobox has since gained
-// **creatable mode** (`onCreateOption`), which keeps a typed product as free text instead of
-// dropping it — so arbitrary products still save, and picking a real one now records the actual
-// product_code, which is what makes COGS lookup possible at all.
+// ⭐ THE PRODUCT FIELD IS NO LONGER FREE TEXT (Afshaan, 2026-09-04). Creatable mode
+// (`onCreateOption`) is removed: a line must resolve to a real catalogue product, and if the
+// product does not exist yet it gets CREATED FIRST — its EAN has to exist before anything ships
+// to an influencer anyway. This is the standing rule (S179 / PATTERN-160: every product picker is
+// a searchable Combobox, never free text).
+//
+// ⚠️ Two things that removal must NOT do, both traced bugs:
+//   · `freeTextValue` STAYS. 341 deals hold legacy free-text lines; Combobox renders the box from
+//     `value` only under this flag, so dropping it would blank every legacy row on screen.
+//   · Dropping `onCreateOption` alone is SILENTLY LOSSY — Combobox only preserves typed text on
+//     blur under `freeTextValue && onCreateOption`, so unmatched text would sit in the box and
+//     never reach the parent (the S214 data-loss bug that got the first Combobox reverted). So the
+//     block is EXPLICIT: unmatched text on blur raises a visible inline error on that row and
+//     makes the editor invalid, instead of quietly evaporating.
+//   · Legacy rows STAY SAVEABLE. ~250 live/shipped/delivered deals carry a free-text line; blocking
+//     save on them would freeze view/metric updates on active deals. A row that ARRIVED with
+//     product_code and no product_ref is stamped legacy and stays saveable until it is edited.
 // ⚠️ Options are per VARIANT, not per product name: sales.product_cost is keyed on product_code
 // and a bare name is ambiguous (Bumble = 5 variants at different costs). Variant itself stays
 // free text — the catalog carries no variant taxonomy.
@@ -23,13 +34,35 @@ export function emptyLine() {
   return { product_code: '', product_ref: null, cogs_inr: null, product_variant: '', quantity: 1, goodies_cost: '', shipping_cost: '' };
 }
 
-export default function ProductLinesEditor({ value, onChange, session }) {
-  const lines = value && value.length ? value : [emptyLine()];
+export default function ProductLinesEditor({ value, onChange, session, onValidityChange }) {
+  // The blank fallback row is held in a ref so it keeps ONE identity across renders — a fresh
+  // emptyLine() each render would hand out a new __uid every time.
+  const blankRef = useRef(emptyLine());
+  const lines = value && value.length ? value : [blankRef.current];
   const [catalog, setCatalog] = useState([]);
+  // Per-row rejected text: __uid -> what the user typed that resolved to no product.
+  const [rowErrors, setRowErrors] = useState({});
+  // __uids whose next blur is the tail of a commit the Combobox itself made (selectOption always
+  // calls input.blur() right after onChange), so that blur must not be read as unmatched text.
+  const pickedRef = useRef(new Set());
+  const uidSeq = useRef(0);
   // Keep a fresh handle on the current lines + onChange so the async price-fill
   // (theme ②, B#9) merges into the latest state rather than a stale closure.
   const linesRef = useRef(lines); linesRef.current = lines;
   const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
+
+  // Stable per-row identity, stamped ONCE per row object and carried by every `{...l, ...patch}`.
+  // NOT the array index: rows are added and removed, and an index-keyed error follows the wrong
+  // row after a delete. `__legacyFreeText` is decided at the same moment — on FIRST SIGHT of the
+  // row — which is the only point at which "arrived that way" is still distinguishable from
+  // "someone typed it just now". Neither marker is persisted: linesToPayload builds its fields
+  // explicitly, so they never reach the worker.
+  for (const l of lines) {
+    if (!l.__uid) {
+      l.__uid = `pl${++uidSeq.current}`;
+      l.__legacyFreeText = !!(l.product_code || '').trim() && !l.product_ref;
+    }
+  }
 
   useEffect(() => {
     if (!session) return;
@@ -69,8 +102,8 @@ export default function ProductLinesEditor({ value, onChange, session }) {
 
   // One option PER VARIANT, because sales.product_cost is keyed on product_code and a product
   // name alone is ambiguous (Bumble has 5 variants at different costs). Legacy rows hold a bare
-  // typed name that matches no option — creatable mode keeps them as free text rather than
-  // discarding them on blur, which is exactly why S214 reverted the old Combobox attempt.
+  // typed name that matches no option; they still DISPLAY (freeTextValue) and stay saveable, but
+  // nothing new may be entered that way.
   const productOptions = (catalog || [])
     .filter(p => p.product_code)
     .map(p => {
@@ -100,9 +133,9 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   // ASP" — there was no ASP. Historic rows therefore keep their manual values untouched, which
   // satisfies "retain the old method for previous months" without a backfill.
   //
-  // A typed product that is not in the catalogue stays free text with no product_ref: the field
-  // is deliberately free-text (S214) and must not discard what someone typed.
-  // `opt` is the picked option (carrying the real product_code) or null for a typed-in product.
+  // `opt` is the picked option (carrying the real product_code); it is null only for a CLEAR
+  // (the × / Backspace path) now that creatable mode is gone — typed text no longer arrives here
+  // at all, it is refused on blur by onProductBlur.
   async function onProductPicked(i, label, opt) {
     const code = opt?.product_code || null;
     const sku = opt?.sku || null;
@@ -123,8 +156,11 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     // cleared; a hand-typed one (≠ the recorded cogs_inr) is never touched.
     const prev = lines[i] || {};
     const wasAutoFilled = prev.cogs_inr != null && Number(prev.goodies_cost) === Number(prev.cogs_inr);
+    // Touching the product field ends this row's legacy grace: from here it must resolve.
+    if (prev.__uid) { pickedRef.current.add(prev.__uid); clearRowError(prev.__uid); }
     setRow(i, {
       product_code: name, product_ref: code, cogs_inr: null, list_price_inr: null,
+      __legacyFreeText: false,
       ...(wasAutoFilled ? { goodies_cost: '' } : {}),
       ...(opt && variant ? { product_variant: variant } : {}),
     });
@@ -163,6 +199,51 @@ export default function ProductLinesEditor({ value, onChange, session }) {
     }));
   }
 
+  function clearRowError(uid) {
+    setRowErrors(prev => {
+      if (!(uid in prev)) return prev;
+      const next = { ...prev };
+      delete next[uid];
+      return next;
+    });
+  }
+
+  // Leaving the product field with text that resolved to nothing is the case the removed
+  // `onCreateOption` used to swallow. It is raised HERE, synchronously on blur (onBlurCapture on
+  // the wrapper, not the Combobox's own 150 ms deferred blur) so the editor is already invalid by
+  // the time a mousedown on a Save button turns into a click.
+  function onProductBlur(uid, typed) {
+    // The Combobox just committed a pick/clear and blurred the input itself — not a stray edit.
+    if (pickedRef.current.has(uid)) { pickedRef.current.delete(uid); clearRowError(uid); return; }
+    const t = (typed || '').trim();
+    const row = linesRef.current.find(l => l.__uid === uid) || {};
+    const committed = (row.product_code || '').trim();
+    if (!t) { clearRowError(uid); return; }
+    // Focused and left without changing anything: a resolved row, or a legacy row that is
+    // allowed to stay as it is.
+    if (t === committed && (row.product_ref || row.__legacyFreeText)) { clearRowError(uid); return; }
+    // An exact label match is resolved by Combobox's own blur handler a tick later — flagging it
+    // here would show an error that clears itself.
+    if (productOptions.some(o => (o.label || '').trim().toLowerCase() === t.toLowerCase())) {
+      clearRowError(uid); return;
+    }
+    setRowErrors(prev => ({ ...prev, [uid]: t }));
+  }
+
+  // A row is unresolved when it carries product text with no product_ref and was not stamped
+  // legacy on arrival. `linesAreValid` below applies the same rule for the save handlers.
+  function rowNeedsRef(l) {
+    return !!(l.product_code || '').trim() && !l.product_ref && !l.__legacyFreeText;
+  }
+  const valid = !lines.some(l => rowErrors[l.__uid] || rowNeedsRef(l));
+  const onValidityChangeRef = useRef(onValidityChange); onValidityChangeRef.current = onValidityChange;
+  const lastValidRef = useRef(null);
+  useEffect(() => {
+    if (lastValidRef.current === valid) return;
+    lastValidRef.current = valid;
+    onValidityChangeRef.current?.(valid);
+  }, [valid]);
+
   function addRow() { onChange([...lines, emptyLine()]); }
   function removeRow(i) {
     const next = lines.filter((_, idx) => idx !== i);
@@ -171,20 +252,36 @@ export default function ProductLinesEditor({ value, onChange, session }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {lines.map((l, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
-          <div>
+      {lines.map((l, i) => {
+        const uid = l.__uid;
+        const rejected = rowErrors[uid];
+        // Two shapes of the same failure: text the user typed that never resolved (rejected),
+        // and a row already holding an unresolved name it is not entitled to keep (rowNeedsRef).
+        const problem = rejected
+          ? `“${rejected}” isn’t in the product catalogue.`
+          : (rowNeedsRef(l) ? `“${l.product_code}” isn’t linked to a catalogue product.` : null);
+        return (
+        <div key={uid} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+          <div
+            // Captured on the wrapper because the Combobox's own blur is deferred 150 ms, which
+            // loses the race against a click on Save. Focus clears the row's error so a mistyped
+            // entry is recoverable: focus again, leave it as it was, and the flag goes.
+            onFocusCapture={() => clearRowError(uid)}
+            onBlurCapture={e => onProductBlur(uid, e.target && e.target.value)}
+            // Any keystroke means the pending Combobox commit (if any) is no longer what is in
+            // the box, so the next blur must be judged on its text.
+            onChangeCapture={() => pickedRef.current.delete(uid)}
+          >
             {i === 0 && <div style={lbl}>Product</div>}
             <Combobox
               value={l.product_code || ''}
               options={productOptions}
               onChange={(val, opt) => onProductPicked(i, val, opt)}
-              onCreateOption={(typed) => onProductPicked(i, typed, null)}
-              createLabel={(q) => <>Use “{q}”</>}
               placeholder="Search a product…"
-              // This field's value IS the typed text (S214 free text), so a product that
-              // isn't in the catalogue must display and must survive tabbing to Variant.
-              // Without it the name vanished on the way to the next field.
+              // Legacy rows (341 deals) hold a name that matches no option. Without this the
+              // Combobox renders them EMPTY, which reads as the line having been destroyed.
+              // Creatable mode is deliberately absent — see the header note.
               freeTextValue
               portal
               style={inp}
@@ -228,7 +325,15 @@ export default function ProductLinesEditor({ value, onChange, session }) {
           </div>
           <button type="button" onClick={() => removeRow(i)} title="Remove" style={removeBtn}>×</button>
         </div>
-      ))}
+        {problem && (
+          <div style={errText}>
+            {problem} Pick a product from the list — if it doesn’t exist yet, create the
+            product first.
+          </div>
+        )}
+        </div>
+        );
+      })}
       <div>
         <button type="button" onClick={addRow} style={addBtn}>+ Add product</button>
       </div>
@@ -253,6 +358,16 @@ export function linesToPayload(lines) {
     }));
 }
 
+// The save-side twin of the inline check: every line carrying product text must resolve to a
+// real product_ref, EXCEPT a row the editor stamped legacy on arrival (it came from the DB that
+// way and stays saveable — ~250 live/shipped/delivered deals depend on that). Call sites use it
+// as the hard guard next to the onValidityChange state that disables their button; the state is
+// the wider of the two (it also knows about typed text that never got committed).
+export function linesAreValid(lines) {
+  return !(lines || []).some(l => (l.product_code || '').trim() && !l.product_ref && !l.__legacyFreeText);
+}
+
+const errText = { fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.4, color: 'var(--state-error-fg)' };
 const hint = { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' };
 const hintBtn = { background: 'transparent', border: 'none', padding: 0, color: 'var(--state-info-fg, #6aa9ff)', fontFamily: 'var(--font-mono)', fontSize: 10.5, textDecoration: 'underline', cursor: 'pointer' };
 const lbl = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };

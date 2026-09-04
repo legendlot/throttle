@@ -9,7 +9,7 @@ import StageStepper from '../../../../components/StageStepper.js';
 import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
-import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
+import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
 import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 import { titleish } from '../../../../lib/productLabel.js';
@@ -330,6 +330,7 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
   const [editing, setEditing] = useState(false);
   const [lines, setLines] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [productsValid, setProductsValid] = useState(true);
 
   function startEdit() {
     setLines((products || []).map(p => ({
@@ -347,6 +348,8 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
     setEditing(true);
   }
   async function save() {
+    // Unresolved product line — refuse, don't just grey the button (2026-09-04).
+    if (!productsValid || !linesAreValid(lines)) { toast('Pick a product from the list for every line', 'error'); return; }
     setBusy(true);
     try {
       await ignitionopsPost('setEngagementProducts', { engagement_id: engagementId, products: linesToPayload(lines) }, session);
@@ -367,10 +370,10 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
       </div>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <ProductLinesEditor value={lines} onChange={setLines} session={session} />
+          <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={save} disabled={busy || !productsValid} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || !productsValid) ? 'not-allowed' : 'pointer', opacity: (busy || !productsValid) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (

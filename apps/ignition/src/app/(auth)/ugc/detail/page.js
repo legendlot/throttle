@@ -4,7 +4,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Modal, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
-import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
+import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
 import {
   UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, UGC_HAPPY_PATH,
   roasTone, roasToneColor,
@@ -248,6 +248,7 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [lines, setLines] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [productsValid, setProductsValid] = useState(true);
   function startEdit() {
     setLines((products || []).map(p => ({
       product_code: p.product_code || '', product_variant: p.product_variant || '',
@@ -258,6 +259,8 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
     setEditing(true);
   }
   async function saveLines() {
+    // Unresolved product line — refuse, don't just grey the button (2026-09-04).
+    if (!productsValid || !linesAreValid(lines)) { toast('Pick a product from the list for every line', 'error'); return; }
     setBusy(true);
     try {
       await ignitionopsPost('setEngagementProducts', { engagement_id: engagementId, products: linesToPayload(lines) }, session);
@@ -268,10 +271,10 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
     <Card title="Product" action={canEdit && !editing ? <button onClick={startEdit} style={editBtn}>Edit</button> : null}>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <ProductLinesEditor value={lines} onChange={setLines} session={session} />
+          <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button onClick={() => setEditing(false)} style={ghostBtn}>Cancel</button>
-            <button onClick={saveLines} disabled={busy} style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={saveLines} disabled={busy || !productsValid} style={{ ...primaryBtn, opacity: (busy || !productsValid) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (products || []).length === 0 ? (

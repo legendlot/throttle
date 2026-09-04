@@ -10,6 +10,9 @@ export function Modal({
   confirmColor,
   confirmStyle,
   onConfirm,
+  // Blocks Confirm for a reason other than in-flight work (e.g. the form is invalid).
+  // Additive: callers that omit it keep the old loading-only behaviour.
+  confirmDisabled = false,
   loading,
   error,
   size = 'md',
@@ -90,11 +93,12 @@ export function Modal({
             </button>
             <button
               onClick={onConfirm}
-              disabled={loading}
+              disabled={loading || confirmDisabled}
               style={{
                 background: confirmColor === 'red' ? '#ef4444' : (confirmColor || '#3b82f6'),
                 border: 'none', color: '#fff', padding: '6px 14px', borderRadius: 4,
-                cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.6 : 1,
+                cursor: loading ? 'wait' : (confirmDisabled ? 'not-allowed' : 'pointer'),
+                opacity: (loading || confirmDisabled) ? 0.6 : 1,
                 fontFamily: 'var(--mono)', fontSize: 12,
                 ...(confirmStyle || {}),
               }}

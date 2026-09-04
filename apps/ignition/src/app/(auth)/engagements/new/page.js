@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { useToast, Spinner } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
-import ProductLinesEditor, { emptyLine, linesToPayload } from '../../../../components/ProductLinesEditor.js';
+import ProductLinesEditor, { emptyLine, linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
 import PocSelect from '../../../../components/PocSelect.js';
 import SelectedInfluencerCard from '../../../../components/SelectedInfluencerCard.js';
 
@@ -17,6 +17,7 @@ export default function NewEngagementPage() {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [lines, setLines] = useState([emptyLine()]);
+  const [productsValid, setProductsValid] = useState(true);
   const [form, setForm] = useState({
     engagement_type: 'video_tracking',
     deal_type: 'paid',
@@ -69,6 +70,9 @@ export default function NewEngagementPage() {
 
   async function submit() {
     if (!selected) { toast('Pick an influencer', 'error'); return; }
+    // Every product line must resolve to a real catalogue product (2026-09-04). The button is
+    // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
+    if (!productsValid || !linesAreValid(lines)) { toast('Pick a product from the list for every line', 'error'); return; }
     setBusy(true);
     try {
       const products = linesToPayload(lines);
@@ -190,12 +194,12 @@ export default function NewEngagementPage() {
 
       <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, marginBottom: 12 }}>
         <h2 style={hd}>Products</h2>
-        <ProductLinesEditor value={lines} onChange={setLines} session={session} />
+        <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
       </section>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <button onClick={() => router.back()} style={btnGhost}>Cancel</button>
-        <button onClick={submit} disabled={!selected || busy} style={{ ...btnPrimary, opacity: !selected || busy ? 0.5 : 1 }}>
+        <button onClick={submit} disabled={!selected || busy || !productsValid} style={{ ...btnPrimary, opacity: (!selected || busy || !productsValid) ? 0.5 : 1 }}>
           {busy ? 'Creating…' : 'Create Engagement'}
         </button>
       </div>

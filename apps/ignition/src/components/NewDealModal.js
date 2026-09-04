@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
-import ProductLinesEditor, { emptyLine, linesToPayload } from './ProductLinesEditor.js';
+import ProductLinesEditor, { emptyLine, linesToPayload, linesAreValid } from './ProductLinesEditor.js';
 import PocSelect from './PocSelect.js';
 import SelectedInfluencerCard from './SelectedInfluencerCard.js';
 
@@ -20,6 +20,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(presetInfluencer || null);
   const [lines, setLines] = useState([emptyLine()]);
+  const [productsValid, setProductsValid] = useState(true);
   const [form, setForm] = useState({
     engagement_type: 'video_tracking', deal_type: 'paid',
     expected_post_date: '',
@@ -52,6 +53,9 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
 
   async function submit() {
     if (!selected) { setErr('Pick an influencer first'); return; }
+    // Every product line must resolve to a real catalogue product (2026-09-04). Confirm is
+    // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
+    if (!productsValid || !linesAreValid(lines)) { setErr('Pick a product from the list for every line'); return; }
     setBusy(true); setErr(null);
     try {
       const payload = { influencer_id: selected.id, ...form };
@@ -75,7 +79,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   return (
     <Modal open={open} onClose={onClose} title="Add Deal"
       confirmLabel={busy ? 'Creating…' : 'Create Deal'} confirmColor="#FF6B00"
-      onConfirm={submit} loading={busy} error={err}>
+      onConfirm={submit} confirmDisabled={!productsValid} loading={busy} error={err}>
       <div style={{ marginBottom: 14 }}>
         <div style={lbl}>Influencer *</div>
         {selected ? (
@@ -162,7 +166,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
 
       <div style={{ marginTop: 14 }}>
         <div style={lbl}>Products</div>
-        <ProductLinesEditor value={lines} onChange={setLines} session={session} />
+        <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
       </div>
     </Modal>
   );
