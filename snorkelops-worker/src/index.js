@@ -1142,8 +1142,8 @@ function poPrintHtml(d) {
       <div class="hd">Delivery Address</div>${dAddr}
       ${po.notes ? `<div style="margin-top:10px"><div class="hd">Notes</div><div style="white-space:pre-line">${esc(po.notes)}</div></div>` : ''}
     </div>
-    <div style="page-break-before:always;margin-top:24px">
-      <table style="margin-top:40px"><tbody><tr>
+    <div style="page-break-inside:avoid;margin-top:28px">
+      <table><tbody><tr>
         <td style="width:60%"></td>
         <td style="width:40%;text-align:right;font-size:11px">
           <div style="margin-bottom:4px">Prepared by:</div>

@@ -302,9 +302,14 @@ function PrintPOContent() {
           )}
         </div>
 
-        {/* Prepared-by footer. Page break before to mirror the printed-PO
-            convention (signature block on its own page). */}
-        <div style={{ pageBreakBefore: 'always', marginTop: 24 }}>
+        {/* Prepared-by footer. ⚠️ This used to be `pageBreakBefore: 'always'` — "signature
+            block on its own page" — which forced a SECOND PAGE carrying nothing but
+            "Prepared by: <name>" on every single-page PO. Found 2026-09-04 (S344) when the
+            same markup was rendered to a real PDF and the blank page became obvious; it had
+            been in every printed PO until then. Now it simply follows the content and is
+            kept intact if a genuinely long PO does break across pages.
+            ⚠️ Mirrored in snorkelops-worker/src/index.js `poPrintHtml` — change both. */}
+        <div style={{ pageBreakInside: 'avoid', marginTop: 28 }}>
           <table style={{ marginTop: 40 }}>
             <tbody>
               <tr>
