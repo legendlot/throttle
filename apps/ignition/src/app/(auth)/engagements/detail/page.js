@@ -10,7 +10,7 @@ import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
-import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings } from '../../../../lib/metrics.js';
+import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings, metricsCompleteness } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 import { titleish } from '../../../../lib/productLabel.js';
 import { NewPaymentModal } from '../../../../components/NewPaymentModal.js';
@@ -93,6 +93,9 @@ export default function EngagementDetailPage() {
   // Reann #5 (2026-09-04) — a live video with no Cost or no Views is a data hole, flagged at the
   // top of the deal where it cannot be missed. A WARNING only: nothing here blocks anything.
   const dataWarnings = liveDataWarnings(e, inf?.channel_platform);
+  // Afshaan 2026-09-04 — derived from the SAME `e` the page already holds, so a PerformanceCard
+  // save (onSaved={reload} → setData) flips the pill without a page reload.
+  const completeness = metricsCompleteness(e);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1200 }}>
@@ -117,6 +120,10 @@ export default function EngagementDetailPage() {
         )}
         <StageBadge stage={e.stage} size="lg" />
         <DealTypeBadge dealType={e.deal_type} />
+        {/* Complete is DERIVED, never a stage — `live` is still terminal (S214 ⑤). Nothing renders
+            before the deal is live: an unposted deal has no numbers to be missing. The pill carries
+            real text rather than an aria-label on a bare glyph (S346 review). */}
+        <CompletenessPill completeness={completeness} />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <BriefPreviewButton engagementId={e.id} session={session} />
           <OpenPitstopButton engagement={e} onLinked={reload} />
@@ -676,6 +683,38 @@ function CostEdit({ label, value, onChange }) {
 // be argued with before anything is armed. There is no Send button and that is deliberate: the
 // send path needs a Relay template and an influencer comms profile, neither of which exists yet.
 // Copy-to-clipboard is the honest interim — Reann can paste it into her own email today.
+/** Derived-completion pill for the deal header. Styled like DealTypeBadge (the free-text badge
+ *  shape in this header) rather than a new component, since it carries no stage vocabulary.
+ *  Green = complete; muted = live but still missing numbers, named in `missing` order so the
+ *  reader knows what to go and enter. Nothing at all before the deal is live. */
+function CompletenessPill({ completeness }) {
+  const { live, complete, missing } = completeness;
+  if (!live) return null;
+  const p = complete
+    ? { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' }
+    : { fg: 'var(--text-3)',           bg: 'var(--surface-2)' };
+  return (
+    <span
+      title={complete ? 'All metrics captured' : `Missing: ${missing.join(', ')}`}
+      style={{
+        display: 'inline-flex',
+        padding: '2px 8px',
+        fontSize: 11,
+        fontFamily: 'var(--font-mono)',
+        fontWeight: 600,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+        color: p.fg,
+        background: p.bg,
+        border: '1px solid currentColor',
+        borderRadius: 'var(--radius-sm)',
+      }}
+    >
+      {complete ? 'Complete' : `Incomplete · missing: ${missing.join(', ')}`}
+    </span>
+  );
+}
+
 function BriefPreviewButton({ engagementId, session }) {
   const { showToast: toast } = useToast();
   const [draft, setDraft] = useState(null);

@@ -152,3 +152,37 @@ export function liveDataWarnings(e = {}, platform) {
   if (unexplainedGaps(e, platform).includes('views') || viewsUnentered) out.push('Views');
   return out;
 }
+
+// Afshaan 2026-09-04 — "Complete" is a DERIVED flag, not a stage. `live` stays the terminal stage
+// (S214 ⑤) and nothing here writes anything: a deal is Complete when it is live AND the four
+// numbers the deal is judged on have actually been entered. There is no `complete` column and the
+// retired `completed` stage is NOT resurrected by this.
+//
+// ⚠️ Views uses `> 0`, not "not null" — the same trap liveDataWarnings documents above: of the live
+// deals, **none has views NULL and 18 sit at views = 0**, so a null test would mark all 18 complete
+// while their numbers have never been typed. `total_cost` is a GENERATED column and therefore never
+// null, so it gets the same `> 0` treatment for the same reason. Likes and Followers gained take a
+// plain null test: a genuine zero is a real, entered answer for both.
+//
+// Stage is `live` ONLY, deliberately narrower than liveDataWarnings' LIVE_STAGES (which also counts
+// the retired `completed`). Measured 2026-09-04: 0 rows sit at `completed`, so the two agree on
+// every real row today; if one ever appears it renders as not-live here, i.e. no pill, rather than
+// a wrong claim.
+const COMPLETENESS_CHECKS = [
+  { label: 'Views',            test: (e) => num(e.views) > 0 },
+  { label: 'Likes',            test: (e) => num(e.likes) != null },
+  { label: 'Followers gained', test: (e) => num(e.followers_gained) != null },
+  { label: 'Cost',             test: (e) => num(e.total_cost) > 0 },
+];
+
+/**
+ * @param e engagement row
+ * @returns { live, complete, missing[] } — `missing` in COMPLETENESS_CHECKS order, and populated
+ *          even when the deal is not live so a caller can say what a not-yet-live deal still needs.
+ *          `complete` is false unless the deal is live.
+ */
+export function metricsCompleteness(e = {}) {
+  const live = String(e.stage || '').toLowerCase() === 'live';
+  const missing = COMPLETENESS_CHECKS.filter(c => !c.test(e)).map(c => c.label);
+  return { live, complete: live && missing.length === 0, missing };
+}

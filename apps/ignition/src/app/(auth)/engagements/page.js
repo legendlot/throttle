@@ -9,6 +9,7 @@ import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
+import { metricsCompleteness } from '../../../lib/metrics.js';
 
 // 'Live' is the terminal success stage (S214 ⑤) — the old 'Completed' tab is gone.
 const TABS = [
@@ -38,6 +39,16 @@ const DEAL_TYPE_FILTERS = [
   ...DEAL_TYPE_VALUES.map(v => ({ id: v, label: DEAL_TYPE_LABELS[v] })),
 ];
 
+// Completion (Afshaan, 2026-09-04) — a DERIVED flag, not a stage: `live` + all four metrics
+// entered (see metricsCompleteness). "Not complete" means live-but-missing-numbers, i.e. the
+// deals worth chasing — NOT every unfinished deal, which would be most of the pipeline and tell
+// nobody anything. Applied client-side like every other filter below.
+const COMPLETION_FILTERS = [
+  { id: 'all',      label: 'All completion' },
+  { id: 'complete', label: 'Complete' },
+  { id: 'not',      label: 'Not complete' },
+];
+
 // The campaign filter's "not on any campaign" choice — roughly a quarter of deals, so it is a real
 // bucket, not an edge case. 'all' and this are the only non-uuid values the filter holds.
 const CAMPAIGN_NONE = '__none__';
@@ -64,7 +75,7 @@ const SPEND_EXCLUDED_STAGES = new Set(['cancelled']);
 const FILTER_KEY = 'ignition.engagements.filters.v2';
 const EMPTY_FILTERS = {
   tab: 'all', type: 'all', stages: [], search: '',
-  products: [], dealType: 'all', campaign: 'all',
+  products: [], dealType: 'all', campaign: 'all', completion: 'all',
   dateMode: 'any', dateFrom: '', dateTo: '',
 };
 
@@ -118,7 +129,7 @@ export default function EngagementsPage() {
   function set(patch) { setF(prev => ({ ...prev, ...patch })); }
   function clearAll() { setF(EMPTY_FILTERS); }
 
-  const { tab, type, stages, search, products, dealType, campaign, dateMode, dateFrom, dateTo } = f;
+  const { tab, type, stages, search, products, dealType, campaign, completion, dateMode, dateFrom, dateTo } = f;
 
   // Campaign NAMES for the campaign filter. `getEngagements` returns `campaign_id` (the list
   // SELECT is `*`) but not the campaign's name, so the ids are unreadable on their own. Fetched
@@ -233,6 +244,13 @@ export default function EngagementsPage() {
       if (products.length && !products.includes(productKey(r.product_code))) return false;
       if (campaign === CAMPAIGN_NONE) { if (r.campaign_id) return false; }
       else if (campaign !== 'all' && r.campaign_id !== campaign) return false;
+      if (completion !== 'all') {
+        const { live, complete } = metricsCompleteness(r);
+        if (completion === 'complete' && !complete) return false;
+        // "Not complete" is scoped to LIVE deals only: a shipped deal has no numbers yet and
+        // listing it here would bury the handful that actually need chasing.
+        if (completion === 'not' && (!live || complete)) return false;
+      }
       if (dateMode === 'any') return true;
       const d = effectiveDate(r);
       if (dateMode === 'upcoming') {
@@ -251,7 +269,7 @@ export default function EngagementsPage() {
       }
       return true;
     });
-  }, [rows, products, dealType, campaign, dateMode, dateFrom, dateTo]);
+  }, [rows, products, dealType, campaign, completion, dateMode, dateFrom, dateTo]);
 
   // Summary of what is on screen (Reann, 2026-08-27: "a summary tab in engagements, as it is
   // on the main dashboard, to view the total number of videos displayed and the total cost
@@ -301,7 +319,8 @@ export default function EngagementsPage() {
   }
 
   const filtersActive = tab !== 'all' || type !== 'all' || stages.length > 0 || !!search
-    || products.length > 0 || dealType !== 'all' || campaign !== 'all' || dateMode !== 'any';
+    || products.length > 0 || dealType !== 'all' || campaign !== 'all' || completion !== 'all'
+    || dateMode !== 'any';
 
   return (
     <div>
@@ -375,6 +394,11 @@ export default function EngagementsPage() {
           {campaignOptions.map(o => (
             <option key={o.id} value={o.id}>{o.label} ({o.count})</option>
           ))}
+        </select>
+
+        {/* Afshaan 2026-09-04 — completion filter; see COMPLETION_FILTERS. */}
+        <select value={completion} onChange={e => set({ completion: e.target.value })} style={inputStyle(160)}>
+          {COMPLETION_FILTERS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
         </select>
 
         {/* Reann #5 — posting-date filter. */}
@@ -493,6 +517,23 @@ export default function EngagementsPage() {
                             fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'help',
                           }}
                         >⚑</span>
+                      )}
+                      {/* Afshaan 2026-09-04 — Complete = live + all four metrics entered
+                          (metricsCompleteness). Same glyph treatment as the ⚑ above and for the
+                          same reason: this is the at-a-glance companion to the COMPLETION filter,
+                          not a pill. ⛔ Nothing is rendered for an INCOMPLETE row on purpose —
+                          most rows are not live, so a "missing" marker here would paint the whole
+                          table; the filter is where you go looking for those. */}
+                      {metricsCompleteness(r).complete && (
+                        <span
+                          title="Complete — all metrics captured"
+                          role="img"
+                          aria-label="Complete — all metrics captured"
+                          style={{
+                            marginLeft: 6, color: 'var(--state-success-fg)',
+                            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'help',
+                          }}
+                        >✓</span>
                       )}
                     </td>
                     <td style={td}>
