@@ -737,6 +737,22 @@ function TrackingLinkRow({ e, canEdit, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState(null);   // getTrackingLinkStatus — stale-target check
+
+  // ⚠️ The staleness check has to run ON LOAD, not off the mint call. The worker also returns
+  // `target_stale` from mintTrackingLink, but that path is unreachable for exactly the deals
+  // that need it: the mint button below is hidden once `utm_link` exists, so a deal whose
+  // product changed AFTER minting never makes the call. A silent indicator would repeat the
+  // original failure, where every path reported success while the link kept the old target.
+  // Degrades to no banner on error — a check that cannot run must not blank the row.
+  useEffect(() => {
+    if (!session || !e.id || !e.utm_link) { setStatus(null); return; }
+    let live = true;
+    ignitionopsGet('getTrackingLinkStatus', { engagement_id: e.id }, session)
+      .then(r => { if (live) setStatus(r); })
+      .catch(() => { if (live) setStatus(null); });
+    return () => { live = false; };
+  }, [e.id, e.utm_link, session]);
 
   async function mint() {
     setBusy(true);
@@ -775,6 +791,23 @@ function TrackingLinkRow({ e, canEdit, session, onSaved }) {
         <button onClick={copy} style={{ background: 'transparent', border: 'none', padding: 0, color: copied ? '#4ade80' : 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, textDecoration: 'underline', cursor: 'pointer' }}>
           {copied ? 'copied' : 'copy'}
         </button>
+        {/* The link's target is frozen at mint, so correcting the deal's product leaves it
+            pointing at the old one. Ignition cannot repoint it — a target change moves where
+            already-printed artwork sends customers, so it is audited to a named person and
+            lives in Relay → Links. Say where it points, where it should, and where to go. */}
+        {status?.target_stale && (
+          <span style={{ width: '100%', marginTop: 4, padding: 8, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', fontSize: 11, lineHeight: 1.6, color: 'var(--text-1)' }}>
+            <strong>This link points at a different product.</strong> It was minted before the
+            deal's product changed, and it still sends people to{' '}
+            <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{status.link_target}</span>{' '}
+            instead of{' '}
+            <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{status.resolved_target}</span>.
+            <br />
+            Ignition cannot repoint it — every target change is recorded against a person. Fix it in{' '}
+            <a href="https://relay.legendoftoys.com/links/" target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>Relay → Links</a>
+            {status.code ? <> (search for <span style={{ fontFamily: 'var(--font-mono)' }}>{status.code}</span>)</> : null}.
+          </span>
+        )}
       </span>
     </div>
   );

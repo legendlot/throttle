@@ -2641,6 +2641,51 @@ async function resolveLinkTarget(env, engagementId, explicit) {
   return productUrl(hit?.handle, hit?.variantId);
 }
 
+// ── Is this deal's link still pointing at this deal's product? (S342) ───────────────────────
+//
+// ⚠️ The staleness the mint path reports (`target_stale` below) can NEVER reach the deals that
+// need it. It is computed only on a 409 from a FORCED re-mint, and the deal page hides the mint
+// button the moment `utm_link` is set — so for a deal whose product changed after minting, the
+// mint call is never made and the flag is never produced. Shipped S324, consumed by nobody
+// (grep: one occurrence in the tree). This is the read-only version that the page CAN call:
+// resolve where the deal points TODAY and hold it against what the link actually stores.
+//
+// Read-only ON PURPOSE. Repointing stays out of Ignition: commsops `/internal/campaign-link` is
+// mint-only because a target change moves where already-printed artwork sends customers, so every
+// one is audited to `comms.link_changes` against a named person and a service token has none.
+// The fix path is Relay → Links; this endpoint exists so somebody KNOWS to walk it.
+async function getTrackingLinkStatus(url, auth, env) {
+  const id = url.searchParams.get('engagement_id');
+  if (!id) return err('engagement_id required', 400);
+  const er = await sb(`/rest/v1/engagements?id=eq.${id}&select=utm_link&limit=1`, env);
+  const eng = er.ok ? er.data?.[0] : null;
+  if (!eng) return err('not_found', 404);
+  if (!eng.utm_link) return ok({ has_link: false, target_stale: false });
+
+  // The stored link is `<link_base_url>/r/<code>`; `code` is comms.links' primary key.
+  const code = String(eng.utm_link).split('/r/')[1]?.split(/[?#/]/)[0] || null;
+  if (!code) return ok({ has_link: true, target_stale: false, reason: 'unparseable_link' });
+  const lr = await sb(
+    `/rest/v1/links?code=eq.${encodeURIComponent(code)}&select=code,target_url,active&limit=1`, env,
+    { headers: { 'Accept-Profile': 'comms' } },
+  ).catch(() => ({ ok: false }));
+  const link = lr.ok ? lr.data?.[0] : null;
+  if (!link) return ok({ has_link: true, code, target_stale: false, reason: 'link_not_found' });
+
+  const resolved = await resolveLinkTarget(env, id).catch(() => null);
+  // ⚠️ Only a REAL product URL is allowed to accuse a link of being stale. resolveLinkTarget
+  // falls back to the bare store root BOTH when the deal genuinely has no product and when a
+  // catalogue lookup fails, so treating that fallback as "the current target" would flag every
+  // unresolvable deal — a banner is worth nothing the moment it cries wolf. Say "cannot tell"
+  // instead, and let the page stay silent.
+  if (!resolved || resolved === LOT_STORE_URL) {
+    return ok({ has_link: true, code, link_target: link.target_url, resolved_target: null,
+      target_stale: false, reason: 'target_unresolvable' });
+  }
+  return ok({ has_link: true, code, link_target: link.target_url, resolved_target: resolved,
+    target_stale: link.target_url !== resolved });
+}
+
 async function mintTrackingLink(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
@@ -3833,6 +3878,7 @@ const GET_ACTIONS = {
   getDealBriefPreview,
   getPostReminderDue,
   getBrokenChannelLinks,
+  getTrackingLinkStatus,
 };
 
 const POST_ACTIONS = {
