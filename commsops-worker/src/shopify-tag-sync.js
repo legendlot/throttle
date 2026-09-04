@@ -9,7 +9,9 @@
 // It is NOT that customer webhooks stopped arriving, and it is NOT a parsing bug — both were
 // filed as hypotheses and both are dead. 31,055 comms.consent rows with source='shopify_webhook'
 // were created after their profile, the most recent on 2026-09-04, and those rows are written by
-// the SAME function that writes tags (shopify.js mapCustomer). So the mapper runs on every live
+// the SAME function that writes tags — mapCustomerRest, the REST WEBHOOK mapper (shopify.js:143;
+// tags at :155, consent at :163/:169/:175). NOT mapCustomer, which is the GraphQL importer and
+// stamps source='shopify_import'. So the mapper runs on every live
 // customer webhook and writes no tags, which leaves exactly one explanation: `tags` is absent
 // from the REST webhook payload. No change to the mapper can conjure a field the payload does
 // not carry. The June backfill had tags because it asked GraphQL for them — so does this.
