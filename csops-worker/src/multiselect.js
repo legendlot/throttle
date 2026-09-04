@@ -12,10 +12,15 @@
 // sends the comma form and still works, while a single value containing a comma survives.
 export const MULTI_SEP = '\u001f';
 
+// ⚠️ Hardened S347b after the hostile review. `v` is whatever the query string held, so it is not
+// necessarily a string; a non-string used to throw `v.startsWith is not a function` out of a report
+// handler. Coerce rather than trust.
 export function splitMulti(v) {
-  if (!v) return [];
-  const parts = v.startsWith(MULTI_SEP)
-    ? v.slice(MULTI_SEP.length).split(MULTI_SEP)
-    : v.split(',');
+  if (v === null || v === undefined) return [];
+  const str = String(v);
+  if (!str) return [];
+  const parts = str.startsWith(MULTI_SEP)
+    ? str.slice(MULTI_SEP.length).split(MULTI_SEP)
+    : str.split(',');
   return parts.map(x => x.trim()).filter(Boolean);
 }

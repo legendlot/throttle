@@ -51,6 +51,11 @@ export async function csopsPost(action, body = {}, session) {
 // value containing a comma is transported intact.
 export const MULTI_SEP = '\u001f';
 
+// ⚠️ A value CONTAINING the separator would decode as two values — a plausible WRONG filter, which
+// is a worse failure than the visibly-empty report this encoding replaced. No such value can exist
+// today (U+001F is a control character), so strip rather than throw: a report must not be taken
+// down by one odd row, and a stripped separator still yields the right single value.
 export function joinMulti(values) {
-  return MULTI_SEP + values.join(MULTI_SEP);
+  const clean = values.map(v => String(v).split(MULTI_SEP).join(''));
+  return MULTI_SEP + clean.join(MULTI_SEP);
 }

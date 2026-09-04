@@ -45,3 +45,17 @@ test('empty and blank inputs yield no filter rather than a filter matching nothi
 test('surrounding whitespace is trimmed in the new encoding too', () => {
   assert.deepEqual(splitMulti(join(['  Shadow  ', ' Titan'])), ['Shadow', 'Titan']);
 });
+
+// ── hardening (S347b, from the hostile review) ──────────────────────────────
+
+test('a non-string input is coerced, not thrown out of a report handler', () => {
+  assert.deepEqual(splitMulti(5), ['5']);
+  assert.deepEqual(splitMulti(null), []);
+  assert.deepEqual(splitMulti(undefined), []);
+});
+
+test('a value containing the separator decodes as MULTIPLE values — which is why the client strips it', () => {
+  // Documents the raw decoder's behaviour so the client-side strip is not silently removed:
+  // an unstripped separator here would be a plausible WRONG filter, not a visibly empty report.
+  assert.deepEqual(splitMulti(MULTI_SEP + 'A' + MULTI_SEP + 'B'), ['A', 'B']);
+});
