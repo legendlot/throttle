@@ -3421,6 +3421,9 @@ async function getMonthlyBreakdown(url, auth, env) {
   // Must match getMonthlyTargets' exclusion or the drill-down stops summing to the tile above it.
   const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${encodeURIComponent(sel)}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const takeRows = bucketVideoViewsByMonth(r.data || [], vr.ok ? vr.data || [] : []).rows.filter(t => t.month === month);
+  const dealById = new Map((r.data || []).map(e => [e.id, e]));
 
   const spend = [], views = [], conversions = [];
   for (const e of (r.data || [])) {
@@ -3448,12 +3451,24 @@ async function getMonthlyBreakdown(url, auth, env) {
       if (amt > 0) spend.push({ ...base, amount: Math.round(amt), dated_by: 'post_date' });
     }
     if (postMonth === month) {
-      if (num(e.views) > 0) views.push({ ...base, views: num(e.views) });
       // Reann #9 — conversions itemised. Counted on the POST month so it lines up with views.
       if (num(e.orders) > 0 || num(e.conversions_value) > 0) {
         conversions.push({ ...base, orders: num(e.orders), order_value: num(e.conversions_value) });
       }
     }
+  }
+  // Views are itemised PER TAKE (slice 4) so a deal with a take in September and one in October
+  // shows one row in each month, and each month's rows still sum to its tile.
+  if (!isUnalloc) for (const t of takeRows) {
+    const e = dealById.get(t.engagement_id); if (!e) continue;
+    const who = e.influencer || {};
+    views.push({
+      engagement_id: e.id, engagement_no: e.engagement_no, stage: e.stage, engagement_type: e.engagement_type,
+      campaign_tag: e.campaign_tag || null, influencer_id: who.id || null, influencer_code: who.influencer_code || null,
+      influencer_name: who.channel_name || who.person_name || null, channel_link: who.channel_link || null,
+      platform: who.channel_platform || null, post_date: e.post_date || null,
+      seq: t.seq, take_post_date: t.post_date, views: t.views,
+    });
   }
   const sum = (a, k) => a.reduce((t, x) => t + num(x[k]), 0);
   spend.sort((a, b) => b.amount - a.amount);
@@ -3527,17 +3542,17 @@ async function getMonthlyTargets(url, auth, env) {
 
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
-  const er = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
+  const er = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=id,post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
+  // Slice 4: views come from the takes. One fetch, paged at db-max-rows (5,000; 411 rows today,
+  // 6 per deal at most → ~2,500 at 411 deals). Order by a unique pair so paging cannot skip.
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
   const actMap = {};
   let unallocSpend = 0, unallocDeals = 0;
   const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_spend: 0 }));
+  const { byMonth: viewsByMonth } = bucketVideoViewsByMonth(er.ok ? er.data || [] : [], vr.ok ? vr.data || [] : []);
+  for (const [m, v] of Object.entries(viewsByMonth)) bucket(m).actual_views += v;
   if (er.ok) {
     for (const e of (er.data || [])) {
-      // Views attribute to the month the video actually POSTED (S214 6-pt ②) — post_date
-      // is now mandatory at go-live, so a deal without one hasn't posted and its views
-      // (which should be 0) don't count toward any month's target.
-      const postMonth = (e.post_date || '').slice(0, 7);
-      if (/^\d{4}-\d{2}$/.test(postMonth)) bucket(postMonth).actual_views += num(e.views);
       // ⭐ UNALLOCATED SPEND (Reann #1, S273 — the column deferred in S214 is now built).
       // Spend on a deal whose video has NOT posted cannot honestly belong to any month: the
       // product shipped, the money is committed, but the month it will land in is unknown.
@@ -3644,10 +3659,17 @@ async function applyMetaMetrics(env, engagementId, m) {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({
       ad_spend: m.spend, conversions_value: m.revenue, purchases: m.purchases,
-      impressions: m.impressions, ctr: m.ctr, frequency: m.frequency,
+      ctr: m.ctr, frequency: m.frequency,
       meta_synced_at: nowIso(), updated_at: nowIso(),
     }),
   });
+  // S351: impressions is PER-VIDEO now and the deal column is a rollup, so writing it on the deal
+  // would be silently reverted by the next recomputeVideoRollup. The Meta ad runs the seq-1 take.
+  await sb(`/rest/v1/engagement_videos?on_conflict=engagement_id,seq`, env, {
+    method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+    body: JSON.stringify([{ engagement_id: engagementId, seq: 1, impressions: m.impressions, updated_at: nowIso() }]),
+  });
+  try { await recomputeVideoRollup(env, engagementId); } catch { /* rollup is best-effort here; the deal patch already landed */ }
 }
 
 // Daily cron: refresh active UGC deals that carry a meta_ad_id (oldest-synced first).
