@@ -1770,6 +1770,31 @@ export default {
             }));
           }
 
+          // Config health check for the PO→Slack DM path (S344). Read-only and it SENDS
+          // NOTHING: it answers "is this wired up?" without a live PO approval, which is
+          // otherwise the only way to find out — i.e. at the worst possible moment.
+          // Admin-gated because it reveals whether a given email maps to a Slack account.
+          case 'diagPoNotify': {
+            if (!canPaySuperAdmin(P) && !canAcceptPO(P)) return err('No permission', 403);
+            const out = {
+              slack_token_set: !!env.SLACK_BOT_TOKEN,
+              cf_account_id_set: !!env.CF_ACCOUNT_ID,
+              cf_browser_token_set: !!env.CF_BROWSER_TOKEN,
+            };
+            if (env.SLACK_BOT_TOKEN) {
+              const who = await slackApi('auth.test', {}, env);
+              out.slack_auth_ok = !!who.ok;
+              out.slack_bot = who.ok ? { team: who.team, bot: who.user, bot_id: who.bot_id } : null;
+              out.slack_error = who.ok ? null : who.error;
+              const email = url.searchParams.get('email');
+              if (email) {
+                const id = await slackUserIdByEmail(email, env);
+                out.lookup = { email, resolved: !!id, user_id: id };
+              }
+            }
+            return ok(out);
+          }
+
           case 'getHsnRates': {
             const r = await query('hsn_gst_rates',
               `?select=hsn_code,description,gst_percent&order=hsn_code.asc`);
