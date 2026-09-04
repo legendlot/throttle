@@ -66,10 +66,12 @@ export default function SalesOrdersPage() {
   };
 
   function exportCsv() {
-    const cols = ['Order', 'Date', 'Partner', 'Channel', 'Status', 'Fulfilment', 'Invoice', 'Grand Total', 'Received', 'Balance', 'Due', 'Overdue', 'Payment'];
+    const cols = ['Order', 'Date', 'Partner', 'Channel', 'Status', 'Fulfilment', 'Invoice', 'Grand Total',
+      'Fulfilled Value', 'Shortfall', 'Received', 'Balance', 'Due', 'Overdue', 'Payment'];
     const lines = [cols.join(',')];
     for (const o of filtered) lines.push([o.order_no, o.order_date, o.partner_name, o.channel_key,
       orderStatusLabel(o.status), fulfilmentMeta(o.fulfilment_status).label, o.invoice_no, o.grand_total,
+      o.fulfilled_value, o.shortfall_value,
       o.amount_received, o.balance, o.due_date, o.overdue ? 'Yes' : 'No', o.payment_status].map(csvCell).join(','));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -118,7 +120,7 @@ export default function SalesOrdersPage() {
             <table className="dt">
               <thead><tr>
                 <th>Order</th><th>Date</th><th>Partner</th><th>Ch</th><th>Status</th><th>Fulfilment</th>
-                <th className="num">Total</th><th className="num">Balance</th><th>Due</th><th>Payment</th>
+                <th className="num">Total</th><th className="num">Fulfilled</th><th className="num">Balance</th><th>Due</th><th>Payment</th>
               </tr></thead>
               <tbody>
                 {filtered.map(o => {
@@ -133,6 +135,25 @@ export default function SalesOrdersPage() {
                       <td><Badge label={orderStatusLabel(o.status)} tone={ORDER_STATUS_TONES[o.status] || 'gray'} /></td>
                       <td><Badge label={fm.label} tone={fm.tone} dot /></td>
                       <td className="num mono">{inr(o.grand_total)}</td>
+                      {/* Fulfilment value in ₹, and the shortfall beneath it (Ram, #bugs
+                          2026-09-04). Units never told you whether a short shipment mattered:
+                          3 missing remotes and 3 missing cars read identically. Shown only
+                          where a shortfall is meaningful — a cancelled order has no gap to
+                          chase, and repeating the total on every fulfilled row is noise. */}
+                      <td className="num mono">
+                        {o.fulfilled_value == null || o.status === 'cancelled' ? (
+                          <span style={{ color: 'var(--text-3)' }}>—</span>
+                        ) : (
+                          <>
+                            <div>{inr(o.fulfilled_value)}</div>
+                            {Number(o.shortfall_value) > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--red-fg)' }}>
+                                −{inr(o.shortfall_value)}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </td>
                       <td className="num mono" style={{ color: Number(o.balance) > 0 ? 'var(--red-fg)' : 'var(--text-3)' }}>{inr(o.balance)}</td>
                       <td className="mono" style={{ color: o.overdue ? 'var(--red-fg)' : 'var(--text-2)' }}>{o.due_date ? fmtDateShort(o.due_date) + (o.overdue ? ' ⚠' : '') : '—'}</td>
                       <td><Badge label={pm.label} tone={pm.tone} /></td>
