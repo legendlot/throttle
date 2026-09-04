@@ -1639,7 +1639,17 @@ async function getStageRules(params, auth, env) {
 // `limit=20000` here was silently a 5,000 ceiling. Ordered by `id` (unique) so page boundaries
 // can neither drop nor repeat a row. Same fix as getSupportAnalytics carries.
 const REPORTS_SELECT = 'id,created_at,closed_at,disposition,issue_category,product,platform,'
+  + 'intake_channel,auto_created,'
   + 'assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr';
+
+// A comma-separated multi-select param → Set, or null for "no filter on this dimension".
+// One value still works unchanged, so an older cached page keeps functioning (S344).
+function multiParam(params, key) {
+  const v = params.get(key);
+  if (!v) return null;
+  const vals = v.split(',').map(x => x.trim()).filter(Boolean);
+  return vals.length ? new Set(vals) : null;
+}
 
 async function fetchTicketsRanged(col, from, to, env) {
   const PAGE = 1000;
@@ -1685,7 +1695,39 @@ async function getReports(params, auth, env) {
     fetchTicketsRanged('closed_at',  from, to, env),
   ]);
   if (!raised || !closed) return err('Failed to load reports data', 500);
-  const rows = raised.rows;
+
+  // Agent + support-channel filters (Pruthvi #bugs 1788512544, S344). Reports had NO agent
+  // dimension at all — Analytics has had one — and Pitstop is used across departments, so a
+  // team's numbers could not be isolated here. Both are MULTI-select: a comma-separated list,
+  // a single value still works.
+  //
+  // Filtered JS-side, like getSupportAnalytics, because `channel` is DERIVED (analyticsDims'
+  // support_channel folds auto_created/phone/call into "Calls") and a PostgREST predicate
+  // cannot express it — and because deriving the option list separately from the filter is how
+  // a measurement and its implementation end up defining the same set differently.
+  //
+  // ⚠️ Applied to BOTH ranged sets. The raised/closed split below is two populations, and
+  // filtering only the raised one would give an agent's row a filtered `total` beside an
+  // unfiltered `closed` — the two halves of the same line answering different questions.
+  const wantAgent   = multiParam(params, 'agent');
+  const wantChannel = multiParam(params, 'channel');
+  const dimsOf = (r) => analyticsDims(r, {});   // {} = no product-line map; unused here
+  const keep = (r) => {
+    if (!wantAgent && !wantChannel) return true;
+    const d = dimsOf(r);
+    return (!wantAgent || wantAgent.has(d.agent)) && (!wantChannel || wantChannel.has(d.support_channel));
+  };
+  // Option lists come from the date-scoped rows BEFORE the filters, so picking an agent does
+  // not collapse the channel list to that agent's own channels (same rule as /analytics).
+  const agentOpts = new Set(), channelOpts = new Set();
+  for (const r of [...raised.rows, ...closed.rows]) {
+    const d = dimsOf(r);
+    agentOpts.add(d.agent);
+    channelOpts.add(d.support_channel);
+  }
+  const rangeTotal = raised.rows.length;
+  const rows = raised.rows.filter(keep);
+  const closedRows = closed.rows.filter(keep);
 
   // Conversations handled alongside tickets raised (Pruthvi #bugs 2026-07-25,
   // clarified in-thread: not every conversation becomes a ticket — shipment and
@@ -1698,6 +1740,10 @@ async function getReports(params, auth, env) {
     body: JSON.stringify({ p_from: from, p_to: to }),
   });
   if (convR.ok) conversations = convR.data || null;
+  // ⚠️ cs_conversation_counts is a date-ranged RPC with no agent/channel arguments, so this
+  // figure is ALWAYS the whole range. Flagged rather than silently left beside filtered ticket
+  // counts — a whole-range number sitting next to a one-agent number reads as that agent's.
+  if (conversations && (wantAgent || wantChannel)) conversations = { ...conversations, unfiltered: true };
 
   // Aggregate
   const monthly = {};
@@ -1755,7 +1801,7 @@ async function getReports(params, auth, env) {
   // is counted here and an agent clearing old backlog finally gets credit on the day they cleared
   // it. The agent sets are a UNION: someone can close tickets in a window with none raised to
   // them in it (total 0, closed > 0) and vice versa, so seed the row from whichever side is first.
-  for (const r of closed.rows) {
+  for (const r of closedRows) {
     const agentName = r.assigned_agent_name || '— unassigned —';
     byAgent[agentName] = byAgent[agentName] || { name: agentName, total: 0, closed: 0, total_close_days: 0 };
     byAgent[agentName].closed++;
@@ -1783,8 +1829,21 @@ async function getReports(params, auth, env) {
       from, to,
       total_rows:   rows.length,
       raised_rows:  rows.length,
-      closed_rows:  closed.rows.length,
+      // Pre-filter denominator, so the page can say "N of M tickets in range" the way
+      // /analytics does rather than leaving a filtered figure looking like the whole month.
+      range_total:  rangeTotal,
+      closed_rows:  closedRows.length,
       truncated:    raised.truncated || closed.truncated,
+    },
+    // Fed straight into the toolbar's multi-selects; `applied_filters` travels back so the
+    // CSV header can name the cohort it was exported under.
+    filter_options: {
+      agent:   [...agentOpts].sort((a, b) => a.localeCompare(b)),
+      channel: [...channelOpts].sort((a, b) => a.localeCompare(b)),
+    },
+    applied_filters: {
+      agent:   wantAgent   ? [...wantAgent]   : [],
+      channel: wantChannel ? [...wantChannel] : [],
     },
     conversations,   // { total, handled, outbound_only, no_history } | null
     monthly_trend: Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month)),
@@ -1890,10 +1949,14 @@ async function getSupportAnalytics(params, auth, env) {
   const grain = params.get('grain') === 'week' ? 'week' : 'month';
 
   // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
+  // MULTI-select (S344, Pruthvi #bugs 1788512544): each dimension takes a COMMA-SEPARATED list.
+  // A single value still works unchanged, so an older cached page keeps functioning.
   const want = {};
   for (const k of ANALYTICS_DIM_KEYS) {
     const v = params.get(k);
-    if (v) want[k] = v;
+    if (!v) continue;
+    const vals = v.split(',').map(x => x.trim()).filter(Boolean);
+    if (vals.length) want[k] = new Set(vals);
   }
 
   const scope = await visibilityFilters(params, auth, env);
@@ -1951,7 +2014,7 @@ async function getSupportAnalytics(params, auth, env) {
   for (const r of allRows) {
     const d = analyticsDims(r, lineOf);
     for (const k of ANALYTICS_DIM_KEYS) optionSets[k].add(d[k]);
-    if (ANALYTICS_DIM_KEYS.every(k => !want[k] || want[k] === d[k])) filteredRows.push(r);
+    if (ANALYTICS_DIM_KEYS.every(k => !want[k] || want[k].has(d[k]))) filteredRows.push(r);
   }
   const filter_options = Object.fromEntries(
     ANALYTICS_DIM_KEYS.map(k => [k, [...optionSets[k]].sort((a, b) => a.localeCompare(b))]),
@@ -2021,7 +2084,7 @@ async function getSupportAnalytics(params, auth, env) {
     // than leaving a filtered dashboard indistinguishable from a quiet month.
     range: { from, to, total: rows.length, range_total: rangeTotal, truncated },
     filter_options,
-    applied_filters: want,
+    applied_filters: Object.fromEntries(Object.entries(want).map(([k, v]) => [k, [...v]])),
     kpis,
     by_product_matrix: {
       categories,
@@ -9918,6 +9981,11 @@ async function getMessagingThreads(params, auth, env) {
   // state === 'all' → no thread_state filter
   const priority = params.get('priority');         // urgent|high|normal|low facet (S164)
   if (priority) q += `&priority=eq.${encodeURIComponent(priority)}`;
+  // Awaiting Reply (S344, Afshaan): "a standard filter on any of the tabs we have ... like the
+  // unread filter in Gmail". `awaiting_reply` is a GENERATED column on cs_wa_threads, so this is
+  // a plain PostgREST predicate and the list can never disagree with the topbar pill, which reads
+  // the same column via cs_messaging_stats. An automated auto-reply does NOT clear it.
+  if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true`;
   // Which LOT number the customer wrote to (Pruthvi 2026-07-31). He asked to "segregate
   // the WhatsApp inbox based on the numbers" so transactional/marketing threads can be
   // cleared in bulk without mixing into support. A FACET, not a separate inbox — Afshaan's

@@ -8,6 +8,7 @@ export {
 // NOTE: TrendChart/Chart.js is intentionally NOT re-exported here — it pulls in
 // recharts (~110KB). Import it directly (`kit/Chart.js`) only on the chart pages
 // so the non-chart pages (queue/detail/new/admin) stay lean.
+export { MultiSelect } from './MultiSelect.js';
 export { PitstopSidebar } from './PitstopSidebar.js';
 export { PitstopTopbar } from './PitstopTopbar.js';
 export { CommandPalette } from './CommandPalette.js';

@@ -8,13 +8,15 @@
    category trends. One getSupportAnalytics call (gated cs_reports_view).
    Spec: docs/superpowers/specs/2026-07-16-pitstop-support-analytics-dashboard-design.md
    S339 (Pruthvi #bugs 2026-09-03): dimension filters + sort + CSV export.
+   S344 (Pruthvi #bugs 1788512544): every dimension filter is MULTI-select — Pitstop
+   is used across departments, and one-value-at-a-time cannot isolate a team's metrics.
    ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
-import { KpiCard, Panel, selectStyle, inputStyle } from '../../../components/kit/index.js';
+import { KpiCard, MultiSelect, Panel, selectStyle, inputStyle } from '../../../components/kit/index.js';
 import { TrendChart } from '../../../components/kit/Chart.js';
 
 const SERIES_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#60a5fa', '#f87171', '#c084fc'];
@@ -91,7 +93,10 @@ export default function AnalyticsPage() {
   const [preset, setPreset] = useState('mtd');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [filters, setFilters] = useState({});   // dim key → selected value ('' = all)
+  // dim key → SELECTED VALUES (string[]; [] or absent = All). Multi since S344 — the worker
+  // takes a comma-separated list per dimension and a single value still works, so an older
+  // cached page keeps functioning against the same endpoint.
+  const [filters, setFilters] = useState({});
   const [sort, setSort] = useState('count_desc');
   const [grain, setGrain] = useState('month');   // trend bucket: 'month' | 'week'
   const [data, setData] = useState(null);
@@ -106,7 +111,7 @@ export default function AnalyticsPage() {
 
   // Serialised so the effect re-runs on a filter change without depending on object identity.
   const filterKey = useMemo(
-    () => DIMS.map(([k]) => `${k}=${filters[k] || ''}`).join('&'),
+    () => DIMS.map(([k]) => `${k}=${(filters[k] || []).join(',')}`).join('&'),
     [filters],
   );
 
@@ -115,7 +120,8 @@ export default function AnalyticsPage() {
     let alive = true;
     setLoading(true);
     const args = { from: range.from, to: range.to, grain };
-    for (const [k] of DIMS) if (filters[k]) args[k] = filters[k];
+    // Comma-joined per dimension; an empty selection sends nothing at all, which is "All".
+    for (const [k] of DIMS) if (filters[k]?.length) args[k] = filters[k].join(',');
     csopsGet('getSupportAnalytics', args, session)
       .then(d => { if (alive) { setData(d); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })
@@ -130,11 +136,13 @@ export default function AnalyticsPage() {
   // while the dashboard is still filtered by it.
   function optionsFor(key) {
     const opts = data?.filter_options?.[key] || [];
-    const sel = filters[key];
-    return sel && !opts.includes(sel) ? [sel, ...opts] : opts;
+    const missing = (filters[key] || []).filter(v => !opts.includes(v));
+    return missing.length ? [...missing, ...opts] : opts;
   }
 
-  const activeCount = DIMS.filter(([k]) => filters[k]).length;
+  // Counts DIMENSIONS filtered, not values picked — "Clear 2 filters" must mean two dropdowns,
+  // the same thing it meant when each held one value.
+  const activeCount = DIMS.filter(([k]) => filters[k]?.length).length;
 
   function exportCsv() {
     if (!data || loading) return;
@@ -150,7 +158,12 @@ export default function AnalyticsPage() {
     // The active cohort travels WITH the file — same reason the Reports CSV carries its
     // basis and channel: a spreadsheet opened next week must not be ambiguous about which
     // slice it is, or someone reads a filtered export as the whole month.
-    for (const [k, label] of DIMS) L.push(`${label},${csvEsc(applied[k] || 'All')}`);
+    // `applied_filters[k]` is an ARRAY since S344 — join it, so a three-product cohort names
+    // all three in the header rather than printing "[object Object]" or one of them.
+    for (const [k, label] of DIMS) {
+      const v = applied[k];
+      L.push(`${label},${csvEsc(Array.isArray(v) ? (v.join(' · ') || 'All') : (v || 'All'))}`);
+    }
     L.push(`Sorted by,${csvEsc(SORTS.find(s => s[0] === sort)?.[1] || sort)}`);
     L.push(`Complaints in this cohort,${data.range?.total ?? 0}`);
     L.push(`Complaints in date range (before filters),${data.range?.range_total ?? data.range?.total ?? 0}`);
@@ -259,11 +272,8 @@ export default function AnalyticsPage() {
       {/* Dimension filters */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {DIMS.map(([key, label]) => (
-          <select key={key} value={filters[key] || ''} style={selectStyle}
-            onChange={e => setFilters(f => ({ ...f, [key]: e.target.value }))}>
-            <option value="">{label}: All</option>
-            {optionsFor(key).map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
+          <MultiSelect key={key} label={label} value={filters[key] || []} options={optionsFor(key)}
+            onChange={vals => setFilters(f => ({ ...f, [key]: vals }))} />
         ))}
         {/* Trend grain. Sits with the filters because it changes what the trend panels mean,
             not merely how they look — the tables and the CSV re-head themselves from it. */}

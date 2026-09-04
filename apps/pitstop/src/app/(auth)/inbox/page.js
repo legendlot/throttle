@@ -19,7 +19,7 @@ import {
   Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, ChevronLeft, ChevronRight, CheckSquare, XCircle, Sparkles,
-  Bell, BellOff, ShoppingBag, SlidersHorizontal, Users, PlayCircle,
+  Bell, BellOff, ShoppingBag, SlidersHorizontal, Users, PlayCircle, Reply,
   AlertTriangle, Info, Monitor,
 } from 'lucide-react';
 import { ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
@@ -274,6 +274,12 @@ export default function InboxPage() {
   // Which LOT WhatsApp number the customer wrote to (S262, Pruthvi) — lets the
   // transactional/marketing traffic be isolated and cleared without a second inbox.
   const [wabaFilter, setWabaFilter] = useState('');
+  // Awaiting Reply (S344, Afshaan): "a standard filter on any of the tabs we have (Voice, IG, or
+  // anywhere else) ... like the unread filter in Gmail — if you read something it goes out of that
+  // list." So it is a FACET like priority/agent/waba, orthogonal to the channel segments and the
+  // assignment axis, and it carries no manual state: `awaiting_reply` is a generated column the
+  // customer's own message sets and our reply clears.
+  const [awaitingOnly, setAwaitingOnly] = useState(false);
   const [searchInput, setSearchInput] = useState('');       // phone/name search box (S178, Pruthvi)
   const [search, setSearch] = useState('');                 // debounced → server query
   const [closeOpen, setCloseOpen] = useState(false);         // Close-with-reason popover (2026-07-28)
@@ -293,9 +299,12 @@ export default function InboxPage() {
   const [stats, setStats] = useState({
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
-    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
-    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
-    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    // `awaiting` was `null` on these three — a Relay-cutover leftover from when
+    // cs_messaging_stats() genuinely could not compute it off a mirrored channel. It returns a
+    // real number for all five now (S344), so a null default is just a wrong first paint.
+    whatsapp:  { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    email:     { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    web:       { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
   });
   const [agents, setAgents] = useState([]);
   const [canned, setCanned] = useState([]);
@@ -412,6 +421,9 @@ export default function InboxPage() {
       if (priorityFilter) p.priority = priorityFilter;
       if (agentFilter) p.agent = agentFilter;
       if (wabaFilter) p.waba = wabaFilter;
+      // Applies on every scope — channel segment, assignment tab, Ignition oversight, search —
+      // because "who is waiting on us" is a question worth asking of any of them.
+      if (awaitingOnly) p.awaiting = '1';
       if (sort !== 'recent') p.sort = sort;
       if (search) p.q = search;   // phone/name search (S178, Pruthvi) — server-side
       p.limit = listLimit;        // grows via "Load more" (S202) — single query keeps the 20s poll append-safe
@@ -420,12 +432,12 @@ export default function InboxPage() {
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, sort, ignitionScope, search, listLimit]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, awaitingOnly, sort, ignitionScope, search, listLimit]);
 
   // Reset the list window to the first page whenever a filter/channel/search changes
   // — an old expanded window must not carry into a different view. Setting PAGE when
   // it's already PAGE is a no-op (React bails), so this only refetches after Load-more.
-  useEffect(() => { setListLimit(PAGE); }, [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, sort, ignitionScope, search]);
+  useEffect(() => { setListLimit(PAGE); }, [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, wabaFilter, awaitingOnly, sort, ignitionScope, search]);
 
   // Debounce the search box → server query (S178)
   useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
@@ -554,7 +566,7 @@ export default function InboxPage() {
 
   // Drop any bulk selection when the visible set changes (filters/tab/channel).
   useEffect(() => { setSelectedIds(new Set()); setBulkAgent(''); },
-    [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter]);
+    [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, awaitingOnly]);
 
   // Thread list — load + 20s poll. Re-fires on channel or assignment-tab change.
   useEffect(() => { setLoadingList(true); loadThreads(); }, [loadThreads]);
@@ -689,11 +701,15 @@ export default function InboxPage() {
     setEmailCc(''); setEmailBcc(''); setShowCcBcc(false);
   }, [convo?.thread?.id, convo?.thread?.channel]);
 
-  // "Awaiting reply" spans the two-way channels. WhatsApp joined in S245: it used to be a
+  // "Awaiting reply" spans EVERY channel (S344). WhatsApp joined in S245: it used to be a
   // read-only BiteSpeed mirror whose awaiting lived in BiteSpeed, but after the Relay cutover
-  // inbound lands locally and it is the busiest channel of the three.
+  // inbound lands locally and it is the busiest channel of the five. Email and web were left out
+  // for the same historical reason and cs_messaging_stats() returned null for them — it now
+  // computes all five off the `awaiting_reply` generated column, so summing three of five was
+  // under-reporting the tab badge, the chime and the topbar pill by every email and web query.
   const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0)
-                      + (stats.whatsapp.awaiting || 0);
+                      + (stats.whatsapp.awaiting || 0) + (stats.email?.awaiting || 0)
+                      + (stats.web?.awaiting || 0);
 
   // Restore the sound preference (per browser, per agent) and reset the tab title on unmount.
   useEffect(() => {
@@ -1302,6 +1318,9 @@ export default function InboxPage() {
     background: 'var(--surface)', color: 'var(--t1)', cursor: 'pointer' };
 
   // Filters popover carries an "off default" dot so a hidden filter is never silently applied.
+  // Awaiting is NOT in `filtersDirty` and NOT cleared by "Clear filters": it lives on the bar as
+  // its own visible segment, not inside the popover, so it can never be a hidden filter — and an
+  // agent working the awaiting list must not lose it to a click that tidies the popover.
   const filtersDirty = sort !== 'recent' || !!priorityFilter || !!tagFilter || !!agentFilter || !!wabaFilter;
   function clearFilters() { setSort('recent'); setPriorityFilter(''); setTagFilter(''); setAgentFilter(''); setWabaFilter(''); }
 
@@ -1336,6 +1355,7 @@ export default function InboxPage() {
         agentFilter={agentFilter} setAgentFilter={setAgentFilter}
         agentCounts={agentCounts}
         wabaFilter={wabaFilter} setWabaFilter={setWabaFilter} waNumbers={waNumbers}
+        awaitingOnly={awaitingOnly} setAwaitingOnly={setAwaitingOnly} totalAwaiting={totalAwaiting}
         allTags={allTags} agents={agents}
         filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
         filtersDirty={filtersDirty} clearFilters={clearFilters} miniSelect={miniSelect}
@@ -2524,6 +2544,7 @@ function InboxCommandBar(props) {
     sort, setSort, priorityFilter, setPriorityFilter, tagFilter, setTagFilter,
     agentFilter, setAgentFilter, allTags, agents, agentCounts,
     wabaFilter, setWabaFilter, waNumbers,
+    awaitingOnly, setAwaitingOnly, totalAwaiting,
     filtersOpen, setFiltersOpen, filtersDirty, clearFilters, miniSelect, onExportCsv, exportCount,
     canManage, canReassign, selectMode, onToggleSelect, onCompose,
     listCollapsed, toggleListCollapse,
@@ -2656,6 +2677,22 @@ function InboxCommandBar(props) {
             style={seg(stateFilter === id, { fontSize: 10, fontWeight: 600, padding: '3px 7px',
               color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' })}>{lbl}</button>
         ))}
+        {/* ── Awaiting Reply (S344, Afshaan). A FILTER, deliberately — NOT the deleted AwaitingTile
+               and not a second control that sets `channel`. It sits beside the state segments
+               because it answers the same shape of question ("which slice of this list"), applies
+               on every channel segment and every assignment tab, and clears itself: replying is
+               what takes a thread out of the list, like Gmail's unread filter. The count is the
+               same all-channel figure as the topbar pill, both off `awaiting_reply`. */}
+        <button onClick={() => setAwaitingOnly(v => !v)} className={awaitingOnly ? undefined : 'ps-seg'}
+          title={awaitingOnly
+            ? 'Showing only conversations waiting on us — click to show all'
+            : 'Show only conversations where the customer spoke last and we owe a reply'}
+          style={seg(awaitingOnly, { fontSize: 10, fontWeight: 600, padding: '3px 7px',
+            color: awaitingOnly ? 'var(--accent)' : 'var(--t3)' })}>
+          <Reply size={11} />
+          Awaiting
+          {totalAwaiting > 0 && <span className="num" style={{ fontSize: 10, opacity: 0.7 }}>{totalAwaiting}</span>}
+        </button>
         {/* Read-only oversight: threads transferred to the Influencer team (leads/admin, S177).
             Icon-only now — the label moved into `title`. */}
         {canReassign && (

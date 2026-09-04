@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download, Phone, Users } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
-import { KpiCard, btnGhost } from '../../../components/kit/index.js';
+import { KpiCard, MultiSelect, btnGhost } from '../../../components/kit/index.js';
 // TrendChart is deliberately NOT re-exported from kit/index.js (it pulls ~110KB of recharts),
 // so it is imported directly — same as the analytics page does.
 import { TrendChart } from '../../../components/kit/Chart.js';
@@ -62,6 +62,14 @@ export default function ReportsPage() {
   const [businessHours, setBusinessHours] = useState(true);
   const [tags, setTags] = useState([]);
 
+  // Tickets-tab filters (Pruthvi #bugs 1788512544, S344). Reports had NO agent dimension while
+  // Analytics has had one, and Pitstop is used across departments — a team's numbers could not
+  // be isolated here at all. Both MULTI-select (string[]; [] = All), sent to getReports as a
+  // comma-separated list. Option lists come from the response, computed BEFORE the filters, so
+  // picking an agent does not collapse the channel list.
+  const [tkAgents, setTkAgents] = useState([]);
+  const [tkChannels, setTkChannels] = useState([]);
+
   useEffect(() => {
     if (!session || view !== 'agents' || tags.length) return;
     csopsGet('getTags', {}, session)
@@ -77,6 +85,10 @@ export default function ReportsPage() {
                  : view === 'agents' ? 'getAgentConversationReport'
                  : 'getReports';
     const args = { from: toIsoStart(from), to: toIsoEnd(to) };
+    if (view === 'tickets') {
+      if (tkAgents.length)   args.agent   = tkAgents.join(',');
+      if (tkChannels.length) args.channel = tkChannels.join(',');
+    }
     if (view === 'agents') {
       if (agChannel) args.channel = agChannel;
       if (agTag) args.tag_id = agTag;
@@ -104,7 +116,8 @@ export default function ReportsPage() {
         .catch(() => { if (alive) setWaitData(null); });
     }
     return () => { alive = false; };
-  }, [session, from, to, view, agChannel, agTag, businessHours]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, from, to, view, agChannel, agTag, businessHours, tkAgents, tkChannels]);
 
   function exportCsv() {
     // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
@@ -112,9 +125,21 @@ export default function ReportsPage() {
     if (!data) return;
     const lines = [];
     lines.push(`Pitstop Report,${from} to ${to}`);
+    // The cohort travels WITH the file, same reason the Agents CSV carries its basis and
+    // channel: a filtered export read next week must not be mistaken for the whole month.
+    // Read off the RESPONSE, never the live controls — `data` holds the previous payload
+    // until a refetch resolves, so the controls could stamp new filters onto old numbers.
+    const applied = data.applied_filters || {};
+    lines.push(`Agent,${(applied.agent || []).join(' · ') || 'All'}`);
+    lines.push(`Support channel,${(applied.channel || []).join(' · ') || 'All'}`);
     lines.push(`Tickets raised,${data.range.total_rows}`);
+    if (data.range.range_total != null && data.range.range_total !== data.range.total_rows) {
+      lines.push(`Tickets raised in range (before filters),${data.range.range_total}`);
+    }
     if (data.conversations) {
-      lines.push(`Conversations handled,${data.conversations.handled}`);
+      // `unfiltered` = the counts RPC is date-ranged only, so this figure is the WHOLE range
+      // even when the ticket numbers above are a one-agent slice. Say so in the file.
+      lines.push(`Conversations handled${data.conversations.unfiltered ? ' (whole range — not filtered)' : ''},${data.conversations.handled}`);
       lines.push(`Conversations in range (incl. outbound-only),${data.conversations.total}`);
     }
     lines.push('');
@@ -213,6 +238,16 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Options for the tickets-tab filters. A value that is selected but absent from the current
+  // response (the date range moved under it) is still listed — otherwise the control silently
+  // blanks to "All" while the report is still filtered by it.
+  function ticketOptions(key) {
+    const opts = data?.filter_options?.[key] || [];
+    const sel = key === 'agent' ? tkAgents : tkChannels;
+    const missing = sel.filter(v => !opts.includes(v));
+    return missing.length ? [...missing, ...opts] : opts;
+  }
+
   if (!canViewCosts && !loading) {
     return (
       <EmptyState
@@ -267,10 +302,20 @@ export default function ReportsPage() {
       )}
 
       {view === 'tickets' && (
-        loading || !data ? (
+        <>
+        {/* Tickets-tab filters. Rendered outside the loading/empty branches on purpose: a filter
+            that matches nothing must still be reachable to un-set. */}
+        <TicketFilters
+          agents={tkAgents} onAgents={setTkAgents} agentOptions={ticketOptions('agent')}
+          channels={tkChannels} onChannels={setTkChannels} channelOptions={ticketOptions('channel')}
+          rangeTotal={data?.range?.range_total} shownTotal={data?.range?.total_rows}
+        />
+        {loading || !data ? (
           <Spinner />
         ) : data.range.total_rows === 0 ? (
-          <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
+          (tkAgents.length || tkChannels.length)
+            ? <EmptyState icon={BarChart3} title="No tickets match these filters" message="Nothing in this date range matches every filter you picked. Clear one and try again." />
+            : <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
         ) : (
           <>
             {/* "Total cases" always counted TICKETS, which is why the two tiles Pruthvi
@@ -278,8 +323,15 @@ export default function ReportsPage() {
                 is, with conversations handled beside it — not every conversation
                 becomes a ticket (shipment / general queries often don't). */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+              {/* ⚠️ The conversation counts RPC is date-ranged only — it takes no agent or channel
+                  argument — so under a filter this tile is the WHOLE range while every tile beside
+                  it is the slice. The sub-label says so rather than letting it read as the slice. */}
               <KpiCard label="Conversations handled" value={data.conversations ? data.conversations.handled.toLocaleString() : '—'}
-                       sub={data.conversations ? `of ${data.conversations.total.toLocaleString()} incl. outbound` : 'unavailable'}
+                       sub={data.conversations
+                         ? (data.conversations.unfiltered
+                             ? `of ${data.conversations.total.toLocaleString()} — whole range, unfiltered`
+                             : `of ${data.conversations.total.toLocaleString()} incl. outbound`)
+                         : 'unavailable'}
                        tone="var(--ok-fg)" size={25} />
               <KpiCard label="Tickets raised"     value={data.range.total_rows.toLocaleString()}       sub={`${from} → ${to}`} tone="var(--accent)"  size={25} />
               <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}       sub="logistics in"    tone="var(--warn-fg)" size={25} />
@@ -304,7 +356,8 @@ export default function ReportsPage() {
               <BreakdownTable rows={data.by_agent} variant="agent" />
             </Panel>
           </>
-        )
+        )}
+        </>
       )}
 
       {view === 'calls' && (
@@ -333,6 +386,33 @@ const CHANNEL_OPTS = [
   { v: 'web',       l: 'Web' },
   { v: 'messenger', l: 'Messenger' },
 ];
+
+// Tickets tab — agent + support-channel cohort (Pruthvi #bugs 1788512544, S344). Both
+// multi-select: Pitstop is used across departments, so "these three agents" is the normal
+// question and one-at-a-time cannot answer it. The options are SERVER-side lists computed
+// before the filters, not a hardcoded list like CHANNEL_OPTS below — the support channel is
+// derived (calls fold into "Calls"), so only the worker can enumerate it honestly.
+function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, channelOptions, rangeTotal, shownTotal }) {
+  const active = agents.length + channels.length;
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 'var(--gap)' }}>
+      <MultiSelect label="Agent"   value={agents}   options={agentOptions}   onChange={onAgents} />
+      <MultiSelect label="Channel" value={channels} options={channelOptions} onChange={onChannels} title="Filter by the support channel the ticket came in on" />
+      {active > 0 && (
+        <>
+          <button onClick={() => { onAgents([]); onChannels([]); }} style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }}>
+            Clear filter{active > 1 ? 's' : ''}
+          </button>
+          {rangeTotal != null && (
+            <span style={{ fontSize: 12, color: 'var(--t3)' }}>
+              <strong style={{ color: 'var(--t1)' }}>{shownTotal}</strong> of {rangeTotal} tickets raised in range
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 function AgentFilters({ channel, onChannel, tag, onTag, tags, businessHours, onBusinessHours }) {
   const sel = {
