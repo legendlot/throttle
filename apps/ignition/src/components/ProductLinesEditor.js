@@ -203,7 +203,19 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
       if (l.product_ref !== code) return l;
       const next = { ...l, list_price_inr: list };
       // uncosted variant — leave the field manual rather than write 0
-      if (cogs != null) { next.goodies_cost = cogs; next.cogs_inr = cogs; }
+      if (cogs != null) {
+        // cogs_inr is a pick-time SNAPSHOT of the cost basis and always tracks the pick.
+        // goodies_cost is the USER'S number and must survive one. The wasAutoFilled test
+        // above already protects the clear path; without the same guard here the write
+        // path undid it a moment later, once the fetch resolved — re-picking a product
+        // silently replaced a hand-typed figure with COGS (11 live/delivered deals lost
+        // ₹441–550 → ₹65–80 on 2026-09-04, ~85% down, straight into total_cost → CPM → ROAS).
+        // Test the CURRENT row, not `prev`: if wasAutoFilled the setRow above already
+        // blanked it, and if the user typed while the fetch was in flight that typing wins.
+        const gc = l.goodies_cost;
+        if (gc === '' || gc == null) next.goodies_cost = cogs;
+        next.cogs_inr = cogs;
+      }
       return next;
     }));
   }
