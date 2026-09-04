@@ -968,8 +968,9 @@ async function loadFulfilment(orders) {
       // sum what the manifest PLANNED, so a shipment that left short still counted every planned
       // unit as shipped and the ORDER read "Fully fulfilled" while its own line table showed
       // pending units — SO-0520: planned 30, packed 24, two lines at 0/3, header green. Measured
-      // before the change: 35 of 119 closed requests carried a real packed shortfall and were
-      // mislabelled fully fulfilled. `withLineFulfilment` below already summed packed_qty; the
+      // 2026-09-04 before the change: 35 of the 119 closed requests WITH shipped units (130 closed
+      // in total) carried a real packed shortfall and were mislabelled fully fulfilled; 0 flipped
+      // to not_fulfilled. `withLineFulfilment` below already summed packed_qty; the
       // header and the lines now agree.
       const lnR = await queryPublic('dispatch_shipment_lines',
         `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,packed_qty`);

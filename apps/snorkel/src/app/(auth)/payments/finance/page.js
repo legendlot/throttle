@@ -67,9 +67,12 @@ export default function FinanceQueuePage() {
     setBusy(r.id);
     try {
       const s = await getValidSession();
-      const res = await workerFetch('markPaymentPaid', { data: {
+      const raw = await workerFetch('markPaymentPaid', { data: {
         ids: [r.id], payment_ref: (refs[r.id] || '').trim() || null, paid_amount: r.amount_to_pay,
       } }, s);
+      // snorkelops wraps replies as `{ ok, data }` — read the payload. Off the wrapper, `paid` was
+      // undefined and EVERY successful payment toasted "It had already moved" (hostile review S345).
+      const res = raw?.data || raw;
       if (!res.paid) {
         showToast('It had already moved — refreshing', 'error');
       } else {

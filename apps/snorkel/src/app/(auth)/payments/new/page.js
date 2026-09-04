@@ -80,6 +80,11 @@ export default function NewPaymentRequestPage() {
       return showToast(`A PO is required for ${cat.label}`, 'error');
     if (!files.length) return showToast('Attach the invoice — a photo is fine', 'error');
     if (files.some(x => x.error)) return showToast('Remove the oversized file first', 'error');
+    // The `payment-docs` bucket only accepts these (storage.buckets.allowed_mime_types). Refuse
+    // BEFORE the request is created, so a GIF/BMP/untyped file cannot mint a docless PAY-NNNN.
+    const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'application/pdf']);
+    const bad = files.find(x => !ALLOWED.has(String(x.file?.type || '')));
+    if (bad) return showToast(`${bad.file.name}: only PNG, JPEG, WEBP, HEIC or PDF can be attached`, 'error');
 
     setSaving(true);
     try {
@@ -99,23 +104,36 @@ export default function NewPaymentRequestPage() {
 
       // Upload after the request exists so documents are keyed to it, never to a draft that
       // may never be submitted.
-      for (const item of files) {
-        const upRaw = await workerFetch('createPaymentDocUploadUrl', { data: {
-          request_id: res.id, file_name: item.file.name, doc_kind: 'invoice',
-        } }, s);
-        const up = upRaw?.data || upRaw;   // same `{ ok, data }` wrapper as above
-        if (!up?.token || !up?.storage_path) throw new Error(`Could not prepare the upload for ${item.file.name}`);
-        // Same path as every other upload in the fleet (assets, gate passes, Ignition proofs…):
-        // the Supabase client + the signed token. A raw `fetch(signed_url, PUT)` sat here until
-        // 2026-09-04 and never once succeeded — the URL the worker handed back was relative, so
-        // the browser PUT it to the app's own origin (SIDDU, #bugs `1788515110`).
-        const put = await supabase.storage.from(up.bucket || 'payment-docs')
-          .uploadToSignedUrl(up.storage_path, up.token, item.file, { contentType: item.file.type || 'application/octet-stream' });
-        if (put.error) throw new Error(`Upload failed for ${item.file.name}: ${put.error.message || 'storage rejected it'}`);
-        await workerFetch('recordPaymentDocument', { data: {
-          request_id: res.id, storage_path: up.storage_path, file_name: item.file.name,
-          mime: item.file.type, size_bytes: item.file.size, doc_kind: 'invoice',
-        } }, s);
+      // ⚠️ From here the request EXISTS. A failed upload must never look like a failed request —
+      // that shape (error toast, form still on screen, PAY-NNNN already minted) is what produced
+      // the PAY-0011/12/13 and PAY-0016/17/18 triplicates: the requester re-submitted. So an
+      // upload failure is reported AS an upload failure, with the request number, and we still
+      // leave the form; the invoice can be attached from the request's page.
+      let uploadFailed = null;
+      try {
+        for (const item of files) {
+          const upRaw = await workerFetch('createPaymentDocUploadUrl', { data: {
+            request_id: res.id, file_name: item.file.name, doc_kind: 'invoice',
+          } }, s);
+          const up = upRaw?.data || upRaw;   // same `{ ok, data }` wrapper as above
+          if (!up?.token || !up?.storage_path) throw new Error(`Could not prepare the upload for ${item.file.name}`);
+          // Same path as every other upload in the fleet (assets, gate passes, Ignition proofs…):
+          // the Supabase client + the signed token. A raw `fetch(signed_url, PUT)` sat here until
+          // 2026-09-04 and never once succeeded — the URL the worker handed back was relative, so
+          // the browser PUT it to the app's own origin (SIDDU, #bugs `1788515110`).
+          const put = await supabase.storage.from(up.bucket || 'payment-docs')
+            .uploadToSignedUrl(up.storage_path, up.token, item.file, { contentType: item.file.type || 'application/octet-stream' });
+          if (put.error) throw new Error(`Upload failed for ${item.file.name}: ${put.error.message || 'storage rejected it'}`);
+          await workerFetch('recordPaymentDocument', { data: {
+            request_id: res.id, storage_path: up.storage_path, file_name: item.file.name,
+            mime: item.file.type, size_bytes: item.file.size, doc_kind: 'invoice',
+          } }, s);
+        }
+      } catch (e) { uploadFailed = e?.message || 'upload failed'; }
+      if (uploadFailed) {
+        showToast(`${res.request_no} was raised, but the invoice did not attach (${uploadFailed}). Open it under My Requests and attach it there — do NOT raise it again.`, 'error');
+        router.push('/payments');
+        return;
       }
 
       // The request is ALWAYS raised — these are advisories shown after the fact, never blocks.

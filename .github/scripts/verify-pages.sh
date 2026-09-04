@@ -157,8 +157,9 @@ fail()  { echo "::error title=Pages::$*"   >&2; }
 # Verified 2026-09-03: `pages/builds[].commit` is the full gh-pages sha and matches
 # `commits/gh-pages.sha` exactly.
 EXPECTED_SHA=""
-if [ -n "$GH_TOKEN" ]; then
-  EXPECTED_SHA="$(curl -sS \
+# Resolve the target's gh-pages HEAD. Echoes the sha, or "" on any failure.
+gh_pages_sha() {
+  curl -sS \
     -H "Authorization: Bearer ${GH_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -169,7 +170,10 @@ try:
     print(json.load(sys.stdin).get("sha") or "")
 except Exception:
     print("")
-' 2>/dev/null)"
+' 2>/dev/null
+}
+if [ -n "$GH_TOKEN" ]; then
+  EXPECTED_SHA="$(gh_pages_sha)"
   # ⚠️ The parser above used to be a one-liner whose second line was INDENTED — an
   # IndentationError that stderr suppression hid completely. EXPECTED_SHA came back empty on
   # EVERY run from 2026-09-03 to 2026-09-04, so the sha-pinned path never ran once, every workflow
@@ -184,8 +188,11 @@ elif [ -n "$EXPECTED_SHA" ]; then
 else
   # Never harden a monitoring gap into an outage: if we cannot read the sha we fall back to the
   # old newest-build behaviour, but say plainly that the race is back for this run.
-  warn "${TARGET}: could not resolve the gh-pages HEAD sha; falling back to the NEWEST build, which can race (a previous green build may be reported as ours). Give DEPLOY_TOKEN contents access to remove this."
-  summary "⚠️ **${TARGET}** — could not resolve the gh-pages sha, so this run fell back to the NEWEST Pages build and **the race is back for this run**. \`DEPLOY_TOKEN\` needs contents read on the target repo."
+  # ⚠️ Do NOT name the token as the cause here — the 2026-09-03/04 instance of this warning was a
+  # parse bug in this file, and the wording sent a lane after the credential (S345). An empty
+  # sha means the API call or the parse failed; reproduce the call with a known-good token first.
+  warn "${TARGET}: could not resolve the gh-pages HEAD sha (API call or parse failed — reproduce \`gh api repos/${TARGET}/commits/gh-pages\` with a known-good token before blaming DEPLOY_TOKEN); falling back to the NEWEST build, which can race (a previous green build may be reported as ours)."
+  summary "⚠️ **${TARGET}** — could not resolve the gh-pages sha, so this run fell back to the NEWEST Pages build and **the race is back for this run**. Reproduce the \`commits/gh-pages\` call with a known-good token before treating this as a \`DEPLOY_TOKEN\` scope gap."
 fi
 
 # Echoes "<http_code>|<status>|<error_message>"
@@ -337,6 +344,20 @@ case "$result" in
     for backoff in "${RETRY_BACKOFFS[@]}"; do
       attempt=$((attempt + 1))
       warn "${TARGET}: re-requesting the Pages build (attempt ${attempt}/${#RETRY_BACKOFFS[@]}; this is the fix applied by hand on 2026-07-02 and 2026-07-23)."
+      # ⚠️ A re-request builds the target's CURRENT gh-pages HEAD, not the sha we pushed. When a
+      # later deploy has already landed on gh-pages (12 workflows fan out on a shared-file change),
+      # every rebuilt build carries the NEWER sha, the sha-pinned probe can never match it, and
+      # this loop ends in a false "LIVE IS STALE" while live is in fact newer than our change —
+      # 4 of 12 runs for c1a56a6e failed exactly that way (2026-09-04, hostile review S345). A
+      # newer gh-pages HEAD SUPERSEDES ours: it contains our push, so watch it instead.
+      if [ -n "$EXPECTED_SHA" ]; then
+        now_sha="$(gh_pages_sha)"
+        if [ -n "$now_sha" ] && [ "$now_sha" != "$EXPECTED_SHA" ]; then
+          note "${TARGET}: gh-pages has moved on from ${EXPECTED_SHA:0:8} to ${now_sha:0:8} (a later deploy landed) — watching the newer commit, which supersedes ours."
+          summary "ℹ️ **${TARGET}** — a later deploy landed on gh-pages (\`${now_sha:0:8}\`) while ours (\`${EXPECTED_SHA:0:8}\`) was being rebuilt; verification switched to the newer commit."
+          EXPECTED_SHA="$now_sha"
+        fi
+      fi
       rebuild
       # Waiting BEFORE looking is the whole fix — see RETRY_BACKOFFS above. A re-request
       # checked seconds later just re-observes the same bad window and wastes the attempt.
