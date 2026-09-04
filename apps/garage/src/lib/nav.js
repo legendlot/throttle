@@ -14,6 +14,7 @@ import {
   ClipboardCheck, ArrowUpDown, PackageCheck,
   Gift, Truck, Tags,
   Layers, Settings,
+  Smartphone,
 } from 'lucide-react';
 
 // ════════════════════════════════════════════════════════════════════
@@ -101,6 +102,10 @@ export const GARAGE_NAV_DRAWER = {
     { id: 'library-downloads', label: 'Downloads',      route: '/library/downloads', icon: Download,  desc: 'Exports & sheets' },
     { id: 'procurement-pos',   label: 'Purchase Orders', route: '/procurement/pos',  icon: FileText,  desc: 'Read-only PO reference', gate: (p) => hasPermission(p, 'procurement_view') },
     { id: 'users',             label: 'Users',          route: '/users',             icon: Users,     desc: 'Accounts & roles', gate: (p) => hasPermission(p, 'users_view') || hasPermission(p, 'users_manage') },
+    // ⚠️ Gated on users_manage ALONE, unlike Users above — the worker's getDeviceHw/setDeviceHw
+    // enforce users_manage and `users_view` has ZERO readers in the worker, so gating this on
+    // users_view would show the item to someone who then gets a 403 on every request.
+    { id: 'devices',           label: 'Device Register', route: '/devices',          icon: Smartphone, desc: 'Handsets running the Scanner app', gate: (p) => hasPermission(p, 'users_manage') },
     { id: 'manual',            label: 'System Manual',  route: '/manual',            icon: BookOpen,  desc: 'Operations manual' },
   ],
 };
