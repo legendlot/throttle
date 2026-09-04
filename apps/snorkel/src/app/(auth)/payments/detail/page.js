@@ -23,6 +23,8 @@ export default function PaymentRequestDetail() {
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '' });
   const [proof, setProof] = useState([]);
+  const [invOpen, setInvOpen] = useState(false);
+  const [inv, setInv] = useState([]);
   const [can, setCan] = useState({});
   const firstLoadDone = useRef(false);
 
@@ -65,6 +67,40 @@ export default function PaymentRequestDetail() {
     } catch (e) { showToast(e.message || 'Could not open', 'error'); }
   }
 
+  // Upload one file to `payment-docs` and record it against this request. Extracted from
+  // confirmPaid so the invoice door and the payment-proof door cannot drift apart — both
+  // must keep checking the upload RESULT, since the bug that lost every document from
+  // 2026-08-26 to 2026-09-04 was a failed upload recording a row pointing at nothing.
+  async function uploadPaymentDoc(item, docKind, s) {
+    const upRaw = await workerFetch('createPaymentDocUploadUrl',
+      { data: { request_id: Number(id), file_name: item.file.name, doc_kind: docKind } }, s);
+    const up = upRaw?.data || upRaw;   // snorkelops wraps replies as `{ ok, data }`
+    if (!up?.token || !up?.storage_path) throw new Error(`Could not prepare the upload for ${item.file.name}`);
+    const put = await supabase.storage.from(up.bucket || 'payment-docs')
+      .uploadToSignedUrl(up.storage_path, up.token, item.file, { contentType: item.file.type || 'application/octet-stream' });
+    if (put.error) throw new Error(`Upload failed for ${item.file.name}: ${put.error.message || 'storage rejected it'}`);
+    await workerFetch('recordPaymentDocument', { data: {
+      request_id: Number(id), storage_path: up.storage_path, file_name: item.file.name,
+      mime: item.file.type, size_bytes: item.file.size, doc_kind: docKind,
+    } }, s);
+  }
+
+  // The door back in. Without it a requester whose invoice was lost had only one move —
+  // cancel and re-raise — which is why PAY-0011/12/13 and PAY-0016/17/18 are triplicates
+  // of one invoice each (measured 2026-09-04).
+  async function attachInvoices() {
+    setBusy(true);
+    try {
+      const s = await getValidSession();
+      for (const item of inv) await uploadPaymentDoc(item, 'invoice', s);
+      setInvOpen(false); setInv([]);
+      showToast(inv.length > 1 ? `${inv.length} invoices attached` : 'Invoice attached', 'success');
+      await load();
+    } catch (e) {
+      showToast(e.message || 'Failed', 'error');
+    } finally { setBusy(false); }
+  }
+
   async function confirmPaid() {
     setBusy(true);
     try {
@@ -75,22 +111,7 @@ export default function PaymentRequestDetail() {
         paid_amount: pay.paid_amount === '' ? null : Number(pay.paid_amount),
       } }, s);
       // proof attaches to the request, which is what removes the "is it done?" round-trip
-      for (const item of proof) {
-        const upRaw = await workerFetch('createPaymentDocUploadUrl',
-          { data: { request_id: Number(id), file_name: item.file.name, doc_kind: 'payment_proof' } }, s);
-        const up = upRaw?.data || upRaw;   // snorkelops wraps replies as `{ ok, data }`
-        if (!up?.token || !up?.storage_path) throw new Error(`Could not prepare the upload for ${item.file.name}`);
-        // Fleet-standard upload (Supabase client + signed token). The raw PUT this replaced never
-        // checked its result, so a failed proof upload still recorded a document row pointing at
-        // nothing — Finance would have seen "proof attached" with no file behind it.
-        const put = await supabase.storage.from(up.bucket || 'payment-docs')
-          .uploadToSignedUrl(up.storage_path, up.token, item.file, { contentType: item.file.type || 'application/octet-stream' });
-        if (put.error) throw new Error(`Upload failed for ${item.file.name}: ${put.error.message || 'storage rejected it'}`);
-        await workerFetch('recordPaymentDocument', { data: {
-          request_id: Number(id), storage_path: up.storage_path, file_name: item.file.name,
-          mime: item.file.type, size_bytes: item.file.size, doc_kind: 'payment_proof',
-        } }, s);
-      }
+      for (const item of proof) await uploadPaymentDoc(item, 'payment_proof', s);
       setPayOpen(false); setProof([]);
       showToast('Marked paid', 'success');
       await load();
@@ -103,6 +124,10 @@ export default function PaymentRequestDetail() {
   if (!d?.request) return <PageHead title="Not found" sub="This request does not exist, or is not yours." />;
 
   const r = d.request;
+  // The requester owns the invoice; finance needs it to pay. A dead request gets no door —
+  // attaching to a cancelled/rejected row would just re-create the confusion it was closed for.
+  const canAttachInvoice = !['cancelled', 'rejected'].includes(r.status)
+    && (r.requested_by_user_id === userId || !!can.execute);
   const alreadyRequested = (d.related || []).reduce((a, x) => a + (Number(x.amount_to_pay) || 0), 0);
   const Row = ({ k, v }) => (
     <div style={{ display: 'flex', gap: 12, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
@@ -166,13 +191,16 @@ export default function PaymentRequestDetail() {
         )}
 
         <Panel title="Documents" count={d.documents?.length || 0}>
-          <div style={{ padding: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ padding: 16, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             {(d.documents || []).length === 0 && <span style={{ color: 'var(--t2)' }}>None attached.</span>}
             {(d.documents || []).map(doc => (
               <Btn key={doc.id} onClick={() => openDoc(doc.id)}>
                 {doc.doc_kind === 'payment_proof' ? '🧾 ' : '📄 '}{doc.file_name || 'file'}
               </Btn>
             ))}
+            {canAttachInvoice && (
+              <Btn kind="primary" disabled={busy} onClick={() => setInvOpen(true)}>+ Attach invoice</Btn>
+            )}
           </div>
         </Panel>
 
@@ -227,6 +255,23 @@ export default function PaymentRequestDetail() {
                   setRejectOpen(false); setRejectNote('');
                 }}>Reject</Btn>
               <Btn onClick={() => setRejectOpen(false)}>Cancel</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {invOpen && (
+        <Modal onClose={() => { if (!busy) { setInvOpen(false); setInv([]); } }} title="Attach invoice">
+          <div style={{ padding: 16, maxWidth: 460 }}>
+            <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
+              Attaches to {r.request_no} — no need to cancel and raise it again.
+            </p>
+            <InvoiceUpload files={inv} onChange={setInv} disabled={busy} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <Btn kind="primary" disabled={busy || !inv.length} onClick={attachInvoices}>
+                {busy ? 'Uploading…' : 'Attach'}
+              </Btn>
+              <Btn disabled={busy} onClick={() => { setInvOpen(false); setInv([]); }}>Cancel</Btn>
             </div>
           </div>
         </Modal>
