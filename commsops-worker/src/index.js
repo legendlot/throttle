@@ -23,6 +23,7 @@ const SUB = require('./subscribe.js');
 const SHOPFLO = require('./shopflo-webhooks.js');
 const CF = require('./cashfree.js');
 const CFWH = require('./cashfree-webhooks.js');
+const LCWH = require('./limechat-webhooks.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
@@ -3258,6 +3259,17 @@ export default {
     // payload to comms.webhook_captures until the mapper is written off a real sample.
     if (url.pathname === '/webhooks/shopflo' && request.method === 'POST') {
       const r = await SHOPFLO.handleShopfloWebhook(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // LimeChat voice-bot call outcomes (Phase 0 of the voice channel — CART ABANDONMENT, not
+    // COD). Token-guarded (LimeChat gives us no signature); inert 503 until
+    // LIMECHAT_WEBHOOK_TOKEN is set, so the URL can be handed to Pruthvi before the token
+    // exists. CAPTURE-FIRST BY DESIGN: the payload shape is still unknown (Pruthvi is building
+    // the flow, and LimeChat's disposition is fully custom), so every authenticated request is
+    // stored raw in comms.webhook_captures and ack'd 200 — mapped or not. Never 500: a shape we
+    // did not anticipate must not make the vendor retry-storm. See limechat-webhooks.js.
+    if (url.pathname === '/webhooks/limechat' && request.method === 'POST') {
+      const r = await LCWH.handleLimechatWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
     // TrustSignal SMS delivery receipts. There is NO signature on these callbacks, so the
