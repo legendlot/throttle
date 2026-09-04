@@ -8,7 +8,21 @@
 </div>
 
 <h2 class="sec">The layout</h2>
-<p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, <strong>Influencer</strong>, <strong>Payments</strong>, Costs (with the rolled-up <strong>total</strong> in orange), Logistics, Post-live and Performance (views, orders, ROAS), followed by Notes and a History log.</p>
+<p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, a <strong>Complete</strong> or <strong>Incomplete</strong> pill once the deal is Live, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, <strong>Influencer</strong>, <strong>Payments</strong>, Costs (with the rolled-up <strong>total</strong> in orange), Logistics, Post-live and Performance (views, orders, ROAS), followed by Notes and a History log.</p>
+
+<h2 class="sec">Complete is a derived flag, not a stage</h2>
+<p><strong>Live is still the final stage</strong> &mdash; nothing about a deal moves when it becomes Complete. Complete is worked out, not clicked: a deal reads Complete once it is at stage <strong>Live</strong> and four numbers have all been entered &mdash; <strong>Views</strong> (greater than zero), <strong>Likes</strong>, <strong>Followers gained</strong>, and <strong>Cost</strong> (a total cost greater than zero). The pill sits next to the stage and deal-type badges in the header: a green <strong>Complete</strong> pill when all four are in, or a muted <strong>Incomplete &middot; missing: &hellip;</strong> pill naming exactly which of the four are still blank. Nothing shows before the deal reaches Live &mdash; an unposted deal has no numbers to be missing yet.</p>
+<p>Entering the missing numbers in the <strong>Performance</strong> card flips the pill immediately, with no reload, because it is read straight from the same deal data the page already holds.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Why a flag, not a stage</div>
+  <p>Reann originally asked for a Complete stage. It was built as a derived flag instead so the stage vocabulary does not grow, and so nothing has to be clicked to mark a deal done &mdash; entering the numbers <em>is</em> marking it done.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Every live deal currently reads Incomplete</div>
+  <p><strong>Followers gained</strong> has never been entered on any deal, so until that number starts being filled in, every Live deal will show Incomplete regardless of how many of the other three numbers are in.</p>
+</div>
 
 <div class="callout warn">
   <div class="c-title">&#9888; A live deal missing Cost or Views gets flagged</div>

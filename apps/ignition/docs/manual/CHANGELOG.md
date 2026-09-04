@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.10.0] - 2026-09-04
+### Changed
+- Engagement detail: documented "Complete" as a derived flag, not a stage. A Live deal reads
+  Complete once Views, Likes, Followers gained and Cost are all entered; the header shows a
+  green Complete pill or a muted Incomplete pill naming exactly which numbers are missing.
+  Live remains the final stage; nothing moves when a deal becomes Complete.
+- Engagements: documented the green checkmark after the engagement number for Complete deals,
+  and the new Completion filter (All / Complete / Not complete) beside the date filter.
+
 ## [1.8.0] - 2026-09-04
 ### Changed
 - New Deal / Product Lines: the product field is pick-only now (catalogue only, no free
