@@ -163,9 +163,18 @@ if [ -n "$GH_TOKEN" ]; then
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/repos/${TARGET}/commits/gh-pages" 2>/dev/null \
-    | python3 -c 'import sys,json
-  try: print(json.load(sys.stdin).get("sha") or "")
-  except Exception: print("")' 2>/dev/null)"
+    | python3 -c '
+import sys, json
+try:
+    print(json.load(sys.stdin).get("sha") or "")
+except Exception:
+    print("")
+' 2>/dev/null)"
+  # ⚠️ The parser above used to be a one-liner whose second line was INDENTED — an
+  # IndentationError that stderr suppression hid completely. EXPECTED_SHA came back empty on
+  # EVERY run from 2026-09-03 to 2026-09-04, so the sha-pinned path never ran once, every workflow
+  # fell back to the newest-build race, and the warning below blamed DEPLOY_TOKEN for a bug in
+  # this file (S345, backlog [core]). The token was never tested. Keep the block form.
 fi
 
 if [ -z "$GH_TOKEN" ]; then
@@ -273,8 +282,11 @@ settle() {
                sleep "$SLEEP"; continue ;;
     esac
   done
-  warn "${TARGET}: no COMPLETED Pages build for ${EXPECTED_SHA:0:8} within $((budget * SLEEP))s. Not failing the deploy (a monitoring gap must not become an outage) — but LIVE MAY BE STALE: check https://github.com/${TARGET}/deployments"
-  summary "⚠️ **${TARGET}** — no completed Pages build for \`${EXPECTED_SHA:0:8}\` within $((budget * SLEEP))s. This is the 2026-07-23 shape (gh-pages updated, Pages never built it); the tokenless live check runs next. https://github.com/${TARGET}/deployments"
+  # Name what we were waiting for. With no resolved sha the wait was for the NEWEST build, and
+  # an empty backtick in the summary ("build for ``") reads as a missing sha, not as that.
+  local which="${EXPECTED_SHA:0:8}"; [ -z "$which" ] && which="the newest build (sha unresolved)"
+  warn "${TARGET}: no COMPLETED Pages build for ${which} within $((budget * SLEEP))s. Not failing the deploy (a monitoring gap must not become an outage) — but LIVE MAY BE STALE: check https://github.com/${TARGET}/deployments"
+  summary "⚠️ **${TARGET}** — no completed Pages build for \`${which}\` within $((budget * SLEEP))s. This is the 2026-07-23 shape (gh-pages updated, Pages never built it); the tokenless live check runs next. https://github.com/${TARGET}/deployments"
   echo "timeout"
 }
 
