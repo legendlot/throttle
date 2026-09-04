@@ -3390,8 +3390,11 @@ export default {
     // own code. Read-from-Shopify + upsert-into-comms only; it sends nothing.
     // ⚠️ `maxPages` is capped server-side — an unbounded manual pull could page all ~92k
     // customers and burn the Shopify API budget the hourly sync depends on.
+    // Its OWN token, not WA_SYNC_TOKEN. That one is held by several callers, so scoping this
+    // route to it would widen what a leak of it reaches — and rotating it would mean
+    // coordinating every holder (CORE.md). A dedicated secret costs one `wrangler secret put`.
     if (url.pathname === '/internal/shopify-tag-pull' && request.method === 'POST') {
-      const want = env.WA_SYNC_TOKEN;
+      const want = env.SHOPIFY_SYNC_TOKEN;
       const a = request.headers.get('Authorization') || '';
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return err('unauthorised', 401);
