@@ -617,10 +617,10 @@ function deriveFulfilment(request, shipments) {
 // with no way to learn that the three outstanding items were Flare LE Race Black, Knox
 // Explorer Black and Knox Adventure Red.
 //
-// ⚠️ `packed_qty`, NOT `target_qty`. The order-level roll-up above sums target_qty, which is
-// what the manifest PLANNED — fine for "is there a shipment", wrong for "what actually went".
-// A line packed short would report as fully sent, which is precisely the follow-up this is
-// meant to support.
+// ⚠️ `packed_qty`, NOT `target_qty` — what actually went, not what the manifest PLANNED. A line
+// packed short would otherwise report as fully sent, which is precisely the follow-up this is
+// meant to support. (The order-level roll-up in loadFulfilment summed target_qty until
+// 2026-09-04 and disagreed with this table on the same screen — fixed there, same rule.)
 // ⚠️ Cancelled shipments are excluded; a cancelled shipment sent nothing.
 // ⚠️ Matched on product+model+colour because dispatch lines carry no sales-order line id.
 // Colour/model are compared as ''-normalised strings so a NULL on one side does not silently
@@ -716,10 +716,17 @@ async function loadFulfilment(orders) {
     shipments = shR.ok ? shR.data : [];
     const shIds = shipments.map(s => s.id);
     if (shIds.length) {
+      // ⚠️ `packed_qty`, NOT `target_qty` (Ram, #bugs 2026-09-04 `1788500532`). This used to
+      // sum what the manifest PLANNED, so a shipment that left short still counted every planned
+      // unit as shipped and the ORDER read "Fully fulfilled" while its own line table showed
+      // pending units — SO-0520: planned 30, packed 24, two lines at 0/3, header green. Measured
+      // before the change: 35 of 119 closed requests carried a real packed shortfall and were
+      // mislabelled fully fulfilled. `withLineFulfilment` below already summed packed_qty; the
+      // header and the lines now agree.
       const lnR = await queryPublic('dispatch_shipment_lines',
-        `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,target_qty`);
+        `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,packed_qty`);
       const byShip = {};
-      (lnR.ok ? lnR.data : []).forEach(l => { byShip[l.shipment_id] = (byShip[l.shipment_id] || 0) + (Math.round(Number(l.target_qty)) || 0); });
+      (lnR.ok ? lnR.data : []).forEach(l => { byShip[l.shipment_id] = (byShip[l.shipment_id] || 0) + (Math.round(Number(l.packed_qty)) || 0); });
       shipments.forEach(s => { s._shipped_units = byShip[s.id] || 0; });
     }
   }
