@@ -38,6 +38,11 @@ export default function FinanceQueuePage() {
   const [busy, setBusy] = useState(null);
   const [refs, setRefs] = useState({});
   const [onlyUrgent, setOnlyUrgent] = useState(false);
+  // ⚠️ getFinanceQueue admits execute OR super_admin, but markPaymentPaid requires EXECUTE alone
+  // (snorkelops:3932). So a super admin could open this queue and click a Mark-paid button that
+  // was certain to 403. Paying is finance's — Mahesh and Priya (Afshaan, 2026-09-04) — so super
+  // admins get the queue read-only rather than a button that lies.
+  const [canExecute, setCanExecute] = useState(false);
   const firstLoadDone = useRef(false);
 
   const load = useCallback(async () => {
@@ -45,7 +50,11 @@ export default function FinanceQueuePage() {
     if (!firstLoadDone.current) setLoading(true);
     try {
       const s = await getValidSession();
-      const data = await garageFetch('getFinanceQueue', {}, s);
+      const [data, boot] = await Promise.all([
+        garageFetch('getFinanceQueue', {}, s),
+        garageFetch('getPaymentBootstrap', {}, s),
+      ]);
+      setCanExecute(!!boot?.can?.execute);
       setD({ requests: data?.requests || [], banks: data?.banks || {}, documents: data?.documents || {} });
       // ⚠️ Sharpest case of the truncation class: the money total below is a SUM. A cut list
       // under-reports what finance actually owes, and a short total reads as authoritative.
@@ -207,15 +216,21 @@ export default function FinanceQueuePage() {
                 <Btn onClick={() => router.push(`/payments/detail?id=${r.id}`)}>Open</Btn>
               </div>
 
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <input style={{ ...inp, flex: 1, minWidth: 180 }}
-                  placeholder="UTR / reference"
-                  value={refs[r.id] || ''}
-                  onChange={e => setRefs(p => ({ ...p, [r.id]: e.target.value }))} />
-                <Btn kind="primary" disabled={busy === r.id} onClick={() => pay(r)}>
-                  {busy === r.id ? 'Saving…' : 'Mark paid'}
-                </Btn>
-              </div>
+              {canExecute ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input style={{ ...inp, flex: 1, minWidth: 180 }}
+                    placeholder="UTR / reference"
+                    value={refs[r.id] || ''}
+                    onChange={e => setRefs(p => ({ ...p, [r.id]: e.target.value }))} />
+                  <Btn kind="primary" disabled={busy === r.id} onClick={() => pay(r)}>
+                    {busy === r.id ? 'Saving…' : 'Mark paid'}
+                  </Btn>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--t2)' }}>
+                  View only — payments are marked by finance.
+                </div>
+              )}
             </div>
           </Panel>
         );

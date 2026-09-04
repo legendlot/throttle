@@ -3908,7 +3908,13 @@ export default {
           }
 
           case 'rejectPaymentRequest': {
-            if (!canPayApprove(P)) return err('No permission', 403);
+            // Rejecting a bad invoice is FINANCE's daily call, not an escalation to the approver
+            // (Afshaan, 2026-09-04: finance marks a request paid, held or rejected). Gating this
+            // on canPayApprove alone left it with Vinay only, while the people who actually read
+            // the invoice could not act on it.
+            if (!canPayApprove(P) && !canPayExecute(P) && !canPaySuperAdmin(P)) {
+              return err('No permission to reject', 403);
+            }
             const d = body.data || {};
             if (!d.id) return err('id required');
             if (!d.rejection_note) return err('A reason is required to reject');
