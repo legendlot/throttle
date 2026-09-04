@@ -10,16 +10,19 @@ import { KpiCard, btnGhost } from '../../../components/kit/index.js';
 import { TrendChart } from '../../../components/kit/Chart.js';
 import { dateStr } from '@throttle/domain';
 
-function toIsoStart(date) {
+// IST-EXPLICIT range boundaries (S344) — same fix as analytics/page.js, and the same bug: these
+// used the VIEWER's midnight via setHours(), so a non-IST browser shifted the whole range and every
+// number on the page with it. The user's picker gives the calendar date they mean; the boundary we
+// want is IST midnight, because the business day is IST.
+// ⚠️ Verified under TZ=Asia/Kolkata (byte-identical, a no-op for the team today) and
+// TZ=America/New_York (corrected — the old code lost the first 9.5 hours of the day).
+const pad2 = (n) => String(n).padStart(2, '0');
+const istBoundary = (date, endOfDay) => {
   const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString();
-}
-function toIsoEnd(date) {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d.toISOString();
-}
+  return new Date(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+};
+function toIsoStart(date) { return istBoundary(date, false); }
+function toIsoEnd(date)   { return istBoundary(date, true); }
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 
 const TYPE_COLORS = {

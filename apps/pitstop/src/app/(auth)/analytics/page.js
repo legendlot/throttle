@@ -19,8 +19,22 @@ import { TrendChart } from '../../../components/kit/Chart.js';
 
 const SERIES_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#60a5fa', '#f87171', '#c084fc'];
 
-function isoStart(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.toISOString(); }
-function isoEnd(d)   { const x = new Date(d); x.setHours(23, 59, 59, 999); return x.toISOString(); }
+// IST-EXPLICIT range boundaries (S344). These used to call `setHours()`, i.e. the VIEWER's
+// midnight, so in a non-IST browser the range sent to the worker was itself shifted: a New York
+// viewer asking for 1 Sep sent 2026-09-01T04:00Z, which is 09:30 IST — the first 9.5 hours of the
+// business day were silently missing from every figure on the page.
+//
+// The date the user means is the calendar date on their picker (its LOCAL Y/M/D); the boundary we
+// want is IST midnight, because the business day is IST. So read the local calendar parts and
+// build the instant with an explicit +05:30, the way the worker's helpers do.
+//
+// ⚠️ Verified 2026-09-04 under TZ=Asia/Kolkata and TZ=America/New_York: identical output in IST
+// (so this is a no-op for the team today) and corrected in New York.
+const pad2 = (n) => String(n).padStart(2, '0');
+const istBoundary = (d, endOfDay) =>
+  new Date(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
+function isoStart(d) { return istBoundary(d, false); }
+function isoEnd(d)   { return istBoundary(d, true); }
 
 // Resolve a preset → {from, to} Date objects (local; IST offset handled server-side).
 function presetRange(preset) {
