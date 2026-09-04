@@ -10,11 +10,24 @@
 <h2 class="sec">The layout</h2>
 <p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, <strong>Influencer</strong>, <strong>Payments</strong>, Costs (with the rolled-up <strong>total</strong> in orange), Logistics, Post-live and Performance (views, orders, ROAS), followed by Notes and a History log.</p>
 
+<div class="callout warn">
+  <div class="c-title">&#9888; A live deal missing Cost or Views gets flagged</div>
+  <p>Once a deal is <strong>Live</strong>, a banner appears at the top of the page if <strong>Cost</strong> or <strong>Views</strong> is missing &mdash; the video is publicly up but its numbers were never entered, and without them CPM and cost-per-video cannot be worked out. It is a warning, not a block: the deal still saves and advances normally. Fill costs in the <strong>Costs</strong> card and views in the <strong>Performance</strong> card to clear it.</p>
+</div>
+
 <p><strong>Deal Terms</strong> also records <strong>ad rights</strong>: whether the creator has agreed we may run the video as a paid ad, what we paid for that specifically, and how long we may run it. The amount is separate from the creator&rsquo;s fee and counts toward the deal&rsquo;s total cost. Ad rights shows a dash until someone answers the question &mdash; a dash means <em>nobody has recorded it</em>, which is not the same as No.</p>
 
 <p>The <strong>Influencer</strong> card repeats who the deal is with &mdash; handle, name, phone, email, location, platform, type and follower count &mdash; so you can check you are looking at the right person without opening their profile. It is read-only; edit the creator on their own page.</p>
 
 <p>The <strong>Payments</strong> card shows what has been paid against this deal and what is still owed, and every payment carries its <strong>screenshot</strong>: click it to open the proof. <strong>+ Record</strong> logs a new payment with the creator and deal already filled in. The separate Payments page is still there for spend across all deals.</p>
+
+<h2 class="sec">The Performance card</h2>
+<p>Once a deal has posted, <strong>Edit</strong> on the Performance card opens the platform's metrics: views, likes, comments, shares, reposts, saves, followers gained, followers at post date, and (where the deal drives traffic) impressions, sessions, orders and conversions. A blank metric can carry a &ldquo;why blank?&rdquo; reason instead of a number, for the ones that genuinely were not tracked.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Followers at post date is required</div>
+  <p><strong>Followers at post date</strong> is the one metric that does not accept a &ldquo;why blank?&rdquo; reason: Save stays disabled until a number is entered. It cannot be recovered later, so it has to be captured while you have it, or the deal loses it for good.</p>
+</div>
 
 <h2 class="sec">The tracking link</h2>
 <p>Every deal can carry its own <strong>tracking link</strong> &mdash; a short <code>lottoys.in</code> address that sends the customer to Legend of Toys and records that the visit came from <em>this</em> creator and <em>this</em> deal. It appears in the <strong>Post-live</strong> card, in full, with a <strong>copy</strong> button, because the whole point is to hand the string to a creator.</p>
@@ -28,7 +41,12 @@
 <div class="callout note">
   <div class="c-title">The link opens the deal&rsquo;s own colour</div>
   <p>The link lands on the exact colour saved on the deal, not just the product page. This matters because a product&rsquo;s colours all share one page on the website, so a link that only names the product opens whichever colour the shop lists first &mdash; a Tarmac Purple deal would have shown Tarmac Black.</p>
-  <p><strong>Set the product before you create the link.</strong> If the product on a deal is changed <em>after</em> the link exists, the link keeps pointing where it was first sent, and Ignition cannot move it &mdash; the <strong>Create tracking link</strong> button only appears while a deal has no link. Ask for it to be repointed; the link itself stays valid, so anything already shared keeps working.</p>
+  <p><strong>Set the product before you create the link.</strong> If the product on a deal is changed <em>after</em> the link exists, the link keeps pointing where it was first sent, and Ignition cannot move it &mdash; the <strong>Create tracking link</strong> button only appears while a deal has no link. The link itself stays valid, so anything already shared keeps working.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A stale link now warns you, on its own</div>
+  <p>If the tracking link was minted and the deal&rsquo;s product changed afterward, a banner appears right under the link showing where it currently points and where the deal now points. Ignition still cannot repoint it: every target change is recorded against a named person, so fixing it is done in <strong>Relay &rarr; Links</strong>, not here. The banner links straight there.</p>
 </div>
 
 <h2 class="sec">The deal brief</h2>

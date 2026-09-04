@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.8.0] - 2026-09-04
+### Changed
+- New Deal / Product Lines: the product field is pick-only now (catalogue only, no free
+  typing); a product that does not exist yet has to be created first. Older deals with a
+  typed-in product still open and save unchanged unless that field itself is edited.
+- Engagement detail: Followers at post date is now a required Performance field (no
+  "why blank?" reason accepted for it) since the number cannot be recovered later.
+- Engagement detail: a warning banner appears on a live deal missing Cost or Views (warns,
+  does not block).
+- Engagement detail: the tracking-link mismatch warning is now automatic, showing where the
+  link points versus where the deal now points, with a link to Relay -> Links to fix it.
+- Engagements: added deal type, multi-select product, and campaign filters, all of which
+  combine with the existing tabs/stage/date filters.
+
 ## [1.1.0] - 2026-06-06
 ### Added
 - Payments, Schedule and Targets chapters. Payments and Schedule join the Work
