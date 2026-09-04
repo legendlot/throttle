@@ -74,6 +74,19 @@ const KEYS = {
 // and `callStatus` all collapse to `callstatus` and match one candidate spelling.
 function normKey(k) { return String(k).toLowerCase().replace(/[\s_\-.]/g, ''); }
 
+// FNV-1a over the raw request bytes, hex. Used ONLY to build a dedupe key when the vendor sends
+// no call id — see the idempotency note in handleLimechatWebhook for why a phone+timestamp key
+// is wrong there. Not a security primitive.
+function bodyHash(s) {
+  let h = 0x811c9dc5;
+  const str = String(s || '');
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 // Walk a nested object/array breadth-first and collect the first scalar value whose key matches
 // any candidate. BREADTH-FIRST ON PURPOSE: a top-level `status` should beat a `status` buried
 // inside a nested provider blob. Bounded on nodes and depth so a hostile or huge body cannot
@@ -173,12 +186,24 @@ async function handleLimechatWebhook(env, request) {
     return { ok: true, captured: true, mapped: false, reason: 'no_identity', extracted: got };
   }
 
-  // Idempotency: prefer the vendor's own call id. Without one, two deliveries of the same call
-  // would double-append, so fall back to a coarse key and accept the (visible) duplication
-  // rather than inventing an id that could collide across calls.
+  // Idempotency: prefer the vendor's own call id.
+  //
+  // ⚠️ THE FALLBACK HASHES THE RAW BODY, and the obvious alternative is a trap this file walked
+  // into once. `phone + occurred_at` looks like a reasonable coarse key, but when the payload
+  // carries NEITHER a call id NOR a recognisable timestamp it collapses to
+  // `<phone>:unknown` for that customer forever — so the SECOND real call to the same person
+  // dedupes away and its outcome is silently lost. That is precisely the failure this module
+  // exists to prevent, and it would have been invisible: the raw capture still lands, only the
+  // event goes missing. (The comment here previously claimed the key avoided "an id that could
+  // collide across calls"; it did not. Found by this session's own hostile review.)
+  //
+  // Hashing the raw bytes gets both halves right under the module's governing assumption that we
+  // know nothing about the shape: a genuine REDELIVERY is byte-identical and dedupes, while two
+  // distinct calls differ somewhere and do not. FNV-1a is enough — this is a dedupe key, not a
+  // security boundary.
   const idem = got.call_id
     ? `limechat:call:${got.call_id}`
-    : `limechat:call:${got.phone}:${got.occurred_at || 'unknown'}`;
+    : `limechat:call:${got.phone}:b${bodyHash(raw)}`;
 
   const envelope = {
     identifiers: [{ type: 'phone', value: got.phone, is_verified: false }],
@@ -213,4 +238,4 @@ async function handleLimechatWebhook(env, request) {
   };
 }
 
-module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, EVENT_NAME };
+module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, bodyHash, EVENT_NAME };

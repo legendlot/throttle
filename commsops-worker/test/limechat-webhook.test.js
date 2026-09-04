@@ -211,10 +211,38 @@ t('idempotency prefers the vendor call id', async () => {
   assert.strictEqual(ingested[0].idempotency_key, 'limechat:call:c-42');
 });
 
-t('without a call id it falls back to phone + time', async () => {
+t('without a call id the fallback key hashes the BODY, not phone + time', async () => {
   reset();
   await LC.handleLimechatWebhook(ENV, req({ phone: '9876543210', updated_at: '2026-09-04T10:00:00Z' }));
-  assert.strictEqual(ingested[0].idempotency_key, 'limechat:call:+919876543210:2026-09-04T10:00:00.000Z');
+  assert.ok(/^limechat:call:\+919876543210:b[0-9a-f]{8}$/.test(ingested[0].idempotency_key),
+    'got ' + ingested[0].idempotency_key);
+});
+
+t('TWO DIFFERENT calls with no id and no timestamp do NOT collide', async () => {
+  // The regression this replaces: a phone+occurred_at key collapsed to "<phone>:unknown" for that
+  // customer forever, so the second real call deduped away and its outcome vanished — the raw
+  // capture would still land, so the loss was invisible. Found by hostile review.
+  reset();
+  await LC.handleLimechatWebhook(ENV, req({ phone: '9876543210', disposition: 'no answer' }));
+  await LC.handleLimechatWebhook(ENV, req({ phone: '9876543210', disposition: 'answered and confirmed' }));
+  assert.strictEqual(ingested.length, 2);
+  assert.notStrictEqual(ingested[0].idempotency_key, ingested[1].idempotency_key,
+    'two distinct call outcomes for one customer must not share a dedupe key');
+});
+
+t('a byte-identical REDELIVERY still dedupes to the same key', async () => {
+  reset();
+  const body = { phone: '9876543210', disposition: 'busy' };
+  await LC.handleLimechatWebhook(ENV, req(body));
+  await LC.handleLimechatWebhook(ENV, req(body));
+  assert.strictEqual(ingested[0].idempotency_key, ingested[1].idempotency_key,
+    'the same delivery twice must collapse — that is what idempotency is for');
+});
+
+t('bodyHash is stable and differs on differing input', () => {
+  assert.strictEqual(LC.bodyHash('abc'), LC.bodyHash('abc'));
+  assert.notStrictEqual(LC.bodyHash('abc'), LC.bodyHash('abd'));
+  assert.ok(/^[0-9a-f]{8}$/.test(LC.bodyHash('')));
 });
 
 t('the whole raw payload rides along in properties.raw', async () => {
