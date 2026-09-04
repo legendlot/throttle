@@ -23,14 +23,16 @@ const SHOP = require('../src/shopify.js');
 const realSb = A.sbComms;
 const realFetch = SHOP.fetchCustomerPageByQuery;
 const realApply = SHOP.applyNodes;
+const realApplyMapped = SHOP.applyMapped;
 
-let settingsRow, patched, fetchCalls, applied, pagesToServe;
+let settingsRow, patched, fetchCalls, applied, appliedMapped, pagesToServe;
 
 function stub() {
   settingsRow = { shopify_tag_sync_at: null };
   patched = [];
   fetchCalls = [];
   applied = [];
+  appliedMapped = [];
   pagesToServe = [];
   A.sbComms = async (path, env, opts) => {
     if (path.startsWith('/rest/v1/settings') && (!opts || !opts.method)) {
@@ -50,8 +52,13 @@ function stub() {
     applied.push(nodes);
     return { profiles: nodes.length, consent: 0, skipped: 0 };
   };
+  SHOP.applyMapped = async (env, mapped) => {
+    appliedMapped.push(mapped);
+    applied.push(mapped);
+    return { profiles: mapped.length, consent: 0, skipped: 0 };
+  };
 }
-function restore() { A.sbComms = realSb; SHOP.fetchCustomerPageByQuery = realFetch; SHOP.applyNodes = realApply; }
+function restore() { A.sbComms = realSb; SHOP.fetchCustomerPageByQuery = realFetch; SHOP.applyNodes = realApply; SHOP.applyMapped = realApplyMapped; }
 
 const TS = require('../src/shopify-tag-sync.js');
 const ENV = { SHOPIFY_STORE_DOMAIN: 'ed7e3f-cf.myshopify.com', SHOPIFY_CLIENT_ID: 'id', SHOPIFY_CLIENT_SECRET: 'sec' };
@@ -212,12 +219,42 @@ t('follows the cursor across pages and applies every one', async () => {
   restore();
 });
 
-t('stops when a page returns no cursor, even if hasNext lies', async () => {
+t('a null cursor with hasNext:true is TRUNCATED — it must not advance to run-start', async () => {
+  // THE VACUOUS TEST THIS REPLACES asserted only `r.pages === 1` and would have passed with the
+  // bug it was meant to guard. Shopify can answer hasNextPage:true with a null endCursor; the old
+  // `truncated: hasNext && pages >= maxPages` then evaluated FALSE on page 1, so the run called
+  // itself complete and the watermark jumped to run-start — silently skipping every unread row in
+  // the window. Found by the S352 hostile review, which built this exact state and found nothing
+  // asserted about it.
   stub();
   settingsRow = { shopify_tag_sync_at: new Date(NOW - 2 * 60 * 60 * 1000).toISOString() };
   pagesToServe = [{ customers: [cust('a', '2026-09-04T09:00:00Z')], hasNext: true, cursor: null }];
   const r = await TS.runTagSync(ENV, NOW);
   assert.strictEqual(r.pages, 1, 'a null cursor with hasNext:true would otherwise loop on page 1');
+  assert.strictEqual(r.truncated, true, 'stopped while Shopify still had more => truncated');
+  assert.strictEqual(r.advanced_to, '2026-09-04T09:00:00.000Z',
+    'must advance only to the last row seen, never to run-start');
+  assert.notStrictEqual(r.advanced_to, new Date(NOW).toISOString());
+  restore();
+});
+
+t('CONSENT IS NEVER WRITTEN by the tag sync', async () => {
+  // The regression this guards cost 7 real customers their opt-out: mapCustomer emits a consent
+  // block, Shopify's consentUpdatedAt is often NEWER than a Shopflo checkout opt-out, and
+  // captured_at DESC then makes the stale Shopify opted_in win. A tag sync must carry tags only.
+  stub();
+  settingsRow = { shopify_tag_sync_at: new Date(NOW - 2 * 60 * 60 * 1000).toISOString() };
+  pagesToServe = [{ customers: [{
+    id: 'gid://shopify/Customer/1', email: 'x@y.com', tags: ['back-in-stock'],
+    updatedAt: '2026-09-04T09:00:00Z', createdAt: '2026-01-01T00:00:00Z',
+    emailMarketingConsent: { marketingState: 'SUBSCRIBED', consentUpdatedAt: '2026-08-17T19:55:50Z' },
+  }], hasNext: false, cursor: null }];
+  await TS.runTagSync(ENV, NOW);
+  assert.strictEqual(appliedMapped.length, 1);
+  for (const m of appliedMapped[0]) {
+    assert.ok(!('consent' in m), 'the tag sync must strip consent before applying');
+  }
+  assert.ok(appliedMapped[0][0].attributes.tags.includes('back-in-stock'), 'tags still flow');
   restore();
 });
 

@@ -3403,7 +3403,9 @@ export default {
       try {
         const r = await TAGSYNC.syncByQuery(env, {
           query: b.query,
-          maxPages: Math.min(Number(b.maxPages) || TAGSYNC.MAX_PAGES, 100),
+          // Floored as well as capped: a negative maxPages made the loop a no-op that still
+          // reported truncated:true (S352 hostile review).
+          maxPages: Math.min(Math.max(1, Number(b.maxPages) || TAGSYNC.MAX_PAGES), 100),
         });
         return ok(r);
       } catch (e) { return err(e?.message || String(e), 400); }

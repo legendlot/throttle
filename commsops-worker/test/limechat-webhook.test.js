@@ -262,6 +262,52 @@ t('the event name is outcome-neutral', async () => {
   assert.ok(!/confirm|cancel|declin|abandon/i.test(ingested[0].name));
 });
 
+// ── hardening found by the S352 hostile review ──
+t('a TOP-LEVEL field beats a nested one even under a DIFFERENT candidate name', () => {
+  // The old ranking used candidate-index only, so a vendor blob one level down won whenever its
+  // key happened to be listed first. `status` is what the Phase-1 send rule keys on, and
+  // "purchased" vs "completed" is exactly the confirmed/unresolved distinction.
+  const got = LC.extract({ disposition: 'purchased', provider: { call_status: 'completed' } });
+  assert.strictEqual(got.status, 'purchased');
+});
+
+t('depth still yields to preference WITHIN one level', () => {
+  const got = LC.extract({ result: 'ok', disposition: 'no answer' });
+  assert.strictEqual(got.status, 'no answer');
+});
+
+t('a wrapper `to` / `number` is no longer mistaken for a phone', () => {
+  const got = LC.extract({ to: 'support@legendoftoys.com', number: 9876543210 });
+  assert.strictEqual(got.phone, null, 'missing a field beats inventing one');
+});
+
+t('timestamps outside a plausible window are rejected, not coerced to 1970', () => {
+  assert.strictEqual(LC.extract({ updated_at: '2026' }).occurred_at, null);
+  assert.strictEqual(LC.extract({ updated_at: 0 }).occurred_at, null);
+  assert.strictEqual(LC.extract({ updated_at: -1 }).occurred_at, null);
+  assert.strictEqual(LC.extract({ updated_at: true }).occurred_at, null);
+  assert.strictEqual(LC.extract({ updated_at: 4102444800 }).occurred_at, null, 'year 2100 rejected');
+  const good = new Date(Date.now() - 60000).toISOString();
+  assert.strictEqual(LC.extract({ updated_at: good }).occurred_at, good, 'a real one still passes');
+});
+
+t('the UNAUTHENTICATED rejection capture stores only allow-listed headers', async () => {
+  reset();
+  const headers = new Headers({ 'content-type': 'application/json', 'x-huge': 'A'.repeat(5000) });
+  headers.set('Authorization', 'Bearer wrong');
+  const r = await LC.handleLimechatWebhook(ENV, new Request('https://x/webhooks/limechat',
+    { method: 'POST', headers, body: '{}' }));
+  assert.strictEqual(r.status, 401);
+  assert.ok(!('x-huge' in captures[0].headers), 'a public endpoint must not be an unbounded write primitive');
+  assert.strictEqual(captures[0].headers['content-type'], 'application/json');
+});
+
+t('an AUTHENTICATED capture keeps full headers — that is the discovery value', async () => {
+  reset();
+  await LC.handleLimechatWebhook(ENV, req({ phone: '9876543210' }));
+  assert.strictEqual(captures[0].headers['x-vendor'], 'limechat');
+});
+
 run().then(() => {
   A.sbComms = realSb; ingestMod.ingest = realIngest;
   console.log(`\n${pass} passed, ${fail} failed`);

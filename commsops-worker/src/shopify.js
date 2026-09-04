@@ -26,10 +26,13 @@ async function getShopifyToken(env, force = false) {
 }
 
 // THE canonical "can we talk to Shopify?" predicate. Exported so no caller re-implements it:
-// S352 wrote `SHOPIFY_CLIENT_ID && SHOPIFY_CLIENT_SECRET` in the tag-sync cron and it silently
-// skipped every tick on a deployment authenticating with a static SHOPIFY_ACCESS_TOKEN — the
-// narrower copy read as "not configured" while shopifyGraphQL itself was perfectly happy. A
-// duplicated predicate that drifts is worse than no guard, because the skip is quiet.
+// S352's tag-sync cron had written its own narrower copy (`SHOPIFY_CLIENT_ID &&
+// SHOPIFY_CLIENT_SECRET`, missing the static-`SHOPIFY_ACCESS_TOKEN` branch), and this extraction
+// de-duplicates it. ⚠️ **An earlier version of this comment claimed that copy "silently skipped
+// every tick" — IT DID NOT, and the claim was formally retracted (PATTERN-357).** The cron ran to
+// completion on the pre-fix code; the credentials the narrow predicate demanded were set all
+// along. This is hygiene against a predicate that COULD drift, not the repair of a live bug —
+// do not cite it as evidence of one.
 function isConfigured(env) {
   return !!env.SHOPIFY_STORE_DOMAIN
     && (!!env.SHOPIFY_ACCESS_TOKEN || (!!env.SHOPIFY_CLIENT_ID && !!env.SHOPIFY_CLIENT_SECRET));

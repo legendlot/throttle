@@ -58,11 +58,17 @@ function tokenOk(env, request) {
 // stored raw. When the real shape lands, correct these lists off a capture; do not add a
 // parallel mapper.
 const KEYS = {
+  // ⚠️ `to` and `number` were REMOVED (S352 hostile review): on a wrapper payload
+  // `{to:"support@lot", number:123}` they made an email address the phone. A candidate list for an
+  // UNSEEN payload must prefer missing a field to inventing one — a null is visible in the capture,
+  // a wrong value is not.
   phone:   ['phone', 'phone_number', 'phonenumber', 'msisdn', 'mobile', 'contact_number',
-            'customer_phone', 'to_number', 'destination_number', 'caller_id', 'to', 'number'],
+            'customer_phone', 'to_number', 'destination_number', 'caller_id'],
   callId:  ['call_id', 'callid', 'call_uuid', 'call_sid', 'callsid', 'conversation_id',
             'session_id', 'request_id', 'reference_id', 'uuid'],
-  status:  ['call_status', 'callstatus', 'status', 'disposition', 'outcome', 'call_outcome',
+  // `reason`/`result` sit LAST: they are ordinary wrapper words ({result:"ok"}) and must never
+  // outrank a real disposition.
+  status:  ['call_status', 'callstatus', 'disposition', 'outcome', 'call_outcome', 'status',
             'status_reason', 'reason', 'result'],
   remarks: ['remarks', 'remark', 'notes', 'comment', 'summary', 'call_summary'],
   when:    ['last_updated', 'updated_at', 'end_time', 'ended_at', 'completed_at', 'call_time',
@@ -98,7 +104,15 @@ function findField(body, candidates) {
   const want = candidates.map(normKey);
   const queue = [[body, 0]];
   let seen = 0;
-  const found = new Map();       // candidate index -> value (lower index = better match)
+  // DEPTH FIRST, then candidate preference. The old version ranked on candidate index alone, so
+  // `{disposition:"purchased", provider:{call_status:"completed"}}` returned "completed" — a
+  // vendor blob one level down beat the real top-level field, because `call_status` happens to be
+  // listed before `disposition`. The doc-comment above already promised "a top-level field beats
+  // a nested one" and only delivered it when the two shared a NAME (S352 hostile review).
+  // ⚠️ This matters most for `status`: it is the field the Phase-1 send rule keys on, and
+  // "purchased" vs "completed" is exactly the confirmed/unresolved distinction that decides
+  // whether a customer gets messaged.
+  let best = null;               // { depth, idx, value }
   while (queue.length) {
     const [node, depth] = queue.shift();
     if (!node || typeof node !== 'object' || depth > MAX_DEPTH || ++seen > MAX_NODES) continue;
@@ -106,12 +120,13 @@ function findField(body, candidates) {
       if (v && typeof v === 'object') { queue.push([v, depth + 1]); continue; }
       if (v === null || v === undefined || v === '') continue;
       const idx = want.indexOf(normKey(k));
-      if (idx >= 0 && !found.has(idx)) found.set(idx, v);
+      if (idx < 0) continue;
+      if (!best || depth < best.depth || (depth === best.depth && idx < best.idx)) {
+        best = { depth, idx, value: v };
+      }
     }
   }
-  if (!found.size) return null;
-  const best = Math.min(...found.keys());
-  return found.get(best);
+  return best ? best.value : null;
 }
 
 // Pull everything we can recognise. Every field is optional — an empty extraction is a valid,
@@ -126,7 +141,16 @@ function extract(body) {
     const d = Number.isFinite(n) && String(whenRaw).trim() !== ''
       ? new Date(n > 1e12 ? n : n * 1000)
       : new Date(String(whenRaw));
-    if (!isNaN(d.getTime())) occurredAt = d.toISOString();
+    // ⚠️ BOUNDED. `new Date("2026")`, `Number(true)`, `0` and `-1` all coerce to *valid* dates in
+    // 1970, and an unbounded future value is equally accepted — this lands in
+    // `comms.events.occurred_at`, which drives journey and segment windows. One S352 smoke already
+    // wrote an event 37 minutes in the future. Anything outside a plausible call window is not a
+    // timestamp we recognise, so it falls through to null and the raw value stays in the capture.
+    const ms = d.getTime();
+    const nowMs = Date.now();
+    if (!isNaN(ms) && ms > nowMs - 30 * 24 * 3600 * 1000 && ms < nowMs + 3600 * 1000) {
+      occurredAt = d.toISOString();
+    }
   }
   return {
     phone: normalizePhone(phoneRaw),
@@ -142,12 +166,18 @@ function extract(body) {
 // ── raw capture ───────────────────────────────────────────────────────────────────────────
 // Headers minus the auth-bearing ones. `_reason` records why this capture happened so the
 // captures table is self-describing when someone reads it weeks later.
-async function capture(env, request, body, reason) {
+// `lean` = the UNAUTHENTICATED rejection path. It runs before auth succeeds, so anyone who learns
+// the URL can drive it; copying every header there turns a public endpoint into an unbounded
+// row-write primitive. Authenticated captures keep full headers (that is the discovery value).
+const LEAN_HEADERS = new Set(['content-type', 'user-agent', 'cf-ray', 'cf-ipcountry']);
+
+async function capture(env, request, body, reason, lean) {
   const hdrs = {};
   for (const [k, v] of request.headers) {
     const lk = k.toLowerCase();
     if (lk === 'authorization' || lk === 'x-limechat-token' || lk === 'cookie') continue;
-    hdrs[k] = v;
+    if (lean && !LEAN_HEADERS.has(lk)) continue;
+    hdrs[k] = String(v).slice(0, 256);
   }
   await A.sbComms('/rest/v1/webhook_captures', env, {
     method: 'POST',
@@ -164,7 +194,7 @@ async function handleLimechatWebhook(env, request) {
     // identical from our side and a rotated token is the likeliest cause of both. Bounded so an
     // unauthenticated caller who finds the URL cannot use it as an unbounded write primitive.
     const excerpt = await request.text().then((t) => String(t || '').slice(0, 512)).catch(() => '');
-    await capture(env, request, { _rejected: true, _excerpt: excerpt }, 'bad_token').catch(() => {});
+    await capture(env, request, { _rejected: true, _excerpt: excerpt }, 'bad_token', true).catch(() => {});
     console.log('limechat_bad_token', { bytes: excerpt.length });
     return { ok: false, error: 'unauthorised', status: 401 };
   }

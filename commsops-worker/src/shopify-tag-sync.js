@@ -9,8 +9,7 @@
 // It is NOT that customer webhooks stopped arriving, and it is NOT a parsing bug — both were
 // filed as hypotheses and both are dead. 31,055 comms.consent rows with source='shopify_webhook'
 // were created after their profile, the most recent on 2026-09-04, and those rows are written by
-// the SAME function that writes tags — mapCustomerRest, the REST WEBHOOK mapper (shopify.js:143;
-// tags at :155, consent at :163/:169/:175). NOT mapCustomer, which is the GraphQL importer and
+// the SAME function that writes tags — mapCustomerRest, the REST WEBHOOK mapper (grep it in shopify.js — line numbers omitted on purpose, they rot). NOT mapCustomer, which is the GraphQL importer and
 // stamps source='shopify_import'. So the mapper runs on every live
 // customer webhook and writes no tags, which leaves exactly one explanation: `tags` is absent
 // from the REST webhook payload. No change to the mapper can conjure a field the payload does
@@ -23,15 +22,19 @@
 //     one-off extraction of the incumbent PDP form's back-in-stock requests. That is a SEPARATE
 //     backlog item and this is deliberately the same code path: one pull, pointed twice.
 //
-// RE-APPLYING IS SAFE, VERIFIED NOT ASSUMED (2026-09-04, reading the RPC source). Profile
-// attributes shallow-merge (`attributes || incoming`), so a tag write cannot clobber
-// event-derived fields. Consent is protected twice over: comms.shopify_apply_customers skips an
-// `unknown` row when a known opted_in/opted_out already exists — the same guard consent.js
-// carries in JS, independently implemented in SQL — and its INSERT dedups on
-// (profile, channel, purpose, state, source, captured_at). Consent reads are ordered by
-// captured_at, so re-delivering an OLD Shopify state can never outrank a newer Relay one.
-// ⚠️ That guard is why this can run on a schedule at all. If it is ever removed from the RPC,
-// this sync becomes a consent regression — check before touching comms.shopify_apply_customers.
+// RE-APPLYING IS SAFE FOR ATTRIBUTES, AND CONSENT IS NOT RE-APPLIED AT ALL.
+// Profile attributes shallow-merge (`attributes || incoming`), so a tag write cannot clobber
+// event-derived fields.
+// ⛔ **CORRECTED 2026-09-04 (S352 hostile review). This header previously claimed "consent is
+// protected twice over" and that was WRONG — it cost 7 real customers their opt-out.** Both
+// guards it cited (the RPC's `unknown` skip, and `captured_at` ordering) defend against an OLD
+// Shopify state losing to a newer local one. The actual failure is the MIRROR IMAGE: Shopify's
+// `consentUpdatedAt` is frequently NEWER than a Shopflo checkout opt-out, an `opted_in` is
+// inserted unconditionally, and `captured_at DESC` then makes the stale Shopify row win. Seven
+// profiles were made marketable again on this job's first run. **The fix is that syncByQuery now
+// strips the consent block entirely — see the comment at the applyMapped call.**
+// ⚠️ If anyone ever re-adds consent to this path, they must first solve "a newer Shopify opt-in
+// must not outrank an older non-Shopify opt-out", which nothing in the stack does today.
 const A = require('./auth.js');
 const SHOP = require('./shopify.js');
 
@@ -65,7 +68,27 @@ async function syncByQuery(env, { query, maxPages = MAX_PAGES, pageSize = PAGE_S
     pages++;
     const nodes = page.customers || [];
     if (nodes.length) {
-      const res = await SHOP.applyNodes(env, nodes);
+      // ⛔ CONSENT IS STRIPPED. THIS IS THE MOST IMPORTANT LINE IN THE FILE.
+      //
+      // `applyNodes` = `applyMapped(nodes.map(mapCustomer))`, and `mapCustomer` emits a consent
+      // block alongside the attributes. Re-delivering that from a TAG sync resurrects dead
+      // opt-outs: Shopify's `consentUpdatedAt` is often NEWER than a Shopflo checkout opt-out,
+      // `comms.shopify_apply_customers` guards only `state='unknown'` (an `opted_in` inserts
+      // unconditionally), and `consent.js` resolves the effective state by
+      // `ORDER BY captured_at DESC` — so a stale Shopify `opted_in` outranks a real, later
+      // opt-out and the customer becomes marketable again.
+      //
+      // ⚠️ NOT HYPOTHETICAL — the first run of this job did exactly that to **7 profiles**
+      // (2026-09-04, S352, all 7 verified `opted_out` beforehand with no webhook opt-in, so the
+      // live path had never delivered these; rows snapshotted to
+      // `store.safety_relay_consent_optout_resurrect_2026_09_04` and deleted). The module header
+      // claimed "consent is protected twice over" and it was wrong: both guards defend against an
+      // OLD Shopify state losing, and this is the mirror image — a NEWER Shopify state winning.
+      //
+      // This job exists to carry TAGS. It has no business writing consent at all, so it doesn't.
+      // The customer webhook path (`mapCustomerRest`) remains the consent feed and is untouched.
+      const mapped = nodes.map((n) => { const m = SHOP.mapCustomer(n); delete m.consent; return m; });
+      const res = await SHOP.applyMapped(env, mapped);
       customers += nodes.length;
       profiles += res.profiles || 0;
       consent += res.consent || 0;
@@ -78,7 +101,16 @@ async function syncByQuery(env, { query, maxPages = MAX_PAGES, pageSize = PAGE_S
     if (!after) break;
   }
 
-  return { pages, customers, profiles, consent, lastUpdatedAt, truncated: hasNext && pages >= maxPages };
+  // ⚠️ `truncated` is `hasNext` ALONE, deliberately — NOT `hasNext && pages >= maxPages`.
+  // The loop has TWO exits: the page cap, and `if (!after) break` on a null cursor. Shopify can
+  // return `hasNextPage:true` with a null/empty `endCursor` (an empty filtered page), and the
+  // old `pages >= maxPages` conjunction then evaluated FALSE on page 1 — so the run reported
+  // itself complete, `runTagSync` advanced the watermark to run-start, and every unread row in
+  // the window was skipped **permanently and silently**. That is the exact outcome the advance
+  // rules below say they prevent. A run that stopped while Shopify still had more is truncated,
+  // whatever made it stop. (S352 hostile review; the old test asserted only `pages === 1` here
+  // and would have passed with the bug — see the tests.)
+  return { pages, customers, profiles, consent, lastUpdatedAt, truncated: hasNext };
 }
 
 // Read the singleton settings row. Returns null on a failed read so the caller can fail closed

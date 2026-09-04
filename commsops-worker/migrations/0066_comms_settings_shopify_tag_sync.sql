@@ -8,8 +8,8 @@
 -- The cause is settled and it is NOT a mapper bug. Customer webhooks demonstrably land —
 -- 31,055 comms.consent rows with source='shopify_webhook' were created after their profile,
 -- the most recent on 2026-09-04 — and those consent rows are written by the SAME function that
--- writes tags (shopify.js mapCustomerRest, the REST WEBHOOK mapper at :143 -- NOT mapCustomer, the
--- GraphQL importer, which stamps source='shopify_import': consent at :163/:169/:175, attrs.tags at :155, guarded
+-- writes tags (shopify.js mapCustomerRest, the REST WEBHOOK mapper -- NOT mapCustomer, the
+-- GraphQL importer, which stamps source='shopify_import'. It writes attrs.tags guarded
 -- `if (tags.length)`). So the mapper runs on every live customer webhook and writes no tags,
 -- which means `tags` is simply absent from the REST webhook payload. Nothing about the mapper
 -- can fix that; the only way to see a tag is to ASK for it over GraphQL, where the June
