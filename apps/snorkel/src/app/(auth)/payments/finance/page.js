@@ -161,7 +161,7 @@ export default function FinanceQueuePage() {
   return (
     <>
       <PageHead title="Finance Queue"
-        sub="Approved and unpaid, most urgent first. Everything needed to pay is on the card — bank details included." />
+        sub="Approved and unpaid, most urgent first — held requests are parked below. Everything needed to pay is on the card — bank details included." />
 
       {truncation && (
         <div style={{
@@ -179,7 +179,10 @@ export default function FinanceQueuePage() {
       )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <Kpi label="To pay" value={truncation?.total != null ? `${rows.length} of ${truncation.total}` : (truncation ? `${rows.length}+` : rows.length)} />
+        {/* Kpi animates a NUMBER — a "12 of 340" string renders 0 (the Value bug, same class). */}
+        <Kpi label="To pay" value={rows.length}
+             format={v => truncation?.total != null ? `${Math.round(v)} of ${truncation.total}`
+                        : (truncation ? `${Math.round(v)}+` : Math.round(v).toLocaleString('en-IN'))} />
         <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={total} format={v => money(v)} />
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
         {held.length > 0 && <Kpi label="On hold" value={held.length} />}

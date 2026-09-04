@@ -1655,18 +1655,27 @@ export default {
           // Slack workflow again with extra steps.
           case 'getFinanceQueue': {
             if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission', 403);
-            const r = await query('payment_requests',
-              // `held` rides along with `approved`: a hold is a pause inside the finance queue,
-              // so finance must still see the row (and release it) without leaving this screen.
-              // The response shape is unchanged — the UI partitions by `status`.
-              '?status=in.(approved,held)&select=*,payee:payment_payees(id,payee_code,name,payee_type)' +
-              `&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
-              { prefer: 'count=exact' });
+            // `held` rides along with `approved`: a hold is a pause inside the finance queue,
+            // so finance must still see the row (and release it) without leaving this screen.
+            // The response shape is unchanged — the UI partitions by `status`.
+            // TWO reads, not one: held rows must never spend the ready-to-pay page budget or skew
+            // its count — an urgent held row sorts to the TOP of a shared query and displaces a
+            // payable one at the limit (hostile review S350).
+            const sel = 'select=*,payee:payment_payees(id,payee_code,name,payee_type)';
+            const [r, h] = await Promise.all([
+              query('payment_requests',
+                `?status=eq.approved&${sel}&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
+                { prefer: 'count=exact' }),
+              query('payment_requests', `?status=eq.held&${sel}&order=held_at.desc&limit=${FIN_PAGE_LIMIT}`),
+            ]);
             if (!r.ok) return err(r.data);
-            const rows = r.data || [];
+            const ready = r.data || [];
+            const rows  = [...ready, ...((h.ok && h.data) || [])];
+            // total / fetched / truncated describe the READY pile only — that is what finance
+            // owes today, and the UI's To-pay KPI is its numerator.
             const finTotal     = totalFromRange(r.range);
-            const finTruncated = finTotal === null ? rows.length >= FIN_PAGE_LIMIT : finTotal > rows.length;
-            const finMeta = { total: finTotal, fetched: rows.length,
+            const finTruncated = finTotal === null ? ready.length >= FIN_PAGE_LIMIT : finTotal > ready.length;
+            const finMeta = { total: finTotal, fetched: ready.length,
                               limit: FIN_PAGE_LIMIT, truncated: finTruncated };
             if (!rows.length) return ok({ requests: [], banks: {}, documents: {}, ...finMeta });
 
@@ -3924,19 +3933,20 @@ export default {
             }
             const d = body.data || {};
             if (!d.id) return err('id required');
-            if (!d.rejection_note) return err('A reason is required to reject');
+            const note = String(d.rejection_note || '').trim().slice(0, 1000);
+            if (!note) return err('A reason is required to reject');
             const now = new Date().toISOString();
             const r = await update('payment_requests', {
               status: 'rejected', rejected_by_user_id: userId,
               rejected_by_name: authResult?.fullName || null, rejected_at: now,
-              rejection_note: d.rejection_note, updated_at: now,
+              rejection_note: note, updated_at: now,
             }, `id=eq.${encodeURIComponent(d.id)}&status=in.(submitted,pending_approval,approved,held)`);
             if (!r.ok) return err('Reject failed: ' + JSON.stringify(r.data));
             const rej = (Array.isArray(r.data) ? r.data : [])[0];
             if (rej) await notify([{
               user_id: rej.requested_by_user_id, request_id: rej.id, kind: 'rejected',
               title: `${rej.request_no} was rejected`,
-              body: d.rejection_note,   // the reason IS the notification; a bare "rejected" is useless
+              body: note,   // the reason IS the notification; a bare "rejected" is useless
             }]);
             return ok({ rejected: d.id });
           }
@@ -3950,7 +3960,7 @@ export default {
             if (!canPayExecute(P) && !canPaySuperAdmin(P)) return err('No permission to hold', 403);
             const d = body.data || {};
             if (!d.id) return err('id required');
-            const reason = String(d.held_reason || '').trim();
+            const reason = String(d.held_reason || '').trim().slice(0, 1000);
             if (!reason) return err('A reason is required to hold');
             const now = new Date().toISOString();
             const r = await update('payment_requests', {

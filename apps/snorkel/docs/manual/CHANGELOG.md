@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.13.1] - 2026-09-04
+### Fixed
+- Finance Queue: a held request is rejected from its own page (Open, then Reject), not from the On hold section.
+
 ## [1.13.0] - 2026-09-04
 ### Changed
 - Finance Queue: documented putting an approved request on hold (reason required, requester
