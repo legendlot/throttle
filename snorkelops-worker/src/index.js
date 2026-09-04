@@ -512,24 +512,58 @@ function duplicateMould(lines, existing) {
 // moulding would refuse almost every PO in the system. Only an explicit 'moulding' blocks.
 // Every read here fails OPEN — a lookup that errors is not evidence of a violation, and a
 // PO must never be blocked by a Supabase hiccup.
+// PostgREST percent-decodes BEFORE splitting in.() on commas, so a bare
+// encodeURIComponent lets `%2C` re-split and a `)` terminate the list — the code would
+// drop silently out of the match set and the violation would pass. Same quoting as the
+// hardened precedent in getRequests.
+const inQuoted = (vals) => vals.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
+
 async function moulderPaintedPartViolations(vendorCode, lineRows) {
   if (!vendorCode) return [];
-  const coded = (lineRows || []).filter(l => l && l.part_code);
-  if (!coded.length) return [];
+  const rows = (Array.isArray(lineRows) ? lineRows : []).filter(Boolean);
+  // Two line shapes reach a moulder and BOTH must be tested. A part line names its
+  // part_code directly. ⭐ A MOULD line carries no part_code at all — it names a mould,
+  // and seedReceivingLinesFromPO explodes it into store.mould_parts at receiving time.
+  // Checking only part_code lines missed the shape Monash actually uses: measured
+  // 2026-09-04, its last 90 days are 73 Mould lines (part_code NULL on all 73) against
+  // 48 part lines. No mould maps to a painted code TODAY, but setMouldParts applies no
+  // painted check, so one sheet import would open the bypass with nothing to catch it.
+  const direct = rows.filter(l => l.part_code);
+  const mouldNos = [...new Set(rows.filter(l => !l.part_code && l.mould_no)
+    .map(l => String(l.mould_no).trim()).filter(Boolean))];
+  if (!direct.length && !mouldNos.length) return [];
   const vR = await query('vendors',
     `?vendor_code=eq.${encodeURIComponent(vendorCode)}&select=process_type,vendor_name&limit=1`);
   const vendor = vR.ok ? vR.data?.[0] : null;
+  // Fail OPEN: a failed lookup is not evidence of a violation. NULL process_type is
+  // UNKNOWN, never "not a moulder" — classification is the vendor form's job.
   if (!vendor || vendor.process_type !== 'moulding') return [];
-  const codes = [...new Set(coded.map(l => String(l.part_code).trim()).filter(Boolean))];
+
+  const norm = (c) => String(c).trim().toUpperCase();
+  const candidates = direct.map(l => ({ part_code: norm(l.part_code), via_mould: null }));
+  if (mouldNos.length) {
+    const mpR = await query('mould_parts',
+      `?mould_no=in.(${inQuoted(mouldNos)})&select=mould_no,part_code`);
+    if (!mpR.ok) return [];                       // fail open, same rule as above
+    for (const r of (mpR.data || [])) {
+      if (r.part_code) candidates.push({ part_code: norm(r.part_code), via_mould: r.mould_no });
+    }
+  }
+  if (!candidates.length) return [];
+
+  const codes = [...new Set(candidates.map(c => c.part_code))];
   const pR = await query('part_finish_pairs',
-    `?is_active=eq.true&painted_part_code=in.(${codes.map(encodeURIComponent).join(',')})` +
+    `?is_active=eq.true&painted_part_code=in.(${inQuoted(codes)})` +
     `&select=painted_part_code,unpainted_part_code`);
   if (!pR.ok || !Array.isArray(pR.data)) return [];
-  const unpaintedFor = new Map(pR.data.map(p => [p.painted_part_code, p.unpainted_part_code]));
+  const unpaintedFor = new Map(pR.data.map(p => [norm(p.painted_part_code), p.unpainted_part_code]));
+  const seen = new Set();
   const out = [];
-  for (const l of coded) {
-    const pc = String(l.part_code).trim();
-    if (unpaintedFor.has(pc)) out.push({ part_code: pc, unpainted_part_code: unpaintedFor.get(pc) });
+  for (const c of candidates) {
+    if (!unpaintedFor.has(c.part_code) || seen.has(c.part_code)) continue;
+    seen.add(c.part_code);
+    out.push({ part_code: c.part_code, unpainted_part_code: unpaintedFor.get(c.part_code),
+               via_mould: c.via_mould });
   }
   return out;
 }
@@ -537,7 +571,8 @@ async function moulderPaintedPartViolations(vendorCode, lineRows) {
 // The 409 body every po_lines write path shares, so the three sites can never drift apart.
 function moulderPaintedPartError(vendorName, violations) {
   return err(`${vendorName} is a MOULDING vendor and cannot be sent painted part codes. `
-    + violations.map(v => `${v.part_code} is painted — order ${v.unpainted_part_code} instead`).join('; '), 409);
+    + violations.map(v => `${v.part_code} is painted${v.via_mould ? ` (via mould ${v.via_mould})` : ''}`
+        + ` — order ${v.unpainted_part_code} instead`).join('; '), 409);
 }
 
 // Push corrected codes back onto every active variant of the family. Guarded so a
@@ -3158,8 +3193,18 @@ export default {
             }
             // Before the revision snapshot — a refused amendment must not bump anything.
             // The amend can also RE-POINT the vendor, so check the code this PO will end up on.
-            const amendVendorCode = d.vendor_code !== undefined ? d.vendor_code : po.vendor_code;
+            let amendVendorCode = d.vendor_code !== undefined ? d.vendor_code : po.vendor_code;
             const amendVendorName = d.vendor_name !== undefined ? d.vendor_name : po.vendor_name;
+            // ⚠️ `vendor_name` and `vendor_code` are BOTH separately updatable here, so an
+            // API caller can re-point the PO by NAME alone. Without this resolve, the guard
+            // would test the OLD code, pass, and leave the header on the moulder. postPO
+            // already does exactly this lookup; amendPO did not. (Not reachable from the
+            // Amend modal, which sets both — API-only.)
+            if (d.vendor_code === undefined && d.vendor_name !== undefined && d.vendor_name) {
+              const avR = await query('vendors',
+                `?vendor_name=ilike.${encodeURIComponent(d.vendor_name)}&select=vendor_code&limit=1`);
+              if (avR.ok && avR.data?.[0]?.vendor_code) amendVendorCode = avR.data[0].vendor_code;
+            }
             // ⚠️ `d.lines` is OPTIONAL here and the line rewrite below is conditional, while
             // `vendor_code`/`vendor_name` are both in the updatable list — so an amend can
             // re-point a PO onto a moulder WITHOUT sending a single line. Checking only
