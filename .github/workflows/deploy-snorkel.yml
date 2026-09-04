@@ -3,6 +3,19 @@ name: Deploy Snorkel
 on:
   push:
     branches: [main]
+    # Only rebuild this app when something it depends on changes (S344, 2026-09-04).
+    # Every push used to trigger ALL TWELVE app workflows regardless of what changed:
+    # with several lanes pushing, that reached 31 queued runs and ~25min per deploy.
+    # Mirrors the filter deploy.yml (Throttle) has always had.
+    # ⚠️ `packages/**` MUST stay: all twelve apps depend on @throttle/{ui,auth,db,domain},
+    # so a package change has to rebuild every app or we ship a stale one and never know.
+    paths:
+      - 'apps/snorkel/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'turbo.json'
+      - '.github/workflows/deploy-snorkel.yml'
   workflow_dispatch:
 
 jobs:
