@@ -253,10 +253,9 @@ export default function EngagementDetailPage() {
 
         <PostLiveCard e={e} canEdit={canManage} session={session} onSaved={reload} />
 
-        <VideosCard videos={data.videos || []} />
-
         <PerformanceCard
           e={e}
+          videos={data.videos || []}
           canEdit={!!perms?.ignition_manage && e.stage === 'live'}
           session={session}
           onSaved={reload}
@@ -924,74 +923,56 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
   );
 }
 
-// Multiple videos per deal (Reann #10) — READ-ONLY for now. Every deal has exactly one row
-// (seq 1, backfilled from video_link/post_date), so with one video this reads as a restatement
-// of Post/Live and nothing more; the seq column only appears once there is a second video.
-// Adding, editing and the views rollup are deliberately NOT here: the deal-level metrics on
-// `engagement` are still the only ones anything writes, and a second write surface before the
-// rollup exists would let a PATCH here be silently reverted by it later.
-function VideosCard({ videos }) {
-  // Every deal has a backfilled seq=1 row, so `videos.length` is never 0 — gating on it put a new
-  // "Videos" card reading "— / — / 0 views" on the 208 deals that have no video yet, which is the
-  // opposite of the intended "nothing looks new" until slice 3. Gate on real content instead.
-  if (!videos.some(v => v.video_link || v.post_date)) return null;
-  return (
-    <Card title="Videos">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {videos.map((v, i) => (
-          <div key={v.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
-            {videos.length > 1 && <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>#{v.seq}</span>}
-            <span style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {v.video_link
-                ? <a href={v.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{v.video_link.slice(0, 34)}…</a>
-                : '—'}
-            </span>
-            <span style={{ marginLeft: 'auto', color: 'var(--text-3)', display: 'flex', gap: 10, whiteSpace: 'nowrap' }}>
-              <span>{v.post_date || '—'}</span>
-              <span title="Views">{v.views != null ? `${Number(v.views).toLocaleString()} views` : '— views'}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
 // #13 — editable performance stats once the deal is live/completed.
 // Reann 2026-08-10 #1 added saves / reposts / followers_gained / follower_count_at_post.
 // Reann 2026-09-04 #7 made follower_count_at_post MANDATORY here — REQUIRED_METRICS in
 // lib/metrics.js is the one list, so the label, the disabled Save and the refusal all agree.
-const METRIC_FIELDS = [
-  ['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
+//
+// S351 (multiple videos, slice 3) — the metrics split in two.
+// Per-VIDEO metrics are written with setEngagementVideo against one take; the matching column on
+// `engagements` is a worker-owned ROLLUP of the takes and is no longer in ENGAGEMENT_FIELDS, so a
+// PATCH of it here would be silently reverted by the next rollup.
+const VIDEO_METRIC_FIELDS = [
+  ['views', 'Views'], ['organic_views', 'Organic views'], ['paid_views', 'Paid views'],
+  ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
   ['reposts', 'Reposts'], ['saves', 'Saves'], ['followers_gained', 'Followers gained'],
-  ['follower_count_at_post', 'Followers at post date'],
-  ['impressions', 'Impressions'], ['sessions', 'Sessions'], ['orders', 'Orders'],
-  ['conversions_value', 'Conversions ₹'],
+  ['follower_count_at_post', 'Followers at post date'], ['impressions', 'Impressions'],
 ];
+// …and the deal-level ones that are NOT per-video (still written with updateEngagement).
+const DEAL_METRIC_FIELDS = [['sessions', 'Sessions'], ['orders', 'Orders'], ['conversions_value', 'Conversions ₹']];
+// organic_views / paid_views exist ONLY on engagement_videos — `engagements` has no such column
+// (checked in information_schema, S351), so they are per-take detail and never a deal total.
+const VIDEO_ONLY_FIELDS = new Set(['organic_views', 'paid_views']);
+const MAX_VIDEOS = 6;   // engagement_videos.seq CHECK (1..6) — the 7th insert 23514s; refuse here first
 
-function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons }) {
+function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapReasons }) {
   const { showToast: toast } = useToast();
+  const takes = [...(videos || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
+  const [tab, setTab] = useState(takes[0]?.seq ?? 1);          // seq of the take being viewed
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [gaps, setGaps] = useState({});
   const [busy, setBusy] = useState(false);
+  const current = takes.find(t => Number(t.seq) === Number(tab)) || null;
 
   const applicable = ([k]) => isMetricApplicable(k, platform);
-  const shown = METRIC_FIELDS.filter(applicable);
-  const derived = deriveMetrics(e, platform);
+  const shown = VIDEO_METRIC_FIELDS.filter(applicable);
+  const derived = deriveMetrics(e, platform);                   // deal-level ratios off the ROLLUP
   const unexplained = unexplainedGaps(e, platform);
   // Reann #7 — blank required metrics in what is currently typed, not in the saved row: the
-  // message and the Save button have to clear the moment the number is entered.
-  const missingRequired = missingRequiredMetrics(form, platform);
+  // message and the Save button have to clear the moment the number is entered. `form` carries
+  // every shown VIDEO metric, so follower_count_at_post is read from the take being edited.
+  const missingRequired = editing && current ? missingRequiredMetrics(form, platform) : [];
   const requiredLabels = missingRequired
-    .map(k => (METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
+    .map(k => (VIDEO_METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
 
   function startEdit() {
-    const f = {};
-    for (const [k] of shown) f[k] = e[k] ?? '';
-    setForm(f); setGaps({ ...(e.metric_gaps || {}) }); setEditing(true);
+    if (!current) return;
+    const f = { video_link: current.video_link ?? '', post_date: (current.post_date || '').slice(0, 10) };
+    for (const [k] of shown) f[k] = current[k] ?? '';
+    setForm(f); setGaps({ ...(current.metric_gaps || {}) }); setEditing(true);
   }
-  async function save() {
+  async function saveTake() {
     // The hard stop, enforced twice on purpose: the Save button is disabled below, but a disabled
     // button is a hint — this is the gate. A metric_gaps reason deliberately does not clear it.
     if (missingRequired.length) {
@@ -1000,31 +981,106 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
     }
     setBusy(true);
     try {
-      const patch = { engagement_id: e.id };
+      const patch = {
+        engagement_id: e.id, seq: current.seq,
+        video_link: form.video_link === '' ? null : form.video_link,
+        post_date: form.post_date === '' ? null : form.post_date,
+      };
       for (const [k] of shown) patch[k] = form[k] === '' ? null : Number(form[k]);
       // Only keep a reason where the value is actually blank — a reason sitting behind a real
       // number is stale the moment someone fills it in, and would keep reading as "unknown".
       const cleaned = {};
       for (const [k] of shown) if (patch[k] == null && gaps[k]) cleaned[k] = gaps[k];
       patch.metric_gaps = cleaned;
-      await ignitionopsPost('updateEngagement', patch, session);
-      toast('Performance updated', 'success');
+      await ignitionopsPost('setEngagementVideo', patch, session);
+      toast(`Video #${current.seq} updated`, 'success');
       setEditing(false);
       onSaved?.();
     } catch (err) { toast(err.message, 'error'); }
     finally { setBusy(false); }
   }
+  async function addTake() {
+    if (takes.length >= MAX_VIDEOS) { toast(`A deal holds at most ${MAX_VIDEOS} videos`, 'error'); return; }
+    setBusy(true);
+    try {
+      // No seq — the worker picks the lowest free one (deletions leave holes).
+      const r = await ignitionopsPost('setEngagementVideo', { engagement_id: e.id }, session);
+      toast(`Video #${r.video.seq} added`, 'success');
+      setTab(r.video.seq); setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+  async function removeTake() {
+    // #1 is the primary: its link and date ARE the deal's, and the worker refuses to delete it
+    // while other takes exist. Never offer it.
+    if (!current || Number(current.seq) === 1) return;
+    if (!window.confirm(`Remove video #${current.seq}? Its numbers leave the deal's totals.`)) return;
+    setBusy(true);
+    try {
+      await ignitionopsPost('deleteEngagementVideo', { engagement_id: e.id, seq: current.seq }, session);
+      toast(`Video #${current.seq} removed`, 'success');
+      setTab(1); setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const tabStyle = (active) => ({
+    padding: '4px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
+    background: active ? 'var(--surface-3)' : 'transparent', color: active ? 'var(--text-1)' : 'var(--text-3)',
+    border: '1px solid', borderColor: active ? 'var(--border-2)' : 'var(--border)', borderRadius: 'var(--radius-sm)',
+  });
 
   return (
     <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
         <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Performance</h2>
-        {canEdit && !editing && (
+        <div role="tablist" aria-label="Video takes" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {takes.map(t => (
+            <button key={t.seq} role="tab" aria-selected={Number(t.seq) === Number(tab)} style={tabStyle(Number(t.seq) === Number(tab))}
+              onClick={() => { setTab(t.seq); setEditing(false); }}>Video #{t.seq}</button>
+          ))}
+          {canEdit && takes.length < MAX_VIDEOS && (
+            <button onClick={addTake} disabled={busy} style={tabStyle(false)} title="Add another take of this video">+ Add video</button>
+          )}
+        </div>
+        {canEdit && current && !editing && (
           <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
         )}
       </div>
-      {editing ? (
+
+      {!current && <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No video on this deal yet.</div>}
+
+      {current && !editing && (
+        <>
+          <KV label="Link" value={current.video_link
+            ? <a href={current.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{current.video_link}</a>
+            : '—'} />
+          <KV label="Posted" value={current.post_date || '—'} />
+          {shown.map(([k, label]) => {
+            const raw = current[k];
+            const reason = (current.metric_gaps || {})[k];
+            const val = (raw == null || raw === '')
+              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
+              : Number(raw).toLocaleString();
+            return <KV key={k} label={label} value={val} />;
+          })}
+        </>
+      )}
+
+      {current && editing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Link</span>
+            <input value={form.video_link} onChange={ev => setForm(f => ({ ...f, video_link: ev.target.value }))}
+              style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Posted</span>
+            <input type="date" value={form.post_date} onChange={ev => setForm(f => ({ ...f, post_date: ev.target.value }))}
+              style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+          </div>
           {shown.map(([k, label]) => {
           const required = REQUIRED_METRICS.includes(k);
           const blankRequired = required && missingRequired.includes(k);
@@ -1035,7 +1091,7 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
               </span>
               {/* The required field is edited right here, in the same card — a hard stop that sent
                   you to another screen to clear it would be a dead end. Focus it when it is blank. */}
-              <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
+              <input type="number" min="0" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
                 autoFocus={blankRequired}
                 style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
               {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown.
@@ -1059,67 +1115,138 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            {Number(current.seq) !== 1 && (
+              <button onClick={removeTake} disabled={busy}
+                style={{ marginRight: 'auto', padding: '6px 12px', background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Remove video #{current.seq}</button>
+            )}
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={save} disabled={busy || missingRequired.length > 0}
+            <button onClick={saveTake} disabled={busy || missingRequired.length > 0}
               title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : undefined}
-              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
+          </div>
+        </div>
+      )}
+
+      <DealTotals e={e} derived={derived} unexplained={unexplained} takes={takes}
+        canEdit={canEdit} session={session} onSaved={onSaved} platform={platform} />
+    </section>
+  );
+}
+
+// The deal's own numbers, below the per-take tabs. The rolled-up metric columns are READ-ONLY —
+// setEngagementVideo + recomputeVideoRollup are their only writer since S351, so an input here
+// would be reverted by the next rollup. Sessions / Orders / Conversions ₹ are NOT per-video and
+// are still edited here through updateEngagement, exactly as the old card did.
+function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved, platform }) {
+  const { showToast: toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const applicable = ([k]) => isMetricApplicable(k, platform);
+  const rolled = VIDEO_METRIC_FIELDS.filter(f => !VIDEO_ONLY_FIELDS.has(f[0])).filter(applicable);
+  const shownDeal = DEAL_METRIC_FIELDS.filter(applicable);
+
+  function startEdit() {
+    const f = {};
+    for (const [k] of shownDeal) f[k] = e[k] ?? '';
+    setForm(f); setEditing(true);
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const patch = { engagement_id: e.id };
+      for (const [k] of shownDeal) patch[k] = form[k] === '' ? null : Number(form[k]);
+      await ignitionopsPost('updateEngagement', patch, session);
+      toast('Deal totals updated', 'success');
+      setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const value = (raw, reason, isMoney) => (raw == null || raw === '')
+    ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
+    : (isMoney ? `₹${Number(raw).toLocaleString()}` : Number(raw).toLocaleString());
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Deal totals ({takes.length} video{takes.length === 1 ? '' : 's'})
+        </div>
+        {canEdit && !editing && (
+          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit totals</button>
+        )}
+      </div>
+
+      {/* Summed across the takes by the worker — typed on a video tab, never here. */}
+      {rolled.map(([k, label]) => <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], false)} />)}
+
+      {editing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {shownDeal.map(([k, label]) => (
+            <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+              <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
+                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={busy}
+              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
         <>
-          {shown.map(([k, label]) => {
-            const raw = e[k];
-            const reason = (e.metric_gaps || {})[k];
-            const isMoney = k === 'conversions_value';
-            const val = (raw == null || raw === '')
-              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
-              : (isMoney ? `₹${Number(raw).toLocaleString()}` : Number(raw).toLocaleString());
-            return <KV key={k} label={label} value={val} />;
-          })}
+          {shownDeal.map(([k, label]) => (
+            <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], k === 'conversions_value')} />
+          ))}
           {e.actual_roas != null && <KV label="Actual ROAS" value={Number(e.actual_roas).toFixed(2)} />}
-
-          {/* Engagement ratios — every one divides by followers at post date. */}
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-              Engagement ratios
-            </div>
-            {derived.missingDenominator ? (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
-                Needs <strong style={{ color: 'var(--text-2)' }}>followers at post date</strong> before any
-                ratio can be worked out. It is the follower count on the day this posted, not today&apos;s —
-                using today&apos;s would understate a creator who has grown since. Add it above.
-              </div>
-            ) : (
-              derived.ratios.map(r => (
-                <KV key={r.key} label={r.label}
-                  value={r.value == null
-                    ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
-                    : (r.unit === 'x' ? `${r.value}x` : `${r.value}%`)} />
-              ))
-            )}
-          </div>
-
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-              Business
-            </div>
-            {derived.business.map(b => (
-              <KV key={b.key} label={b.label}
-                value={b.value == null
-                  ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
-                  : `₹${Number(b.value).toLocaleString()}`} />
-            ))}
-          </div>
-
-          {unexplained.length > 0 && (
-            <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-              {unexplained.length} metric{unexplained.length > 1 ? 's' : ''} blank with no reason recorded.
-              Edit and pick why, so a gap can be told apart from a genuine zero.
-            </div>
-          )}
         </>
       )}
-    </section>
+
+      {/* Engagement ratios — every one divides by followers at post date (the seq-1 take's). */}
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+          Engagement ratios
+        </div>
+        {derived.missingDenominator ? (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            Needs <strong style={{ color: 'var(--text-2)' }}>followers at post date</strong> before any
+            ratio can be worked out. It is the follower count on the day this posted, not today&apos;s —
+            using today&apos;s would understate a creator who has grown since. Add it on video #1 above.
+          </div>
+        ) : (
+          derived.ratios.map(r => (
+            <KV key={r.key} label={r.label}
+              value={r.value == null
+                ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
+                : (r.unit === 'x' ? `${r.value}x` : `${r.value}%`)} />
+          ))
+        )}
+      </div>
+
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+          Business
+        </div>
+        {derived.business.map(b => (
+          <KV key={b.key} label={b.label}
+            value={b.value == null
+              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
+              : `₹${Number(b.value).toLocaleString()}`} />
+        ))}
+      </div>
+
+      {unexplained.length > 0 && (
+        <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+          {unexplained.length} metric{unexplained.length > 1 ? 's' : ''} blank with no reason recorded.
+          Edit a video above and pick why, so a gap can be told apart from a genuine zero.
+        </div>
+      )}
+    </div>
   );
 }
 
