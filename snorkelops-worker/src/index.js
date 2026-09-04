@@ -1830,11 +1830,21 @@ export default {
                 return new Response(html, { headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
               }
               const pdf = await renderPdfFromHtml(html, env);
+              // Page count matters: a forced page break once put a near-empty second page
+              // carrying only "Prepared by:" on every single-page PO (S344). Byte size
+              // does not catch that — the count does, so it is asserted here.
+              let pages = null;
+              if (pdf) {
+                const head = new TextDecoder('latin1').decode(pdf);
+                const m = head.match(/\/Type\s*\/Pages[\s\S]{0,200}?\/Count\s+(\d+)/);
+                pages = m ? Number(m[1]) : (head.match(/\/Type\s*\/Page[^s]/g) || []).length || null;
+              }
               out.render = {
                 po_number: poNum,
                 lines: data.lines.length,
                 html_bytes: html.length,
                 pdf_bytes: pdf ? pdf.length : 0,
+                pages,
                 is_pdf: !!pdf && pdf[0] === 0x25 && pdf[1] === 0x50 && pdf[2] === 0x44 && pdf[3] === 0x46,
               };
               if (url.searchParams.get('test_send') === '1' && pdf) {
