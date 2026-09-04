@@ -25,9 +25,18 @@ async function getShopifyToken(env, force = false) {
   return _tok;
 }
 
+// THE canonical "can we talk to Shopify?" predicate. Exported so no caller re-implements it:
+// S352 wrote `SHOPIFY_CLIENT_ID && SHOPIFY_CLIENT_SECRET` in the tag-sync cron and it silently
+// skipped every tick on a deployment authenticating with a static SHOPIFY_ACCESS_TOKEN — the
+// narrower copy read as "not configured" while shopifyGraphQL itself was perfectly happy. A
+// duplicated predicate that drifts is worse than no guard, because the skip is quiet.
+function isConfigured(env) {
+  return !!env.SHOPIFY_STORE_DOMAIN
+    && (!!env.SHOPIFY_ACCESS_TOKEN || (!!env.SHOPIFY_CLIENT_ID && !!env.SHOPIFY_CLIENT_SECRET));
+}
+
 async function shopifyGraphQL(env, query, variables) {
-  if (!env.SHOPIFY_STORE_DOMAIN || (!env.SHOPIFY_ACCESS_TOKEN && (!env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET)))
-    throw new Error('shopify_not_configured');
+  if (!isConfigured(env)) throw new Error('shopify_not_configured');
   const run = async (tok) => {
     const res = await fetch(adminUrl(env), {
       method: 'POST',
@@ -740,7 +749,7 @@ async function backfillPage(env, after, pageSize = 40) {
 }
 
 module.exports = {
-  mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, fetchCustomerPageByQuery,
+  mapCustomer, normalizePhone, mktState, gidNum, isConfigured, fetchCustomerPage, fetchCustomerPageByQuery,
   applyNodes, applyMapped, backfillSample, backfillPage,
   mapLastOrder, fetchLastOrderPage, backfillLastOrderPage,
   // M4 webhooks + pixel

@@ -54,7 +54,7 @@ function stub() {
 function restore() { A.sbComms = realSb; SHOP.fetchCustomerPageByQuery = realFetch; SHOP.applyNodes = realApply; }
 
 const TS = require('../src/shopify-tag-sync.js');
-const ENV = { SHOPIFY_CLIENT_ID: 'id', SHOPIFY_CLIENT_SECRET: 'sec' };
+const ENV = { SHOPIFY_STORE_DOMAIN: 'ed7e3f-cf.myshopify.com', SHOPIFY_CLIENT_ID: 'id', SHOPIFY_CLIENT_SECRET: 'sec' };
 const NOW = Date.parse('2026-09-04T12:00:00Z');
 function cust(id, updatedAt) { return { id, updatedAt, email: `${id}@x.com`, tags: ['back-in-stock'] }; }
 
@@ -64,6 +64,28 @@ t('does nothing when Shopify is not configured', async () => {
   const r = await TS.runTagSync({}, NOW);
   assert.strictEqual(r.skipped, 'shopify_not_configured');
   assert.strictEqual(fetchCalls.length, 0);
+  restore();
+});
+
+t('a static SHOPIFY_ACCESS_TOKEN counts as configured — the S352 silent-skip regression', async () => {
+  // The first cut of runTagSync required CLIENT_ID + CLIENT_SECRET and so skipped EVERY tick on
+  // a deployment authenticating with a static access token, while shopifyGraphQL was perfectly
+  // happy. The predicate now lives once, in shopify.js. This test exists so the duplicate cannot
+  // come back: a quiet skip is invisible, which is what made it cost a deploy to notice.
+  stub();
+  settingsRow = { shopify_tag_sync_at: new Date(NOW - 2 * 60 * 60 * 1000).toISOString() };
+  pagesToServe = [{ customers: [cust('c1', '2026-09-04T11:00:00Z')], hasNext: false, cursor: null }];
+  const r = await TS.runTagSync(
+    { SHOPIFY_STORE_DOMAIN: 'ed7e3f-cf.myshopify.com', SHOPIFY_ACCESS_TOKEN: 'shpat_x' }, NOW);
+  assert.notStrictEqual(r.skipped, 'shopify_not_configured');
+  assert.strictEqual(r.customers, 1);
+  restore();
+});
+
+t('a store domain alone is NOT configured', async () => {
+  stub();
+  const r = await TS.runTagSync({ SHOPIFY_STORE_DOMAIN: 'x.myshopify.com' }, NOW);
+  assert.strictEqual(r.skipped, 'shopify_not_configured');
   restore();
 });
 

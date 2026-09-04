@@ -94,7 +94,8 @@ async function writeWatermark(env, iso) {
 
 // The cron entry point. Best-effort and self-gating; never throws at the scheduler.
 async function runTagSync(env, now = Date.now()) {
-  if (!env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) return { skipped: 'shopify_not_configured' };
+  // Use shopify.js's own predicate, never a local copy — see isConfigured there for why.
+  if (!SHOP.isConfigured(env)) return { skipped: 'shopify_not_configured' };
 
   const wm = await readWatermark(env);
   // FAIL CLOSED on a failed read — do not fall through to "never synced" and re-pull everything.
