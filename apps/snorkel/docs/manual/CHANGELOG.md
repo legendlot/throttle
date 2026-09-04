@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.13.0] - 2026-09-04
+### Changed
+- Finance Queue: documented putting an approved request on hold (reason required, requester
+  sees it), the On hold section (who/when/why, excluded from the To-pay total), Release, and
+  that a held request can still be rejected or cancelled by the requester.
+- Raising a Payment Request: documented the "On hold with Finance" status in the My Requests
+  flow, that it is a pause not a rejection, and that the requester can still cancel it.
+- Notifications: documented the "On hold" (with reason) and "Back with Finance" (on release)
+  notification kinds.
+
 ## [1.12.0] - 2026-09-04
 ### Changed
 - PO Requests: documented the new Items column (line count, or a dash for prose requests).
