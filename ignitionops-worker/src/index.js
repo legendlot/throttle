@@ -699,13 +699,14 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar, pr, epr, ubr] = await Promise.all([
+  const [hr, nr, ar, pr, epr, ubr, vr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/payments?engagement_id=eq.${eng.id}&select=*&order=paid_on.desc,created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_products?engagement_id=eq.${eng.id}&select=*&order=sort_order.asc`, env),
     sb(`/rest/v1/ugc_briefs?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=50`, env),
+    sb(`/rest/v1/engagement_videos?engagement_id=eq.${eng.id}&select=*&order=seq.asc`, env),
   ]);
 
   const payments = pr.data || [];
@@ -726,6 +727,10 @@ async function getEngagement(url, auth, env) {
   return ok({
     engagement: eng,
     products,
+    // Multiple videos per deal (Reann #10). Every deal has exactly one row today (seq 1,
+    // backfilled from engagement.video_link/post_date), so this is read-only scaffolding —
+    // the deal-level metrics on `engagement` are still the ones the app writes and totals.
+    videos: vr.data || [],
     ugc_briefs: ubr.data || [],
     history: hr.data || [],
     notes: nr.data || [],
@@ -734,6 +739,13 @@ async function getEngagement(url, auth, env) {
     paid_total: Math.round(paid_total),
     allowed_next: allowedTransitions(eng.stage, eng.engagement_type === 'ugc'),
   });
+}
+
+async function getEngagementVideos(url, auth, env) {
+  const eid = url.searchParams.get('engagement_id');
+  if (!eid) return err('engagement_id required', 400);
+  const r = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=*&order=seq.asc`, env);
+  return ok({ videos: r.data || [] });
 }
 
 async function getRoster(url, auth, env) {
@@ -3846,6 +3858,7 @@ const GET_ACTIONS = {
   getInfluencer,
   getEngagements,
   getEngagement,
+  getEngagementVideos,
   getRoster,
   getDiscountCodes,
   getCampaigns,

@@ -246,6 +246,8 @@ export default function EngagementDetailPage() {
 
         <PostLiveCard e={e} canEdit={canManage} session={session} onSaved={reload} />
 
+        <VideosCard videos={data.videos || []} />
+
         <PerformanceCard
           e={e}
           canEdit={!!perms?.ignition_manage && e.stage === 'live'}
@@ -873,6 +875,36 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
         </>
       )}
     </section>
+  );
+}
+
+// Multiple videos per deal (Reann #10) — READ-ONLY for now. Every deal has exactly one row
+// (seq 1, backfilled from video_link/post_date), so with one video this reads as a restatement
+// of Post/Live and nothing more; the seq column only appears once there is a second video.
+// Adding, editing and the views rollup are deliberately NOT here: the deal-level metrics on
+// `engagement` are still the only ones anything writes, and a second write surface before the
+// rollup exists would let a PATCH here be silently reverted by it later.
+function VideosCard({ videos }) {
+  if (!videos.length) return null;
+  return (
+    <Card title="Videos">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {videos.map((v, i) => (
+          <div key={v.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
+            {videos.length > 1 && <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>#{v.seq}</span>}
+            <span style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {v.video_link
+                ? <a href={v.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{v.video_link.slice(0, 34)}…</a>
+                : '—'}
+            </span>
+            <span style={{ marginLeft: 'auto', color: 'var(--text-3)', display: 'flex', gap: 10, whiteSpace: 'nowrap' }}>
+              <span>{v.post_date || '—'}</span>
+              <span title="Views">{v.views != null ? `${Number(v.views).toLocaleString()} views` : '— views'}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
