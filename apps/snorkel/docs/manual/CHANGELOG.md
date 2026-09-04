@@ -3,6 +3,19 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.12.0] - 2026-09-04
+### Changed
+- PO Requests: documented the new Items column (line count, or a dash for prose requests).
+- Vendors: documented the new Process field (Moulding/Painting/Assembly/Other), required at
+  creation, optional on edit, and the moulding-vendor painted-part-code PO block it enables.
+- Raising a Payment Request: documented attaching an invoice after the fact from a request's
+  Documents panel, available to the requester on their own request and to Finance, until the
+  request is cancelled or rejected.
+- Finance Queue: documented that only people authorised to pay see the UTR box and Mark-paid
+  button; everyone else sees a view-only notice.
+- Roles & What You Can See: added the money-authority model (raise vs. approve vs. pay; the
+  ₹1,00,000 approval threshold; Finance role ≠ payment authority).
+
 ## [1.10.0] - 2026-09-03
 ### Added
 - New Request: line items. "What do you need?" renamed "Why do you need it?" (context

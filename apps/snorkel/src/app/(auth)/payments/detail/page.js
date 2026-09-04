@@ -230,7 +230,15 @@ export default function PaymentRequestDetail() {
           </>
         )}
         {can.execute && r.status === 'approved' && (
-          <Btn kind="primary" disabled={busy} onClick={() => setPayOpen(true)}>Mark paid</Btn>
+          <>
+            <Btn kind="primary" disabled={busy} onClick={() => setPayOpen(true)}>Mark paid</Btn>
+            {/* Finance rejects the invoice it is holding. The worker gate was widened to
+                approve|execute|super_admin, but this button stayed on can.approve — so the
+                backend permission was unreachable and "finance can reject" was not true on
+                any screen. A request only reaches finance at `approved`, so that is the
+                status they act on; `pending_approval` stays the approver's. */}
+            <Btn disabled={busy} onClick={() => setRejectOpen(true)}>Reject</Btn>
+          </>
         )}
         {r.requested_by_user_id === userId && !['paid','cancelled','rejected'].includes(r.status) && (
           <Btn disabled={busy}

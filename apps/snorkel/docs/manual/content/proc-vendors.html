@@ -8,14 +8,20 @@
 </div>
 
 <h2 class="sec">The list</h2>
-<p>Each vendor row shows its code, name, category, country, contact, default payment terms, typical lead time, and whether it is active. Search matches across code, name, category, country, contact and GSTIN. Anyone in procurement can view the list; the <strong>New Vendor</strong> button and the per-row <strong>Edit</strong> appear only for those who can manage vendors.</p>
+<p>Each vendor row shows its code, name, category, <strong>Process</strong>, country, contact, default payment terms, typical lead time, and whether it is active. Search matches across code, name, category, country, contact and GSTIN. Anyone in procurement can view the list; the <strong>New Vendor</strong> button and the per-row <strong>Edit</strong> appear only for those who can manage vendors.</p>
 
 <h2 class="sec">A vendor record</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Identity</div><div class="a-val"><p>Name, category, source country, location.</p></div></div>
+  <div class="a-row"><div class="a-key">Process</div><div class="a-val"><p>What this vendor <em>does</em> to the part: Moulding, Painting, Assembly or Other. Required when you create a vendor; you can leave it as-is when editing an existing one, which is why most vendors on file today are still unclassified.</p></div></div>
   <div class="a-row"><div class="a-key">Terms</div><div class="a-val"><p>Currency, default payment terms and typical lead time &mdash; these pre-fill the PO.</p></div></div>
   <div class="a-row"><div class="a-key">Contact</div><div class="a-val"><p>Name, phone and email.</p></div></div>
   <div class="a-row"><div class="a-key">GSTIN &amp; address</div><div class="a-val"><p>The supplier&rsquo;s tax number and address. The GSTIN&rsquo;s state decides whether a PO is taxed as CGST+SGST or IGST.</p></div></div>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; A Moulding vendor cannot be sent a painted part code</div>
+  <p>A moulding vendor makes the <strong>unpainted</strong> part. Mark a vendor as <strong>Moulding</strong> and Snorkel will refuse any purchase order to them that carries a painted part code, telling you the unpainted code to order instead. This only works for vendors you have classified, so set Process correctly when you create a moulding vendor.</p>
 </div>
 
 <h2 class="sec">Supplied items</h2>
