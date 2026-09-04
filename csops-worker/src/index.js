@@ -28,7 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
-import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange } from './analytics.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange, istBucketRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 
 
@@ -1941,30 +1941,30 @@ async function getAgentConversationDaily(params, auth, env) {
   const tagIds   = arrParam(params, 'tag_id');
   const agentIds = arrParam(params, 'agent');
   const businessHours = params.get('business_hours') === 'true';
+  // Grain (S349c): day | week (Monday-start) | month — one RPC call per BUCKET, each clipped to
+  // the range, so a weekly average is the week's own average and never a mean of daily means.
+  const grain = ['week', 'month'].includes(params.get('grain')) ? params.get('grain') : 'day';
 
-  const range = istDayRange(from, to, MAX_DAILY_DAYS);
+  const range = istBucketRange(from, to, grain, MAX_DAILY_DAYS);
   if (!range.ok) {
     return range.reason === 'too_long'
-      ? err(`The daily trend covers up to ${MAX_DAILY_DAYS} days — this range is ${range.count}. Narrow the dates.`, 400)
+      ? err(`The trend covers up to ${MAX_DAILY_DAYS} ${grain === 'day' ? 'days' : grain + 's'} — this range is ${range.count}. Narrow the dates or pick a coarser grain.`, 400)
       : err('Invalid date range', 400);
   }
-  const days = range.days;
+  const days = range.buckets;
 
-  const fromMs = Date.parse(from), toMs = Date.parse(to);
-  const oneDay = async (day) => {
-    const dayStart = Date.parse(`${day}T00:00:00.000+05:30`);
-    const dayEnd   = Date.parse(`${day}T23:59:59.999+05:30`);
+  // `b.from/to` are already clipped to the requested range by istBucketRange.
+  const oneDay = async (b) => {
     const r = await sb('/rest/v1/rpc/cs_agent_conversation_report', env, {
       method: 'POST',
       body: JSON.stringify({
-        p_from: new Date(Math.max(dayStart, fromMs)).toISOString(),
-        p_to:   new Date(Math.min(dayEnd, toMs)).toISOString(),
+        p_from: b.from, p_to: b.to,
         p_channels: channels, p_tag_ids: tagIds, p_agent_ids: agentIds,
         p_business_hours: businessHours,
       }),
     });
-    if (!r.ok) { console.error('[daily-trend]', day, r.status, JSON.stringify(r.data)); throw new Error(day); }
-    return { day, report: r.data || {} };
+    if (!r.ok) { console.error('[daily-trend]', b.bucket, r.status, JSON.stringify(r.data)); throw new Error(b.bucket); }
+    return { day: b.bucket, report: r.data || {} };   // `day` = the bucket's IST start date
   };
   const dayReports = [];
   try {
@@ -1979,7 +1979,7 @@ async function getAgentConversationDaily(params, auth, env) {
 
   const series = dailySeries(dayReports);
   return ok({
-    range: { from, to, business_hours: businessHours, days: days.length,
+    range: { from, to, business_hours: businessHours, days: days.length, grain,
              channels, tag_ids: tagIds, agent_ids: agentIds },
     metrics: DAILY_METRICS,
     ...series,
@@ -2375,6 +2375,7 @@ async function getCallReports(params, auth, env) {
 
   let total = 0, answered = 0, missed = 0, abandoned = 0, totalDur = 0, durCount = 0;
   const daily = {}, byAccount = {}, byDepartment = {}, byAgent = {}, byHour = Array(24).fill(0);
+  const dailyByAgent = {};   // agent name → { day → row } (S349c)
   let incoming_total = 0, incoming_answered = 0, outgoing_total = 0, outgoing_answered = 0;
 
   for (const c of rows) {
@@ -2389,9 +2390,23 @@ async function getCallReports(params, auth, env) {
     // which is exactly the population the callback and abandoned-call work cares about.
     const day = istDateStr(c.created_at);
     if (day) {
-      daily[day] = daily[day] || { date: day, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
+      daily[day] = daily[day] || { date: day, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0, dur_sum: 0, dur_count: 0 };
       if (c.direction === 'incoming') { daily[day].in_total++; if (reachedAgent(c)) daily[day].in_answered++; }
       else if (c.direction === 'outgoing') { daily[day].out_total++; if (c.status === 'answered') daily[day].out_answered++; }
+      // Duration as SUM + COUNT, not an average: the page folds days into weeks/months and only
+      // sums fold exactly (S349c). Same rule for the per-agent rows below.
+      if (c.duration_seconds && c.duration_seconds > 0) { daily[day].dur_sum += c.duration_seconds; daily[day].dur_count++; }
+      // Per-agent per-day (S349c, the Calls trend per agent). Same attribution as byAgent below:
+      // a missed call has no agent, so only answered/outbound work lands here.
+      if (c.agent_user_id || c.agent_name) {
+        const an = c.agent_name || '— unknown —';
+        const da = (dailyByAgent[an] ||= {});
+        const r = da[day] || (da[day] = { date: day, in_answered: 0, out_total: 0, out_answered: 0, answered_calls: 0, dur_sum: 0, dur_count: 0 });
+        if (c.status === 'answered') r.answered_calls++;
+        if (c.direction === 'incoming') { if (reachedAgent(c)) r.in_answered++; }
+        else if (c.direction === 'outgoing') { r.out_total++; if (c.status === 'answered') r.out_answered++; }
+        if (c.duration_seconds && c.duration_seconds > 0) { r.dur_sum += c.duration_seconds; r.dur_count++; }
+      }
     }
 
     if (c.direction === 'incoming') { incoming_total++; if (reachedAgent(c)) incoming_answered++; }
@@ -2491,6 +2506,9 @@ async function getCallReports(params, auth, env) {
       incoming_not_reached: incoming_total - incoming_answered,
     },
     daily: Object.values(daily).sort((a, b) => a.date.localeCompare(b.date)),
+    daily_by_agent: Object.entries(dailyByAgent).map(([name, byDay]) => ({
+      name, days: Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date)),
+    })),
     by_direction: {
       // `answered` here now means REACHED AN AGENT (see reachedAgent above), so the inbound
       // answer rate is a real answer rate rather than a restatement of how many rows exist.

@@ -200,3 +200,40 @@ export function istDayRange(fromIso, toIso, maxDays = 62) {
   for (let d = firstDay; d <= lastDay; d++) days.push(new Date(d * DAY).toISOString().slice(0, 10));
   return { ok: true, days };
 }
+
+// istBucketRange — the IST buckets (day / Monday-start week / calendar month) a [from, to] range
+// touches, each CLIPPED to the range so a bucket's RPC window never reaches outside what the user
+// asked for (S349c: weekly + monthly grains for the agent trend). Same validation rules as
+// istDayRange, which is now the 'day' case. Returns { ok:true, buckets:[{ bucket, from, to }] }
+// (`bucket` = the IST start date 'YYYY-MM-DD'; from/to = ISO instants) or { ok:false, reason, count }.
+export function istBucketRange(fromIso, toIso, grain = 'day', maxBuckets = 62) {
+  const fromMs = Date.parse(fromIso), toMs = Date.parse(toIso);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) return { ok: false, reason: 'invalid' };
+  const IST = 5.5 * 3600 * 1000, DAY = 86400000;
+  const firstDay = Math.floor((fromMs + IST) / DAY), lastDay = Math.floor((toMs + IST) / DAY);
+  const ymd = (dayNo) => new Date(dayNo * DAY).toISOString().slice(0, 10);
+  // Bucket start for a day number, and the next bucket's start — the count is derived from the
+  // starts arithmetically before anything is enumerated (an absurd `to` must cost O(1)).
+  const startOf = (dayNo) => {
+    if (grain === 'month') { const d = new Date(dayNo * DAY); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / DAY; }
+    if (grain === 'week')  { const dow = (new Date(dayNo * DAY).getUTCDay() + 6) % 7; return dayNo - dow; }
+    return dayNo;
+  };
+  const nextStart = (startNo) => {
+    if (grain === 'month') { const d = new Date(startNo * DAY); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / DAY; }
+    return startNo + (grain === 'week' ? 7 : 1);
+  };
+  const first = startOf(firstDay), last = startOf(lastDay);
+  let count;
+  if (grain === 'month') {
+    const a = new Date(first * DAY), b = new Date(last * DAY);
+    count = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth()) + 1;
+  } else count = Math.floor((last - first) / (grain === 'week' ? 7 : 1)) + 1;
+  if (count > maxBuckets) return { ok: false, reason: 'too_long', count };
+  const buckets = [];
+  for (let s = first; s <= last; s = nextStart(s)) {
+    const bStart = s * DAY - IST, bEnd = nextStart(s) * DAY - IST - 1;   // IST midnight → instant
+    buckets.push({ bucket: ymd(s), from: new Date(Math.max(bStart, fromMs)).toISOString(), to: new Date(Math.min(bEnd, toMs)).toISOString() });
+  }
+  return { ok: true, buckets };
+}

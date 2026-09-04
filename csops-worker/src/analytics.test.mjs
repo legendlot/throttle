@@ -270,3 +270,32 @@ test('istDayRange: garbage and same-day from > to are invalid, not a silent zero
   assert.deepEqual(istDayRange('garbage', '2026-09-04T00:00:00Z'), { ok: false, reason: 'invalid' });
   assert.deepEqual(istDayRange('2026-09-04T18:00:00Z', '2026-09-04T09:00:00Z'), { ok: false, reason: 'invalid' });
 });
+
+// ── istBucketRange (S349c) ───────────────────────────────────────────────────
+
+import { istBucketRange } from './analytics.js';
+
+test('istBucketRange: weeks start on Monday and are clipped to the range at both ends', () => {
+  // 2026-09-02 is a Wednesday; 2026-09-10 is a Thursday.
+  const r = istBucketRange('2026-09-02T00:00:00+05:30', '2026-09-10T23:59:59.999+05:30', 'week');
+  assert.deepEqual(r.buckets.map(b => b.bucket), ['2026-08-31', '2026-09-07']);
+  assert.equal(r.buckets[0].from, '2026-09-01T18:30:00.000Z');      // clipped to the range start, not Monday
+  assert.equal(r.buckets[0].to,   '2026-09-06T18:29:59.999Z');      // Sunday end-of-day IST
+  assert.equal(r.buckets[1].to,   '2026-09-10T18:29:59.999Z');      // clipped to the range end
+});
+
+test('istBucketRange: months are calendar months, count is arithmetic, cap applies to buckets', () => {
+  const r = istBucketRange('2026-01-15T00:00:00+05:30', '2026-09-04T23:59:59.999+05:30', 'month');
+  assert.equal(r.buckets.length, 9);
+  assert.equal(r.buckets[0].bucket, '2026-01-01');
+  assert.equal(r.buckets[0].from, '2026-01-14T18:30:00.000Z');
+  assert.equal(r.buckets[1].from, '2026-01-31T18:30:00.000Z');      // Feb 1 00:00 IST
+  assert.equal(r.buckets[1].to,   '2026-02-28T18:29:59.999Z');      // Feb 28 23:59:59.999 IST
+  const tooLong = istBucketRange('2020-01-01T00:00:00Z', '2026-09-04T00:00:00Z', 'month', 62);
+  assert.equal(tooLong.ok, false); assert.equal(tooLong.count, 81);
+});
+
+test('istBucketRange: day grain agrees with istDayRange', () => {
+  const a = istBucketRange('2026-08-30T18:30:00Z', '2026-09-02T18:29:59.999Z', 'day').buckets.map(b => b.bucket);
+  assert.deepEqual(a, istDayRange('2026-08-30T18:30:00Z', '2026-09-02T18:29:59.999Z').days);
+});

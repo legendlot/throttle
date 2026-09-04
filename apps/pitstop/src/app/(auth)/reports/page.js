@@ -75,6 +75,7 @@ export default function ReportsPage() {
   const [dailyErr, setDailyErr] = useState(null);
   const [dailyMetric, setDailyMetric] = useState('queries');
   const [dailyClamped, setDailyClamped] = useState(false);   // range longer than the daily cap
+  const [dailyGrain, setDailyGrain] = useState('day');       // 'day' | 'week' | 'month' (S349c)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -166,11 +167,17 @@ export default function ReportsPage() {
       // 62 at daily grain — so without this the panel showed an error on every first visit until
       // "Last 7 days" was clicked (S349b hostile review). Clamp to the LAST 62 days of the range
       // and say so in the caption; the KPIs and table above keep the full range.
+      // Grain-aware (S349c): the cap is 62 BUCKETS, so a week grain clamps at 62 weeks and a
+      // month grain at ~62 months — year-to-date needs no clamp once the grain is coarser.
       const dayCount = Math.round((Date.parse(toIsoStart(to)) - Date.parse(toIsoStart(from))) / 86400000) + 1;
-      const clamped = dayCount > DAILY_MAX_DAYS;
-      const dailyArgs = clamped
-        ? { ...args, from: toIsoStart(new Date(Date.parse(toIsoStart(to)) - (DAILY_MAX_DAYS - 1) * 86400000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)) }
-        : args;
+      const maxDays = dailyGrain === 'month' ? DAILY_MAX_DAYS * 28 : dailyGrain === 'week' ? DAILY_MAX_DAYS * 7 - 6 : DAILY_MAX_DAYS;
+      const clamped = dayCount > maxDays;
+      const dailyArgs = {
+        ...(clamped
+          ? { ...args, from: toIsoStart(new Date(Date.parse(toIsoStart(to)) - (maxDays - 1) * 86400000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)) }
+          : args),
+        grain: dailyGrain,
+      };
       setDailyData(null); setDailyErr(null); setDailyClamped(clamped);
       csopsGet('getAgentConversationDaily', dailyArgs, session)
         .then(d => { if (alive) setDailyData(d); })
@@ -178,7 +185,7 @@ export default function ReportsPage() {
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels]);
+  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels, dailyGrain]);
 
   function exportCsv() {
     // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
@@ -296,8 +303,9 @@ export default function ReportsPage() {
     if (dailyData?.days?.length) {
       const M = dailyData.metrics || [];
       lines.push('');
-      lines.push(`Daily trend (${dailyData.range?.business_hours ? 'business hours' : '24x7'}),${dailyData.days.length} days`);
-      lines.push(['Day', 'Agent', ...M.map(m => m.label + (m.kind === 'minutes' ? ' (min)' : m.kind === 'pct' ? ' %' : ''))].map(esc).join(','));
+      const gw = grainWord(dailyData.range?.grain);
+      lines.push(`${gw.title} trend (${dailyData.range?.business_hours ? 'business hours' : '24x7'}),${dailyData.days.length} ${gw.plural}`);
+      lines.push([gw.bucket, 'Agent', ...M.map(m => m.label + (m.kind === 'minutes' ? ' (min)' : m.kind === 'pct' ? ' %' : ''))].map(esc).join(','));
       for (const d of dailyData.days) lines.push([d.day, 'All agents', ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
       for (const a of (dailyData.by_agent || [])) {
         for (const d of a.days) lines.push([d.day, a.name, ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
@@ -356,6 +364,10 @@ export default function ReportsPage() {
                                    setFrom(dateStr(f)); setTo(dateStr(d)); }}
             style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }} title="Today and the six days before it">
             Last 7 days
+          </button>
+          <button onClick={() => { const d = new Date(); setFrom(dateStr(new Date(d.getFullYear(), d.getMonth(), 1))); setTo(dateStr(d)); }}
+            style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }} title="The 1st of this month to today">
+            MTD
           </button>
           <button onClick={exportCsv} disabled={view === 'agents' ? !agentData?.by_agent?.length : !data} style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
@@ -464,7 +476,8 @@ export default function ReportsPage() {
           {loading || !agentData ? <Spinner /> : <AgentsPanel data={agentData} wait={waitData} />}
           {!loading && agentData && (
             <DailyTrendPanel data={dailyData} error={dailyErr} metric={dailyMetric} onMetric={setDailyMetric}
-              businessHours={!!agentData.range?.business_hours} clamped={dailyClamped} />
+              businessHours={!!agentData.range?.business_hours} clamped={dailyClamped}
+              grain={dailyGrain} onGrain={setDailyGrain} />
           )}
         </>
       )}
@@ -516,10 +529,22 @@ function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, c
 // should read, so for minutes/rates the smaller agents are simply not drawn.
 const DAILY_TOP_AGENTS = 6;
 const DAILY_MAX_DAYS = 62;     // mirrors csops MAX_DAILY_DAYS — the page clamps so the worker never has to refuse
+const GRAINS = [['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']];
+function grainWord(g) {
+  if (g === 'month') return { title: 'Monthly', plural: 'months', bucket: 'Month' };
+  if (g === 'week')  return { title: 'Weekly',  plural: 'weeks',  bucket: 'Week beginning' };
+  return { title: 'Daily', plural: 'days', bucket: 'Day' };
+}
+const fmtSecs = (s) => s == null || isNaN(s) ? '—' : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 const DAILY_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6'];
-const fmtDay = (d) => { const t = Date.parse(`${d}T00:00:00Z`); return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : d; };
+const fmtDay = (d, grain) => {
+  const t = Date.parse(`${d}T00:00:00Z`);
+  if (!Number.isFinite(t)) return d;
+  if (grain === 'month') return new Date(t).toLocaleDateString('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+};
 
-function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped }) {
+function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped, grain = 'day', onGrain, title }) {
   const metrics = data?.metrics || [];
   const m = metrics.find(x => x.key === metric) || metrics[0];
   const rows = useMemo(() => {
@@ -528,6 +553,7 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped
     const rest = (data.by_agent || []).slice(DAILY_TOP_AGENTS);
     return data.days.map((d, i) => {
       const row = { day: d.day, team: d[m.key] };
+      if (m.teamOnly) return row;   // a metric with no per-agent meaning (e.g. calls nobody took)
       for (const a of top) row[a.name] = a.days[i]?.[m.key] ?? null;
       if (rest.length && m.kind === 'count') row.Others = rest.reduce((s, a) => s + (a.days[i]?.[m.key] || 0), 0);
       return row;
@@ -539,24 +565,32 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped
     // A literal, not var(--t1): recharts writes `stroke` as an SVG presentation attribute, where a
     // CSS variable is not guaranteed to resolve (Chart.js documents the same constraint).
     const out = [{ key: 'team', name: 'All agents', color: '#f5f5f6', kind: 'line' }];
+    if (m.teamOnly) return out;
     top.forEach((a, i) => out.push({ key: a.name, name: a.name, color: DAILY_COLORS[i % DAILY_COLORS.length], kind: 'line' }));
     if (data.by_agent.length > DAILY_TOP_AGENTS && m.kind === 'count') out.push({ key: 'Others', name: 'Others', color: '#8b8f98', kind: 'line' });
     return out;
   }, [data, m]);
-  const yFmt = m?.kind === 'minutes' ? (v) => dur(v) : m?.kind === 'pct' ? (v) => `${v}%` : undefined;
+  const yFmt = m?.kind === 'minutes' ? (v) => dur(v) : m?.kind === 'seconds' ? fmtSecs : m?.kind === 'pct' ? (v) => `${v}%` : undefined;
+  const gw = grainWord(grain);
   const hidden = Math.max(0, (data?.by_agent?.length || 0) - DAILY_TOP_AGENTS);
 
   return (
     <div style={{ marginTop: 'var(--gap)', padding: 'var(--pad)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontFamily: 'var(--f-mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Daily trend · {businessHours ? 'business hours' : '24×7'}
+          {title || `${gw.title} trend`}{businessHours != null ? ` · ${businessHours ? 'business hours' : '24×7'}` : ''}
         </div>
+        {onGrain && (
+          <select value={grain} onChange={e => onGrain(e.target.value)}
+            style={{ fontFamily: 'var(--f-ui)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+            {GRAINS.map(([g, l]) => <option key={g} value={g}>{l}</option>)}
+          </select>
+        )}
         <select value={m?.key || ''} onChange={e => onMetric(e.target.value)}
           style={{ fontFamily: 'var(--f-ui)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
           {metrics.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
         </select>
-        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{clamped ? `last ${data.range.days} days of the range shown (daily trend caps at ${DAILY_MAX_DAYS})` : `${data.range.days} days`} · one line per agent, busiest {Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown{hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}</span>}
+        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{clamped ? `last ${data.range.days} ${gw.plural} of the range shown (caps at ${DAILY_MAX_DAYS})` : `${data.range.days} ${gw.plural}`}{m?.teamOnly ? ' · team only (this metric has no per-agent meaning)' : ` · one line per agent, busiest ${Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown${hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}`}</span>}
         {/* Verified live 2026-09-04: queries/answered/assigned/resolved sum to the range total exactly;
             handled does NOT (1,589 vs 1,179 over 7 days) because a conversation replied to on three
             days is handled on each of them and once in the range. Say so, or the sum reads as a bug. */}
@@ -567,7 +601,7 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped
       ) : !data ? (
         <Spinner />
       ) : (
-        <TrendChart data={rows} xKey="day" series={series} xFmt={fmtDay} yFmt={yFmt} height={260} xLabel="Day" showLegend />
+        <TrendChart data={rows} xKey="day" series={series} xFmt={(d) => fmtDay(d, grain)} yFmt={yFmt} height={260} xLabel={gw.bucket} showLegend />
       )}
     </div>
   );
@@ -873,9 +907,8 @@ function CallsPanel({ data }) {
         <CallsBreakdown rows={data.by_agent || []} variant="agent" />
       </Panel>
 
-      <Panel title="Call volume trend">
-        <CallTrend daily={data.daily || []} />
-      </Panel>
+      {/* The trend panel draws its own card (shared with the Agents tab) — no Panel wrapper. */}
+      <CallTrend daily={data.daily || []} byAgent={data.daily_by_agent || []} />
 
       <Panel title="Hourly distribution (IST)">
         <HourlyBars hourly={data.hourly || []} />
@@ -892,61 +925,60 @@ function CallsPanel({ data }) {
 // Day / week / month is rolled up HERE rather than server-side on purpose — the payload is one
 // row per day (≤366 for a year), so a second grain parameter on the handler would buy nothing
 // and give the two grains two places to disagree.
-function CallTrend({ daily }) {
-  const [grain, setGrain] = useState('day');
-  const rows = useMemo(() => {
-    // Filter to well-formed dates first. `new Date('nullT00:00:00Z').toISOString()` THROWS a
-    // RangeError, and a throw inside useMemo white-screens the whole Calls tab — a malformed
-    // row must cost one bar, not the page. The worker only emits YYYY-MM-DD, so this is a belt.
-    const src = (daily || [])
-      .filter(d => typeof d?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.date))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    if (grain === 'day') return src.map(d => ({ ...d, bucket: d.date }));
+// Calls trend (S349c) — the SAME panel as the Agents tab, fed by folding the worker's per-day
+// team rows and per-day per-agent rows into day / Monday-week / month buckets on the page. Only
+// SUMS are folded (counts, duration sum + count); the rate and the average are derived per bucket
+// AFTER the fold, so a weekly answer rate is the week's own rate, never a mean of daily rates.
+const CALL_METRICS = [
+  { key: 'in_total',     label: 'Inbound',                 kind: 'count', teamOnly: true },
+  { key: 'in_answered',  label: 'Reached an agent',        kind: 'count' },
+  { key: 'in_missed',    label: 'Did not reach an agent',  kind: 'count', teamOnly: true },
+  { key: 'answer_rate',  label: 'Inbound answer rate',     kind: 'pct',   teamOnly: true },
+  { key: 'out_total',    label: 'Outbound',                kind: 'count' },
+  { key: 'out_answered', label: 'Outbound answered',       kind: 'count' },
+  { key: 'avg_duration', label: 'Avg duration',            kind: 'seconds' },
+];
+function bucketOf(date, grain) {
+  if (grain === 'month') return `${date.slice(0, 7)}-01`;
+  if (grain === 'week') { const dt = new Date(`${date}T00:00:00Z`); dt.setUTCDate(dt.getUTCDate() - (dt.getUTCDay() + 6) % 7); return dt.toISOString().slice(0, 10); }
+  return date;
+}
+const CALL_SUMS = ['in_total', 'in_answered', 'out_total', 'out_answered', 'dur_sum', 'dur_count'];
+function finishCallRow(r) {
+  return {
+    ...r,
+    in_missed:    (r.in_total || 0) - (r.in_answered || 0),
+    answer_rate:  r.in_total ? +((100 * r.in_answered) / r.in_total).toFixed(1) : null,
+    avg_duration: r.dur_count ? Math.round(r.dur_sum / r.dur_count) : null,
+  };
+}
+function foldCalls(daily = [], byAgent = [], grain) {
+  const ok = (d) => typeof d?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.date);
+  const fold = (rows) => {
     const acc = new Map();
-    for (const d of src) {
-      // Dates are IST-bucketed by the worker, so `new Date(d.date)` is parsed as UTC midnight
-      // and only ever used for arithmetic here — no further timezone shifting.
-      let key;
-      if (grain === 'month') key = (d.date || '').slice(0, 7);
-      else {
-        const dt = new Date(`${d.date}T00:00:00Z`);
-        const dow = (dt.getUTCDay() + 6) % 7;            // Monday-start week
-        dt.setUTCDate(dt.getUTCDate() - dow);
-        key = dt.toISOString().slice(0, 10);
-      }
-      const cur = acc.get(key) || { bucket: key, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
-      cur.in_total += d.in_total || 0;   cur.in_answered += d.in_answered || 0;
-      cur.out_total += d.out_total || 0; cur.out_answered += d.out_answered || 0;
-      acc.set(key, cur);
+    for (const d of rows.filter(ok)) {
+      const k = bucketOf(d.date, grain);
+      const cur = acc.get(k) || Object.fromEntries([['day', k], ...CALL_SUMS.map(x => [x, 0])]);
+      for (const x of CALL_SUMS) cur[x] += d[x] || 0;
+      acc.set(k, cur);
     }
-    return [...acc.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
-  }, [daily, grain]);
-
-  if (!rows.length) return <div style={{ fontSize: 12.5, color: 'var(--t3)' }}>No calls in range.</div>;
-
-  const series = [
-    { key: 'in_total',    name: 'Inbound',           color: 'info',   kind: 'area' },
-    { key: 'in_answered', name: 'Inbound answered',  color: 'ok',     kind: 'line' },
-    { key: 'out_total',   name: 'Outbound',          color: 'accent', kind: 'line' },
-  ];
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-        {['day', 'week', 'month'].map(g => (
-          <button key={g} onClick={() => setGrain(g)}
-            style={{ padding: '4px 10px', fontSize: 11.5, borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                     textTransform: 'capitalize', fontWeight: grain === g ? 700 : 500,
-                     border: `1px solid ${grain === g ? 'var(--accent)' : 'var(--border-2)'}`,
-                     background: grain === g ? 'var(--accent)' : 'transparent',
-                     color: grain === g ? '#fff' : 'var(--t2)' }}>
-            {g}
-          </button>
-        ))}
-      </div>
-      <TrendChart data={rows} xKey="bucket" series={series} height={240}
-        xLabel={grain === 'month' ? 'Month' : grain === 'week' ? 'Week beginning' : 'Day'} showLegend />
-    </div>
-  );
+    return acc;
+  };
+  const team = fold(daily);
+  const days = [...team.keys()].sort().map(k => finishCallRow(team.get(k)));
+  const by_agent = byAgent.map(a => {
+    const f = fold(a.days || []);
+    const rows = days.map(d => finishCallRow(f.get(d.day) || Object.fromEntries([['day', d.day], ...CALL_SUMS.map(x => [x, 0])])));
+    return { name: a.name, agent_id: null, handled_total: rows.reduce((s, r) => s + (r.in_answered || 0) + (r.out_answered || 0), 0), days: rows };
+  }).sort((a, b) => b.handled_total - a.handled_total || a.name.localeCompare(b.name));
+  return { range: { days: days.length, grain }, metrics: CALL_METRICS, days, by_agent };
+}
+function CallTrend({ daily, byAgent }) {
+  const [grain, setGrain] = useState('day');
+  const [metric, setMetric] = useState('in_total');
+  const data = useMemo(() => foldCalls(daily, byAgent, grain), [daily, byAgent, grain]);
+  if (!data.days.length) return <div style={{ fontSize: 12.5, color: 'var(--t3)' }}>No calls in range.</div>;
+  return <DailyTrendPanel data={data} metric={metric} onMetric={setMetric} grain={grain} onGrain={setGrain} title="Call trend" businessHours={null} />;
 }
 
 function CallsBreakdown({ rows, variant }) {
