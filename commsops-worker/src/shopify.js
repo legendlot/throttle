@@ -466,6 +466,40 @@ query($first:Int!,$after:String){
   }
 }`;
 
+// SEARCH-FILTERED customer page, sorted oldest-updated first (S352, the tag re-pull).
+//
+// A SEPARATE QUERY FROM CUSTOMERS_QUERY ON PURPOSE. It would have been less code to add
+// `query`/`sortKey` arguments to the shared one, but CUSTOMERS_QUERY backs the whole-catalogue
+// backfill (backfillPage / backfillSample) — a working path whose cursor semantics depend on
+// Shopify's default ordering. Changing the sort under it to serve a new caller is exactly the
+// "fixed N−1 of N sites" shape CORE.md warns about, in reverse: it would silently alter a path
+// nobody was asking me to touch. The node selection is identical apart from `updatedAt`.
+//
+// `sortKey: UPDATED_AT, reverse: false` is load-bearing, not cosmetic: ascending order is what
+// lets a run that hits the page cap advance the watermark to the last row it actually saw and
+// resume cleanly. Under Shopify's default (relevance/id) ordering there is no safe resume point,
+// so a truncated run would have to either re-pull from the start or skip rows.
+const CUSTOMERS_BY_QUERY = `
+query($first:Int!,$after:String,$query:String){
+  customers(first:$first, after:$after, query:$query, sortKey:UPDATED_AT, reverse:false){
+    pageInfo{ hasNextPage endCursor }
+    edges{ node{
+      id firstName lastName email phone numberOfOrders createdAt updatedAt tags
+      amountSpent{ amount currencyCode }
+      defaultAddress{ city }
+      emailMarketingConsent{ marketingState consentUpdatedAt }
+      smsMarketingConsent{ marketingState consentUpdatedAt }
+    }}
+  }
+}`;
+
+async function fetchCustomerPageByQuery(env, { first = 100, after = null, query = null }) {
+  const d = await shopifyGraphQL(env, CUSTOMERS_BY_QUERY, { first, after, query });
+  const conn = d.customers;
+  return { customers: (conn.edges || []).map((e) => e.node),
+    hasNext: !!conn.pageInfo?.hasNextPage, cursor: conn.pageInfo?.endCursor || null };
+}
+
 async function fetchCustomerPage(env, { first = 100, after = null }) {
   const d = await shopifyGraphQL(env, CUSTOMERS_QUERY, { first, after });
   const conn = d.customers;
@@ -706,7 +740,8 @@ async function backfillPage(env, after, pageSize = 40) {
 }
 
 module.exports = {
-  mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, applyNodes, applyMapped, backfillSample, backfillPage,
+  mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, fetchCustomerPageByQuery,
+  applyNodes, applyMapped, backfillSample, backfillPage,
   mapLastOrder, fetchLastOrderPage, backfillLastOrderPage,
   // M4 webhooks + pixel
   mapCustomerRest, identsFromContact, mapOrderEvent, mapCheckoutEvent, ORDER_TOPIC_EVENT,

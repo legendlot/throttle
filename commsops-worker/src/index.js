@@ -24,6 +24,7 @@ const SHOPFLO = require('./shopflo-webhooks.js');
 const CF = require('./cashfree.js');
 const CFWH = require('./cashfree-webhooks.js');
 const LCWH = require('./limechat-webhooks.js');
+const TAGSYNC = require('./shopify-tag-sync.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
@@ -2561,6 +2562,18 @@ async function runScheduled(env) {
     if (r?.sent) console.log('rto_stage_events', JSON.stringify(r));
   } catch (e) { console.log('rto_stage_events_error', e?.message || String(e)); }
 
+  // 0c. Shopify customer TAG re-pull. Tags are absent from the REST customer webhook payload, so
+  // the live mirror has written none since the 2026-06-30 backfill (8,400 tagged profiles, all
+  // from one 3-hour window that day). GraphQL is the only place tags exist, hence a pull.
+  // Self-gating on settings.shopify_tag_sync_at (hourly), fail-closed when unset, and
+  // best-effort like everything above it — a Shopify outage must never break the campaign
+  // scheduler below. See shopify-tag-sync.js.
+  try {
+    const r = await TAGSYNC.runTagSync(env);
+    if (r?.customers) console.log('shopify_tag_sync', JSON.stringify(r));
+    else if (r?.skipped && r.skipped !== 'too_soon') console.log('shopify_tag_sync_skipped', r.skipped);
+  } catch (e) { console.log('shopify_tag_sync_error', e?.message || String(e)); }
+
   // 1. due scheduled campaigns
   try {
     const due = await A.sbComms(
@@ -3370,6 +3383,28 @@ export default {
     // What WA_TOKEN can do (scopes only — never the token). Distinguishes a missing
     // whatsapp_business_messaging scope from an app that is simply not subscribed to the WABA:
     // both surface as the same (#200) on send, and only one is fixed by subscribing.
+    // Manual Shopify customer pull by search query — the SAME path the hourly tag sync uses,
+    // pointed at an arbitrary query. Two uses: arming/priming the sync, and the one-off
+    // extraction of the incumbent PDP form's back-in-stock requests
+    // (`{"query":"tag:back-in-stock"}`), which is its own backlog item and deliberately not its
+    // own code. Read-from-Shopify + upsert-into-comms only; it sends nothing.
+    // ⚠️ `maxPages` is capped server-side — an unbounded manual pull could page all ~92k
+    // customers and burn the Shopify API budget the hourly sync depends on.
+    if (url.pathname === '/internal/shopify-tag-pull' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      const b = await request.json().catch(() => ({}));
+      if (!b.query || typeof b.query !== 'string') return err('query_required', 400);
+      try {
+        const r = await TAGSYNC.syncByQuery(env, {
+          query: b.query,
+          maxPages: Math.min(Number(b.maxPages) || TAGSYNC.MAX_PAGES, 100),
+        });
+        return ok(r);
+      } catch (e) { return err(e?.message || String(e), 400); }
+    }
     if (url.pathname === '/internal/wa-token-scopes' && request.method === 'POST') {
       const want = env.WA_SYNC_TOKEN;
       const a = request.headers.get('Authorization') || '';

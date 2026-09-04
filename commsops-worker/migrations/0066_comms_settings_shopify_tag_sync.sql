@@ -1,0 +1,35 @@
+-- 0066: watermark for the Shopify customer TAG re-pull (S352, 2026-09-04).
+--
+-- WHY THIS EXISTS. Shopify customer tags in comms.profiles have been frozen since the
+-- 2026-06-30 backfill: measured 2026-09-04, ALL 8,400 tagged Shopify-mirrored profiles were
+-- created in a single 3-hour window that day, and not one tag has been written in the 66 days
+-- since (denominator: 91,801 profiles carrying attributes->>'shopify_created_at').
+--
+-- The cause is settled and it is NOT a mapper bug. Customer webhooks demonstrably land —
+-- 31,055 comms.consent rows with source='shopify_webhook' were created after their profile,
+-- the most recent on 2026-09-04 — and those consent rows are written by the SAME function that
+-- writes tags (shopify.js mapCustomer: consent at :163/:169/:175, attrs.tags at :155, guarded
+-- `if (tags.length)`). So the mapper runs on every live customer webhook and writes no tags,
+-- which means `tags` is simply absent from the REST webhook payload. Nothing about the mapper
+-- can fix that; the only way to see a tag is to ASK for it over GraphQL, where the June
+-- backfill got them from in the first place.
+--
+-- Hence a periodic re-pull, and hence this watermark: the sync asks Shopify for customers
+-- updated since it last ran and re-applies them through the existing
+-- comms.shopify_apply_customers path.
+--
+-- FAILS CLOSED WHEN NULL, deliberately — same contract as settings.rto_stage_emit_from. An
+-- unset watermark must never be read as "sync everything from the beginning of time": that
+-- would page all ~92k customers on the first tick of a five-minute cron. An operator sets it
+-- once to arm the sync.
+--
+-- ONE COLUMN SERVES TWO ROLES (last-synced-up-to AND last-run-at), which is what lets the cron
+-- self-gate on its age without a second column. The cost is that a run truncated by the page
+-- cap advances only to the last row it saw, so a large recent backlog drains one window per
+-- hour rather than continuously. That is acceptable for a tag sync and is logged when it
+-- happens; re-application is idempotent either way.
+ALTER TABLE comms.settings ADD COLUMN IF NOT EXISTS shopify_tag_sync_at timestamptz;
+
+-- PostgREST caches the schema, columns included: a column added after start is invisible to it
+-- until reloaded, and the failure is SILENT (the field simply never appears in a select).
+NOTIFY pgrst, 'reload schema';
