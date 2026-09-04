@@ -28,7 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
-import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS } from './analytics.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
 
 
@@ -1933,20 +1933,22 @@ async function getAgentConversationReport(params, auth, env) {
 const MAX_DAILY_DAYS = 62;
 const DAILY_FANOUT = 8;
 async function getAgentConversationDaily(params, auth, env) {
-  const from = params.get('from') || new Date(Date.now() - 6 * 86400000).toISOString();
-  const to   = params.get('to')   || new Date().toISOString();
+  // Both bounds REQUIRED (review finding 10): the sibling report defaults to YTD, which this
+  // endpoint would refuse, so a silent default here could never reconcile with it.
+  const from = params.get('from'), to = params.get('to');
+  if (!from || !to) return err('from and to are required', 400);
   const channels = arrParam(params, 'channel');
   const tagIds   = arrParam(params, 'tag_id');
   const agentIds = arrParam(params, 'agent');
   const businessHours = params.get('business_hours') === 'true';
 
-  const first = istDate(from), last = istDate(to);
-  if (!first || !last || first > last) return err('Invalid date range', 400);
-  const days = [];
-  for (let d = first; d <= last; d = istDate(new Date(`${d}T12:00:00+05:30`).getTime() + 86400000)) days.push(d);
-  if (days.length > MAX_DAILY_DAYS) {
-    return err(`The daily trend covers up to ${MAX_DAILY_DAYS} days — this range is ${days.length}. Narrow the dates.`, 400);
+  const range = istDayRange(from, to, MAX_DAILY_DAYS);
+  if (!range.ok) {
+    return range.reason === 'too_long'
+      ? err(`The daily trend covers up to ${MAX_DAILY_DAYS} days — this range is ${range.count}. Narrow the dates.`, 400)
+      : err('Invalid date range', 400);
   }
+  const days = range.days;
 
   const fromMs = Date.parse(from), toMs = Date.parse(to);
   const oneDay = async (day) => {
@@ -1961,7 +1963,7 @@ async function getAgentConversationDaily(params, auth, env) {
         p_business_hours: businessHours,
       }),
     });
-    if (!r.ok) throw new Error(`day ${day}: ${JSON.stringify(r.data)}`);
+    if (!r.ok) { console.error('[daily-trend]', day, r.status, JSON.stringify(r.data)); throw new Error(day); }
     return { day, report: r.data || {} };
   };
   const dayReports = [];
@@ -1971,7 +1973,8 @@ async function getAgentConversationDaily(params, auth, env) {
       dayReports.push(...chunk);
     }
   } catch (e) {
-    return err(`Failed to load daily agent trend (${e.message})`, 500);
+    // Opaque on purpose, like the sibling report: the PostgREST body is logged above, not shown.
+    return err('Failed to load daily agent trend', 500);
   }
 
   const series = dailySeries(dayReports);

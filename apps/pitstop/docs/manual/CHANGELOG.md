@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.22.1] - 2026-09-04
+### Changed
+- **Reports** — Daily trend: the six agents drawn are ranked by their Handled figures added up
+  across the days shown (not the range total, a different number); a range longer than 62 days
+  now plots its last 62 days and says so, instead of showing an error.
+
 ## [1.22.0] - 2026-09-04
 ### Changed
 - **Reports** — new **Last 7 days** button beside the From/To pickers on every tab, sets the

@@ -182,3 +182,21 @@ export function dailySeries(dayReports = []) {
 
   return { days, by_agent };
 }
+
+// istDayRange — the IST calendar days a [from, to] instant range touches, validated BEFORE any
+// enumeration (S349b hostile review): the count is arithmetic, so an absurd `to` (9999-12-31 typed
+// into a date box) is refused as a 400 in O(1) rather than materialising 2.9 M strings and OOMing
+// the isolate. Also refuses unparsable instants and from > to at the INSTANT level — a same-day
+// from > to used to pass a date-string guard and return a silent all-zero series.
+// Returns { ok:true, days:[...] } or { ok:false, reason:'invalid'|'too_long', count }.
+export function istDayRange(fromIso, toIso, maxDays = 62) {
+  const fromMs = Date.parse(fromIso), toMs = Date.parse(toIso);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) return { ok: false, reason: 'invalid' };
+  const IST = 5.5 * 3600 * 1000, DAY = 86400000;
+  const firstDay = Math.floor((fromMs + IST) / DAY), lastDay = Math.floor((toMs + IST) / DAY);
+  const count = lastDay - firstDay + 1;
+  if (count > maxDays) return { ok: false, reason: 'too_long', count };
+  const days = [];
+  for (let d = firstDay; d <= lastDay; d++) days.push(new Date(d * DAY).toISOString().slice(0, 10));
+  return { ok: true, days };
+}

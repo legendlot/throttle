@@ -31,7 +31,9 @@ export const hourFmt = (h) => {
   return (n - 12) + 'p';
 };
 
-function ChartTooltip({ active, payload, label, series, xLabel, xFmt }) {
+// `yFmt` (S349b): the tooltip must format a value the way the axis beside it does — a minutes
+// series read '2.4h' on the axis and '146' in the tooltip before this was threaded through.
+function ChartTooltip({ active, payload, label, series, xLabel, xFmt, yFmt = countFmt }) {
   if (!active || !payload || !payload.length) return null;
   return (
     <div style={{ background: SURFACE2, border: `1px solid ${GRID}`, borderRadius: 8, padding: '10px 12px',
@@ -42,7 +44,7 @@ function ChartTooltip({ active, payload, label, series, xLabel, xFmt }) {
         return (
           <div key={p.dataKey} style={{ color: p.color, display: 'flex', justifyContent: 'space-between', gap: 16, lineHeight: 1.7 }}>
             <span>{s?.name || p.name}</span>
-            <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{countFmt(p.value)}</strong>
+            <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{yFmt(p.value)}</strong>
           </div>
         );
       })}
@@ -78,8 +80,8 @@ export function TrendChart({ data, xKey = 'x', series = [], xFmt, yFmt = countFm
         <XAxis dataKey={xKey} tickFormatter={xFmt} tick={{ fill: T3, fontSize: 11, fontFamily: 'var(--f-mono)' }}
           axisLine={{ stroke: GRID }} tickLine={false} minTickGap={16} />
         <YAxis tickFormatter={yFmt} tick={{ fill: T3, fontSize: 11, fontFamily: 'var(--f-mono)' }}
-          axisLine={false} tickLine={false} width={40} allowDecimals={false} />
-        <Tooltip content={<ChartTooltip series={norm} xLabel={xLabel} xFmt={xFmt} />}
+          axisLine={false} tickLine={false} width={40} allowDecimals={yFmt !== countFmt} />
+        <Tooltip content={<ChartTooltip series={norm} xLabel={xLabel} xFmt={xFmt} yFmt={yFmt} />}
           cursor={{ stroke: '#FFFFFF', strokeOpacity: 0.3, strokeWidth: 1 }} />
         {showLegend && <Legend wrapperStyle={{ fontFamily: 'var(--f-mono)', fontSize: 12, paddingTop: 6 }} iconType="plainline" />}
         {norm.map(s => (

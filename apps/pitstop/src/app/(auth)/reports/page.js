@@ -74,6 +74,7 @@ export default function ReportsPage() {
   const [dailyData, setDailyData] = useState(null);
   const [dailyErr, setDailyErr] = useState(null);
   const [dailyMetric, setDailyMetric] = useState('queries');
+  const [dailyClamped, setDailyClamped] = useState(false);   // range longer than the daily cap
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -161,8 +162,17 @@ export default function ReportsPage() {
         .catch(() => { if (alive) setWaitData(null); });
       // The daily trend is the same report per IST day (worker fans out, capped at 62 days), so it
       // takes the SAME args — filters and basis included — and cannot disagree with the KPIs.
-      setDailyData(null); setDailyErr(null);
-      csopsGet('getAgentConversationDaily', args, session)
+      // ⚠️ The tab OPENS on year-to-date (247 days on 2026-09-04) and the worker refuses more than
+      // 62 at daily grain — so without this the panel showed an error on every first visit until
+      // "Last 7 days" was clicked (S349b hostile review). Clamp to the LAST 62 days of the range
+      // and say so in the caption; the KPIs and table above keep the full range.
+      const dayCount = Math.round((Date.parse(toIsoStart(to)) - Date.parse(toIsoStart(from))) / 86400000) + 1;
+      const clamped = dayCount > DAILY_MAX_DAYS;
+      const dailyArgs = clamped
+        ? { ...args, from: toIsoStart(new Date(Date.parse(toIsoStart(to)) - (DAILY_MAX_DAYS - 1) * 86400000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)) }
+        : args;
+      setDailyData(null); setDailyErr(null); setDailyClamped(clamped);
+      csopsGet('getAgentConversationDaily', dailyArgs, session)
         .then(d => { if (alive) setDailyData(d); })
         .catch(e => { if (alive) { setDailyData(null); setDailyErr(e.message); } });
     }
@@ -215,8 +225,8 @@ export default function ReportsPage() {
     lines.push(`Return cost (₹),${data.cost_summary.return_cost_inr}`);
     lines.push(`Replacement cost (₹),${data.cost_summary.replacement_cost_inr}`);
     lines.push(`Refund amount (₹),${data.cost_summary.refund_amount_inr}`);
-    const csv = lines.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    // BOM first — Excel ignores the MIME charset on a double-clicked .csv (S349 review).
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -293,7 +303,8 @@ export default function ReportsPage() {
         for (const d of a.days) lines.push([d.day, a.name, ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
       }
     }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    // BOM first: agent names and the "— unassigned —" bucket are non-ASCII (S349 review).
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -453,7 +464,7 @@ export default function ReportsPage() {
           {loading || !agentData ? <Spinner /> : <AgentsPanel data={agentData} wait={waitData} />}
           {!loading && agentData && (
             <DailyTrendPanel data={dailyData} error={dailyErr} metric={dailyMetric} onMetric={setDailyMetric}
-              businessHours={!!agentData.range?.business_hours} />
+              businessHours={!!agentData.range?.business_hours} clamped={dailyClamped} />
           )}
         </>
       )}
@@ -504,10 +515,11 @@ function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, c
 // summed into "Others" for COUNT metrics only — an average of averages is not a number anyone
 // should read, so for minutes/rates the smaller agents are simply not drawn.
 const DAILY_TOP_AGENTS = 6;
+const DAILY_MAX_DAYS = 62;     // mirrors csops MAX_DAILY_DAYS — the page clamps so the worker never has to refuse
 const DAILY_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6'];
 const fmtDay = (d) => { const t = Date.parse(`${d}T00:00:00Z`); return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : d; };
 
-function DailyTrendPanel({ data, error, metric, onMetric, businessHours }) {
+function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped }) {
   const metrics = data?.metrics || [];
   const m = metrics.find(x => x.key === metric) || metrics[0];
   const rows = useMemo(() => {
@@ -524,7 +536,9 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours }) {
   const series = useMemo(() => {
     if (!data?.by_agent || !m) return [];
     const top = data.by_agent.slice(0, DAILY_TOP_AGENTS);
-    const out = [{ key: 'team', name: 'All agents', color: 'var(--t1)', kind: 'line' }];
+    // A literal, not var(--t1): recharts writes `stroke` as an SVG presentation attribute, where a
+    // CSS variable is not guaranteed to resolve (Chart.js documents the same constraint).
+    const out = [{ key: 'team', name: 'All agents', color: '#f5f5f6', kind: 'line' }];
     top.forEach((a, i) => out.push({ key: a.name, name: a.name, color: DAILY_COLORS[i % DAILY_COLORS.length], kind: 'line' }));
     if (data.by_agent.length > DAILY_TOP_AGENTS && m.kind === 'count') out.push({ key: 'Others', name: 'Others', color: '#8b8f98', kind: 'line' });
     return out;
@@ -542,7 +556,7 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours }) {
           style={{ fontFamily: 'var(--f-ui)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
           {metrics.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
         </select>
-        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{data.range.days} days · one line per agent, busiest {Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown{hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}</span>}
+        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{clamped ? `last ${data.range.days} days of the range shown (daily trend caps at ${DAILY_MAX_DAYS})` : `${data.range.days} days`} · one line per agent, busiest {Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown{hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}</span>}
         {/* Verified live 2026-09-04: queries/answered/assigned/resolved sum to the range total exactly;
             handled does NOT (1,589 vs 1,179 over 7 days) because a conversation replied to on three
             days is handled on each of them and once in the range. Say so, or the sum reads as a bug. */}

@@ -249,3 +249,24 @@ test('DAILY_METRICS keys are unique and each has a kind the chart can format', (
   assert.equal(new Set(keys).size, keys.length);
   for (const m of DAILY_METRICS) assert.ok(['count', 'minutes', 'pct'].includes(m.kind), m.key);
 });
+
+// ── istDayRange (S349b review) ───────────────────────────────────────────────
+
+import { istDayRange } from './analytics.js';
+
+test('istDayRange: IST calendar days, month end and leap day included, inclusive of both ends', () => {
+  assert.deepEqual(istDayRange('2026-08-30T18:30:00Z', '2026-09-02T18:29:59.999Z').days,
+    ['2026-08-31', '2026-09-01', '2026-09-02']);   // 18:30Z = next IST day; 18:29:59.999Z = end of the SAME IST day
+  assert.deepEqual(istDayRange('2028-02-28T00:00:00+05:30', '2028-03-01T00:00:00+05:30').days,
+    ['2028-02-28', '2028-02-29', '2028-03-01']);
+});
+
+test('istDayRange: an absurd range is refused by arithmetic, never enumerated', () => {
+  const r = istDayRange('2026-09-04T00:00:00+05:30', '9999-12-31T23:59:59+05:30');
+  assert.equal(r.ok, false); assert.equal(r.reason, 'too_long'); assert.ok(r.count > 2_000_000);
+});
+
+test('istDayRange: garbage and same-day from > to are invalid, not a silent zero series', () => {
+  assert.deepEqual(istDayRange('garbage', '2026-09-04T00:00:00Z'), { ok: false, reason: 'invalid' });
+  assert.deepEqual(istDayRange('2026-09-04T18:00:00Z', '2026-09-04T09:00:00Z'), { ok: false, reason: 'invalid' });
+});
