@@ -32,9 +32,16 @@ than working around it.
 handle join is built. Let's keep the social sections out of it for now."*
 
 ⚠️ Social is excluded for a **hard technical reason**, not preference: an IG/FB thread carries only a
-handle, nothing maps a handle to a customer profile, and building that identity join is its own
-backlog item. Folding social in before that exists would make the ticket's customer identity
-unreliable for the one channel where it is already weakest.
+handle, and **nothing maps a handle to a customer profile** — `comms.identifiers` carries no
+Instagram or Facebook identifier type at all (verified 2026-09-04). A WhatsApp thread auto-matches on
+its phone; an IG thread has no equivalent. Folding social in before that join exists would make the
+ticket's customer identity unreliable for the one channel where it is already weakest.
+
+⛔ **There is NO open backlog item for that identity join — do not go looking for one.** The old
+`[pitstop] [build]` "auto-link an IG/FB thread to the customer's prior ticket" was **dropped**
+2026-09-04 as a consequence of this scope decision (`archive/BACKLOG_ARCHIVE.md` §S344). **Bringing
+social into this design therefore means re-opening that work first**, and the manual *Link ticket*
+button remains the current answer in the meantime.
 
 ## 3. What is ALREADY built — measure before designing
 
