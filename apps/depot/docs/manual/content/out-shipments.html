@@ -31,6 +31,16 @@
   <li><span class="s-title">Shipped.</span> When everything&rsquo;s packed, mark the shipment shipped; this updates every unit in it to Shipped.</li>
 </ol>
 
+<div class="callout note">
+  <div class="c-title">&#9432; Partial dispatch: shipping with an unpacked balance</div>
+  <p>Mark Shipped now checks the manifest first. If every line is fully packed it ships exactly as before. If any line still has units unpacked, it asks: <em>&ldquo;N units on M line(s) are not packed. Ship the packed units now and move the balance to a NEW shipment?&rdquo;</em></p>
+  <ul>
+    <li><strong>Cancel</strong> leaves the shipment exactly as it was, nothing ships and nothing moves.</li>
+    <li><strong>Confirm</strong> ships the packed units, shrinks this shipment down to what actually shipped (it now reads 100%), and creates a sibling shipment titled <span class="mono">&lt;title&gt; &middot; balance</span> on the same channel and fulfilment request/sales order, scheduled today, carrying only the unpacked balance per line. It appears on the pack list as its own shipment, ready to pack and ship separately.</li>
+  </ul>
+  <p>This exists because some marketplaces, Flipkart among them, accept partial fulfilment against a single PO: you no longer have to wait for every last unit before shipping what is ready.</p>
+</div>
+
 <h2 class="sec">Reading the numbers</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Pool / Target</div><div class="a-val"><p>Units allocated to this shipment so far <strong>versus the manifest goal</strong> (e.g. <span class="mono">8 / 20</span>). This is allocation progress, not the same as packed.</p></div></div>
@@ -50,5 +60,5 @@
 
 <div class="callout danger">
   <div class="c-title">&#9940; Shipping is the commitment</div>
-  <p><strong>Mark Shipped</strong> flips every unit in the shipment to Shipped; do it only when the consignment has genuinely left. Cancelling returns units to the dispatch pool (not lost), but &ldquo;this cannot be undone&rdquo;, so cancel deliberately.</p>
+  <p><strong>Mark Shipped</strong> flips every unit in the shipment to Shipped (or, on a partial dispatch, every unit that was packed); do it only when the consignment has genuinely left. Cancelling returns units to the dispatch pool (not lost), but &ldquo;this cannot be undone&rdquo;, so cancel deliberately.</p>
 </div>

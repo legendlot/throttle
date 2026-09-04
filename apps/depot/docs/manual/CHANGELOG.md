@@ -1,5 +1,13 @@
 # Changelog — Depot Operations Manual
 
+## 1.11.0 — 2026-09-04 (Session 349)
+
+- **Shipments:** documents partial dispatch. Mark Shipped now checks the manifest; if a line has
+  an unpacked balance, Depot asks whether to ship the packed units and move the balance to a new
+  sibling shipment (titled `<title> · balance`, same channel and fulfilment request/sales order,
+  scheduled today). Cancel leaves the shipment untouched. Logged as `SHIPMENT_PARTIAL_DISPATCH`.
+  Exists so marketplaces like Flipkart can accept partial fulfilment against one PO.
+
 ## 1.10.0 — 2026-09-03
 
 - **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than general floor-management access): what it's for, the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.
