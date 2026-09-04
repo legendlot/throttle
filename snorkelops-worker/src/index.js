@@ -1824,6 +1824,11 @@ export default {
               const data = await loadPoDocData(poNum);
               if (!data) { out.render = { po_number: poNum, error: 'PO not found' }; return ok(out); }
               const html = poPrintHtml(data);
+              // ?html=1 returns the source instead of rendering — lets the exact document
+              // be eyeballed in a browser without burning a Browser Run call per look.
+              if (url.searchParams.get('html') === '1') {
+                return new Response(html, { headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
+              }
               const pdf = await renderPdfFromHtml(html, env);
               out.render = {
                 po_number: poNum,
