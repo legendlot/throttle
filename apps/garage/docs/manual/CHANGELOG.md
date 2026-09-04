@@ -6,6 +6,15 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.22.0 - 2026-09-04
+
+- **Device Register** (new chapter, `/devices`, users_manage only): documents the new admin
+  screen listing every handset that has used the LOT Scanner app. Covers labelling and status,
+  the roaming/unbound "Used as" column, and the two flag-only toggles. Makes explicit that a
+  browser-based scanner sends no device ID (so this is a rollout checklist, not a security
+  list), that the toggles never block anything today, and that "unbound" is expected for
+  Attendance and Lookup.
+
 ## 1.21.0 - 2026-09-03
 
 - **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than general Manpower access): what it's for, the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.

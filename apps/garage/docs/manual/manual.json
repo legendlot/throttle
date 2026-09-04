@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
-  "version": "1.21.0",
-  "date": "2026-09-01",
+  "version": "1.22.0",
+  "date": "2026-09-04",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -453,6 +453,15 @@
           "title": "Users & Roles",
           "route": "/users",
           "file": "usr-users.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "devices",
+          "title": "Device Register",
+          "route": "/devices",
+          "file": "usr-devices.html",
           "roles": [
             "adm"
           ]

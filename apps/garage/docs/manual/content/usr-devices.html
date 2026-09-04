@@ -1,0 +1,52 @@
+<p class="lead">The Device Register lists every handset that has used the LOT Scanner app, so an admin can label and classify phones without touching SQL. It is a rollout checklist and an observation tool, not a security gate: nothing on this screen blocks a phone from scanning.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Labelling and watching scanner handsets.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: label, set status, flag (observe only).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> users_manage only</div></div>
+  <div class="g-cell"><div class="g-lbl">Live?</div><div class="g-val">Observing now; nothing blocks yet.</div></div>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Only the app appears here</div>
+  <p>A handset shows up the moment it uses the <strong>LOT Scanner app</strong>. A phone using the scanner <strong>website</strong> sends no device ID at all, so it is simply absent from this list, not shown and not flagged. That means an <strong>Unknown</strong> device almost always means &ldquo;the app is not installed on this phone yet&rdquo;, not &ldquo;an unrecognised phone&rdquo;. Until every scanner in the building is on the app, treat this screen as a <strong>rollout checklist</strong>, never as a security list.</p>
+</div>
+
+<h2 class="sec">The two flags</h2>
+<p>Two toggles sit at the top: <strong>Flag roaming devices</strong> and <strong>Flag unbound devices</strong>. Both start OFF, and each shows, live, how many devices it would catch right now if switched on.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Flags only, nothing is blocked</div>
+  <p>Turning a toggle on changes no floor behaviour today. It does not stop a scan, does not lock a device out, and does not need to be on for anything else on this screen to work. The count beside each toggle exists so nobody switches one on without first seeing what it would catch.</p>
+</div>
+
+<p><strong>Roaming</strong> means a handset has been used to claim more than one station device code, for example the same phone used at both Store Issue and Returns Intake. Roaming is allowed; the flag exists to measure how often it actually happens before any rule is set on it.</p>
+<p><strong>Unbound</strong> means a handset has never claimed a station device code at all.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Unbound is not suspicious</div>
+  <p>Attendance and Lookup are the two stations that never send a station code, so any phone used only for those legitimately shows as unbound forever. Do not read &ldquo;unbound&rdquo; as &ldquo;unrecognised&rdquo; or unauthorised; it is expected for those two stations and for any phone that has only just started using the app.</p>
+</div>
+
+<h2 class="sec">The table</h2>
+<p>Above the table, a row of coloured counts (Known, Unknown, Blocked) totals every device by status, and a search box filters the list by device ID, label, station code or IP as you type. <strong>Refresh</strong> re-reads the list from the worker.</p>
+
+<table class="tbl">
+  <thead><tr><th>Column</th><th>What it shows</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">Device</td><td>The hardware ID the app reports. An identifier, not a credential, and readable from inside the app, so treat it as a label, not a proof of identity.</td></tr>
+    <tr><td class="mono">Label</td><td>Free text you set, e.g. &ldquo;INW line 1 scanner&rdquo;. Type in the box and a <strong>Save</strong> button appears; click it to store the label.</td></tr>
+    <tr><td class="mono">Status</td><td>A dropdown: <strong>Unknown</strong>, <strong>Known</strong> or <strong>Blocked</strong>. Changing it saves immediately. As above, Blocked is a classification only; nothing today reads it to actually stop a device.</td></tr>
+    <tr><td class="mono">Last seen</td><td>How long since this device last called the worker, with the exact IST timestamp on hover.</td></tr>
+    <tr><td class="mono">Last action</td><td>The most recent worker action this device made a call for.</td></tr>
+    <tr><td class="mono">Used as</td><td>The station device code(s) this handset has claimed, oldest to newest. A single code shows plainly; more than one is highlighted and shows a count, meaning the phone has <strong>roamed</strong> between stations. No codes shows &ldquo;unbound&rdquo;.</td></tr>
+    <tr><td class="mono">IP</td><td>The last IP address the device called from.</td></tr>
+    <tr><td class="mono">Seen</td><td>How many times this device has been seen in total.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Label at install time</h2>
+<div class="callout tip">
+  <div class="c-title">&#9432; Label the phone while you are holding it</div>
+  <p>Label a device the moment the app is installed on it, while you are standing next to it and know exactly which station it belongs to. Come back to it later, once several unlabelled phones have appeared, and you are guessing between identical hardware IDs with no way to tell them apart.</p>
+</div>
