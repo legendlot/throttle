@@ -3026,6 +3026,15 @@ export default {
             const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
+            // ⛔ Refusing 'Cancelled' as a TARGET (below) was never enough — this handler
+            // never checked the CURRENT status, so a Cancelled PO could be written
+            // straight back to Sent/Draft/Closed with no reason and no audit. Same
+            // resurrection hazard as updatePOLineReceived, and unlike that handler this
+            // one HAS a live caller (PODetailClient.js:202). Found 2026-09-04 (S345)
+            // while fixing the other door; the backlog item named only one of the two.
+            if (po.status === 'Cancelled') {
+              return err('This PO is Cancelled and cannot be moved to another status. Raise a new PO instead.', 409);
+            }
             if (d.status === 'Accepted' || d.status === 'Approved') {
               return err('Use the Accept / Final Approve actions for those transitions', 400);
             }
@@ -3335,6 +3344,20 @@ export default {
             if (!canRaisePO(P)) return err('Procurement permission required', 403);
             const d = body.data;
             if (!d.po_number||!d.line_no||d.qty_received===undefined) return err('po_number, line_no, qty_received required');
+            // ⛔ A Cancelled PO must not be resurrected by a late receipt. The status
+            // recompute below writes Closed/Partially Received with no reason, no
+            // po_revisions row and no activity-log entry — the exact inverse of cancelPO,
+            // which REFUSES to cancel a PO that has receipts against it. Recording the
+            // receipt and skipping only the recompute would still create the state
+            // cancelPO exists to prevent, so refuse the whole call. (S345, 2026-09-04 —
+            // latent: 0 POs have ever been resurrected, and this handler has no caller
+            // in the monorepo, but it is a live POST action for anyone with canRaisePO.)
+            const poStatusR = await query('purchase_orders',
+              `?po_number=eq.${encodeURIComponent(d.po_number)}&select=status&limit=1`);
+            if (!poStatusR.ok||!poStatusR.data[0]) return err('PO not found');
+            if (poStatusR.data[0].status === 'Cancelled') {
+              return err('This PO is Cancelled — a receipt cannot be posted against it. Raise a new PO, or reverse the cancellation deliberately.', 409);
+            }
             await update('po_lines',
               { qty_received: d.qty_received, updated_at: new Date().toISOString() },
               `po_number=eq.${encodeURIComponent(d.po_number)}&line_no=eq.${d.line_no}`);
