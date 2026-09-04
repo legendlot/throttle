@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "test": "node --test src/telephony/*.test.mjs"
+    "test": "node --test 'src/**/*.test.mjs'"
   },
   "type": "module",
   "devDependencies": {

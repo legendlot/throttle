@@ -28,6 +28,7 @@ import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
+import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket } from './analytics.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -1876,47 +1877,6 @@ function istDate(ts) {                       // UTC ISO → 'YYYY-MM-DD' in IST
   if (!ts) return null;
   return new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
-const SUPPORT_CHANNEL_LABELS = {
-  whatsapp: 'WhatsApp', email: 'Email', instagram: 'Instagram', messenger: 'Messenger',
-  web: 'Web', sheet: 'Imported', other: 'Other',
-};
-// The five filterable dimensions, each derived ONCE here and used for both the option
-// lists and the filtering. Two of them (product line, support channel) are derived, not
-// columns, so a PostgREST-side filter could not express them — and deriving the option
-// list separately from the filter is exactly how a measurement and its implementation end
-// up defining the same set differently. One function, both callers.
-function analyticsDims(r, lineOf) {
-  return {
-    product:         r.product || '—',
-    issue_category:  r.issue_category || 'Uncategorised',
-    product_line:    lineOf[r.product] || 'Unclassified',
-    sale_channel:    r.platform || 'Unknown',
-    support_channel: r.auto_created || r.intake_channel === 'phone' || r.intake_channel === 'call'
-      ? 'Calls'
-      : (SUPPORT_CHANNEL_LABELS[r.intake_channel] || (r.intake_channel ? r.intake_channel : 'Unknown')),
-    // The agent a complaint is ATTRIBUTED to, not who resolved it — this is ticket-grain, and a
-    // ticket carries one assignee. Unassigned is a real and interesting bucket here (it is where
-    // complaints go to be forgotten), so it gets a label rather than being dropped from the list.
-    agent: r.assigned_agent_name || '— unassigned —',
-  };
-}
-const ANALYTICS_DIM_KEYS = ['product', 'issue_category', 'product_line', 'sale_channel', 'support_channel', 'agent'];
-
-// Trend bucket for an IST date string (YYYY-MM-DD). Month -> 'YYYY-MM'; week -> the
-// week-commencing MONDAY as 'YYYY-MM-DD'. Monday because the floor's week runs Mon–Sat
-// (RULE-ATT-001 working days) and a Sunday-start week would split every working week.
-// ⚠️ Parsed as UTC on purpose: `cd` is ALREADY an IST calendar date, so re-interpreting it
-// in any other zone would shift the day and drop calls into the wrong week.
-function trendBucket(istDateStr, grain) {
-  if (!istDateStr) return null;
-  if (grain !== 'week') return istDateStr.slice(0, 7);
-  const t = Date.parse(`${istDateStr}T00:00:00Z`);
-  if (!Number.isFinite(t)) return null;
-  const d = new Date(t);
-  const dow = (d.getUTCDay() + 6) % 7;          // 0 = Monday
-  d.setUTCDate(d.getUTCDate() - dow);
-  return d.toISOString().slice(0, 10);
-}
 
 async function getSupportAnalytics(params, auth, env) {
   // Default range = current month-to-date (IST). Presets/custom come from the page.
@@ -2164,17 +2124,24 @@ async function getCallReports(params, auth, env) {
 
     const acct = c.myop_account_id ? acctById[c.myop_account_id] : null;
     const ak = acct?.slug || '—';
-    byAccount[ak] = byAccount[ak] || { slug: ak, name: acct?.name || '—', total: 0, answered: 0, missed: 0 };
+    byAccount[ak] = byAccount[ak] || { slug: ak, name: acct?.name || '—', total: 0, answered: 0, missed: 0, incoming_total: 0, incoming_reached: 0, outgoing_total: 0, outgoing_answered: 0 };
     byAccount[ak].total++;
+    // Raw provider status, kept ONLY so an older cached page keeps rendering. Do not add
+    // new readers — see the direction-split fields below.
     if (c.status === 'answered') byAccount[ak].answered++;
     if (c.status === 'missed')   byAccount[ak].missed++;
+    if (c.direction === 'incoming') { byAccount[ak].incoming_total++; if (reachedAgent(c)) byAccount[ak].incoming_reached++; }
+    else                            { byAccount[ak].outgoing_total++; if (c.status === 'answered') byAccount[ak].outgoing_answered++; }
 
     const dept = c.cs_department_id ? deptById[c.cs_department_id] : null;
     const dk = dept?.slug || '—';
-    byDepartment[dk] = byDepartment[dk] || { slug: dk, name: dept?.name || '—', total: 0, answered: 0, missed: 0, total_dur: 0, dur_count: 0 };
+    byDepartment[dk] = byDepartment[dk] || { slug: dk, name: dept?.name || '—', total: 0, answered: 0, missed: 0, incoming_total: 0, incoming_reached: 0, outgoing_total: 0, outgoing_answered: 0, total_dur: 0, dur_count: 0 };
     byDepartment[dk].total++;
+    // Raw provider status, kept ONLY for older cached pages — see the split fields below.
     if (c.status === 'answered') byDepartment[dk].answered++;
     if (c.status === 'missed')   byDepartment[dk].missed++;
+    if (c.direction === 'incoming') { byDepartment[dk].incoming_total++; if (reachedAgent(c)) byDepartment[dk].incoming_reached++; }
+    else                            { byDepartment[dk].outgoing_total++; if (c.status === 'answered') byDepartment[dk].outgoing_answered++; }
     if (c.duration_seconds && c.duration_seconds > 0) { byDepartment[dk].total_dur += c.duration_seconds; byDepartment[dk].dur_count++; }
 
     const agentName = c.agent_name || '— unassigned —';
@@ -2214,14 +2181,20 @@ async function getCallReports(params, auth, env) {
     delete a.total_dur; delete a.dur_count;
     return a;
   }
+  // ⭐ answer_rate_pct is INBOUND-ONLY (reached an agent / inbound calls), matching `totals`
+  // and by_agent. It used to be raw-status answered over calls in BOTH directions, which mixed
+  // "an inbound caller got a human" with "someone we rang picked up" — two different things
+  // averaged into one number, and inflated by every outbound call. S344.
   function finishDept(d) {
-    d.answer_rate_pct = d.total > 0 ? Math.round((d.answered / d.total) * 100) : null;
+    d.answer_rate_pct = d.incoming_total > 0 ? Math.round((d.incoming_reached / d.incoming_total) * 100) : null;
+    d.incoming_not_reached = d.incoming_total - d.incoming_reached;
     d.avg_handle_seconds = d.dur_count > 0 ? Math.round(d.total_dur / d.dur_count) : null;
     delete d.total_dur; delete d.dur_count;
     return d;
   }
   function finishAccount(a) {
-    a.answer_rate_pct = a.total > 0 ? Math.round((a.answered / a.total) * 100) : null;
+    a.answer_rate_pct = a.incoming_total > 0 ? Math.round((a.incoming_reached / a.incoming_total) * 100) : null;
+    a.incoming_not_reached = a.incoming_total - a.incoming_reached;
     return a;
   }
 

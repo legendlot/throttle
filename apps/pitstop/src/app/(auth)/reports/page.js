@@ -735,16 +735,24 @@ function CallsBreakdown({ rows, variant }) {
   }
   return (
     <table style={{ width:'100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      {/* Split by direction to match by_agent and the totals (S344). "Answered" here used to be
+          the provider's raw status across BOTH directions, so an inbound caller reaching a human
+          and an outbound call being picked up were added together — and "Missed" was the
+          MyOperator-era false 45, which the provider almost never set. ⚠️ Answer rate now reads
+          LOWER and Not reached reads far HIGHER than before; that is the correction landing, the
+          same one by_agent took in S340. */}
       <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
-        <CTh>{variant === 'dept' ? 'Department' : 'Account'}</CTh><CTh>Total</CTh><CTh>Answered</CTh><CTh>Missed</CTh><CTh>Answer rate</CTh>
+        <CTh>{variant === 'dept' ? 'Department' : 'Account'}</CTh><CTh>Total</CTh><CTh>Answered (in)</CTh><CTh>Not reached (in)</CTh><CTh>Outgoing</CTh><CTh>Connected</CTh><CTh>Answer rate (in)</CTh>
       </tr></thead>
       <tbody>
         {rows.map(r => (
           <tr key={r.slug} style={{ borderTop: '1px solid var(--border)' }}>
             <CTd>{r.name}</CTd>
             <CTd><code style={callMono}>{r.total}</code></CTd>
-            <CTd><code style={callMono}>{r.answered}</code></CTd>
-            <CTd><code style={callMono}>{r.missed}</code></CTd>
+            <CTd><code style={callMono}>{r.incoming_reached ?? r.answered}</code></CTd>
+            <CTd><code style={callMono}>{r.incoming_not_reached ?? r.missed}</code></CTd>
+            <CTd><code style={callMono}>{r.outgoing_total ?? 0}</code></CTd>
+            <CTd><code style={callMono}>{r.outgoing_answered ?? 0}</code></CTd>
             <CTd><code style={callMono}>{r.answer_rate_pct != null ? `${r.answer_rate_pct}%` : '—'}</code></CTd>
           </tr>
         ))}
