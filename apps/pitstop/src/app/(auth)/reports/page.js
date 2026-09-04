@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download, Phone, Users } from 'lucide-react';
-import { csopsGet } from '../../../lib/csopsFetch.js';
+import { csopsGet, joinMulti } from '../../../lib/csopsFetch.js';
 import { KpiCard, MultiSelect, btnGhost } from '../../../components/kit/index.js';
 // TrendChart is deliberately NOT re-exported from kit/index.js (it pulls ~110KB of recharts),
 // so it is imported directly — same as the analytics page does.
@@ -104,8 +104,8 @@ export default function ReportsPage() {
                  : 'getReports';
     const args = { from: toIsoStart(from), to: toIsoEnd(to) };
     if (view === 'tickets') {
-      if (tkAgents.length)   args.agent   = tkAgents.join(',');
-      if (tkChannels.length) args.channel = tkChannels.join(',');
+      if (tkAgents.length)   args.agent   = joinMulti(tkAgents);
+      if (tkChannels.length) args.channel = joinMulti(tkChannels);
     }
     if (view === 'agents') {
       if (agChannel) args.channel = agChannel;

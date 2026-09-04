@@ -36,3 +36,21 @@ export async function csopsPost(action, body = {}, session) {
   if (!res.ok || data.ok === false) throw new Error(data.error || `csopsPost ${action} failed (${res.status})`);
   return data.data;
 }
+
+// ── Multi-select filter transport ────────────────────────────────────────────
+// Multi-select filter values used to be comma-joined, so any dimension value
+// CONTAINING a comma (a product named "Shadow, Red") split into two fragments,
+// matched nothing, and rendered an EMPTY report that read like a quiet month
+// rather than an error. No such value exists today (0 of 14,195 tickets,
+// measured 2026-09-04) — this is a legal-tomorrow input, closed before it bites.
+//
+// Encoding: join on U+001F (UNIT SEPARATOR) and PREFIX the string with one too.
+// The prefix is what makes this safe to roll out: the worker reads a leading
+// U+001F as "new encoding, split on U+001F" and anything else as the old
+// comma-joined form, so a page cached mid-rollout keeps working AND a single
+// value containing a comma is transported intact.
+export const MULTI_SEP = '\u001f';
+
+export function joinMulti(values) {
+  return MULTI_SEP + values.join(MULTI_SEP);
+}

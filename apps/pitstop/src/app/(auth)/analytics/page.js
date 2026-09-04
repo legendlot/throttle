@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download } from 'lucide-react';
-import { csopsGet } from '../../../lib/csopsFetch.js';
+import { csopsGet, joinMulti } from '../../../lib/csopsFetch.js';
 import { KpiCard, MultiSelect, Panel, selectStyle, inputStyle } from '../../../components/kit/index.js';
 import { TrendChart } from '../../../components/kit/Chart.js';
 
@@ -123,7 +123,7 @@ export default function AnalyticsPage() {
 
   // Serialised so the effect re-runs on a filter change without depending on object identity.
   const filterKey = useMemo(
-    () => DIMS.map(([k]) => `${k}=${(filters[k] || []).join(',')}`).join('&'),
+    () => DIMS.map(([k]) => `${k}=${joinMulti(filters[k] || [])}`).join('&'),
     [filters],
   );
 
@@ -132,8 +132,9 @@ export default function AnalyticsPage() {
     let alive = true;
     setLoading(true);
     const args = { from: range.from, to: range.to, grain };
-    // Comma-joined per dimension; an empty selection sends nothing at all, which is "All".
-    for (const [k] of DIMS) if (filters[k]?.length) args[k] = filters[k].join(',');
+    // Unit-separator-joined per dimension (joinMulti) so a value containing a comma survives;
+    // an empty selection sends nothing at all, which is "All".
+    for (const [k] of DIMS) if (filters[k]?.length) args[k] = joinMulti(filters[k]);
     csopsGet('getSupportAnalytics', args, session)
       .then(d => { if (alive) { setData(d); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })

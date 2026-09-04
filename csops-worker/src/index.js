@@ -29,6 +29,7 @@ import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
 import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket } from './analytics.js';
+import { splitMulti } from './multiselect.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -1642,12 +1643,12 @@ const REPORTS_SELECT = 'id,created_at,closed_at,disposition,issue_category,produ
   + 'intake_channel,auto_created,'
   + 'assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr';
 
-// A comma-separated multi-select param → Set, or null for "no filter on this dimension".
+// A multi-select param → Set, or null for "no filter on this dimension".
 // One value still works unchanged, so an older cached page keeps functioning (S344).
 function multiParam(params, key) {
   const v = params.get(key);
   if (!v) return null;
-  const vals = v.split(',').map(x => x.trim()).filter(Boolean);
+  const vals = splitMulti(v);
   return vals.length ? new Set(vals) : null;
 }
 
@@ -1949,13 +1950,14 @@ async function getSupportAnalytics(params, auth, env) {
   const grain = params.get('grain') === 'week' ? 'week' : 'month';
 
   // Dimension filters (Pruthvi #bugs 2026-09-03). Absent/'' = no filter on that dimension.
-  // MULTI-select (S344, Pruthvi #bugs 1788512544): each dimension takes a COMMA-SEPARATED list.
-  // A single value still works unchanged, so an older cached page keeps functioning.
+  // MULTI-select (S344, Pruthvi #bugs 1788512544): each dimension takes a separator-joined list,
+  // decoded by splitMulti so a value containing a comma survives. A single value still works
+  // unchanged, so an older cached page keeps functioning.
   const want = {};
   for (const k of ANALYTICS_DIM_KEYS) {
     const v = params.get(k);
     if (!v) continue;
-    const vals = v.split(',').map(x => x.trim()).filter(Boolean);
+    const vals = splitMulti(v);
     if (vals.length) want[k] = new Set(vals);
   }
 
