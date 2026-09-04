@@ -129,8 +129,11 @@ export default function ReportsPage() {
         if (view === 'calls') setCallData(d);
         else if (view === 'agents') {
           setAgentData(d);
-          // Only an unfiltered response describes the whole roster; a filtered one is a subset.
-          if (!agAgents.length) {
+          // Only a TRULY unfiltered response describes the whole roster. Guarding on the agent
+          // chips alone (as this did when it shipped) let a channel- or tag-filtered response
+          // freeze the roster to that subset, after which the other agents were unreachable
+          // until every chip was cleared — caught by the S347 hostile review.
+          if (!agAgents.length && !agChannels.length && !agTags.length) {
             setAgRoster((d?.by_agent || [])
               .filter(a => a.agent_id)
               .map(a => ({ v: a.agent_id, l: a.name })));

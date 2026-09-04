@@ -223,6 +223,8 @@ export default function AnalyticsPage() {
     // thing that gets quoted in a meeting a month later.
     const grainW     = grainWord(data.trend_grain);
     const bucketHead = bucketHeading(data.trend_grain);
+    // Every trend panel on screen must reach the file — Pruthvi's own fallback ask was "export the
+    // whole data". The two panels added in S347 were missing from this loop when it shipped.
     for (const [title, series] of [[`${grainW} Product Trend`, data.monthly_product_trend],
                                   [`${grainW} Category Trend`, data.monthly_category_trend]]) {
       if (!series?.length) continue;
@@ -236,6 +238,24 @@ export default function AnalyticsPage() {
       L.push([bucketHead, 'Total', ...dims].map(csvEsc).join(','));
       for (const row of series) L.push([row.bucket, row.total, ...dims.map(d => row[d] || 0)].map(csvEsc).join(','));
       L.push('');
+    }
+
+    // Complaint rate + ageing, added S347b so the export matches what the page renders.
+    if (data.complaint_rate_trend?.length) {
+      L.push('');
+      L.push(`${grainW} Complaint Rate`);
+      L.push([bucketHead, 'Complaints', 'Rolling avg', 'Window (buckets)'].map(csvEsc).join(','));
+      for (const r of data.complaint_rate_trend) {
+        L.push([r.bucket, r.count, r.avg, r.window].map(csvEsc).join(','));
+      }
+    }
+    if (data.ageing_trend?.length) {
+      L.push('');
+      L.push(`${grainW} Ageing Trend`);
+      L.push([bucketHead, 'Total', 'Within 3d', 'After 3d', 'Unknown'].map(csvEsc).join(','));
+      for (const r of data.ageing_trend) {
+        L.push([r.bucket, r.total, r.within_3d, r.after_3d, r.ageing_unknown].map(csvEsc).join(','));
+      }
     }
 
     const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -509,7 +529,10 @@ function ComplaintRateBlock({ series, grain }) {
       <TrendChart data={series} xKey="bucket" height={240} xLabel={bucketLabel} showLegend
         series={[
           { key: 'count', name: 'Complaints', color: SERIES_COLORS[3], kind: 'area' },
-          { key: 'avg', name: `Rolling avg (${w} ${grain === 'day' ? 'days' : grain === 'week' ? 'weeks' : 'months'})`, color: SERIES_COLORS[0], kind: 'line' },
+          // ⚠️ "buckets", NOT "days". Gaps are not zero-filled upstream, so a quiet stretch means
+          // 7 buckets can span more than 7 calendar days. The legend said "days" when this shipped
+          // and that was wrong — caught by the S347 hostile review.
+          { key: 'avg', name: `Rolling avg (${w} buckets)`, color: SERIES_COLORS[0], kind: 'line' },
         ]} />
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
