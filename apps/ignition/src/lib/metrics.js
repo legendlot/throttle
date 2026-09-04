@@ -101,3 +101,50 @@ export function unexplainedGaps(e = {}, platform) {
     .filter(m => num(e[m.key]) == null && !gaps[m.key])
     .map(m => m.key);
 }
+
+// Reann 2026-09-04 #7 — followers at post date is MANDATORY: a video cannot be saved without it.
+// It is the only metric that gets this treatment, and deliberately the only one a metric_gaps
+// reason cannot satisfy: the count is point-in-time and NOT backfillable (see the column comment
+// in ignitionops-worker), so "we'll note why it's blank" means the number is gone for good and
+// every ratio on this deal is permanently unavailable. Every other metric can be filled later.
+export const REQUIRED_METRICS = ['follower_count_at_post'];
+
+// Which required metrics are still blank in a set of edited values. Platform-gated like everything
+// else — a hard stop must never fire for a metric that does not apply to the channel.
+export function missingRequiredMetrics(values = {}, platform) {
+  return REQUIRED_METRICS
+    .filter(k => isMetricApplicable(k, platform))
+    .filter(k => num(values[k]) == null);
+}
+
+// Reann 2026-09-04 #5 — "flag missing data on engagements: warning if a video is missing Cost or
+// Views when it's LIVE". A WARNING, never a block (contrast with REQUIRED_METRICS above).
+// Stages: the video is public from `live` onward, so `live` and `completed` count and `posting`
+// does not — a deal still being posted has no numbers yet and flagging it would cry wolf.
+const LIVE_STAGES = new Set(['live', 'completed']);
+
+export function liveDataWarnings(e = {}, platform) {
+  if (!LIVE_STAGES.has(String(e.stage || '').toLowerCase())) return [];
+  const out = [];
+  // "Cost" = total_cost, the same figure the Business block labels "Cost per video" and the one
+  // CPM divides. It is a GENERATED column (payment + commission + ad spend + goodies + shipping +
+  // return + ad rights, each COALESCEd), so it is never null — 0 means nothing has been costed.
+  if (!num(e.total_cost)) out.push('Cost');
+  // Views: unexplainedGaps is the shared "is it blank" definition and is checked first, but on a
+  // LIVE deal it is not sufficient on its own.
+  //
+  // ⚠️ MEASURED 2026-09-04, and this is the whole reason the extra clause exists: of 202
+  // live/completed deals, **0 have views NULL** and **18 sit at views = 0**. unexplainedGaps tests
+  // for null, so on its own this warning could never fire even once — it would ship looking correct
+  // and flag nothing. The real signal is the zero, not the null: a video that is publicly live with
+  // no views recorded has not had its numbers entered.
+  //
+  // Deliberately NOT fixed by changing unexplainedGaps: a real 0 IS a filled value elsewhere (the
+  // "why is this blank?" reason UI must not start demanding a reason for a genuine zero). The
+  // stricter test belongs only here, where the stage already tells us the video is public.
+  const viewsUnentered = isMetricApplicable('views', platform)
+    && !num(e.views)
+    && !(e.metric_gaps || {}).views;
+  if (unexplainedGaps(e, platform).includes('views') || viewsUnentered) out.push('Views');
+  return out;
+}

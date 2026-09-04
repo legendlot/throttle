@@ -10,7 +10,7 @@ import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
-import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS } from '../../../../lib/metrics.js';
+import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 import { titleish } from '../../../../lib/productLabel.js';
 import { NewPaymentModal } from '../../../../components/NewPaymentModal.js';
@@ -90,6 +90,9 @@ export default function EngagementDetailPage() {
   if (!data) return <Spinner />;
   const e = data.engagement;
   const inf = e.influencer || {};
+  // Reann #5 (2026-09-04) — a live video with no Cost or no Views is a data hole, flagged at the
+  // top of the deal where it cannot be missed. A WARNING only: nothing here blocks anything.
+  const dataWarnings = liveDataWarnings(e, inf?.channel_platform);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1200 }}>
@@ -176,6 +179,18 @@ export default function EngagementDetailPage() {
           </div>
         )}
       </Card>
+
+      {dataWarnings.length > 0 && (
+        <div style={{ padding: 12, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+          <strong>Missing {dataWarnings.join(' and ')}.</strong> This video is live and has no{' '}
+          {dataWarnings.map(w => w.toLowerCase()).join(' and no ')} recorded — CPM and cost-per-video
+          cannot be worked out until {dataWarnings.length > 1 ? 'they are' : 'it is'} filled in.
+          {' '}Fill {[
+            dataWarnings.includes('Cost') ? 'costs in the Costs card' : null,
+            dataWarnings.includes('Views') ? 'views in the Performance card' : null,
+          ].filter(Boolean).join(', and ')}.
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
         <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} session={session} onSaved={reload} />
@@ -830,6 +845,8 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
 
 // #13 — editable performance stats once the deal is live/completed.
 // Reann 2026-08-10 #1 added saves / reposts / followers_gained / follower_count_at_post.
+// Reann 2026-09-04 #7 made follower_count_at_post MANDATORY here — REQUIRED_METRICS in
+// lib/metrics.js is the one list, so the label, the disabled Save and the refusal all agree.
 const METRIC_FIELDS = [
   ['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
   ['reposts', 'Reposts'], ['saves', 'Saves'], ['followers_gained', 'Followers gained'],
@@ -849,6 +866,11 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
   const shown = METRIC_FIELDS.filter(applicable);
   const derived = deriveMetrics(e, platform);
   const unexplained = unexplainedGaps(e, platform);
+  // Reann #7 — blank required metrics in what is currently typed, not in the saved row: the
+  // message and the Save button have to clear the moment the number is entered.
+  const missingRequired = missingRequiredMetrics(form, platform);
+  const requiredLabels = missingRequired
+    .map(k => (METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
 
   function startEdit() {
     const f = {};
@@ -856,6 +878,12 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
     setForm(f); setGaps({ ...(e.metric_gaps || {}) }); setEditing(true);
   }
   async function save() {
+    // The hard stop, enforced twice on purpose: the Save button is disabled below, but a disabled
+    // button is a hint — this is the gate. A metric_gaps reason deliberately does not clear it.
+    if (missingRequired.length) {
+      toast(`${requiredLabels.join(', ')} is required before performance can be saved`, 'error');
+      return;
+    }
     setBusy(true);
     try {
       const patch = { engagement_id: e.id };
@@ -883,13 +911,23 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
       </div>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {shown.map(([k, label]) => (
+          {shown.map(([k, label]) => {
+          const required = REQUIRED_METRICS.includes(k);
+          const blankRequired = required && missingRequired.includes(k);
+          return (
             <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+              <span style={{ width: 130, color: blankRequired ? 'var(--state-error-fg)' : 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {label}{required && <span style={{ color: 'var(--state-error-fg)' }}> *</span>}
+              </span>
+              {/* The required field is edited right here, in the same card — a hard stop that sent
+                  you to another screen to clear it would be a dead end. Focus it when it is blank. */}
               <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
-                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
-              {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown. */}
-              {(form[k] === '' || form[k] == null) && (
+                autoFocus={blankRequired}
+                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+              {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown.
+                  A REQUIRED metric gets none: it is not backfillable, so a reason would just record
+                  that the number is lost. Capture it now or the deal has no ratios, ever. */}
+              {!required && (form[k] === '' || form[k] == null) && (
                 <select value={gaps[k] || ''} onChange={ev => setGaps(g => ({ ...g, [k]: ev.target.value }))}
                   style={{ width: 150, background: 'var(--surface-2)', color: gaps[k] ? 'var(--text-1)' : 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                   <option value="">why blank?</option>
@@ -897,10 +935,20 @@ function PerformanceCard({ e, canEdit, session, onSaved, platform, gapReasons })
                 </select>
               )}
             </div>
-          ))}
+          );
+          })}
+          {missingRequired.length > 0 && (
+            <div style={{ padding: '8px 10px', background: 'var(--state-error-bg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+              <strong>{requiredLabels.join(', ')} is required.</strong> This cannot be saved without it,
+              and &ldquo;why blank?&rdquo; does not apply — the count on the day this posted cannot be
+              recovered later, and every ratio on the deal depends on it. Enter it above.
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={save} disabled={busy || missingRequired.length > 0}
+              title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : undefined}
+              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
