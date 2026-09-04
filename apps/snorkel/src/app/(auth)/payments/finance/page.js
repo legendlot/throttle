@@ -50,9 +50,14 @@ export default function FinanceQueuePage() {
     if (!firstLoadDone.current) setLoading(true);
     try {
       const s = await getValidSession();
+      // ⚠️ These two have DIFFERENT gates: the queue needs execute||super_admin, but
+      // getPaymentBootstrap needs `payment_request`, which comes from the ROLE, not the grant.
+      // Grant `execute` to someone whose role lacks it (or who has no Snorkel role at all) and an
+      // un-caught Promise.all would take the whole queue down over the button's permission.
+      // Degrade to view-only instead — never lose the queue over a secondary read.
       const [data, boot] = await Promise.all([
         garageFetch('getFinanceQueue', {}, s),
-        garageFetch('getPaymentBootstrap', {}, s),
+        garageFetch('getPaymentBootstrap', {}, s).catch(() => null),
       ]);
       setCanExecute(!!boot?.can?.execute);
       setD({ requests: data?.requests || [], banks: data?.banks || {}, documents: data?.documents || {} });

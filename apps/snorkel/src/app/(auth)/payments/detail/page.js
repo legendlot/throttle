@@ -89,16 +89,34 @@ export default function PaymentRequestDetail() {
   // cancel and re-raise — which is why PAY-0011/12/13 and PAY-0016/17/18 are triplicates
   // of one invoice each (measured 2026-09-04).
   async function attachInvoices() {
+    // Refuse what the bucket will refuse, BEFORE any upload — `payment-docs` accepts only these
+    // mime types (storage.buckets.allowed_mime_types) and 25 MB. Same guard the new-request form
+    // learned; without it storage 400s mid-loop and lands in the partial state below.
+    if (inv.some(x => x.error)) return showToast('Remove the oversized file first', 'error');
+    const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'application/pdf']);
+    const bad = inv.find(x => !ALLOWED.has(String(x.file?.type || '')));
+    if (bad) return showToast(`${bad.file.name}: only PNG, JPEG, WEBP, HEIC or PDF can be attached`, 'error');
+
     setBusy(true);
+    // ⚠️ Multi-file uploads are NOT atomic. On a mid-loop failure the earlier files ARE stored, so
+    // the retry this modal invites must not re-upload them — that would write a second document row
+    // for the same file, which is the duplicate-by-retry shape that produced the PAY-0011/12/13
+    // triplicates in the first place. Drop what succeeded and reload either way.
+    const done = [];
     try {
       const s = await getValidSession();
-      for (const item of inv) await uploadPaymentDoc(item, 'invoice', s);
+      for (const item of inv) { await uploadPaymentDoc(item, 'invoice', s); done.push(item); }
       setInvOpen(false); setInv([]);
-      showToast(inv.length > 1 ? `${inv.length} invoices attached` : 'Invoice attached', 'success');
-      await load();
+      showToast(done.length > 1 ? `${done.length} invoices attached` : 'Invoice attached', 'success');
     } catch (e) {
-      showToast(e.message || 'Failed', 'error');
-    } finally { setBusy(false); }
+      setInv(inv.filter(x => !done.includes(x)));
+      showToast(done.length
+        ? `${done.length} attached, then failed: ${e.message || 'upload error'}. The rest are still listed.`
+        : (e.message || 'Failed'), 'error');
+    } finally {
+      await load();               // the Documents panel must show what actually landed
+      setBusy(false);
+    }
   }
 
   async function confirmPaid() {
@@ -230,15 +248,17 @@ export default function PaymentRequestDetail() {
           </>
         )}
         {can.execute && r.status === 'approved' && (
-          <>
-            <Btn kind="primary" disabled={busy} onClick={() => setPayOpen(true)}>Mark paid</Btn>
-            {/* Finance rejects the invoice it is holding. The worker gate was widened to
-                approve|execute|super_admin, but this button stayed on can.approve — so the
-                backend permission was unreachable and "finance can reject" was not true on
-                any screen. A request only reaches finance at `approved`, so that is the
-                status they act on; `pending_approval` stays the approver's. */}
-            <Btn disabled={busy} onClick={() => setRejectOpen(true)}>Reject</Btn>
-          </>
+          <Btn kind="primary" disabled={busy} onClick={() => setPayOpen(true)}>Mark paid</Btn>
+        )}
+        {/* Reject mirrors the WORKER's gate (approve|execute|super_admin) rather than a narrower
+            guess. It was pinned to `can.approve && pending_approval`, which left the widened
+            backend permission unreachable: finance holds `execute` not `approve`, and everything
+            they read is `approved` — so nobody, not even the approver, could reject the requests
+            that actually reach finance. A UI predicate narrower than its handler is a dead gate. */}
+        {(can.approve || can.execute || can.super_admin)
+          && ['submitted', 'pending_approval', 'approved'].includes(r.status)
+          && !(can.approve && r.status === 'pending_approval') && (
+          <Btn disabled={busy} onClick={() => setRejectOpen(true)}>Reject</Btn>
         )}
         {r.requested_by_user_id === userId && !['paid','cancelled','rejected'].includes(r.status) && (
           <Btn disabled={busy}
