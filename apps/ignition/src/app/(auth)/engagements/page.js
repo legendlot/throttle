@@ -2,11 +2,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav, useToast } from '@throttle/ui';
+import { Spinner, Chip, Combobox, useListNav, useToast } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../components/StageBadge.js';
 import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
+import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 
 // 'Live' is the terminal success stage (S214 ⑤) — the old 'Completed' tab is gone.
@@ -26,6 +27,21 @@ const DATE_MODES = [
   { id: 'range',    label: 'Date range' },
 ];
 
+// Paid / Barter (Reann #9, 2026-09-04). ⚠️ The money-shape of a deal lives in `deal_type`,
+// NOT in `engagements.is_barter` — that column is NULL on all 411 rows and has never been
+// written by any code path, while `deal_type` is 100% populated (311 barter / 100 paid,
+// measured 2026-09-04). Built from DEAL_TYPE_VALUES rather than a hardcoded paid/barter pair
+// so the two affiliate shapes the badge already renders stay reachable instead of being
+// visible only under 'All'.
+const DEAL_TYPE_FILTERS = [
+  { id: 'all', label: 'All deal types' },
+  ...DEAL_TYPE_VALUES.map(v => ({ id: v, label: DEAL_TYPE_LABELS[v] })),
+];
+
+// The campaign filter's "not on any campaign" choice — 114 of 411 deals, so it is a real
+// bucket, not an edge case. 'all' and this are the only non-uuid values the filter holds.
+const CAMPAIGN_NONE = '__none__';
+
 // Stages that mean "already posted, or the deal is closed" — a deal in one of these can
 // never be overdue. Mirrors the worker's POSTED_OR_TERMINAL list (ignitionops
 // getOverdueEngagements); the two must agree or the Schedule page and this filter would
@@ -42,10 +58,14 @@ const SPEND_EXCLUDED_STAGES = new Set(['cancelled']);
 // clears or changes them"). They were being lost on every trip into a deal and back, because
 // the page remounts with fresh state. Session-scoped on purpose: it should outlive a
 // navigation, not a working day.
-const FILTER_KEY = 'ignition.engagements.filters.v1';
+// v2 (2026-09-04): `product` (one key) became `products` (an array) and dealType/campaign
+// joined. The key is bumped rather than merged so a v1 blob cannot leave `products` holding a
+// string, which `.includes()` would silently treat as a substring test.
+const FILTER_KEY = 'ignition.engagements.filters.v2';
 const EMPTY_FILTERS = {
   tab: 'all', type: 'all', stages: [], search: '',
-  product: 'all', dateMode: 'any', dateFrom: '', dateTo: '',
+  products: [], dealType: 'all', campaign: 'all',
+  dateMode: 'any', dateFrom: '', dateTo: '',
 };
 
 function loadFilters() {
@@ -56,7 +76,11 @@ function loadFilters() {
     const saved = JSON.parse(raw);
     // Merge over the defaults so a stored shape from an older build cannot leave a field
     // undefined and blank the control it drives.
-    return { ...EMPTY_FILTERS, ...saved, stages: Array.isArray(saved.stages) ? saved.stages : [] };
+    return {
+      ...EMPTY_FILTERS, ...saved,
+      stages: Array.isArray(saved.stages) ? saved.stages : [],
+      products: Array.isArray(saved.products) ? saved.products : [],
+    };
   } catch { return EMPTY_FILTERS; }
 }
 
@@ -81,6 +105,7 @@ export default function EngagementsPage() {
   const [restored, setRestored] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
 
   // Restore once, after mount — sessionStorage does not exist during the static export's
   // prerender, so this cannot be the useState initialiser.
@@ -93,7 +118,24 @@ export default function EngagementsPage() {
   function set(patch) { setF(prev => ({ ...prev, ...patch })); }
   function clearAll() { setF(EMPTY_FILTERS); }
 
-  const { tab, type, stages, search, product, dateMode, dateFrom, dateTo } = f;
+  const { tab, type, stages, search, products, dealType, campaign, dateMode, dateFrom, dateTo } = f;
+
+  // Campaign NAMES for the campaign filter. `getEngagements` returns `campaign_id` (the list
+  // SELECT is `*`) but not the campaign's name, so the ids are unreadable on their own. Fetched
+  // with NO status filter on purpose — every other caller asks for `status: 'active'` because
+  // they are ASSIGNING a deal, and a filter that only offered active campaigns would make the
+  // deals on a completed one unfindable. 10 campaigns today; loaded once per mount, not per
+  // filter change, so it never joins the paging loop below.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    ignitionopsGet('getCampaigns', {}, session)
+      .then(r => { if (!cancelled) setCampaigns(r.campaigns || []); })
+      // A failed campaign fetch must not take the list down with it — the filter degrades to
+      // ids-with-no-names being absent, and every other filter still works.
+      .catch(() => { if (!cancelled) setCampaigns([]); });
+    return () => { cancelled = true; };
+  }, [session]);
 
   useEffect(() => {
     if (!session || !restored) return;
@@ -138,7 +180,8 @@ export default function EngagementsPage() {
     return () => { cancelled = true; };
   }, [tab, type, stages, search, session, restored]);
 
-  // Product + posting-date filtering are done HERE, not in the worker, because the page
+  // Product, deal-type, campaign and posting-date filtering are all done HERE, not in the
+  // worker, because the page
   // already holds the entire filtered set (it pages until a short page arrives — ~350 rows
   // today). That keeps the summary tiles below honest by construction: they count exactly the
   // rows on screen. It also means the product picker can offer the values actually in use
@@ -155,10 +198,41 @@ export default function EngagementsPage() {
     return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
   }, [rows]);
 
+  // Same shape and same rule as productOptions: offer only the campaigns actually carrying a
+  // deal in the current set, plus the un-campaigned bucket. A campaign with zero deals is a
+  // choice that can only ever empty the table.
+  const campaignOptions = useMemo(() => {
+    const nameById = new Map(campaigns.map(c => [c.id, c.name || c.campaign_no || '—']));
+    const counts = new Map();
+    let none = 0;
+    for (const r of rows) {
+      if (!r.campaign_id) { none += 1; continue; }
+      counts.set(r.campaign_id, (counts.get(r.campaign_id) || 0) + 1);
+    }
+    const opts = [...counts.entries()]
+      // An id with no name is a campaign the fetch above did not return (or has not loaded
+      // yet). Showing the id would be unreadable, so it is labelled rather than dropped — a
+      // silently missing choice is how "my deals disappeared" reports start.
+      .map(([id, count]) => ({ id, label: nameById.get(id) || 'Unnamed campaign', count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    if (none) opts.push({ id: CAMPAIGN_NONE, label: 'No campaign', count: none });
+    return opts;
+  }, [rows, campaigns]);
+
   const visible = useMemo(() => {
     const today = todayISO();
+    // Every clause below ANDs — each one `return false`s on its own and the row must survive
+    // all of them, so Barter + a campaign + two products narrows, never replaces. The
+    // server-side filters (type / stage / search) have already narrowed `rows`, so these
+    // compose with those too.
     return rows.filter(r => {
-      if (product !== 'all' && productKey(r.product_code) !== product) return false;
+      if (dealType !== 'all' && r.deal_type !== dealType) return false;
+      // Multi-select: empty = no constraint, otherwise the row's product must be one of the
+      // picked keys (OR within the filter, AND against the others) — the standard meaning of
+      // a multi-select facet.
+      if (products.length && !products.includes(productKey(r.product_code))) return false;
+      if (campaign === CAMPAIGN_NONE) { if (r.campaign_id) return false; }
+      else if (campaign !== 'all' && r.campaign_id !== campaign) return false;
       if (dateMode === 'any') return true;
       const d = effectiveDate(r);
       if (dateMode === 'upcoming') {
@@ -177,7 +251,7 @@ export default function EngagementsPage() {
       }
       return true;
     });
-  }, [rows, product, dateMode, dateFrom, dateTo]);
+  }, [rows, products, dealType, campaign, dateMode, dateFrom, dateTo]);
 
   // Summary of what is on screen (Reann, 2026-08-27: "a summary tab in engagements, as it is
   // on the main dashboard, to view the total number of videos displayed and the total cost
@@ -213,6 +287,12 @@ export default function EngagementsPage() {
     const r = visible[i]; if (r) router.push(`/engagements/detail/?id=${r.id}`);
   });
 
+  function removeProduct(k) { setF(prev => ({ ...prev, products: prev.products.filter(x => x !== k) })); }
+  function addProduct(k) {
+    if (!k) return;
+    setF(prev => (prev.products.includes(k) ? prev : { ...prev, products: [...prev.products, k] }));
+  }
+
   function toggleStage(s) {
     setF(prev => ({
       ...prev,
@@ -221,7 +301,7 @@ export default function EngagementsPage() {
   }
 
   const filtersActive = tab !== 'all' || type !== 'all' || stages.length > 0 || !!search
-    || product !== 'all' || dateMode !== 'any';
+    || products.length > 0 || dealType !== 'all' || campaign !== 'all' || dateMode !== 'any';
 
   return (
     <div>
@@ -258,11 +338,42 @@ export default function EngagementsPage() {
           <option value="ugc">UGC</option>
         </select>
 
-        {/* Reann #3 — product filter. Options are the products actually on deals. */}
-        <select value={product} onChange={e => set({ product: e.target.value })} style={inputStyle(190)}>
-          <option value="all">All products</option>
-          {productOptions.map(o => (
-            <option key={o.key} value={o.key}>{o.label} ({o.count})</option>
+        {/* Reann #9 — Paid / Barter. Reads `deal_type`, not `is_barter`; see DEAL_TYPE_FILTERS. */}
+        <select value={dealType} onChange={e => set({ dealType: e.target.value })} style={inputStyle(150)}>
+          {DEAL_TYPE_FILTERS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+        </select>
+
+        {/* Reann #3 (single) → #9 (multi) — product filter. Options are the products actually
+            on deals. A Combobox, not a <select multiple>: every product picker in the fleet is
+            a searchable Combobox (S179 / PATTERN-160). Combobox has no multi-select mode, so it
+            is used as the ADD control and the picks live as removable chips beside it — the
+            standard picker keeps doing the searching, and nothing is hand-rolled.
+            `portal` because `.ig-main` is `overflow-y: auto`; an absolute dropdown is clipped
+            by it. Selected keys are removed from the options so the list cannot re-offer them,
+            and `value` is held at '' so the box empties itself ready for the next pick. */}
+        <Combobox
+          value=""
+          options={productOptions
+            .filter(o => !products.includes(o.key))
+            .map(o => ({ value: o.key, label: o.label, hint: String(o.count) }))}
+          onChange={(v) => addProduct(v)}
+          placeholder={products.length ? 'Add product…' : 'All products'}
+          allowClear={false}
+          portal
+          style={{ width: 190 }}
+          inputStyle={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}
+        />
+        {products.map(k => (
+          <Chip key={k} active onClick={() => removeProduct(k)}>
+            {productOptions.find(o => o.key === k)?.label || titleish(k)} ×
+          </Chip>
+        ))}
+
+        {/* Reann #9 — campaign filter. campaign_id, never the DEPRECATED campaign_tag. */}
+        <select value={campaign} onChange={e => set({ campaign: e.target.value })} style={inputStyle(190)}>
+          <option value="all">All campaigns</option>
+          {campaignOptions.map(o => (
+            <option key={o.id} value={o.id}>{o.label} ({o.count})</option>
           ))}
         </select>
 
