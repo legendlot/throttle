@@ -778,6 +778,82 @@ export function rollupVideos(videos) {
   return out;
 }
 
+const VIDEO_FIELDS = ['video_link','post_date','views','organic_views','paid_views','likes','comments','shares',
+  'reposts','saves','impressions','followers_gained','follower_count_at_post','metric_gaps','note'];
+const VIDEO_NUMERIC = ['views','organic_views','paid_views','likes','comments','shares','reposts','saves',
+  'impressions','followers_gained','follower_count_at_post'];
+const VIDEO_MAX_SEQ = 6;   // engagement_videos.seq CHECK (seq BETWEEN 1 AND 6) — refuse BEFORE the insert
+
+// Re-derive the deal's metric columns from its video rows and write them. The ONLY writer of
+// deal-level views/likes/… since S351. Then CPM, exactly as updateEngagement always did.
+async function recomputeVideoRollup(env, engagementId) {
+  const vr = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${engagementId}&select=*&order=seq.asc`, env);
+  const patch = rollupVideos(vr.ok ? vr.data || [] : []);
+  patch.updated_at = nowIso();
+  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`rollup_db_error: ${JSON.stringify(r.data)}`);
+  await recomputeCpm(env, engagementId);
+  return patch;
+}
+
+// Upsert ONE video take (seq 1..6) and roll the deal up. seq omitted = the lowest free seq
+// (deletions leave holes; a deal may hold at most 6 rows at a time, not 6 ever).
+async function setEngagementVideo(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&select=id,seq&order=seq.asc`, env);
+  const taken = new Set((existing.ok ? existing.data || [] : []).map(v => Number(v.seq)));
+  let seq = body.seq == null ? null : Number(body.seq);
+  if (seq == null) { for (let s = 1; s <= VIDEO_MAX_SEQ; s++) if (!taken.has(s)) { seq = s; break; } }
+  if (seq == null) return err(`a deal holds at most ${VIDEO_MAX_SEQ} videos`, 400);
+  if (!Number.isInteger(seq) || seq < 1 || seq > VIDEO_MAX_SEQ) return err(`seq must be 1..${VIDEO_MAX_SEQ}`, 400);
+
+  const row = { engagement_id: body.engagement_id, seq };
+  for (const k of VIDEO_FIELDS) if (k in body) row[k] = body[k];
+  for (const k of VIDEO_NUMERIC) if (k in row) {
+    const n = vnum(row[k]);
+    if (row[k] != null && String(row[k]).trim() !== '' && n == null) return err(`${k} must be a number`, 400);
+    if (n != null && n < 0) return err(`${k} cannot be negative`, 400);
+    row[k] = n;
+  }
+  if ('post_date' in row && row.post_date != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(row.post_date))) return err('post_date must be YYYY-MM-DD', 400);
+  if ('metric_gaps' in row && (row.metric_gaps == null || typeof row.metric_gaps !== 'object' || Array.isArray(row.metric_gaps))) row.metric_gaps = {};
+  // Reann #7 hard stop, server side: a take with views recorded must carry its follower base.
+  if (vnum(row.views) > 0 && !(vnum(row.follower_count_at_post) > 0)) return err('follower_count_at_post is required once views are entered', 400);
+  row.updated_at = nowIso();
+  if (!taken.has(seq)) row.created_by = auth.userId || null;
+
+  const up = await sb(`/rest/v1/engagement_videos?on_conflict=engagement_id,seq`, env, {
+    method: 'POST', prefer: 'resolution=merge-duplicates,return=representation', body: JSON.stringify([row]),
+  });
+  if (!up.ok) return err(`db_error: ${JSON.stringify(up.data)}`, 400);
+  let rollup;
+  try { rollup = await recomputeVideoRollup(env, body.engagement_id); }
+  catch (e) { return err(String(e.message || e), 500); }
+  return ok({ video: up.data?.[0] || row, rollup });
+}
+
+// Remove a take. seq 1 is the primary (its post_date/video_link ARE the deal's) and cannot be
+// deleted while other takes exist — delete the others first, or edit seq 1 in place.
+async function deleteEngagementVideo(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id || body.seq == null) return err('engagement_id and seq required', 400);
+  const seq = Number(body.seq);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&select=seq`, env);
+  const count = existing.ok ? (existing.data || []).length : 0;
+  if (seq === 1 && count > 1) return err('delete the other takes first; #1 is the primary', 400);
+  const del = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&seq=eq.${seq}`, env, {
+    method: 'DELETE', prefer: 'return=minimal',
+  });
+  if (!del.ok) return err(`db_error: ${JSON.stringify(del.data)}`, 400);
+  let rollup;
+  try { rollup = await recomputeVideoRollup(env, body.engagement_id); }
+  catch (e) { return err(String(e.message || e), 500); }
+  return ok({ deleted: true, rollup });
+}
+
 async function getEngagementVideos(url, auth, env) {
   const eid = url.searchParams.get('engagement_id');
   if (!eid) return err('engagement_id required', 400);
@@ -3962,6 +4038,8 @@ const POST_ACTIONS = {
   addCategoryOption,
   createEngagement,
   updateEngagement,
+  setEngagementVideo,
+  deleteEngagementVideo,
   setEngagementProducts,
   deleteEngagement,
   generateUgcBrief,
