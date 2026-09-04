@@ -3,6 +3,19 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.11.0] - 2026-09-04
+### Changed
+- Engagement detail: the Performance card now holds one video per tab (Video #1, Video #2,
+  up to six per deal), each with its own link, posted date and metrics. + Add video adds a
+  take; Remove video #N deletes any take but the primary Video #1. Deal totals, below the
+  tabs, is now a rollup of the takes (views, likes, comments, shares, reposts, saves,
+  followers gained, impressions), no longer typed directly; Sessions, Orders and
+  Conversions ₹ stay deal-level and editable there. Video #1's link and posted date are the
+  same field as the Post-live card's.
+- Targets: documented the month drill-down for the first time (Spend, Views, Conversions),
+  and the new behaviour where a deal's videos each count in the month they posted; a take
+  after the first shows a small "#2" and its own posted date in the Views drill-down.
+
 ## [1.10.0] - 2026-09-04
 ### Changed
 - Engagement detail: documented "Complete" as a derived flag, not a stage. A Live deal reads
