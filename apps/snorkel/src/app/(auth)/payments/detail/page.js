@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
+import { garageFetch, workerFetch, getValidSession, supabase } from '@throttle/db';
 import { Spinner, useToast, Modal } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
@@ -76,13 +76,16 @@ export default function PaymentRequestDetail() {
       } }, s);
       // proof attaches to the request, which is what removes the "is it done?" round-trip
       for (const item of proof) {
-        const up = await workerFetch('createPaymentDocUploadUrl',
+        const upRaw = await workerFetch('createPaymentDocUploadUrl',
           { data: { request_id: Number(id), file_name: item.file.name, doc_kind: 'payment_proof' } }, s);
-        await fetch(up.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': item.file.type || 'application/octet-stream' },
-          body: item.file,
-        });
+        const up = upRaw?.data || upRaw;   // snorkelops wraps replies as `{ ok, data }`
+        if (!up?.token || !up?.storage_path) throw new Error(`Could not prepare the upload for ${item.file.name}`);
+        // Fleet-standard upload (Supabase client + signed token). The raw PUT this replaced never
+        // checked its result, so a failed proof upload still recorded a document row pointing at
+        // nothing — Finance would have seen "proof attached" with no file behind it.
+        const put = await supabase.storage.from(up.bucket || 'payment-docs')
+          .uploadToSignedUrl(up.storage_path, up.token, item.file, { contentType: item.file.type || 'application/octet-stream' });
+        if (put.error) throw new Error(`Upload failed for ${item.file.name}: ${put.error.message || 'storage rejected it'}`);
         await workerFetch('recordPaymentDocument', { data: {
           request_id: Number(id), storage_path: up.storage_path, file_name: item.file.name,
           mime: item.file.type, size_bytes: item.file.size, doc_kind: 'payment_proof',

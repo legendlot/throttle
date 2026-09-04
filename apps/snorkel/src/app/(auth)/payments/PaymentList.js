@@ -64,7 +64,8 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       const s = await getValidSession();
       const payload = { ids: [...sel] };
       if (bulkAction === 'markPaymentPaid' && ref.trim()) payload.payment_ref = ref.trim();
-      const res = await workerFetch(bulkAction, { data: payload }, s);
+      const raw = await workerFetch(bulkAction, { data: payload }, s);
+      const res = raw?.data || raw;   // snorkelops wraps replies as `{ ok, data }` — read the payload, not the wrapper
       const done = res.approved ?? res.paid ?? 0;
       // Say what actually moved, not what was asked for — a row can leave the queue between
       // the page loading and the bulk running.

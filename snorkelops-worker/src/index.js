@@ -3851,7 +3851,14 @@ export default {
             const sr = await storageFetch(`/object/upload/sign/${PAYMENT_BUCKET}/${path}`, { method: 'POST' });
             if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
             const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
-            return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, signed_url: sr.data.url });
+            // ⚠️ Storage returns `url` RELATIVE (`/object/upload/sign/…?token=…`). Returned as-is, a
+            // browser `fetch(signed_url, PUT)` resolves it against the APP origin and 404s — which is
+            // why ZERO payment documents were ever stored across 16 requests from 2026-08-26 to
+            // 2026-09-04 (SIDDU, #bugs `1788515110`). The app now uploads via the Supabase client
+            // with `token` like every other upload in the fleet; this absolute URL is the fallback
+            // for any raw-fetch caller.
+            const signedUrl = /^https?:\/\//.test(String(sr.data.url)) ? sr.data.url : `${SUPABASE_URL}/storage/v1${sr.data.url}`;
+            return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, signed_url: signedUrl, bucket: PAYMENT_BUCKET });
           }
 
           case 'recordPaymentDocument': {
