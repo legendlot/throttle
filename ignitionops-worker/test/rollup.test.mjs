@@ -39,6 +39,25 @@ test('empty input yields an all-null patch and an empty gaps object', () => {
   assert.deepEqual(r.metric_gaps, {});
 });
 
+test('seq arriving as a STRING still sorts numerically ("2" before "1" is still take 1 first)', () => {
+  const r = rollupVideos([
+    v('2', { post_date: '2026-10-03', video_link: 'https://b' }),
+    v('1', { post_date: '2026-09-28', video_link: 'https://a' }),
+  ]);
+  assert.equal(r.post_date, '2026-09-28');
+  assert.equal(r.video_link, 'https://a');
+});
+
+test('with seq 1 deleted, the mirror fields come from the LOWEST seq present — never from nothing', () => {
+  const r = rollupVideos([
+    v(3, { post_date: '2026-10-09', video_link: 'https://c', follower_count_at_post: 1100 }),
+    v(2, { post_date: '2026-10-03', video_link: 'https://b', follower_count_at_post: 900 }),
+  ]);
+  assert.equal(r.post_date, '2026-10-03');
+  assert.equal(r.video_link, 'https://b');
+  assert.equal(r.follower_count_at_post, 900);
+});
+
 test('string numbers from PostgREST are summed as numbers, whitespace is not a value', () => {
   const r = rollupVideos([v(1, { views: '12' }), v(2, { views: ' ' })]);
   assert.equal(r.views, 12);

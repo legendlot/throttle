@@ -783,14 +783,19 @@ const VIDEO_FIELDS = ['video_link','post_date','views','organic_views','paid_vie
 const VIDEO_NUMERIC = ['views','organic_views','paid_views','likes','comments','shares','reposts','saves',
   'impressions','followers_gained','follower_count_at_post'];
 const VIDEO_MAX_SEQ = 6;   // engagement_videos.seq CHECK (seq BETWEEN 1 AND 6) — refuse BEFORE the insert
+// Every metric whose presence makes `follower_count_at_post` mandatory (the Reann #7 hard stop) —
+// i.e. all of VIDEO_NUMERIC except the base itself. Mirrors the client gate in
+// apps/ignition/src/app/(auth)/engagements/detail/page.js (PerformanceCard).
+const VIDEO_METRICS_NEEDING_BASE = VIDEO_NUMERIC.filter(k => k !== 'follower_count_at_post');
 
 // Re-derive the deal's metric columns from its video rows and write them. The ONLY writer of
 // deal-level views/likes/… since S351. Then CPM, exactly as updateEngagement always did.
 async function recomputeVideoRollup(env, engagementId) {
-  const vr = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${engagementId}&select=*&order=seq.asc`, env);
+  const eid = encodeURIComponent(engagementId);
+  const vr = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=*&order=seq.asc`, env);
   const patch = rollupVideos(vr.ok ? vr.data || [] : []);
   patch.updated_at = nowIso();
-  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+  const r = await sb(`/rest/v1/engagements?id=eq.${eid}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch),
   });
   if (!r.ok) throw new Error(`rollup_db_error: ${JSON.stringify(r.data)}`);
@@ -798,12 +803,25 @@ async function recomputeVideoRollup(env, engagementId) {
   return patch;
 }
 
+// PostgREST's raw payload is not an answer anyone on the floor can act on. Map the two codes this
+// path actually produces — a concurrent insert on (engagement_id,seq) and a dead deal id.
+function videoDbErr(res) {
+  const code = res.data?.code;
+  if (code === '23505') return err('another video was added a moment ago — reload and try again', 409);
+  if (code === '23503') return err('no such deal', 404);
+  return err(`db_error: ${JSON.stringify(res.data)}`, 400);
+}
+
 // Upsert ONE video take (seq 1..6) and roll the deal up. seq omitted = the lowest free seq
 // (deletions leave holes; a deal may hold at most 6 rows at a time, not 6 ever).
 async function setEngagementVideo(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
-  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&select=id,seq&order=seq.asc`, env);
+  const eid = encodeURIComponent(body.engagement_id);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,seq&order=seq.asc`, env);
+  // A failed read is NOT "no takes": treating it as empty hands seq 1 to a second take and the
+  // upsert then overwrites the primary. Refuse instead.
+  if (!existing.ok) return err('could not read existing takes', 502);
   const taken = new Set((existing.ok ? existing.data || [] : []).map(v => Number(v.seq)));
   let seq = body.seq == null ? null : Number(body.seq);
   if (seq == null) { for (let s = 1; s <= VIDEO_MAX_SEQ; s++) if (!taken.has(s)) { seq = s; break; } }
@@ -818,36 +836,49 @@ async function setEngagementVideo(body, auth, env) {
     if (n != null && n < 0) return err(`${k} cannot be negative`, 400);
     row[k] = n;
   }
-  if ('post_date' in row && row.post_date != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(row.post_date))) return err('post_date must be YYYY-MM-DD', 400);
+  if ('post_date' in row && row.post_date != null) {
+    // The shape check alone passes 2026-02-31 and 2026-13-01, which Postgres then 22008s. Round-trip
+    // it: only a real date survives Date.parse → toISOString unchanged.
+    const d = String(row.post_date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return err('post_date must be YYYY-MM-DD', 400);
+    if (!Number.isFinite(Date.parse(d)) || new Date(d).toISOString().slice(0, 10) !== d) return err('post_date is not a real date', 400);
+  }
   if ('metric_gaps' in row && (row.metric_gaps == null || typeof row.metric_gaps !== 'object' || Array.isArray(row.metric_gaps))) row.metric_gaps = {};
-  // Reann #7 hard stop, server side: a take with views recorded must carry its follower base.
-  if (vnum(row.views) > 0 && !(vnum(row.follower_count_at_post) > 0)) return err('follower_count_at_post is required once views are entered', 400);
+  // Reann #7 hard stop, server side: ANY performance number on a take needs its follower base —
+  // every ratio divides by it and it cannot be backfilled. A take that only carries a link and a
+  // post date saves freely (that is how a video is filed before its numbers exist).
+  if (VIDEO_METRICS_NEEDING_BASE.some(k => row[k] != null) && !(vnum(row.follower_count_at_post) > 0)) {
+    return err('follower_count_at_post is required once any performance metric is entered', 400);
+  }
   row.updated_at = nowIso();
   if (!taken.has(seq)) row.created_by = auth.userId || null;
 
   const up = await sb(`/rest/v1/engagement_videos?on_conflict=engagement_id,seq`, env, {
     method: 'POST', prefer: 'resolution=merge-duplicates,return=representation', body: JSON.stringify([row]),
   });
-  if (!up.ok) return err(`db_error: ${JSON.stringify(up.data)}`, 400);
+  if (!up.ok) return videoDbErr(up);
   let rollup;
   try { rollup = await recomputeVideoRollup(env, body.engagement_id); }
   catch (e) { return err(String(e.message || e), 500); }
   return ok({ video: up.data?.[0] || row, rollup });
 }
 
-// Remove a take. seq 1 is the primary (its post_date/video_link ARE the deal's) and cannot be
-// deleted while other takes exist — delete the others first, or edit seq 1 in place.
+// Remove a take. seq 1 is the primary (its post_date/video_link ARE the deal's) and is NEVER
+// deletable — every deal holds exactly one row at seq 1. Edit it in place instead.
 async function deleteEngagementVideo(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id || body.seq == null) return err('engagement_id and seq required', 400);
+  const eid = encodeURIComponent(body.engagement_id);
   const seq = Number(body.seq);
-  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&select=seq`, env);
-  const count = existing.ok ? (existing.data || []).length : 0;
-  if (seq === 1 && count > 1) return err('delete the other takes first; #1 is the primary', 400);
-  const del = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${body.engagement_id}&seq=eq.${seq}`, env, {
+  // Refused outright, not "only while other takes exist": deleting the last take left the deal
+  // with no primary row, so the next mirror/rollup had nothing to read.
+  if (seq === 1) return err('#1 is the primary take and cannot be removed', 400);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=seq`, env);
+  if (!existing.ok) return err('could not read existing takes', 502);
+  const del = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&seq=eq.${seq}`, env, {
     method: 'DELETE', prefer: 'return=minimal',
   });
-  if (!del.ok) return err(`db_error: ${JSON.stringify(del.data)}`, 400);
+  if (!del.ok) return videoDbErr(del);
   let rollup;
   try { rollup = await recomputeVideoRollup(env, body.engagement_id); }
   catch (e) { return err(String(e.message || e), 500); }
@@ -860,12 +891,25 @@ async function deleteEngagementVideo(body, auth, env) {
 // seq-1 row gets one. Non-fatal by design: the deal patch has already landed.
 async function mirrorDealVideoFields(env, engagementId, patch) {
   if (!('post_date' in patch) && !('video_link' in patch)) return;
+  const eid = encodeURIComponent(engagementId);
+  // Did the primary row already exist? When this INSERTS one, the deal's rollup columns were
+  // derived from no rows at all and are now stale — the deal-level patch that got us here wrote
+  // link/date but nothing re-derives views/likes/…. An update needs no rollup: the mirrored
+  // fields are the two the rollup copies from seq 1, and they already match the deal.
+  const pre = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&seq=eq.1&select=id&limit=1`, env);
+  const had = pre.ok && (pre.data || []).length > 0;
   const mirror = { engagement_id: engagementId, seq: 1, updated_at: nowIso() };
   if ('post_date' in patch) mirror.post_date = patch.post_date;
   if ('video_link' in patch) mirror.video_link = patch.video_link;
   await sb(`/rest/v1/engagement_videos?on_conflict=engagement_id,seq`, env, {
     method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify([mirror]),
   });
+  if (!had) {
+    // Best-effort, exactly like the rest of this function: the deal patch has already landed and
+    // a rollup failure must not turn a saved edit into an error.
+    try { await recomputeVideoRollup(env, engagementId); }
+    catch (e) { console.error('mirror_rollup_failed', engagementId, String(e?.message || e)); }
+  }
 }
 
 async function getEngagementVideos(url, auth, env) {
@@ -1401,11 +1445,16 @@ async function getReports(url, auth, env) {
   filters.push(EXCLUDE_NON_SPEND);
 
   const r = await sb(
-    `/rest/v1/engagements?${filters.join('&')}&select=engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
+    `/rest/v1/engagements?${filters.join('&')}&select=id,engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   const rows = r.data || [];
+  // Slice 4, same rule as both monthly handlers: a month's views are its TAKES' views, not the
+  // whole deal's parked on one post_date. Only by_month moves — spend/orders/product/tier totals
+  // stay deal-level, as they are deal-level facts.
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const viewsByMonth = bucketVideoViewsByMonth(rows, vr.ok ? vr.data || [] : []).byMonth;
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
   const roasOf = e => (e.actual_roas != null ? num(e.actual_roas) : (e.roas_on_ad_spend != null ? num(e.roas_on_ad_spend) : null));
@@ -1447,7 +1496,7 @@ async function getReports(url, auth, env) {
     const month = (e.post_date || e.created_at || '').slice(0, 7);
     if (month) {
       const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
-      m.spend += spend; m.orders += orders; m.views += views; m.deals += 1;
+      m.spend += spend; m.orders += orders; m.deals += 1;   // views: per take, filled in below
     }
     // ⚠️ Keyed CASE-INSENSITIVELY (2026-08-27). `product_code` holds free text — 44 distinct
     // spellings for 22 products, measured the same day — and this map keyed on the raw string,
@@ -1466,6 +1515,12 @@ async function getReports(url, auth, env) {
     if (roas != null) { roasSum += roas; roasN++; roasDist[bucketOf(ROAS_BUCKETS, roas)]++; }
   }
 
+  // Views per month come from the takes, keyed on each take's own post_date. A month that only
+  // exists because of created_at (nothing posted yet) therefore reads 0 views — which is the truth.
+  for (const month of Object.keys(viewsByMonth)) {
+    const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
+    m.views = viewsByMonth[month];
+  }
   const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month))
     .map(m => ({ ...m, spend: Math.round(m.spend) }));
   const byProduct = Object.values(byProductMap).sort((a, b) => b.spend - a.spend)
@@ -1850,9 +1905,10 @@ async function createEngagement(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const eng = r.data?.[0];
   await writeHistory(env, eng.id, 'create', null, startStage, null, auth.userId);
-  // S351: a deal created WITH a link/post date (rare, but the form allows it) gets its seq-1
-  // video row now, so "every deal has exactly one row at seq 1" holds for new deals too.
-  await mirrorDealVideoFields(env, eng.id, row);
+  // S351: EVERY new deal gets its seq-1 video row now — both keys are passed present-but-null when
+  // the form had no link/date, so the row exists from minute one. Without that, a deal created bare
+  // had no primary take at all and the Performance card had nothing to edit.
+  await mirrorDealVideoFields(env, eng.id, { post_date: row.post_date ?? null, video_link: row.video_link ?? null });
   // Multi-product (#4): if explicit product lines were supplied, store them + roll up.
   if (Array.isArray(body.products) && body.products.length) {
     await insertEngagementProducts(env, eng.id, body.products);
@@ -3501,6 +3557,18 @@ async function getCampaignSummary(url, auth, env) {
     + 'follower_count_at_post,stage,influencer_id';
   const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${sel}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  // Slice 4: views are counted PER TAKE, on the take's own post_date, so a from/to window that
+  // covers take 2 but not take 1 counts take 2's views only — the deal-level figure sat entirely
+  // on the deal's post_date and put both (or neither) in the window. Everything else here is a
+  // deal-level fact and keeps the deal's date.
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const takeViews = {};
+  for (const t of bucketVideoViewsByMonth(r.data || [], vr.ok ? vr.data || [] : []).rows) {
+    const d = String(t.post_date || '').slice(0, 10);
+    if (from && d && d < from) continue;
+    if (to && d && d > to) continue;
+    takeViews[t.engagement_id] = (takeViews[t.engagement_id] || 0) + num(t.views);
+  }
 
   const g = {};
   for (const e of (r.data || [])) {
@@ -3515,7 +3583,8 @@ async function getCampaignSummary(url, auth, env) {
     });
     b.deals++; if (e.stage === 'live') b.live_deals++;
     if (e.influencer_id) b.influencers.add(e.influencer_id);
-    for (const k of ['views','likes','comments','shares','saves','reposts','orders']) b[k] += num(e[k]);
+    for (const k of ['likes','comments','shares','saves','reposts','orders']) b[k] += num(e[k]);
+    b.views += takeViews[e.id] || 0;
     b.order_value += num(e.conversions_value);
     b.spend += spendOf(e);
     b.reach_at_post += num(e.follower_count_at_post);
@@ -3764,8 +3833,15 @@ async function loadConnectOverlay(env, threads) {
   // side, so this can never downgrade a human-set 'promoted'/'closed'/'working'.
   // `has_reply === true` is strict: null means csops could not tell us, and unknown
   // must leave the stored value alone.
+  // ⛔ `awaiting_reply !== true` or this UNDOES the re-open below on the very next load: has_reply
+  // stays true forever once any post-transfer reply exists, so a row the re-open put back to 'new'
+  // would be flipped to 'working' here while the customer is still waiting. `awaiting_reply` is a
+  // GENERATED column on store.cs_wa_threads (csops-worker/src/index.js:10231), but the bridge
+  // OVERWRITES it on the way out (:10868, `lm.direction === 'inbound'`) — so a thread with no
+  // message in that 1500-row slice reads false and converges exactly as it did before; a fresh
+  // inbound (the re-open case) is always in the slice and reads true. Strict `!== true` either way.
   const stale = threads
-    .filter(t => t.has_reply === true && byThread[t.id] && byThread[t.id].status === 'new')
+    .filter(t => t.has_reply === true && t.awaiting_reply !== true && byThread[t.id] && byThread[t.id].status === 'new')
     .map(t => t.id);
   if (stale.length) {
     const up = await sb(`/rest/v1/connects?thread_id=in.(${stale.join(',')})&status=eq.new`, env, {

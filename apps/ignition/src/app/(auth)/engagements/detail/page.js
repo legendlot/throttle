@@ -953,7 +953,9 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
   const [form, setForm] = useState({});
   const [gaps, setGaps] = useState({});
   const [busy, setBusy] = useState(false);
-  const current = takes.find(t => Number(t.seq) === Number(tab)) || null;
+  // Fall back to the primary, not to null: after a take is removed, `tab` still points at the seq
+  // that just went away and the card read "No video on this deal yet." on a deal full of videos.
+  const current = takes.find(t => Number(t.seq) === Number(tab)) || takes[0] || null;
 
   const applicable = ([k]) => isMetricApplicable(k, platform);
   const shown = VIDEO_METRIC_FIELDS.filter(applicable);
@@ -962,7 +964,12 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
   // Reann #7 — blank required metrics in what is currently typed, not in the saved row: the
   // message and the Save button have to clear the moment the number is entered. `form` carries
   // every shown VIDEO metric, so follower_count_at_post is read from the take being edited.
-  const missingRequired = editing && current ? missingRequiredMetrics(form, platform) : [];
+  // …and ONLY once a performance number is actually being entered. A take filed with just a link
+  // and a post date (the normal state the day it goes live) has no ratios to protect, and blocking
+  // it made the video unfileable until its numbers existed. Same rule as the server hard stop in
+  // ignitionops-worker (VIDEO_METRICS_NEEDING_BASE).
+  const anyMetricEntered = shown.some(([k]) => !REQUIRED_METRICS.includes(k) && form[k] !== '' && form[k] != null);
+  const missingRequired = editing && current && anyMetricEntered ? missingRequiredMetrics(form, platform) : [];
   const requiredLabels = missingRequired
     .map(k => (VIDEO_METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
 
