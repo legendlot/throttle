@@ -6942,6 +6942,20 @@ async function maybeOutOfHoursAutoreply(thread, ticketId, env) {
   const cfg = await oooAutoreplyConfig(env);
   if (!cfg?.enabled) return { skipped: 'disabled' };
 
+  // SUPPORT NUMBER ONLY (Pruthvi, #bugs 2026-09-04 `1788502075`). A customer answering a COD
+  // confirmation on the transactional number, or a campaign on the marketing number, was getting
+  // "our team is offline" — 10 of the first 54 sends (7 marketing, 3 transactional) went out on
+  // numbers the team never converses on. Those threads are the wrong-number redirect's job, not
+  // this one's. Resolved from the sender registry, never hardcoded: the support phone_number_id
+  // changes on every WABA migration. ALLOW-LIST, same reasoning as the redirect's — and it fails
+  // CLOSED: if the support number cannot be resolved unambiguously, send nothing.
+  const sup = await sb(
+    '/rest/v1/sender_identities?channel=eq.whatsapp&purpose=eq.utility&status=eq.active&select=metadata',
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  const supIds = (sup.ok ? (sup.data || []) : []).map(s => s.metadata?.phone_number_id).filter(Boolean);
+  if (supIds.length !== 1) return { skipped: `support_number_unresolved:${supIds.length}` };
+  if (String(thread.waba_phone_number_id) !== String(supIds[0])) return { skipped: 'not_support_number' };
+
   if (await anyoneOnShiftNow(env)) return { skipped: 'in_hours' };
 
   // Once per thread per 24h — three messages overnight get one reply, not three.
