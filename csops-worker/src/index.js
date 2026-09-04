@@ -2381,7 +2381,7 @@ async function getCallReports(params, auth, env) {
 
   let total = 0, answered = 0, missed = 0, abandoned = 0, totalDur = 0, durCount = 0;
   const daily = {}, byAccount = {}, byDepartment = {}, byAgent = {}, byHour = Array(24).fill(0);
-  const dailyByAgent = {};   // agent name → { day → row } (S349c)
+  const dailyByAgent = Object.create(null);   // agent name → { day → row } (S349c). Null-proto: the key is a DB string.
   let incoming_total = 0, incoming_answered = 0, outgoing_total = 0, outgoing_answered = 0;
 
   for (const c of rows) {

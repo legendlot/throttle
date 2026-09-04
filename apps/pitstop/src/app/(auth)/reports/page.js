@@ -179,7 +179,8 @@ export default function ReportsPage() {
     if (agAgents.length)   args.agent   = joinMulti(agAgents);
     if (businessHours) args.business_hours = 'true';
     // Grain-aware clamp in DAYS: 62 days · 62 weeks (62*7-6 days is exactly tight) · 24 months
-    // (24*28 days is conservative — the worker's month cap is lower because a month costs ~1.6 s).
+    // (24*28 days is exactly tight — 672 days never spans more than 24 calendar months; the worker's
+    // month cap is lower because a month costs ~1.6 s).
     const dayCount = Math.round((Date.parse(toIsoStart(to)) - Date.parse(toIsoStart(from))) / 86400000) + 1;
     const maxDays = dailyGrain === 'month' ? MONTH_MAX_BUCKETS * 28 : dailyGrain === 'week' ? DAILY_MAX_DAYS * 7 - 6 : DAILY_MAX_DAYS;
     const clamped = dayCount > maxDays;
@@ -600,7 +601,7 @@ function DailyTrendPanel({ data, error, metric, onMetric, businessHours, clamped
           style={{ fontFamily: 'var(--f-ui)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
           {metrics.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
         </select>
-        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{clamped ? `last ${data.range.days} ${gw.plural} of the range shown (caps at ${DAILY_MAX_DAYS})` : `${data.range.days} ${gw.plural}`}{m?.teamOnly ? ' · team only (this metric has no per-agent meaning)' : ` · one line per agent, busiest ${Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown${hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}`}</span>}
+        {data?.range && <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>{clamped ? `last ${data.range.days} ${gw.plural} of the range shown (caps at ${(data.range.grain || grain) === 'month' ? MONTH_MAX_BUCKETS : DAILY_MAX_DAYS})` : `${data.range.days} ${gw.plural}`}{m?.teamOnly ? ' · team only (this metric has no per-agent meaning)' : ` · one line per agent, busiest ${Math.min(DAILY_TOP_AGENTS, data.by_agent?.length || 0)} shown${hidden > 0 ? (m?.kind === 'count' ? `, ${hidden} more as Others` : `, ${hidden} more not drawn (no honest average of averages)`) : ''}`}</span>}
         {/* Verified live 2026-09-04: queries/answered/assigned/resolved sum to the range total exactly;
             handled does NOT (1,589 vs 1,179 over 7 days) because a conversation replied to on three
             days is handled on each of them and once in the range. Say so, or the sum reads as a bug. */}
@@ -983,7 +984,13 @@ function foldCalls(daily = [], byAgent = [], grain) {
     const f = fold(a.days || []);
     const rows = days.map(d => finishCallRow(f.get(d.day) || Object.fromEntries([['day', d.day], ...CALL_SUMS.map(x => [x, 0])]), false));
     return { name: a.name, agent_id: null, handled_total: rows.reduce((s, r) => s + (r.in_answered || 0) + (r.out_answered || 0), 0), days: rows };
-  }).sort((a, b) => b.handled_total - a.handled_total || a.name.localeCompare(b.name));
+  }).sort((a, b) => {
+    // The unassigned bucket ranks LAST whatever its volume (it is already 3rd of 5 by calls), so
+    // it never pushes a real agent out of the top-N lines; it still draws when there is room.
+    const ua = a.name === '— unassigned —', ub = b.name === '— unassigned —';
+    if (ua !== ub) return ua ? 1 : -1;
+    return b.handled_total - a.handled_total || a.name.localeCompare(b.name);
+  });
   return { range: { days: days.length, grain }, metrics: CALL_METRICS, days, by_agent };
 }
 function CallTrend({ daily, byAgent }) {

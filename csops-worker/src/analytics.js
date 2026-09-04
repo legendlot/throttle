@@ -224,6 +224,9 @@ export function istBucketRange(fromIso, toIso, grain = 'day', maxBuckets = 62) {
     return startNo + (grain === 'week' ? 7 : 1);
   };
   const first = startOf(firstDay), last = startOf(lastDay);
+  // Past Date's representable range (±8.64e15 ms) the day arithmetic stays finite while the
+  // Date construction throws — refuse here, at either bound, for every grain.
+  if (![first, last].every(d => Number.isFinite(d) && Math.abs(d * DAY) <= 8.64e15)) return { ok: false, reason: 'invalid' };
   let count;
   if (grain === 'month') {
     const a = new Date(first * DAY), b = new Date(last * DAY);

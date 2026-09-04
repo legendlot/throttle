@@ -310,3 +310,7 @@ test('istBucketRange: a range starting on a Sunday labels its first week by the 
   assert.deepEqual(r.buckets.map(b => b.bucket), ['2026-08-31', '2026-09-07']);
   assert.equal(r.buckets[0].from, '2026-09-05T18:30:00.000Z');   // clipped: the Sunday only
 });
+
+test('istBucketRange: the LOWER Date bound at week grain is invalid too (review of the review)', () => {
+  assert.deepEqual(istBucketRange('-271821-04-20T00:00:00Z', '-271821-05-01T00:00:00Z', 'week'), { ok: false, reason: 'invalid' });
+});
