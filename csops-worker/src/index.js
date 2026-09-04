@@ -2057,20 +2057,29 @@ async function getSupportAnalyticsRows(params, auth, env) {
   }
 
   // Internal notes, fetched in id-chunks (a 300-id `in.()` list stays well inside URL limits;
-  // YTD is ~2,700 complaints → ~9 requests, nowhere near the subrequest ceiling). Measured
-  // 2026-09-04: only 5 complaints YTD carry a note at all, so this is cheap — but the ask was
-  // "comments", and the day the team starts using notes the export must already show them.
+  // 2,740 complaints YTD (2026-09-04) → 10 chunk requests, nowhere near the subrequest ceiling).
+  // Measured the same day: only 5 complaints YTD carry a note at all, so this is cheap — but the
+  // ask was "comments", and the day the team starts using notes the export must already show them.
+  // ⚠️ PAGED within each chunk too, for the same reason the ticket fetch above is: PostgREST caps
+  // every response at db-max-rows (5,000) with no error. 300 tickets averaging 17 notes would
+  // silently lose notes while `truncated` said the file was complete (S349 hostile review).
+  // Ordered by `id` (unique) so page boundaries neither drop nor repeat a note; the per-ticket
+  // arrays therefore arrive in id order, which is creation order for an append-only table.
   const notesByTicket = {};
   const ids = rows.map(x => x.r.id);
-  const CHUNK = 300;
+  const CHUNK = 300, NPAGE = 1000;
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
-    const nRes = await sb(
-      `/rest/v1/cs_ticket_notes?ticket_id=in.(${chunk.join(',')})&select=ticket_id,created_at,created_by_name,body&order=created_at.asc`,
-      env,
-    );
-    if (!nRes.ok) return err(`Failed to load ticket notes: ${JSON.stringify(nRes.data)}`, nRes.status);
-    for (const n of (nRes.data || [])) (notesByTicket[n.ticket_id] ||= []).push(n);
+    for (let offset = 0; ; offset += NPAGE) {
+      const nRes = await sb(
+        `/rest/v1/cs_ticket_notes?ticket_id=in.(${chunk.join(',')})&select=ticket_id,created_at,created_by_name,body&order=id.asc&limit=${NPAGE}&offset=${offset}`,
+        env,
+      );
+      if (!nRes.ok) return err(`Failed to load ticket notes: ${JSON.stringify(nRes.data)}`, nRes.status);
+      const page = nRes.data || [];
+      for (const n of page) (notesByTicket[n.ticket_id] ||= []).push(n);
+      if (page.length < NPAGE) break;
+    }
   }
 
   return ok({

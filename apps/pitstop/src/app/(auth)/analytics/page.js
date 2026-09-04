@@ -115,6 +115,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rowsBusy, setRowsBusy] = useState(false);   // the row-level export is a second fetch
+  const [rowsError, setRowsError] = useState(null);  // …with its own failure state
 
   const range = useMemo(() => {
     if (preset === 'custom' && customFrom && customTo) return { from: isoStart(customFrom), to: isoEnd(customTo) };
@@ -265,7 +266,11 @@ export default function AnalyticsPage() {
       L.push('');
     }
 
-    const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });
+    // ⚠️ BOM first. Excel ignores the MIME charset on a double-clicked .csv and reads the system
+    // codepage unless the file starts with U+FEFF — measured 2026-09-04 (S349 hostile review):
+    // 884 of 2,732 YTD descriptions (32%) carry non-ASCII, so without this a third of the one
+    // column the complaints export exists for renders as mojibake.
+    const blob = new Blob(['﻿' + L.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -285,6 +290,7 @@ export default function AnalyticsPage() {
   async function exportRowsCsv() {
     if (!data || loading || rowsBusy) return;
     setRowsBusy(true);
+    setRowsError(null);
     try {
       const applied = data.applied_filters || {};
       const args = { from: data.range?.from || range.from, to: data.range?.to || range.to };
@@ -314,7 +320,11 @@ export default function AnalyticsPage() {
       ];
       L.push(COLS.map(([, h]) => csvEsc(h)).join(','));
       for (const r of (d.rows || [])) L.push(COLS.map(([k]) => csvEsc(r[k])).join(','));
-      const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });
+      // ⚠️ BOM first. Excel ignores the MIME charset on a double-clicked .csv and reads the system
+    // codepage unless the file starts with U+FEFF — measured 2026-09-04 (S349 hostile review):
+    // 884 of 2,732 YTD descriptions (32%) carry non-ASCII, so without this a third of the one
+    // column the complaints export exists for renders as mojibake.
+    const blob = new Blob(['﻿' + L.join('\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -322,7 +332,9 @@ export default function AnalyticsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e.message);
+      // Its own state, not the dashboard's `error`: that one is cleared only by a successful
+      // dashboard fetch, so a failed export would leave a red banner over correct panels.
+      setRowsError(e.message);
     } finally {
       setRowsBusy(false);
     }
@@ -391,6 +403,12 @@ export default function AnalyticsPage() {
           </>
         )}
       </div>
+
+      {rowsError && (
+        <div style={{ padding: 12, background: 'var(--bad-bg)', color: 'var(--bad-fg)', borderRadius: 8, fontSize: 13 }}>
+          Export complaints failed: {rowsError}
+        </div>
+      )}
 
       {data?.range?.truncated && (
         <div style={{ padding: 12, background: 'var(--warn-bg)', color: 'var(--warn-fg)', borderRadius: 8, fontSize: 13 }}>

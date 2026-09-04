@@ -194,3 +194,7 @@ test('maskPhoneForExport matches the Queue export mask: all but the last three d
   assert.equal(maskPhoneForExport('123'), '123');
   assert.equal(maskPhoneForExport(null), '');
 });
+
+test('formatTicketNotes survives a numeric body and a garbage timestamp — one cell, not a thrown export', () => {
+  assert.equal(formatTicketNotes([{ body: 5, created_at: 'garbage', created_by_name: 'X' }]), '[, X] 5');
+});

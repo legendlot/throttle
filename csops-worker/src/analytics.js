@@ -90,10 +90,14 @@ export function rollingAverage(series, window) {
 export function formatTicketNotes(notes = []) {
   const out = [];
   for (const n of notes) {
-    const body = (n?.body || '').trim();
+    // Hardened (S349 review): a non-string body or an unparseable timestamp must cost ONE cell,
+    // never the whole export — the module is exported and the next caller will not know the
+    // column types. Same reasoning as splitMulti's guard in multiselect.js.
+    const body = String(n?.body ?? '').trim();
     if (!body) continue;
-    const when = n.created_at
-      ? new Date(new Date(n.created_at).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' IST'
+    const t = n.created_at ? new Date(n.created_at).getTime() : NaN;
+    const when = Number.isFinite(t)
+      ? new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' IST'
       : '';
     const who = n.created_by_name ? `, ${n.created_by_name}` : '';
     out.push(`[${when}${who}] ${body.replace(/\s*\r?\n\s*/g, ' / ')}`);

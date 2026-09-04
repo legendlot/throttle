@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.21.1] - 2026-09-04
+### Changed
+- **Support Analytics** — Export complaints: states exactly what the file carries about the
+  customer (phone masked as in the Queue export; email address and order ID in full, which the
+  Queue export does not carry) and that it is an internal file.
+
 ## [1.21.0] - 2026-09-04
 ### Changed
 - **Support Analytics** — new **Export complaints** button beside **Export CSV**. Documents that
