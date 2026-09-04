@@ -229,6 +229,26 @@ function totalFromRange(range) {
 // rate inside Snorkel was ZERO because the module was never announced. Mahesh announced it and
 // locked #payments on 2026-09-02, so real volume starts now — which is why these two stopped
 // being theoretical and got the same treatment as getPOs (S334).
+// Fetch EVERY row of a query, not the first 5,000. PostgREST clamps every response to
+// `db-max-rows` (5,000 here) with no error and no header the caller reads, so a table that
+// grows past it starts returning short silently — see CORE.md. `sales_order_lines` (2,515)
+// and `dispatch_shipment_lines` (2,921) are both within a couple of years of that at current
+// growth, and a truncation there would UNDERSTATE fulfilment value on the sales list, which
+// reads as "the vendor shorted us" rather than as a bug. So page.
+// ⚠️ `params` MUST carry an `order=` ending in a unique column (id) — a non-unique sort makes
+// page boundaries drop and repeat rows.
+async function pageAll(queryFn, table, params, pageSize = 1000) {
+  const out = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const r = await queryFn(table, `${params}&limit=${pageSize}&offset=${offset}`);
+    if (!r.ok || !Array.isArray(r.data)) break;
+    out.push(...r.data);
+    if (r.data.length < pageSize) break;      // short page = last page
+    if (offset > 100000) break;               // belt and braces against an infinite loop
+  }
+  return out;
+}
+
 const PO_PAGE_LIMIT  = 2000;
 const PAY_PAGE_LIMIT = 400;
 const FIN_PAGE_LIMIT = 300;
@@ -680,9 +700,18 @@ async function withLineFulfilment(lines, f) {
     return rows.map(l => ({ ...l, shipped_qty: 0, packed_qty: 0, pending_qty: Math.round(Number(l.qty)) || 0 }));
   }
   const shIds = shipments.map(s => s.id);
-  const shipped = new Set(shipments.filter(s => s.status === 'shipped').map(s => s.id));
   const lnR = await queryPublic('dispatch_shipment_lines',
     `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,product,model,color,target_qty,packed_qty`);
+  return allocateLineFulfilment(rows, shipments, (lnR.ok && Array.isArray(lnR.data)) ? lnR.data : []);
+}
+
+// The allocation itself, split out of withLineFulfilment (S344) so the BATCHED sales-order
+// list can reuse it over pre-fetched dispatch lines instead of re-deriving it. There must
+// only ever be ONE implementation of this: the pool-draining below is subtle, and a second
+// copy that looked up per line would silently double-count the 28% of orders with duplicate
+// variant lines. Pure — no I/O — so both callers get identical semantics.
+function allocateLineFulfilment(rows, shipments, dispatchLines) {
+  const shipped = new Set(shipments.filter(s => s.status === 'shipped').map(s => s.id));
   // ⚠️ WHITESPACE-INSENSITIVE, not just trimmed. `store.sales_order_lines` holds one line
   // spelled "Mc Cloud" while every dispatch line says "McCloud" (RULE-NAME-001's canonical
   // form) — a trim-and-lowercase key leaves those unequal, so that shipped line would read as
@@ -697,7 +726,7 @@ async function withLineFulfilment(lines, f) {
   const packedBy = {}; // packed but NOT yet despatched — the two buckets are disjoint, so
                        // the pools below can be drained independently without double-counting
                        // a unit as both sent and waiting.
-  for (const dl of (lnR.ok && Array.isArray(lnR.data) ? lnR.data : [])) {
+  for (const dl of (Array.isArray(dispatchLines) ? dispatchLines : [])) {
     const k = key(dl.product, dl.model, dl.color);
     const q = Math.round(Number(dl.packed_qty)) || 0;
     if (shipped.has(dl.shipment_id)) sentBy[k] = (sentBy[k] || 0) + q;
@@ -727,6 +756,67 @@ async function withLineFulfilment(lines, f) {
     const packedStill = take(packedPool, k, Math.max(0, ordered - sent));
     return { ...l, shipped_qty: sent, packed_qty: packedStill, pending_qty: Math.max(0, ordered - sent) };
   });
+}
+
+// ── Fulfilment VALUE per order, batched for the sales-order LIST (Ram, #bugs 2026-09-04
+// `1788500532`; S344) ────────────────────────────────────────────────────────────────────
+// "Order value vs Fulfilment value": a shortfall in ₹ rather than in units, so 3 missing
+// remotes and 3 missing cars stop looking like the same problem.
+//
+// ⚠️ Reuses allocateLineFulfilment — the SAME allocation the order detail screen uses. The
+// tempting shortcut (shipped_units ÷ requested_units × grand_total) is wrong whenever an
+// order mixes cheap and expensive lines, which is the normal case: short-shipping 3 remotes
+// out of 30 units is not 10% of the money.
+//
+// ⚠️ GST-INCLUSIVE, because the list's existing "Total" column is `grand_total`. Two numbers
+// on one row must share a basis or the comparison is nonsense.
+// ⚠️ Values are DERIVED from the order line's own rate/discount/gst_pct rather than scaled
+// from line_total, so a partially-shipped line prices at exactly the rate it was sold at.
+async function salesOrderFulfilmentValues(orders, ful) {
+  const out = {};
+  if (!orders?.length) return out;
+  // Whole-table paged reads rather than a 500-id `in.()`: 527 order UUIDs would build a
+  // ~19 KB URL, and the list already returns every order, so the row sets are the same.
+  const [allLines, allDispatch] = await Promise.all([
+    pageAll(query, 'sales_order_lines',
+      '?select=order_id,product,model,color,qty,rate,discount_pct,gst_pct&order=order_id.asc,id.asc'),
+    pageAll(queryPublic, 'dispatch_shipment_lines',
+      '?select=shipment_id,product,model,color,target_qty,packed_qty&order=shipment_id.asc,id.asc'),
+  ]);
+  const linesByOrder = {};
+  for (const l of allLines) (linesByOrder[l.order_id] ||= []).push(l);
+  const dispByShip = {};
+  for (const d of allDispatch) (dispByShip[d.shipment_id] ||= []).push(d);
+
+  for (const o of orders) {
+    const f = ful?.[o.id];
+    const rows = linesByOrder[o.id] || [];
+    // Same shipment resolution as withLineFulfilment, legacy fallback included — a
+    // pre-cutover order links via sales_orders.dispatch_shipment_id and would otherwise
+    // report ZERO fulfilled value on an order that has already shipped.
+    const all = (f?.shipments?.length ? f.shipments : (f?.legacyShipment ? [f.legacyShipment] : []));
+    const shipments = all.filter(s => s.status !== 'cancelled');
+    const dispatchLines = shipments.flatMap(sh => dispByShip[sh.id] || []);
+    const allocated = allocateLineFulfilment(rows, shipments, dispatchLines);
+    let taxable = 0, gst = 0;
+    for (const l of allocated) {
+      const sent = Math.round(Number(l.shipped_qty)) || 0;
+      if (!sent) continue;
+      const t = sent * (Number(l.rate) || 0) * (1 - (Number(l.discount_pct) || 0) / 100);
+      taxable += t;
+      gst += t * (Number(l.gst_pct) || 0) / 100;
+    }
+    const value = +(taxable + gst).toFixed(2);
+    const ordered = Number(o.grand_total) || 0;
+    out[o.id] = {
+      fulfilled_taxable: +taxable.toFixed(2),
+      fulfilled_value: value,
+      // Never negative: over-shipping is a different conversation and a negative "shortfall"
+      // in a ₹ column reads as a credit, which it is not.
+      shortfall_value: +Math.max(0, ordered - value).toFixed(2),
+    };
+  }
+  return out;
 }
 
 // Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
@@ -2352,6 +2442,7 @@ export default {
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
             const ful = await loadFulfilment(orders);
+            const vals = await salesOrderFulfilmentValues(orders, ful);
             const toCancel = [];
             const rows = orders.map(o => {
               const f = ful[o.id];
@@ -2359,7 +2450,8 @@ export default {
               if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
                 toCancel.push({ o, reason: f.request.reject_reason });
               const dec = decorateSalesOrder(o, anchor);
-              return { ...dec, ...der, partner_name: o.sales_partners?.name || null,
+              return { ...dec, ...der, ...(vals[o.id] || {}),
+                       partner_name: o.sales_partners?.name || null,
                        partner_state: o.sales_partners?.state || null, sales_partners: undefined };
             });
             await reconcileRejections(toCancel);
