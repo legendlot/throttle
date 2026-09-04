@@ -38,7 +38,7 @@ const DEAL_TYPE_FILTERS = [
   ...DEAL_TYPE_VALUES.map(v => ({ id: v, label: DEAL_TYPE_LABELS[v] })),
 ];
 
-// The campaign filter's "not on any campaign" choice — 114 of 411 deals, so it is a real
+// The campaign filter's "not on any campaign" choice — roughly a quarter of deals, so it is a real
 // bucket, not an edge case. 'all' and this are the only non-uuid values the filter holds.
 const CAMPAIGN_NONE = '__none__';
 
@@ -475,9 +475,10 @@ export default function EngagementsPage() {
                     {/* A deal with no campaign cannot be rolled up into campaign performance, so it
                         is flagged for audit (Reann item 12). Read `campaign_id` — `campaign_tag` is
                         deprecated and set on 5 rows, so flagging on it would mark almost everything.
-                        ⚠️ A glyph, deliberately NOT a StageBadge-style pill: 114 of 412 deals (27.7%,
-                        measured 2026-09-04) carry no campaign, and a pill on more than a quarter of
-                        the rows is noise rather than a signal. The CAMPAIGN filter already offers a
+                        ⚠️ A glyph, deliberately NOT a StageBadge-style pill: roughly a QUARTER of deals
+                        carry no campaign, and a pill on that many rows is noise rather than a
+                        signal. ⛔ No count is quoted here on purpose — it moves every day as deals
+                        are created (113/411 → 114/413 inside one afternoon). Re-derive it. The CAMPAIGN filter already offers a
                         "No campaign" option with the live count — this is the at-a-glance companion
                         to it, in the column the eye scans first. */}
                     <td style={td}>
@@ -485,6 +486,7 @@ export default function EngagementsPage() {
                       {!r.campaign_id && (
                         <span
                           title="No campaign — this deal is not attributed to any campaign"
+                          role="img"
                           aria-label="No campaign"
                           style={{
                             marginLeft: 6, color: 'var(--state-warning-fg)',

@@ -131,9 +131,14 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
     })
     .filter((o, i, a) => a.findIndex(x => x.value === o.value) === i);
 
+  // ⚠️ Reads `linesRef.current`, NOT the `lines` prop — and publishes through commitLines.
+  // commitLines makes the ref the newest truth, so between an async writer landing and React
+  // committing that render, the prop is STALE. A setRow off the prop in that window republishes
+  // the pre-merge array and drops the COGS that just arrived — the same lost update the helper
+  // exists to close, running the other way. Latent today (React batching means a user event
+  // cannot interleave a promise microtask) but it is the N-1-of-N shape, so it is closed here.
   function setRow(i, patch) {
-    const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
-    onChange(next);
+    commitLines(linesRef.current.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
   // Picking from the catalogue records the REAL product reference alongside the typed name and
@@ -213,7 +218,14 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
       // free-text row wearing the previous pick's COGS (the "SHA" row, ref null but
       // cogs_inr 523.15 — IGN-2026-00530, 2026-08-26).
       if (l.product_ref !== code) return l;
-      const next = { ...l, list_price_inr: list };
+      // ⚠️ Only write a list price we actually resolved. This and the effect above ask the worker
+      // DIFFERENT questions — the effect sends sku:'' (product_code only), this sends the option's
+      // sku — and getProductPrice tries the direct sku before the sku_map fallback, so one can hit
+      // where the other misses (the documented stale product_master.sku case). Writing `null`
+      // unconditionally let this merge wipe a "List ₹" the effect had just resolved. Display-only,
+      // never persisted, so the cost was a hint vanishing — but it is the same class as the bug above.
+      const next = { ...l };
+      if (list != null) next.list_price_inr = list;
       // uncosted variant — leave the field manual rather than write 0
       if (cogs != null) {
         // cogs_inr is a pick-time SNAPSHOT of the cost basis and always tracks the pick.
@@ -277,10 +289,11 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
     onValidityChangeRef.current?.(valid);
   }, [valid]);
 
-  function addRow() { onChange([...lines, emptyLine()]); }
+  // Same reason as setRow: base on the ref, publish through commitLines.
+  function addRow() { commitLines([...linesRef.current, emptyLine()]); }
   function removeRow(i) {
-    const next = lines.filter((_, idx) => idx !== i);
-    onChange(next.length ? next : [emptyLine()]);
+    const next = linesRef.current.filter((_, idx) => idx !== i);
+    commitLines(next.length ? next : [emptyLine()]);
   }
 
   return (
