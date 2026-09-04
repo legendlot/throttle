@@ -3590,6 +3590,30 @@ async function loadConnectOverlay(env, threads) {
     });
     if (up.ok) for (const id of stale) byThread[id].status = 'working';
   }
+
+  // S351 (2026-09-04): a CLOSED connect whose customer writes again must come back as 'new'.
+  // Closing is overlay-only (setConnectStatus patches this table and nothing else), csops never
+  // writes here, and the converge above only touches 'new' — so before this, fresh inbound on a
+  // closed connect stayed 'closed' with no signal at all. 470 stale connects were bulk-closed on
+  // 2026-09-04 with a 7-day-quiet cut precisely because of that gap. The tell is the thread's
+  // `last_inbound_at` (from the csops bridge, select=*) being LATER than the close (`updated_at`,
+  // which every close path stamps). `status=eq.closed` is on the WRITE filter, so a row a human
+  // has meanwhile moved to working/promoted is left alone. Strict on both timestamps: an unknown
+  // must not re-open anything.
+  const reopen = threads
+    .filter(t => {
+      const row = byThread[t.id];
+      if (!row || row.status !== 'closed' || !t.last_inbound_at || !row.updated_at) return false;
+      const inbound = Date.parse(t.last_inbound_at), closed = Date.parse(row.updated_at);
+      return Number.isFinite(inbound) && Number.isFinite(closed) && inbound > closed;
+    })
+    .map(t => t.id);
+  if (reopen.length) {
+    const up = await sb(`/rest/v1/connects?thread_id=in.(${reopen.join(',')})&status=eq.closed`, env, {
+      method: 'PATCH', body: JSON.stringify({ status: 'new', updated_at: new Date().toISOString() }),
+    });
+    if (up.ok) for (const id of reopen) byThread[id].status = 'new';
+  }
   return byThread;
 }
 
