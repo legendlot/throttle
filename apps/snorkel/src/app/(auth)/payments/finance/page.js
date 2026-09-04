@@ -180,7 +180,7 @@ export default function FinanceQueuePage() {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <Kpi label="To pay" value={truncation?.total != null ? `${rows.length} of ${truncation.total}` : (truncation ? `${rows.length}+` : rows.length)} />
-        <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={money(total)} />
+        <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={total} format={v => money(v)} />
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
         {held.length > 0 && <Kpi label="On hold" value={held.length} />}
       </div>
@@ -333,7 +333,7 @@ export default function FinanceQueuePage() {
       )}
 
       {holdFor && (
-        <Modal onClose={() => { if (busy !== holdFor.id) { setHoldFor(null); setHoldNote(''); } }}
+        <Modal open onClose={() => { if (busy !== holdFor.id) { setHoldFor(null); setHoldNote(''); } }}
                title={`Put ${holdFor.request_no} on hold`}>
           <div style={{ padding: 16, maxWidth: 460 }}>
             <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>

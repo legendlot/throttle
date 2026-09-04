@@ -337,7 +337,7 @@ export default function NewPaymentRequestPage() {
       )}
 
       {dupWarn && (
-        <Modal onClose={() => { setDupWarn(null); router.push('/payments'); }} title="Raised — but check this">
+        <Modal open onClose={() => { setDupWarn(null); router.push('/payments'); }} title="Raised — but check this">
           <div style={{ padding: 16, maxWidth: 520 }}>
             <p style={{ marginTop: 0 }}>
               <b>{dupWarn.request_no}</b> was raised. {
@@ -428,7 +428,7 @@ export function NewPayeeModal({ onClose, onCreated, canEnterBank }) {
   }
 
   return (
-    <Modal onClose={onClose} title="New payee">
+    <Modal open onClose={onClose} title="New payee">
       <div style={{ padding: 16, maxWidth: 520 }}>
         <label style={L}>Name *</label>
         <input style={I} value={d.name} onChange={e => set('name', e.target.value)}

@@ -283,7 +283,7 @@ export default function PaymentRequestDetail() {
       </div>
 
       {rejectOpen && (
-        <Modal onClose={() => setRejectOpen(false)} title="Reject request">
+        <Modal open onClose={() => setRejectOpen(false)} title="Reject request">
           <div style={{ padding: 16, maxWidth: 460 }}>
             <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
               The requester sees this reason, so make it actionable.
@@ -304,7 +304,7 @@ export default function PaymentRequestDetail() {
       )}
 
       {holdOpen && (
-        <Modal onClose={() => setHoldOpen(false)} title="Put on hold">
+        <Modal open onClose={() => setHoldOpen(false)} title="Put on hold">
           <div style={{ padding: 16, maxWidth: 460 }}>
             <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
               The requester sees this reason and the request stays open on their side.
@@ -325,7 +325,7 @@ export default function PaymentRequestDetail() {
       )}
 
       {invOpen && (
-        <Modal onClose={() => { if (!busy) { setInvOpen(false); setInv([]); } }} title="Attach invoice">
+        <Modal open onClose={() => { if (!busy) { setInvOpen(false); setInv([]); } }} title="Attach invoice">
           <div style={{ padding: 16, maxWidth: 460 }}>
             <p style={{ marginTop: 0, fontSize: 13, color: 'var(--t2)' }}>
               Attaches to {r.request_no} — no need to cancel and raise it again.
@@ -342,7 +342,7 @@ export default function PaymentRequestDetail() {
       )}
 
       {payOpen && (
-        <Modal onClose={() => setPayOpen(false)} title="Mark paid">
+        <Modal open onClose={() => setPayOpen(false)} title="Mark paid">
           <div style={{ padding: 16, maxWidth: 460 }}>
             <label style={{ fontSize: 12, color: 'var(--t2)' }}>Reference / UTR</label>
             <input value={pay.payment_ref} onChange={e => setPay(p => ({ ...p, payment_ref: e.target.value }))}

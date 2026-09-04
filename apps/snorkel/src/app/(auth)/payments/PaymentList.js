@@ -118,7 +118,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       {rows.length > 0 && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Kpi label="Requests" value={rows.length} />
-          <Kpi label="Value" value={money(total)} />
+          <Kpi label="Value" value={total} format={v => money(v)} />
           {scope === 'mine' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
         </div>
       )}
