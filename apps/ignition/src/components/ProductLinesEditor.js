@@ -51,6 +51,18 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
   const linesRef = useRef(lines); linesRef.current = lines;
   const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
 
+  // ⚠️ EVERY ASYNC WRITER MUST GO THROUGH THIS, never a bare `onChangeRef.current(...)`.
+  // Two of them exist — the list-price effect below and onProductPicked's COGS merge — and both
+  // build their next array from `linesRef.current`, which is only refreshed on render (line above).
+  // Their fetches land ~40ms apart, inside one render window, so the later writer mapped a
+  // linesRef that did not yet carry the earlier one's fields and silently dropped them. That is
+  // the whole of "costs do not appear on the first tap" (Reann, #bugs 2026-09-04): the COGS merge
+  // landed at ~474ms and the list-price effect overwrote it at ~515ms, so goodies_cost came back
+  // empty while List ₹ appeared. The second tap worked only because the effect skips rows that
+  // already have a list price, so nothing raced it. Publishing to the ref makes the next writer
+  // read the previous one's result regardless of when React re-renders.
+  function commitLines(next) { linesRef.current = next; onChangeRef.current(next); }
+
   // Stable per-row identity, stamped ONCE per row object and carried by every `{...l, ...patch}`.
   // NOT the array index: rows are added and removed, and an index-keyed error follows the wrong
   // row after a delete. `__legacyFreeText` is decided at the same moment — on FIRST SIGHT of the
@@ -90,7 +102,7 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
       if (cancelled) return;
       const priced = new Map(pairs.filter(([, p]) => p != null && Number(p) > 0).map(([c, p]) => [c, Number(p)]));
       if (!priced.size) return;
-      onChangeRef.current(linesRef.current.map(l => (
+      commitLines(linesRef.current.map(l => (
         l.product_ref && priced.has(l.product_ref) && l.list_price_inr == null
           ? { ...l, list_price_inr: priced.get(l.product_ref) }
           : l
@@ -194,7 +206,7 @@ export default function ProductLinesEditor({ value, onChange, session, onValidit
     // not a useful reference, so treat it as unknown rather than showing "List ₹0".
     const listRaw = priceRes?.price?.price;
     const list = (listRaw == null || Number(listRaw) <= 0) ? null : Number(listRaw);
-    onChangeRef.current(linesRef.current.map((l, idx) => {
+    commitLines(linesRef.current.map((l, idx) => {
       if (idx !== i) return l;
       // Stale-merge guard: only apply if the row still holds THIS pick. Without it,
       // clearing or re-typing the product while the fetch was in flight produced a
