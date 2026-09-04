@@ -16,7 +16,12 @@ export const MULTI_SEP = '\u001f';
 // necessarily a string; a non-string used to throw `v.startsWith is not a function` out of a report
 // handler. Coerce rather than trust.
 export function splitMulti(v) {
-  if (v === null || v === undefined) return [];
+  // Every falsy input means NO FILTER, and must stay that way. Coercing first would turn `false`
+  // into ["false"] and `0` into ["0"] — a filter that matches nothing, which is strictly worse
+  // than no filter at all. (Unreachable from today's call sites, which all guard on `if (!v)`
+  // before calling and receive only string|null from URLSearchParams — but this module is exported
+  // and the next caller will not know that.)
+  if (!v) return [];
   const str = String(v);
   if (!str) return [];
   const parts = str.startsWith(MULTI_SEP)

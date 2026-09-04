@@ -242,20 +242,26 @@ export default function AnalyticsPage() {
 
     // Complaint rate + ageing, added S347b so the export matches what the page renders.
     if (data.complaint_rate_trend?.length) {
-      L.push('');
-      L.push(`${grainW} Complaint Rate`);
+      L.push(csvEsc(`${grainW} Complaint Rate`));
       L.push([bucketHead, 'Complaints', 'Rolling avg', 'Window (buckets)'].map(csvEsc).join(','));
       for (const r of data.complaint_rate_trend) {
         L.push([r.bucket, r.count, r.avg, r.window].map(csvEsc).join(','));
       }
+      L.push('');
     }
     if (data.ageing_trend?.length) {
-      L.push('');
-      L.push(`${grainW} Ageing Trend`);
-      L.push([bucketHead, 'Total', 'Within 3d', 'After 3d', 'Unknown'].map(csvEsc).join(','));
+      // The panel PLOTS shares and the table shows count + %, so the file carries both — exporting
+      // counts alone would omit the numbers actually charted, while the manual says the export is
+      // what is on screen.
+      L.push(csvEsc(`${grainW} Ageing Trend`));
+      L.push([bucketHead, 'Total', 'Within 3d', 'Within 3d %', 'After 3d', 'After 3d %',
+              'Unknown', 'Unknown %'].map(csvEsc).join(','));
       for (const r of data.ageing_trend) {
-        L.push([r.bucket, r.total, r.within_3d, r.after_3d, r.ageing_unknown].map(csvEsc).join(','));
+        const pc = (n) => (r.total ? +((n / r.total) * 100).toFixed(1) : 0);
+        L.push([r.bucket, r.total, r.within_3d, pc(r.within_3d), r.after_3d, pc(r.after_3d),
+                r.ageing_unknown, pc(r.ageing_unknown)].map(csvEsc).join(','));
       }
+      L.push('');
     }
 
     const blob = new Blob([L.join('\n')], { type: 'text/csv;charset=utf-8' });

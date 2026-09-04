@@ -51,11 +51,20 @@ export async function csopsPost(action, body = {}, session) {
 // value containing a comma is transported intact.
 export const MULTI_SEP = '\u001f';
 
-// ⚠️ A value CONTAINING the separator would decode as two values — a plausible WRONG filter, which
-// is a worse failure than the visibly-empty report this encoding replaced. No such value can exist
-// today (U+001F is a control character), so strip rather than throw: a report must not be taken
-// down by one odd row, and a stripped separator still yields the right single value.
+// ⚠️ A value CONTAINING the separator would decode as TWO values — a plausible WRONG filter, and a
+// worse failure than the visibly-empty report this encoding replaced. We strip it rather than throw,
+// because a report must not be taken down by one odd row.
+// ⛔ BE HONEST ABOUT WHAT THE STRIP DOES: "A<US>B" becomes "AB", which matches NO row — so the
+// filter comes back empty or under-counted, it is NOT silently corrected to the right value. An
+// earlier version of this comment claimed it "still yields the right single value"; that was wrong.
+// This is acceptable only because no such value can exist: U+001F is a control character, and 0 of
+// 14,209 cs_tickets rows carry any C0 control char in a filter dimension (measured 2026-09-04).
+// If a value ever legitimately needs one, percent-encode here instead of stripping.
+// null/undefined elements are dropped rather than becoming the strings "null"/"undefined", which
+// would reach a uuid[] parameter and 500 the whole report.
 export function joinMulti(values) {
-  const clean = values.map(v => String(v).split(MULTI_SEP).join(''));
+  const clean = (values || [])
+    .filter(v => v !== null && v !== undefined)
+    .map(v => String(v).split(MULTI_SEP).join(''));
   return MULTI_SEP + clean.join(MULTI_SEP);
 }
