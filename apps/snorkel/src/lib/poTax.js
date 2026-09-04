@@ -4,6 +4,15 @@
 //   - pos/[poNumber]/PODetailClient.js  (totals block + line columns)
 //   - pos/print/page.js        (printed PO totals)
 //
+// ⚠️⚠️ THIS FUNCTION IS PORTED VERBATIM INTO THE WORKER as `computePoTax` in
+// snorkelops-worker/src/index.js, where it sets the totals on the PDF that is DM'd to a
+// requester when their PO is final-approved (S344). The vendor's printed copy and the
+// requester's PDF must agree to the paisa, so THE TWO MUST BE CHANGED TOGETHER.
+// The worker is deliberately import-free (zero imports, one file), which is why this is
+// a copy rather than a shared module. `node scripts/test-po-tax-parity.mjs` extracts the
+// worker's live function from its source and asserts both agree — run it after any edit
+// here; it is wired to fail on a difference as small as a rounding change.
+//
 // Rules:
 //   - currency !== 'INR'  → no GST shown (CN/RMB vendors are exempt)
 //   - vendor GSTIN state code === company state code (default '29' / Karnataka)

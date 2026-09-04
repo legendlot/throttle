@@ -920,8 +920,367 @@ async function createVendorRow(d, createdBy) {
   return { ok: true, vendor_code: code };
 }
 
+// ══ PO raised → PDF → Slack DM to the requester (S344, 2026-09-04) ═════════════
+// Joseph asked for the raised PO to come back to him automatically (#bugs
+// 1788271551.564379); Afshaan's call was a Slack DM with the PDF, built as its own
+// Slack app with DM scopes. Fires on finalApprovePO — the moment the PO is genuinely
+// live. A Draft/Accepted PO is not "raised" and its PDF would be misleading.
+//
+// EVERY part of this is best-effort and wrapped: a Slack outage, a missing token or a
+// failed render must NEVER fail a PO approval. It runs in ctx.waitUntil so approval
+// returns immediately rather than waiting on a browser render.
+
+// ⚠️⚠️ VERBATIM PORT of computeTax from apps/snorkel/src/lib/poTax.js. ⚠️⚠️
+// The PDF and the on-screen printed PO MUST agree to the paisa, so these two must be
+// changed TOGETHER — a divergence here means the vendor's copy and the requester's copy
+// state different GST. The paired warning is on the app-side file. Drift is checked by
+// tools/test-po-tax-parity.mjs, which runs both implementations over live PO data.
+const PO_DEFAULT_COMPANY_GSTIN = '29AAFCF7834H1ZA';
+function poLineAmount(l) {
+  const tv = parseFloat(l.total_value);
+  if (Number.isFinite(tv)) return tv;
+  const q = parseFloat(l.qty_ordered) || 0;
+  const p = parseFloat(l.unit_price) || 0;
+  return q * p;
+}
+function computePoTax(lines, currency, vendorGstin = null, companyGstin = PO_DEFAULT_COMPANY_GSTIN) {
+  const list = Array.isArray(lines) ? lines : [];
+  const taxable = list.reduce((s, l) => s + poLineAmount(l), 0);
+  if (currency !== 'INR') {
+    return { taxable, gst: 0, cgst: 0, sgst: 0, igst: 0, grand: taxable,
+             showGst: false, isCgstSgst: false, halfRate: 0, fullRate: 0 };
+  }
+  const gst = list.reduce((s, l) => {
+    const amt = poLineAmount(l);
+    const pct = parseFloat(l.gst_percent) || 0;
+    return s + (amt * pct) / 100;
+  }, 0);
+  const companyState = (companyGstin || PO_DEFAULT_COMPANY_GSTIN).substring(0, 2);
+  const vendorState  = vendorGstin ? String(vendorGstin).substring(0, 2) : null;
+  const isCgstSgst = !vendorState || vendorState === companyState;
+  const blended  = taxable > 0 ? (gst / taxable) * 100 : 0;
+  const halfRate = Math.round((blended / 2) * 10) / 10;
+  const fullRate = Math.round(blended * 10) / 10;
+  return { taxable, gst,
+    cgst: isCgstSgst ? gst / 2 : 0, sgst: isCgstSgst ? gst / 2 : 0,
+    igst: isCgstSgst ? 0 : gst, grand: taxable + gst,
+    showGst: true, isCgstSgst, halfRate, fullRate };
+}
+
+// Presentation helpers — also mirrored from the print page.
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function poCurrencySymbol(c) {
+  if (c === 'INR') return '₹';
+  if (c === 'USD') return '$';
+  if (c === 'RMB' || c === 'CNY') return '¥';
+  return c ? c + ' ' : '';
+}
+function poMoney(n, curr) {
+  const v = Number(n) || 0;
+  return `${poCurrencySymbol(curr)}${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function poFormatNumber(po_number, raised_date) {
+  if (!po_number) return '';
+  const seq = String(po_number).split('-').pop() || '';
+  const ym  = (raised_date || '').replace(/-/g, '').substring(0, 6);
+  const n   = String(parseInt(seq, 10) || 0).padStart(3, '0');
+  return ym ? `LOT/PO/${ym}/${n}` : `LOT/PO/${n}`;
+}
+function poDdMmYyyy(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return String(d);
+  return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
+}
+
+// The document data. Same queries as the getPrintPOData handler, minus the request-time
+// permission gating — this runs server-side for a known requester, and the China case is
+// handled by the caller refusing to attach a PDF at all (see notifyRequesterPoRaised).
+async function loadPoDocData(poNumber) {
+  const [headerR, linesR, regR] = await Promise.all([
+    query('purchase_orders', `?po_number=eq.${encodeURIComponent(poNumber)}&limit=1`),
+    query('po_lines', `?po_number=eq.${encodeURIComponent(poNumber)}&order=line_no.asc`),
+    query('company_addresses', `?is_registered_office=eq.true&limit=1`),
+  ]);
+  if (!headerR.ok || !headerR.data?.[0]) return null;
+  const po = headerR.data[0];
+  const company = regR.data?.[0] || null;
+  let vendor = null;
+  if (po.vendor_code) {
+    const vR = await query('vendors', `?vendor_code=eq.${encodeURIComponent(po.vendor_code)}&limit=1`);
+    vendor = vR.data?.[0] || null;
+  }
+  if (!vendor && po.vendor_name) {
+    const vR = await query('vendors', `?vendor_name=ilike.${encodeURIComponent(po.vendor_name)}&limit=1`);
+    vendor = vR.data?.[0] || null;
+  }
+  let deliveryAddress = null;
+  if (po.delivery_address_id) {
+    const daR = await query('company_addresses', `?id=eq.${po.delivery_address_id}&limit=1`);
+    deliveryAddress = daR.data?.[0] || null;
+  }
+  if (!deliveryAddress) deliveryAddress = company;
+  let preparedByName = po.raised_by || null;
+  if (po.raised_by_user_id) {
+    const upR = await query('users_profile', `?id=eq.${encodeURIComponent(po.raised_by_user_id)}&select=full_name&limit=1`);
+    if (upR.ok && upR.data?.[0]?.full_name) preparedByName = upR.data[0].full_name;
+  }
+  return { po, vendor, company, deliveryAddress, lines: linesR.data || [], prepared_by_name: preparedByName };
+}
+
+// Standalone A4 HTML. Mirrors apps/snorkel/.../procurement/pos/print/page.js — same
+// blocks in the same order (header, PO no/date, vendor|company, lines, tax summary,
+// delivery + notes, prepared-by on its own page). Self-contained: no external CSS, no
+// images (the print page's /lot-logo.png is skipped — Browser Rendering would have to
+// fetch it from the public origin, and a broken image on a vendor document is worse
+// than no image; the letterhead text carries the identity).
+function poPrintHtml(d) {
+  const { po, vendor, company, deliveryAddress, lines, prepared_by_name } = d;
+  const tax = computePoTax(lines, po.currency, vendor?.gstin || null, company?.gstin || null);
+  const addr = [company?.city, company?.state, company?.pincode].filter(Boolean).join(', ');
+  const dAddr = deliveryAddress
+    ? [deliveryAddress.legal_name, deliveryAddress.line1, deliveryAddress.line2,
+       [deliveryAddress.city, deliveryAddress.state, deliveryAddress.pincode].filter(Boolean).join(', ')]
+      .filter(Boolean).map(x => `<div>${esc(x)}</div>`).join('')
+    : '<div>&mdash;</div>';
+  const rows = (lines || []).map((l, i) => {
+    const amount = poLineAmount(l);
+    return `<tr>
+      <td class="c">${i + 1}</td>
+      <td>${esc(l.description || l.part_code || '')}</td>
+      ${tax.showGst ? `<td>${esc(l.hsn_code || '')}</td>` : ''}
+      ${tax.showGst ? `<td class="n">${l.gst_percent != null ? esc(parseFloat(l.gst_percent)) + '%' : ''}</td>` : ''}
+      <td class="n">${Number(l.qty_ordered || 0).toLocaleString('en-IN')}</td>
+      <td>${esc(l.unit || '')}</td>
+      <td class="n">${l.unit_price != null ? esc(poMoney(l.unit_price, po.currency)) : ''}</td>
+      <td class="n">${esc(poMoney(amount, po.currency))}</td>
+    </tr>`;
+  }).join('');
+  const taxRows = tax.showGst
+    ? (tax.isCgstSgst
+        ? `<tr><td>CGST ${tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</td><td class="n">${esc(poMoney(tax.cgst, po.currency))}</td></tr>
+           <tr><td>SGST ${tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</td><td class="n">${esc(poMoney(tax.sgst, po.currency))}</td></tr>`
+        : `<tr><td>IGST ${tax.fullRate > 0 ? `@ ${tax.fullRate}%` : ''}</td><td class="n">${esc(poMoney(tax.igst, po.currency))}</td></tr>`)
+    : '';
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(po.po_number)}</title><style>
+    @page { size: A4; margin: 15mm; }
+    body { margin:0; background:#fff; color:#000; font-family: Arial, Helvetica, sans-serif; }
+    .po { padding: 0; }
+    h1 { margin:0; font-size:16px; text-transform:uppercase; text-align:center; letter-spacing:2px; text-decoration:underline; margin:14px 0 10px; }
+    table { width:100%; border-collapse:collapse; }
+    table.lines th, table.lines td { border:1px solid #000; padding:6px 8px; font-size:11px; vertical-align:top; }
+    table.lines th { background:#f0f0f0; font-weight:700; text-align:left; }
+    .n { text-align:right; font-variant-numeric: tabular-nums; }
+    .c { text-align:center; }
+    hr { border:none; border-top:1px solid #000; margin:10px 0; }
+    .hd { font-weight:700; margin-bottom:4px; text-transform:uppercase; font-size:10px; }
+    .sm { font-size:11px; line-height:1.45; }
+  </style></head><body><div class="po">
+    <div style="text-align:right" class="sm">
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${esc(company?.legal_name || '')}</div>
+      <div>${esc(company?.line1 || '')}</div>
+      ${company?.line2 ? `<div>${esc(company.line2)}</div>` : ''}
+      <div>${esc(addr)}</div>
+      ${company?.phone ? `<div>${esc(company.phone)}</div>` : ''}
+      ${company?.email ? `<div>${esc(company.email)}</div>` : ''}
+      ${company?.gstin ? `<div>GSTIN: ${esc(company.gstin)}</div>` : ''}
+    </div>
+    <h1>Purchase Order</h1>
+    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:8px">
+      <span><strong>PO Number:</strong> ${esc(poFormatNumber(po.po_number, po.raised_date))}</span>
+      <span><strong>Date:</strong> ${esc(poDdMmYyyy(po.raised_date))}</span>
+    </div>
+    ${po.revision > 0 ? `<div style="font-size:11px;margin-bottom:8px"><strong>Revision:</strong> ${esc(po.revision)}</div>` : ''}
+    <hr />
+    <table style="margin-bottom:12px"><tbody><tr>
+      <td style="width:50%;vertical-align:top;padding-right:14px" class="sm">
+        <div class="hd">To: Vendor / Supplier</div>
+        <div style="font-weight:700">${esc(vendor?.vendor_name || po.vendor_name || '')}</div>
+        ${vendor?.address ? `<div style="white-space:pre-line">${esc(vendor.address)}</div>` : ''}
+        ${vendor?.contact_name ? `<div>Attn: ${esc(vendor.contact_name)}</div>` : ''}
+        ${vendor?.contact_phone ? `<div>${esc(vendor.contact_phone)}</div>` : ''}
+        ${vendor?.gstin ? `<div>GSTIN: ${esc(vendor.gstin)}</div>` : ''}
+      </td>
+      <td style="width:50%;vertical-align:top;padding-left:14px;border-left:1px solid #000" class="sm">
+        <div class="hd">Company Name</div>
+        <div style="font-weight:700">${esc(company?.legal_name || '')}</div>
+        <div>${esc(company?.line1 || '')}</div>
+        ${company?.line2 ? `<div>${esc(company.line2)}</div>` : ''}
+        <div>${esc(addr)}</div>
+        ${company?.gstin ? `<div>GSTIN: ${esc(company.gstin)}</div>` : ''}
+      </td>
+    </tr></tbody></table>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px">Order Details</div>
+    <table class="lines"><thead><tr>
+      <th class="c" style="width:30px">S.No</th><th>Particulars</th>
+      ${tax.showGst ? '<th style="width:60px">HSN</th><th class="n" style="width:50px">GST %</th>' : ''}
+      <th class="n" style="width:60px">Qty</th><th style="width:50px">Unit</th>
+      <th class="n" style="width:80px">Rate</th><th class="n" style="width:100px">Amount</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <table style="margin-top:10px"><tbody><tr><td style="width:60%"></td><td style="width:40%">
+      <table style="width:100%;font-size:11px"><tbody>
+        <tr><td>Total Taxable Value</td><td class="n">${esc(poMoney(tax.taxable, po.currency))}</td></tr>
+        ${taxRows}
+        <tr style="font-weight:700;font-size:12px">
+          <td style="border-top:1px solid #000;padding-top:4px">Grand Total</td>
+          <td class="n" style="border-top:1px solid #000;padding-top:4px">${esc(poMoney(tax.grand, po.currency))}</td></tr>
+      </tbody></table>
+    </td></tr></tbody></table>
+    <div style="margin-top:16px" class="sm">
+      <div class="hd">Delivery Address</div>${dAddr}
+      ${po.notes ? `<div style="margin-top:10px"><div class="hd">Notes</div><div style="white-space:pre-line">${esc(po.notes)}</div></div>` : ''}
+    </div>
+    <div style="page-break-before:always;margin-top:24px">
+      <table style="margin-top:40px"><tbody><tr>
+        <td style="width:60%"></td>
+        <td style="width:40%;text-align:right;font-size:11px">
+          <div style="margin-bottom:4px">Prepared by:</div>
+          <div style="font-weight:700">${esc(prepared_by_name || po.raised_by || '')}</div>
+        </td></tr></tbody></table>
+    </div>
+  </div></body></html>`;
+}
+
+// Cloudflare Browser Rendering REST /pdf. REST rather than the Workers binding on
+// purpose: the binding needs @cloudflare/puppeteer as an npm dependency and this worker
+// is deliberately import-free. Raw `html` (not `url`) means nothing has to authenticate
+// against the app or be exposed publicly. Returns bytes, or null on any failure.
+async function renderPdfFromHtml(html, env) {
+  const acct = env.CF_ACCOUNT_ID, token = env.CF_BROWSER_TOKEN;
+  if (!acct || !token) { console.log('[pdf] CF_ACCOUNT_ID/CF_BROWSER_TOKEN not set — skipping'); return null; }
+  try {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acct}/browser-rendering/pdf`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html, pdfOptions: { format: 'a4', printBackground: true } }),
+    });
+    if (!res.ok) { console.error('[pdf] render failed', res.status, (await res.text()).slice(0, 300)); return null; }
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (e) { console.error('[pdf] render threw', e.message); return null; }
+}
+
+// ── Slack (dedicated Snorkel app with DM scopes) ──────────────────────────────
+// Scopes: users:read, users:read.email, im:write, chat:write, files:write.
+// SLACK_BOT_TOKEN here is SNORKEL'S OWN app token — never the Claude app's.
+async function slackApi(method, payload, env) {
+  const token = env.SLACK_BOT_TOKEN;
+  if (!token) return { ok: false, error: 'no_token' };
+  try {
+    const res = await fetch(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// Requester → Slack user. store.po_requests.requested_by_email is populated on every
+// request (10/10 measured 2026-09-04) and every LOT Slack account uses the same
+// @legendoftoys.com address, so lookupByEmail IS the mapping — no slack_id column.
+async function slackUserIdByEmail(email, env) {
+  if (!email) return null;
+  const token = env.SLACK_BOT_TOKEN;
+  if (!token) return null;
+  try {
+    const res = await fetch(`https://slack.com/api/users.lookupByEmail?email=${encodeURIComponent(email)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const j = await res.json();
+    return j.ok ? (j.user?.id || null) : null;
+  } catch { return null; }
+}
+
+// Slack's external-upload flow: reserve a URL, POST the bytes, complete into the DM.
+// initial_comment rides along so the PDF and the message are ONE notification.
+async function slackUploadPdfToDm(channel, bytes, filename, comment, env) {
+  const token = env.SLACK_BOT_TOKEN;
+  if (!token || !bytes) return false;
+  try {
+    const up = await fetch('https://slack.com/api/files.getUploadURLExternal', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ filename, length: String(bytes.length) }),
+    }).then(r => r.json());
+    if (!up.ok) { console.error('[slack] getUploadURL failed', up.error); return false; }
+    const put = await fetch(up.upload_url, { method: 'POST', body: bytes });
+    if (!put.ok) { console.error('[slack] byte upload failed', put.status); return false; }
+    const done = await slackApi('files.completeUploadExternal', {
+      files: [{ id: up.file_id, title: filename }],
+      channel_id: channel,
+      initial_comment: comment,
+    }, env);
+    if (!done.ok) { console.error('[slack] completeUpload failed', done.error); return false; }
+    return true;
+  } catch (e) { console.error('[slack] upload threw', e.message); return false; }
+}
+
+// The whole notification. Best-effort throughout: every failure degrades to the next
+// cheapest thing (PDF -> link-only message -> in-app notification) and NOTHING here can
+// fail the PO approval that triggered it.
+async function notifyRequesterPoRaised(po, env) {
+  try {
+    if (!po?.source_request_no) return;                        // not raised from a request
+    const rq = await query('po_requests',
+      `?request_no=eq.${encodeURIComponent(po.source_request_no)}&select=request_no,title,requested_by_email,requested_by_name,requested_by_user_id&limit=1`);
+    const req = rq.ok ? rq.data?.[0] : null;
+    if (!req) return;
+
+    const poLink = `https://snorkel.legendoftoys.com/procurement/pos/print?po_number=${encodeURIComponent(po.po_number)}`;
+    const label  = poFormatNumber(po.po_number, po.raised_date);
+    const text =
+      `:white_check_mark: *Your PO has been raised — ${label}*\n` +
+      `Request *${req.request_no}*${req.title ? ` — ${req.title}` : ''}\n` +
+      `Vendor: ${po.vendor_name || '—'}\n` +
+      `<${poLink}|Open the PO>`;
+
+    const slackId = await slackUserIdByEmail(req.requested_by_email, env);
+    if (!slackId) {
+      // No Slack account, or the lookup failed. Zero of 7 requesters today, but nothing
+      // gates it and floor staff may not all have Slack.
+      // ⛔ DELIBERATELY NOT written to store.payment_notifications, though that is the
+      // only in-app feed there is. Two reasons, both found while building this:
+      //   1. `kind` carries a CHECK (approval_needed|payment_needed|approved|rejected|
+      //      paid|cancelled). 'po_raised' would raise 23514 — and because notify()
+      //      swallows its own errors, it would fail SILENTLY and look delivered.
+      //      Widening the CHECK is the documented fix, but see (2).
+      //   2. That feed renders at /payments/notifications. A PO-raised item is not a
+      //      payment and a requester has no reason to look there, so widening the
+      //      constraint would buy a notification nobody reads.
+      // The real fallback already exists and needs no code: the request itself flips to
+      // `approved` with linked_po_number set, which the requester sees on their own
+      // Requests list. The DM is an addition to that, never the only channel.
+      console.log('[po-notify] no Slack user for', req.requested_by_email,
+                  '— requester sees it on their Requests list; nothing else to do');
+      return;
+    }
+    const dm = await slackApi('conversations.open', { users: slackId }, env);
+    const channel = dm.ok ? dm.channel?.id : null;
+    if (!channel) { console.error('[po-notify] conversations.open failed', dm.error); return; }
+
+    // ⚠️ China-sourced POs carry a financial strip that getPrintPOData withholds from
+    // anyone without procurement_china. This path has not checked the RECIPIENT's
+    // permissions, so it never attaches a China PDF — link only, and the app applies
+    // its own gate when they open it. Conservative on purpose: a DM'd PDF cannot be
+    // un-sent, and leaking China pricing is worse than a missing attachment.
+    let attached = false;
+    if (po.source !== 'China') {
+      const data = await loadPoDocData(po.po_number);
+      if (data) {
+        const pdf = await renderPdfFromHtml(poPrintHtml(data), env);
+        if (pdf) attached = await slackUploadPdfToDm(
+          channel, pdf, `${label.replace(/\//g, '-')}.pdf`, text, env);
+      }
+    }
+    if (!attached) await slackApi('chat.postMessage', { channel, text, unfurl_links: false }, env);
+  } catch (e) {
+    console.error('[po-notify] failed (PO approval unaffected):', e.message);
+  }
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     if (request.method === 'OPTIONS')
       return new Response(null, { headers: CORS });
@@ -2408,6 +2767,12 @@ export default {
               po_number: d.po_number, revision: po.revision, changed_by: postRole, change_summary: 'PO final-approved',
             });
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_APPROVED', 'PO', d.po_number, `PO ${d.po_number} approved (final)`, {});
+            // Tell the requester their PO is live (S344). waitUntil, not await: a browser
+            // render plus three Slack calls takes seconds, and an approval must not wait
+            // on it — nor fail if Slack is down. notifyRequesterPoRaised swallows all.
+            const approvedPo = { ...po, status: 'Approved' };
+            if (ctx?.waitUntil) ctx.waitUntil(notifyRequesterPoRaised(approvedPo, env));
+            else await notifyRequesterPoRaised(approvedPo, env);
             return ok({ po_number: d.po_number, status: 'Approved' });
           }
 
