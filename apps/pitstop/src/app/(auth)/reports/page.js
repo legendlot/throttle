@@ -75,10 +75,20 @@ export default function ReportsPage() {
   // Agents-tab filters (Pruthvi #bugs 2026-07-25). businessHours defaults ON since
   // 2026-08-27 (Pruthvi, #bugs 1787684420 reply): the team is judged on these numbers,
   // so the default basis is their rostered hours; untick for the 24x7 view.
-  const [agChannel, setAgChannel] = useState('');
-  const [agTag, setAgTag] = useState('');
+  // MULTI-select since S347 (string[]; [] = All). The Tickets tab and all six Analytics
+  // dimensions went multi-select in S344 and this tab was the last single-select surface.
+  // It could not be done in the UI alone: cs_agent_conversation_report aggregates SERVER-side,
+  // so post-filtering rows would leave the KPI totals whole-cohort while the table under them
+  // was filtered — correct-looking and wrong. Both RPCs took array params instead.
+  const [agChannels, setAgChannels] = useState([]);
+  const [agTags, setAgTags] = useState([]);
+  const [agAgents, setAgAgents] = useState([]);
   const [businessHours, setBusinessHours] = useState(true);
   const [tags, setTags] = useState([]);
+  // The agent roster is captured from an UNFILTERED response and then held. Deriving the
+  // options from the current response instead would shrink the list as soon as you picked
+  // someone, leaving no way to add a second agent.
+  const [agRoster, setAgRoster] = useState([]);
 
   // Tickets-tab filters (Pruthvi #bugs 1788512544, S344). Reports had NO agent dimension while
   // Analytics has had one, and Pitstop is used across departments — a team's numbers could not
@@ -108,15 +118,24 @@ export default function ReportsPage() {
       if (tkChannels.length) args.channel = joinMulti(tkChannels);
     }
     if (view === 'agents') {
-      if (agChannel) args.channel = agChannel;
-      if (agTag) args.tag_id = agTag;
+      if (agChannels.length) args.channel = joinMulti(agChannels);
+      if (agTags.length)     args.tag_id  = joinMulti(agTags);
+      if (agAgents.length)   args.agent   = joinMulti(agAgents);
       if (businessHours) args.business_hours = 'true';
     }
     csopsGet(action, args, session)
       .then(d => {
         if (!alive) return;
         if (view === 'calls') setCallData(d);
-        else if (view === 'agents') setAgentData(d);
+        else if (view === 'agents') {
+          setAgentData(d);
+          // Only an unfiltered response describes the whole roster; a filtered one is a subset.
+          if (!agAgents.length) {
+            setAgRoster((d?.by_agent || [])
+              .filter(a => a.agent_id)
+              .map(a => ({ v: a.agent_id, l: a.name })));
+          }
+        }
         else setData(d);
         setError(null);
       })
@@ -135,7 +154,7 @@ export default function ReportsPage() {
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, from, to, view, agChannel, agTag, businessHours, tkAgents, tkChannels]);
+  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels]);
 
   function exportCsv() {
     // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
@@ -214,8 +233,9 @@ export default function ReportsPage() {
     // The basis and the cohort travel WITH the file — a CSV read a week later
     // must not be ambiguous about whether times are 24x7 or business hours.
     lines.push(`Basis,${agentData.range?.business_hours ? 'Business hours' : '24x7'}`);
-    lines.push(`Channel,${esc(agChannel || 'All')}`);
-    lines.push(`Tag,${esc(tags.find(x => x.id === agTag)?.name || 'All')}`);
+    lines.push(`Channel,${esc(agChannels.length ? agChannels.map(c => CHANNEL_OPTS.find(o => o.v === c)?.l || c).join(' | ') : 'All')}`);
+    lines.push(`Tag,${esc(agTags.length ? agTags.map(id => tags.find(x => x.id === id)?.name || id).join(' | ') : 'All')}`);
+    lines.push(`Agent,${esc(agAgents.length ? agAgents.map(id => agRoster.find(a => a.v === id)?.l || id).join(' | ') : 'All')}`);
     lines.push(`Conversations in range,${t.total ?? ''}`);
     lines.push(`Queries (customer-initiated),${t.queries ?? ''}`);
     lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);
@@ -264,6 +284,13 @@ export default function ReportsPage() {
     const sel = key === 'agent' ? tkAgents : tkChannels;
     const missing = sel.filter(v => !opts.includes(v));
     return missing.length ? [...missing, ...opts] : opts;
+  }
+
+  // Same rule as ticketOptions: a selected agent absent from the roster (the range moved under
+  // it) is still listed, or the control silently reads "All" while the report stays filtered.
+  function agentOptions() {
+    const missing = agAgents.filter(v => !agRoster.some(o => o.v === v));
+    return missing.length ? [...missing.map(v => ({ v, l: v })), ...agRoster] : agRoster;
   }
 
   if (!canViewCosts && !loading) {
@@ -385,8 +412,9 @@ export default function ReportsPage() {
       {view === 'agents' && (
         <>
           <AgentFilters
-            channel={agChannel} onChannel={setAgChannel}
-            tag={agTag} onTag={setAgTag} tags={tags}
+            channels={agChannels} onChannels={setAgChannels}
+            tagIds={agTags} onTagIds={setAgTags} tags={tags}
+            agents={agAgents} onAgents={setAgAgents} agentOptions={agentOptions()}
             businessHours={businessHours} onBusinessHours={setBusinessHours}
           />
           {loading || !agentData ? <Spinner /> : <AgentsPanel data={agentData} wait={waitData} />}
@@ -432,21 +460,24 @@ function TicketFilters({ agents, onAgents, agentOptions, channels, onChannels, c
   );
 }
 
-function AgentFilters({ channel, onChannel, tag, onTag, tags, businessHours, onBusinessHours }) {
-  const sel = {
-    background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)', padding: '4px 8px', fontSize: 12, minWidth: 130,
-  };
+function AgentFilters({ channels, onChannels, tagIds, onTagIds, tags, agents, onAgents, agentOptions,
+                       businessHours, onBusinessHours }) {
+  const active = channels.length + tagIds.length + agents.length;
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 'var(--gap)' }}>
-      <select value={channel} onChange={e => onChannel(e.target.value)} style={sel} title="Filter by channel">
-        <option value="">All channels</option>
-        {CHANNEL_OPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-      </select>
-      <select value={tag} onChange={e => onTag(e.target.value)} style={sel} title="Filter by tag">
-        <option value="">All tags</option>
-        {tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
+      <MultiSelect label="Agent"   value={agents}   options={agentOptions} onChange={onAgents}
+        title="Filter by assigned agent — the KPIs above the table follow the same cohort" />
+      <MultiSelect label="Channel" value={channels} options={CHANNEL_OPTS} onChange={onChannels}
+        title="Filter by channel" />
+      <MultiSelect label="Tag"     value={tagIds}
+        options={tags.map(t => ({ v: t.id, l: t.name }))} onChange={onTagIds}
+        title="Filter by tag" />
+      {active > 0 && (
+        <button onClick={() => { onAgents([]); onChannels([]); onTagIds([]); }}
+          style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }}>
+          Clear filter{active > 1 ? 's' : ''}
+        </button>
+      )}
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
         <input type="checkbox" checked={businessHours} onChange={e => onBusinessHours(e.target.checked)} style={{ cursor: 'pointer' }} />
         Business hours only

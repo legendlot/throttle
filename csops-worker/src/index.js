@@ -1652,6 +1652,16 @@ function multiParam(params, key) {
   return vals.length ? new Set(vals) : null;
 }
 
+// Same decode, but as an ARRAY for an RPC argument rather than a Set for in-Worker filtering.
+// null (not []) means "no filter" — the RPC treats an empty array as no filter too, but sending
+// null keeps the intent unambiguous in the request body.
+function arrParam(params, key) {
+  const v = params.get(key);
+  if (!v) return null;
+  const vals = splitMulti(v);
+  return vals.length ? vals : null;
+}
+
 async function fetchTicketsRanged(col, from, to, env) {
   const PAGE = 1000;
   const MAX_ROWS = 50000;
@@ -1877,8 +1887,13 @@ async function getReports(params, auth, env) {
 async function getAgentConversationReport(params, auth, env) {
   const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
   const to   = params.get('to')   || new Date().toISOString();
-  const channel = params.get('channel') || null;
-  const tagId   = params.get('tag_id')  || null;
+  // MULTI-select (S347). The RPC aggregates server-side, so these have to reach Postgres:
+  // post-filtering the returned rows would leave the KPI totals whole-cohort while the table
+  // underneath them was filtered — which reads as correct and is not. splitMulti also accepts
+  // the old comma form, so a page cached before this shipped keeps working.
+  const channels = arrParam(params, 'channel');
+  const tagIds   = arrParam(params, 'tag_id');
+  const agentIds = arrParam(params, 'agent');
   // Anything but an explicit 'true' means 24x7 — the honest default, since a
   // business-hours figure silently flatters every response time.
   const businessHours = params.get('business_hours') === 'true';
@@ -1887,7 +1902,7 @@ async function getAgentConversationReport(params, auth, env) {
     method: 'POST',
     body: JSON.stringify({
       p_from: from, p_to: to,
-      p_channel: channel, p_tag_id: tagId,
+      p_channels: channels, p_tag_ids: tagIds, p_agent_ids: agentIds,
       p_business_hours: businessHours,
     }),
   });
@@ -1913,15 +1928,19 @@ async function getAgentConversationReport(params, auth, env) {
 async function getConversationWaitBreakdown(params, auth, env) {
   const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
   const to   = params.get('to')   || new Date().toISOString();
-  const channel = params.get('channel') || null;
-  const tagId   = params.get('tag_id')  || null;
+  // Widened alongside getAgentConversationReport (S347). This panel renders directly under
+  // that report's KPIs and is driven by the SAME filter row, so if only one of the two
+  // understood multi-select they would silently describe different cohorts.
+  const channels = arrParam(params, 'channel');
+  const tagIds   = arrParam(params, 'tag_id');
+  const agentIds = arrParam(params, 'agent');
   const businessHours = params.get('business_hours') === 'true';
 
   const r = await sb('/rest/v1/rpc/cs_conversation_wait_breakdown', env, {
     method: 'POST',
     body: JSON.stringify({
       p_from: from, p_to: to,
-      p_channel: channel, p_tag_id: tagId,
+      p_channels: channels, p_tag_ids: tagIds, p_agent_ids: agentIds,
       p_business_hours: businessHours,
     }),
   });
