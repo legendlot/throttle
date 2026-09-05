@@ -2330,7 +2330,7 @@ async function getCallReports(params, auth, env) {
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
   const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
 
-  const select = 'id,created_at,direction,status,provider,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at';
+  const select = 'id,created_at,direction,status,provider,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at,called_back_by_user_id';
   // ⚠️ PAGED, and it MUST stay paged. This was `limit=20000`, which PostgREST silently caps at
   // the project's db-max-rows (5,000) — no error, no header. Measured 2026-09-03: 19,736 calls
   // exist and the DEFAULT range on this report is year-to-date, i.e. all of them. So the calls
@@ -2356,10 +2356,13 @@ async function getCallReports(params, auth, env) {
   }
 
   // Resolve account + dept lookups in parallel for label-friendly grouping
-  const [acctR, deptR] = await Promise.all([
+  const [acctR, deptR, usersR] = await Promise.all([
     sb(`/rest/v1/myop_accounts?select=id,slug,name`, env),
     sb(`/rest/v1/cs_departments?select=id,slug,name`, env),
+    // No `active` filter: a call-back made by a since-deactivated agent still belongs to them.
+    sb(`/rest/v1/users_profile?select=id,full_name&limit=500`, env),
   ]);
+  const nameById = Object.fromEntries((usersR.data || []).map(u => [u.id, u.full_name || '—']));
   const acctById = Object.fromEntries((acctR.data || []).map(a => [a.id, a]));
   const deptById = Object.fromEntries((deptR.data || []).map(d => [d.id, d]));
 
@@ -2454,10 +2457,11 @@ async function getCallReports(params, auth, env) {
     // silently blended calls they took with calls they placed, so the two could never be
     // told apart. The three fields below split it explicitly; the UI reads those.
     // Measured 2026-08-26: 1,704 outgoing calls in 30 days were invisible on this table.
-    byAgent[agentName] = byAgent[agentName] || {
-      name: agentName, answered_calls: 0, missed_returned: 0, total_dur: 0, dur_count: 0, tickets_opened: 0,
+    const agentRow = (n) => (byAgent[n] ||= {
+      name: n, answered_calls: 0, missed_returned: 0, total_dur: 0, dur_count: 0, tickets_opened: 0,
       incoming_answered: 0, outgoing_total: 0, outgoing_answered: 0,
-    };
+    });
+    agentRow(agentName);
     if (c.status === 'answered') byAgent[agentName].answered_calls++;
     if (c.direction === 'incoming') {
       // reachedAgent, not status — see the rule above. An inbound call the provider logged as
@@ -2467,7 +2471,19 @@ async function getCallReports(params, auth, env) {
       byAgent[agentName].outgoing_total++;
       if (c.status === 'answered') byAgent[agentName].outgoing_answered++;
     }
-    if (c.status === 'missed' && c.called_back_at) byAgent[agentName].missed_returned++;
+    // ⚠️ `missed_returned` read 0 for every agent since the Exotel cutover (Pruthvi, #bugs
+    // 2026-09-05): Exotel logs an inbound call nobody took as `abandoned` (talk time 0 — see
+    // exotel-adapter `mapExotelStatus`), never `missed`, so a status-keyed count could not move.
+    // Measured 2026-09-05: 937 inbound calls did not reach an agent in 30 days, 500 of them were
+    // called back, and the column showed 0. It now counts inbound calls that did NOT reach an
+    // agent (`!reachedAgent`, the same rule the headline uses) and were called back, credited to
+    // the agent who MADE the call-back — a call nobody took has no agent of its own, so the row's
+    // `agent_name` is the wrong person (usually '— unassigned —'). MyOperator-era `missed` rows
+    // satisfy the same predicate (status ≠ answered), so nothing historical is dropped.
+    if (c.direction === 'incoming' && !reachedAgent(c) && c.called_back_at) {
+      const returnedBy = (c.called_back_by_user_id && nameById[c.called_back_by_user_id]) || agentName;
+      agentRow(returnedBy).missed_returned++;
+    }
     if (c.duration_seconds && c.duration_seconds > 0) { byAgent[agentName].total_dur += c.duration_seconds; byAgent[agentName].dur_count++; }
     if (c.ticket_id) byAgent[agentName].tickets_opened++;
 

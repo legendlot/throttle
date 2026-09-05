@@ -1019,7 +1019,12 @@ function CallsBreakdown({ rows, variant }) {
             many of those were picked up. ⚠️ Answered will read LOWER than before for anyone
             who makes outbound calls; that is the correction, not a regression. */}
         <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
-          <CTh>Agent</CTh><CTh>Answered (in)</CTh><CTh>Outgoing</CTh><CTh>Connected</CTh><CTh>Missed → returned</CTh><CTh>Avg handle</CTh><CTh>Tickets opened</CTh>
+          {/* "Not reached → returned" was "Missed → returned" and read 0 for every agent since the
+              Exotel cutover (Pruthvi #bugs 2026-09-05): Exotel logs an inbound call nobody took as
+              `abandoned`, never `missed`, so a status-keyed count could not move. It now counts
+              inbound calls that did not reach an agent and were called back, credited to whoever
+              made the call-back. */}
+          <CTh>Agent</CTh><CTh>Answered (in)</CTh><CTh>Outgoing</CTh><CTh>Connected</CTh><CTh>Not reached → returned</CTh><CTh>Avg handle</CTh><CTh>Tickets opened</CTh>
         </tr></thead>
         <tbody>
           {rows.map(r => (
