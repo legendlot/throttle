@@ -91,6 +91,7 @@ export default function ReportsPage() {
   const [agTags, setAgTags] = useState([]);
   const [agAgents, setAgAgents] = useState([]);
   const [businessHours, setBusinessHours] = useState(true);
+  const [callsBusinessHours, setCallsBusinessHours] = useState(false);
   const [tags, setTags] = useState([]);
   // The agent roster is captured from an UNFILTERED response and then held. Deriving the
   // options from the current response instead would shrink the list as soon as you picked
@@ -130,6 +131,10 @@ export default function ReportsPage() {
       if (agAgents.length)   args.agent   = joinMulti(agAgents);
       if (businessHours) args.business_hours = 'true';
     }
+    // Calls has its own switch (Pruthvi #bugs 2026-09-05), default OFF: it filters calls to those
+    // that started inside the department's shift window, which is a different question from the
+    // Agents tab's business-hours clock and should not flip when that one does.
+    if (view === 'calls' && callsBusinessHours) args.business_hours = 'true';
     csopsGet(action, args, session)
       .then(d => {
         if (!alive) return;
@@ -164,7 +169,7 @@ export default function ReportsPage() {
     }
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, tkAgents, tkChannels]);
+  }, [session, from, to, view, agChannels, agTags, agAgents, businessHours, callsBusinessHours, tkAgents, tkChannels]);
 
   // The Agents trend is its OWN effect (S349c review): it shares the filters and basis with the
   // report above, but a grain change must refetch only the trend — keyed into the main effect it
@@ -472,7 +477,20 @@ export default function ReportsPage() {
       )}
 
       {view === 'calls' && (
-        loading || !callData ? <Spinner /> : <CallsPanel data={callData} />
+        <>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 'var(--gap)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={callsBusinessHours} onChange={e => setCallsBusinessHours(e.target.checked)} style={{ cursor: 'pointer' }} />
+              Business hours only
+            </label>
+            <span style={{ fontSize: 11, color: 'var(--t4)' }}>
+              {callsBusinessHours
+                ? 'Only calls that started inside the department’s shift hours (default 10:00–19:00, Mon–Sat).'
+                : 'All calls, around the clock (24×7).'}
+            </span>
+          </div>
+          {loading || !callData ? <Spinner /> : <CallsPanel data={callData} businessHours={!!callData.range?.business_hours} />}
+        </>
       )}
 
       {view === 'agents' && (
@@ -879,7 +897,7 @@ function SectionTab({ active, onClick, icon, label }) {
   );
 }
 
-function CallsPanel({ data }) {
+function CallsPanel({ data, businessHours = false }) {
   if (!data || !data.totals || data.totals.total === 0) {
     return <EmptyState icon={Phone} title="No calls in range" message="Adjust the date range." />;
   }
@@ -920,7 +938,7 @@ function CallsPanel({ data }) {
       </Panel>
 
       {/* The trend panel draws its own card (shared with the Agents tab) — no Panel wrapper. */}
-      <CallTrend daily={data.daily || []} byAgent={data.daily_by_agent || []} />
+      <CallTrend daily={data.daily || []} byAgent={data.daily_by_agent || []} businessHours={businessHours} />
 
       <Panel title="Hourly distribution (IST)">
         <HourlyBars hourly={data.hourly || []} />
@@ -993,7 +1011,7 @@ function foldCalls(daily = [], byAgent = [], grain) {
   });
   return { range: { days: days.length, grain }, metrics: CALL_METRICS, days, by_agent };
 }
-function CallTrend({ daily, byAgent }) {
+function CallTrend({ daily, byAgent, businessHours = false }) {
   const [grain, setGrain] = useState('day');
   const [metric, setMetric] = useState('in_total');
   const data = useMemo(() => foldCalls(daily, byAgent, grain), [daily, byAgent, grain]);
@@ -1005,7 +1023,7 @@ function CallTrend({ daily, byAgent }) {
       </div>
     );
   }
-  return <DailyTrendPanel data={data} metric={metric} onMetric={setMetric} grain={grain} onGrain={setGrain} title="Call trend" businessHours={null} />;
+  return <DailyTrendPanel data={data} metric={metric} onMetric={setMetric} grain={grain} onGrain={setGrain} title="Call trend" businessHours={businessHours} />;
 }
 
 function CallsBreakdown({ rows, variant }) {

@@ -2325,6 +2325,7 @@ async function getSupportAnalytics(params, auth, env) {
 async function getCallReports(params, auth, env) {
   const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
   const to   = params.get('to')   || new Date().toISOString();
+  const businessHours = params.get('business_hours') === 'true';
 
   // Dept filter (non-admins locked to own)
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
@@ -2356,12 +2357,32 @@ async function getCallReports(params, auth, env) {
   }
 
   // Resolve account + dept lookups in parallel for label-friendly grouping
-  const [acctR, deptR, usersR] = await Promise.all([
+  const [acctR, deptR, usersR, shiftsR] = await Promise.all([
     sb(`/rest/v1/myop_accounts?select=id,slug,name`, env),
     sb(`/rest/v1/cs_departments?select=id,slug,name`, env),
     // No `active` filter: a call-back made by a since-deactivated agent still belongs to them.
     sb(`/rest/v1/users_profile?select=id,full_name&limit=500`, env),
+    businessHours
+      ? sb(`/rest/v1/cs_shifts?select=cs_department_id,start_min,end_min,working_days,is_active`, env)
+      : Promise.resolve({ ok: true, data: [] }),
   ]);
+  // ⭐ Business hours on Calls (Pruthvi, #bugs 2026-09-05): a call counts only if it STARTED inside
+  // its department's shift window (store.cs_shifts, IST), defaulting to 10:00–19:00 Mon–Sat — the
+  // same COALESCE the Agents report's SQL uses. Volume metrics, so this is a row FILTER, not the
+  // clock-minutes arithmetic the Agents tab applies to response times. Calls with no department
+  // take the default window rather than being dropped.
+  const rowsAll = rows.length;
+  if (businessHours) {
+    if (!shiftsR.ok) return err('Failed to load shift windows for the call report', 502);
+    const shiftByDept = Object.fromEntries((shiftsR.data || []).filter(s => s.is_active !== false).map(s => [s.cs_department_id, s]));
+    const DEFAULT_SHIFT = { start_min: 600, end_min: 1140, working_days: [1, 2, 3, 4, 5, 6], is_active: true };
+    const kept = rows.filter(c => {
+      const parts = istParts(c.created_at);
+      if (!parts) return false;
+      return inShiftWindow((c.cs_department_id && shiftByDept[c.cs_department_id]) || DEFAULT_SHIFT, parts);
+    });
+    rows.length = 0; rows.push(...kept);
+  }
   // Fail loud, not quiet: with an empty map every call-back would fall through to the row's
   // agent_name, which for a not-reached call is '— unassigned —' — the whole column would land in
   // the unassigned row and the report would still render as authoritative (hostile review S353).
@@ -2524,7 +2545,7 @@ async function getCallReports(params, auth, env) {
   }
 
   return ok({
-    range: { from, to, rows: rows.length, truncated },
+    range: { from, to, rows: rows.length, truncated, business_hours: businessHours, rows_24x7: rowsAll },
     totals: {
       // ⚠️ `answered` / `missed` / `abandoned` are the PROVIDER'S OWN status words, counted raw
       // and across both directions. They are kept because other readers use them, but for the
@@ -2634,6 +2655,14 @@ function istDateStr(iso) {
 function istHour(iso) {
   const d = istShifted(iso);
   return d ? d.getUTCHours() : NaN;
+}
+// IST minute-of-day + ISO weekday for a timestamp — the same shape `istNow()` returns, so a
+// historical call can be tested with `inShiftWindow` exactly like the live roster is.
+function istParts(iso) {
+  const d = istShifted(iso);
+  if (!d) return null;
+  const dow0 = d.getUTCDay();
+  return { min: d.getUTCHours() * 60 + d.getUTCMinutes(), isoDow: dow0 === 0 ? 7 : dow0 };
 }
 
 function istNow() {
