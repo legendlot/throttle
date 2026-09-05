@@ -899,7 +899,12 @@ function SectionTab({ active, onClick, icon, label }) {
 
 function CallsPanel({ data, businessHours = false }) {
   if (!data || !data.totals || data.totals.total === 0) {
-    return <EmptyState icon={Phone} title="No calls in range" message="Adjust the date range." />;
+    // With the business-hours filter on, "none" usually means "none inside the window", not "none
+    // at all" — point at the tick-box, not the date picker (hostile review S353).
+    const hidden = businessHours ? Number(data?.range?.rows_24x7 || 0) : 0;
+    return hidden > 0
+      ? <EmptyState icon={Phone} title="No calls inside business hours" message={`${hidden} call${hidden === 1 ? '' : 's'} in this range, none inside the shift window. Untick "Business hours only" to see them.`} />
+      : <EmptyState icon={Phone} title="No calls in range" message="Adjust the date range." />;
   }
   const fmtMMSS = (s) => s == null ? '—' : `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   return (

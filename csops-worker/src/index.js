@@ -2366,7 +2366,10 @@ async function getCallReports(params, auth, env) {
       ? sb(`/rest/v1/cs_shifts?select=cs_department_id,start_min,end_min,working_days,is_active`, env)
       : Promise.resolve({ ok: true, data: [] }),
   ]);
-  // ⭐ Business hours on Calls (Pruthvi, #bugs 2026-09-05): a call counts only if it STARTED inside
+  // ⭐ Business hours on Calls (Pruthvi, #bugs 2026-09-05): a call counts only if it was LOGGED inside
+  // (`created_at`, the same column every other bucket on this report uses — `started_at` lags it
+  // by ~29 min on average for Exotel and moves 1% of calls across the window edge; keeping one
+  // column keeps the daily/hourly buckets and this filter consistent) inside
   // its department's shift window (store.cs_shifts, IST), defaulting to 10:30–19:30 every day
   // (Pruthvi's call; the Agents SQL still COALESCEs to 10:00–19:00 Mon–Sat for response times —
   // a different question, deliberately not unified). Volume metrics, so this is a row FILTER, not the
