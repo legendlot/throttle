@@ -2367,15 +2367,19 @@ async function getCallReports(params, auth, env) {
       : Promise.resolve({ ok: true, data: [] }),
   ]);
   // ⭐ Business hours on Calls (Pruthvi, #bugs 2026-09-05): a call counts only if it STARTED inside
-  // its department's shift window (store.cs_shifts, IST), defaulting to 10:00–19:00 Mon–Sat — the
-  // same COALESCE the Agents report's SQL uses. Volume metrics, so this is a row FILTER, not the
+  // its department's shift window (store.cs_shifts, IST), defaulting to 10:30–19:30 every day
+  // (Pruthvi's call; the Agents SQL still COALESCEs to 10:00–19:00 Mon–Sat for response times —
+  // a different question, deliberately not unified). Volume metrics, so this is a row FILTER, not the
   // clock-minutes arithmetic the Agents tab applies to response times. Calls with no department
   // take the default window rather than being dropped.
   const rowsAll = rows.length;
   if (businessHours) {
     if (!shiftsR.ok) return err('Failed to load shift windows for the call report', 502);
     const shiftByDept = Object.fromEntries((shiftsR.data || []).filter(s => s.is_active !== false).map(s => [s.cs_department_id, s]));
-    const DEFAULT_SHIFT = { start_min: 600, end_min: 1140, working_days: [1, 2, 3, 4, 5, 6], is_active: true };
+    // Default set by Pruthvi (#bugs 2026-09-05 17:21): 10:30–19:30, every day of the week. Almost
+    // every call carries no department (819 of 823 in the week this shipped), so this constant,
+    // not cs_shifts, is what the tick-box applies to in practice.
+    const DEFAULT_SHIFT = { start_min: 630, end_min: 1170, working_days: [1, 2, 3, 4, 5, 6, 7], is_active: true };
     const kept = rows.filter(c => {
       const parts = istParts(c.created_at);
       if (!parts) return false;

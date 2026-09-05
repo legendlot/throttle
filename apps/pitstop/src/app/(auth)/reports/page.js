@@ -485,7 +485,7 @@ export default function ReportsPage() {
             </label>
             <span style={{ fontSize: 11, color: 'var(--t4)' }}>
               {callsBusinessHours
-                ? 'Only calls that started inside the department’s shift hours (default 10:00–19:00, Mon–Sat).'
+                ? 'Only calls that started inside the department’s shift hours (default 10:30–19:30, every day).'
                 : 'All calls, around the clock (24×7).'}
             </span>
           </div>
