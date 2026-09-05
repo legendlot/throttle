@@ -2362,6 +2362,10 @@ async function getCallReports(params, auth, env) {
     // No `active` filter: a call-back made by a since-deactivated agent still belongs to them.
     sb(`/rest/v1/users_profile?select=id,full_name&limit=500`, env),
   ]);
+  // Fail loud, not quiet: with an empty map every call-back would fall through to the row's
+  // agent_name, which for a not-reached call is '— unassigned —' — the whole column would land in
+  // the unassigned row and the report would still render as authoritative (hostile review S353).
+  if (!usersR.ok) return err('Failed to load agent names for the call report', 502);
   const nameById = Object.fromEntries((usersR.data || []).map(u => [u.id, u.full_name || '—']));
   const acctById = Object.fromEntries((acctR.data || []).map(a => [a.id, a]));
   const deptById = Object.fromEntries((deptR.data || []).map(d => [d.id, d]));
@@ -2474,8 +2478,10 @@ async function getCallReports(params, auth, env) {
     // ⚠️ `missed_returned` read 0 for every agent since the Exotel cutover (Pruthvi, #bugs
     // 2026-09-05): Exotel logs an inbound call nobody took as `abandoned` (talk time 0 — see
     // exotel-adapter `mapExotelStatus`), never `missed`, so a status-keyed count could not move.
-    // Measured 2026-09-05: 937 inbound calls did not reach an agent in 30 days, 500 of them were
-    // called back, and the column showed 0. It now counts inbound calls that did NOT reach an
+    // Measured 2026-09-05 under THIS predicate (30 days to 09-05): 1,406 inbound calls did not reach
+    // an agent, 506 of them were called back (937 Exotel `abandoned` + 6 MyOperator `missed`, plus
+    // 463 'answered'-with-no-agent rows that nobody called back), and the column showed 0. It now
+    // counts inbound calls that did NOT reach an
     // agent (`!reachedAgent`, the same rule the headline uses) and were called back, credited to
     // the agent who MADE the call-back — a call nobody took has no agent of its own, so the row's
     // `agent_name` is the wrong person (usually '— unassigned —'). MyOperator-era `missed` rows
