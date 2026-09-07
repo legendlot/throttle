@@ -22,6 +22,9 @@ const deps = {
   assert.equal(r.handoff, false);
   const types = r.stepRows.map((s) => s.step_type);
   assert.ok(types.includes('subflow_enter') && types.includes('subflow_return'), types.join(','));
+  // bot_message rows are interleaved at the moment each reply is produced, not appended in bulk
+  // at the end — the sub-flow's "Answer." must precede the subflow_return row, not follow it.
+  assert.deepEqual(types, ['subflow_enter', 'bot_message', 'subflow_return', 'bot_message']);
   // each bot_message row is attributed to the step that produced it, not the final step
   const msgRows = r.stepRows.filter((s) => s.step_type === 'bot_message');
   assert.deepEqual(msgRows.map((s) => s.step_id), ['a', 'menu']);
@@ -40,5 +43,15 @@ const deps = {
   // unknown shared bot: the turn hands off rather than stalling
   const r3 = await T.executeTurn({}, session, PARENT, { kind: 'button', buttonId: 'b_faq', text: 'FAQs' }, { ...deps, loadActiveShared: async () => null });
   assert.equal(r3.handoff, true);
+  // a session that STARTED inside a sub-flow: the sub-flow ends, but sessionDefinition's own
+  // load of the PARENT comes back null (missing/pruned version, transient error) — must hand
+  // off, not throw E.advance(null, ...).
+  const session3 = { id: 's3', bot_id: 'p', bot_version: 1, current_step: 'm', status: 'active', context: {}, sub_bot_id: FAQ_ID, sub_version: 5, return_step: 'faq' };
+  const deps3 = { loadDefinition: async () => null };
+  const r4 = await T.executeTurn({}, session3, SUB2, { kind: 'button', buttonId: 'x', text: 'X' }, deps3);
+  assert.equal(r4.handoff, true);
+  assert.equal(r4.out.state.status, 'handed_off');
+  assert.equal(r4.frame, null);
+  assert.ok(r4.stepRows.some((s) => s.step_type === 'handoff' && s.result?.reason === 'parent_unavailable'), r4.stepRows.map((s) => s.step_type).join(','));
   console.log('bot-turn ok');
 })().catch((e) => { console.error(e); process.exit(1); });

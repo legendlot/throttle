@@ -1,8 +1,6 @@
 // Public web-bot surface (S312) — the first unauthenticated write surface in this fleet,
 // so it is deliberately tiny: three routes, hard caps, no free-form writes anywhere.
 const A = require('./auth.js');
-const E = require('./bot-engine.js');
-const OS = require('./bot-order-status.js');
 const T = require('./bot-turn.js');
 
 const ALLOWED_ORIGINS = new Set(['https://www.legendoftoys.com', 'https://legendoftoys.com']);
