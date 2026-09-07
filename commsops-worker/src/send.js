@@ -400,6 +400,8 @@ async function send(env, opts) {
         // Interactive reply-buttons ride on the CALL, not the template — they are declared on
         // the journey send step. Only meaningful for a non-template (session) send.
         interactiveButtons: isTemplate ? null : (opts.interactiveButtons || null),
+        // Same rule for a list (S355 bots): declared on the call, session sends only.
+        interactiveList: isTemplate ? null : (opts.interactiveList || null),
       });
       // UTM-tag LOT-owned links on MARKETING sends. Until now this happened on the EMAIL path
       // only, so 100% of real volume (WhatsApp) went out untagged — 2,985 marketing sends in the

@@ -112,8 +112,33 @@ async function send(rendered, env) {
         ...(up.kind === 'document' && m.filename ? { filename: String(m.filename) } : {}),
       },
     };
-  } else {
-    // free-form text — only inside the 24h window
+  } else if (rendered.mode === 'list') {
+    // Interactive LIST (S355 bots). Session message: same 24h rule as text/interactive. Meta caps:
+    // 10 rows, title 24, description 72, action button 20 — truncated, never rejected (a silent
+    // 400 mid-conversation is worse than a clipped label). Row id echoes back on list_reply.id.
+    if (rendered.window_open !== true)
+      return { provider_message_id: null, status: 'skipped', reason: 'window_closed' };
+    const rows = (Array.isArray(rendered.rows) ? rendered.rows : []).slice(0, 10);
+    if (!rendered.text) return { provider_message_id: null, status: 'failed', reason: 'empty_text' };
+    if (!rows.length) return { provider_message_id: null, status: 'failed', reason: 'list_no_rows' };
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: String(rendered.text).slice(0, 1024) },
+        action: {
+          button: String(rendered.button || 'Choose').slice(0, 20),
+          sections: [{ rows: rows.map((r, i) => ({
+            id: String(r.id || `row_${i}`).slice(0, 200),
+            title: String(r.title || `Option ${i + 1}`).slice(0, 24),
+            ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
+          })) }],
+        },
+      },
+    };
+  } else if (rendered.mode === 'text' || rendered.mode == null) {
+    // free-form text — only inside the 24h window (was the catch-all `else`; an unknown mode now
+    // fails closed below instead of being sent as prose with its options silently dropped)
     if (rendered.window_open !== true)
       return { provider_message_id: null, status: 'skipped', reason: 'window_closed' };
     const bodyText = rendered.text;
@@ -122,6 +147,8 @@ async function send(rendered, env) {
       messaging_product: 'whatsapp', to, type: 'text',
       text: { preview_url: rendered.preview_url !== false, body: bodyText },
     };
+  } else {
+    return { provider_message_id: null, status: 'failed', reason: 'unknown_render_mode' };
   }
 
   let res, data;

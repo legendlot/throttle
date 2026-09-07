@@ -182,6 +182,19 @@ function renderWhatsapp(template, ctx) {
       })),
     };
   }
+  // LIST mode — one interactive message carrying up to 10 rows behind a button, the WhatsApp
+  // answer to a menu with more options than the 3 reply buttons above allow (S355 bots). Checked
+  // AFTER interactive: a step that declares both gets buttons, the cheaper tap for the customer.
+  // Row `id` is what comes back on `interactive.list_reply.id`, so it is what the bot routes on.
+  if (ctx?.interactiveList && Array.isArray(ctx.interactiveList.rows) && ctx.interactiveList.rows.length) {
+    return {
+      mode: 'list', text: body,
+      button: applyTokens(String(ctx.interactiveList.button || 'Choose'), values),
+      rows: ctx.interactiveList.rows.slice(0, 10).map((r, i) => ({
+        id: String(r.id || `row_${i}`), title: applyTokens(String(r.title || r.label || ''), values),
+        description: r.description ? applyTokens(String(r.description), values) : null })),
+    };
+  }
   return { mode: 'text', text: body };
 }
 

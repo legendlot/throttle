@@ -4,7 +4,7 @@ const A = require('./auth.js');
 const E = require('./bot-engine.js');
 
 async function listBots(env) {
-  const r = await A.sbComms('/rest/v1/bots?select=id,name,status,channel,active_version,updated_at&order=updated_at.desc', env);
+  const r = await A.sbComms('/rest/v1/bots?select=id,name,status,channel,active_version,config,updated_at&order=updated_at.desc', env);
   return r.ok ? { ok: true, bots: r.data } : { ok: false, error: 'list_failed' };
 }
 
@@ -14,11 +14,44 @@ async function getBot(env, id) {
   return bot ? { ok: true, bot } : { ok: false, error: 'not_found' };
 }
 
-async function saveBot(env, { id, name, draft_definition, config }, userId) {
-  const body = { name, draft_definition: draft_definition || {}, config: config || {}, updated_at: new Date().toISOString() };
+// The pilot switch is Afshaan's flip (spec §5.1.3): builders may edit anything in config EXCEPT
+// mode/pilot_numbers, which only setBotMode (activate tier) writes. Existing values are kept.
+function sanitizeBuilderConfig(incoming, existing) {
+  const out = { ...(incoming || {}) };
+  out.mode = (existing && existing.mode) || 'pilot';
+  out.pilot_numbers = Array.isArray(existing?.pilot_numbers) ? existing.pilot_numbers : [];
+  return out;
+}
+
+function normalizeMode(body) {
+  const mode = body?.mode;
+  if (mode !== 'pilot' && mode !== 'public') return null;
+  const nums = (Array.isArray(body.pilot_numbers) ? body.pilot_numbers : [])
+    .map((n) => String(n).replace(/\D/g, '')).filter((d) => d.length >= 10 && d.length <= 15);
+  return { mode, pilot_numbers: [...new Set(nums)] };
+}
+
+async function setBotMode(env, id, body) {
+  const m = normalizeMode(body);
+  if (!m) return { ok: false, error: 'invalid_mode' };
+  const cur = await getBot(env, id);
+  if (!cur.ok) return cur;
+  const config = { ...(cur.bot.config || {}), ...m };
+  const u = await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}`, env, { method: 'PATCH',
+    body: JSON.stringify({ config, updated_at: new Date().toISOString() }) });
+  return u.ok && u.data?.[0] ? { ok: true, bot: u.data[0] } : { ok: false, error: 'update_failed' };
+}
+
+async function saveBot(env, { id, name, draft_definition, config, channel }, userId) {
+  const existing = id ? await getBot(env, id) : null;
+  if (id && !existing?.ok) return existing;
+  const prevCfg = existing?.ok ? (existing.bot.config || {}) : {};
+  const body = { name, draft_definition: draft_definition || {}, config: sanitizeBuilderConfig(config, prevCfg), updated_at: new Date().toISOString() };
+  const ch = ['web', 'whatsapp', 'shared'].includes(channel) ? channel : null;
+  if (ch && (!existing?.ok || !existing.bot.active_version)) body.channel = ch;   // channel is fixed at first publish
   const r = id
     ? await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}`, env, { method: 'PATCH', body: JSON.stringify(body) })
-    : await A.sbComms('/rest/v1/bots', env, { method: 'POST', body: JSON.stringify({ ...body, created_by: userId || null }) });
+    : await A.sbComms('/rest/v1/bots', env, { method: 'POST', body: JSON.stringify({ ...body, channel: ch || 'web', created_by: userId || null }) });
   const bot = r.ok && (Array.isArray(r.data) ? r.data[0] : r.data);
   return bot ? { ok: true, bot } : { ok: false, error: 'save_failed', detail: r.data };
 }
@@ -26,7 +59,9 @@ async function saveBot(env, { id, name, draft_definition, config }, userId) {
 async function publishBot(env, id, userId) {
   const cur = await getBot(env, id);
   if (!cur.ok) return cur;
-  const errs = E.validateBotDef(cur.bot.draft_definition);
+  const sh = await A.sbComms('/rest/v1/bots?channel=eq.shared&status=eq.active&active_version=not.is.null&select=id', env);
+  const sharedIds = new Set((sh.ok ? sh.data : []).map((b) => b.id));
+  const errs = E.validateBotDef(cur.bot.draft_definition, { channel: cur.bot.channel, isShared: cur.bot.channel === 'shared', sharedIds });
   if (errs.length) return { ok: false, error: 'invalid_definition', errors: errs };
   const version = (cur.bot.active_version || 0) + 1;
   const v = await A.sbComms('/rest/v1/bot_versions', env, { method: 'POST',
@@ -43,4 +78,4 @@ async function setBotStatus(env, id, status) {
   return u.ok && u.data?.[0] ? { ok: true, bot: u.data[0] } : { ok: false, error: 'update_failed' };
 }
 
-module.exports = { listBots, getBot, saveBot, publishBot, setBotStatus };
+module.exports = { listBots, getBot, saveBot, publishBot, setBotStatus, setBotMode, sanitizeBuilderConfig, normalizeMode };
