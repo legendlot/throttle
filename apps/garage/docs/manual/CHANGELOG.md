@@ -6,6 +6,12 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.23.0 - 2026-09-07
+
+- **Receiving**: documents that a damaged count entered while counting a box now goes straight
+  to the Damage Ledger as a pending row against the shipment, and that amending a counted box
+  cancels the earlier damaged row and records the new one.
+
 ## 1.22.0 - 2026-09-04
 
 - **Device Register** (new chapter, `/devices`, users_manage only): documents the new admin
