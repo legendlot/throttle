@@ -65,6 +65,8 @@
 ALTER TABLE comms.bots DROP CONSTRAINT IF EXISTS bots_channel_check;
 ALTER TABLE comms.bots ADD CONSTRAINT bots_channel_check CHECK (channel IN ('web','whatsapp','shared'));
 
+-- visitor_key is NOT NULL with no default (0058:37) and is a WEB identity; WhatsApp sessions have none.
+ALTER TABLE comms.bot_sessions ALTER COLUMN visitor_key DROP NOT NULL;
 ALTER TABLE comms.bot_sessions
   ADD COLUMN IF NOT EXISTS channel text NOT NULL DEFAULT 'web',
   ADD COLUMN IF NOT EXISTS wa_from text,
@@ -96,10 +98,10 @@ NOTIFY pgrst, 'reload schema';
 Run via `execute_sql`:
 ```sql
 select pg_get_constraintdef(oid) from pg_constraint where conname='bots_channel_check';
-select column_name from information_schema.columns where table_schema='comms' and table_name='bot_sessions' and column_name in ('channel','wa_from','phone_number_id','sub_bot_id','sub_version','return_step');
+select column_name, is_nullable from information_schema.columns where table_schema='comms' and table_name='bot_sessions' and column_name in ('visitor_key','channel','wa_from','phone_number_id','sub_bot_id','sub_version','return_step');
 select indexname from pg_indexes where schemaname='comms' and indexname in ('bot_sessions_wa_active_uq','bot_session_steps_pmid_uq');
 ```
-Expected: the CHECK reads `channel = ANY (ARRAY['web','whatsapp','shared'])`; 6 columns; 2 indexes.
+Expected: the CHECK reads `channel = ANY (ARRAY['web','whatsapp','shared'])`; 7 columns with `visitor_key` now `YES`; 2 indexes.
 
 - [ ] **Step 4: Commit**
 
@@ -179,17 +181,18 @@ git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle commit -m "S355 [rela
 ### Task 3: Engine — keywords on the first message, collect fallback + miss cap
 
 **Files:**
-- Modify: `commsops-worker/src/bot-engine.js` (`advance`, new `matchKeyword`), `commsops-worker/src/journey-graph.js:~8` (`HANDLES`)
+- Modify: `commsops-worker/src/bot-engine.js` (`advance`, new `matchKeyword`)
 - Test: `commsops-worker/test/bot-keywords.test.js` (new)
 
 **Interfaces:**
 - Consumes: `G.resolveTarget(step, handle)`.
-- Produces: `matchKeyword(def, text)` → step id | null (exported). `input.kind==='open'` accepts `text`. `collect` honours `outcomes.fallback` after `MAX_MENU_MISSES` failed validations; `state.context.collect_misses` counter.
+- Produces: `matchKeyword(def, text)` → step id | null (exported). `input.kind==='open'` accepts `text`. `collect` honours `outcomes.fallback` after `MAX_MENU_MISSES` failed validations; `state.context.collect_misses` counter. **A collect with NO fallback wired hands off** (never a silent null walk — the live web bot v1 has two such collects, verified 2026-09-07).
 
-- [ ] **Step 1: Check `HANDLES` in journey-graph.js**
+⚠️ `journey-graph.js` `HANDLES` is NOT edited: `validateBotDef` computes handles inline and `walk` calls `resolveTarget` directly, so a `collect` entry there binds nothing (review finding). The app-side `graph.js` mirror is Task 13.
 
-Run: `grep -n "const HANDLES" -A 12 /Users/afshaansiddiqui/Documents/Claude/05_Throttle/commsops-worker/src/journey-graph.js`
-Find the `collect` entry (bot mode). It reads `collect: ['next']` (or is absent and falls to `['next']`). Note the exact line for Step 4.
+- [ ] **Step 1: Confirm the no-fallback case exists live**
+
+Run via `execute_sql`: `select k, v.definition->'steps'->k->'outcomes'->>'fallback' fb from comms.bot_versions v, jsonb_object_keys(v.definition->'steps') k where v.definition->'steps'->k->>'type'='collect';` → two rows, both `fb` NULL. This is why Step 4's collect branch must hand off when `fallback` resolves to null.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -245,6 +248,13 @@ assert.equal(r.state.current_step, 'ask_order'); assert.equal(r.state.context.co
 r = E.advance(DEF, r.state, { kind: 'text', text: '' });     // media -> empty text counts as a miss
 assert.equal(r.state.status, 'handed_off');
 
+// a collect with NO fallback wired (the live web bot's shape) must hand off, never go silent
+const NOFB = { entry: 'c', steps: { c: { type: 'collect', field: 'order_number', prompt: 'Order?', outcomes: { next: 'e' } }, e: { type: 'end', outcomes: {} } } };
+r = E.advance(NOFB, { current_step: 'c', status: 'active', context: { collect_misses: 1 } }, { kind: 'text', text: 'zzz' });
+assert.equal(r.state.status, 'handed_off');
+assert.ok(r.effects.some((e) => e.type === 'handoff'));
+assert.ok(r.replies.length >= 1 && r.replies[r.replies.length - 1].text.length > 0);
+
 // keyword is NOT consulted at a menu — free text that is a keyword still counts as a miss
 r = E.advance(DEF, { current_step: 'welcome', status: 'active', context: {} }, { kind: 'text', text: 'agent' });
 assert.equal(r.state.current_step, 'welcome'); assert.equal(r.state.context.menu_misses, 1);
@@ -263,8 +273,6 @@ console.log('bot-keywords ok');
 Run: `node test/bot-keywords.test.js` — Expected: `TypeError: E.matchKeyword is not a function`.
 
 - [ ] **Step 4: Implement**
-
-In `journey-graph.js`, make the bot `collect` handle set `['next', 'fallback']` and add `subflow: ['next']` (Task 5 uses it) — edit the `HANDLES` object found in Step 1, e.g. `collect: ['next', 'fallback'], subflow: ['next'],`.
 
 In `bot-engine.js`:
 
@@ -315,7 +323,15 @@ Replace the `collect` branch with:
     if (kw && def.steps[kw]) return walk(def, state, kw, replies, effects);
     const misses = (state.context.collect_misses || 0) + 1;
     state.context.collect_misses = misses;
-    if (misses >= MAX_MENU_MISSES) return walk(def, state, G.resolveTarget(step, 'fallback'), replies, effects);
+    if (misses >= MAX_MENU_MISSES) {
+      const fb = G.resolveTarget(step, 'fallback');
+      if (fb && def.steps[fb]) return walk(def, state, fb, replies, effects);
+      // No fallback wired (the pre-S355 web bot shape): walk(null) would emit NOTHING and leave
+      // the customer staring at silence. Hand off instead — never a silent dead end.
+      replies.push({ text: HANDOFF_DEFAULT });
+      state.status = 'handed_off'; effects.push({ type: 'handoff' });
+      return { state, replies, effects };
+    }
     replies.push({ text: step.field === 'order_number'
       ? 'That does not look like an order number — it is on your confirmation, like #LOT48622.'
       : 'Please share a valid phone number or email so we can help.' });
@@ -339,17 +355,19 @@ and in the `!t` branch add `else if (step.type === 'collect' && h === 'fallback'
     if (!Array.isArray(r?.match) || !r.match.filter(Boolean).length) errs.push({ code: 'keyword_empty', stepId: `keyword_${i}` });
   }
 ```
-Export `matchKeyword`.
+`HANDOFF_DEFAULT` is the constant Task 4 introduces — define it in THIS task (move Task 4's line here): `const HANDOFF_DEFAULT = 'Let me connect you to our support team — a human will reply right here as soon as one is available.';` near the top, and use it in `walk`'s `handoff` branch in place of the literal. Export `matchKeyword` and `HANDOFF_DEFAULT`.
+
+**Accepted behaviour, record it in the wrap (review finding 11):** two messages in ONE webhook batch (`"hi"` then `"where is my order"`) — the first opens the session and lands on the greeting menu; the second is free text at a menu, so it counts as a miss and re-shows the menu. Keywords are not consulted at a menu by spec §3.3. The customer taps a button next; nothing is lost.
 
 - [ ] **Step 5: Run all bot tests**
 
-Run: `node test/bot-keywords.test.js && node test/bot-engine.test.js && node test/bot-order-status.test.js && node test/journey-graph.test.js && node test/journeys-compile.test.js`
-Expected: `bot-keywords ok`, all exit 0. ⚠️ If `bot-engine.test.js` fails on its existing "collect invalid → re-prompts" case, it is because the fixture's `ident` step has no `fallback` — that fixture stays valid because one miss still re-prompts; only the second miss walks `fallback` (null → walk emits nothing). Do not weaken the assertion; add `fallback: 'handoff1'` to the fixture's collect steps.
+Run: `node test/bot-keywords.test.js && node test/bot-engine.test.js && node test/bot-order-status.test.js`
+Expected: `bot-keywords ok`, all exit 0. The existing `bot-engine.test.js` "collect invalid → re-prompts" case still passes: one miss re-prompts; a second miss on a fixture with no fallback now hands off (covered by the NOFB case above).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle add commsops-worker/src/bot-engine.js commsops-worker/src/journey-graph.js commsops-worker/test/bot-keywords.test.js commsops-worker/test/bot-engine.test.js
+git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle add commsops-worker/src/bot-engine.js commsops-worker/test/bot-keywords.test.js commsops-worker/test/bot-engine.test.js
 git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle commit -m "S355 [relay]: bot engine — keywords on the opening message + at a failed collect; collect fallback handle with a 2-miss cap (spec §3.3-3.4)"
 ```
 
@@ -391,9 +409,7 @@ Run: `node test/bot-engine.test.js` — Expected: AssertionError `'ended' == 'ha
 
 - [ ] **Step 3: Implement**
 
-Add near the top: `const HANDOFF_DEFAULT = 'Let me connect you to our support team — a human will reply right here as soon as one is available.';` and use it in the `handoff` branch of `walk` (replace the literal).
-
-In `advance`, right after the `status !== 'active'` guard, add:
+`HANDOFF_DEFAULT` already exists from Task 3. In `advance`, right after the `status !== 'active'` guard, add:
 ```js
   if (input.kind === 'expire') { state.status = 'ended'; return { state, replies, effects }; }
   if (input.kind === 'resume') {
@@ -409,7 +425,6 @@ Replace the `attempts >= MAX_ORDER_ATTEMPTS` line with:
       return { state, replies, effects };
     }
 ```
-Export `HANDOFF_DEFAULT`.
 
 - [ ] **Step 4: Run tests** — `node test/bot-engine.test.js && node test/bot-keywords.test.js` → exit 0.
 
@@ -603,6 +618,10 @@ const deps = {
   assert.equal(r.handoff, false);
   const types = r.stepRows.map((s) => s.step_type);
   assert.ok(types.includes('subflow_enter') && types.includes('subflow_return'), types.join(','));
+  // each bot_message row is attributed to the step that produced it, not the final step
+  const msgRows = r.stepRows.filter((s) => s.step_type === 'bot_message');
+  assert.deepEqual(msgRows.map((s) => s.step_id), ['a', 'menu']);
+  assert.ok(!('_step' in r.out.replies[0]));
   // a sub-flow that WAITS (menu) leaves the frame set for the next turn
   const SUB2 = { entry: 'm', steps: { m: { type: 'menu', text: 'Topics', buttons: [{ id: 'x', label: 'X' }], outcomes: { x: 'e', fallback: 'e' } }, e: { type: 'end', outcomes: {} } } };
   const deps2 = { ...deps, loadActiveShared: async () => ({ version: 5, definition: SUB2 }) };
@@ -663,7 +682,11 @@ async function executeTurn(env, session, def, input, deps = {}) {
   let parentDef = prev.frame ? null : def;   // parent, needed to resume after a return
   const stepRows = [];
   let out = E.advance(curDef, prev, input);
-  let replies = [...out.replies];
+  // Each reply remembers the step that produced it (`_step`), captured at push time — the FINAL
+  // current_step is the parent's after a sub-flow return, and bot_session_steps is the analytics
+  // substrate: drop-off inside a shared sub-flow must attribute to the sub-flow's step.
+  const tag = (rs, st) => rs.map((r) => ({ ...r, _step: st.current_step || 'entry' }));
+  let replies = tag(out.replies, out.state);
   let handoff = false;
   for (let guard = 0; guard < MAX_EFFECT_LOOPS; guard++) {
     const fx = out.effects || []; out.effects = [];
@@ -673,23 +696,25 @@ async function executeTurn(env, session, def, input, deps = {}) {
         const r = await lookup(env, e);
         stepRows.push({ session_id: session.id, step_id: out.state.current_step, step_type: 'order_lookup', result: { ok: r.ok, reason: r.reason || null } });
         out = E.advance(curDef, out.state, { kind: 'action_result', ok: r.ok, data: r.ok ? { statusText: r.statusText } : {} });
-        replies.push(...out.replies); reentered = true;
+        replies.push(...tag(out.replies, out.state)); reentered = true;
       } else if (e.type === 'subflow_enter') {
         const shared = await loadShared(env, e.bot_id);
         stepRows.push({ session_id: session.id, step_id: e.return_step, step_type: 'subflow_enter', result: { bot_id: e.bot_id, version: shared?.version || null } });
-        if (!shared) {          // unpublished/missing shared bot: never stall the customer
-          replies.push({ text: E.HANDOFF_DEFAULT }); out.state.status = 'handed_off'; handoff = true; continue;
+        if (!shared) {          // unpublished/paused/missing shared bot: never stall the customer
+          replies.push({ text: E.HANDOFF_DEFAULT, _step: e.return_step }); out.state.status = 'handed_off'; handoff = true;
+          stepRows.push({ session_id: session.id, step_id: e.return_step, step_type: 'handoff', result: { reason: 'subflow_unavailable' } });
+          continue;
         }
         parentDef = curDef; curDef = shared.definition;
         out.state.frame = { bot_id: e.bot_id, version: shared.version, return_step: e.return_step };
         out = E.advance(curDef, out.state, { kind: 'open' });
-        replies.push(...out.replies); reentered = true;
+        replies.push(...tag(out.replies, out.state)); reentered = true;
       } else if (e.type === 'subflow_return') {
         stepRows.push({ session_id: session.id, step_id: e.return_step, step_type: 'subflow_return', result: null });
         if (!parentDef) parentDef = await sessionDefinition(env, { ...session, sub_bot_id: null }, deps);
         curDef = parentDef;
         out = E.advance(curDef, out.state, { kind: 'resume', from: e.return_step });
-        replies.push(...out.replies); reentered = true;
+        replies.push(...tag(out.replies, out.state)); reentered = true;
       } else if (e.type === 'handoff') {
         handoff = true;
         stepRows.push({ session_id: session.id, step_id: out.state.current_step, step_type: 'handoff', result: null });
@@ -697,8 +722,8 @@ async function executeTurn(env, session, def, input, deps = {}) {
     }
     if (!reentered) break;
   }
-  for (const r of replies) stepRows.push({ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: 'bot_message', result: { text: r.text, buttons: r.buttons || null, style: r.style || null } });
-  out.replies = replies;
+  for (const r of replies) stepRows.push({ session_id: session.id, step_id: r._step || 'entry', step_type: 'bot_message', result: { text: r.text, buttons: r.buttons || null, style: r.style || null } });
+  out.replies = replies.map(({ _step, ...r }) => r);   // callers never see the tag
   return { out, stepRows, handoff, frame: out.state.frame || null };
 }
 
@@ -809,15 +834,20 @@ async function setBotMode(env, id, body) {
   return u.ok && u.data?.[0] ? { ok: true, bot: u.data[0] } : { ok: false, error: 'update_failed' };
 }
 ```
-Change `saveBot`:
+Replace `saveBot` in full:
 ```js
 async function saveBot(env, { id, name, draft_definition, config, channel }, userId) {
   const existing = id ? await getBot(env, id) : null;
-  const prevCfg = existing?.ok ? existing.bot.config : {};
+  if (id && !existing?.ok) return existing;
+  const prevCfg = existing?.ok ? (existing.bot.config || {}) : {};
   const body = { name, draft_definition: draft_definition || {}, config: sanitizeBuilderConfig(config, prevCfg), updated_at: new Date().toISOString() };
   const ch = ['web', 'whatsapp', 'shared'].includes(channel) ? channel : null;
   if (ch && (!existing?.ok || !existing.bot.active_version)) body.channel = ch;   // channel is fixed at first publish
-  ...unchanged POST/PATCH...
+  const r = id
+    ? await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}`, env, { method: 'PATCH', body: JSON.stringify(body) })
+    : await A.sbComms('/rest/v1/bots', env, { method: 'POST', body: JSON.stringify({ ...body, channel: ch || 'web', created_by: userId || null }) });
+  const bot = r.ok && (Array.isArray(r.data) ? r.data[0] : r.data);
+  return bot ? { ok: true, bot } : { ok: false, error: 'save_failed', detail: r.data };
 }
 ```
 Change `publishBot`:
@@ -902,14 +932,25 @@ const realFetch = global.fetch;
     assert.equal((await wa.send({ mode: 'carousel', text: 'x', to: '9199', phone_number_id: 'P', window_open: true }, { WA_TOKEN: 't' })).reason, 'unknown_render_mode');
   });
   await t('gate refuses an out-of-window list like text/interactive', async () => {
-    _clearSettingsCache && _clearSettingsCache();
-    const g = await runGate({ WA_SKIP_DB: '1' }, { channel: 'whatsapp', purpose: 'utility', to: '+919999999999', wa: { mode: 'list', window_open: false, hasTemplate: false }, profile: null });
+    // Same stub as test/wa.test.js:337-352 — without it getSettings falls back to test_mode:true
+    // and the gate returns test_mode_blocked at step 0, never reaching the window check.
+    const orig = A.sbComms;
+    A.sbComms = async (path) => {
+      if (path.startsWith('/rest/v1/settings')) return { ok: true, data: [{ test_mode: false, test_mode_allow: [], quiet_hours_start: 21, quiet_hours_end: 9 }] };
+      if (path.startsWith('/rest/v1/suppressions')) return { ok: true, data: [] };
+      return { ok: true, data: [] };
+    };
+    _clearSettingsCache();
+    const g = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: false } });
     assert.equal(g.pass, false); assert.equal(g.reason, 'window_closed');
+    const open = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: true } });
+    assert.equal(open.pass, true);
+    A.sbComms = orig;
   });
   console.log(`\n${pass} passed, ${fail} failed`); if (fail) process.exit(1);
 })();
 ```
-⚠️ The `runGate` call signature and any settings stub must be copied from how `test/wa.test.js` invokes `runGate` for its own `window_closed` case — read that case and mirror its env/arguments exactly; do not invent `WA_SKIP_DB`.
+Add `const A = require('../src/auth.js');` to the test's requires. ⚠️ Before running, open `test/wa.test.js:337-352` and copy its settings-row shape exactly (the field list above is from that case as of 2026-09-07; if it has changed, the existing case is the authority).
 
 - [ ] **Step 3: Run to verify it fails** — `node test/wa-list.test.js` → the render case fails (`'text' == 'list'`).
 
@@ -977,7 +1018,8 @@ git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle commit -m "S355 [rela
 
 **Interfaces:**
 - Consumes: `T.executeTurn`, `T.sessionDefinition`, `send()` from `send.js`, `A.sbComms`, `A.sbStore`, `detectOptOut`.
-- Produces: `maybeHandleInbound(env, m, ingestRes, deps)` → `null` (not engaged) | `{ handled:true, session_id, session_status, replies:[{text,buttons?,style?}], handoff }` | `{ handled:true, duplicate:true }`. `stripBotId(id)`. `BOT_ID_PREFIX = 'bot:'`. Each inbound `m` gets `m.bot = <that object>` so `forwardToCsops` carries it. Exposed constants `HUMAN_ACTIVE_MS = 12h`, `IDLE_EXPIRE_MS = 6h`.
+- Produces: `maybeHandleInbound(env, m, ingestRes, deps)` → `null` (not engaged) | `{ handled:true, session_id, session_status, replies:[{text,buttons?,style?}], handoff, duplicate?:true }`. On a duplicate claim the object still carries the LIVE `session_status`/`handoff` with `replies: []` so csops can drive the thread rail even when the transcript rows are skipped. `stripBotId(id)`. `BOT_ID_PREFIX = 'bot:'`. Each inbound `m` gets `m.bot = <that object>` so `forwardToCsops` carries it. Exposed constants `HUMAN_ACTIVE_MS = 12h`, `IDLE_EXPIRE_MS = 6h`.
+- **Handoff is sticky (engage condition 8):** `findLatestSession` returns the newest session for `(from, pid)` of ANY status; if it is `handed_off` and its `last_activity_at` is within `IDLE_EXPIRE_MS`, the bot does not engage — the customer asked for a human and is waiting; a new session would re-greet them and re-hide the thread from the queue.
 
 - [ ] **Step 1: Write the failing tests (deps-injected, no network)**
 
@@ -998,7 +1040,7 @@ function mk(over = {}) {
     activeWaBot: async () => BOT,
     threadLastOutbound: async () => ({ found: false }),
     hasActiveEnrolment: async () => false,
-    findActiveSession: async () => null,
+    findLatestSession: async () => null,
     createSession: async (env, row) => { calls.sessions.push(row); return { id: 'S1', ...row, status: 'active', current_step: null, context: {} }; },
     claimTurn: async (env, row) => { calls.claims.push(row); return true; },
     loadDefinition: async () => DEF,
@@ -1021,8 +1063,10 @@ const ING = { ok: true, profile_id: 'prof1' };
   assert.equal(calls.sends[0].purpose, 'utility'); assert.equal(calls.sends[0].phoneNumberId, 'PNID'); assert.equal(calls.sends[0].to, '+917709991011');
   assert.equal(calls.sends[0].interactiveList.rows[0].id, 'bot:menu:b_faq');
   assert.equal(calls.sends[0].dedupKey, 'bot:S1:wamid.1:0');
+  assert.equal(calls.sends[0].profileId, 'prof1');                       // every bot message row is attributed
   assert.equal(calls.claims[0].provider_message_id, 'wamid.1');
   assert.equal(calls.sessions[0].channel, 'whatsapp'); assert.equal(calls.sessions[0].wa_from, '917709991011'); assert.equal(calls.sessions[0].profile_id, 'prof1');
+  assert.ok(!('visitor_key' in calls.sessions[0]));                      // web identity; column is nullable since 0068
   // not on the support number / no active bot / non-pilot number / STOP / human active / mid-journey -> null
   assert.equal(await W.maybeHandleInbound({}, M({ phone_number_id: 'OTHER' }), ING, mk().deps), null);
   assert.equal(await W.maybeHandleInbound({}, M(), ING, mk({ activeWaBot: async () => null }).deps), null);
@@ -1035,20 +1079,36 @@ const ING = { ok: true, profile_id: 'prof1' };
   // public mode ignores the allow-list
   ({ deps } = mk({ activeWaBot: async () => ({ ...BOT, config: { mode: 'public', pilot_numbers: [] } }) }));
   assert.equal((await W.maybeHandleInbound({}, M({ from: '919999999999' }), ING, deps)).handled, true);
-  // duplicate claim -> handled but silent, nothing sent
-  ({ deps, calls } = mk({ claimTurn: async () => false }));
+  // duplicate claim -> handled but silent: nothing sent, but the LIVE session state still travels
+  const live = { id: 'S1', bot_id: 'bot1', bot_version: 2, channel: 'whatsapp', status: 'active', current_step: 'menu', context: {}, last_activity_at: new Date().toISOString() };
+  ({ deps, calls } = mk({ claimTurn: async () => false, findLatestSession: async () => live }));
   r = await W.maybeHandleInbound({}, M(), ING, deps);
-  assert.deepEqual(r, { handled: true, duplicate: true }); assert.equal(calls.sends.length, 0);
+  assert.deepEqual(r, { handled: true, duplicate: true, session_id: 'S1', session_status: 'active', replies: [], handoff: false }); assert.equal(calls.sends.length, 0);
+  // STICKY HANDOFF: a handed-off session under 6h idle keeps the bot silent (the customer is waiting for a human)
+  const handed = { ...live, status: 'handed_off', last_activity_at: new Date(Date.now() - 120e3).toISOString() };
+  ({ deps, calls } = mk({ findLatestSession: async () => handed }));
+  assert.equal(await W.maybeHandleInbound({}, M({ text: 'hello?', provider_message_id: 'wamid.9' }), ING, deps), null);
+  assert.equal(calls.sessions.length, 0);
+  // ...but after 6h idle a handed-off session no longer blocks: a fresh session opens
+  ({ deps, calls } = mk({ findLatestSession: async () => ({ ...handed, last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }) }));
+  assert.equal((await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.10' }), ING, deps)).session_status, 'active');
+  assert.equal(calls.sessions.length, 1);
+  // an ENDED session never blocks — the next "hi" opens a fresh one
+  ({ deps, calls } = mk({ findLatestSession: async () => ({ ...live, status: 'ended' }) }));
+  assert.equal(calls.sessions.length, 0); await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.11' }), ING, deps); assert.equal(calls.sessions.length, 1);
+  // createSession failure is logged and the bot stays silent (never throws into the webhook)
+  ({ deps } = mk({ createSession: async () => null }));
+  assert.equal(await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.12' }), ING, deps), null);
   // list tap on an existing session: bot: prefix stripped, walks to the answer, ends -> session_status ended
-  const sess = { id: 'S1', bot_id: 'bot1', bot_version: 2, channel: 'whatsapp', status: 'active', current_step: 'menu', context: {}, last_activity_at: new Date().toISOString() };
-  ({ deps, calls } = mk({ findActiveSession: async () => sess }));
+  const sess = live;
+  ({ deps, calls } = mk({ findLatestSession: async () => sess }));
   r = await W.maybeHandleInbound({}, M({ type: 'interactive', text: 'FAQs', button_id: 'bot:menu:b_faq', provider_message_id: 'wamid.2' }), ING, deps);
   assert.equal(r.session_status, 'ended'); assert.deepEqual(r.replies.map((x) => x.text), ['Answer']);
   assert.equal(calls.sessions.length, 0);
   // idle > 6h: old session expired, new one opened with the greeting
   const stale = { ...sess, last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() };
   const expired = [];
-  ({ deps, calls } = mk({ findActiveSession: async () => stale, persist: async (env, s, patch) => { if (patch.status === 'ended') expired.push(s.id); } }));
+  ({ deps, calls } = mk({ findLatestSession: async () => stale, persist: async (env, s, patch) => { if (patch.status === 'ended') expired.push(s.id); } }));
   r = await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.3' }), ING, deps);
   assert.deepEqual(expired, ['S1']); assert.equal(calls.sessions.length, 1); assert.equal(r.replies[0].text, 'Hi');
   // keyword on the opening message -> straight to handoff
@@ -1106,14 +1166,20 @@ async function hasActiveEnrolment(env, profileId) {
   const r = await A.sbComms(`/rest/v1/enrolments?profile_id=eq.${A.enc(profileId)}&status=eq.active&select=id&limit=1`, env).catch(() => ({ ok: false }));
   return !r.ok || !!r.data?.[0];      // unreadable -> treat as enrolled (fail closed)
 }
-async function findActiveSession(env, from, phoneNumberId) {
-  const r = await A.sbComms(`/rest/v1/bot_sessions?channel=eq.whatsapp&wa_from=eq.${A.enc(from)}&phone_number_id=eq.${A.enc(phoneNumberId)}&status=eq.active&select=*&limit=1`, env);
+// Newest session of ANY status — a handed_off one is the sticky-handoff signal (condition 8).
+async function findLatestSession(env, from, phoneNumberId) {
+  const r = await A.sbComms(`/rest/v1/bot_sessions?channel=eq.whatsapp&wa_from=eq.${A.enc(from)}&phone_number_id=eq.${A.enc(phoneNumberId)}&select=*&order=started_at.desc&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
 }
 async function createSession(env, row) {
   const ins = await A.sbComms('/rest/v1/bot_sessions', env, { method: 'POST', body: JSON.stringify(row) });
   if (ins.ok && ins.data?.[0]) return ins.data[0];
-  return findActiveSession(env, row.wa_from, row.phone_number_id);   // lost the unique-index race: adopt the winner
+  // Lost the active-session unique-index race: adopt the winner. Any OTHER failure is logged —
+  // a silent null here is a silently dead bot (the deps-stubbed tests cannot catch a DB-shape error).
+  const winner = await findLatestSession(env, row.wa_from, row.phone_number_id);
+  if (winner && winner.status === 'active') return winner;
+  console.log('bot_wa_session_create_failed', JSON.stringify({ status: ins.status, detail: JSON.stringify(ins.data || '').slice(0, 200) }));
+  return null;
 }
 async function claimTurn(env, row) {
   const r = await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(row) });
@@ -1125,12 +1191,12 @@ async function persist(env, session, patch, stepRows) {
   await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(session.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
   if (stepRows?.length) await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(stepRows) });
 }
-const DEFAULTS = { supportPhoneId, activeWaBot, threadLastOutbound, hasActiveEnrolment, findActiveSession, createSession, claimTurn, persist, send,
+const DEFAULTS = { supportPhoneId, activeWaBot, threadLastOutbound, hasActiveEnrolment, findLatestSession, createSession, claimTurn, persist, send,
   loadDefinition: T.defaultLoadDefinition, loadActiveShared: T.defaultLoadActiveShared, lookupOrderStatus: null };
 
-function toSendOpts(sessionId, pmid, i, stepId, reply, from, phoneNumberId) {
-  const base = { channel: 'whatsapp', purpose: 'utility', to: '+' + from, phoneNumberId,
-    template: { content: { text_body: reply.text } }, dedupKey: `bot:${sessionId}:${pmid}:${i}`, source: 'relay_bot' };
+function toSendOpts(session, pmid, i, stepId, reply, from, phoneNumberId) {
+  const base = { channel: 'whatsapp', purpose: 'utility', to: '+' + from, phoneNumberId, profileId: session.profile_id || null,
+    template: { content: { text_body: reply.text } }, dedupKey: `bot:${session.id}:${pmid}:${i}`, source: 'relay_bot' };
   if (reply.buttons && reply.buttons.length) {
     if (reply.style === 'list' || reply.buttons.length > 3)
       base.interactiveList = { button: reply.list_button || 'Choose', rows: reply.buttons.map((b) => ({ id: wireId(stepId, b.id), title: b.label, description: b.description || null })) };
@@ -1156,8 +1222,11 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   if (!kindOk) return null;                                                                    // 7
   const text = String(m.text || '').slice(0, 500);
 
-  let session = await d.findActiveSession(env, m.from, pid);
-  if (session && Date.now() - new Date(session.last_activity_at || session.started_at).getTime() > IDLE_EXPIRE_MS) {
+  let session = await d.findLatestSession(env, m.from, pid);
+  const idleMs = session ? Date.now() - new Date(session.last_activity_at || session.started_at).getTime() : 0;
+  if (session && session.status === 'handed_off' && idleMs < IDLE_EXPIRE_MS) return null;      // 8. sticky handoff: a human is owed
+  if (session && session.status !== 'active') session = null;                                    // ended / stale handed_off: start fresh
+  if (session && idleMs > IDLE_EXPIRE_MS) {
     const ex = E.advance({ entry: null, steps: {} }, session, { kind: 'expire' });
     await d.persist(env, session, { status: ex.state.status, ended_at: new Date().toISOString() }, [{ session_id: session.id, step_id: session.current_step || 'entry', step_type: 'expire', result: null }]);
     session = null;
@@ -1169,9 +1238,11 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
     if (!session) return null;
     opened = true;
   }
-  // claim THIS message before advancing — redelivery / concurrent invocation = skip (spec §5.2)
+  // claim THIS message before advancing — redelivery / concurrent invocation = skip (spec §5.2).
+  // The duplicate branch still reports the LIVE session state: csops drives the thread rail off it
+  // even when it skips the transcript rows (a redelivered first message must not leave bot_active false).
   const claimed = await d.claimTurn(env, { session_id: session.id, step_id: session.current_step || 'entry', step_type: 'customer_message', result: { text, type: m.type || 'text', button_id: m.button_id || null }, provider_message_id: m.provider_message_id || null });
-  if (!claimed) return { handled: true, duplicate: true };
+  if (!claimed) return { handled: true, duplicate: true, session_id: session.id, session_status: session.status, replies: [], handoff: session.status === 'handed_off' };
 
   const def = await T.sessionDefinition(env, session, { loadDefinition: d.loadDefinition });
   if (!def) return null;
@@ -1182,7 +1253,7 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   const out = t.out;
   const sendRows = [];
   for (const [i, r] of out.replies.entries()) {
-    const res = await d.send(env, toSendOpts(session.id, m.provider_message_id || 'nopmid', i, out.state.current_step || 'entry', r, m.from, pid)).catch((e) => ({ status: 'failed', reason: String(e?.message || e) }));
+    const res = await d.send(env, toSendOpts(session, m.provider_message_id || 'nopmid', i, out.state.current_step || 'entry', r, m.from, pid)).catch((e) => ({ status: 'failed', reason: String(e?.message || e) }));
     if (res.status !== 'sent' && res.status !== 'deduped') sendRows.push({ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: 'send_failed', result: { status: res.status, reason: res.reason || null } });
   }
   await d.persist(env, session, { current_step: out.state.current_step, status: out.state.status, context: out.state.context,
@@ -1298,11 +1369,11 @@ function resumeHistory(rows) {
     style: r.result?.style || null, agent_name: r.result?.agent_name || null }));
 }
 ```
-Export both + `IDLE_EXPIRE_MS`. In `index.js` `/web/session`, before the insert:
+Export both + `IDLE_EXPIRE_MS`. In `index.js` `/web/session`, **as the FIRST thing after `const b = await request.json()…` and BEFORE the `bots?…status=eq.active` lookup** — a paused bot returns `bot_unavailable` 503 at that lookup, and a visitor mid-session (including one waiting on an agent after a handoff) must still get their transcript back:
 ```js
         if (b.resume) {
           const s = await BW.loadSession(env, String(b.resume));
-          if (s && s.bot_id === bot.id && BW.isResumable(s)) {
+          if (s && s.bot_id === String(b.botId || '') && BW.isResumable(s)) {
             const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,result&order=id.desc&limit=20`, env);
             return withCors(ok({ session_id: s.id, status: s.status, replies: [], history: BW.resumeHistory((h.ok ? h.data : []).reverse()) }));
           }
@@ -1338,7 +1409,7 @@ git -C /Users/afshaansiddiqui/Documents/Claude/05_Throttle commit -m "S355 [rela
 - Test: `csops-worker/src/bot-forward.test.mjs` (new)
 
 **Interfaces:**
-- Produces: `botOutboundRows({threadId, wabaPhoneNumberId, replies, now})` → uniform-key rows; `inboundRowKeys(row)` → the same row with `template_name: null` added (so the web bulk insert stays homogeneous); `botThreadPatch({session_status, handoff, thread, now})` → PATCH body. `store.cs_wa_threads.bot_active` + trigger `cs_wa_messages_clear_bot_active`. `closed_reason` accepts `bot_resolved`.
+- Produces: `botOutboundRows({threadId, wabaPhoneNumberId, replies, now})` → uniform-key rows with an explicit, strictly increasing `created_at` (the inbox orders by `created_at`, and a bulk insert's `now()` default is identical on every row); `botThreadPatch({session_status, handoff, thread, now})` → PATCH body. `store.cs_wa_threads.bot_active` + two triggers: `cs_wa_messages_clear_bot_active` (human outbound) and `cs_wa_threads_clear_bot_active_manual` (an agent closes/snoozes/assigns by hand — those write no message row). `closed_reason` accepts `bot_resolved`. `store.cs_messaging_stats` and `store.cs_unread_counts_by_channel` exclude `bot_active` threads so the topbar pills agree with the list filter.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1360,6 +1431,9 @@ test('bot rows carry the relay_bot marker, no user, uniform keys, options flatte
   }
   assert.equal(rows[0].body, 'Hi\n1. Track\n2. Agent');
   assert.equal(flattenReply({ text: 'x', buttons: [] }), 'x');
+  // explicit created_at, strictly increasing, all after the inbound's timestamp
+  assert.ok(rows[0].created_at > '2026-09-07T10:00:00.000Z' && rows[1].created_at > rows[0].created_at);
+  assert.equal(rows[0].created_at, rows[0].sent_at);
 });
 test('thread patch: active -> bot_active; handoff -> open+unassigned; ended -> closed bot_resolved', () => {
   const now = '2026-09-07T10:00:00.000Z';
@@ -1384,13 +1458,18 @@ export function flattenReply(r) {
   return String(r?.text ?? '') + opts;
 }
 export function botOutboundRows({ threadId, wabaPhoneNumberId, replies, now }) {
-  return (replies || []).map((r, i) => ({
-    thread_id: threadId, direction: 'outbound', kind: 'text', body: flattenReply(r),
-    template_name: 'relay_bot',              // THE marker: NOT-NULL template + NULL user = automated
-    sent_by_user_id: null, sent_by_name: 'Relay (bot)', is_internal: false, status: 'sent',
-    waba_phone_number_id: wabaPhoneNumberId || null,
-    sent_at: new Date(new Date(now).getTime() + i + 1).toISOString(),   // strictly after the inbound
-  }));
+  return (replies || []).map((r, i) => {
+    // The inbox orders by created_at, and a bulk insert gives every row the same now() —
+    // so both timestamps are explicit and strictly increasing, after the inbound's.
+    const at = new Date(new Date(now).getTime() + (i + 1) * 5).toISOString();
+    return {
+      thread_id: threadId, direction: 'outbound', kind: 'text', body: flattenReply(r),
+      template_name: 'relay_bot',              // THE marker: NOT-NULL template + NULL user = automated
+      sent_by_user_id: null, sent_by_name: 'Relay (bot)', is_internal: false, status: 'sent',
+      waba_phone_number_id: wabaPhoneNumberId || null,
+      sent_at: at, created_at: at,
+    };
+  });
 }
 export function botThreadPatch({ session_status, handoff, thread, now }) {
   if (handoff || session_status === 'handed_off') {
@@ -1427,9 +1506,32 @@ END $$;
 DROP TRIGGER IF EXISTS cs_wa_messages_clear_bot_active ON store.cs_wa_messages;
 CREATE TRIGGER cs_wa_messages_clear_bot_active AFTER INSERT ON store.cs_wa_messages
   FOR EACH ROW EXECUTE FUNCTION store.cs_clear_bot_active();
+-- an agent closing / snoozing / claiming the thread BY HAND writes no message row (setThreadState,
+-- assignThread are PATCH-only) — clear the rail on those transitions too, or the thread is invisible forever
+CREATE OR REPLACE FUNCTION store.cs_clear_bot_active_manual() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = store, public AS $$
+BEGIN
+  IF NEW.bot_active AND (
+       (NEW.thread_state IS DISTINCT FROM OLD.thread_state AND NEW.thread_state IN ('closed','snoozed'))
+    OR (NEW.assigned_agent_id IS NOT NULL AND OLD.assigned_agent_id IS NULL)
+  ) THEN
+    NEW.bot_active := false;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS cs_wa_threads_clear_bot_active_manual ON store.cs_wa_threads;
+CREATE TRIGGER cs_wa_threads_clear_bot_active_manual BEFORE UPDATE ON store.cs_wa_threads
+  FOR EACH ROW EXECUTE FUNCTION store.cs_clear_bot_active_manual();
 NOTIFY pgrst, 'reload schema';
 ```
-Verify: `select column_name from information_schema.columns where table_schema='store' and table_name='cs_wa_threads' and column_name='bot_active'; select pg_get_constraintdef(oid) from pg_constraint where conname='cs_wa_threads_closed_reason_check';` → column present, `bot_resolved` in the list.
+⚠️ `botThreadPatch`'s own `ended` patch sets `thread_state='closed'` AND `bot_active=false` in one UPDATE — the manual trigger sees `NEW.bot_active=false` and does nothing; consistent.
+
+**Then, in the SAME migration, widen the two counting RPCs** (the topbar Awaiting/unread pills must agree with the list filter — `index.js:10335-10337` states that invariant). First read them: `select pg_get_functiondef('store.cs_messaging_stats'::regproc); select pg_get_functiondef('store.cs_unread_counts_by_channel'::regproc);`. Re-issue each with `CREATE OR REPLACE` and exactly ONE change each:
+- `cs_messaging_stats`: in its first CTE, `SELECT t.id, t.channel, t.thread_state, t.assigned_agent_id, t.awaiting_reply FROM store.cs_wa_threads t …` → `… (t.awaiting_reply AND NOT t.bot_active) AS awaiting_reply …`. Nothing else (total/mine/unassigned/closed stay whole-channel — a bot thread is still a thread on the Unassigned tab, with its badge).
+- `cs_unread_counts_by_channel`: `WHERE has_unread_inbound AND thread_state IN ('open','snoozed')` → append `AND NOT bot_active`.
+Append both `CREATE OR REPLACE FUNCTION …` blocks verbatim (with the one-line edits) to the migration before the `NOTIFY`.
+
+Verify: `select column_name from information_schema.columns where table_schema='store' and table_name='cs_wa_threads' and column_name='bot_active'; select pg_get_constraintdef(oid) from pg_constraint where conname='cs_wa_threads_closed_reason_check'; select tgname from pg_trigger where tgrelid in ('store.cs_wa_messages'::regclass,'store.cs_wa_threads'::regclass) and tgname like '%bot_active%'; select position('bot_active' in pg_get_functiondef('store.cs_messaging_stats'::regproc)) > 0, position('bot_active' in pg_get_functiondef('store.cs_unread_counts_by_channel'::regproc)) > 0;` → column present, `bot_resolved` in the list, 2 triggers, `true, true`.
 
 - [ ] **Step 6: Wire `index.js`**
 
@@ -1440,27 +1542,39 @@ In `relayWaIngestInbound`, immediately after the thread PATCH that sets `last_in
   // S355 — a bot-handled turn: write the bot's lines (tagged relay_bot), drive the bot_active rail,
   // and SKIP the redirect + out-of-hours auto-reply (the bot IS this inbound's auto-message).
   if (m?.bot?.handled) {
+    // Transcript rows only for a first delivery; the RAIL is applied on every delivery — a Meta
+    // redelivery of a message the bot already answered still carries the live session state, and
+    // skipping the patch would leave an active session on an unrailed thread (retro-assign grabs it).
     if (!m.bot.duplicate) {
       const rows = botOutboundRows({ threadId: thread.id, wabaPhoneNumberId: m?.phone_number_id || thread.waba_phone_number_id || null, replies: m.bot.replies || [], now: ts });
       if (rows.length) {
         const bi = await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
         if (!bi.ok) console.error('[relay-wa] bot rows insert failed', bi.status, JSON.stringify(bi.data)?.slice(0, 200));
       }
-      const tp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread, now: ts });
-      await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(tp) }).catch(() => {});
+    }
+    const tp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread, now: ts });
+    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(tp) }).catch(() => {});
+    // keep the open ticket's history honest — the customer's line still happened
+    if (linkedTicketId) {
+      await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
+        ticket_id: linkedTicketId, field_name: 'wa_message_received', old_value: null, new_value: kind,
+        note: (content || '').slice(0, 140), changed_by_user_id: null, changed_by_name: m?.name || 'Relay (auto)' }) }).catch(() => {});
     }
     return { thread_id: thread.id, ticket_id: linkedTicketId, bot: true };
   }
 ```
-⚠️ The early `return` skips the redirect, the OOO reply and the ticket-history note — deliberate (spec §5.5). Check the `ts`/`thread` variable names match the surrounding code (read 10 lines above).
+⚠️ The early `return` skips ONLY the wrong-number redirect and the OOO reply — deliberate (spec §5.5); the ticket-history write is repeated above so it is not lost. Check the `ts`/`thread`/`kind`/`content`/`linkedTicketId` names match the surrounding code (read 40 lines above — they are all declared before the insert).
 
-In `handleRelayWebForward`, change the row mapping to add the marker with the SAME key on every row:
+**Accepted, record in the wrap:** an OPEN `cs_tickets` row does not stop the bot. The 12 h human-active rule covers a live conversation; a ticket whose last agent reply is older than that gets self-serve, and a handoff lands back on the same thread.
+
+In `handleRelayWebForward`, change the row mapping to add the marker (and the channel, which today silently defaults to `'whatsapp'` on a web thread) with the SAME keys on every row:
 ```js
     template_name: m.direction === 'outbound' ? 'relay_bot' : null,
+    channel: 'web',
 ```
-(inside the existing `rows = b.messages.map(...)` object, next to `sent_by_name`).
+(inside the existing `rows = b.messages.map(...)` object, next to `sent_by_name`). ⚠️ Known gap, recorded not fixed: web threads get the `relay_bot` tag (so `awaiting_reply` stays true through a web bot session) but NO `bot_active` rail — the web forward carries no `session_status`. Volume is ~0 behind the staff gate; **close this before the web un-gate** (add `session_status` to the web forward and apply `botThreadPatch` there too). Task 15 writes it into the backlog item.
 
-In `getMessagingThreads` (line ~10338): `if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true&bot_active=is.false`;`. In `getMessagingStats`: find every count that filters `awaiting_reply=is.true` (`grep -n "awaiting_reply" src/index.js` inside that function's range) and append `&bot_active=is.false` to each. In `retroAssignUnownedThreads` (~7855) add `+ \`&bot_active=is.false\`` to the query string after `assigned_agent_id=is.null`.
+In `getMessagingThreads` (line ~10338): `if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true&bot_active=is.false`;`. `getMessagingStats` is a 4-line wrapper over the `cs_messaging_stats` RPC — **no JS change**; the exclusion lives in the migration above. In `retroAssignUnownedThreads` (~7855) add `+ \`&bot_active=is.false\`` to the query string directly after the `&assigned_agent_id=is.null` fragment.
 
 - [ ] **Step 7: Run the csops suite** — `node --test 'src/**/*.test.mjs' 2>&1 | grep -E '^ℹ (tests|pass|fail)'` → `fail 0`.
 
@@ -1531,7 +1645,20 @@ and inside each option row, when `c.style === 'list'`, a second input bound to `
               placeholder="Let me connect you to our support team — a human will reply right here as soon as one is available." />
           </Field>
 ```
-Add a `subflow` block: a `<select>` of shared bots — `BotDrawer` gains a `sharedBots` prop (`[{id,name,active_version}]`) passed from `BotBuilder` (`rows.filter((r) => r.channel === 'shared' && r.active_version)`); value `c.bot_id`; hint *"Jumps into a shared flow (published). When it ends, continues on this step's Next."* Update the `handoff` hint to: *"Ends the bot's part and places the conversation in the Pitstop inbox. The bot never speaks again in this conversation."*
+Add a `subflow` block: a `<select>` of shared bots — `BotDrawer` gains a `sharedBots` prop (`[{id,name,active_version}]`). **Two edits, both required:** (a) `BotDrawer.js:18` signature → `export default function BotDrawer({ nodeId, config, onChange, onDelete, readOnly, sharedBots = [] })`; (b) the call site `BotBuilder.js:256` → add `sharedBots={rows.filter((r) => r.channel === 'shared' && r.active_version)}` to the `<BotDrawer …/>` props (without it the select is empty and `subflow_target_invalid` can never be fixed from the UI). The block:
+```jsx
+      {c.type === 'subflow' && (
+        <>
+          <Field label="Shared flow (published)">
+            <select className="f-inp" value={c.bot_id || ''} disabled={readOnly} onChange={(e) => set({ bot_id: e.target.value })}>
+              <option value="">— pick a shared flow —</option>
+              {sharedBots.map((b) => <option key={b.id} value={b.id}>{b.name} (v{b.active_version})</option>)}
+            </select>
+          </Field>
+          <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>Jumps into the shared flow. When it ends, the customer continues on this step's <b>Next</b>.</div>
+        </>
+      )}
+``` Update the `handoff` hint to: *"Ends the bot's part and places the conversation in the Pitstop inbox. The bot never speaks again in this conversation."*
 
 - [ ] **Step 3: Bot settings in `BotBuilder.js`**
 
@@ -1628,7 +1755,9 @@ Record both version ids.
 - [ ] **Step 2: Wait for the two app deploys** (each ALONE, in background):
 `tools/wait-deploy.sh relay <sha>` and `tools/wait-deploy.sh pitstop <sha>` — read each `VERDICT:` line; anything but exit 0 is not live.
 
-- [ ] **Step 3: Seed the shared FAQ bot + the WhatsApp bot (SQL, mirrors publishBot)**
+- [ ] **Step 3: Seed the shared FAQ bot + the WhatsApp bot as DRAFTS; publish through the UI so `validateBotDef` runs**
+
+⚠️ Raw-SQL publishing (`insert into bot_versions … ; update bots set active_version=1`) bypasses the only lint gate (`bots.js publishBot`). Seed `draft` rows only; every v1 is created by the builder's **Publish** button. ⚠️ Button/row labels must not be opt-in/opt-out keywords (`detectOptOut` runs on the tapped title: avoid labels like "Stop", "Start", "End", "Resume").
 
 ```sql
 -- shared FAQ (structure only; copy is Pruthvi's)
@@ -1637,7 +1766,7 @@ with b as (
   values ('FAQ (shared)', 'draft', 'shared', '{}'::jsonb, '{}'::jsonb, 'S355') returning id)
 select id from b;
 ```
-Then with that id `<FAQ>` build the definition and publish:
+Then with that id `<FAQ>` set the draft definition:
 ```sql
 update comms.bots set draft_definition = $${
  "entry":"topics","steps":{
@@ -1655,9 +1784,8 @@ update comms.bots set draft_definition = $${
   "a_play":{"type":"message","text":"[Pruthvi: answer — playtime]","outcomes":{"next":"e"}},
   "e":{"type":"end","outcomes":{}},
   "h":{"type":"handoff","outcomes":{}}}}$$::jsonb where id = '<FAQ>';
-insert into comms.bot_versions (bot_id, version, definition, created_by) select id, 1, draft_definition, 'S355' from comms.bots where id='<FAQ>';
-update comms.bots set active_version=1, status='active' where id='<FAQ>';
 ```
+Open `/journeys?mode=bot` (in-app browser; STOP at a login wall and ask Afshaan), open "FAQ (shared)", **Publish** → v1, no lint errors. (Shared must be published BEFORE the WhatsApp bot, whose `subflow` lint requires a published target.)
 WhatsApp bot (`<WA>`), `pilot_numbers` = `917709991011` plus Pruthvi's number — read it from his Slack profile (`slack_read_user_profile U099BNH5PCZ`); if absent, seed Afshaan's only and note it in the wrap:
 ```sql
 insert into comms.bots (name, status, channel, draft_definition, config, created_by) values ('Support assistant (WhatsApp)', 'draft', 'whatsapp', $${
@@ -1678,18 +1806,23 @@ insert into comms.bots (name, status, channel, draft_definition, config, created
   "bye":{"type":"end","text":"Happy to help — just say hi any time.","outcomes":{}},
   "h":{"type":"handoff","text":"Connecting you to our support team — a human will reply right here as soon as one is available.","outcomes":{}}}}$$::jsonb,
  '{"mode":"pilot","pilot_numbers":["917709991011"]}'::jsonb, 'S355') returning id;
-insert into comms.bot_versions (bot_id, version, definition, created_by) select id, 1, draft_definition, 'S355' from comms.bots where id='<WA>';
-update comms.bots set active_version=1, status='active' where id='<WA>';
 ```
-Then open `/journeys?mode=bot` in the in-app browser, open the WhatsApp bot and press **Publish** once — this runs the real `validateBotDef` with channel lint against the seed (expect v2, no errors). Add the FAQs button to the existing web bot via the builder (a `subflow` step to `<FAQ>` off its menu) — do NOT publish the web bot with placeholder copy; save as draft only.
+Open the WhatsApp bot in the builder and **Publish** → v1 (real channel lint: 3-button menus, 20-char labels, list ≤10 rows, `collect.fallback` wired, `subflow` target published). Any lint error here is a seed bug — fix the draft, not the lint.
+
+**The live web bot ("New web assistant", `7cb27755-…`):** its two `collect` steps have no `fallback` (verified 2026-09-07), so it cannot be republished until they are wired, and the spec's "web bot gains FAQs → subflow" is otherwise never delivered. In the builder: wire both collects' **Fallback** → the existing handoff step; add a **FAQs** button on its menu → a new `subflow` step → `<FAQ>` → Next → the menu; **Publish** → v2. It stays behind the staff gate, so placeholder FAQ copy is not customer-visible. (Until v2 is published, the deployed engine already hands off on a second miss at an unwired collect — Task 3 — so v1 is safe meanwhile.)
 
 - [ ] **Step 4: Smoke — WhatsApp, from Afshaan's number (7709991011) to +919880212323**
 
-Precondition SQL: `select last_outbound_at, bot_active from store.cs_wa_threads where customer_phone='+917709991011' and waba_phone_number_id='1266501519877668';` — if `last_outbound_at` is within 12 h, the bot will not engage; note it and wait or close the gap (an agent must NOT reply). Then, message by message, checking after each:
+Preconditions (all verified 2026-09-07 — re-check before the smoke):
+- **Thread adoption:** Afshaan's number has NO thread on the support pnid; `relayWaFindOrCreateThread` will ADOPT his numberless thread `358e6c7c-9042-4665-9069-069f1e31d164`, which is already **assigned** (`107ea993-…`) with `last_outbound_at` 2026-08-26. Unassign it first so step 4's "lands in Unassigned" is testable: `create table store.safety_cs_wa_threads_s355_2026_09_07 as select * from store.cs_wa_threads where id='358e6c7c-9042-4665-9069-069f1e31d164'; update store.cs_wa_threads set assigned_agent_id=null, assigned_agent_name=null, assigned_at=null where id='358e6c7c-9042-4665-9069-069f1e31d164';` (his own test thread; snapshot first per CLAUDE.md).
+- **Human-active:** `select last_outbound_at, bot_active, assigned_agent_id from store.cs_wa_threads where id='358e6c7c-9042-4665-9069-069f1e31d164';` — `last_outbound_at` must be older than 12 h (it is), and no agent may reply during steps 1–3.
+- **The order for step 3:** on WhatsApp the identity is the SENDER's phone, so `#LOT49400` (the S312 web smoke order, typed identity) will NOT verify. Afshaan's profile has exactly one `order_placed` event: order **45200** (2026-07-30). Confirm its Shopify phone before the smoke via the same GraphQL `bot-order-status.js defaultFetchOrder` runs (`orders(first:1, query:"name:#LOT45200") { nodes { name phone customer { phone } } }` through `SHOP.shopifyGraphQL` in a one-off `node -e` with the commsops env, or `npx wrangler dev` + a curl) — if the phone is `+917709991011`, use `#LOT45200` in step 3; if not, step 3's **found** branch is untestable from his number: run steps 3's `not_found` path instead (wrong number → retry menu) and have Pruthvi (pilot number) exercise `found` with an order placed on his number. Record which.
+Then, message by message, checking after each:
 1. `hi` → greeting with 3 buttons. SQL: one `bot_sessions` row `channel='whatsapp'`, `bot_session_steps` has `customer_message` with `provider_message_id`; `cs_wa_messages` has the inbound + 1 outbound `template_name='relay_bot'`; `cs_wa_threads.bot_active=true`, `awaiting_reply=true`, `last_outbound_at` unchanged.
 2. tap **FAQs** → list of 5 topics (Meta list UI). Tap **Shipping time** → placeholder answer, then the greeting again. `bot_sessions.sub_bot_id` is NULL after the return; steps include `subflow_enter` + `subflow_return`.
-3. tap **Track my order** → order prompt; send `#LOT49400` (the S312 smoke order, phone must match) → real status text; then **Anything else? → No, thanks** → goodbye. SQL: session `ended`, thread `thread_state='closed'`, `closed_reason='bot_resolved'`, `bot_active=false`.
-4. `hi` again → new session (closed thread re-opened by the inbound). Send `zzz` at the order prompt twice → handoff copy. SQL: session `handed_off`; thread open, `bot_active=false`, unassigned, `awaiting_reply=true`. In Pitstop (in-app browser, STOP at a login wall and ask Afshaan): thread visible in **Unassigned** and **Awaiting**, no Bot badge, full transcript with `Relay (bot)` lines. Reply from the inbox → arrives on the phone; send `hi` → **no** bot reply (human active).
+3. tap **Track my order** → order prompt; send the order chosen in the preconditions → real status text (or the `not_found` retry menu if no order verifies — say which); then **Anything else? → No, thanks** → goodbye. SQL: session `ended`, thread `thread_state='closed'`, `closed_reason='bot_resolved'`, `bot_active=false`.
+4. `hi` again → new session (closed thread re-opened by the inbound). Send `zzz` at the order prompt twice → handoff copy. SQL: session `handed_off`; thread open, `bot_active=false`, unassigned, `awaiting_reply=true`. **Sticky handoff:** send `hello?` → **no** bot reply, no new session (`select count(*) from comms.bot_sessions where wa_from='917709991011'` unchanged). In Pitstop (in-app browser, STOP at a login wall and ask Afshaan): thread visible in **Unassigned** and **Awaiting**, the topbar Awaiting pill counts it, no Bot badge, full transcript with `Relay (bot)` lines in order. Reply from the inbox → arrives on the phone; send `hi` → **no** bot reply (human active).
+4b. **Manual close clears the rail:** with a fresh bot session active on another pilot number (or after step 7's `hi`), close the thread from Pitstop → SQL `bot_active=false` (the BEFORE UPDATE trigger).
 5. Re-send the step-1 webhook body to `POST https://commsops.afshaan.workers.dev/webhooks/whatsapp` with a valid signature is not practical — instead prove the claim path in SQL: `insert into comms.bot_session_steps (session_id, step_id, step_type, provider_message_id) values ('<session>', 'x', 'customer_message', '<pmid from step 1>')` must fail with 23505.
 6. From a non-pilot number (ask Pruthvi to send `hi`, or use a second test SIM): no bot reply; normal behaviour. `STOP` from Afshaan's number → opt-out row written, no bot reply.
 7. Retro-assign: wait one 10-minute tick with a fresh bot session active → the thread stays unassigned (`assigned_agent_id IS NULL`), Bot badge visible in the inbox list.
@@ -1705,7 +1838,7 @@ Precondition SQL: `select last_outbound_at, bot_active from store.cs_wa_threads 
 **Files:**
 - Modify (root repo `/Users/afshaansiddiqui/Documents/Claude`): `systems/relay.md` §Bot builder (new sub-section "Two bots, one engine — S355"), `systems/pitstop.md` (bot_active rail + `bot_resolved`), `reference/db-schema.md` (new columns on `comms.bots/bot_sessions/bot_session_steps`, `store.cs_wa_threads.bot_active`, the `closed_reason` value, the trigger), `reference/decisions.md` (the `bot_resolved` close-on-self-serve call; `relay_bot` marker; pilot switch is activate-tier), `backlog/relay.md` (update the two items: the Web bot build item's ①② closed, ④ deferred with reason; the Pruthvi ask item → what is now owed), `archive/BACKLOG_ARCHIVE.md` if an item fully closes.
 
-- [ ] **Step 1: Write the spoke + reference updates** with measured numbers stamped `(measured 2026-09-07)`, the worker version ids and shas from Task 14, and the residual list: hours-aware handoff copy deferred; `delay_ms` deferred; Pruthvi's answer copy pending; public flip pending (activate tier via Settings → Rollout, or `setBotMode`).
+- [ ] **Step 1: Write the spoke + reference updates** with measured numbers stamped `(measured 2026-09-07)`, the worker version ids and shas from Task 14, and the residual list: hours-aware handoff copy deferred; `delay_ms` deferred; Pruthvi's answer copy pending; public flip pending (activate tier via Settings → Rollout, or `setBotMode`); **web threads have the `relay_bot` tag but no `bot_active` rail — close before the web un-gate** (Task 11 note); accepted behaviours: second message in one webhook batch is a menu miss; an open ticket does not stop the bot. Also correct two records: spec §5.3's "autoassign runs on that same request" is wrong for relay-wa (no arrival-time `cs_autoassign_thread` call exists on that path — only the 10-minute `retroAssignUnownedThreads` sweep, and `metaMessageCreated`/the Gmail poller call it on arrival); and qualify the `reference/db-schema.md` `cs_routing_config` note to say the same.
 
 - [ ] **Step 2: Regenerate counts + commit root (path-scoped)**
 
@@ -1727,6 +1860,11 @@ Thread `#bugs` parent `1788433215.944179`. Draft, terse, per the team-comms memo
 - [ ] **Step 4: Hostile review** — run `/hostile-review` over the session's diff (both repos, both migrations, the seed rows, the smoke claims) before wrap; fix and record findings.
 
 ---
+
+## Hostile-review log (2026-09-07, plan v1 → v2)
+
+Independent reviewer (Opus, high, read-only, 70 tool calls) + the author; every finding verified against the primary text before acceptance. All 22 accepted:
+1. `bot_sessions.visitor_key` NOT NULL → 0068 drops it (T1). 2. Handoff not sticky → engage condition 8 via `findLatestSession` (T9). 3. `getMessagingStats` is an RPC wrapper → widen `cs_messaging_stats` + `cs_unread_counts_by_channel` in the migration (T11). 4. Unwired collect → silent null walk → hands off (T3). 5. Manual close/assign never cleared `bot_active` → BEFORE UPDATE trigger (T11). 6. Duplicate branch skipped the rail → patch always, rows once (T9/T11). 7. `#LOT49400` cannot verify from Afshaan's number → order precondition (T14). 8. Adopted thread already assigned → unassign with snapshot (T14). 9. `journey-graph.HANDLES` edit bound nothing → removed (T3). 10. Gate test would hit `test_mode_blocked` → real stub (T8). 11. Second message in a batch is a menu miss → accepted, recorded (T3/T15). 12. `profileId` missing on bot sends → added (T9). 13. `created_at` ordering in the inbox → explicit stagger (T11). 14. `sharedBots` call site missing → both edits named (T13). 15. Resume dies on a paused bot → block moved above the lookup (T10). 16. Web FAQ never delivered + lint blocks republish → wire fallbacks, publish v2 gated (T14). 17. Ticket-history note dropped → kept above the return; open-ticket condition accepted as not needed (T11/T15). 18. Sub-flow replies attributed to the parent step → per-reply `_step` (T6). 19. Spec §5.3 / db-schema autoassign claims wrong for relay-wa → corrected (T15 + spec §11). 20. Raw-SQL publish bypassed lint → seed drafts, publish via UI (T14). 21. (author) Task 7 `saveBot` had a `...unchanged...` placeholder → full code. 22. (author) `detectOptOut` on tapped labels → seed label rule (T14). Also recorded: web threads get the tag but no rail (T11/T15); web rows now carry `channel:'web'`.
 
 ## Self-review (done at plan-writing time)
 

@@ -265,8 +265,17 @@ provider_message_id IS NOT NULL`. `NOTIFY pgrst, 'reload schema'` in the migrati
     unread filters exclude it too, and the thread row shows a **"Bot"** badge instead. The customer
     is talking to the bot; nobody should be assigned it.
   - `handoff=true` → `bot_active=false`, thread open + unassigned, `awaiting_reply` is true by
-    construction (the bot never bumped `last_outbound_at`), autoassign runs on that same request —
-    exactly the queue behaviour a fresh inbound gets today. No ticket in v1 (§0).
+    construction (the bot never bumped `last_outbound_at`); the 10-minute `retroAssignUnownedThreads`
+    sweep picks it up — exactly the queue behaviour a fresh WhatsApp inbound gets today. ⚠️ v1 of this
+    spec said "autoassign runs on that same request": **wrong for the relay-wa path** — no arrival-time
+    `cs_autoassign_thread` call exists there (only `metaMessageCreated` and the Gmail poller call it
+    on arrival; verified 2026-09-07). No ticket in v1 (§0).
+  - **Sticky handoff (engage condition 8, added by the plan review):** while the newest session for
+    the customer is `handed_off` and under 6 h idle, the bot does not engage on further messages — the
+    customer asked for a human and is waiting; re-greeting them would also re-hide the thread.
+  - An agent who closes, snoozes or claims a `bot_active` thread **by hand** (no message row) clears the
+    rail via a `BEFORE UPDATE` trigger; the counting RPCs behind the topbar pills exclude `bot_active`
+    the same way the list filter does.
   - `session_status='ended'` (customer self-served, e.g. read an FAQ and stopped) →
     `bot_active=false` and the thread is **closed** with `closed_reason='bot_resolved'`. A closed
     thread re-opens on the customer's next inbound exactly as today; without the close, every
@@ -412,3 +421,11 @@ section is named.
     `setBotMode`.
 Knowledge-layer correction made alongside: `reference/db-schema.md` note on
 `cs_routing_config.auto_assign_enabled` (said FALSE on all 3; live TRUE on all 4).
+
+**Plan review, same day (2026-09-07, 22 findings on the implementation plan, log in
+`docs/superpowers/plans/2026-09-07-relay-flowbots-wa-web.md`) — the ones that changed THIS spec:**
+§5.3 autoassign sentence corrected (relay-wa has no arrival-time autoassign); sticky handoff added as
+engage condition 8; manual close/assign clears `bot_active`; the counting RPCs exclude `bot_active`;
+web threads get the `relay_bot` tag but no rail until the web un-gate (recorded in the backlog item);
+a collect with no wired fallback hands off rather than going silent; the order-attempt cap and the
+unwired-collect case both use the single handoff copy.
