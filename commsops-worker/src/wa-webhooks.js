@@ -17,6 +17,7 @@ const { detectOptOut, applyOptOut } = require('./optout.js');
 const AL = require('./alerts.js');
 const WAM = require('./wa-media.js');   // media-id cache invalidation on a 131052/131053
 const C2P = require('./c2p-late-confirm.js');   // S297 — accept a confirm that missed its window
+const BOTWA = require('./bot-wa.js');   // S355 — the Relay flow bot answers inside this loop
 
 // Canonical message status is monotonic — an out-of-order webhook must never regress it
 // (e.g. a late 'delivered' arriving after 'read'/'opened' — review M6). Deliberately
@@ -364,7 +365,9 @@ async function handleInbound(env, payload) {
     // 500 the route (Meta would redeliver and re-run the opt-out write). A missed
     // signal is not a lost branch — the interpreter's own DB pre-check re-reads the
     // event on its next transition, and the node times out to `no_reply` regardless.
-    if (m.button_id) {
+    // S355: a BOT menu tap must NOT wake a parked journey step — the matcher keys on the event
+    // NAME, so emitting whatsapp_reply here would resolve a live C2P wait to no_reply (spec §4).
+    if (m.button_id && !String(m.button_id).startsWith(BOTWA.BOT_ID_PREFIX)) {
       const rep = await ingest(env, {
         identifiers: [{ type: 'phone', value: `+${wa.toWaId(m.from)}` }],
         name: 'whatsapp_reply',
@@ -409,6 +412,13 @@ async function handleInbound(env, payload) {
         });
       }
     }
+
+    // 2e. S355 — the flow bot answers here, BEFORE the Pitstop forward, so the forward can carry
+    // its replies. Every engage condition fails closed; an error is a silent bot, never a 500.
+    try {
+      const bot = await BOTWA.maybeHandleInbound(env, m, res);
+      if (bot) m.bot = bot;
+    } catch (e) { console.log('bot_wa_error', JSON.stringify({ reason: String(e?.message || e).slice(0, 160), provider_message_id: m.provider_message_id || null })); }
   }
   // 2d. park any attachment's bytes somewhere Pitstop can actually open (S245).
   await hostInboundMedia(env, inbound);

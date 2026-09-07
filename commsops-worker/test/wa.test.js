@@ -179,6 +179,28 @@ function restoreFetch() { global.fetch = realFetch; }
     A.sbComms = orig;
   });
 
+  // S355 — the bot's own menu rows carry a `bot:` wire id. Emitting whatsapp_reply for one would
+  // wake (and wrongly resolve) any journey parked on a reply, so that emit is suppressed while the
+  // generic whatsapp_inbound — the inbox, the 24h window, inbound analytics — still fires.
+  await t('a bot: button tap emits whatsapp_inbound but NOT whatsapp_reply', async () => {
+    const orig = A.sbComms;
+    const names = [];
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/rpc/resolve_identity')) return { ok: true, data: 'prof-1' };
+      if (path.startsWith('/rest/v1/events')) { names.push(JSON.parse(init.body).name); return { ok: true, data: [{ id: 'ev-1' }] }; }
+      return { ok: true, data: [] };   // wa_windows, waits matcher, journeys — and sender_identities: no support number, so the bot stays silent
+    };
+    const payload = { object: 'whatsapp_business_account', entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: 'PID' },
+      messages: [
+        { id: 'bt1', from: '919880212323', type: 'interactive', timestamp: '1700000000', interactive: { list_reply: { id: 'bot:menu:b_faq', title: 'FAQs' } } },
+      ] } }] }] };
+    await waHook.handleInbound({}, payload);
+    A.sbComms = orig;
+    assert.ok(names.includes('whatsapp_inbound'));
+    assert.ok(!names.includes('whatsapp_reply'));
+  });
+
   await t('handleStatuses persists Meta pricing (category + tri-state billable)', async () => {
     const orig = A.sbComms;
     const patches = [];
