@@ -36,5 +36,6 @@
 
 <div class="callout tip"><div class="c-title">&#10003; Tip</div><p>A reconciliation that is out by roughly the tax rate is a definition mismatch, not a data problem. A reconciliation out by a few percent is usually timing. A reconciliation out by a lot is worth reporting.</p></div>
 
-<h2 class="sec">One known simplification</h2>
-<p>The tax strip currently uses a single 18% rate. That is correct for the overwhelming majority of LOT revenue, but the L.O.T Build range is taxed at 5%, so its net is understated slightly. The amount is small and known. If you are reporting on L.O.T Build specifically rather than on the business as a whole, say that the net is conservative.</p>
+<h2 class="sec">How the GST rung actually works</h2>
+<p>The &#8722; GST rung is not one flat rate everywhere; it uses the best tax figure each channel can honestly supply. Website (Shopify), GT, MT, Peeko and Flipkart Managed strip the exact GST invoiced on each order, so a 5% line like L.O.T Build nets correctly (shipped 2026-09-07). Quick-commerce (Blinkit, Zepto, Instamart) strips GST per SKU from its HSN rate (shipped 2026-09-01). Amazon still strips a flat 18%, deliberately: Amazon's exact GST only arrives through settlement weeks later, with roughly a quarter of it confirmed within 14 days, so using it live would overstate net on recent days; a "settled %" badge shows how much of the period's GST is confirmed. Cred and Firstcry also strip a flat 18% for now, until Firstcry's discount field is understood.</p>
+<p>A per-order or per-SKU tax figure is only trusted when it is a plausible share of the order value, between 3% and 20%. Outside that range the flat strip is used instead, and it is never zero: a missing or implausible tax figure would otherwise overstate net.</p>
