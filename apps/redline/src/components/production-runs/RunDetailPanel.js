@@ -400,8 +400,8 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                 const variantLabel = wo.variant || 'Common';
                 const colourLabel = wo.colour ? ` ${wo.colour}` : '';
                 const splitText =
-                  wo.qty_ecomm != null || wo.qty_retail != null
-                    ? `E:${wo.qty_ecomm || 0} R:${wo.qty_retail || 0}`
+                  wo.qty_ecomm != null || wo.qty_retail != null || wo.qty_export > 0
+                    ? `E:${wo.qty_ecomm || 0} R:${wo.qty_retail || 0}${wo.qty_export > 0 ? ` X:${wo.qty_export}` : ''}`
                     : '';
                 return (
                   <span

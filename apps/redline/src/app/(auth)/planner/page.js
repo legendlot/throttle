@@ -446,7 +446,7 @@ export default function PlannerPage() {
     if (!session || !line?.variants?.length) return;
     setStockWarnings(prev => ({ ...prev, [line.id]: { loading: true, short: [] } }));
     const calls = line.variants.map(v => {
-      const q = (Number(v.qty_ecomm) || 0) + (Number(v.qty_retail) || 0);
+      const q = (Number(v.qty_ecomm) || 0) + (Number(v.qty_retail) || 0) + (Number(v.qty_export) || 0);
       if (q <= 0) return Promise.resolve({ parts: [] });
       return garageFetch('checkRunBomStock', {
         product: line.product, variant: v.variant || '', colour: v.colour || '', qty: q,
@@ -491,8 +491,10 @@ export default function PlannerPage() {
         colour:     v.colour,
         gap_ecomm:  v.gap_ecomm  || 0,
         gap_retail: v.gap_retail || 0,
+        gap_export: v.gap_export || 0,
         qty_ecomm:  v.gap_ecomm  || 0,
         qty_retail: v.gap_retail || 0,
+        qty_export: v.gap_export || 0,
       })),
     });
     setScheduleTarget({
@@ -514,7 +516,7 @@ export default function PlannerPage() {
 
   function addToSchedule() {
     if (!scheduling) return;
-    const activeVariants = scheduling.variants.filter(v => v.qty_ecomm + v.qty_retail > 0);
+    const activeVariants = scheduling.variants.filter(v => v.qty_ecomm + v.qty_retail + v.qty_export > 0);
     if (activeVariants.length === 0) {
       setSchedulingError('No variants with qty > 0');
       return;
@@ -541,8 +543,10 @@ export default function PlannerPage() {
         colour:     v.colour,
         gap_ecomm:  v.gap_ecomm  || 0,
         gap_retail: v.gap_retail || 0,
+        gap_export: v.gap_export || 0,
         qty_ecomm:  v.qty_ecomm,
         qty_retail: v.qty_retail,
+        qty_export: v.qty_export || 0,
       })),
     };
     if (scheduleTarget.cartId === 'new') {
@@ -668,7 +672,7 @@ export default function PlannerPage() {
   async function handleCreateAll(cart) {
     if (!cart.production_date) { showToast('Set a production date for this cart first', 'error'); return; }
     const linesToCreate = cart.lines.filter(line =>
-      line.variants.some(v => (v.qty_ecomm || 0) + (v.qty_retail || 0) > 0)
+      line.variants.some(v => (v.qty_ecomm || 0) + (v.qty_retail || 0) + (v.qty_export || 0) > 0)
       && (createStatus[cart.id]?.[line.id] !== 'done')
     );
     if (linesToCreate.length === 0) { showToast('Nothing to create in this cart', 'info'); return; }
@@ -689,7 +693,7 @@ export default function PlannerPage() {
         line_no:   line.line_no,
         shift:     'Morning',
         upload_id: planData?.upload?.id || null,
-        variants:  line.variants.filter(v => (v.qty_ecomm || 0) + (v.qty_retail || 0) > 0),
+        variants:  line.variants.filter(v => (v.qty_ecomm || 0) + (v.qty_retail || 0) + (v.qty_export || 0) > 0),
       };
 
       let res;
@@ -1053,6 +1057,8 @@ export default function PlannerPage() {
                                         {prod.gap_ecomm > 0 && <span>{fmt(prod.gap_ecomm)} ecomm</span>}
                                         {prod.gap_ecomm > 0 && prod.gap_retail > 0 && <span> · </span>}
                                         {prod.gap_retail > 0 && <span>{fmt(prod.gap_retail)} retail</span>}
+                                        {(prod.gap_ecomm > 0 || prod.gap_retail > 0) && prod.gap_export > 0 && <span> · </span>}
+                                        {prod.gap_export > 0 && <span>{fmt(prod.gap_export)} export</span>}
                                       </span>
                                     </button>
                                     <button
@@ -1098,6 +1104,7 @@ export default function PlannerPage() {
                                           </span>
                                           {v.gap_ecomm  > 0 && <span className="num">{fmt(v.gap_ecomm)} ecomm</span>}
                                           {v.gap_retail > 0 && <span className="num">{fmt(v.gap_retail)} retail</span>}
+                                          {v.gap_export > 0 && <span className="num">{fmt(v.gap_export)} export</span>}
                                         </div>
                                       ))}
                                     </div>
@@ -1118,7 +1125,7 @@ export default function PlannerPage() {
                                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 10 }}>
                                         <thead>
                                           <tr>
-                                            {['Variant', 'Colour', 'Qty Ecomm', 'Qty Retail'].map(h => (
+                                            {['Variant', 'Colour', 'Qty Ecomm', 'Qty Retail', 'Qty Export'].map(h => (
                                               <th key={h} className="eyebrow" style={{ padding: '5px 8px', textAlign: 'left' }}>{h}</th>
                                             ))}
                                           </tr>
@@ -1142,6 +1149,14 @@ export default function PlannerPage() {
                                                   style={smallInput} />
                                                 <span className="num" style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
                                                   /{v.gap_retail}
+                                                </span>
+                                              </td>
+                                              <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                                                <input type="number" min={0} value={v.qty_export ?? 0}
+                                                  onChange={e => setSchedulingVariantQty(vi, 'qty_export', e.target.value)}
+                                                  style={smallInput} />
+                                                <span className="num" style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
+                                                  /{v.gap_export || 0}
                                                 </span>
                                               </td>
                                             </tr>
@@ -1348,6 +1363,7 @@ export default function PlannerPage() {
                               const gapLabel = [
                                 v.gap_ecomm  > 0 ? `${v.gap_ecomm}e`  : null,
                                 v.gap_retail > 0 ? `${v.gap_retail}r` : null,
+                                v.gap_export > 0 ? `${v.gap_export}x` : null,
                               ].filter(Boolean).join(' · ');
                               return (
                                 <div key={vi} style={{
@@ -1372,6 +1388,10 @@ export default function PlannerPage() {
                                       <span className="num" style={{ color: 'var(--t3)' }}>r</span>
                                     </>
                                   )}
+                                  <input type="number" min={0} value={v.qty_export ?? 0}
+                                    onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_export', e.target.value)}
+                                    style={{ ...smallInput, width: 56, padding: '2px 6px', fontSize: 11, textAlign: 'right' }} />
+                                  <span className="num" style={{ color: 'var(--t3)' }}>x</span>
                                   <span className="num" style={{ color: 'var(--t4)', fontSize: 10, marginLeft: 4, whiteSpace: 'nowrap' }}>
                                     gap: {gapLabel || '—'}
                                   </span>

@@ -156,7 +156,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
   const [shift, setShift] = useState('Morning');
   const [runDate, setRunDate] = useState(() => todayStr());
   const [notes, setNotes] = useState('');
-  const [rows, setRows] = useState([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]);
+  const [rows, setRows] = useState([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '', qty_export: '' }]);
   // FBU run-model refinement (S180): production declares the run format; FBU surfaced +
   // defaulted when built units are in stock ("finish these first").
   const [format, setFormat] = useState('CKD');
@@ -175,15 +175,15 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
   const colorsFor = (v) => (cat?.colors?.[product]?.[v]) || [];
 
   const setRow = (i, k, val) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: val } : r));
-  const addRow = () => setRows(rs => [...rs, { variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]);
+  const addRow = () => setRows(rs => [...rs, { variant: '', colour: '', qty_ecomm: '', qty_retail: '', qty_export: '' }]);
   const delRow = (i) => setRows(rs => rs.length > 1 ? rs.filter((_, j) => j !== i) : rs);
 
   async function submit(force = false) {
     if (!product) { toast('Pick a product', 'error'); return; }
     if (outsourced && !vendorId) { toast('Pick a vendor', 'error'); return; }
     const variantsPayload = rows
-      .map(r => ({ variant: r.variant || null, colour: r.colour || null, qty_ecomm: parseInt(r.qty_ecomm) || 0, qty_retail: parseInt(r.qty_retail) || 0 }))
-      .filter(r => (r.qty_ecomm + r.qty_retail) > 0);
+      .map(r => ({ variant: r.variant || null, colour: r.colour || null, qty_ecomm: parseInt(r.qty_ecomm) || 0, qty_retail: parseInt(r.qty_retail) || 0, qty_export: parseInt(r.qty_export) || 0 }))
+      .filter(r => (r.qty_ecomm + r.qty_retail + r.qty_export) > 0);
     if (!variantsPayload.length) { toast('Add at least one variant with a quantity', 'error'); return; }
     setBusy(true);
     try {
@@ -199,7 +199,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
       if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
       toast(`${r.data.run_no} created — issue it in Garage`, 'success');
       setProduct(''); setVendorId(''); setNotes('');
-      setRows([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]);
+      setRows([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '', qty_export: '' }]);
     } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
@@ -208,7 +208,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
     <Panel title={outsourced ? 'Request Outsourced Run · EXT' : 'Request Fresh Run'} icon={outsourced ? 'truck' : 'factory'} pad={20}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
         <div><span className="eyebrow" style={lblStyle}>Product *</span>
-          <Combobox value={product} onChange={v => { setProduct(v); setRows([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
+          <Combobox value={product} onChange={v => { setProduct(v); setRows([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '', qty_export: '' }]); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
         {outsourced
           ? <div><span className="eyebrow" style={lblStyle}>Vendor *</span>
               <Combobox value={vendorId} onChange={setVendorId} options={vendors.map(v => ({ value: String(v.id), label: v.vendor_name || v.vendor_code || `#${v.id}` }))} placeholder="Select vendor" /></div>
@@ -237,7 +237,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
 
       <span className="eyebrow" style={lblStyle}>Variants</span>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
-        <thead><tr><th style={th}>Variant</th><th style={th}>Colour</th><th style={{ ...th, textAlign: 'right' }}>Ecom</th><th style={{ ...th, textAlign: 'right' }}>Retail</th><th style={th}></th></tr></thead>
+        <thead><tr><th style={th}>Variant</th><th style={th}>Colour</th><th style={{ ...th, textAlign: 'right' }}>Ecom</th><th style={{ ...th, textAlign: 'right' }}>Retail</th><th style={{ ...th, textAlign: 'right' }}>Export</th><th style={th}></th></tr></thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={i}>
@@ -245,6 +245,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
               <td style={{ ...td, minWidth: 150 }}><Combobox value={r.colour} onChange={v => setRow(i, 'colour', v)} options={colorsFor(r.variant).map(c => ({ value: c, label: c }))} placeholder="—" portal /></td>
               <td style={td}><input type="number" min="0" value={r.qty_ecomm} onChange={e => setRow(i, 'qty_ecomm', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
               <td style={td}><input type="number" min="0" value={r.qty_retail} onChange={e => setRow(i, 'qty_retail', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
+              <td style={td}><input type="number" min="0" value={r.qty_export} onChange={e => setRow(i, 'qty_export', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
               <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delRow(i)} style={iconBtn} title="Remove row"><Icon name="x" size={13} /></button></td>
             </tr>
           ))}
@@ -253,7 +254,7 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
       <button onClick={addRow} style={{ ...btnGhost, marginBottom: 18 }}><Icon name="plus" size={14} />Add variant</button>
 
       <CoveragePanel product={product}
-        qty={rows.reduce((s, r) => s + (parseInt(r.qty_ecomm) || 0) + (parseInt(r.qty_retail) || 0), 0)}
+        qty={rows.reduce((s, r) => s + (parseInt(r.qty_ecomm) || 0) + (parseInt(r.qty_retail) || 0) + (parseInt(r.qty_export) || 0), 0)}
         session={session} />
 
       <div><span className="eyebrow" style={lblStyle}>Notes · optional</span><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, resize: 'vertical' }} /></div>

@@ -171,8 +171,9 @@ export default function IssueQueuePage() {
         const variantStr = (run.variants || []).map((v) => {
           const e    = v.qty_ecomm || 0;
           const r    = v.qty_retail || 0;
+          const x    = v.qty_export || 0;
           const name = v.variant || 'Common';
-          if (e > 0 || r > 0) return `${name} E:${e} R:${r}`;
+          if (e > 0 || r > 0 || x > 0) return `${name} E:${e} R:${r}${x > 0 ? ` X:${x}` : ''}`;
           return `${name} ×${v.qty}`;
         }).join(', ');
         const vendorName   = isOutsourced && run.vendor ? run.vendor.vendor_name : null;
@@ -1441,9 +1442,9 @@ function DetailBody({ item, materialCache, pickedMap }) {
               <span style={{ color: 'var(--t3)', margin: '0 4px' }}>·</span>
               <span>{(wo.variant || 'Common')}{wo.colour ? ' ' + wo.colour : ''}</span>
               <span style={{ color: '#7b93ff', marginLeft: 6 }}>{wo.qty} units</span>
-              {(wo.qty_ecomm > 0 || wo.qty_retail > 0) && (
+              {(wo.qty_ecomm > 0 || wo.qty_retail > 0 || wo.qty_export > 0) && (
                 <span style={{ color: 'var(--t3)', fontSize: 10, marginLeft: 5, fontFamily: 'var(--mono)' }}>
-                  E:{wo.qty_ecomm || 0} R:{wo.qty_retail || 0}
+                  E:{wo.qty_ecomm || 0} R:{wo.qty_retail || 0}{wo.qty_export > 0 ? ` X:${wo.qty_export}` : ''}
                 </span>
               )}
             </div>
