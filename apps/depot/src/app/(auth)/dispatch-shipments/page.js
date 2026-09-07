@@ -98,10 +98,11 @@ function CType({ t }) {
   const tt = String(t).toLowerCase();
   const ecom = tt === 'ecom';
   const retail = tt === 'retail';
+  const exp = tt === 'export';
   return (
     <span className="num" style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
-      color: ecom ? 'var(--blue-bright)' : retail ? 'var(--yellow)' : 'var(--t3)',
-      background: ecom ? 'var(--info-bg)' : retail ? 'var(--brand-bg)' : 'var(--surface-2)',
+      color: ecom ? 'var(--blue-bright)' : retail ? 'var(--yellow)' : exp ? 'var(--green)' : 'var(--t3)',
+      background: ecom ? 'var(--info-bg)' : retail ? 'var(--brand-bg)' : exp ? 'var(--ok-bg)' : 'var(--surface-2)',
       borderRadius: 3, padding: '0 4px', whiteSpace: 'nowrap' }}>{t}</span>
   );
 }

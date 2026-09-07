@@ -20,8 +20,8 @@ import {
 // ── Helpers ───────────────────────────────────────────────────
 function TypeChip({ type }) {
   const t = (type || 'other').toLowerCase();
-  const fg = t === 'ecom' ? 'var(--blue-bright)' : t === 'retail' ? 'var(--yellow)' : 'var(--t3)';
-  const bg = t === 'ecom' ? 'var(--info-bg)' : t === 'retail' ? 'var(--brand-bg)' : 'var(--surface-2)';
+  const fg = t === 'ecom' ? 'var(--blue-bright)' : t === 'retail' ? 'var(--yellow)' : t === 'export' ? 'var(--green)' : 'var(--t3)';
+  const bg = t === 'ecom' ? 'var(--info-bg)' : t === 'retail' ? 'var(--brand-bg)' : t === 'export' ? 'var(--ok-bg)' : 'var(--surface-2)';
   return (
     <span className="num" style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
       color: fg, background: bg, borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
@@ -176,6 +176,7 @@ export default function DispatchChannelsPage() {
               <select style={{ ...selectStyle, width: '100%' }} value={type} onChange={e => setType(e.target.value)}>
                 <option value="ecom">Ecom</option>
                 <option value="retail">Retail</option>
+                <option value="export">Export</option>
                 <option value="other">Other</option>
               </select>
             </div>

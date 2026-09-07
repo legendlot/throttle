@@ -42,7 +42,7 @@ const numTh = { ...thStyle, textAlign: 'right' };
 
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
-  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
+  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : t === 'export' ? 'success' : 'neutral';
   return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
 }
 
