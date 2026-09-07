@@ -187,10 +187,10 @@ const TONES = {
   info: { fg: 'var(--info-fg)', bg: 'var(--info-bg)',  bd: 'var(--info-bd)' },
   mute: { fg: 'var(--t2)',      bg: 'var(--surface-3)', bd: 'var(--border-2)' },
 };
-export function ToneBadge({ tone = 'mute', children, style }) {
+export function ToneBadge({ tone = 'mute', children, style, title }) {
   const t = TONES[tone] || TONES.mute;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', fontFamily: 'var(--f-display)',
+    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', fontFamily: 'var(--f-display)',
       fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
       color: t.fg, background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 5, padding: '2px 8px',
       whiteSpace: 'nowrap', ...style }}>{children}</span>

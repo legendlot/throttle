@@ -126,6 +126,12 @@ export default function BotDrawer({ nodeId, config, onChange, onDelete, readOnly
             <select className="f-inp" value={c.bot_id || ''} disabled={readOnly} onChange={(e) => set({ bot_id: e.target.value })}>
               <option value="">— pick a shared flow —</option>
               {sharedBots.map((b) => <option key={b.id} value={b.id}>{b.name} (v{b.active_version})</option>)}
+              {/* c.bot_id may point at a shared flow that is no longer active/published —
+                  render it so the broken state is visible instead of silently showing "pick a
+                  shared flow" over a step that already has a target. */}
+              {c.bot_id && !sharedBots.some((b) => b.id === c.bot_id) && (
+                <option value={c.bot_id}>Unavailable flow ({c.bot_id.slice(0, 8)}…)</option>
+              )}
             </select>
           </Field>
           <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>Jumps into the shared flow. When it ends, the customer continues on this step&rsquo;s <b>Next</b>.</div>

@@ -37,7 +37,7 @@ function TestPanel({ botId, definition, session }) {
   // and a `subflow_return` effect pops it and resumes the parent at `return_step`.
   // Refs, not state, because a single click can chain 3 turns before React re-renders.
   const stateRef = useRef(null);
-  const frameRef = useRef(null);   // { definition, name, return_step, parentState } | null
+  const frameRef = useRef(null);   // { definition, name, return_step } | null
 
   const turn = useCallback(async (input) => {
     setBusy(true);
@@ -66,17 +66,25 @@ function TestPanel({ botId, definition, session }) {
           const shared = g?.bot;
           if (!shared?.draft_definition) lines.push({ who: 'sys', text: '→ shared flow not found — cannot follow it in the test panel' });
           else {
-            lines.push({ who: 'sys', text: `→ enters shared flow "${shared.name}"` });
-            frameRef.current = { definition: shared.draft_definition, name: shared.name, return_step: enter.return_step, parentState: out.state };
-            stateRef.current = { current_step: null, status: 'active', context: out.state.context || {} };
+            // The panel tests the shared bot's DRAFT — the runtime jumps into its ACTIVE
+            // (published) version. Said here so a draft-only difference is never mistaken
+            // for a bug.
+            lines.push({ who: 'sys', text: `→ enters shared flow "${shared.name}" (draft — the live bot runs its published version)` });
+            frameRef.current = { definition: shared.draft_definition, name: shared.name, return_step: enter.return_step };
+            // The engine's `end` step only emits `subflow_return` when `state.frame` is set
+            // (bot-engine.js walk()'s `end` branch) — bot-turn.js installs it before the
+            // `open` turn against the shared definition (bot-turn.js:69). Without it the
+            // shared flow's `end` just sets `ended` and the panel hangs there.
+            stateRef.current = { current_step: null, status: 'active', context: out.state.context || {}, frame: { bot_id: enter.bot_id, version: shared.active_version || null, return_step: enter.return_step } };
             setState(stateRef.current);
             curInput = { kind: 'open' };
           }
         } else if (back && frame) {
           lines.push({ who: 'sys', text: '→ returns' });
           frameRef.current = null;
-          stateRef.current = { ...(frame.parentState || {}), status: 'active', context: out.state.context || {} };
-          setState(stateRef.current);
+          // `out.state` is already the engine's returned state with `frame` cleared
+          // (bot-engine.js's `end` branch does `state.frame = null` itself) — resume
+          // against the PARENT definition using it as-is.
           curInput = { kind: 'resume', from: back.return_step || frame.return_step };
         }
         setTranscript((t) => [...t, ...lines]);
@@ -171,7 +179,7 @@ export default function BotBuilder() {
   useEffect(() => { if (session) load(); }, [session, load]);
 
   function open(b) {
-    setBot(b); setName(b.name); setPublishErrors(null); setSelected(null);
+    setBot(b); setName(b.name); setPublishErrors(null); setSelected(null); setSettings(false);
     const g = botNodes(b);
     setNodes(g.nodes); setEdges(g.edges);
     setView('form');
@@ -202,7 +210,9 @@ export default function BotBuilder() {
       const r = await workerFetch('saveBot', { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {}, channel: bot.channel || 'web' }, session);
       const saved = r?.data?.bot || r?.bot;
       if (!saved) { showToast(`Save failed: ${r?.error || 'unknown'}`, 'error'); return; }
-      setBot((b) => ({ ...b, ...saved }));
+      // The wire definition drops incomplete keyword rows (filtered above); a half-typed
+      // row must survive locally so Save draft never erases what the author is mid-typing.
+      setBot((b) => ({ ...b, ...saved, draft_definition: { ...saved.draft_definition, keywords: b.draft_definition?.keywords || saved.draft_definition?.keywords || [] } }));
       showToast('Draft saved');
       load();
     } finally { setBusy(false); }
@@ -229,9 +239,11 @@ export default function BotBuilder() {
     } finally { setBusy(false); }
   }
 
-  // Only a PUBLISHED shared flow can be jumped into — an unpublished one has no active
-  // version for the engine to run, and picking it would only earn `subflow_target_invalid`.
-  const sharedBots = rows.filter((r) => r.channel === 'shared' && r.active_version);
+  // Only a PUBLISHED, ACTIVE shared flow can be jumped into — an unpublished one has no
+  // active version for the engine to run, and a paused one is what the worker's publish
+  // lint and the runtime loader both require too. Picking anything else would only earn
+  // `subflow_target_invalid`.
+  const sharedBots = rows.filter((r) => r.channel === 'shared' && r.active_version && r.status === 'active');
   const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
   const updateSelectedConfig = (cfg) => setNodes((ns) => ns.map((n) => (n.id === selected ? { ...n, data: { ...n.data, config: cfg } } : n)));
   const deleteSelected = () => {
@@ -260,7 +272,7 @@ export default function BotBuilder() {
                     <td className="mono">
                       {r.channel}
                       {r.channel === 'whatsapp' && r.config?.mode && (
-                        <> <Badge label={r.config.mode} tone={r.config.mode === 'public' ? 'green' : 'yellow'} /></>
+                        <> <Badge label={r.config.mode} tone={r.config.mode === 'public' ? 'orange' : 'green'} /></>
                       )}
                     </td>
                     <td className="mono">{r.active_version ? `v${r.active_version}` : '—'}</td>
