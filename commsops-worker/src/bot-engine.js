@@ -78,7 +78,9 @@ function walk(def, state, stepId, replies, effects) {
       // handoff said nothing and the customer just saw the chat stop). Authorable copy,
       // honest default. Business-hours-aware wording is a csops-side residual.
       replies.push({ text: step.text || HANDOFF_DEFAULT, step_id: id });
-      state.status = 'handed_off'; effects.push({ type: 'handoff' }); return { state, replies, effects };
+      // step_id on the EFFECT too: bot-turn writes the handoff step row from it, and the turn's
+      // final current_step is not always the step that handed off.
+      state.status = 'handed_off'; effects.push({ type: 'handoff', step_id: id }); return { state, replies, effects };
     }
     if (step.type === 'subflow') {
       // Depth 1 only: the route swaps the definition and re-enters. The engine stays pure —
@@ -143,7 +145,7 @@ function advance(def, prev, input) {
       // No fallback wired (the pre-S355 web bot shape): walk(null) would emit NOTHING and leave
       // the customer staring at silence. Hand off instead — never a silent dead end.
       replies.push({ text: HANDOFF_DEFAULT, step_id: state.current_step });
-      state.status = 'handed_off'; effects.push({ type: 'handoff' });
+      state.status = 'handed_off'; effects.push({ type: 'handoff', step_id: state.current_step });
       return { state, replies, effects };
     }
     replies.push({ text: step.field === 'order_number'
@@ -163,7 +165,16 @@ function advance(def, prev, input) {
     }
     if (!handle) {
       const misses = (state.context.menu_misses || 0) + 1;
-      if (misses >= MAX_MENU_MISSES) return walk(def, state, G.resolveTarget(step, 'fallback'), replies, effects);
+      if (misses >= MAX_MENU_MISSES) {
+        const fb = G.resolveTarget(step, 'fallback');
+        if (fb && def.steps[fb]) return walk(def, state, fb, replies, effects);
+        // Unwired fallback (lint flags it, but a pre-lint definition can be live): walk(null)
+        // emits NOTHING and the customer is left at silence. Hand off, exactly as the collect
+        // miss-cap does — never a silent dead end.
+        replies.push({ text: HANDOFF_DEFAULT, step_id: state.current_step });
+        state.status = 'handed_off'; effects.push({ type: 'handoff', step_id: state.current_step });
+        return { state, replies, effects };
+      }
       state.context.menu_misses = misses;
       replies.push({ text: 'Sorry, I did not catch that — please pick an option below.', step_id: state.current_step });
       replies.push({ ...renderStep(step), step_id: state.current_step });
@@ -180,7 +191,7 @@ function advance(def, prev, input) {
       // The cap is a dead end for the BOT, not for the customer: hand off, never send them away
       // to an email address (spec §3.5).
       replies.push({ text: step.text_exhausted || HANDOFF_DEFAULT, step_id: state.current_step });
-      state.status = 'handed_off'; effects.push({ type: 'handoff' });
+      state.status = 'handed_off'; effects.push({ type: 'handoff', step_id: state.current_step });
       return { state, replies, effects };
     }
     return walk(def, state, G.resolveTarget(step, 'not_found'), replies, effects);
@@ -229,7 +240,10 @@ function validateBotDef(def, opts = {}) {
       if (opts.isShared) errs.push({ code: 'shared_contains_subflow', stepId: id });
       if (opts.sharedIds && !(step.bot_id && opts.sharedIds.has(step.bot_id))) errs.push({ code: 'subflow_target_invalid', stepId: id });
     }
-    if (opts.channel === 'whatsapp') {
+    // A SHARED flow is rendered by whichever parent calls it — including the WhatsApp bot — so it
+    // must clear Meta's caps too. Linting it as web-only let an 11-row list publish and then fail
+    // at Meta with a 400 the customer never sees (spec §5.4).
+    if (opts.channel === 'whatsapp' || opts.isShared) {
       if (step.type === 'menu') {
         const btns = step.buttons || [];
         if (step.style === 'list') {

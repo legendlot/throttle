@@ -83,7 +83,7 @@ async function executeTurn(env, session, def, input, deps = {}) {
         pushReplies(out.replies); reentered = true;
       } else if (e.type === 'handoff') {
         handoff = true;
-        stepRows.push({ session_id: session.id, step_id: out.state.current_step, step_type: 'handoff', result: null });
+        stepRows.push({ session_id: session.id, step_id: e.step_id || out.state.current_step, step_type: 'handoff', result: null });
       }
     }
     if (!reentered) break;

@@ -106,8 +106,17 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
 
   let session = await d.findLatestSession(env, m.from, pid);
   const idleMs = session ? Date.now() - new Date(session.last_activity_at || session.started_at).getTime() : 0;
-  if (session && session.status === 'handed_off' && idleMs < IDLE_EXPIRE_MS) return null;      // 8. sticky handoff: a human is owed
-  if (session && session.status !== 'active') session = null;                                    // ended / stale handed_off: start fresh
+  // 8. STICKY HANDOFF — and it is NOT on the idle clock. A customer who asked for a human is owed
+  // one however long the queue takes; expiring the handoff after 6h let the bot re-greet somebody
+  // still waiting AND re-hid the thread behind bot_active. The only thing that ends it is a human
+  // actually replying (condition 5's read): after that reply, condition 5 governs — inside 12h the
+  // bot is silent anyway, outside it a fresh session is the right answer.
+  if (session && session.status === 'handed_off') {
+    const humanAfter = lo.found && lo.last_outbound_at && new Date(lo.last_outbound_at) > new Date(session.last_activity_at);
+    if (!humanAfter) return null;
+    session = null;
+  }
+  if (session && session.status !== 'active') session = null;                                    // ended: start fresh
   if (session && idleMs > IDLE_EXPIRE_MS) {
     const ex = E.advance({ entry: null, steps: {} }, session, { kind: 'expire' });
     await d.persist(env, session, { status: ex.state.status, ended_at: new Date().toISOString() }, [{ session_id: session.id, step_id: session.current_step || 'entry', step_type: 'expire', result: null }]);
@@ -132,7 +141,14 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   // The duplicate branch still reports the LIVE session state: csops drives the thread rail off it
   // even when it skips the transcript rows (a redelivered first message must not leave bot_active false).
   const claimed = await d.claimTurn(env, { session_id: session.id, step_id: session.current_step || 'entry', step_type: 'customer_message', result: { text, type: m.type || 'text', button_id: m.button_id || null }, provider_message_id: m.provider_message_id || null });
-  if (!claimed) return { handled: true, duplicate: true, session_id: session.id, session_status: session.status, replies: [], handoff: session.status === 'handed_off' };
+  if (!claimed) {
+    // Re-read: the concurrent winner may have handed off between our findLatestSession and here,
+    // and the stale pre-claim status would tell csops to keep bot_active=true on a thread that is
+    // now waiting for a human. Read failure falls back to what we already have.
+    const fresh = await d.findLatestSession(env, m.from, pid).catch(() => null);
+    const st = (fresh && fresh.id === session.id ? fresh.status : session.status);
+    return { handled: true, duplicate: true, session_id: session.id, session_status: st, replies: [], handoff: st === 'handed_off' };
+  }
   const input = opened ? { kind: 'open', text }
     : m.button_id ? { kind: 'button', buttonId: stripBotId(m.button_id), text }
     : { kind: 'text', text };
@@ -141,7 +157,9 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   const sendRows = [];
   for (const [i, r] of out.replies.entries()) {
     const res = await d.send(env, toSendOpts(session, m.provider_message_id || 'nopmid', i, r.step_id || out.state.current_step || 'entry', r, m.from, pid)).catch((e) => ({ status: 'failed', reason: String(e?.message || e) }));
-    if (res.status !== 'sent' && res.status !== 'deduped') sendRows.push({ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: 'send_failed', result: { status: res.status, reason: res.reason || null } });
+    // Attribute the failure to the step that EMITTED this reply, not the turn's final
+    // current_step (after a sub-flow return they differ) — same rule as bot-turn's bot_message rows.
+    if (res.status !== 'sent' && res.status !== 'deduped') sendRows.push({ session_id: session.id, step_id: r.step_id || out.state.current_step || 'entry', step_type: 'send_failed', result: { status: res.status, reason: res.reason || null } });
   }
   await d.persist(env, session, { current_step: out.state.current_step, status: out.state.status, context: out.state.context,
     sub_bot_id: t.frame ? t.frame.bot_id : null, sub_version: t.frame ? t.frame.version : null, return_step: t.frame ? t.frame.return_step : null,

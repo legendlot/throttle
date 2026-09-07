@@ -42,6 +42,9 @@ async function loadSession(env, id) {
 const IDLE_EXPIRE_MS = 6 * 3600 * 1000;
 function isResumable(s) {
   if (!s || (s.status !== 'active' && s.status !== 'handed_off')) return false;
+  // WEB only: a session id is a bare uuid on a public route, and a WhatsApp session resumed here
+  // would replay that customer's transcript into a browser and then take turns off-channel.
+  if (s.channel !== 'web') return false;
   return Date.now() - new Date(s.last_activity_at || s.started_at || 0).getTime() < IDLE_EXPIRE_MS;
 }
 // Only what /web/poll already exposes plus the bot's own lines — NEVER customer_message rows.
@@ -70,13 +73,15 @@ async function persist(env, session, out, stepRows, frame) {
 // ⚠️ identity comes from the POST-turn state, never the stale session row: the thread is
 // created on turn 1 (before collect has run), so if this sent session.context the phone
 // collected THIS turn would never reach the inbox thread — csops PATCHes it in on arrival.
-async function forwardToCsops(env, session, identity, inboundText, replies, handoff) {
+// `sessionStatus` (S355 fix round 2) drives csops's §5.3 rail on WEB threads, which had none:
+// a mid-flow web session left the thread in Awaiting/unread, and a self-served one forever.
+async function forwardToCsops(env, session, identity, inboundText, replies, handoff, sessionStatus) {
   if (!env.CSOPS || !env.CSOPS_WA_FORWARD_TOKEN) return;
   const messages = [];
   if (inboundText) messages.push({ direction: 'inbound', text: inboundText });
   for (const r of replies) messages.push({ direction: 'outbound', text: r.text + (r.buttons ? '\n' + r.buttons.map((b, i) => `${i + 1}. ${b.label}`).join('\n') : '') });
   const init = { method: 'POST', headers: { Authorization: `Bearer ${env.CSOPS_WA_FORWARD_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: session.id, identity: identity || {}, messages, handoff: !!handoff }) };
+    body: JSON.stringify({ session_id: session.id, identity: identity || {}, messages, handoff: !!handoff, session_status: sessionStatus || null }) };
   await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-web', init)).catch((e) => console.log('web_forward_error', String(e?.message || e)));
 }
 
@@ -104,7 +109,7 @@ async function runTurn(env, session, def, input, inboundText) {
   // that noise (open-only "Web visitor" threads with no customer line). The constant greeting
   // is all the transcript loses; per-IP limiting on /web/* stays a WAF-config residual.
   if (inboundText || t.handoff)
-    await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, t.handoff);
+    await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, t.handoff, out.state.status);
   return out;
 }
 

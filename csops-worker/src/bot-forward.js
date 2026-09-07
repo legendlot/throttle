@@ -23,12 +23,30 @@ export function botOutboundRows({ threadId, wabaPhoneNumberId, replies, now, tic
     };
   });
 }
+// The rail has NO expiry writer: `bot_active` only flips back on the customer's NEXT inbound
+// (bot-wa.js's 6h idle expire), on a human outbound, or on a manual agent action. An abandoned
+// session therefore holds the thread out of Awaiting/unread/auto-assign FOREVER — and a web
+// session has no inbound-driven expiry at all. So every READER treats the rail as live only
+// while the customer was here inside the same 6h window the session itself uses.
+export const BOT_RAIL_TTL_MS = 6 * 3600 * 1000;
+export function railLive(thread, nowMs) {
+  if (!thread || !thread.bot_active) return false;
+  const t = Date.parse(thread.last_inbound_at || '');
+  if (!Number.isFinite(t)) return false;   // no inbound ever recorded: nothing to keep alive
+  return t > (nowMs ?? Date.now()) - BOT_RAIL_TTL_MS;
+}
 export function botThreadPatch({ session_status, handoff, thread, now }) {
   if (handoff || session_status === 'handed_off') {
     const p = { bot_active: false };
     if (thread?.thread_state && thread.thread_state !== 'open') Object.assign(p, { thread_state: 'open', closed_at: null, closed_by_user_id: null, snoozed_until: null, closed_reason: null, closed_note: null });
     return p;
   }
-  if (session_status === 'ended') return { bot_active: false, thread_state: 'closed', closed_at: now, closed_reason: 'bot_resolved', closed_by_user_id: null, snoozed_until: null };
+  // Self-served -> close as bot_resolved, so ~450 abandoned threads/week do not sit in Awaiting.
+  // ⚠️ NOT when an agent owns the thread: the bot must never close somebody's assigned thread out
+  // from under them (they may still be mid-reply). Drop the rail and leave it open for its owner.
+  if (session_status === 'ended') {
+    if (thread?.assigned_agent_id) return { bot_active: false };
+    return { bot_active: false, thread_state: 'closed', closed_at: now, closed_reason: 'bot_resolved', closed_by_user_id: null, snoozed_until: null };
+  }
   return { bot_active: true };
 }

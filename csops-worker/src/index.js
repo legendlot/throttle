@@ -25,7 +25,7 @@ import {
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { partitionBySupport } from './ticket-thread.js';
-import { botOutboundRows, botThreadPatch } from './bot-forward.js';
+import { botOutboundRows, botThreadPatch, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -6774,7 +6774,7 @@ function relayWaKind(type) {
 // the relay_web marker pair.
 async function handleRelayWebForward(b, env) {
   let thread = (await sb(
-    `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone,customer_handle&limit=1`, env
+    `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone,customer_handle,assigned_agent_id&limit=1`, env
   )).data?.[0];
   // Identity lands AFTER the thread exists (collect runs on turn 2) — patch it in the
   // first time it arrives, else every web thread shows no phone forever.
@@ -6822,6 +6822,14 @@ async function handleRelayWebForward(b, env) {
   }
   const threadPatch = { last_message_at: now };
   if (b.messages.some((m) => m.direction === 'inbound')) threadPatch.last_inbound_at = now;
+  // S355 — the web thread gets the SAME §5.3 rail as WhatsApp (it had none: every web bot thread
+  // sat in Awaiting/unread while the bot was mid-conversation, and a self-served one forever).
+  // Merged into this one PATCH rather than a second round-trip; botThreadPatch owns the
+  // handoff re-open, so clearClosedFields is only needed for the handoff-without-status case.
+  Object.assign(threadPatch, botThreadPatch({
+    session_status: b.session_status || (b.handoff ? 'handed_off' : 'active'),
+    handoff: !!b.handoff, thread, now,
+  }));
   // A handoff must surface in the active inbox even if the thread had been closed.
   if (b.handoff && thread.thread_state && thread.thread_state !== 'open') clearClosedFields(threadPatch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
@@ -7919,7 +7927,10 @@ async function retroAssignUnownedThreads(env, perRun = RETRO_ASSIGN_PER_RUN) {
   const cutoff = new Date(Date.now() - RETRO_ASSIGN_MAX_AGE_DAYS * 86400000).toISOString();
   const q = `/rest/v1/cs_wa_threads`
     + `?thread_state=eq.open&assigned_agent_id=is.null`
-    + `&bot_active=is.false`   // S355 — a live bot session owns the thread; do not hand it to an agent
+    // S355 — a LIVE bot session owns the thread; do not hand it to an agent. "Live" is time-boxed:
+    // nothing clears bot_active on an abandoned session, so an untimed check left those threads
+    // permanently unassignable (same 6h window as bot-forward.js railLive).
+    + `&or=(bot_active.is.false,last_inbound_at.lt.${encodeURIComponent(new Date(Date.now() - BOT_RAIL_TTL_MS).toISOString())})`
     + `&channel=in.(${channels.map(encodeURIComponent).join(',')})`
     + `&or=(last_message_at.gte.${encodeURIComponent(cutoff)},`
     + `and(last_message_at.is.null,created_at.gte.${encodeURIComponent(cutoff)}))`
@@ -10391,7 +10402,11 @@ async function getMessagingThreads(params, auth, env) {
   // a plain PostgREST predicate and the list can never disagree with the topbar pill, which reads
   // the same column via cs_messaging_stats. An automated auto-reply does NOT clear it.
   // S355 — and never a thread the bot is currently handling: it is not waiting on a human.
-  if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true&bot_active=is.false`;
+  // The rail is only trusted for BOT_RAIL_TTL_MS after the customer's last inbound: nothing
+  // clears bot_active when a session is simply abandoned, so an untimed check hid the thread
+  // from Awaiting forever (bot-forward.js railLive is the JS twin of this predicate).
+  if (params.get('awaiting') === '1')
+    q += `&awaiting_reply=is.true&or=(bot_active.is.false,last_inbound_at.lt.${encodeURIComponent(new Date(Date.now() - BOT_RAIL_TTL_MS).toISOString())})`;
   // Which LOT number the customer wrote to (Pruthvi 2026-07-31). He asked to "segregate
   // the WhatsApp inbox based on the numbers" so transactional/marketing threads can be
   // cleared in bulk without mixing into support. A FACET, not a separate inbox — Afshaan's
@@ -10457,7 +10472,9 @@ async function getMessagingThreads(params, auth, env) {
       // last_read_at); we AND in the open-state check here (S222, Pruthvi unread indicator).
       // S355 fix round 1 — AND out a live bot session too, matching cs_unread_counts_by_channel's
       // `AND NOT bot_active`: without this the per-row dot and the pill disagreed on a bot thread.
-      unread: !!t.has_unread_inbound && t.thread_state !== 'closed' && !t.bot_active,
+      // The rail is time-boxed the same way everywhere (railLive) — an abandoned session must not
+      // suppress the dot forever.
+      unread: !!t.has_unread_inbound && t.thread_state !== 'closed' && !railLive(t, Date.now()),
       tags: tagsByThread[t.id] || [],
     };
   });

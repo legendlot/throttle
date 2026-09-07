@@ -1086,7 +1086,7 @@ async function handlePost(body, auth, env) {
     }
     case 'setBotMode': {   // pilot|public + allow-list — Afshaan's flip, activate tier ONLY (spec §5.1.3)
       if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
-      const r = await BOTS.setBotMode(env, body.id, body);
+      const r = await BOTS.setBotMode(env, body.id, body, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'testBotTurn': {   // canvas Test panel: draft definition, NO effects executed, no rows written

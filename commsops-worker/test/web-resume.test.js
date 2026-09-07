@@ -11,8 +11,12 @@ assert.deepEqual(BW.resumeHistory(rows), [
   { id: 2, who: 'bot', text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons', agent_name: null },
   { id: 4, who: 'agent', text: 'Hello from Sunitha', buttons: null, style: null, agent_name: 'Sunitha' },
 ]);
-assert.equal(BW.isResumable({ status: 'active', last_activity_at: new Date().toISOString() }), true);
-assert.equal(BW.isResumable({ status: 'active', last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }), false);
-assert.equal(BW.isResumable({ status: 'handed_off', last_activity_at: new Date().toISOString() }), true);   // agent replies still poll
-assert.equal(BW.isResumable({ status: 'ended', last_activity_at: new Date().toISOString() }), false);
+assert.equal(BW.isResumable({ channel: 'web', status: 'active', last_activity_at: new Date().toISOString() }), true);
+assert.equal(BW.isResumable({ channel: 'web', status: 'active', last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }), false);
+assert.equal(BW.isResumable({ channel: 'web', status: 'handed_off', last_activity_at: new Date().toISOString() }), true);   // agent replies still poll
+assert.equal(BW.isResumable({ channel: 'web', status: 'ended', last_activity_at: new Date().toISOString() }), false);
+// Fix round 2 (minor c): /web/session resume takes a bare session uuid on a PUBLIC route — a
+// WhatsApp session must never be resumable there (it would replay that customer's transcript
+// into a browser and then take turns off-channel).
+assert.equal(BW.isResumable({ channel: 'whatsapp', status: 'active', last_activity_at: new Date().toISOString() }), false);
 console.log('web-resume ok');

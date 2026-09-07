@@ -74,6 +74,7 @@ function widgetJs(botId, workerBase) {
       el.onclick = function () { if (!busy) { disableChips(); send({ buttonId: bt.id, text: bt.label }); } };
       wrap.appendChild(el);
     });
+    wrap.setAttribute('data-lotchat-chips', '1');
     msgs.appendChild(wrap); msgs.scrollTop = msgs.scrollHeight;
   }
   function disableChips() {
@@ -89,7 +90,7 @@ function widgetJs(botId, workerBase) {
 
   // Resume redraw (S355) — bot lines with buttons, agent lines with the agent name; NEVER
   // customer_message rows (BW.resumeHistory on the worker side already filters those out).
-  function showHistory(history) {
+  function showHistory(history, sessionStatus) {
     (history || []).forEach(function (h) {
       // No separate agent bubble class in this widget — both render 'bot'-styled.
       bubble(h.text, 'bot', h.who === 'agent' ? (h.agent_name || 'LOT Support') : null);
@@ -97,6 +98,13 @@ function widgetJs(botId, workerBase) {
       if (h.who === 'agent' && h.id) lastAgentId = Math.max(lastAgentId, h.id);
     });
     disableChips();   // historical chips are not live — the composer still works
+    // ...except the LAST menu on a still-ACTIVE session: that one IS the live prompt the visitor
+    // was answering when they navigated away, so a resume must leave it tappable.
+    if (sessionStatus === 'active') {
+      var groups = msgs.querySelectorAll('[data-lotchat-chips]');
+      var last = groups[groups.length - 1];
+      if (last) last.querySelectorAll('button').forEach(function (b) { b.disabled = false; b.style.opacity = ''; b.style.cursor = 'pointer'; });
+    }
   }
 
   function loadSaved() {
@@ -129,7 +137,7 @@ function widgetJs(botId, workerBase) {
       if (!d || d.ok === false) { bubble('Chat is unavailable right now \\u2014 please email support@legendoftoys.com.', 'bot'); return; }
       var dd = d.data || d;
       sessionId = dd.session_id; saveSession(sessionId);
-      if (dd.history) showHistory(dd.history); else showReplies(dd.replies);
+      if (dd.history) showHistory(dd.history, dd.status); else showReplies(dd.replies);
       onStatus(dd.status);
     }).catch(function () { bubble('Chat could not connect.', 'bot'); });
   }

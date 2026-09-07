@@ -51,6 +51,18 @@ assert.equal(x1.state.context.menu_misses, 1);
 let x2 = E.advance(DEF, x1.state, { kind: 'text', text: 'still weather' });
 assert.equal(x2.state.current_step, 'handoff1');
 
+// Fix round 2 (minor a): the same miss cap on a menu whose fallback is NOT wired must hand off,
+// not walk(null) into silence — mirrors the collect miss cap. (Lint flags the unwired fallback,
+// but a definition published before that lint existed is still live.)
+{
+  const NOFB = { entry: 'm', steps: { m: { type: 'menu', text: 'Pick', buttons: [{ id: 'a', label: 'A' }], outcomes: { a: 'e' } }, e: { type: 'end', outcomes: {} } } };
+  const m1 = E.advance(NOFB, { current_step: 'm', status: 'active', context: {} }, { kind: 'text', text: 'huh' });
+  const m2 = E.advance(NOFB, m1.state, { kind: 'text', text: 'huh again' });
+  assert.equal(m2.state.status, 'handed_off');
+  assert.ok(m2.effects.some((e) => e.type === 'handoff' && e.step_id === 'm'));
+  assert.equal(m2.replies[m2.replies.length - 1].text, E.HANDOFF_DEFAULT);
+}
+
 // order number collect -> action emits order_lookup effect and waits
 let o = E.advance(DEF, { current_step: 'collect_order', status: 'active', context: { identity: { phone: '9876543210' } } }, { kind: 'text', text: '#12345' });
 assert.equal(o.state.current_step, 'status1');

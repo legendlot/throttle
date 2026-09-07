@@ -85,6 +85,10 @@ const LIST = { entry: 'm', steps: { m: { type: 'menu', style: 'list', text: 'x',
 const lErrs = E.validateBotDef(LIST, { channel: 'whatsapp' });
 assert.ok(lErrs.some((e) => e.code === 'wa_too_many_rows'));
 assert.ok(lErrs.some((e) => e.code === 'wa_row_description_long'));
+// Fix round 2 (I4): a SHARED flow is rendered by its parent — which may be the WhatsApp bot —
+// so the Meta caps apply to channel='shared' too, not only channel='whatsapp'.
+const shErrs = E.validateBotDef(LIST, { isShared: true, sharedIds: new Set() });
+assert.ok(shErrs.some((e) => e.code === 'wa_too_many_rows'));
 
 // finding 5 coverage: wa_row_title_long
 const LIST_TITLE = { entry: 'm', steps: { m: { type: 'menu', style: 'list', text: 'x',

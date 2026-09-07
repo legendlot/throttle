@@ -57,14 +57,32 @@ const ING = { ok: true, profile_id: 'prof1' };
   ({ deps, calls } = mk({ claimTurn: async () => false, findLatestSession: async () => live }));
   r = await W.maybeHandleInbound({}, M(), ING, deps);
   assert.deepEqual(r, { handled: true, duplicate: true, session_id: 'S1', session_status: 'active', replies: [], handoff: false }); assert.equal(calls.sends.length, 0);
-  // STICKY HANDOFF: a handed-off session under 6h idle keeps the bot silent (the customer is waiting for a human)
+  // Fix round 2 (minor b): the duplicate branch RE-READS the session, so a concurrent winner's
+  // handoff (landed after our first read) is what csops sees — not the stale pre-claim status.
+  {
+    let reads = 0;
+    const { deps: dd } = mk({ claimTurn: async () => false,
+      findLatestSession: async () => (++reads === 1 ? live : { ...live, status: 'handed_off' }) });
+    const dr = await W.maybeHandleInbound({}, M(), ING, dd);
+    assert.equal(dr.session_status, 'handed_off'); assert.equal(dr.handoff, true);
+  }
+  // STICKY HANDOFF: a handed-off session keeps the bot silent (the customer is waiting for a human)
   const handed = { ...live, status: 'handed_off', last_activity_at: new Date(Date.now() - 120e3).toISOString() };
   ({ deps, calls } = mk({ findLatestSession: async () => handed }));
   assert.equal(await W.maybeHandleInbound({}, M({ text: 'hello?', provider_message_id: 'wamid.9' }), ING, deps), null);
   assert.equal(calls.sessions.length, 0);
-  // ...but after 6h idle a handed-off session no longer blocks: a fresh session opens
+  // Fix round 2 (I3): the handoff is NOT on the idle clock. 7h later, with NO human reply, the
+  // customer is still owed one — re-greeting them would also re-hide the thread behind bot_active.
   ({ deps, calls } = mk({ findLatestSession: async () => ({ ...handed, last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }) }));
-  assert.equal((await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.10' }), ING, deps)).session_status, 'active');
+  assert.equal(await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.10' }), ING, deps), null);
+  assert.equal(calls.sessions.length, 0);
+  // ...it ends only when a human has actually replied AFTER the handoff. Condition 5 then governs:
+  // that reply is 13h old, outside the human-active window, so a fresh session may open.
+  ({ deps, calls } = mk({
+    findLatestSession: async () => ({ ...handed, last_activity_at: new Date(Date.now() - 14 * 3600e3).toISOString() }),
+    threadLastOutbound: async () => ({ found: true, last_outbound_at: new Date(Date.now() - 13 * 3600e3).toISOString() }),
+  }));
+  assert.equal((await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.10b' }), ING, deps)).session_status, 'active');
   assert.equal(calls.sessions.length, 1);
   // an ENDED session never blocks — the next "hi" opens a fresh one
   ({ deps, calls } = mk({ findLatestSession: async () => ({ ...live, status: 'ended' }) }));

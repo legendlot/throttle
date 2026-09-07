@@ -31,7 +31,7 @@ function normalizeMode(body) {
   return { mode, pilot_numbers: [...new Set(nums)] };
 }
 
-async function setBotMode(env, id, body) {
+async function setBotMode(env, id, body, userId) {
   const m = normalizeMode(body);
   if (!m) return { ok: false, error: 'invalid_mode' };
   const cur = await getBot(env, id);
@@ -39,7 +39,11 @@ async function setBotMode(env, id, body) {
   const config = { ...(cur.bot.config || {}), ...m };
   const u = await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}`, env, { method: 'PATCH',
     body: JSON.stringify({ config, updated_at: new Date().toISOString() }) });
-  return u.ok && u.data?.[0] ? { ok: true, bot: u.data[0] } : { ok: false, error: 'update_failed' };
+  if (!u.ok || !u.data?.[0]) return { ok: false, error: 'update_failed' };
+  // The pilot->public flip is the single highest-blast-radius change in this system (every
+  // WhatsApp inbound starts meeting a bot) and nothing else records WHO made it or when.
+  console.log('bot_mode_changed', JSON.stringify({ id, mode: m.mode, count: m.pilot_numbers.length, by: userId || null }));
+  return { ok: true, bot: u.data[0] };
 }
 
 async function saveBot(env, { id, name, draft_definition, config, channel }, userId) {
