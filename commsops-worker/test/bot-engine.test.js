@@ -4,10 +4,10 @@ const E = require('../src/bot-engine.js');
 
 const DEF = { entry: 'welcome', steps: {
   welcome: { type: 'message', text: 'Hi!', outcomes: { next: 'ident' } },
-  ident:   { type: 'collect', field: 'phone_or_email', prompt: 'Phone or email?', outcomes: { next: 'menu1' } },
+  ident:   { type: 'collect', field: 'phone_or_email', prompt: 'Phone or email?', outcomes: { next: 'menu1', fallback: 'handoff1' } },
   menu1:   { type: 'menu', text: 'Pick one', buttons: [{ id: 'b_track', label: 'Track my order' }, { id: 'b_agent', label: 'Agent' }],
              outcomes: { b_track: 'collect_order', b_agent: 'handoff1', fallback: 'handoff1' } },
-  collect_order: { type: 'collect', field: 'order_number', prompt: 'Order number?', outcomes: { next: 'status1' } },
+  collect_order: { type: 'collect', field: 'order_number', prompt: 'Order number?', outcomes: { next: 'status1', fallback: 'handoff1' } },
   status1: { type: 'action', kind: 'order_status', outcomes: { found: 'done', not_found: 'handoff1' } },
   handoff1:{ type: 'handoff', outcomes: {} },
   done:    { type: 'end', text: 'Bye!', outcomes: {} },
@@ -18,6 +18,8 @@ const fresh = () => ({ current_step: null, status: 'active', context: {} });
 let r = E.advance(DEF, fresh(), { kind: 'open' });
 assert.equal(r.state.current_step, 'ident');
 assert.deepEqual(r.replies.map(x => x.text), ['Hi!', 'Phone or email?']);
+// S355 (R3): every reply carries the id of the step that emitted it
+assert.deepEqual(r.replies.map(x => x.step_id), ['welcome', 'ident']);
 
 // collect valid phone -> lands on menu with buttons; identity normalized to last-10 digits
 r = E.advance(DEF, r.state, { kind: 'text', text: '+91 98765-43210' });
@@ -68,10 +70,10 @@ assert.deepEqual(f.replies.map(x => x.text), ['Out for delivery', 'Bye!']);
 let nf = E.advance(DEF, { current_step: 'status1', status: 'active', context: { order_attempts: 0 } }, { kind: 'action_result', ok: false });
 assert.equal(nf.state.current_step, 'handoff1');
 
-// the 5th failure hits MAX_ORDER_ATTEMPTS: session ENDS with the support copy, no handoff walk
+// the 5th failure hits MAX_ORDER_ATTEMPTS: S355 HANDS OFF (never an email address), no handoff walk
 let cap = E.advance(DEF, { current_step: 'status1', status: 'active', context: { order_attempts: 4 } }, { kind: 'action_result', ok: false });
-assert.equal(cap.state.status, 'ended');
-assert.match(cap.replies[0].text, /could not verify/i);
+assert.equal(cap.state.status, 'handed_off');
+assert.match(cap.replies[0].text, /support team|human/i);
 
 // handed_off session: bot NEVER replies (agent supremacy)
 let h = E.advance(DEF, { current_step: 'menu1', status: 'handed_off', context: {} }, { kind: 'text', text: 'hello?' });
@@ -94,5 +96,40 @@ const loopDef = { entry: 'a', steps: {
   b: { type: 'message', text: 'B', outcomes: { next: 'a' } } } };
 const lr = E.advance(loopDef, fresh(), { kind: 'open' });
 assert.deepEqual(lr.replies.map(x => x.text), ['A', 'B']);
+
+// ── S355: list-style menu renders rows with descriptions ──
+{
+  const LDEF = { entry: 'm', steps: {
+    m: { type: 'menu', style: 'list', list_button: 'Topics', text: 'Pick a topic',
+         buttons: [{ id: 'b_ship', label: 'Shipping', description: 'How long delivery takes' }, { id: 'b_war', label: 'Warranty' }],
+         outcomes: { b_ship: 'e', b_war: 'e', fallback: 'e' } },
+    e: { type: 'end', outcomes: {} },
+  } };
+  const r = E.advance(LDEF, fresh(), { kind: 'open' });
+  assert.equal(r.replies[0].style, 'list');
+  assert.equal(r.replies[0].list_button, 'Topics');
+  assert.deepEqual(r.replies[0].buttons[0], { id: 'b_ship', label: 'Shipping', description: 'How long delivery takes' });
+  assert.equal(r.replies[0].buttons[1].description, null);
+  // default style is buttons, list_button null
+  const BDEF = { entry: 'm', steps: { m: { type: 'menu', text: 'x', buttons: [{ id: 'a', label: 'A' }], outcomes: { a: 'e', fallback: 'e' } }, e: { type: 'end', outcomes: {} } } };
+  assert.equal(E.advance(BDEF, fresh(), { kind: 'open' }).replies[0].style, 'buttons');
+}
+
+// ── S355: attempt cap hands off (never "email support"); expire; resume ──
+{
+  const s = { current_step: 'status1', status: 'active', context: { order_attempts: E.MAX_ORDER_ATTEMPTS - 1, identity: { phone: '9876543210' }, order_number: '#LOT1' } };
+  const r = E.advance(DEF, s, { kind: 'action_result', ok: false, data: {} });
+  assert.equal(r.state.status, 'handed_off');
+  assert.ok(r.effects.some((e) => e.type === 'handoff'));
+  assert.ok(!/support@/.test(r.replies.map((x) => x.text).join(' ')));
+  const DEF2 = JSON.parse(JSON.stringify(DEF)); DEF2.steps.status1.text_exhausted = 'Passing you to a person.';
+  assert.equal(E.advance(DEF2, s, { kind: 'action_result', ok: false, data: {} }).replies[0].text, 'Passing you to a person.');
+  // expire: ends silently
+  const x = E.advance(DEF, { current_step: 'menu1', status: 'active', context: {} }, { kind: 'expire' });
+  assert.equal(x.state.status, 'ended'); assert.equal(x.replies.length, 0);
+  // resume from a step's next handle
+  const y = E.advance(DEF, { current_step: 'welcome', status: 'active', context: {} }, { kind: 'resume', from: 'welcome' });
+  assert.equal(y.state.current_step, 'ident');
+}
 
 console.log('bot-engine tests OK');
