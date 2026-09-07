@@ -71,7 +71,11 @@ export default function ConversationPanel({ ticket, session }) {
         <Note>
           {data?.reason === 'no_phone_or_email_on_ticket'
             ? 'This ticket has no phone or email, so no conversation can be matched to it.'
-            : 'No conversation on any channel for this customer yet.'}
+            : data?.reason === 'only_other_number'
+              // Support-number rule (S354): the customer's Marketing / Transactional-number
+              // threads are not shown on a ticket. Say so, or a blank panel reads as "no history".
+              ? 'The only conversation linked to this ticket is on a marketing or transactional number, so it is not shown here. Tickets show support-number conversations only.'
+              : 'No conversation on any channel for this customer yet.'}
         </Note>
       </Card>
     );

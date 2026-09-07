@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.25.0] - 2026-09-07
+### Changed
+- **Work ticket (conversation panel)** — the panel now shows support-number WhatsApp
+  conversations only; a conversation the same customer had on the marketing or transactional
+  number is left out, since those are almost always a one-line auto-reply pointing the customer
+  to the support line. If the only linked conversation is on a marketing or transactional
+  number, the panel now shows a message explaining why nothing is shown instead of leaving the
+  panel blank.
+
 ## [1.23.1] - 2026-09-04
 ### Changed
 - **Reports** — trend panel: caps are 62 days / 62 weeks / 24 months and a longer range clamps
