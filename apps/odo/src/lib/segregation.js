@@ -25,17 +25,25 @@ export const GST_RATE = 0.18;
 //   qc_upload / Export — zero-rated export sales need an explicit 0% rule here, not a strip.
 export const TAX_AT_INGEST_ADAPTERS = new Set(['shopify', 'snorkel_internal']);
 
-// GST to strip from ONE f_order_rollup row's post-discount, tax-inclusive base. Exact only when
-// the adapter stages it AND the value is sane: 0 < tax ≤ base. A zero on a positive base means
-// "not captured" and a tax above its base is a broken feed — both fall back to the flat strip,
-// never to zero (zero GST overstates net, the dangerous direction; same rule as the QC fallback).
+// GST to strip from ONE f_order_rollup row's post-discount, tax-inclusive base. A row is a
+// sale_date × channel DAY, not an order, so "the tax is present" is not enough — a day where 1 of
+// 500 orders staged its tax has tax_ingest > 0 and would pass a bare `> 0` check, understating
+// GST and OVERSTATING net (the dangerous direction; S355 hostile review). So the staged tax is
+// trusted only when it is a PLAUSIBLE RATE of the base: LOT sells 5% and 18% goods, i.e. between
+// 4.76% and 15.25% of a tax-inclusive base, so the band is [3%, 20%]. Below it = partially
+// captured, above it = a broken feed (Firstcry's tax-on-full-gross shape); both fall back to the
+// flat strip, never to zero (same rule as the QC fallback). A zero-rated Export row would fall to
+// the flat strip too — it needs its own explicit rule when that channel goes live.
+export const INGEST_TAX_RATE_MIN = 0.03;
+export const INGEST_TAX_RATE_MAX = 0.20;
 export function rowGst(r) {
   const base = Number(r.gross || 0) - Number(r.discount || 0);
   const flat = base - base / (1 + GST_RATE);
   if (!TAX_AT_INGEST_ADAPTERS.has(r.adapter_kind)) return flat;
   const raw = r.tax_ingest;
   const t = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
-  return (Number.isFinite(t) && t > 0 && t <= base + 0.5) ? t : flat;
+  if (!Number.isFinite(t) || !(base > 0)) return flat;
+  return (t >= base * INGEST_TAX_RATE_MIN && t <= base * INGEST_TAX_RATE_MAX) ? t : flat;
 }
 
 // Order-grain ladder math over f_order_rollup rows (per sale_date × channel).
