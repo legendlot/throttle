@@ -24,6 +24,7 @@ import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
+import { partitionBySupport, supportVisibleClause } from './ticket-thread.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -5232,6 +5233,17 @@ async function getWaThread(params, auth, env) {
 // may still have a live conversation worth seeing. It is reported as `matched_by:'phone'` /
 // `'email'` so the UI can say "same customer" rather than implying a binding that does not
 // exist — a matched thread is a lead, a linked one is a fact.
+//
+// SUPPORT NUMBER ONLY (S354, 2026-09-07, Pruthvi #bugs 1788772437). On BOTH paths a WhatsApp
+// thread is shown only if it arrived on the Support number (or predates Relay — NULL id); the
+// same customer's Marketing / Transactional-number threads stay out of the ticket. They are
+// nearly all the one-line "wrong number" redirect (maybeWrongNumberRedirect), and because
+// relayWaIngestInbound links that redirect row to the customer's open ticket by phone, the
+// panel had been opening on the redirect instead of the real conversation — measured
+// 2026-09-07: 1,541 of the 2,198 linked tickets in 30 days carried a non-support thread, and
+// on 795 it was the ONLY linked thread. Those 795 now fall through to the fallback and, if
+// nothing is there, report `hidden_other_number` so the panel can say WHY it is blank rather
+// than "no conversation on any channel". Rule + tests → ticket-thread.js.
 async function getTicketThread(params, auth, env) {
   const g = require('cs_ticket_view', auth); if (g) return g;
   const ticket_id = params.get('ticket_id');
@@ -5244,7 +5256,20 @@ async function getTicketThread(params, auth, env) {
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
 
-  const empty = (reason) => ok({ threads: [], thread: null, messages: [], matched_by: null, reason });
+  // Resolve the Support number the same way startWaConversation does — its phone_number_id
+  // changes on every WABA migration, so it is never a constant. Exactly one active utility
+  // sender is expected; anything else fails loudly rather than guessing which number is
+  // "support" and silently hiding the wrong conversations.
+  const sRes = await sb(
+    '/rest/v1/sender_identities?channel=eq.whatsapp&purpose=eq.utility&status=eq.active&select=metadata',
+    env, { headers: { 'Accept-Profile': 'comms' } });
+  const senders = sRes.data || [];
+  const supportPid = senders.length === 1 ? senders[0].metadata?.phone_number_id : null;
+  if (!supportPid)
+    return err(`Cannot resolve the support WhatsApp number — found ${senders.length} active utility senders, expected exactly 1`, 500);
+
+  let hidden_other_number = 0;
+  const empty = (reason) => ok({ threads: [], thread: null, messages: [], matched_by: null, reason, hidden_other_number });
 
   // ① The link. Paged rather than `limit=1` because a ticket can legitimately be bound to more
   // than one conversation (a WhatsApp thread and a later email, say) and the agent should see
@@ -5259,14 +5284,19 @@ async function getTicketThread(params, auth, env) {
     const r = await sb(
       `/rest/v1/cs_wa_threads?id=in.(${linkedIds.map(encodeURIComponent).join(',')})`
       + `&select=*&order=last_message_at.desc.nullslast&limit=20`, env);
-    threads = r.data || [];
-    matched_by = 'link';
+    // Partition in JS rather than in the query so the hidden count is exact and the rule is the
+    // tested one — the list is capped at 20 either way.
+    const { visible, hidden } = partitionBySupport(r.data || [], supportPid);
+    hidden_other_number = hidden.length;
+    threads = visible;
+    if (threads.length) matched_by = 'link';
   }
 
   // ② Fallback — same customer, no binding. Phone covers WhatsApp; email threads carry the
   // address in `external_user_id` (there is no customer_email on cs_wa_threads — see the
-  // db-schema note). Deliberately NOT filtered on waba_phone_number_id: that filter is the
-  // whole bug this handler exists to fix.
+  // db-schema note). Filtered by the SAME support-number rule (`supportVisibleClause`), which is
+  // deliberately NOT the old `waba_phone_number_id=is.null` placeholder: that hid every Relay
+  // thread, this one hides only the other numbers' threads.
   if (!threads.length) {
     // ⚠️ Values are DOUBLE-QUOTED inside or=(). An E.164 phone starts with `+`, which a query
     // string decodes to a SPACE, and an email is full of dots — both would be mis-parsed bare.
@@ -5282,9 +5312,10 @@ async function getTicketThread(params, auth, env) {
     // so `is.false` cannot silently drop rows here.
     const r = await sb(
       `/rest/v1/cs_wa_threads?or=(${or.join(',')})&ignition_connect=is.false`
+      + `&${supportVisibleClause(supportPid)}`
       + `&select=*&order=last_message_at.desc.nullslast&limit=5`, env);
     threads = r.data || [];
-    if (!threads.length) return empty('no_conversation_yet');
+    if (!threads.length) return empty(hidden_other_number ? 'only_other_number' : 'no_conversation_yet');
     matched_by = threads[0].channel === 'email' ? 'email' : 'phone';
   }
 
@@ -5302,6 +5333,7 @@ async function getTicketThread(params, auth, env) {
     messages: msgsRes.data || [],
     matched_by,
     within_customer_window: withinCustomerWindow(primary),
+    hidden_other_number,
   });
 }
 
