@@ -24,7 +24,7 @@ import {
   reconcileExotelCalls, settleExotelCalls, backfillExotelCalls,
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
-import { partitionBySupport, supportVisibleClause } from './ticket-thread.js';
+import { partitionBySupport } from './ticket-thread.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -5260,16 +5260,26 @@ async function getTicketThread(params, auth, env) {
   // changes on every WABA migration, so it is never a constant. Exactly one active utility
   // sender is expected; anything else fails loudly rather than guessing which number is
   // "support" and silently hiding the wrong conversations.
+  // Resolve the Support number the same way startWaConversation does — its phone_number_id
+  // changes on every WABA migration, so it is never a constant. Exactly one active utility
+  // sender is expected. ⚠️ If it is NOT exactly one (a migration in flight briefly holds two,
+  // or the registry read fails), this READ handler DEGRADES to the pre-S354 unfiltered panel
+  // with `support_filter:'unresolved'` — it must never 500 every ticket in Pitstop over a
+  // registry blip. The SEND paths (startWaConversation, the auto-reply) fail closed instead,
+  // and that asymmetry is deliberate: showing an extra conversation is harmless, messaging a
+  // customer from the wrong number is not. (S354 hostile review, finding 1.)
   const sRes = await sb(
     '/rest/v1/sender_identities?channel=eq.whatsapp&purpose=eq.utility&status=eq.active&select=metadata',
     env, { headers: { 'Accept-Profile': 'comms' } });
-  const senders = sRes.data || [];
-  const supportPid = senders.length === 1 ? senders[0].metadata?.phone_number_id : null;
-  if (!supportPid)
-    return err(`Cannot resolve the support WhatsApp number — found ${senders.length} active utility senders, expected exactly 1`, 500);
+  const senders = sRes.ok && Array.isArray(sRes.data) ? sRes.data : [];
+  const supportPid = senders.length === 1 ? (senders[0].metadata?.phone_number_id || null) : null;
+  const support_filter = supportPid ? 'applied' : 'unresolved';
+  if (!supportPid) console.error(`[getTicketThread] support number unresolved — ${sRes.ok ? senders.length + ' active utility senders' : 'registry read failed'}; panel unfiltered`);
+  // With no support pid there is nothing to hide — every thread is "visible".
+  const partition = (rows) => supportPid ? partitionBySupport(rows, supportPid) : { visible: rows, hidden: [] };
 
   let hidden_other_number = 0;
-  const empty = (reason) => ok({ threads: [], thread: null, messages: [], matched_by: null, reason, hidden_other_number });
+  const empty = (reason) => ok({ threads: [], thread: null, messages: [], matched_by: null, reason, hidden_other_number, support_filter });
 
   // ① The link. Paged rather than `limit=1` because a ticket can legitimately be bound to more
   // than one conversation (a WhatsApp thread and a later email, say) and the agent should see
@@ -5286,7 +5296,7 @@ async function getTicketThread(params, auth, env) {
       + `&select=*&order=last_message_at.desc.nullslast&limit=20`, env);
     // Partition in JS rather than in the query so the hidden count is exact and the rule is the
     // tested one — the list is capped at 20 either way.
-    const { visible, hidden } = partitionBySupport(r.data || [], supportPid);
+    const { visible, hidden } = partition(r.ok && Array.isArray(r.data) ? r.data : []);
     hidden_other_number = hidden.length;
     threads = visible;
     if (threads.length) matched_by = 'link';
@@ -5310,11 +5320,17 @@ async function getTicketThread(params, auth, env) {
     // Pitstop's hands (csops getThreads draws the same line); linking a CS ticket at one would
     // send the agent to a thread they may not act on. Both columns are NOT NULL DEFAULT false,
     // so `is.false` cannot silently drop rows here.
+    // Partitioned in JS, not filtered in the query, so the threads hidden HERE count too —
+    // otherwise a customer whose only conversation is on the marketing number reads as "no
+    // conversation on any channel" (S354 hostile review, finding 4: 116 such tickets in 30d).
+    // limit raised 5 → 20 so hidden rows cannot crowd the visible ones out of the page.
     const r = await sb(
       `/rest/v1/cs_wa_threads?or=(${or.join(',')})&ignition_connect=is.false`
-      + `&${supportVisibleClause(supportPid)}`
-      + `&select=*&order=last_message_at.desc.nullslast&limit=5`, env);
-    threads = r.data || [];
+      + `&select=*&order=last_message_at.desc.nullslast&limit=20`, env);
+    if (!r.ok) console.error('[getTicketThread] fallback thread read failed', r.data);
+    const fb = partition(r.ok && Array.isArray(r.data) ? r.data : []);
+    hidden_other_number += fb.hidden.length;
+    threads = fb.visible.slice(0, 5);
     if (!threads.length) return empty(hidden_other_number ? 'only_other_number' : 'no_conversation_yet');
     matched_by = threads[0].channel === 'email' ? 'email' : 'phone';
   }
@@ -5334,6 +5350,7 @@ async function getTicketThread(params, auth, env) {
     matched_by,
     within_customer_window: withinCustomerWindow(primary),
     hidden_other_number,
+    support_filter,
   });
 }
 
