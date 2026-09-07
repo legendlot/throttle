@@ -25,6 +25,7 @@ import {
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { partitionBySupport } from './ticket-thread.js';
+import { botOutboundRows, botThreadPatch } from './bot-forward.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -6808,6 +6809,11 @@ async function handleRelayWebForward(b, env) {
     thread_id: thread.id, direction: m.direction, kind: 'text', body: m.text,
     is_internal: false, sent_by_user_id: null,
     sent_by_name: m.direction === 'outbound' ? 'Relay (bot)' : null,
+    // S355 — THE automated marker (NOT-NULL template + NULL user): the awaiting_reply trigger
+    // reads it, so a web bot session no longer clears "the customer is waiting". `channel` is
+    // set explicitly because the column defaults to 'whatsapp' on a web thread's rows.
+    template_name: m.direction === 'outbound' ? 'relay_bot' : null,
+    channel: 'web',
     sent_at: m.direction === 'outbound' ? now : null,
   }));
   if (rows.length) {
@@ -6946,6 +6952,30 @@ async function relayWaIngestInbound(m, env) {
   const patch = { last_message_at: ts, last_inbound_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
   if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+
+  // S355 — a bot-handled turn: write the bot's lines (tagged relay_bot), drive the bot_active rail,
+  // and SKIP the redirect + out-of-hours auto-reply (the bot IS this inbound's auto-message).
+  if (m?.bot?.handled) {
+    // Transcript rows only for a first delivery; the RAIL is applied on every delivery — a Meta
+    // redelivery of a message the bot already answered still carries the live session state, and
+    // skipping the patch would leave an active session on an unrailed thread (retro-assign grabs it).
+    if (!m.bot.duplicate) {
+      const rows = botOutboundRows({ threadId: thread.id, wabaPhoneNumberId: m?.phone_number_id || thread.waba_phone_number_id || null, replies: m.bot.replies || [], now: ts });
+      if (rows.length) {
+        const bi = await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
+        if (!bi.ok) console.error('[relay-wa] bot rows insert failed', bi.status, JSON.stringify(bi.data)?.slice(0, 200));
+      }
+    }
+    const tp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread, now: ts });
+    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(tp) }).catch(() => {});
+    // keep the open ticket's history honest — the customer's line still happened
+    if (linkedTicketId) {
+      await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
+        ticket_id: linkedTicketId, field_name: 'wa_message_received', old_value: null, new_value: kind,
+        note: (content || '').slice(0, 140), changed_by_user_id: null, changed_by_name: m?.name || 'Relay (auto)' }) }).catch(() => {});
+    }
+    return { thread_id: thread.id, ticket_id: linkedTicketId, bot: true };
+  }
 
   // S245 — marketing/txn "wrong number" handling: send ONE redirect. Flag-gated and allow-listed
   // inside, so this is a no-op for support and while the switch is off. Wrapped: a failure here
@@ -7871,6 +7901,7 @@ async function retroAssignUnownedThreads(env, perRun = RETRO_ASSIGN_PER_RUN) {
   const cutoff = new Date(Date.now() - RETRO_ASSIGN_MAX_AGE_DAYS * 86400000).toISOString();
   const q = `/rest/v1/cs_wa_threads`
     + `?thread_state=eq.open&assigned_agent_id=is.null`
+    + `&bot_active=is.false`   // S355 — a live bot session owns the thread; do not hand it to an agent
     + `&channel=in.(${channels.map(encodeURIComponent).join(',')})`
     + `&or=(last_message_at.gte.${encodeURIComponent(cutoff)},`
     + `and(last_message_at.is.null,created_at.gte.${encodeURIComponent(cutoff)}))`
@@ -10341,7 +10372,8 @@ async function getMessagingThreads(params, auth, env) {
   // unread filter in Gmail". `awaiting_reply` is a GENERATED column on cs_wa_threads, so this is
   // a plain PostgREST predicate and the list can never disagree with the topbar pill, which reads
   // the same column via cs_messaging_stats. An automated auto-reply does NOT clear it.
-  if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true`;
+  // S355 — and never a thread the bot is currently handling: it is not waiting on a human.
+  if (params.get('awaiting') === '1') q += `&awaiting_reply=is.true&bot_active=is.false`;
   // Which LOT number the customer wrote to (Pruthvi 2026-07-31). He asked to "segregate
   // the WhatsApp inbox based on the numbers" so transactional/marketing threads can be
   // cleared in bulk without mixing into support. A FACET, not a separate inbox — Afshaan's
