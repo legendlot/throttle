@@ -67,7 +67,7 @@ function walk(def, state, stepId, replies, effects) {
     if (!step) break;
     state.current_step = id;
     if (step.type === 'message') { replies.push({ ...renderStep(step), step_id: id }); id = G.resolveTarget(step, 'next'); continue; }
-    if (step.type === 'collect') { replies.push({ text: step.prompt, step_id: id }); return { state, replies, effects }; }
+    if (step.type === 'collect') { state.context.collect_misses = 0; replies.push({ text: step.prompt, step_id: id }); return { state, replies, effects }; }
     if (step.type === 'menu')    { state.context.menu_misses = 0; replies.push({ ...renderStep(step), step_id: id }); return { state, replies, effects }; }
     if (step.type === 'action' && step.kind === 'order_status') {
       effects.push({ type: 'order_lookup', orderNumber: state.context.order_number, identity: state.context.identity || {} });
@@ -107,6 +107,7 @@ function advance(def, prev, input) {
 
   if (input.kind === 'expire') { state.status = 'ended'; return { state, replies, effects }; }
   if (input.kind === 'resume') {
+    state.frame = null;                                    // re-entering the parent: the sub-flow frame is spent
     const from = def.steps[input.from];
     return walk(def, state, from ? G.resolveTarget(from, 'next') : def.entry, replies, effects);
   }
@@ -185,8 +186,10 @@ function advance(def, prev, input) {
     return walk(def, state, G.resolveTarget(step, 'not_found'), replies, effects);
   }
 
-  // Anything else (text at an action/terminal): restate where we are.
-  replies.push({ ...renderStep(step), step_id: state.current_step });
+  // Anything else (text at an action/terminal): restate where we are — unless the current
+  // step has nothing to restate (e.g. a subflow step, which is a wait-for-effect, not text).
+  const restate = renderStep(step);
+  if (restate.text) replies.push({ ...restate, step_id: state.current_step });
   return { state, replies, effects };
 }
 
@@ -235,7 +238,7 @@ function validateBotDef(def, opts = {}) {
           if (btns.some((b) => String(b.label || '').length > WA_BUTTON_LABEL)) errs.push({ code: 'wa_button_label_long', stepId: id });
         }
       }
-      const body = step.text || step.prompt || step.text_exhausted || '';
+      const body = step.text || step.prompt || '';   // text_exhausted has its own check below
       if (String(body).length > WA_BODY) errs.push({ code: 'wa_text_long', stepId: id });
     }
     if (step.type === 'action' && String(step.text_exhausted || '').length > WA_BODY) errs.push({ code: 'text_exhausted_long', stepId: id });

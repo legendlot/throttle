@@ -60,6 +60,35 @@ assert.ok(r.replies.length >= 1 && r.replies[r.replies.length - 1].text.length >
 r = E.advance(DEF, { current_step: 'welcome', status: 'active', context: {} }, { kind: 'text', text: 'human' });
 assert.equal(r.state.current_step, 'welcome'); assert.equal(r.state.context.menu_misses, 1);
 
+// Fix round 1 finding 1: collect_misses must reset on ENTERING a collect via a keyword escape —
+// a miss at collect A, then keyword-escape to collect B, then ONE typo at B must re-prompt
+// (misses 1), not hand off (it would if B inherited A's miss count).
+{
+  const TWO_COLLECTS = { entry: 'a', keywords: [{ match: ['help me'], target: 'b' }], steps: {
+    a: { type: 'collect', field: 'order_number', prompt: 'A?', outcomes: { next: 'e', fallback: 'h' } },
+    b: { type: 'collect', field: 'order_number', prompt: 'B?', outcomes: { next: 'e', fallback: 'h' } },
+    e: { type: 'end', outcomes: {} }, h: { type: 'handoff', outcomes: {} },
+  } };
+  // one prior miss at A (an invalid order number that does NOT match any keyword)
+  let s = E.advance(TWO_COLLECTS, { current_step: 'a', status: 'active', context: {} }, { kind: 'text', text: 'zzz' }).state;
+  assert.equal(s.current_step, 'a'); assert.equal(s.context.collect_misses, 1);
+  // keyword escape from A to collect B (input is invalid for order_number AND matches a keyword)
+  let r = E.advance(TWO_COLLECTS, s, { kind: 'text', text: 'help me please' });
+  assert.equal(r.state.current_step, 'b');
+  assert.equal(r.state.context.collect_misses, 0, 'entering B must reset collect_misses');
+  // one typo at B: must re-prompt (misses 1), NOT hand off
+  r = E.advance(TWO_COLLECTS, r.state, { kind: 'text', text: 'zzz' });
+  assert.equal(r.state.current_step, 'b');
+  assert.equal(r.state.context.collect_misses, 1);
+  assert.equal(r.state.status, 'active');
+}
+
+// finding 5 coverage: keyword_empty lint
+{
+  const kerr2 = E.validateBotDef({ entry: 'e', keywords: [{ match: [], target: 'e' }], steps: { e: { type: 'end', outcomes: {} } } });
+  assert.ok(kerr2.some((e) => e.code === 'keyword_empty'), JSON.stringify(kerr2));
+}
+
 // lint: collect.fallback must be wired
 const errs = E.validateBotDef({ entry: 'c', steps: { c: { type: 'collect', field: 'order_number', outcomes: { next: 'e' } }, e: { type: 'end', outcomes: {} } } });
 assert.ok(errs.some((e) => e.code === 'fallback_unwired' && e.stepId === 'c'), JSON.stringify(errs));
