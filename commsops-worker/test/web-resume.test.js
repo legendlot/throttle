@@ -8,8 +8,8 @@ const rows = [
   { id: 4, step_type: 'agent_reply', result: { text: 'Hello from Sunitha', agent_name: 'Sunitha' } },
 ];
 assert.deepEqual(BW.resumeHistory(rows), [
-  { who: 'bot', text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons', agent_name: null },
-  { who: 'agent', text: 'Hello from Sunitha', buttons: null, style: null, agent_name: 'Sunitha' },
+  { id: 2, who: 'bot', text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons', agent_name: null },
+  { id: 4, who: 'agent', text: 'Hello from Sunitha', buttons: null, style: null, agent_name: 'Sunitha' },
 ]);
 assert.equal(BW.isResumable({ status: 'active', last_activity_at: new Date().toISOString() }), true);
 assert.equal(BW.isResumable({ status: 'active', last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }), false);

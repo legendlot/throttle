@@ -47,7 +47,7 @@ function isResumable(s) {
 // Only what /web/poll already exposes plus the bot's own lines — NEVER customer_message rows.
 function resumeHistory(rows) {
   return (rows || []).filter((r) => r.step_type === 'bot_message' || r.step_type === 'agent_reply').map((r) => ({
-    who: r.step_type === 'agent_reply' ? 'agent' : 'bot', text: r.result?.text ?? '', buttons: r.result?.buttons || null,
+    id: r.id, who: r.step_type === 'agent_reply' ? 'agent' : 'bot', text: r.result?.text ?? '', buttons: r.result?.buttons || null,
     style: r.result?.style || null, agent_name: r.result?.agent_name || null }));
 }
 

@@ -91,9 +91,12 @@ function widgetJs(botId, workerBase) {
   // customer_message rows (BW.resumeHistory on the worker side already filters those out).
   function showHistory(history) {
     (history || []).forEach(function (h) {
-      bubble(h.text, h.who === 'agent' ? 'bot' : 'bot', h.who === 'agent' ? (h.agent_name || 'LOT Support') : null);
+      // No separate agent bubble class in this widget — both render 'bot'-styled.
+      bubble(h.text, 'bot', h.who === 'agent' ? (h.agent_name || 'LOT Support') : null);
       if (h.who === 'bot' && h.buttons && h.buttons.length) renderButtons(h.buttons, h.style);
+      if (h.who === 'agent' && h.id) lastAgentId = Math.max(lastAgentId, h.id);
     });
+    disableChips();   // historical chips are not live — the composer still works
   }
 
   function loadSaved() {
@@ -109,6 +112,7 @@ function widgetJs(botId, workerBase) {
     if (s === 'ended') {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       inp.disabled = true; inp.placeholder = 'Chat over \\u2014 reopen to start again';
+      try { localStorage.removeItem('lot_chat_session'); } catch (e) {}
     }
   }
 

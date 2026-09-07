@@ -3047,10 +3047,11 @@ export default {
         // there, but a visitor mid-session (including one waiting on an agent after a
         // handoff) must still get their transcript back.
         if (b.resume) {
-          const s = await BW.loadSession(env, String(b.resume));
-          if (s && s.bot_id === String(b.botId || '') && BW.isResumable(s)) {
-            const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,result&order=id.desc&limit=20`, env);
-            return withCors(ok({ session_id: s.id, status: s.status, replies: [], history: BW.resumeHistory((h.ok ? h.data : []).reverse()) }));
+          const s = await BW.loadSession(env, String(b.resume)).catch(() => null);
+          if (s && String(s.bot_id).toLowerCase() === String(b.botId || '').toLowerCase() && BW.isResumable(s)) {
+            const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,result&order=id.desc&limit=20`, env)
+              .catch(() => ({ ok: false }));
+            return withCors(ok({ session_id: s.id, status: s.status, replies: [], history: BW.resumeHistory((h.ok && Array.isArray(h.data) ? h.data : []).reverse()) }));
           }
         }
         const bot = (await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(b.botId || '')}&status=eq.active&select=id,active_version,config&limit=1`, env)
