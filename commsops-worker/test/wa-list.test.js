@@ -47,11 +47,14 @@ const realFetch = global.fetch;
       return { ok: true, data: [] };
     };
     _clearSettingsCache();
-    const g = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: false } });
-    assert.equal(g.pass, false); assert.equal(g.reason, 'window_closed');
-    const open = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: true } });
-    assert.equal(open.pass, true);
-    A.sbComms = orig;
+    try {
+      const g = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: false } });
+      assert.equal(g.pass, false); assert.equal(g.reason, 'window_closed');
+      const open = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'list', window_open: true } });
+      assert.equal(open.pass, true);
+    } finally {
+      A.sbComms = orig;
+    }
   });
   console.log(`\n${pass} passed, ${fail} failed`); if (fail) process.exit(1);
 })();

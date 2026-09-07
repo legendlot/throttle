@@ -60,7 +60,8 @@ async function publishBot(env, id, userId) {
   const cur = await getBot(env, id);
   if (!cur.ok) return cur;
   const sh = await A.sbComms('/rest/v1/bots?channel=eq.shared&status=eq.active&active_version=not.is.null&select=id', env);
-  const sharedIds = new Set((sh.ok ? sh.data : []).map((b) => b.id));
+  if (!sh.ok) return { ok: false, error: 'shared_lookup_failed' };
+  const sharedIds = new Set(sh.data.map((b) => b.id));
   const errs = E.validateBotDef(cur.bot.draft_definition, { channel: cur.bot.channel, isShared: cur.bot.channel === 'shared', sharedIds });
   if (errs.length) return { ok: false, error: 'invalid_definition', errors: errs };
   const version = (cur.bot.active_version || 0) + 1;

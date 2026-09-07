@@ -4,11 +4,18 @@
 //   parseStatusWebhook(payload)  → [{provider_message_id, canonical_status, engagement_event, at, reason, cost?, to, phone_number_id}]
 //   parseInbound(payload)        → [{provider_message_id, from, wa_id, name, text, type, media?, ts, phone_number_id}]
 //
-// Two send modes, decided upstream by renderWhatsapp:
-//   template — {mode:'template', template:{name, language, components}} — valid ANY time.
-//   text     — {mode:'text', text} — free-form; valid ONLY inside the 24h customer window.
-//              The adapter refuses text unless rendered.window_open === true (belt-and-braces;
-//              gate.js also blocks it, so a bug in either layer still can't leak a window-closed text).
+// Five send modes, decided upstream by renderWhatsapp, checked in this order:
+//   template    — {mode:'template', template:{name, language, components}} — valid ANY time.
+//   interactive — {mode:'interactive', buttons} — up to 3 reply buttons; valid ONLY inside the
+//                 24h customer window.
+//   media       — {mode:'media', ...} — image/document/etc attachment; window-gated like text.
+//   list        — {mode:'list', button, rows} — up to 10 rows in a single-section list message;
+//                 window-gated, refuses empty `rows`.
+//   text        — {mode:'text', text} or mode absent — free-form; valid ONLY inside the 24h
+//                 customer window.
+// All window-gated modes refuse unless rendered.window_open === true (belt-and-braces;
+// gate.js also blocks it, so a bug in either layer still can't leak a window-closed send).
+// Any other `mode` fails closed with reason 'unknown_render_mode'.
 //
 // Rendered carries the routing bits send.js copies off the sender identity:
 //   rendered.to (E.164, no '+'), rendered.phone_number_id, rendered.window_open.
