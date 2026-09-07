@@ -4,16 +4,47 @@
 // sale; using it for the headline would make recent net lag/wobble as orders trickle in. So the
 // metric derives GST here; the exact settled GST is kept as `gstSettled` for reconciliation only.
 // (Afshaan S166 — "live recent data, settled as a refinement".)
+// ⭐ S355 (2026-09-07) narrowed that to the channels where it is TRUE. Website (Shopify) and
+// GT/MT/Peeko (Snorkel) stage the exact GST per order AT INGEST — no lag to wait out — so the
+// order-grain ladder now uses it there (`rowGst` below) and keeps the flat strip only where the
+// exact figure genuinely lags (Amazon). A flat 18% under-nets every 5% L.O.T Build line
+// (RULE-LOTBUILD-002): GT alone was short ₹6,828 for 1–7 Sep 2026, measured the day this shipped.
 // Exported so a surface needing the ex-GST basis strips at THIS rate rather than restating
 // 0.18 of its own — one rate, one place.
 export const GST_RATE = 0.18;
+
+// Adapters whose `tax_ingest` (f_order_rollup, S355) is the EXACT per-order GST at ingest.
+// Everything else keeps the flat strip, each for a measured reason (2026-09-07):
+//   amazon_spapi — `tax_ingest` is ~0; the exact GST arrives through Finances WEEKS later and is
+//                  only 26% settled at ≤14 days old, so "exact when present" would overstate net
+//                  on every recent day. S166 stands for Amazon.
+//   uniware      — Firstcry stages `discount` at 68–95% of gross while its tax is computed on the
+//                  FULL gross (tax > post-discount base on 124 of 232 rows / 90d), so exact tax
+//                  there makes an already-wrong base worse; Cred would move ~₹230/month. Add
+//                  `uniware` once the Firstcry discount field is understood (backlog [odo]).
+//   qc_upload / Export — zero-rated export sales need an explicit 0% rule here, not a strip.
+export const TAX_AT_INGEST_ADAPTERS = new Set(['shopify', 'snorkel_internal']);
+
+// GST to strip from ONE f_order_rollup row's post-discount, tax-inclusive base. Exact only when
+// the adapter stages it AND the value is sane: 0 < tax ≤ base. A zero on a positive base means
+// "not captured" and a tax above its base is a broken feed — both fall back to the flat strip,
+// never to zero (zero GST overstates net, the dangerous direction; same rule as the QC fallback).
+export function rowGst(r) {
+  const base = Number(r.gross || 0) - Number(r.discount || 0);
+  const flat = base - base / (1 + GST_RATE);
+  if (!TAX_AT_INGEST_ADAPTERS.has(r.adapter_kind)) return flat;
+  const raw = r.tax_ingest;
+  const t = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+  return (Number.isFinite(t) && t > 0 && t <= base + 0.5) ? t : flat;
+}
 
 // Order-grain ladder math over f_order_rollup rows (per sale_date × channel).
 // Single definition shared by /performance and the Channels family pages.
 export function aggOrders(rows) {
   const a = { gross: 0, cancelledValue: 0, discount: 0, tax: 0, orders: 0, cancelledOrders: 0,
-              returnsCount: 0, returnsValue: 0, repl: 0, infl: 0, repair: 0 };
+              returnsCount: 0, returnsValue: 0, repl: 0, infl: 0, repair: 0, gstRows: 0 };
   for (const r of (rows || [])) {
+    a.gstRows += rowGst(r);
     a.gross += Number(r.gross || 0);
     a.cancelledValue += Number(r.cancelled_value || 0);
     a.discount += Number(r.discount || 0);
@@ -33,9 +64,12 @@ export function aggOrders(rows) {
   a.netCancel = a.gross;                            // after cancellations (non-cancelled, pre-discount, tax-incl)
   a.netDisc = a.gross - a.discount;                 // after discounts
   a.netReturns = a.netDisc - a.returnsValue;        // after returns (realized tax-incl revenue)
-  a.gstSettled = a.tax;                             // exact GST from settlement (lags weeks; reconciliation only)
-  a.tax = a.netReturns - a.netReturns / (1 + GST_RATE);  // GST stripped at the standard rate — LIVE, derived from gross
-  a.netExGst = a.netReturns - a.tax;                // = netReturns / 1.18 — NET REVENUE (ex-GST), the metric
+  a.gstSettled = a.tax;                             // exact GST, staged + settlement (Amazon's lags weeks; reconciliation only)
+  // GST rung (S355): per row — exact where the channel stages it at ingest, flat 18% elsewhere
+  // (`rowGst`); returns carry no staged GST, so the returns rung is stripped at the flat rate.
+  // For an all-flat row set this is algebraically the old `netReturns − netReturns/1.18`.
+  a.tax = a.gstRows - (a.returnsValue - a.returnsValue / (1 + GST_RATE));
+  a.netExGst = a.netReturns - a.tax;                // NET REVENUE (ex-GST), the metric
   // Reconciliation confidence: how much of the period's GST is confirmed by marketplace settlement
   // (exact gstSettled) vs the live 18% estimate (a.tax). ~100% = fully reconciled (older periods,
   // real-time channels like Shopify); low = recent marketplace sales whose settlement hasn't posted.
@@ -85,10 +119,10 @@ export function aggOrders(rows) {
 //   — net was understated by ₹41,416 (Blinkit's implied blended rate is 14.66%).
 //   Instamart (₹2.49) and Zepto (₹0.64) are ~zero: their catalogue is genuinely all-18%, so the
 //   flat strip was already right there. The whole QC exposure was one channel.
-// ⚠️ This does NOT fix the ORDER-grain ladder (`aggOrders` above, line ~37), which still strips a
-// flat 18% — that is the remaining Website ₹36,538 + GT ₹3,734 and it needs a product dimension the
-// order grain does not have. "The ladder has no product dimension" was true of THAT grain only and
-// got generalised; the QC path had per-SKU tax all along.
+// ✅ The ORDER-grain ladder got the same treatment in S355 (2026-09-07): `aggOrders` uses the
+// GST staged at ingest per row (`rowGst`) for Shopify/Snorkel channels and keeps the flat strip
+// only where the exact figure lags (Amazon). "The ladder has no product dimension" was never the
+// constraint — the order grain carries the exact per-order tax; it was simply being overwritten.
 // ⚠️ Per-ROW fallback is deliberate: a row with no `tax_value` (a future fallback channel that
 // `fill_qc_tax` does not cover) degrades to the flat strip rather than reading as zero GST, which
 // would OVERSTATE net — the dangerous direction on a financial surface.
