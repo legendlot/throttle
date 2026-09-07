@@ -6926,7 +6926,9 @@ async function relayWaIngestInbound(m, env) {
       // `m.bot.handled` carries the live session state and this is the only place a redelivery
       // is ever seen (relayWaIngestInbound returns before thread resolution above).
       if (m?.bot?.handled) {
-        const dt = await sb(`/rest/v1/cs_wa_threads?id=eq.${ex.data[0].thread_id}&select=id,thread_state`, env);
+        // assigned_agent_id MUST be selected: botThreadPatch's `ended` branch reads it to refuse
+        // closing a thread an agent owns (fix-wave I2) — a select without it silently re-opens that hole.
+        const dt = await sb(`/rest/v1/cs_wa_threads?id=eq.${ex.data[0].thread_id}&select=id,thread_state,assigned_agent_id`, env);
         const dThread = dt.data?.[0] || null;
         if (dThread) {
           const dp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread: dThread, now: new Date().toISOString() });

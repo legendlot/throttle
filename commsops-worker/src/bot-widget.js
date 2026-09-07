@@ -100,7 +100,11 @@ function widgetJs(botId, workerBase) {
     disableChips();   // historical chips are not live — the composer still works
     // ...except the LAST menu on a still-ACTIVE session: that one IS the live prompt the visitor
     // was answering when they navigated away, so a resume must leave it tappable.
-    if (sessionStatus === 'active') {
+    // ...but ONLY when the very last history entry is that menu. If the live step is a collect or a
+    // message prompt (e.g. "your order number?"), the last chip group is an ALREADY-ANSWERED menu and
+    // re-enabling it would post a button tap into the collect, which fails validation twice → handoff.
+    var lastEntry = (history || [])[(history || []).length - 1];
+    if (sessionStatus === 'active' && lastEntry && lastEntry.who === 'bot' && lastEntry.buttons && lastEntry.buttons.length) {
       var groups = msgs.querySelectorAll('[data-lotchat-chips]');
       var last = groups[groups.length - 1];
       if (last) last.querySelectorAll('button').forEach(function (b) { b.disabled = false; b.style.opacity = ''; b.style.cursor = 'pointer'; });
