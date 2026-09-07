@@ -1,5 +1,13 @@
 # Changelog — Depot Operations Manual
 
+## 1.12.0 — 2026-09-07 (Session 354)
+
+- **Shipments:** order notes typed on the Snorkel sales order now also show here, not only on the
+  fulfilment request. A shipment's row carries a note marker when its order has notes (hover to
+  read), and the open drawer shows an amber "Order notes — from Snorkel" block under the header,
+  read straight from the order so a sales-side edit updates it here too. Separate from the
+  shipment's own Internal notes field, which is unchanged.
+
 ## 1.11.0 — 2026-09-04 (Session 349)
 
 - **Shipments:** documents partial dispatch. Mark Shipped now checks the manifest; if a line has

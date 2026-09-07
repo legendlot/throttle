@@ -1032,6 +1032,9 @@ export default function DispatchShipmentsPage() {
                               {s.sales_order_no}
                             </span>
                           )}
+                          {/* Order notes from the Snorkel SO — same marker as the request list
+                              (Varnit, #bugs 2026-09-07: they vanished once a request was accepted). */}
+                          {s.so_notes && <span title={s.so_notes} style={{ cursor: 'help', flexShrink: 0 }}>📝</span>}
                           {ready && <ToneBadge tone="ok">Ready</ToneBadge>}
                           {/* Stale-draft nudge, 7 days (Afshaan 2026-07-31). A draft only
                               closes when its LAST box is dispatched out, so an unfinished
@@ -1137,6 +1140,18 @@ export default function DispatchShipmentsPage() {
                 {detailShipment.title && (
                   <div style={{ fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 600, color: 'var(--t1)', marginBottom: 14 }}>
                     {detailShipment.title}
+                  </div>
+                )}
+
+                {/* Order notes — the instructions typed on the Snorkel SO, read through from the
+                    order so an edit there shows here. Same block as the fulfilment request
+                    (Varnit, #bugs 2026-09-07: notes were only on the request, never the shipment). */}
+                {detailShipment.so_notes && (
+                  <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 6,
+                    background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--amber, #d97706)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em',
+                      textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>Order notes — from Snorkel</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{detailShipment.so_notes}</div>
                   </div>
                 )}
 

@@ -31,6 +31,8 @@
   <li><span class="s-title">Shipped.</span> When everything&rsquo;s packed, mark the shipment shipped; this updates every unit in it to Shipped.</li>
 </ol>
 
+<p><strong>Order notes now show here too.</strong> If the sales order behind a shipment carries a note in Snorkel, the shipment&rsquo;s row carries a &#128221; marker in the list (hover it to read without opening), and the open drawer shows an amber <strong>Order notes &mdash; from Snorkel</strong> block under the header, the same box you&rsquo;d see on the fulfilment request. It is read straight from the order, so if sales edits the note it updates here too. This is separate from the shipment&rsquo;s own <strong>Internal notes</strong> field, which is unchanged.</p>
+
 <div class="callout note">
   <div class="c-title">&#9432; Partial dispatch: shipping with an unpacked balance</div>
   <p>Mark Shipped now checks the manifest first. If every line is fully packed it ships exactly as before. If any line still has units unpacked, it asks: <em>&ldquo;N units on M line(s) are not packed. Ship the packed units now and move the balance to a NEW shipment?&rdquo;</em></p>
