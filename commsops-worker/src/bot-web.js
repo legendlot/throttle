@@ -3,6 +3,7 @@
 const A = require('./auth.js');
 const E = require('./bot-engine.js');
 const OS = require('./bot-order-status.js');
+const T = require('./bot-turn.js');
 
 const ALLOWED_ORIGINS = new Set(['https://www.legendoftoys.com', 'https://legendoftoys.com']);
 const MAX_TEXT = 500;              // message length cap
@@ -43,10 +44,11 @@ async function loadDefinition(env, botId, version) {
   return (r.ok && r.data?.[0]?.definition) || null;
 }
 
-async function persist(env, session, out, stepRows) {
+async function persist(env, session, out, stepRows, frame) {
   await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(session.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ current_step: out.state.current_step, status: out.state.status, context: out.state.context,
       profile_id: session.profile_id || out.state.context.profile_id || null,
+      sub_bot_id: frame ? frame.bot_id : null, sub_version: frame ? frame.version : null, return_step: frame ? frame.return_step : null,
       last_activity_at: new Date().toISOString(), ended_at: out.state.status === 'ended' ? new Date().toISOString() : null }) });
   if (stepRows.length)
     await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(stepRows) });
@@ -66,28 +68,12 @@ async function forwardToCsops(env, session, identity, inboundText, replies, hand
   await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-web', init)).catch((e) => console.log('web_forward_error', String(e?.message || e)));
 }
 
-// One turn: engine -> execute effects (order lookup loops back in; handoff forwards) -> persist.
+// One turn: engine -> execute effects (bot-turn.js owns that loop, shared with WhatsApp)
+// -> persist (session row + the frame) -> forward.
 async function runTurn(env, session, def, input, inboundText) {
-  let out = E.advance(def, session, input);
-  const stepRows = [{ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: inboundText ? 'customer_message' : 'open', result: inboundText ? { text: inboundText } : null }];
-  let handoff = false;
-  for (let guard = 0; guard < 3; guard++) {           // an order_lookup re-enters at most once; handoff is terminal
-    const fx = out.effects || [];
-    out.effects = [];
-    let reentered = false;
-    for (const e of fx) {
-      if (e.type === 'order_lookup') {
-        const r = await OS.lookupOrderStatus(env, e);
-        stepRows.push({ session_id: session.id, step_id: out.state.current_step, step_type: 'order_lookup', result: { ok: r.ok, reason: r.reason || null } });
-        const next = E.advance(def, out.state, { kind: 'action_result', ok: r.ok, data: r.ok ? { statusText: r.statusText } : {} });
-        out = { state: next.state, replies: [...out.replies, ...next.replies], effects: next.effects };
-        reentered = true;
-      }
-      if (e.type === 'handoff') { handoff = true; stepRows.push({ session_id: session.id, step_id: out.state.current_step, step_type: 'handoff', result: null }); }
-    }
-    if (!reentered) break;
-  }
-  for (const r of out.replies) stepRows.push({ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: 'bot_message', result: { text: r.text, buttons: r.buttons || null } });
+  const stepRows = [{ session_id: session.id, step_id: session.current_step || 'entry', step_type: inboundText ? 'customer_message' : 'open', result: inboundText ? { text: inboundText } : null }];
+  const t = await T.executeTurn(env, session, def, input);
+  const out = t.out; stepRows.push(...t.stepRows);
   // Resolve a profile the moment identity lands — this is what makes the 24h conversion join
   // possible. is_verified:false ON PURPOSE: the visitor TYPED this phone/email, nothing proved
   // ownership, so it must stay a weak key and never force-merge profiles (S224 rules).
@@ -99,14 +85,14 @@ async function runTurn(env, session, def, input, inboundText) {
       body: JSON.stringify({ p_identifiers: ids, p_source: 'web_bot' }) }).catch(() => ({ ok: false }));
     if (rp.ok && rp.data) out.state.context.profile_id = rp.data;   // RPC returns the uuid scalar
   }
-  await persist(env, session, out, stepRows);
+  await persist(env, session, out, stepRows, t.frame);
   // Forward only once a HUMAN has said something (or a handoff fires). The open turn used to
   // forward too, which meant an unauthenticated POST /web/session minted a Pitstop inbox
   // thread by itself — an inbox-spam vector, and 2 of the 5 S312 smoke sessions were exactly
   // that noise (open-only "Web visitor" threads with no customer line). The constant greeting
   // is all the transcript loses; per-IP limiting on /web/* stays a WAF-config residual.
-  if (inboundText || handoff)
-    await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, handoff);
+  if (inboundText || t.handoff)
+    await forwardToCsops(env, session, out.state.context.identity, inboundText, out.replies, t.handoff);
   return out;
 }
 

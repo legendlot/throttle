@@ -31,6 +31,7 @@ const OPTOUT = require('./optout.js');
 const BOTS = require('./bots.js');
 const BE = require('./bot-engine.js');
 const BW = require('./bot-web.js');
+const T = require('./bot-turn.js');   // channel-neutral turn runner (S355)
 const WIDGET = require('./bot-widget.js');
 const FORMS = require('./forms.js');
 const FWIDGET = require('./form-widget.js');
@@ -3056,7 +3057,7 @@ export default {
         const session = await BW.loadSession(env, b.session_id || '');
         if (!session) return withCors(err('no_session', 404));
         if (!(await BW.floodCheck(env, session.id))) return withCors(err('too_many_messages', 429));
-        const def = await BW.loadDefinition(env, session.bot_id, session.bot_version);
+        const def = await T.sessionDefinition(env, session);   // the sub-flow's definition when the session is inside one
         if (!def) return withCors(err('bot_unavailable', 503));
         const input = b.buttonId ? { kind: 'button', buttonId: b.buttonId, text } : { kind: 'text', text };
         const out = await BW.runTurn(env, session, def, input, text);
