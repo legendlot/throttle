@@ -144,6 +144,7 @@ const CLOSE_REASONS = [
 ];
 const CLOSE_REASON_LABEL = Object.fromEntries(CLOSE_REASONS);
 CLOSE_REASON_LABEL.resolved = 'Resolved';
+CLOSE_REASON_LABEL.bot_resolved = 'Resolved by bot';
 
 // ⚠️ Meta gates every reply past the 24h window behind the SEPARATE `human_agent` App Review
 // permission — it is not covered by instagram_business_manage_messages, which is what we hold.
@@ -2921,6 +2922,7 @@ function ThreadRow({ t, active, myId, onClick, noBorder }) {
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
         </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
+          {t.bot_active && <ToneBadge tone="mute" style={{ fontSize: 8.5 }} title="The Relay bot is handling this conversation">Bot</ToneBadge>}
           {t.priority && t.priority !== 'normal' && (
             <ToneBadge tone={PRIORITIES[t.priority]?.tone || 'mute'} style={{ fontSize: 8.5 }}>{PRIORITIES[t.priority]?.label || t.priority}</ToneBadge>
           )}

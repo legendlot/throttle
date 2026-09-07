@@ -31,6 +31,10 @@ function handlesFor(cfg) {
     const ids = Array.isArray(cfg.buttons) ? cfg.buttons.map((b) => b && b.id).filter(Boolean) : [];
     return [...ids, 'fallback'];
   }
+  // Bot-mode collect (S355): a second invalid answer leaves by `fallback`, not `next`.
+  if (cfg.type === 'collect') return ['next', 'fallback'];
+  // Bot-mode subflow (S355): the shared flow's end returns to this step's `next`.
+  if (cfg.type === 'subflow') return ['next'];
   if (cfg.type === 'action') {
     if (cfg.kind === 'payment_link') return ['next', 'failed'];
     if (cfg.kind === 'order_modify') return ['done', 'not_done'];
@@ -131,6 +135,15 @@ function localLint(nodes, edges, mode = 'journey') {
   if (mode === 'bot') {
     if (!stepNodes.some((n) => ['handoff', 'end'].includes(n.data?.config?.type)))
       out.push('no way out — every bot needs a Hand to agent or End chat node');
+    // WhatsApp interactive limits, mirrored from the worker's compile lint (S355).
+    // localLint has no channel, so these are ADVISORY for every bot — the worker
+    // enforces them per channel at publish.
+    for (const n of stepNodes) {
+      const cfg = n.data?.config; if (cfg?.type !== 'menu') continue;
+      const btns = cfg.buttons || [];
+      if (cfg.style === 'list') { if (btns.length > 10) out.push(`${n.id}: a WhatsApp list holds at most 10 rows`); if (btns.some((b) => (b.label || '').length > 24)) out.push(`${n.id}: list row titles are max 24 characters on WhatsApp`); }
+      else { if (btns.length > 3) out.push(`${n.id}: more than 3 buttons — switch this menu to a List`); if (btns.some((b) => (b.label || '').length > 20)) out.push(`${n.id}: button labels are max 20 characters on WhatsApp`); }
+    }
   } else if (!stepNodes.some((n) => n.data?.config?.type === 'exit')) out.push('no exit node — every journey needs at least one');
   for (const n of stepNodes) {
     const declared = handlesFor(n.data?.config);

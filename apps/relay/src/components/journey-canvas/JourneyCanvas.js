@@ -8,7 +8,7 @@ import {
   applyNodeChanges, applyEdgeChanges, addEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag } from 'lucide-react';
+import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag, Share2 } from 'lucide-react';
 import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
 import { humanOutcome } from './labels.js';
 import { isNot } from '@/lib/journeyTrigger.js';
@@ -31,6 +31,7 @@ const STEP_META = {
   order_status:   { label: 'Order status',      icon: ShoppingBag, color: '#c07ad6' },
   handoff:        { label: 'Hand to agent',     icon: LogOut,     color: '#57b56b' },
   end:            { label: 'End chat',          icon: LogOut,     color: '#9aa0a6' },
+  subflow:        { label: 'Shared flow',       icon: Share2,     color: '#7aa7ff' },
 };
 
 const nodeBox = (selected, color) => ({
@@ -106,7 +107,8 @@ function StepNode({ data, selected }) {
         : `set ${c.attr || 'attr'} = ${c.value ?? ''}`)
     // Bot mode (S312)
     : c.type === 'message' ? (c.text ? c.text.slice(0, 40) : 'text not set')
-    : c.type === 'menu' ? `${(c.buttons || []).length} options`
+    : c.type === 'menu' ? `${(c.buttons || []).length} options · ${c.style === 'list' ? 'list' : 'buttons'}`
+    : c.type === 'subflow' ? (c.bot_id ? 'shared flow set' : 'no shared flow picked')
     : c.type === 'collect' ? (c.field === 'order_number' ? 'order number' : 'phone or email')
     : c.type === 'handoff' ? 'to the Pitstop inbox'
     : c.type === 'end' ? (c.text ? c.text.slice(0, 40) : 'closes the chat')
@@ -167,11 +169,13 @@ const NEW_STEP = {
 // chat start. Same NEW_STEP shape so addStep() works unchanged.
 const BOT_NEW_STEP = {
   message: { type: 'message', text: '' },
-  menu:    { type: 'menu', text: '', buttons: [{ id: 'b_opt1', label: 'Option 1' }] },
+  menu:    { type: 'menu', style: 'buttons', text: '', buttons: [{ id: 'b_opt1', label: 'Option 1', description: '' }] },
   collect: { type: 'collect', field: 'phone_or_email', prompt: '' },
   order_status: { type: 'action', kind: 'order_status' },
   handoff: { type: 'handoff' },
   end:     { type: 'end', text: '' },
+  // S355: jump into a published SHARED bot and come back on this step's `next`.
+  subflow: { type: 'subflow', bot_id: '' },
 };
 
 let seq = 0;

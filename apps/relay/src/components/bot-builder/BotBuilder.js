@@ -3,7 +3,7 @@
 // (JourneyCanvas mode="bot"), its own list + save/publish/test wiring against the
 // listBots/saveBot/publishBot/testBotTurn worker actions. Deliberately compact: bots
 // have no triggers, exit rules, versions UI or funnel — a definition, a status, a test.
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -32,27 +32,66 @@ function TestPanel({ botId, definition, session }) {
   const [transcript, setTranscript] = useState([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  // ⚠️ testBotTurn runs ONE definition. To follow a Shared flow the panel keeps a local
+  // frame: while it is set, every turn is sent against the SHARED bot's draft_definition,
+  // and a `subflow_return` effect pops it and resumes the parent at `return_step`.
+  // Refs, not state, because a single click can chain 3 turns before React re-renders.
+  const stateRef = useRef(null);
+  const frameRef = useRef(null);   // { definition, name, return_step, parentState } | null
 
   const turn = useCallback(async (input) => {
     setBusy(true);
     try {
-      const r = await workerFetch('testBotTurn', { id: botId, definition, state, input }, session);
-      const out = r?.data || r;
-      if (!out?.state) return;
-      setState(out.state);
-      setTranscript((t) => [
-        ...t,
-        ...(input.kind === 'open' ? [] : [{ who: 'you', text: input.text || input.buttonId }]),
-        ...(out.replies || []).map((rp) => ({ who: 'bot', text: rp.text, buttons: rp.buttons })),
-        ...(out.effects || []).filter((e) => e.type === 'handoff').map(() => ({ who: 'sys', text: '→ would hand off to an agent here' })),
-        ...(out.effects || []).filter((e) => e.type === 'order_lookup').map((e) => ({ who: 'sys', text: `→ would look up ${e.orderNumber} (verified against ${e.identity?.phone || e.identity?.email || 'nothing — no identity collected!'})` })),
-      ]);
+      let curInput = input;
+      let hops = 0;
+      while (curInput && hops++ < 8) {
+        const frame = frameRef.current;
+        const def = frame ? frame.definition : definition;
+        const r = await workerFetch('testBotTurn', { id: botId, definition: def, state: stateRef.current, input: curInput }, session);
+        const out = r?.data || r;
+        if (!out?.state) return;
+        stateRef.current = out.state;
+        setState(out.state);
+        const lines = [
+          ...(curInput.kind === 'open' || curInput.kind === 'resume' ? [] : [{ who: 'you', text: curInput.text || curInput.buttonId }]),
+          ...(out.replies || []).map((rp) => ({ who: 'bot', text: rp.text, buttons: rp.buttons, style: rp.style })),
+          ...(out.effects || []).filter((e) => e.type === 'handoff').map(() => ({ who: 'sys', text: '→ would hand off to an agent here' })),
+          ...(out.effects || []).filter((e) => e.type === 'order_lookup').map((e) => ({ who: 'sys', text: `→ would look up ${e.orderNumber} (verified against ${e.identity?.phone || e.identity?.email || 'nothing — no identity collected!'})` })),
+        ];
+        const enter = (out.effects || []).find((e) => e.type === 'subflow_enter');
+        const back = (out.effects || []).find((e) => e.type === 'subflow_return');
+        curInput = null;
+        if (enter) {
+          const g = await garageFetch('getBot', { id: enter.bot_id }, session);
+          const shared = g?.bot;
+          if (!shared?.draft_definition) lines.push({ who: 'sys', text: '→ shared flow not found — cannot follow it in the test panel' });
+          else {
+            lines.push({ who: 'sys', text: `→ enters shared flow "${shared.name}"` });
+            frameRef.current = { definition: shared.draft_definition, name: shared.name, return_step: enter.return_step, parentState: out.state };
+            stateRef.current = { current_step: null, status: 'active', context: out.state.context || {} };
+            setState(stateRef.current);
+            curInput = { kind: 'open' };
+          }
+        } else if (back && frame) {
+          lines.push({ who: 'sys', text: '→ returns' });
+          frameRef.current = null;
+          stateRef.current = { ...(frame.parentState || {}), status: 'active', context: out.state.context || {} };
+          setState(stateRef.current);
+          curInput = { kind: 'resume', from: back.return_step || frame.return_step };
+        }
+        setTranscript((t) => [...t, ...lines]);
+      }
     } finally { setBusy(false); }
-  }, [botId, definition, state, session]);
+  }, [botId, definition, session]);
 
-  const start = () => { setState({ current_step: null, status: 'active', context: {} }); setTranscript([]); };
-  // Auto-fire the open turn once a fresh state is set.
-  useEffect(() => { if (state && state.current_step === null && !transcript.length) turn({ kind: 'open' }); }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Fire the open turn from start() itself — the old "auto-fire when current_step is null"
+  // effect would also fire on the fresh state a sub-flow entry installs.
+  const start = () => {
+    stateRef.current = { current_step: null, status: 'active', context: {} };
+    frameRef.current = null;
+    setState(stateRef.current); setTranscript([]);
+    turn({ kind: 'open' });
+  };
 
   return (
     <div>
@@ -72,8 +111,10 @@ function TestPanel({ botId, definition, session }) {
                   {m.text}
                   {m.buttons && (
                     <span style={{ display: 'block', marginTop: 5 }}>
+                      {/* a WhatsApp LIST renders one row per line, not a row of chips */}
                       {m.buttons.map((b) => (
-                        <button key={b.id} className="btn" type="button" style={{ marginRight: 5, marginBottom: 3, fontSize: 12 }}
+                        <button key={b.id} className="btn" type="button"
+                          style={{ marginRight: 5, marginBottom: 3, fontSize: 12, ...(m.style === 'list' ? { display: 'block', width: '100%', textAlign: 'left' } : null) }}
                           disabled={busy || state.status !== 'active'} onClick={() => turn({ kind: 'button', buttonId: b.id, text: b.label })}>
                           {b.label}
                         </button>
@@ -112,6 +153,7 @@ export default function BotBuilder() {
   const [edges, setEdges] = useState([]);
   const [selected, setSelected] = useState(null);
   const [publishErrors, setPublishErrors] = useState(null);
+  const [settings, setSettings] = useState(false);
 
   const [stats, setStats] = useState({});   // bot_id -> {sessions,handled,handoffs,conversions} (7d)
   const load = useCallback(async () => {
@@ -139,12 +181,15 @@ export default function BotBuilder() {
     if (r?.bot) open(r.bot);
   }
   function startNew() {
-    open({ id: null, name: 'New web assistant', status: 'draft', active_version: null, draft_definition: { entry: null, steps: {} }, config: {} });
+    open({ id: null, name: 'New web assistant', status: 'draft', active_version: null, channel: 'web', draft_definition: { entry: null, steps: {} }, config: {} });
   }
 
   // Serialize the canvas. toDefinition throws without an entry edge — surface as a toast.
+  // KEYWORDS are top-level definition state, not a node, so toDefinition() (which builds
+  // the definition purely from nodes+edges) cannot know about them — merge them back in
+  // or every save would drop them.
   function currentDefinition() {
-    try { return toDefinition(nodes, edges); }
+    try { return { ...toDefinition(nodes, edges), keywords: (bot?.draft_definition?.keywords || []).filter((k) => k.match?.length && k.target) }; }
     catch { showToast('Connect Chat start to a first step before saving', 'error'); return null; }
   }
 
@@ -154,7 +199,7 @@ export default function BotBuilder() {
     if (!definition) return;
     setBusy(true);
     try {
-      const r = await workerFetch('saveBot', { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {} }, session);
+      const r = await workerFetch('saveBot', { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {}, channel: bot.channel || 'web' }, session);
       const saved = r?.data?.bot || r?.bot;
       if (!saved) { showToast(`Save failed: ${r?.error || 'unknown'}`, 'error'); return; }
       setBot((b) => ({ ...b, ...saved }));
@@ -184,6 +229,9 @@ export default function BotBuilder() {
     } finally { setBusy(false); }
   }
 
+  // Only a PUBLISHED shared flow can be jumped into — an unpublished one has no active
+  // version for the engine to run, and picking it would only earn `subflow_target_invalid`.
+  const sharedBots = rows.filter((r) => r.channel === 'shared' && r.active_version);
   const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
   const updateSelectedConfig = (cfg) => setNodes((ns) => ns.map((n) => (n.id === selected ? { ...n, data: { ...n.data, config: cfg } } : n)));
   const deleteSelected = () => {
@@ -209,7 +257,12 @@ export default function BotBuilder() {
                   <tr key={r.id}>
                     <td>{r.name}</td>
                     <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
-                    <td className="mono">{r.channel}</td>
+                    <td className="mono">
+                      {r.channel}
+                      {r.channel === 'whatsapp' && r.config?.mode && (
+                        <> <Badge label={r.config.mode} tone={r.config.mode === 'public' ? 'green' : 'yellow'} /></>
+                      )}
+                    </td>
                     <td className="mono">{r.active_version ? `v${r.active_version}` : '—'}</td>
                     <td className="mono" style={{ fontSize: 12 }}>
                       {st ? `${st.sessions} chats · ${st.handled} handled · ${st.handoffs} to agents · ${st.conversions} converted` : '—'}
@@ -233,6 +286,7 @@ export default function BotBuilder() {
         <Badge label={bot?.status || 'draft'} tone={STATUS_TONE[bot?.status] || 'gray'} />
         {bot?.active_version && <span className="dim" style={{ fontSize: 12 }}>live: v{bot.active_version}</span>}
         <span style={{ flex: 1 }} />
+        <Btn onClick={() => setSettings((s) => !s)}>Settings</Btn>
         {canBuild && <Btn onClick={save} disabled={busy}>Save draft</Btn>}
         {canActivate && bot?.id && <Btn kind="primary" onClick={publish} disabled={busy}><Check size={14} /> Publish</Btn>}
         {canActivate && bot?.status === 'active' && <Btn onClick={() => setStatus('paused')} disabled={busy}><Pause size={14} /> Pause</Btn>}
@@ -251,11 +305,15 @@ export default function BotBuilder() {
             onSelect={setSelected} readOnly={busy || !canBuild} />
         </div>
         <div>
-          <Panel title={selectedNode ? 'Step' : 'Test'} pad>
-            {selectedNode
-              ? <BotDrawer nodeId={selectedNode.id} config={selectedNode.data?.config}
-                  onChange={updateSelectedConfig} onDelete={deleteSelected} readOnly={busy || !canBuild} />
-              : <TestPanel botId={bot?.id} definition={currentDefinitionSafe(nodes, edges)} session={session} />}
+          <Panel title={settings ? 'Bot settings' : selectedNode ? 'Step' : 'Test'} pad>
+            {settings
+              ? <BotSettings bot={bot || {}} setBot={setBot} sharedBots={sharedBots}
+                  canActivate={canActivate} session={session} showToast={showToast} />
+              : selectedNode
+                ? <BotDrawer nodeId={selectedNode.id} config={selectedNode.data?.config}
+                    onChange={updateSelectedConfig} onDelete={deleteSelected} readOnly={busy || !canBuild}
+                    sharedBots={sharedBots} />
+                : <TestPanel botId={bot?.id} definition={currentDefinitionSafe(nodes, edges, bot)} session={session} />}
           </Panel>
         </div>
       </div>
@@ -265,6 +323,60 @@ export default function BotBuilder() {
 
 // Test panel needs a definition even while the graph is mid-edit; a graph with no entry
 // edge simply yields null and the panel's first turn reports it — never a throw.
-function currentDefinitionSafe(nodes, edges) {
-  try { return toDefinition(nodes, edges); } catch { return null; }
+// Carries `keywords` too, so a test run behaves like the saved bot will.
+function currentDefinitionSafe(nodes, edges, bot) {
+  try { return { ...toDefinition(nodes, edges), keywords: (bot?.draft_definition?.keywords || []).filter((k) => k.match?.length && k.target) }; } catch { return null; }
+}
+
+// ── Bot settings — the things that are properties of the BOT, not of any one step:
+//    which channel it answers on, the keywords that jump straight to a step from the
+//    opening message (or from an invalid answer), and the WhatsApp rollout.
+//    Channel is fixed after the first publish: sessions and the inbox key on it.
+function BotSettings({ bot, setBot, sharedBots, canActivate, session, showToast }) {
+  const def = bot.draft_definition || {};
+  const keywords = Array.isArray(def.keywords) ? def.keywords : [];
+  const setDef = (patch) => setBot((b) => ({ ...b, draft_definition: { ...(b.draft_definition || {}), ...patch } }));
+  const [mode, setMode] = useState(bot.config?.mode || 'pilot');
+  const [nums, setNums] = useState((bot.config?.pilot_numbers || []).join(', '));
+  // Rollout is a SEPARATE action (activate tier) — saveBot strips mode/pilot_numbers
+  // from config on purpose, so a build-only user can never widen the audience.
+  async function saveMode() {
+    const r = await workerFetch('setBotMode', { id: bot.id, mode, pilot_numbers: nums.split(/[,\s]+/).filter(Boolean) }, session);
+    const d = r?.data?.bot || r?.bot;
+    if (d) { setBot((b) => ({ ...b, config: d.config })); showToast(mode === 'public' ? 'PUBLIC — every customer on the number will get the bot' : 'Pilot mode saved'); }
+    else showToast(`Failed: ${r?.error || 'unknown'}`, 'error');
+  }
+  return (
+    <div>
+      <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">Channel</div>
+        <select className="f-inp" value={bot.channel || 'web'} disabled={!!bot.active_version} onChange={(e) => setBot((b) => ({ ...b, channel: e.target.value }))}>
+          <option value="web">Web widget</option><option value="whatsapp">WhatsApp (support number)</option><option value="shared">Shared flow (used by other bots)</option>
+        </select>
+        {bot.active_version && <div className="dim" style={{ fontSize: 12 }}>Fixed after first publish.</div>}
+      </div>
+      <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">Keywords (opening message, or an invalid answer) → step</div>
+        {keywords.map((k, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <input className="f-inp" placeholder="track, where is my order" value={(k.match || []).join(', ')}
+              onChange={(e) => setDef({ keywords: keywords.map((x, j) => (j === i ? { ...x, match: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } : x)) })} />
+            <input className="f-inp" style={{ maxWidth: 160 }} placeholder="step id" value={k.target || ''}
+              onChange={(e) => setDef({ keywords: keywords.map((x, j) => (j === i ? { ...x, target: e.target.value.trim() } : x)) })} />
+            <button className="btn" type="button" onClick={() => setDef({ keywords: keywords.filter((_, j) => j !== i) })}>×</button>
+          </div>
+        ))}
+        {keywords.length < 20 && <button className="btn" type="button" onClick={() => setDef({ keywords: [...keywords, { match: [], target: '' }] })}>+ Add keyword</button>}
+      </div>
+      {bot.channel === 'whatsapp' && (
+        <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">Rollout (activate permission)</div>
+          <select className="f-inp" value={mode} disabled={!canActivate || !bot.id} onChange={(e) => setMode(e.target.value)}>
+            <option value="pilot">Pilot — only the numbers below</option><option value="public">Public — every customer</option>
+          </select>
+          <input className="f-inp" style={{ marginTop: 6 }} placeholder="917709991011, 91..." value={nums} disabled={!canActivate || !bot.id} onChange={(e) => setNums(e.target.value)} />
+          {canActivate && bot.id && <Btn onClick={saveMode} style={{ marginTop: 6 }}>Save rollout</Btn>}
+          <div className="dim" style={{ fontSize: 12 }}>Answers on the support WhatsApp number. Public is Afshaan&rsquo;s call.</div>
+        </div>
+      )}
+      {bot.channel === 'shared' && <div className="dim" style={{ fontSize: 12 }}>A shared flow has no customers of its own; other bots jump into it with a &ldquo;Shared flow&rdquo; step.</div>}
+    </div>
+  );
 }

@@ -25,6 +25,7 @@ const STEP_TYPE_LABEL = {
   collect: 'Ask for input',
   handoff: 'Hand to agent',
   end: 'End chat',
+  subflow: 'Shared flow',
 };
 
 // Outcomes are the branch handles a step can leave by. These are the ones the
