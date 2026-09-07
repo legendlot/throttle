@@ -199,6 +199,9 @@ function validateBotDef(def, opts = {}) {
   const errs = [];
   if (!def || !def.entry || !def.steps || !def.steps[def.entry]) return [{ code: 'no_entry', stepId: def && def.entry }];
   for (const [id, step] of Object.entries(def.steps)) {
+    // wire ids are `bot:<step_id>:<handle>` (bot-wa.js wireId) and stripBotId only strips the
+    // first two `:`-delimited segments, so a step id containing `:` under-strips on the way back.
+    if (String(id).includes(':')) errs.push({ code: 'step_id_invalid', stepId: id });
     const handles = step.type === 'menu'
       ? [...(step.buttons || []).map((b) => b.id), 'fallback']
       : step.type === 'action' ? ['found', 'not_found']

@@ -104,4 +104,10 @@ const exErrs = E.validateBotDef(LONG_EXHAUSTED, { channel: 'whatsapp' }).map((e)
 assert.ok(exErrs.includes('text_exhausted_long'), JSON.stringify(exErrs));
 assert.ok(!exErrs.includes('wa_text_long'), JSON.stringify(exErrs));
 
+// Fix round 1 finding 7: a step id containing `:` under-strips in bot-wa.js's stripBotId
+// (which only strips the first two `:`-delimited segments of the WIRE id), so the raw button
+// id would carry a stray `:` back into the engine. Lint blocks it at publish time instead.
+const COLON_ID = { entry: 'a:b', steps: { 'a:b': { type: 'end', outcomes: {} } } };
+assert.ok(E.validateBotDef(COLON_ID).some((e) => e.code === 'step_id_invalid' && e.stepId === 'a:b'));
+
 console.log('bot-subflow ok');

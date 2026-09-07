@@ -20,15 +20,23 @@ async function supportPhoneId(env) {
   if (Date.now() - supportCache.at < 60000) return supportCache.id;
   const r = await A.sbComms('/rest/v1/sender_identities?channel=eq.whatsapp&purpose=eq.utility&status=eq.active&select=metadata', env);
   const ids = (r.ok ? r.data : []).map((s) => s.metadata?.phone_number_id).filter(Boolean);
-  supportCache = { at: Date.now(), id: ids.length === 1 ? String(ids[0]) : null };   // exactly one, else fail closed
+  if (ids.length !== 1) {
+    // A failed or ambiguous read is NOT cached — caching it would silently wedge the bot for 60s
+    // on every retry of a transient read. Log it and return null without touching supportCache.
+    console.log('bot_wa_support_number_unresolved', JSON.stringify({ ok: r.ok, count: ids.length }));
+    return null;
+  }
+  supportCache = { at: Date.now(), id: String(ids[0]) };   // exactly one, else fail closed
   return supportCache.id;
 }
 async function activeWaBot(env) {
   const r = await A.sbComms('/rest/v1/bots?channel=eq.whatsapp&status=eq.active&active_version=not.is.null&select=id,active_version,config&limit=2', env);
   return r.ok && r.data?.length === 1 ? r.data[0] : null;
 }
-// ONE read: last_outbound_at is bumped only by human-ish rows (the trigger excludes tagged bot
-// rows), so it IS the "human replied" signal. Thread not found = no human = engage (§5.1.5).
+// ONE read: csops writes every bot reply row with template_name='relay_bot' and sent_by_user_id
+// NULL (Task 11 / spec §5.5), which store.cs_touch_thread_outbound treats as automated, so bot
+// turns never bump last_outbound_at; only agent-authored rows do. It IS the "human replied"
+// signal. Thread not found = no human = engage (§5.1.5).
 async function threadLastOutbound(env, from, phoneNumberId) {
   const r = await A.sbStore(`/rest/v1/cs_wa_threads?customer_phone=eq.${A.enc('+' + from)}&waba_phone_number_id=eq.${A.enc(phoneNumberId)}&select=last_outbound_at&limit=1`, env).catch(() => ({ ok: false }));
   if (!r.ok) return { error: true };
@@ -46,11 +54,11 @@ async function findLatestSession(env, from, phoneNumberId) {
 }
 async function createSession(env, row) {
   const ins = await A.sbComms('/rest/v1/bot_sessions', env, { method: 'POST', body: JSON.stringify(row) });
-  if (ins.ok && ins.data?.[0]) return ins.data[0];
+  if (ins.ok && ins.data?.[0]) return { session: ins.data[0], adopted: false };
   // Lost the active-session unique-index race: adopt the winner. Any OTHER failure is logged —
   // a silent null here is a silently dead bot (the deps-stubbed tests cannot catch a DB-shape error).
   const winner = await findLatestSession(env, row.wa_from, row.phone_number_id);
-  if (winner && winner.status === 'active') return winner;
+  if (winner && winner.status === 'active') return { session: winner, adopted: true };
   console.log('bot_wa_session_create_failed', JSON.stringify({ status: ins.status, detail: JSON.stringify(ins.data || '').slice(0, 200) }));
   return null;
 }
@@ -61,8 +69,8 @@ async function claimTurn(env, row) {
   throw new Error('claim_failed:' + JSON.stringify(r.data).slice(0, 200));
 }
 async function persist(env, session, patch, stepRows) {
-  await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(session.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
-  if (stepRows?.length) await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(stepRows) });
+  A.checkWrite('bot_wa_persist_failed', await A.sbComms(`/rest/v1/bot_sessions?id=eq.${A.enc(session.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) }), { session_id: session.id });
+  if (stepRows?.length) A.checkWrite('bot_wa_persist_failed', await A.sbComms('/rest/v1/bot_session_steps', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(stepRows) }), { session_id: session.id });
 }
 const DEFAULTS = { supportPhoneId, activeWaBot, threadLastOutbound, hasActiveEnrolment, findLatestSession, createSession, claimTurn, persist, send,
   loadDefinition: T.defaultLoadDefinition, loadActiveShared: T.defaultLoadActiveShared, lookupOrderStatus: null };
@@ -85,11 +93,12 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   if (!pid || String(m.phone_number_id) !== String(pid)) return null;                        // 1
   const bot = await d.activeWaBot(env); if (!bot) return null;                                // 2
   const cfg = bot.config || {};
-  if ((cfg.mode || 'pilot') !== 'public' && !(cfg.pilot_numbers || []).includes(String(m.from))) return null;   // 3
+  if ((cfg.mode || 'pilot') !== 'public' && !(cfg.pilot_numbers || []).map(E.normPhone).includes(E.normPhone(m.from))) return null;   // 3
   if (detectOptOut(m.text)) return null;                                                       // 4
   const lo = await d.threadLastOutbound(env, m.from, pid);                                     // 5
   if (lo.error) return null;
   if (lo.found && lo.last_outbound_at && Date.now() - new Date(lo.last_outbound_at).getTime() < HUMAN_ACTIVE_MS) return null;
+  if (!ingestRes?.profile_id) return null;   // unreadable ingest -> silent, not fail-open into condition 6
   if (await d.hasActiveEnrolment(env, ingestRes?.profile_id)) return null;                     // 6
   const kindOk = ['text', 'interactive', 'button', 'image', 'video', 'audio', 'document', 'sticker'].includes(m.type || 'text');
   if (!kindOk) return null;                                                                    // 7
@@ -106,19 +115,24 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   }
   let opened = false;
   if (!session) {
-    session = await d.createSession(env, { bot_id: bot.id, bot_version: bot.active_version, channel: 'whatsapp', wa_from: String(m.from), phone_number_id: pid,
+    const created = await d.createSession(env, { bot_id: bot.id, bot_version: bot.active_version, channel: 'whatsapp', wa_from: String(m.from), phone_number_id: pid,
       profile_id: ingestRes?.profile_id || null, context: { identity: { phone: E.normPhone(m.from) } } });
-    if (!session) return null;
-    opened = true;
+    if (!created) return null;
+    session = created.session;
+    // adopted = lost the unique-index race; the WINNER's state stands, so this turn must NOT
+    // re-greet from def.entry and clobber it (fix round 1 finding 2).
+    opened = !created.adopted;
   }
+  // load def BEFORE claiming — a transient definition read must not burn the message's claim
+  // (fix round 1 finding 5): the claim below is a one-shot dedup key, so a null def AFTER
+  // claiming would drop the message forever with no retry and no log.
+  const def = await T.sessionDefinition(env, session, { loadDefinition: d.loadDefinition });
+  if (!def) { console.log('bot_wa_no_definition', JSON.stringify({ session_id: session.id, bot_id: bot.id })); return null; }
   // claim THIS message before advancing — redelivery / concurrent invocation = skip (spec §5.2).
   // The duplicate branch still reports the LIVE session state: csops drives the thread rail off it
   // even when it skips the transcript rows (a redelivered first message must not leave bot_active false).
   const claimed = await d.claimTurn(env, { session_id: session.id, step_id: session.current_step || 'entry', step_type: 'customer_message', result: { text, type: m.type || 'text', button_id: m.button_id || null }, provider_message_id: m.provider_message_id || null });
   if (!claimed) return { handled: true, duplicate: true, session_id: session.id, session_status: session.status, replies: [], handoff: session.status === 'handed_off' };
-
-  const def = await T.sessionDefinition(env, session, { loadDefinition: d.loadDefinition });
-  if (!def) return null;
   const input = opened ? { kind: 'open', text }
     : m.button_id ? { kind: 'button', buttonId: stripBotId(m.button_id), text }
     : { kind: 'text', text };
@@ -126,7 +140,7 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   const out = t.out;
   const sendRows = [];
   for (const [i, r] of out.replies.entries()) {
-    const res = await d.send(env, toSendOpts(session, m.provider_message_id || 'nopmid', i, out.state.current_step || 'entry', r, m.from, pid)).catch((e) => ({ status: 'failed', reason: String(e?.message || e) }));
+    const res = await d.send(env, toSendOpts(session, m.provider_message_id || 'nopmid', i, r.step_id || out.state.current_step || 'entry', r, m.from, pid)).catch((e) => ({ status: 'failed', reason: String(e?.message || e) }));
     if (res.status !== 'sent' && res.status !== 'deduped') sendRows.push({ session_id: session.id, step_id: out.state.current_step || 'entry', step_type: 'send_failed', result: { status: res.status, reason: res.reason || null } });
   }
   await d.persist(env, session, { current_step: out.state.current_step, status: out.state.status, context: out.state.context,

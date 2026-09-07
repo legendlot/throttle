@@ -14,7 +14,7 @@ function mk(over = {}) {
     threadLastOutbound: async () => ({ found: false }),
     hasActiveEnrolment: async () => false,
     findLatestSession: async () => null,
-    createSession: async (env, row) => { calls.sessions.push(row); return { id: 'S1', ...row, status: 'active', current_step: null, context: {} }; },
+    createSession: async (env, row) => { calls.sessions.push(row); return { session: { id: 'S1', ...row, status: 'active', current_step: null, context: {} }, adopted: false }; },
     claimTurn: async (env, row) => { calls.claims.push(row); return true; },
     loadDefinition: async () => DEF,
     loadActiveShared: async () => null,
@@ -89,5 +89,32 @@ const ING = { ok: true, profile_id: 'prof1' };
   r = await W.maybeHandleInbound({}, M({ text: 'I want an agent', provider_message_id: 'wamid.4' }), ING, deps);
   assert.equal(r.handoff, true); assert.equal(r.session_status, 'handed_off');
   assert.equal(W.stripBotId('bot:menu:b_faq'), 'b_faq'); assert.equal(W.stripBotId('confirm_yes'), 'confirm_yes');
+
+  // Fix round 1 finding 2: createSession lost the unique-index race and adopted the winner —
+  // the caller must NOT treat this as an `open` and re-greet from def.entry, clobbering the
+  // winner's live state. A button tap against the adopted session's real current_step ('menu')
+  // must be handled as a button turn (walks to the answer), not silently re-rendered as the menu.
+  ({ deps, calls } = mk({
+    findLatestSession: async () => null,
+    createSession: async (env, row) => { calls.sessions.push(row); return { session: { id: 'S1', status: 'active', current_step: 'menu', context: {} }, adopted: true }; },
+  }));
+  r = await W.maybeHandleInbound({}, M({ type: 'interactive', text: 'FAQs', button_id: 'bot:menu:b_faq', provider_message_id: 'wamid.20' }), ING, deps);
+  assert.deepEqual(r.replies.map((x) => x.text), ['Answer']); assert.equal(r.session_status, 'ended');
+  assert.equal(calls.sessions.length, 1);   // the attempted insert is still recorded
+
+  // Fix round 1 finding 3: an unreadable ingest (no profile_id) must fail silent, not fail open
+  // through condition 6's hasActiveEnrolment(undefined) which returns false.
+  assert.equal(await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.21' }), { ok: false }, mk().deps), null);
+
+  // Fix round 1 finding 5: a transient definition read failure must not burn the message's claim.
+  ({ deps, calls } = mk({ loadDefinition: async () => null }));
+  assert.equal(await W.maybeHandleInbound({}, M({ provider_message_id: 'wamid.22' }), ING, deps), null);
+  assert.equal(calls.claims.length, 0);
+
+  // Fix round 1 finding 9: pilot allow-list compare must normalise both sides — a stored number
+  // with formatting still matches the raw digits-only wa_id Meta sends.
+  ({ deps } = mk({ activeWaBot: async () => ({ ...BOT, config: { mode: 'pilot', pilot_numbers: ['+91 77099 91011'] } }) }));
+  assert.equal((await W.maybeHandleInbound({}, M({ from: '917709991011', provider_message_id: 'wamid.23' }), ING, deps)).handled, true);
+
   console.log('bot-wa ok');
 })().catch((e) => { console.error(e); process.exit(1); });
