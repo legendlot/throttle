@@ -3043,6 +3043,16 @@ export default {
 
       if (url.pathname === '/web/session' && request.method === 'POST') {
         const b = await request.json().catch(() => ({}));
+        // Resume across a page navigation (S355) — BEFORE the bot lookup: a paused bot 503s
+        // there, but a visitor mid-session (including one waiting on an agent after a
+        // handoff) must still get their transcript back.
+        if (b.resume) {
+          const s = await BW.loadSession(env, String(b.resume));
+          if (s && s.bot_id === String(b.botId || '') && BW.isResumable(s)) {
+            const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,result&order=id.desc&limit=20`, env);
+            return withCors(ok({ session_id: s.id, status: s.status, replies: [], history: BW.resumeHistory((h.ok ? h.data : []).reverse()) }));
+          }
+        }
         const bot = (await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(b.botId || '')}&status=eq.active&select=id,active_version,config&limit=1`, env)
           .catch(() => ({ ok: false }))).data?.[0];
         if (!bot || !bot.active_version) return withCors(err('bot_unavailable', 503));

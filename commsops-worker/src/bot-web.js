@@ -37,6 +37,20 @@ async function loadSession(env, id) {
   return (r.ok && r.data?.[0]) || null;
 }
 
+// Session resume across a page navigation (S355) — same idle window as the WhatsApp side
+// (bot-wa.js IDLE_EXPIRE_MS), separately named because these are separate modules.
+const IDLE_EXPIRE_MS = 6 * 3600 * 1000;
+function isResumable(s) {
+  if (!s || (s.status !== 'active' && s.status !== 'handed_off')) return false;
+  return Date.now() - new Date(s.last_activity_at || s.started_at || 0).getTime() < IDLE_EXPIRE_MS;
+}
+// Only what /web/poll already exposes plus the bot's own lines — NEVER customer_message rows.
+function resumeHistory(rows) {
+  return (rows || []).filter((r) => r.step_type === 'bot_message' || r.step_type === 'agent_reply').map((r) => ({
+    who: r.step_type === 'agent_reply' ? 'agent' : 'bot', text: r.result?.text ?? '', buttons: r.result?.buttons || null,
+    style: r.result?.style || null, agent_name: r.result?.agent_name || null }));
+}
+
 async function loadDefinition(env, botId, version) {
   const r = await A.sbComms(`/rest/v1/bot_versions?bot_id=eq.${A.enc(botId)}&version=eq.${version}&select=definition&limit=1`, env);
   return (r.ok && r.data?.[0]?.definition) || null;
@@ -100,4 +114,4 @@ async function floodCheck(env, sessionId) {
   return (r.ok ? r.data.length : 0) <= MAX_TURNS_PER_MIN;
 }
 
-module.exports = { corsHeaders, makeWithCors, loadSession, loadDefinition, runTurn, floodCheck, MAX_TEXT, ALLOWED_ORIGINS };
+module.exports = { corsHeaders, makeWithCors, loadSession, loadDefinition, runTurn, floodCheck, MAX_TEXT, ALLOWED_ORIGINS, isResumable, resumeHistory, IDLE_EXPIRE_MS };

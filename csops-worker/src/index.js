@@ -6773,13 +6773,19 @@ function relayWaKind(type) {
 // the relay_web marker pair.
 async function handleRelayWebForward(b, env) {
   let thread = (await sb(
-    `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone&limit=1`, env
+    `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone,customer_handle&limit=1`, env
   )).data?.[0];
   // Identity lands AFTER the thread exists (collect runs on turn 2) — patch it in the
   // first time it arrives, else every web thread shows no phone forever.
   if (thread && !thread.customer_phone && b.identity?.phone) {
     await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH',
       body: JSON.stringify({ customer_phone: `+91${b.identity.phone}` }) }).catch(() => {});
+  }
+  // Same for email (S355) — the create path already seeds customer_handle from identity.email
+  // when it's known on turn 1; this covers the far more common case where email lands later.
+  if (thread && b.identity?.email && (!thread.customer_handle || thread.customer_handle === 'Web visitor')) {
+    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH',
+      body: JSON.stringify({ customer_handle: String(b.identity.email).toLowerCase() }) }).catch(() => {});
   }
   if (!thread) {
     const ins = await sb('/rest/v1/cs_wa_threads', env, {

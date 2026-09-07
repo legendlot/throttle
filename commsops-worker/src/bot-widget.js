@@ -53,13 +53,24 @@ function widgetJs(botId, workerBase) {
     return b;
   }
 
-  function renderButtons(buttons) {
+  function renderButtons(buttons, style) {
     var wrap = document.createElement('div');
-    wrap.style.cssText = 'margin:-2px 0 10px;display:flex;flex-wrap:wrap;gap:6px;';
+    // 'list' style (S355) — a vertical stack of full-width rows, description under the label
+    // in smaller text, for a menu of options rather than a short chip row.
+    wrap.style.cssText = style === 'list'
+      ? 'margin:-2px 0 10px;display:flex;flex-direction:column;gap:6px;'
+      : 'margin:-2px 0 10px;display:flex;flex-wrap:wrap;gap:6px;';
     buttons.forEach(function (bt) {
       var el = document.createElement('button');
-      el.type = 'button'; el.textContent = bt.label;
-      el.style.cssText = 'border:1.5px solid #111;background:#fff;color:#111;border-radius:16px;padding:6px 12px;font-size:13px;cursor:pointer;';   // explicit color: the storefront theme is white-on-dark and the chips inherited it (S312 smoke)
+      el.type = 'button';
+      if (style === 'list') {
+        el.style.cssText = 'border:1.5px solid #111;background:#fff;color:#111;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer;text-align:left;width:100%;';
+        var lbl = document.createElement('div'); lbl.style.cssText = 'font-weight:700;'; lbl.textContent = bt.label; el.appendChild(lbl);
+        if (bt.description) { var desc = document.createElement('div'); desc.style.cssText = 'font-size:11px;color:#666;margin-top:2px;'; desc.textContent = bt.description; el.appendChild(desc); }
+      } else {
+        el.textContent = bt.label;
+        el.style.cssText = 'border:1.5px solid #111;background:#fff;color:#111;border-radius:16px;padding:6px 12px;font-size:13px;cursor:pointer;';   // explicit color: the storefront theme is white-on-dark and the chips inherited it (S312 smoke)
+      }
       el.onclick = function () { if (!busy) { disableChips(); send({ buttonId: bt.id, text: bt.label }); } };
       wrap.appendChild(el);
     });
@@ -72,8 +83,24 @@ function widgetJs(botId, workerBase) {
   function showReplies(replies) {
     (replies || []).forEach(function (r) {
       bubble(r.text, 'bot');
-      if (r.buttons && r.buttons.length) renderButtons(r.buttons);
+      if (r.buttons && r.buttons.length) renderButtons(r.buttons, r.style);
     });
+  }
+
+  // Resume redraw (S355) — bot lines with buttons, agent lines with the agent name; NEVER
+  // customer_message rows (BW.resumeHistory on the worker side already filters those out).
+  function showHistory(history) {
+    (history || []).forEach(function (h) {
+      bubble(h.text, h.who === 'agent' ? 'bot' : 'bot', h.who === 'agent' ? (h.agent_name || 'LOT Support') : null);
+      if (h.who === 'bot' && h.buttons && h.buttons.length) renderButtons(h.buttons, h.style);
+    });
+  }
+
+  function loadSaved() {
+    try { return JSON.parse(localStorage.getItem('lot_chat_session') || 'null'); } catch (e) { return null; }
+  }
+  function saveSession(id) {
+    try { localStorage.setItem('lot_chat_session', JSON.stringify({ session_id: id, bot_id: BOT })); } catch (e) {}
   }
 
   function onStatus(s) {
@@ -91,10 +118,15 @@ function widgetJs(botId, workerBase) {
   }
 
   function start() {
-    api('/web/session', { method: 'POST', body: JSON.stringify({ botId: BOT }) }).then(function (d) {
+    var saved = loadSaved();
+    var body = { botId: BOT };
+    if (saved && saved.bot_id === BOT && saved.session_id) body.resume = saved.session_id;
+    api('/web/session', { method: 'POST', body: JSON.stringify(body) }).then(function (d) {
       if (!d || d.ok === false) { bubble('Chat is unavailable right now \\u2014 please email support@legendoftoys.com.', 'bot'); return; }
       var dd = d.data || d;
-      sessionId = dd.session_id; showReplies(dd.replies); onStatus(dd.status);
+      sessionId = dd.session_id; saveSession(sessionId);
+      if (dd.history) showHistory(dd.history); else showReplies(dd.replies);
+      onStatus(dd.status);
     }).catch(function () { bubble('Chat could not connect.', 'bot'); });
   }
 
