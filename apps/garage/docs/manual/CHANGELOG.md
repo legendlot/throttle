@@ -6,6 +6,12 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.24.0 - 2026-09-07
+
+- **Issue Queue**: documents the new Export channel split. A run's variant split now shows
+  `X:n` after `E:n R:n` when it carries export units, and its pick list includes the product's
+  Export Box (a Primary Packaging part with an export quantity).
+
 ## 1.23.0 - 2026-09-07
 
 - **Receiving**: documents that a damaged count entered while counting a box now goes straight

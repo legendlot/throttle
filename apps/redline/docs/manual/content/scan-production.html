@@ -22,15 +22,16 @@
   <li><strong>QC Pass only.</strong> Only a unit that has passed QC can be packed. A unit at any other stage is rejected.</li>
   <li><strong>The right pair.</strong> The remote you scan must be <em>this car&rsquo;s</em> actual paired remote, not just any remote.</li>
 </ul>
+<p>A channel toggle above the scan area picks how the unit is boxed: <strong>ECOM</strong>, <strong>RETAIL</strong> or <strong>EXPORT</strong>. Pick EXPORT for a unit going to an export destination (today: Amazon US); it gets an export box and its batch label carries a <code>-X</code> suffix. Whichever channel you pick stays selected on the phone until you change it, so a run of the same channel does not need reselecting per unit.</p>
 <div class="callout warn">
   <div class="c-title">&#9888; Re-packing is not done at Packaging</div>
   <p>Packaging is for fresh units only. To re-pack a unit that has already been boxed or dispatched (for example to swap its channel), use the <strong>Repack</strong> stations, not Packaging. Packaging will reject an already-dispatched unit.</p>
 </div>
 
 <h2 class="sec">PKG Out</h2>
-<p>The hand-off from production to dispatch. Scan the box label (<code>LOT-XXXXXXXX-E/R</code>). PKG Out accepts exactly two things:</p>
+<p>The hand-off from production to dispatch. Scan the box label (<code>LOT-XXXXXXXX-E/R/X</code>). PKG Out accepts exactly two things:</p>
 <ul>
   <li>a <strong>fresh</strong> unit just boxed at Packaging (awaiting dispatch), or</li>
   <li>a <strong>UDR return</strong> that the Store has issued back out for re-dispatch.</li>
 </ul>
-<p>A UDR return keeps its original sealed box, so PKG Out re-dispatches it on that same label without re-boxing. Anything that is neither is rejected.</p>
+<p>A UDR return keeps its original sealed box, so PKG Out re-dispatches it on that same label without re-boxing. Anything that is neither is rejected. A label ending <code>-E</code> writes an <span class="mono">RTE</span> scan, <code>-R</code> writes <span class="mono">RTR</span>, and <code>-X</code> writes <span class="mono">RTX</span>, tagged <span class="mono">RTX &check;</span> in the log.</p>

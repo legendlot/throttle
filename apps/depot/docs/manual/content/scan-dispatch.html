@@ -4,7 +4,7 @@
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Recording each physical dispatch move on the floor.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: each scan moves a real unit.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Box labels (<code>LOT-&hellip;-E/R</code>), box refs and channels.</div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Box labels (<code>LOT-&hellip;-E/R/X</code>), box refs and channels.</div></div>
 </div>
 
 <h2 class="sec">The Dispatch Flow, in floor order</h2>
@@ -17,7 +17,7 @@
   <tbody>
     <tr>
       <td><strong>Dispatch In</strong> (DTK)</td>
-      <td>The box label, <code>LOT-&hellip;-E/R</code>.</td>
+      <td>The box label, <code>LOT-&hellip;-E/R/X</code>.</td>
       <td>Takes a packed unit into the dispatch area, ready to allocate.</td>
       <td>Anything that has not come through production&rsquo;s final pack step (not yet ready to dispatch).</td>
     </tr>
@@ -25,7 +25,7 @@
       <td><strong>Allocate</strong> (ALLOC)</td>
       <td>Pick the channel first, then the box label.</td>
       <td>Assigns the unit to a sales channel. Re-allocating to a different channel is free.</td>
-      <td>A unit not yet at Dispatch In, or already shipped.</td>
+      <td>A unit not yet at Dispatch In, or already shipped; an <strong>export</strong> box (<code>-X</code>) offered to a non-Export channel, or a non-export box offered to an Export channel.</td>
     </tr>
     <tr>
       <td><strong>Pack</strong> (PACK)</td>
@@ -53,7 +53,7 @@
     </tr>
     <tr>
       <td><strong>Stock Audit</strong> (STOCK_AUDIT)</td>
-      <td>Every held car box label, <code>LOT-&hellip;-E/R</code>.</td>
+      <td>Every held car box label, <code>LOT-&hellip;-E/R/X</code>.</td>
       <td>Feeds the open audit&rsquo;s count. Re-scans of the same car are ignored, so multi-pass and two people scanning is safe.</td>
       <td>Soft by design: it warns but does not stop you (see below).</td>
     </tr>

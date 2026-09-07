@@ -10,7 +10,7 @@
 <p>Production owns every run request. The store never issues stock on its own; it only fills a request that lands in its queue. Each tab below explains how the materials move, step by step, and which system handles each step.</p>
 
 <h2 class="sec">Fresh</h2>
-<p>A normal in-house build. Pick the product, line, shift and the variant quantities (E-Comm and Retail). <strong>You also pick the run&rsquo;s format.</strong> This is required, and it tells the store exactly what to issue:</p>
+<p>A normal in-house build. Pick the product, line, shift and the variant quantities: <strong>Ecom, Retail and Export</strong>. The run&rsquo;s total is Ecom + Retail + Export. Export is for units bound for an export destination (today: Amazon US); its units get an export box on the pick list and are packed under the <strong>EXPORT</strong> channel at Packaging, printing a <code>-X</code> batch label. <strong>You also pick the run&rsquo;s format.</strong> This is required, and it tells the store exactly what to issue:</p>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">CKD</div><div class="a-val"><p>Loose parts. The store issues the full component pick list and the floor assembles the car.</p></div></div>
   <div class="a-row"><div class="a-key">SKD</div><div class="a-val"><p>Part-built bundles. The store issues the SKD bundle plus the finishing kit.</p></div></div>
@@ -91,7 +91,7 @@ FINISH  (in-house, a separate run)
     <tr><td class="mono">Upcoming</td><td>Outsourced runs sent to the vendor, waiting for the built cars. The cars come back through the store&rsquo;s Receiving (declare FBU, link the run) and the run auto-completes once fully received. To turn the built cars into finished units, raise a separate <strong>Fresh run, format FBU</strong>.</td></tr>
   </tbody>
 </table>
-<p>Open ad-hoc parts requests are listed here too, with a Cancel action. Click any run to open its detail: vendor info, work orders, the pick list and the receipt status.</p>
+<p>Open ad-hoc parts requests are listed here too, with a Cancel action. Click any run to open its detail: vendor info, work orders, the pick list and the receipt status. Work order quantities show as <span class="mono">E:n R:n</span>, with a trailing <span class="mono">X:n</span> when the run carries export quantity.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; The store fulfils from Garage</div>

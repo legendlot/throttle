@@ -6,6 +6,19 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## 1.16.0 - 2026-09-07
+
+- **New Run / Request** (Fresh) documents the new **Export** quantity column alongside Ecom and
+  Retail; a run's total is now Ecom + Retail + Export, and Recent Runs' work-order line shows a
+  trailing `X:n` when a run carries export quantity.
+- **Planner** documents the Export sibling on both the scheduling panel's per-variant quantities
+  (`n / gap`, gap sourced from dispatch-plan rows mapped to Export) and on every cart line, where
+  it always shows, defaulting to 0.
+- **Production stations (Scanner)**: **Packaging** documents the new ECOM / RETAIL / EXPORT channel
+  toggle (EXPORT prints a `-X` batch label, for export destinations, today Amazon US) and that the
+  choice persists on the phone until changed; **PKG Out** documents the `-X` label writing an
+  `RTX` scan alongside RTE/RTR, tagged `RTX ✓`.
+
 ## 1.15.0 - 2026-09-03
 
 - **Manpower / Attendance** documents the new **Add attendance** button (permission `attendance_manage`, 25 people, deliberately narrower than the rest of Manpower): what it's for (the scanner refuses a first punch outside every shift window and creates no row at all), the fields, the 7-day backdate limit, the one-row-per-person-per-day rule, and that a row with no shift attached is expected, not an error.

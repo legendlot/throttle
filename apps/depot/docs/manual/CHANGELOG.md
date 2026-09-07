@@ -1,5 +1,15 @@
 # Changelog — Depot Operations Manual
 
+## 1.13.0 — 2026-09-07 (Session 354)
+
+- **Channel Master:** dispatch channels get a fourth type, **Export** (green badge), alongside
+  Ecom, Retail and Other. An Export channel only takes export boxes (the floor's `-X` labels) and
+  an export box only goes to an Export channel; common packaging never bypasses that. Today's one
+  Export channel is Amazon US (Export); future destinations (Walmart, Dubai) are just new channels
+  of type Export.
+- **Dispatch scanner:** box labels now read `LOT-…-E/R/X`; Allocate rejects an export/non-export
+  mismatch between the box and the channel.
+
 ## 1.12.0 — 2026-09-07 (Session 354)
 
 - **Shipments:** order notes typed on the Snorkel sales order now also show here, not only on the
