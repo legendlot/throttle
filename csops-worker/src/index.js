@@ -6911,8 +6911,23 @@ async function relayWaIngestInbound(m, env) {
   const pmid = m?.provider_message_id ? String(m.provider_message_id) : null;
 
   if (pmid) {
-    const ex = await sb(`/rest/v1/cs_wa_messages?provider_message_id=eq.${encodeURIComponent(pmid)}&select=id&limit=1`, env);
-    if (ex.data?.[0]) return { deduped: true };
+    const ex = await sb(`/rest/v1/cs_wa_messages?provider_message_id=eq.${encodeURIComponent(pmid)}&select=id,thread_id&limit=1`, env);
+    if (ex.data?.[0]) {
+      // A Meta redelivery of a message the bot already answered: the transcript rows were
+      // written on the FIRST delivery (skip below), but the rail still needs applying here —
+      // `m.bot.handled` carries the live session state and this is the only place a redelivery
+      // is ever seen (relayWaIngestInbound returns before thread resolution above).
+      if (m?.bot?.handled) {
+        const dt = await sb(`/rest/v1/cs_wa_threads?id=eq.${ex.data[0].thread_id}&select=id,thread_state`, env);
+        const dThread = dt.data?.[0] || null;
+        if (dThread) {
+          const dp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread: dThread, now: new Date().toISOString() });
+          await sb(`/rest/v1/cs_wa_threads?id=eq.${dThread.id}`, env, { method: 'PATCH', body: JSON.stringify(dp) }).catch(() => {});
+        }
+        return { deduped: true, bot_rail: true };
+      }
+      return { deduped: true };
+    }
   }
 
   // m.name is Meta's contacts[].profile.name, forwarded by commsops and previously discarded.
@@ -6956,17 +6971,20 @@ async function relayWaIngestInbound(m, env) {
   // S355 — a bot-handled turn: write the bot's lines (tagged relay_bot), drive the bot_active rail,
   // and SKIP the redirect + out-of-hours auto-reply (the bot IS this inbound's auto-message).
   if (m?.bot?.handled) {
-    // Transcript rows only for a first delivery; the RAIL is applied on every delivery — a Meta
-    // redelivery of a message the bot already answered still carries the live session state, and
-    // skipping the patch would leave an active session on an unrailed thread (retro-assign grabs it).
+    // Transcript rows once; the rail is re-applied on a redelivery in the dedup branch above
+    // (a redelivered message never reaches this point — the pmid check returns earlier).
+    // Anchor the bot's rows/patch to INSERT time (now), not ts (Meta's whole-second message
+    // time) — the inbound row's own created_at is DB now() at insert, measured 1-4s after ts,
+    // so anchoring to ts put the bot's reply ABOVE the customer's message in created_at order.
+    const botNow = new Date().toISOString();
     if (!m.bot.duplicate) {
-      const rows = botOutboundRows({ threadId: thread.id, wabaPhoneNumberId: m?.phone_number_id || thread.waba_phone_number_id || null, replies: m.bot.replies || [], now: ts });
+      const rows = botOutboundRows({ threadId: thread.id, wabaPhoneNumberId: m?.phone_number_id || thread.waba_phone_number_id || null, replies: m.bot.replies || [], now: botNow, ticketId: linkedTicketId });
       if (rows.length) {
         const bi = await sb('/rest/v1/cs_wa_messages', env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
         if (!bi.ok) console.error('[relay-wa] bot rows insert failed', bi.status, JSON.stringify(bi.data)?.slice(0, 200));
       }
     }
-    const tp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread, now: ts });
+    const tp = botThreadPatch({ session_status: m.bot.session_status, handoff: !!m.bot.handoff, thread, now: botNow });
     await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(tp) }).catch(() => {});
     // keep the open ticket's history honest — the customer's line still happened
     if (linkedTicketId) {
@@ -10437,7 +10455,9 @@ async function getMessagingThreads(params, auth, env) {
       // Team-global unread: a customer message arrived after the thread was last opened,
       // and it isn't Done. `has_unread_inbound` is the DB-generated flag (last_inbound_at >
       // last_read_at); we AND in the open-state check here (S222, Pruthvi unread indicator).
-      unread: !!t.has_unread_inbound && t.thread_state !== 'closed',
+      // S355 fix round 1 — AND out a live bot session too, matching cs_unread_counts_by_channel's
+      // `AND NOT bot_active`: without this the per-row dot and the pill disagreed on a bot thread.
+      unread: !!t.has_unread_inbound && t.thread_state !== 'closed' && !t.bot_active,
       tags: tagsByThread[t.id] || [],
     };
   });
