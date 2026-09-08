@@ -19,7 +19,21 @@
   <li><span class="s-title">Mark Paid</span> <span class="role fin">Finance</span> &mdash; once payment has been made.</li>
   <li><span class="s-title">Mark Sent</span> <span class="role proc">Procurement</span> &mdash; records that the PO has gone to the supplier.</li>
 </ol>
-<p>Two more buttons are available while a PO is live: <strong>Amend</strong> (edit the header or shipping details, with a required change note that is logged as a new revision) and <strong>Cancel</strong> (stop the PO, with a required reason). <strong>Print PO</strong> opens a clean, printable copy in a new tab.</p>
+<p>Two more buttons are available while a PO is live: <strong>Amend</strong> (edit the header, shipping details or line prices, with a required change note that is logged as a new revision) and <strong>Cancel</strong> (stop the PO, with a required reason). <strong>Print PO</strong> opens a clean, printable copy in a new tab.</p>
+
+<h2 class="sec">Amending line prices (from 8 Sep 2026)</h2>
+<p>The Amend modal carries a <strong>Line Prices</strong> table: # &middot; Part code &middot; Description &middot; Ordered &middot; Unit price. Use it to correct a price after the PO has already been issued.</p>
+<ol class="steps">
+  <li><span class="s-title">Click Amend.</span> Available on any live PO (not Cancelled, Closed or Soft).</li>
+  <li><span class="s-title">Edit the Unit price on any line.</span> Ordered quantity is shown but is not editable here, change quantities through Add Line or receiving instead.</li>
+  <li><span class="s-title">Type the change note</span> explaining why the price changed, then save.</li>
+</ol>
+<p>Saving bumps the PO&rsquo;s revision by one, writes the old and new price for every changed line to Revision History, and the PO value recalculates automatically.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Line Prices is hidden where you cannot see prices</div>
+  <p>On a China PO, if you do not have the China-PO permission, the Line Prices table does not appear in Amend, matching the padlocked figures everywhere else on this screen.</p>
+</div>
 
 <div class="callout note">
   <div class="c-title">&#9432; A Closed PO with nothing received can still be cancelled (from 3 Sep 2026)</div>
@@ -50,4 +64,9 @@
   <p>Line types now include <strong>Charge</strong>. Use it for anything the vendor bills that is not goods &mdash; shipping, transportation, die charges, tool charges, design plates.</p>
   <p>A Charge line behaves like any other PO line: it still needs an <strong>HSN/SAC code and GST&nbsp;%</strong>, it still prints on the PO, and it still counts toward the PO total. The one difference is that <strong>it is never sent to the store as something to receive</strong>. Before this, a shipping charge appeared on the receiving screen as a quantity to count &mdash; one asked the floor to count 4,080 of &ldquo;Shipping Charges&rdquo;.</p>
   <p class="tip">If you find yourself typing a rupee amount into the <strong>Qty</strong> box to make the total come out right, the line should be a Charge: enter quantity&nbsp;1 and put the amount in Unit Price.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The part master wins on HSN (from 8 Sep 2026)</div>
+  <p>A line&rsquo;s HSN and GST pre-fill from the part master. When lines are added or the PO is amended, a line whose HSN disagrees with the master is re-aligned back to it, most people cannot make it stick by re-typing it. Only <strong>Snorkel Admin, Finance or Procurement Manager</strong> can correct a part&rsquo;s HSN this way, and their correction updates the part master for every future PO. Anyone else&rsquo;s typed code is replaced and the attempt is logged. See <a href="#po-new">Raising a PO</a> for the full rule.</p>
 </div>

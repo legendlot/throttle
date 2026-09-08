@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.14.0] - 2026-09-08
+### Added
+- PO Detail: documented the new Line Prices table inside Amend (# / Part code / Description / Ordered / Unit price), letting any line's unit price be corrected after issue with a required change note, revision bump and old/new price logged to Revision History; quantities stay off-limits there; hidden where China-PO prices are restricted; refused on Cancelled/Closed/Soft POs.
+### Changed
+- Raising a PO and PO Detail: documented that the part master now wins on HSN, a typed HSN that disagrees with the master is re-aligned on raise/amend; only Snorkel Admin, Finance or Procurement Manager can correct a part's HSN by typing a new code (which updates the master for future POs), anyone else's typed code is replaced and logged.
+
 ## [1.13.2] - 2026-09-08
 ### Changed
 - Raising a PO: By Units (FBU/CKD) rows now have an editable Unit Price plus read-only HSN and GST% columns on INR POs; documented that the price is per product unit including the remote, and that a blank price on a row with quantity is refused (RULE-PO-001).

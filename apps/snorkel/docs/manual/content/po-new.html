@@ -36,6 +36,11 @@
   <p>For any PO priced in rupees, each line must carry an <strong>HSN code</strong> and a <strong>GST%</strong> before the PO can be printed. When you pick a part with a known HSN, Snorkel fills the GST rate for you and adds it into the running CGST/SGST or IGST totals. Foreign-currency POs have no GST block at all.</p>
 </div>
 
+<div class="callout note">
+  <div class="c-title">&#9432; The part master wins on HSN (from 8 Sep 2026)</div>
+  <p>A line&rsquo;s HSN and GST still pre-fill from the part master. If you type a different HSN on a line, most people will see it quietly re-aligned back to the part master&rsquo;s code when the PO is raised or amended, only <strong>Snorkel Admin, Finance or Procurement Manager</strong> can correct a part&rsquo;s HSN by typing a new code on a line, and doing so updates the part master itself for every future PO. Anyone else&rsquo;s typed code is replaced and the attempt is logged. Before this, any typed HSN silently overwrote the part master for everyone.</p>
+</div>
+
 <div class="callout danger">
   <div class="c-title">&#9940; A By Units row with a quantity needs a price (from 8 Sep 2026)</div>
   <p>On an INR PO, submitting with a quantity but a blank Unit Price on a By Units row is refused: a toast names the row so you know which one to fix. Payments cannot be raised off a PO with no price and no GST (RULE-PO-001). The pre-submit totals panel now folds unit rows into the same subtotal and GST totals as the parts lines.</p>
