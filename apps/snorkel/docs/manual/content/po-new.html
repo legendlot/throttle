@@ -23,7 +23,9 @@
 <h2 class="sec">Step 2: fill the form</h2>
 <ol class="steps">
   <li><span class="s-title">Pick the vendor.</span> Choosing one auto-fills the currency, payment terms, source country and typical lead time from the vendor&rsquo;s record, so keep vendor records tidy.</li>
-  <li><span class="s-title">Add the line items.</span> Depending on the category you either tick parts off a product&rsquo;s parts list (quantities scale to the number of units), choose units of a finished product, or type lines in by hand. Every line you add shows in a running table with a live subtotal.</li>
+  <li><span class="s-title">Add the line items.</span> Depending on the category you either tick parts off a product&rsquo;s parts list (quantities scale to the number of units), choose units of a finished product, or type lines in by hand. Every line you add shows in a running table with a live subtotal.
+    <p>For <strong>Full Products &ndash; By Units</strong> (FBU or CKD), each row is Format, Variant, Colour, Product Qty, Remote Qty (only on products that have one), and an editable <strong>Unit Price</strong>. On an INR PO, Snorkel also shows read-only <strong>HSN</strong> and <strong>GST&nbsp;%</strong> columns pulled from the product master and the same HSN&rarr;GST table used on the Parts grid: you never type them. The unit price is <strong>per product unit, remote included</strong>, there is no separate price box for the remote; Remote Qty stays just a quantity on the line.</p>
+  </li>
   <li><span class="s-title">Fill the shipping timeline.</span> Ready date, shipping date, mode, forwarder and transit days. Pick a forwarder and Snorkel fills the transit days for the chosen mode, then works out the expected arrival date for you.</li>
   <li><span class="s-title">Choose the delivery address</span> (which of our company addresses the goods ship to). It defaults to the usual one.</li>
   <li><span class="s-title">Click Create PO.</span> It is saved as a Draft, ready to be accepted.</li>
@@ -32,6 +34,11 @@
 <div class="callout danger">
   <div class="c-title">&#9940; Indian POs need HSN and GST on every line</div>
   <p>For any PO priced in rupees, each line must carry an <strong>HSN code</strong> and a <strong>GST%</strong> before the PO can be printed. When you pick a part with a known HSN, Snorkel fills the GST rate for you and adds it into the running CGST/SGST or IGST totals. Foreign-currency POs have no GST block at all.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; A By Units row with a quantity needs a price (from 8 Sep 2026)</div>
+  <p>On an INR PO, submitting with a quantity but a blank Unit Price on a By Units row is refused: a toast names the row so you know which one to fix. Payments cannot be raised off a PO with no price and no GST (RULE-PO-001). The pre-submit totals panel now folds unit rows into the same subtotal and GST totals as the parts lines.</p>
 </div>
 
 <div class="callout note">

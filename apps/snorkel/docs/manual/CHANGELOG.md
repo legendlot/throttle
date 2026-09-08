@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.13.2] - 2026-09-08
+### Changed
+- Raising a PO: By Units (FBU/CKD) rows now have an editable Unit Price plus read-only HSN and GST% columns on INR POs; documented that the price is per product unit including the remote, and that a blank price on a row with quantity is refused (RULE-PO-001).
+
 ## [1.13.1] - 2026-09-04
 ### Fixed
 - Finance Queue: a held request is rejected from its own page (Open, then Reject), not from the On hold section.
