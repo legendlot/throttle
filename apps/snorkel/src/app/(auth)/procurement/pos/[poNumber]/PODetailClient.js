@@ -185,6 +185,12 @@ export default function PODetailPage() {
       actual_arrival_date: formatDateInput(po.actual_arrival_date),
       notes: po.notes || '',
       quality_hold: !!po.quality_hold,
+      // Per-line prices, keyed by po_lines.id (Joseph, 2026-09-07). Seeded from the stored
+      // price so an untouched row submits nothing. Empty on a China PO for a non-po_china
+      // user — the worker strips unit_price out of the read entirely.
+      linePrices: Object.fromEntries(
+        lines.map((l) => [String(l.id), l.unit_price != null ? String(l.unit_price) : '']),
+      ),
     });
     setAmendOpen(true);
   }
@@ -226,8 +232,25 @@ export default function PODetailPage() {
       if (amendData.invoice_value !== '') payload.invoice_value = parseFloat(amendData.invoice_value);
       if (amendData.transit_days !== '')  payload.transit_days  = parseInt(amendData.transit_days, 10);
       payload.quality_hold = !!amendData.quality_hold;
-      await workerFetch('amendPO', { data: payload }, session);
-      showToast(`${po.po_number} amended`, 'success');
+      // Line prices ride the same payload — one reason, one revision bump, one history entry.
+      // Only rows whose price actually changed are sent; the worker drops no-ops anyway.
+      if (isFinanceVisible) {
+        const priceEdits = lines
+          .map((l) => {
+            const raw = amendData.linePrices?.[String(l.id)];
+            if (raw === undefined) return null;
+            const next = String(raw).trim();
+            const cur = l.unit_price != null ? String(l.unit_price) : '';
+            if (next === cur) return null;
+            return { line_id: l.id, unit_price: next === '' ? null : Number(next) };
+          })
+          .filter(Boolean);
+        if (priceEdits.length) payload.line_prices = priceEdits;
+      }
+      const res = await workerFetch('amendPO', { data: payload }, session);
+      const nPrice = res?.data?.prices_changed || 0;
+      showToast(`${po.po_number} amended → rev ${res?.data?.revision ?? ''}`
+        + (nPrice ? ` · ${nPrice} price${nPrice === 1 ? '' : 's'} updated` : ''), 'success');
       setAmendOpen(false);
       loadPO();
     } catch (e) {
@@ -492,6 +515,8 @@ export default function PODetailPage() {
         <AmendModal
           po={po}
           session={session}
+          lines={lines}
+          financeVisible={isFinanceVisible}
           data={amendData}
           setData={setAmendData}
           onClose={() => !amendSubmitting && setAmendOpen(false)}
@@ -642,7 +667,7 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
   );
 }
 
-function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting }) {
+function AmendModal({ po, session, lines = [], financeVisible = true, data, setData, onClose, onSubmit, submitting }) {
   function set(field, value) { setData((d) => ({ ...d, [field]: value })); }
   const [vendorCache, setVendorCache] = useState([]);
   useEscapeClose(true, () => { if (!submitting) onClose(); });
@@ -717,6 +742,43 @@ function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting 
           <input type="checkbox" checked={!!data.quality_hold} onChange={(e) => set('quality_hold', e.target.checked)} disabled={submitting} />
           Quality Hold
         </label>
+
+        {/* Line prices — the only line field amendable after issue. Hidden entirely when the
+            financial strip is restricted (China PO, no po_china): the worker strips unit_price
+            out of the read, so there would be nothing to edit and the blanks would look like
+            zeroes. Quantities are NOT editable here — that is Add Line / receiving territory. */}
+        {financeVisible && lines.length > 0 && (
+          <>
+            <div style={{ ...labelStyle, marginBottom: 6 }}>Line Prices</div>
+            <table className="dt" style={{ marginBottom: 12 }}>
+              <thead><tr>
+                <th>#</th><th>Part code</th><th>Description</th>
+                <th className="num">Ordered</th><th className="num">Unit price</th>
+              </tr></thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={l.id || i}>
+                    <td className="mono dim">{i + 1}</td>
+                    <td className="mono">{l.part_code || '—'}</td>
+                    <td className="dim" style={{ whiteSpace: 'normal' }}>{l.description || l.product || '—'}</td>
+                    <td className="num mono">{(parseFloat(l.qty_ordered) || 0).toLocaleString('en-IN')}</td>
+                    <td className="num">
+                      <input
+                        type="number" min="0" step="0.01"
+                        value={data.linePrices?.[String(l.id)] ?? ''}
+                        onChange={(e) => setData((d) => ({
+                          ...d, linePrices: { ...(d.linePrices || {}), [String(l.id)]: e.target.value },
+                        }))}
+                        style={{ ...inputStyle, width: 110, fontFamily: 'var(--mono)' }}
+                        disabled={submitting}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
           <button style={btnSecondary} onClick={onClose} disabled={submitting}>Cancel</button>

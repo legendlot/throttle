@@ -3304,8 +3304,47 @@ export default {
             }
             const mouldViolA = await moulderPaintedPartViolations(amendVendorCode, amendLinesToCheck);
             if (mouldViolA.length) return moulderPaintedPartError(amendVendorName, mouldViolA);
+            // PER-LINE PRICE AMENDMENT (2026-09-08, Joseph #bugs). A price moves after a PO is
+            // issued — the vendor re-quotes, a rate was typed wrong — and until now NOTHING wrote
+            // po_lines.unit_price after issue: addPOLines only appends, updatePOLineReceived writes
+            // received qty, promoteSoftPO is Soft-only, and the full-line-replace path below is
+            // API-only and refuses once anything is received. This rides the SAME amendment
+            // contract (one reason, one revision bump, one snapshot, one activity entry) rather
+            // than opening a second door with its own history.
+            // ⛔ It writes `unit_price` ONLY. `po_lines.total_value` is a GENERATED column
+            // (qty_ordered * COALESCE(unit_price,0)); the payment over-consumption check sums it
+            // (~line 3885) and it recomputes itself. qty_received is never touched.
+            const linePrices = Array.isArray(d.line_prices) ? d.line_prices : [];
+            if (linePrices.length && Array.isArray(d.lines) && d.lines.length > 0) {
+              // The `lines` path DELETEs and re-inserts every row, so the ids these prices name
+              // stop existing mid-amendment. Refuse the combination rather than half-apply it.
+              return err('Send line_prices or a full `lines` replace, not both', 400);
+            }
+            for (const lp of linePrices) {
+              if (!lp || lp.line_id === undefined || lp.line_id === null || lp.line_id === '') {
+                return err('Each line_prices entry needs a line_id');
+              }
+              const p = lp.unit_price;
+              if (p === null || p === undefined || p === '') continue; // clearing a price is allowed
+              if (!Number.isFinite(Number(p)) || Number(p) < 0) {
+                return err(`Invalid unit price on line ${lp.line_id} — must be a number ≥ 0`, 422);
+              }
+            }
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
+            // Resolve the price edits against the stored rows BEFORE the snapshot — a price
+            // naming a line on another PO must not bump this one's revision (same rule as the
+            // guards above). A price equal to the stored one is dropped, not logged as a change.
+            const priceEdits = [];
+            for (const lp of linePrices) {
+              const cur = (linesR.data||[]).find(l => String(l.id) === String(lp.line_id));
+              if (!cur) return err(`Line ${lp.line_id} is not on ${d.po_number}`, 404);
+              const to = (lp.unit_price === null || lp.unit_price === undefined || lp.unit_price === '')
+                ? null : Number(lp.unit_price);
+              const from = cur.unit_price == null ? null : Number(cur.unit_price);
+              if (from === to) continue;
+              priceEdits.push({ line: cur, from, to });
+            }
             await insert('po_revisions', {
               po_number: d.po_number, revision: po.revision, changed_by: postRole,
               change_summary: d.change_summary||`Amendment to Rev ${newRev}`,
@@ -3349,10 +3388,23 @@ export default {
               await syncPartHsnToMaster(aLines, partHsnMasterA,
                 authResult?.fullName || postRole, postRole, d.po_number);
             }
+            // unit_price ONLY, one row at a time by id — every other column on the line
+            // (qty_ordered, qty_received, hsn, receive_format) is left exactly as it stands.
+            for (const e of priceEdits) {
+              await update('po_lines', { unit_price: e.to, updated_at: new Date().toISOString() },
+                `id=eq.${encodeURIComponent(e.line.id)}`);
+            }
+            const priceSummary = priceEdits.map(e =>
+              `${e.line.part_code || e.line.description || `line ${e.line.line_no}`} ${e.from == null ? '—' : e.from} → ${e.to == null ? '—' : e.to}`
+            ).join(', ');
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_AMENDED', 'PO', d.po_number,
-              `PO ${d.po_number} amended to rev ${newRev} — ${String(d.change_summary).trim()}`,
-              { revision: newRev, change_summary: String(d.change_summary).trim() });
-            return ok({ po_number: d.po_number, revision: newRev });
+              `PO ${d.po_number} amended to rev ${newRev} — ${String(d.change_summary).trim()}`
+                + (priceEdits.length ? ` · prices: ${priceSummary}` : ''),
+              { revision: newRev, change_summary: String(d.change_summary).trim(),
+                ...(priceEdits.length ? { line_prices: priceEdits.map(e => ({
+                  line_id: e.line.id, line_no: e.line.line_no, part_code: e.line.part_code || null,
+                  old_unit_price: e.from, new_unit_price: e.to })) } : {}) });
+            return ok({ po_number: d.po_number, revision: newRev, prices_changed: priceEdits.length });
           }
 
           // Additive line append on an already-raised PO (2026-07-20). The legitimate case behind
