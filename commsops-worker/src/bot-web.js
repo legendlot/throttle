@@ -82,7 +82,10 @@ async function forwardToCsops(env, session, identity, inboundText, replies, hand
   for (const r of replies) messages.push({ direction: 'outbound', text: r.text + (r.buttons ? '\n' + r.buttons.map((b, i) => `${i + 1}. ${b.label}`).join('\n') : '') });
   const init = { method: 'POST', headers: { Authorization: `Bearer ${env.CSOPS_WA_FORWARD_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: session.id, identity: identity || {}, messages, handoff: !!handoff, session_status: sessionStatus || null }) };
-  await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-web', init)).catch((e) => console.log('web_forward_error', String(e?.message || e)));
+  const res = await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-web', init)).catch((e) => { console.log('web_forward_error', String(e?.message || e)); return null; });
+  // S359: a non-2xx used to vanish here — csops was 500ing every returning visitor's turn
+  // (cs_wa_threads_phone_null_waba_idx) with no signal on either side. Mirrors wa-webhooks.js.
+  if (res && !res.ok) console.log('web_forward_failed', res.status, (await res.text().catch(() => '')).slice(0, 160));
 }
 
 // One turn: engine -> execute effects (bot-turn.js owns that loop, shared with WhatsApp)

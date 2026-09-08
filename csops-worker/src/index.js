@@ -6798,7 +6798,11 @@ async function handleRelayWebForward(b, env) {
       }),
     });
     thread = ins.data?.[0];
-    if (!thread) return err('thread_create_failed', 500);
+    if (!thread) {
+      // S359: log the PostgREST error — the 500 was silent while cs_wa_threads_phone_null_waba_idx rejected every returning phone.
+      console.error('[relay-web] thread create failed', ins.status, JSON.stringify(ins.data).slice(0, 200));
+      return err('thread_create_failed', 500);
+    }
   }
   const now = new Date().toISOString();
   // ⚠️ EVERY row must carry the SAME key set: PostgREST rejects a bulk insert whose rows
