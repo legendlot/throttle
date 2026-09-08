@@ -2341,7 +2341,17 @@ export default {
                 _china_restricted: true,
               });
             }
-            return ok({ po: poRow, vendor, lines: lines.data||[], revisions: revisions.data||[] });
+            // The detail page never SHOWED the delivery address, so nobody could see what
+            // changePODeliveryAddress was about to change (Prarthi, #bugs 2026-09-08). Same
+            // resolve as getPrintPOData. NOT added to the China-restricted return above —
+            // that path deliberately ships a stripped payload.
+            let delivery_address = null;
+            if (poRow.delivery_address_id) {
+              const daR = await query('company_addresses',
+                `?id=eq.${poRow.delivery_address_id}&limit=1`);
+              delivery_address = daR.data?.[0] || null;
+            }
+            return ok({ po: poRow, vendor, lines: lines.data||[], revisions: revisions.data||[], delivery_address });
           }
 
           case 'getPrintPOData': {
@@ -3437,6 +3447,58 @@ export default {
                   line_id: e.line.id, line_no: e.line.line_no, part_code: e.line.part_code || null,
                   old_unit_price: e.from, new_unit_price: e.to })) } : {}) });
             return ok({ po_number: d.po_number, revision: newRev, prices_changed: priceEdits.length, warning: priceWarning });
+          }
+
+          // DELIVERY ADDRESS CHANGE (2026-09-08, Prarthi #bugs). "Where do we ship it" moves
+          // after a PO is issued — the goods go to the other unit — and until now the only
+          // door was amendPO, which bumps the revision and snapshots po_revisions. A new
+          // revision is a new commercial document the vendor must be re-sent; a delivery
+          // address is not that. So this writes ONE header field, NO revision, NO snapshot,
+          // and pays for the missing revision row with an activity entry naming both labels.
+          // (Consistent with the standing call: a confirmed PO is ITEM-immutable, header
+          // fields stay amendable — the address is a header field.)
+          case 'changePODeliveryAddress': {
+            if (!canRaisePO(P)) return err('No permission to change the delivery address', 403);
+            const d = body.data;
+            if (!d.po_number) return err('po_number required');
+            if (d.delivery_address_id === undefined || d.delivery_address_id === null || d.delivery_address_id === '') {
+              return err('delivery_address_id required');
+            }
+            const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
+            if (!existing.ok||!existing.data[0]) return err('PO not found');
+            const po = existing.data[0];
+            // Same guards as amendPO — this is an amendment of a header field, only without
+            // the revision, so it must not open a wider door than amendPO already is.
+            if (po.source === 'China' && !canRaiseChinaPO(P)) {
+              return err('China PO amend requires po_china permission', 403);
+            }
+            if (['Cancelled','Closed'].includes(po.status)) {
+              return err(`A ${po.status} PO cannot be amended`, 400);
+            }
+            const newAddrId = parseInt(d.delivery_address_id, 10);
+            if (!Number.isFinite(newAddrId)) return err('delivery_address_id must be an id', 422);
+            // A PO must never point at a deactivated address — the print letterhead and the
+            // "where to ship" answer both read this row straight out.
+            const addrR = await query('company_addresses', `?id=eq.${newAddrId}&limit=1`);
+            const newAddr = addrR.data?.[0] || null;
+            if (!newAddr) return err('Delivery address not found', 404);
+            if (!newAddr.active) return err(`${newAddr.label} is deactivated — pick an active address`, 400);
+            if (po.delivery_address_id != null && Number(po.delivery_address_id) === newAddrId) {
+              return ok({ po_number: d.po_number, changed: false, delivery_address: newAddr });
+            }
+            let oldAddr = null;
+            if (po.delivery_address_id) {
+              const oaR = await query('company_addresses', `?id=eq.${po.delivery_address_id}&limit=1`);
+              oldAddr = oaR.data?.[0] || null;
+            }
+            await update('purchase_orders',
+              { delivery_address_id: newAddrId, updated_at: new Date().toISOString() },
+              `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_ADDRESS_CHANGED', 'PO', d.po_number,
+              `PO ${d.po_number} delivery address ${oldAddr?.label || '(none)'} → ${newAddr.label}`,
+              { old_delivery_address_id: po.delivery_address_id ?? null, old_label: oldAddr?.label || null,
+                new_delivery_address_id: newAddrId, new_label: newAddr.label });
+            return ok({ po_number: d.po_number, changed: true, delivery_address: newAddr });
           }
 
           // Additive line append on an already-raised PO (2026-07-20). The legitimate case behind

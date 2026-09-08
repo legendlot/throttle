@@ -118,6 +118,13 @@ export default function PODetailPage() {
   const [addLineSubmitting, setAddLineSubmitting] = useState(false);
   const [partsCache, setPartsCache] = useState(null);
   const [partsLoading, setPartsLoading] = useState(false);
+  // Delivery-address change (2026-09-08, Prarthi): its own door, NOT the Amend modal —
+  // the whole point is that the revision does not move and the PO number does not change.
+  const [addrOpen, setAddrOpen] = useState(false);
+  const [addrList, setAddrList] = useState([]);
+  const [addrLoading, setAddrLoading] = useState(false);
+  const [addrChoice, setAddrChoice] = useState('');
+  const [addrSubmitting, setAddrSubmitting] = useState(false);
 
   const loadPO = useCallback(async () => {
     if (!session || !poNumber || poNumber === 'sample') {
@@ -162,7 +169,7 @@ export default function PODetailPage() {
     );
   }
 
-  const { po, vendor = null, lines = [], revisions = [] } = poData;
+  const { po, vendor = null, lines = [], revisions = [], delivery_address: deliveryAddress = null } = poData;
   const status = po.status || 'Draft';
   const tax = computeTax(lines, po.currency, vendor?.gstin || null);
   const isInr = po.currency === 'INR';
@@ -305,6 +312,41 @@ export default function PODetailPage() {
     }
   }
 
+  async function openChangeAddress() {
+    setAddrChoice(po.delivery_address_id != null ? String(po.delivery_address_id) : '');
+    setAddrOpen(true);
+    setAddrLoading(true);
+    try {
+      const data = await garageFetch('getCompanyAddresses', {}, session);
+      setAddrList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setAddrList([]);
+      showToast(e.message || 'Failed to load addresses', 'error');
+    } finally {
+      setAddrLoading(false);
+    }
+  }
+
+  async function submitChangeAddress() {
+    if (!addrChoice) { showToast('Pick an address', 'error'); return; }
+    setAddrSubmitting(true);
+    try {
+      const res = await workerFetch('changePODeliveryAddress', {
+        data: { po_number: po.po_number, delivery_address_id: parseInt(addrChoice, 10) },
+      }, session);
+      const label = res?.data?.delivery_address?.label || '';
+      showToast(res?.data?.changed === false
+        ? `${po.po_number} already ships to ${label}`
+        : `${po.po_number} now ships to ${label} — revision unchanged`, 'success');
+      setAddrOpen(false);
+      loadPO();
+    } catch (e) {
+      showToast(e.message || 'Address change failed', 'error');
+    } finally {
+      setAddrSubmitting(false);
+    }
+  }
+
   async function submitCancel() {
     if (!cancelReason.trim()) { showToast('Reason required', 'error'); return; }
     setCancelSubmitting(true);
@@ -426,6 +468,18 @@ export default function PODetailPage() {
             <KV k="Forwarder" v={po.forwarder_code || '—'} />
             <KV k="Transit" v={po.transit_days != null ? `${po.transit_days}d` : '—'} />
           </div>
+          <div className="kv-divider">Delivery address</div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12 }}>{deliveryAddress?.label || '—'}</div>
+              <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {deliveryAddress
+                  ? [deliveryAddress.line1, deliveryAddress.city, deliveryAddress.pincode].filter(Boolean).join(', ')
+                  : 'Not set'}
+              </div>
+            </div>
+            {canAmend && <Btn onClick={openChangeAddress} disabled={actionLoading}><Pencil size={12} /> Change</Btn>}
+          </div>
         </Panel>
 
         <Panel title="Financial" pad action={!isFinanceVisible && <span className="panel-hint">🔒 China PO — restricted</span>}>
@@ -541,6 +595,19 @@ export default function PODetailPage() {
           onClose={() => !addLineSubmitting && setAddLineOpen(false)}
           onSubmit={submitAddLine}
           submitting={addLineSubmitting}
+        />
+      )}
+      {addrOpen && (
+        <DeliveryAddressModal
+          poNumber={po.po_number}
+          current={deliveryAddress}
+          addresses={addrList}
+          loading={addrLoading}
+          choice={addrChoice}
+          setChoice={setAddrChoice}
+          onClose={() => !addrSubmitting && setAddrOpen(false)}
+          onSubmit={submitChangeAddress}
+          submitting={addrSubmitting}
         />
       )}
       {cancelOpen && (
@@ -796,6 +863,50 @@ function AmendModal({ po, session, lines = [], financeVisible = true, data, setD
             disabled={submitting}
           >
             {submitting ? 'Saving…' : 'Save Amendment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Deliberately NOT part of AmendModal: changePODeliveryAddress writes one header field and
+// leaves the revision and the PO number alone, so it needs no change summary.
+function DeliveryAddressModal({ poNumber, current, addresses, loading, choice, setChoice, onClose, onSubmit, submitting }) {
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 380, maxWidth: 520 }}>
+        <h3 style={{ margin: 0, marginBottom: 4, color: 'var(--yellow)', fontSize: 14, fontFamily: 'var(--cond)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+          Delivery address — {poNumber}
+        </h3>
+        <div className="dim" style={{ fontSize: 11, marginBottom: 12 }}>
+          Currently {current?.label || 'not set'}. Changing it does not bump the revision or
+          raise a new PO number — the change is recorded in the activity log.
+        </div>
+        <span style={labelStyle}>Ship to *</span>
+        <select
+          value={choice}
+          onChange={(e) => setChoice(e.target.value)}
+          style={{ ...selectStyle, width: '100%' }}
+          disabled={submitting || loading}
+        >
+          {loading && <option value="">Loading…</option>}
+          {!loading && <option value="">Select an address…</option>}
+          {addresses.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}{a.city ? ` — ${a.city}` : ''}
+            </option>
+          ))}
+        </select>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 12 }}>
+          <button style={btnSecondary} onClick={onClose} disabled={submitting}>Cancel</button>
+          <button
+            style={{ ...btnPrimary, opacity: submitting || loading ? 0.6 : 1 }}
+            onClick={onSubmit}
+            disabled={submitting || loading}
+          >
+            {submitting ? 'Saving…' : 'Change address'}
           </button>
         </div>
       </div>
