@@ -2351,6 +2351,16 @@ export default {
                 `?id=eq.${poRow.delivery_address_id}&limit=1`);
               delivery_address = daR.data?.[0] || null;
             }
+            // S360 hostile review #8: the three PRINT paths all end `if (!deliveryAddress)
+            // deliveryAddress = company` (loadPoDocData, getPrintPOData, and lotopsproxy's Depot
+            // print). Without the same fallback the detail page would read "Not set" on a PO whose
+            // printed copy says Registered Office — the screen and the document disagreeing about
+            // where the goods go. 0 of 459 POs have a null address today, but postPO writes
+            // `?? null` and the New PO form sends null on a blank pick, so it is one blank away.
+            if (!delivery_address) {
+              const regR = await query('company_addresses', `?is_registered_office=eq.true&limit=1`);
+              delivery_address = regR.data?.[0] || null;
+            }
             return ok({ po: poRow, vendor, lines: lines.data||[], revisions: revisions.data||[], delivery_address });
           }
 
@@ -3459,7 +3469,7 @@ export default {
           // fields stay amendable — the address is a header field.)
           case 'changePODeliveryAddress': {
             if (!canRaisePO(P)) return err('No permission to change the delivery address', 403);
-            const d = body.data;
+            const d = body.data || {};
             if (!d.po_number) return err('po_number required');
             if (d.delivery_address_id === undefined || d.delivery_address_id === null || d.delivery_address_id === '') {
               return err('delivery_address_id required');
@@ -3475,6 +3485,19 @@ export default {
             if (['Cancelled','Closed'].includes(po.status)) {
               return err(`A ${po.status} PO cannot be amended`, 400);
             }
+            // S360 hostile review #4: amendPO refuses Soft and this did not, so the commit's claim
+            // that the guards "mirror amendPO exactly" was false on this axis. The UI hid it
+            // (canAmend is `!isSoft && …`) but the POST handler is reachable directly.
+            if (po.status === 'Soft') {
+              return err('Soft POs are promoted, not amended — use Promote', 400);
+            }
+            // S360 hostile review #7: parseInt COERCES — parseInt('2abc',10)===2, and [2] and 2.9
+            // all survive Number.isFinite and would resolve to a real address. amendPO passes the
+            // value raw so Postgres rejects it with 22P02; this door has to reject it itself or it
+            // is LOOSER than the action it claims to mirror.
+            if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
+              return err('delivery_address_id must be an id', 422);
+            }
             const newAddrId = parseInt(d.delivery_address_id, 10);
             if (!Number.isFinite(newAddrId)) return err('delivery_address_id must be an id', 422);
             // A PO must never point at a deactivated address — the print letterhead and the
@@ -3482,18 +3505,29 @@ export default {
             const addrR = await query('company_addresses', `?id=eq.${newAddrId}&limit=1`);
             const newAddr = addrR.data?.[0] || null;
             if (!newAddr) return err('Delivery address not found', 404);
-            if (!newAddr.active) return err(`${newAddr.label} is deactivated — pick an active address`, 400);
+            // S360 hostile review #11: the no-op check runs BEFORE the active check on purpose.
+            // Re-submitting a PO's own address must stay a no-op even if that address has since
+            // been deactivated — refusing there would error on a request that changes nothing.
             if (po.delivery_address_id != null && Number(po.delivery_address_id) === newAddrId) {
               return ok({ po_number: d.po_number, changed: false, delivery_address: newAddr });
             }
+            if (!newAddr.active) return err(`${newAddr.label} is deactivated — pick an active address`, 400);
             let oldAddr = null;
             if (po.delivery_address_id) {
               const oaR = await query('company_addresses', `?id=eq.${po.delivery_address_id}&limit=1`);
               oldAddr = oaR.data?.[0] || null;
             }
-            await update('purchase_orders',
+            // S360 hostile review #5: the PATCH result must be CHECKED before the audit row is
+            // written. A 0-row match comes back ok:true with an empty array (return=representation),
+            // so a PO cancelled between the guard read above and this write would still be logged
+            // as "A → B" and reported as success — an audit entry for something that never
+            // happened, in the one design whose whole safety story IS the audit entry.
+            const upd = await update('purchase_orders',
               { delivery_address_id: newAddrId, updated_at: new Date().toISOString() },
               `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            if (!upd.ok || !(upd.data && upd.data.length)) {
+              return err('Address change did not apply — the PO may have changed since you opened it', 409);
+            }
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_ADDRESS_CHANGED', 'PO', d.po_number,
               `PO ${d.po_number} delivery address ${oldAddr?.label || '(none)'} → ${newAddr.label}`,
               { old_delivery_address_id: po.delivery_address_id ?? null, old_label: oldAddr?.label || null,

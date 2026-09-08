@@ -469,17 +469,26 @@ export default function PODetailPage() {
             <KV k="Transit" v={po.transit_days != null ? `${po.transit_days}d` : '—'} />
           </div>
           <div className="kv-divider">Delivery address</div>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 12 }}>{deliveryAddress?.label || '—'}</div>
-              <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {deliveryAddress
-                  ? [deliveryAddress.line1, deliveryAddress.city, deliveryAddress.pincode].filter(Boolean).join(', ')
-                  : 'Not set'}
+          {/* S360 hostile review #6: getPO's china-restricted early return omits delivery_address,
+              but stripChinaPOHeader does NOT strip delivery_address_id — so without this gate a
+              viewer without po_china read "Not set" on a China PO that HAS an address, while the
+              modal would have preselected the right one. Every other restricted field on this
+              screen says Restricted rather than stating a false fact; this one now does too. */}
+          {poData._china_restricted ? (
+            <div style={{ fontSize: 12 }}><RestrictedField /></div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12 }}>{deliveryAddress?.label || '—'}</div>
+                <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {deliveryAddress
+                    ? [deliveryAddress.line1, deliveryAddress.city, deliveryAddress.pincode].filter(Boolean).join(', ')
+                    : 'Not set'}
+                </div>
               </div>
+              {canAmend && <Btn onClick={openChangeAddress} disabled={actionLoading}><Pencil size={12} /> Change</Btn>}
             </div>
-            {canAmend && <Btn onClick={openChangeAddress} disabled={actionLoading}><Pencil size={12} /> Change</Btn>}
-          </div>
+          )}
         </Panel>
 
         <Panel title="Financial" pad action={!isFinanceVisible && <span className="panel-hint">🔒 China PO — restricted</span>}>
@@ -882,7 +891,8 @@ function DeliveryAddressModal({ poNumber, current, addresses, loading, choice, s
         </h3>
         <div className="dim" style={{ fontSize: 11, marginBottom: 12 }}>
           Currently {current?.label || 'not set'}. Changing it does not bump the revision or
-          raise a new PO number — the change is recorded in the activity log.
+          raise a new PO number. The old and new address are recorded against your name in the
+          Garage activity log (not in this PO&rsquo;s Revision History).
         </div>
         <span style={labelStyle}>Ship to *</span>
         <select
