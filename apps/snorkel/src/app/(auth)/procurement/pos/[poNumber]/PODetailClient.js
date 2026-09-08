@@ -251,6 +251,7 @@ export default function PODetailPage() {
       const nPrice = res?.data?.prices_changed || 0;
       showToast(`${po.po_number} amended → rev ${res?.data?.revision ?? ''}`
         + (nPrice ? ` · ${nPrice} price${nPrice === 1 ? '' : 's'} updated` : ''), 'success');
+      if (res?.data?.warning) showToast(res.data.warning, 'error');
       setAmendOpen(false);
       loadPO();
     } catch (e) {
@@ -766,9 +767,12 @@ function AmendModal({ po, session, lines = [], financeVisible = true, data, setD
                       <input
                         type="number" min="0" step="0.01"
                         value={data.linePrices?.[String(l.id)] ?? ''}
-                        onChange={(e) => setData((d) => ({
-                          ...d, linePrices: { ...(d.linePrices || {}), [String(l.id)]: e.target.value },
-                        }))}
+                        onChange={(e) => setData((d) => (
+                          // Unparseable text comes back as '' from a number input — keep the
+                          // previous value rather than silently clearing the price to null.
+                          e.target.value === '' && e.target.validity?.badInput ? d : {
+                          ...d, linePrices: { ...(d.linePrices || {}), [String(l.id)]: e.target.value } }
+                        ))}
                         style={{ ...inputStyle, width: 110, fontFamily: 'var(--mono)' }}
                         disabled={submitting}
                       />

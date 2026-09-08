@@ -74,7 +74,7 @@ test('numeric hsn_code does not throw and normalises', () => {
 
 // ── Part side (PO lines → material_master), S358 hostile-review finding 9 ────────────
 const partMaster = new Map([['HW-SC-23-8', { hsn: '73181500', gst: 18 }], ['UNV-AU-GLUE-01', { hsn: '3506', gst: null }]]);
-const partOpts = { key: 'part_code', gst: 'gst_percent', prevKey: 'part_code' };
+const partOpts = new Function(lift('const PART_HSN_OPTS = ', ';') + '; return PART_HSN_OPTS;')();   // lifted, not retyped
 
 test('parts: create by a buyer with a stale code → master wins on the line, no push, blocked(role)', () => {
   const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '7318', gst_percent: 18 }], partMaster, null, false, partOpts);
@@ -95,4 +95,9 @@ test('parts: line with no part_code (description-only) is ignored', () => {
 test('parts: master hsn with no rate re-aligns the code and leaves gst_percent alone', () => {
   const r = planHsnSync([{ part_code: 'UNV-AU-GLUE-01', hsn_code: '35061000', gst_percent: 12 }], partMaster, prev(['UNV-AU-GLUE-01', '35061000']), false, partOpts);
   assert.equal(r.lines[0].hsn_code, '3506'); assert.equal(r.lines[0].gst_percent, 12);
+});
+
+test('parts: divergent rate — line gst_percent 12 vs master 18 moves to 18 on re-align (guards the gst field name)', () => {
+  const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '7318', gst_percent: 12 }], partMaster, prev(['HW-SC-23-8', '7318']), false, partOpts);
+  assert.equal(r.lines[0].hsn_code, '73181500'); assert.equal(r.lines[0].gst_percent, 18); assert.equal(r.lines[0].gst_pct, undefined);
 });

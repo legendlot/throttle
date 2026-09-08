@@ -663,7 +663,7 @@ async function syncHsnToMaster(plan, actor, actorRole, orderNo, target = 'produc
   }
   for (const b of plan.blocked) {
     await logActivity(actor, actorRole, 'HSN_MASTER_SYNC_BLOCKED', ENT, b.product,
-      `HSN ${b.from} → ${b.to} for ${b.product} NOT applied — only Admin/Finance may change a product's HSN${orderNo ? ` (${orderNo})` : ''}`,
+      `HSN ${b.from} → ${b.to} for ${b.product} NOT applied — only ${target === 'part' ? 'Admin/Finance/Procurement Manager may change a part' : 'Admin/Finance may change a product'}'s HSN${orderNo ? ` (${orderNo})` : ''}`,
       { ...b, order_no: orderNo || null });
   }
   if (plan.realign.length) {
@@ -3143,7 +3143,8 @@ export default {
               isSoft ? 'PO_SOFT_CREATED' : 'PO_CREATED', 'PO', poNumber,
               `PO ${poNumber} ${isSoft?'(Soft) ':''}created — ${d.vendor_name||''} · ${d.source||''} · ${lines.length} lines`,
               { vendor: d.vendor_name, source: d.source, soft: isSoft });
-            return ok({ po_number: poNumber, status: isSoft ? 'Soft' : 'Draft' });
+            return ok({ po_number: poNumber, status: isSoft ? 'Soft' : 'Draft',
+                        hsn_blocked: partPlan.blocked, hsn_realigned: partPlan.realign });
           }
 
           // Draft → Accepted. This is the proc-manager's "accept" — it ALSO flips the
@@ -3316,15 +3317,22 @@ export default {
               // stop existing mid-amendment. Refuse the combination rather than half-apply it.
               return err('Send line_prices or a full `lines` replace, not both', 400);
             }
+            // Normalise BEFORE validating: a whitespace string, a boolean or an array would
+            // otherwise coerce to 0 and price the line at nothing (`Number(' ') === 0` class).
+            const seenLineIds = new Set();
             for (const lp of linePrices) {
               if (!lp || lp.line_id === undefined || lp.line_id === null || lp.line_id === '') {
                 return err('Each line_prices entry needs a line_id');
               }
-              const p = lp.unit_price;
-              if (p === null || p === undefined || p === '') continue; // clearing a price is allowed
-              if (!Number.isFinite(Number(p)) || Number(p) < 0) {
+              if (seenLineIds.has(String(lp.line_id))) return err(`Line ${lp.line_id} appears twice in line_prices`, 400);
+              seenLineIds.add(String(lp.line_id));
+              let p = lp.unit_price;
+              if (typeof p === 'string') p = p.trim();
+              if (p === null || p === undefined || p === '') { lp.unit_price = null; continue; } // clearing a price is allowed
+              if (!(typeof p === 'number' || typeof p === 'string') || !Number.isFinite(Number(p)) || Number(p) < 0) {
                 return err(`Invalid unit price on line ${lp.line_id} — must be a number ≥ 0`, 422);
               }
+              lp.unit_price = Number(p);
             }
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
@@ -3341,9 +3349,14 @@ export default {
               if (from === to) continue;
               priceEdits.push({ line: cur, from, to });
             }
+            const priceSummary = priceEdits.map(e =>
+              `${e.line.part_code || e.line.description || `line ${e.line.line_no}`} ${e.from == null ? '—' : e.from} → ${e.to == null ? '—' : e.to}`
+            ).join(', ');
             await insert('po_revisions', {
               po_number: d.po_number, revision: po.revision, changed_by: postRole,
-              change_summary: d.change_summary||`Amendment to Rev ${newRev}`,
+              // The old→new prices ride the revision row too, so Revision History shows them —
+              // not only the activity log (S358 second hostile review, #1).
+              change_summary: (d.change_summary||`Amendment to Rev ${newRev}`) + (priceEdits.length ? ` · prices: ${priceSummary}` : ''),
               snapshot: JSON.stringify({ header: po, lines: linesR.data||[] }),
             });
             const updates = { revision: newRev, updated_at: new Date().toISOString() };
@@ -3391,9 +3404,20 @@ export default {
               await update('po_lines', { unit_price: e.to, updated_at: new Date().toISOString() },
                 `id=eq.${encodeURIComponent(e.line.id)}`);
             }
-            const priceSummary = priceEdits.map(e =>
-              `${e.line.part_code || e.line.description || `line ${e.line.line_no}`} ${e.from == null ? '—' : e.from} → ${e.to == null ? '—' : e.to}`
-            ).join(', ');
+            // A price CUT can leave approved / in-flight payment requests above the PO's new value;
+            // the over-consumption check only runs at request creation, so say so here.
+            let priceWarning = null;
+            if (priceEdits.length) {
+              const toById = new Map(priceEdits.map(e => [String(e.line.id), e.to]));
+              const newValue = (linesR.data||[]).reduce((sum, l) => sum + (toById.has(String(l.id))
+                ? (parseFloat(l.qty_ordered)||0) * (toById.get(String(l.id)) ?? 0)
+                : (parseFloat(l.total_value)||0)), 0);
+              const prR = await query('payment_requests',
+                `?linked_po_number=eq.${encodeURIComponent(d.po_number)}&status=not.in.(rejected,cancelled)&select=amount_to_pay`);
+              const committed = (prR.ok ? prR.data : []).reduce((sum, r) => sum + (Number(r.amount_to_pay)||0), 0);
+              if (committed > newValue + 0.005)
+                priceWarning = `Payment requests on this PO total ${committed.toFixed(2)}, above its new value ${newValue.toFixed(2)} — review them`;
+            }
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_AMENDED', 'PO', d.po_number,
               `PO ${d.po_number} amended to rev ${newRev} — ${String(d.change_summary).trim()}`
                 + (priceEdits.length ? ` · prices: ${priceSummary}` : ''),
@@ -3401,7 +3425,7 @@ export default {
                 ...(priceEdits.length ? { line_prices: priceEdits.map(e => ({
                   line_id: e.line.id, line_no: e.line.line_no, part_code: e.line.part_code || null,
                   old_unit_price: e.from, new_unit_price: e.to })) } : {}) });
-            return ok({ po_number: d.po_number, revision: newRev, prices_changed: priceEdits.length });
+            return ok({ po_number: d.po_number, revision: newRev, prices_changed: priceEdits.length, warning: priceWarning });
           }
 
           // Additive line append on an already-raised PO (2026-07-20). The legitimate case behind
@@ -3473,7 +3497,8 @@ export default {
               `PO ${d.po_number} → rev ${newRev}: added ${added} — ${String(d.change_summary).trim()}`,
               { revision: newRev, lines_added: lineRows.length, parts: lineRows.map(l => l.part_code).filter(Boolean),
                 change_summary: String(d.change_summary).trim() });
-            return ok({ po_number: d.po_number, revision: newRev, lines_added: lineRows.length });
+            return ok({ po_number: d.po_number, revision: newRev, lines_added: lineRows.length,
+                        hsn_blocked: partPlanL.blocked, hsn_realigned: partPlanL.realign });
           }
 
           case 'cancelPO': {
