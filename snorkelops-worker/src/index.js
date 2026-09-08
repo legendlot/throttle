@@ -1911,13 +1911,19 @@ export default {
 
           case 'getProductCatalogue': {
             const metaR = await queryPublic('product_master',
-              '?is_active=eq.true&component_type=not.in.(remote)&select=product,model,color,has_remote,receive_format&order=product.asc,model.asc,color.asc&limit=5000');
+              '?is_active=eq.true&component_type=not.in.(remote)&select=product,model,color,has_remote,receive_format,hsn_code&order=product.asc,model.asc,color.asc&limit=5000');
             if (!metaR.ok) return err('product_master fetch failed: ' + JSON.stringify(metaR.data));
             const variantSets   = {};
             const hasRemote     = {};
             const colorsMap     = {};
             const receiveFormat = {};
+            const hsnByProduct  = {};   // product family -> hsn_code (grain of product_master.hsn_code)
             for (const row of (metaR.data || [])) {
+              // HSN is captured before the model filter and keyed by FAMILY, first
+              // non-blank wins — same rule as hsnMasterAll(). It rides on this
+              // (ungated) catalogue rather than getProductHsnMap, which is gated on
+              // canSalesView and would 403 for a procurement-only PO buyer.
+              if (row.hsn_code && !hsnByProduct[row.product]) hsnByProduct[row.product] = normHsn(row.hsn_code);
               if (!row.model) continue;
               if (!variantSets[row.product]) variantSets[row.product] = new Set();
               variantSets[row.product].add(row.model);
@@ -1936,7 +1942,7 @@ export default {
               variantMap[product] = [...modelSet].sort();
             }
             const products = Object.keys(variantMap).sort();
-            return ok({ products, variants: variantMap, has_remote: hasRemote, colors: colorsMap, receive_format: receiveFormat });
+            return ok({ products, variants: variantMap, has_remote: hasRemote, colors: colorsMap, receive_format: receiveFormat, hsn: hsnByProduct });
           }
 
           case 'getProductFamilies': {

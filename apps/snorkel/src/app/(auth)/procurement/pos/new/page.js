@@ -145,7 +145,7 @@ function NewPOPage() {
   const searchParams = useSearchParams();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS, HAS_REMOTE, loading: productsLoading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS, HAS_REMOTE, PRODUCT_HSN, loading: productsLoading } = useProducts();
 
   const [step, setStep] = useState('category');
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -502,13 +502,19 @@ function NewPOPage() {
   const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct, PRODUCT_VARIANTS]);
   const fbuColors = useMemo(() => (fbuProduct ? (PRODUCT_COLORS[fbuProduct] || {}) : {}), [fbuProduct, PRODUCT_COLORS]);
   const productHasRemote = !!(fbuProduct && HAS_REMOTE && HAS_REMOTE.has?.(fbuProduct));
+  // Unit lines carry HSN/GST like every other INR line (RULE-PO-001). The code comes
+  // from public.product_master (grain = product family, so it is the same for every
+  // row in the grid) and the rate from the SAME longest-prefix resolver the Parts grid
+  // uses — never typed here, per the 2026-09-03 auto-fill decision.
+  const unitHsn = fbuProduct ? (PRODUCT_HSN[fbuProduct] || '') : '';
+  const unitGst = unitHsn && hsnMap.__resolve?.(unitHsn) != null ? hsnMap.__resolve(unitHsn) : null;
   function addUnitRow() {
     // Default receive_format inherits from the previous row when present so
     // operators don't have to reselect for every variant; falls back to 'FBU'
     // (most common case for China procurement).
     setUnitsRows((prev) => {
       const lastFormat = prev.length ? (prev[prev.length - 1].receive_format || 'FBU') : 'FBU';
-      return [...prev, { variant: '', color: '', qty: '', remote_qty: '', receive_format: lastFormat }];
+      return [...prev, { variant: '', color: '', qty: '', remote_qty: '', unit_price: '', receive_format: lastFormat }];
     });
   }
   function updateUnitRow(i, field, value) {
@@ -529,9 +535,18 @@ function NewPOPage() {
   // as the user edits qty / unit_price / HSN / GST% on any line. Uses the
   // selected vendor's GSTIN (when known) to decide intra-state vs interstate.
   const selectedVendor = useMemo(() => vendorMatch(vendor), [vendor, vendorCache]);
+  // Full Products rows live in unitsRows, not lineItems — fold them in so a By-Units PO
+  // no longer shows a ₹0 subtotal while the buyer is typing prices (S358, 2026-09-08).
+  const taxLines = useMemo(() => {
+    if (selectedCategory?.key !== 'full_products') return lineItems;
+    return [...lineItems, ...unitsRows
+      .filter(u => (parseInt(u.qty, 10) || 0) > 0)
+      .map(u => ({ qty_ordered: u.qty, unit_price: u.unit_price, hsn_code: unitHsn,
+                   gst_percent: unitGst == null ? '' : String(unitGst) }))];
+  }, [lineItems, unitsRows, selectedCategory, unitHsn, unitGst]);
   const tax = useMemo(
-    () => computeTax(lineItems, currency, selectedVendor?.gstin || null),
-    [lineItems, currency, selectedVendor]
+    () => computeTax(taxLines, currency, selectedVendor?.gstin || null),
+    [taxLines, currency, selectedVendor]
   );
   const lineTotal = tax.taxable;
 
@@ -548,12 +563,28 @@ function NewPOPage() {
     // The remote_qty is stored on the line itself (po_lines.remote_qty) — no
     // longer encoded in description as "+ Remote" suffix.
     if (selectedCategory?.key === 'full_products' && unitsRows.length) {
+      // ⛔ Payments cannot be raised off a priced-at-nothing PO (Siddhant, 2026-09-08):
+      // every unit line used to be pushed with unit_price '', which RULE-PO-001 forbids
+      // on an INR PO. Blocked here, naming the row, rather than tolerated downstream.
+      if (currency === 'INR') {
+        const unpriced = unitsRows
+          .map((u, i) => ({ u, i }))
+          .filter(({ u }) => (parseInt(u.qty, 10) || 0) > 0 && !(parseFloat(u.unit_price) > 0));
+        if (unpriced.length) {
+          const { u, i } = unpriced[0];
+          const label = [u.variant, u.color].filter(Boolean).join(' ') || 'no variant';
+          showToast(`Unit price required on row ${i + 1} (${fbuProduct} ${label}) — INR POs need a price on every line`, 'error');
+          return;
+        }
+      }
       unitsRows.forEach((u) => {
         const q = parseInt(u.qty, 10) || 0;
         if (q <= 0) return;
         const rq = parseInt(u.remote_qty, 10) || 0;
         const rf = u.receive_format || 'FBU';
         const remoteLabel = rq > 0 ? ` (+${rq} remote)` : '';
+        // The price is PER PRODUCT UNIT INCLUDING its remote — remote_qty stays a
+        // quantity on this same line and is never priced separately.
         lines.push({
           item_type:      rf === 'FBU' ? 'FBU Unit' : 'CKD Unit',
           product:        fbuProduct,
@@ -563,7 +594,9 @@ function NewPOPage() {
           remote_qty:     rq,
           receive_format: rf,
           unit:           'units',
-          unit_price:     '',
+          unit_price:     u.unit_price,
+          hsn_code:       unitHsn,
+          gst_percent:    unitGst == null ? '' : String(unitGst),
           description:    `${fbuProduct} ${u.variant || ''} ${u.color || ''} [${rf}]${remoteLabel}`.trim().replace(/\s+/g, ' '),
         });
       });
@@ -920,6 +953,9 @@ function NewPOPage() {
               updateUnitRow={updateUnitRow}
               handleVariantChange={handleVariantChange}
               removeUnitRow={removeUnitRow}
+              currency={currency}
+              unitHsn={unitHsn}
+              unitGst={unitGst}
             />
           )}
 
@@ -1398,7 +1434,7 @@ function ManualMode({
   );
 }
 
-function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote = false, unitsRows, addUnitRow, updateUnitRow, handleVariantChange, removeUnitRow }) {
+function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote = false, unitsRows, addUnitRow, updateUnitRow, handleVariantChange, removeUnitRow, currency = 'INR', unitHsn = '', unitGst = null }) {
   if (!fbuProduct) {
     return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Select a product first.</div>;
   }
@@ -1419,6 +1455,9 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
             <th style={tableThStyle}>Colour</th>
             <th style={tableThStyle}>Product Qty</th>
             {productHasRemote && <th style={tableThStyle}>Remote Qty</th>}
+            <th style={tableThStyle}>Unit Price</th>
+            {currency === 'INR' && <th style={tableThStyle}>HSN</th>}
+            {currency === 'INR' && <th style={tableThStyle}>GST %</th>}
             <th style={{ ...tableThStyle, width: 30 }}></th>
           </tr></thead>
           <tbody>
@@ -1481,6 +1520,28 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
                         style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }}
                         placeholder="0"
                       />
+                    </td>
+                  )}
+                  <td style={tableTdStyle}>
+                    {/* Per PRODUCT UNIT, remote included — there is no second price for
+                        the remote, it is a quantity on this same line. Required on an
+                        INR PO (RULE-PO-001); handleSubmit blocks a blank by row. */}
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={r.unit_price ?? ''}
+                      onChange={(e) => updateUnitRow(i, 'unit_price', e.target.value)}
+                      style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }}
+                      placeholder="0.00"
+                    />
+                  </td>
+                  {currency === 'INR' && (
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                      {unitHsn || <span style={{ color: '#fbbf24', fontSize: 9 }}>⚠ no HSN on product master</span>}
+                    </td>
+                  )}
+                  {currency === 'INR' && (
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                      {unitGst != null ? `${unitGst}%` : <span style={{ color: '#fbbf24', fontSize: 9 }}>⚠ no known rate</span>}
                     </td>
                   )}
                   <td style={tableTdStyle}>

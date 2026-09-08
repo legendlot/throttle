@@ -30,11 +30,12 @@ export function useProducts() {
   const PRODUCT_VARIANTS = data?.variants  || {};
   const PRODUCT_COLORS   = data?.colors    || {}; // { product: { model: [color, ...] } }
   const RECEIVE_FORMAT   = data?.receive_format || {}; // { product: 'FBU' | 'CKD' | 'SKD' }
+  const PRODUCT_HSN      = data?.hsn || {};           // { product: hsn_code } from product_master
   const HAS_REMOTE       = new Set(
     Object.entries(data?.has_remote || {})
       .filter(([, v]) => v)
       .map(([k]) => k),
   );
 
-  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, loading };
+  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, PRODUCT_HSN, loading };
 }
