@@ -3171,6 +3171,19 @@ export default {
             }
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_ACCEPTED', 'PO', d.po_number,
               `PO ${d.po_number} accepted${po.source_request_no ? ` (request ${po.source_request_no} approved)` : ''}`, {});
+            // Tell the requester their PO is live (S344, MOVED HERE 2026-09-08).
+            // ⛔ THIS FIRED ON finalApprovePO FOR FOUR DAYS AND THEREFORE NEVER FIRED AT ALL.
+            // Measured 2026-09-08: all 20 request-raised POs ever are `Accepted`, 0 have an
+            // `approved_at` — and 242 of 459 POs sit at Accepted with 0 approved_at. Accept IS
+            // the terminal state of this flow; final approval is a separate finance step that
+            // request-raised POs have never once been through. Joseph re-asked for the feature
+            // on 2026-09-08 because from the floor it looked unbuilt.
+            // Accept is also the honest moment for the message: it is where the request flips to
+            // `approved` and gets its linked_po_number, i.e. where "your PO has been raised"
+            // becomes true. finalApprovePO cannot notify without double-sending, because it
+            // refuses anything not already Accepted — so the hook lives here and only here.
+            if (ctx?.waitUntil) ctx.waitUntil(notifyRequesterPoRaised({ ...po, status: 'Accepted' }, env));
+            else await notifyRequesterPoRaised({ ...po, status: 'Accepted' }, env);
             return ok({ po_number: d.po_number, status: 'Accepted' });
           }
 
@@ -3194,12 +3207,10 @@ export default {
               po_number: d.po_number, revision: po.revision, changed_by: postRole, change_summary: 'PO final-approved',
             });
             await logActivity(authResult?.fullName||postRole, postRole, 'PO_APPROVED', 'PO', d.po_number, `PO ${d.po_number} approved (final)`, {});
-            // Tell the requester their PO is live (S344). waitUntil, not await: a browser
-            // render plus three Slack calls takes seconds, and an approval must not wait
-            // on it — nor fail if Slack is down. notifyRequesterPoRaised swallows all.
-            const approvedPo = { ...po, status: 'Approved' };
-            if (ctx?.waitUntil) ctx.waitUntil(notifyRequesterPoRaised(approvedPo, env));
-            else await notifyRequesterPoRaised(approvedPo, env);
+            // ⛔ NO requester DM here — it moved to `acceptPO` on 2026-09-08. This handler only
+            // ever sees POs that are already Accepted (guard above), so the requester has had
+            // their notification already; notifying again would be a duplicate, not a second
+            // event. See the note in acceptPO for the measurement that forced the move.
             return ok({ po_number: d.po_number, status: 'Approved' });
           }
 
