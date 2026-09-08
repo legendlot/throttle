@@ -595,8 +595,8 @@ function NewPOPage() {
           receive_format: rf,
           unit:           'units',
           unit_price:     u.unit_price,
-          hsn_code:       unitHsn,
-          gst_percent:    unitGst == null ? '' : String(unitGst),
+          hsn_code:       currency === 'INR' ? unitHsn : '',
+          gst_percent:    currency === 'INR' && unitGst != null ? String(unitGst) : '',
           description:    `${fbuProduct} ${u.variant || ''} ${u.color || ''} [${rf}]${remoteLabel}`.trim().replace(/\s+/g, ' '),
         });
       });

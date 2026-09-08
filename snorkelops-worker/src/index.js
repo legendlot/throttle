@@ -446,7 +446,7 @@ async function gstRateLookup() {
 // and any PostgREST in.() quoting trouble with names like "HP desk standee".
 async function hsnMasterAll() {
   const out = new Map();
-  const pmR = await queryPublic('product_master', '?is_active=eq.true&select=product,hsn_code&limit=5000');
+  const pmR = await queryPublic('product_master', '?is_active=eq.true&select=product,hsn_code&order=product.asc,sku.asc&limit=5000');
   const rows = (pmR.ok && Array.isArray(pmR.data)) ? pmR.data : [];
   const codes = new Set();
   for (const r of rows) {
@@ -595,6 +595,17 @@ function moulderPaintedPartError(vendorName, violations) {
 // A product the master has no code for is left alone either way; hsnGaps() names it.
 function planHsnSync(lines, master, prevHsn, allowed) {
   const pushes = new Map(), realign = [], blocked = [];
+  // First pass: an allowed user typing TWO different codes for one product in the same
+  // request is a conflict — refuse both pushes (the master keeps its code and wins on both
+  // lines) rather than letting the last line silently win (S358 hostile review).
+  const typedByProduct = new Map();
+  for (const l of (lines || [])) {
+    const v = normHsn(l.hsn_code);
+    const prev = prevHsn ? prevHsn.get(l.id) : undefined;
+    if ((prev === undefined || prev !== v) && v && isPlausibleHsn(v))
+      typedByProduct.set(l.product, (typedByProduct.get(l.product) || new Set()).add(v));
+  }
+  const conflicted = new Set([...typedByProduct].filter(([, set]) => set.size > 1).map(([p]) => p));
   const out = (lines || []).map(l => {
     const v = normHsn(l.hsn_code);
     const m = master.get(l.product);
@@ -603,10 +614,13 @@ function planHsnSync(lines, master, prevHsn, allowed) {
     const typedNow = prev === undefined || prev !== v;
     if (cur && v === cur) return l;
     if (typedNow && v && isPlausibleHsn(v)) {
-      if (allowed) { pushes.set(l.product, { from: cur, to: v }); return l; }
-      if (cur) blocked.push({ product: l.product, from: cur, to: v });
+      if (allowed && !conflicted.has(l.product)) { pushes.set(l.product, { from: cur, to: v }); return l; }
+      if (cur) blocked.push({ product: l.product, from: cur, to: v, reason: conflicted.has(l.product) ? 'conflict' : 'role' });
     }
     if (!cur) return l;
+    // A blank line on CREATE is the ordinary "default from the master" fill, not a correction;
+    // a blank on an EXISTING line (edit) is a stored gap being closed, so it is reported + logged.
+    if (!v && prev === undefined) return { ...l, hsn_code: cur, ...(m.gst != null ? { gst_pct: m.gst } : {}) };
     realign.push({ id: l.id || null, product: l.product, from: v || null, to: cur });
     const fixed = { ...l, hsn_code: cur };
     if (m.gst != null) fixed.gst_pct = m.gst;
@@ -4521,8 +4535,8 @@ export default {
             const order_no = await nextSeq4('sales_order', 'SO-');
             // HSN/GST default in from the product master, corrections sync back out.
             const hsnMaster = await hsnMasterAll();
-            const hsnPlan = planHsnSync(applyHsnDefaults(d.lines, hsnMaster), hsnMaster, null, canSyncHsnMaster(P));
-            const lines = hsnPlan.lines.map(computeSalesLine);
+            const hsnPlan = planHsnSync(d.lines, hsnMaster, null, canSyncHsnMaster(P));
+            const lines = applyHsnDefaults(hsnPlan.lines, hsnMaster).map(computeSalesLine);
             const subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
             const tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
             const grand_total = +(subtotal + tax_total).toFixed(2);
@@ -4646,13 +4660,13 @@ export default {
               // correction typed here syncs back out to the family.
               const hsnMasterU = await hsnMasterAll();
               const prevHsn = new Map(existing.map(ex => [ex.id, normHsn(ex.hsn_code)]));
-              const hsnPlanU = planHsnSync(applyHsnDefaults(
+              const hsnPlanU = planHsnSync(
                 existing.map(ex => {
                   const inc = d.lines.find(l => l.id === ex.id);
                   return { ...ex, ...(inc || {}) };
-                }), hsnMasterU
-              ), hsnMasterU, prevHsn, canSyncHsnMaster(P));
-              mergedLines = hsnPlanU.lines.map(m => ({ id: m.id, ...computeSalesLine(m), order_id: d.id }));
+                }), hsnMasterU, prevHsn, canSyncHsnMaster(P));
+              mergedLines = applyHsnDefaults(hsnPlanU.lines, hsnMasterU)
+                .map(m => ({ id: m.id, ...computeSalesLine(m), order_id: d.id }));
               hsnSyncedOnEdit = { master: hsnMasterU, plan: hsnPlanU };
               updates.subtotal    = +mergedLines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
               updates.tax_total   = +mergedLines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
@@ -4717,6 +4731,10 @@ export default {
             const hsnSyncedU = hsnSyncedOnEdit
               ? await syncHsnToMaster(hsnSyncedOnEdit.plan, authResult?.fullName || postRole, postRole, curO.order_no || null)
               : [];
+            // A re-align can move grand_total (master rate ≠ line rate), and payment_status is
+            // derived from it — recompute or the badge goes stale exactly the way S358's data fix
+            // just repaired (hostile review, finding 1).
+            if (hsnSyncedOnEdit?.plan.realign.length) await recomputeSalesPayment(d.id);
             return ok({ updated: d.id, dispatch_synced: !!frToSync,
                         manifest_synced: !!shipmentToSync, hsn_synced: hsnSyncedU,
                         hsn_realigned: hsnSyncedOnEdit ? hsnSyncedOnEdit.plan.realign : [],
