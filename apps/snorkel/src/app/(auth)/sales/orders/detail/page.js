@@ -396,9 +396,10 @@ function OrderDetailInner() {
               against this order, save will be refused and tell you so.
             </p>
             <p style={{ ...pageSub, marginTop: 4 }}>
-              HSN is pre-filled from the product master — <b>please check it</b>. If you correct
-              it here, the product master is updated too, so every future order for that product
-              picks up the corrected code.
+              HSN comes from the product master and the master wins: a line that disagrees with it
+              is re-aligned when you save (rate recomputed). Only Admin/Finance can change a
+              product&apos;s HSN — correcting it here updates the master for every future order;
+              anyone else should ask them to fix the catalogue.
             </p>
           </div>
         )}
