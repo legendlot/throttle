@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.16.0] - 2026-09-08
+### Added
+- PO Detail: documented changing an issued PO's delivery address (Ship to dropdown of active company addresses) via the new Change button next to the Delivery address block; this is the one amendment that does not bump the revision or raise a new PO number, instead written to the activity log with the old/new address and who changed it; a repeat pick of the same address is a no-op and writes nothing; deactivated addresses cannot be selected.
+### Changed
+- PO Detail: the layout paragraph and the "on the record" callout now note the delivery-address exception, since not every amendment bumps the revision.
+
 ## [1.15.0] - 2026-09-08
 ### Added
 - Payment requests: documented the My Requests status tabs (All / Submitted / Approved / Paid / Cancelled) and that the Value figure counts active requests only, with cancelled and rejected ones excluded and visible under their own tab; rupee-only, other currencies counted separately.

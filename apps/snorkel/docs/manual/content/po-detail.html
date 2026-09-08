@@ -8,7 +8,7 @@
 </div>
 
 <h2 class="sec">The layout</h2>
-<p>A header carries the PO number, its revision and status badges, and the action buttons. Below it: a <strong>PO Details</strong> panel (vendor, type, source, who raised and approved it, the shipping timeline) and a <strong>Financial</strong> panel (currency, terms, value, invoice). Then the <strong>Line Items</strong> table with a tax-aware total, and a <strong>Revision History</strong> of every change made. If the PO came from a request, a chip links back to it; if a payment has been routed, a chip shows its state.</p>
+<p>A header carries the PO number, its revision and status badges, and the action buttons. Below it: a <strong>PO Details</strong> panel (vendor, type, source, who raised and approved it, the shipping timeline, the delivery address) and a <strong>Financial</strong> panel (currency, terms, value, invoice). Then the <strong>Line Items</strong> table with a tax-aware total, and a <strong>Revision History</strong> of every change made. If the PO came from a request, a chip links back to it; if a payment has been routed, a chip shows its state.</p>
 
 <h2 class="sec">Moving the PO along</h2>
 <p>The approval chain is a relay. At each stage only the right button appears, and only for someone with the right role:</p>
@@ -46,6 +46,15 @@
   <p>Acceptance is procurement saying the PO is correct; final approval is the senior sign-off to actually commit the spend. They are intentionally separate buttons held by separate roles. On China POs the approver must not be the person who raised the PO, four eyes on our biggest orders.</p>
 </div>
 
+<h2 class="sec">Changing the delivery address (from 8 Sep 2026)</h2>
+<p>The PO Details panel shows a <strong>Delivery address</strong> block (label and address line) under the shipping timeline, with a <strong>Change</strong> button next to it.</p>
+<ol class="steps">
+  <li><span class="s-title">Click Change.</span> Visible to anyone who can Amend the PO (not on Cancelled or Closed POs; China POs still need the China-PO permission).</li>
+  <li><span class="s-title">Pick a Ship to address</span> from the dropdown of the company's active addresses, then confirm.</li>
+  <li><span class="s-title">The PO updates immediately.</span> Picking the address it already has is a no-op: Snorkel tells you nothing changed and writes nothing. A deactivated address cannot be selected.</li>
+</ol>
+<p>Unlike every other amendment on this screen, this one does <strong>not</strong> bump the revision number, raise a new PO number, or add a row to Revision History. Instead it is written to the <strong>activity log</strong>, recording the old and new address and who changed it. The reasoning: a new revision is a new commercial document that has to be re-sent to the vendor, and changing where we take delivery is not that, the vendor's copy of the PO is unaffected.</p>
+
 <h2 class="sec">Reading the money</h2>
 <p>The line table totals up a <strong>subtotal</strong>, then the GST (shown as CGST + SGST for a supplier in our own state, or IGST for one in another state), then the <strong>grand total</strong>. If a supplier invoice value has been entered and it disagrees with the PO by more than a rounding amount, a red <strong>MISMATCH</strong> flag appears so it can be checked before paying.</p>
 
@@ -55,8 +64,8 @@
 </div>
 
 <div class="callout tip">
-  <div class="c-title">&#10003; Every amendment is on the record</div>
-  <p>You cannot quietly change a live PO. Each amendment bumps the revision number and is logged in Revision History with who changed it, when, and the summary you typed. Use the change note to explain <em>why</em>, not just what.</p>
+  <div class="c-title">&#10003; Every change is on the record, even the one that skips the revision</div>
+  <p>You cannot quietly change a live PO. Most amendments bump the revision number and are logged in Revision History with who changed it, when, and the summary you typed. The one deliberate exception is the delivery address: it does not bump the revision, but it is still fully on the record, in the activity log with who changed it and the old and new address. Where a change note is required, use it to explain <em>why</em>, not just what.</p>
 </div>
 
 <div class="callout note">
