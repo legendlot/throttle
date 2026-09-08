@@ -1632,6 +1632,10 @@ export default {
             if (!canPayRequest(P)) return err('No permission', 403);
             const scope  = url.searchParams.get('scope') || 'mine';
             const status = url.searchParams.get('status') || '';
+            // An unrecognised scope used to fall through with NEITHER the status pin NOR the owner
+            // filter, handing a privileged caller every request in every status (S350 hostile review).
+            if (!['mine', 'approvals', 'finance'].includes(scope))
+              return err(`Unknown scope=${scope} — use mine | approvals | finance`, 400);
             let q = `?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=${PAY_PAGE_LIMIT}`;
             // A plain requester sees only their own. Approver/executor/super-admin see the queues.
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
@@ -4099,8 +4103,12 @@ export default {
               return err('Only the requester can cancel this', 403);
             if (ex.data[0].status === 'paid') return err('A paid request cannot be cancelled');
             const now = new Date().toISOString();
-            await update('payment_requests', { status: 'cancelled', updated_at: now },
-              `id=eq.${encodeURIComponent(d.id)}`);
+            // The read above is advisory; the PATCH carries its own guard so a request that turns
+            // `paid` between the two cannot be cancelled underneath finance (S350 hostile review).
+            const r = await update('payment_requests', { status: 'cancelled', updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}&status=neq.paid`);
+            if (!r.ok) return err('Cancel failed: ' + JSON.stringify(r.data));
+            if (!(Array.isArray(r.data) && r.data.length)) return err('A paid request cannot be cancelled', 409);
             return ok({ cancelled: d.id });
           }
 

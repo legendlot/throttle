@@ -75,7 +75,10 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   // On the All tab the Value is the ACTIVE value; on a specific tab it is that tab's value, so the
   // Cancelled tab still shows what was cancelled for tracking.
   const valueRows = tab === 'all' ? visible.filter(r => !CLOSED.has(r.status)) : visible;
-  const total = valueRows.reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
+  // Never add rupees to dollars: the headline is INR-only, and any other currency is counted, not summed.
+  const isINR = r => (r.currency || 'INR') === 'INR';
+  const total = valueRows.filter(isINR).reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
+  const foreign = valueRows.filter(r => !isINR(r)).length;
 
   function toggle(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -159,7 +162,8 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       {rows.length > 0 && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Kpi label="Requests" value={visible.length} />
-          <Kpi label={tab === 'all' ? 'Value (active)' : 'Value'} value={total} format={v => money(v)} />
+          <Kpi label={(tab === 'all' ? 'Value (active)' : 'Value') + (foreign ? ' · INR only' : '')} value={total} format={v => money(v)} />
+          {foreign > 0 && <Kpi label="Other currencies" value={foreign} />}
           {scope === 'mine' && tab === 'all' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
         </div>
       )}

@@ -86,7 +86,10 @@ export default function FinanceQueuePage() {
     () => (onlyUrgent ? ready.filter(r => r.is_urgent) : ready),
     [ready, onlyUrgent]);
 
-  const total   = rows.reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
+  // INR-only headline — a USD request must never be added to rupees and printed with ₹.
+  const isINR   = r => (r.currency || 'INR') === 'INR';
+  const total   = rows.filter(isINR).reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
+  const foreign = rows.filter(r => !isINR(r)).length;
   const overdue = rows.filter(r => r.needed_by && r.needed_by < todayISO()).length;
 
   const canHold = canExecute || canSuperAdmin;
@@ -183,7 +186,8 @@ export default function FinanceQueuePage() {
         <Kpi label="To pay" value={rows.length}
              format={v => truncation?.total != null ? `${Math.round(v)} of ${truncation.total}`
                         : (truncation ? `${Math.round(v)}+` : Math.round(v).toLocaleString('en-IN'))} />
-        <Kpi label={truncation ? 'Value (partial)' : 'Value'} value={total} format={v => money(v)} />
+        <Kpi label={(truncation ? 'Value (partial)' : 'Value') + (foreign ? ' · INR only' : '')} value={total} format={v => money(v)} />
+        {foreign > 0 && <Kpi label="Other currencies" value={foreign} />}
         {overdue > 0 && <Kpi label="Past needed-by" value={overdue} />}
         {held.length > 0 && <Kpi label="On hold" value={held.length} />}
       </div>
