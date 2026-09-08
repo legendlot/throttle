@@ -241,8 +241,12 @@ export default function PODetailPage() {
             if (raw === undefined) return null;
             const next = String(raw).trim();
             const cur = l.unit_price != null ? String(l.unit_price) : '';
-            if (next === cur) return null;
-            return { line_id: l.id, unit_price: next === '' ? null : Number(next) };
+            // An EMPTIED field is "no change", never "clear the price": a number input drops its
+            // whole value when a selection is replaced by a rejected keystroke (select-all + a
+            // letter), and a price silently going to null is worse than a price left alone.
+            // Clearing a price stays an API-only operation (unit_price: null on amendPO).
+            if (next === '' || next === cur) return null;
+            return { line_id: l.id, unit_price: Number(next) };
           })
           .filter(Boolean);
         if (priceEdits.length) payload.line_prices = priceEdits;
