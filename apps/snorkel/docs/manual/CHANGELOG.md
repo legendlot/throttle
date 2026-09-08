@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.15.0] - 2026-09-08
+### Added
+- Payment requests: documented the My Requests status tabs (All / Submitted / Approved / Paid / Cancelled) and that the Value figure counts active requests only, with cancelled and rejected ones excluded and visible under their own tab; rupee-only, other currencies counted separately.
+
 ## [1.14.0] - 2026-09-08
 ### Added
 - PO Detail: documented the new Line Prices table inside Amend (# / Part code / Description / Ordered / Unit price), letting any line's unit price be corrected after issue with a required change note, revision bump and old/new price logged to Revision History; quantities stay off-limits there; hidden where China-PO prices are restricted; refused on Cancelled/Closed/Soft POs.
