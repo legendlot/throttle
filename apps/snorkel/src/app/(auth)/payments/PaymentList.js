@@ -18,6 +18,17 @@ export const STATUS_LABEL = {
   paid: 'Paid', rejected: 'Rejected', cancelled: 'Cancelled',
 };
 
+// Tabs group the worker's statuses the way the requester thinks about them.
+export const STATUS_TABS = [
+  { key: 'all',       label: 'All',       statuses: null },
+  { key: 'submitted', label: 'Submitted', statuses: ['submitted', 'pending_approval'] },
+  { key: 'approved',  label: 'Approved',  statuses: ['approved', 'held'] },
+  { key: 'paid',      label: 'Paid',      statuses: ['paid'] },
+  { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled', 'rejected'] },
+];
+// Closed = nobody owes this any more. Excluded from the headline Value.
+const CLOSED = new Set(['cancelled', 'rejected']);
+
 export function money(v, cur = 'INR') {
   const n = Number(v);
   if (!Number.isFinite(n)) return '—';
@@ -37,6 +48,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [ref, setRef] = useState('');
+  const [tab, setTab] = useState('all');
   const firstLoadDone = useRef(false);
 
   const load = useCallback(async () => {
@@ -54,10 +66,21 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   }, [userId, scope, showToast]);
   useEffect(() => { load(); }, [load]);
 
+  // Status tabs (My Requests only — Approvals and Finance are status-pinned by the worker).
+  // Client-side over the loaded rows, so the truncation banner must not claim they narrow the read.
+  const tabs = scope === 'mine' ? STATUS_TABS : null;
+  const visible = tabs && tab !== 'all' ? rows.filter(r => STATUS_TABS.find(t => t.key === tab).statuses.includes(r.status)) : rows;
+  // A cancelled or rejected request is not money anyone still owes — it must never sit in the
+  // headline Value (Siddhanth, #bugs 1788853477: a cancelled ₹2,61,000 kept inflating the total).
+  // On the All tab the Value is the ACTIVE value; on a specific tab it is that tab's value, so the
+  // Cancelled tab still shows what was cancelled for tracking.
+  const valueRows = tab === 'all' ? visible.filter(r => !CLOSED.has(r.status)) : visible;
+  const total = valueRows.reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
+
   function toggle(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
-  const allOn = rows.length > 0 && sel.size === rows.length;
+  const allOn = visible.length > 0 && sel.size === visible.length;
 
   async function runBulk() {
     if (!sel.size) return;
@@ -83,8 +106,6 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
 
   if (loading) return <Spinner />;
 
-  const total = rows.reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
-
   return (
     <>
       <PageHead title={title} sub={sub} />
@@ -100,7 +121,27 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
               ? `Showing the first ${truncation.limit} of ${truncation.total} requests.`
               : `Showing the first ${truncation.limit} requests — there are more.`}
           </strong>{' '}
-          The counts below cover the loaded rows only. Filter by status to narrow the list.
+          The counts and tabs below cover the loaded rows only.
+        </div>
+      )}
+
+      {tabs && rows.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+          {tabs.map(t => {
+            const n = t.statuses ? rows.filter(r => t.statuses.includes(r.status)).length : rows.length;
+            const on = tab === t.key;
+            return (
+              <button key={t.key} type="button" onClick={() => { setTab(t.key); setSel(new Set()); }}
+                style={{
+                  padding: '6px 12px', borderRadius: 999, fontSize: 13, cursor: 'pointer',
+                  border: `1px solid ${on ? 'var(--accent)' : 'var(--bd)'}`,
+                  background: on ? 'var(--accent-soft)' : 'var(--surface)',
+                  color: on ? 'var(--accent)' : 'var(--t2)', fontWeight: on ? 700 : 500,
+                }}>
+                {t.label} <span style={{ opacity: 0.7 }}>{n}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -117,9 +158,9 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
 
       {rows.length > 0 && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <Kpi label="Requests" value={rows.length} />
-          <Kpi label="Value" value={total} format={v => money(v)} />
-          {scope === 'mine' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
+          <Kpi label="Requests" value={visible.length} />
+          <Kpi label={tab === 'all' ? 'Value (active)' : 'Value'} value={total} format={v => money(v)} />
+          {scope === 'mine' && tab === 'all' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
         </div>
       )}
 
@@ -140,9 +181,9 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
         </div>
       )}
 
-      <Panel title={title} count={rows.length}>
-        {rows.length === 0
-          ? <EmptyState icon="check-check" title="Nothing here" hint={emptyHint} />
+      <Panel title={title} count={visible.length}>
+        {visible.length === 0
+          ? <EmptyState icon="check-check" title="Nothing here" hint={rows.length ? 'No requests in this status.' : emptyHint} />
           : (
             <div style={{ overflowX: 'auto' }}>
               <table className="dt">
@@ -151,7 +192,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                     {bulkAction && (
                       <th style={{ width: 34 }}>
                         <input type="checkbox" checked={allOn}
-                          onChange={() => setSel(allOn ? new Set() : new Set(rows.map(r => r.id)))} />
+                          onChange={() => setSel(allOn ? new Set() : new Set(visible.map(r => r.id)))} />
                       </th>
                     )}
                     <th>Request</th><th>Payee</th><th>Purpose</th>
@@ -160,7 +201,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(r => (
+                  {visible.map(r => (
                     <tr key={r.id} style={{ cursor: 'pointer' }}
                         onClick={() => router.push(`/payments/detail?id=${r.id}`)}>
                       {bulkAction && (
