@@ -71,3 +71,28 @@ test('numeric hsn_code does not throw and normalises', () => {
   const r = planHsnSync([{ id: 'a', product: 'Wooden Garage', hsn_code: 95030010 }], master, prev(['a', '95030010']), false);
   assert.equal(r.realign.length, 0);
 });
+
+// ── Part side (PO lines → material_master), S358 hostile-review finding 9 ────────────
+const partMaster = new Map([['HW-SC-23-8', { hsn: '73181500', gst: 18 }], ['UNV-AU-GLUE-01', { hsn: '3506', gst: null }]]);
+const partOpts = { key: 'part_code', gst: 'gst_percent', prevKey: 'part_code' };
+
+test('parts: create by a buyer with a stale code → master wins on the line, no push, blocked(role)', () => {
+  const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '7318', gst_percent: 18 }], partMaster, null, false, partOpts);
+  assert.equal(r.pushes.size, 0); assert.equal(r.blocked.length, 1); assert.equal(r.lines[0].hsn_code, '73181500');
+});
+test('parts: create by admin with a new code → pushes for that part_code only', () => {
+  const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '73181600' }, { part_code: 'UNV-AU-GLUE-01', hsn_code: '3506' }], partMaster, null, true, partOpts);
+  assert.equal(r.pushes.size, 1); assert.equal(r.pushes.get('HW-SC-23-8').to, '73181600'); assert.equal(r.realign.length, 0);
+});
+test('parts: amend-replace by admin, line unchanged vs the existing line but stale vs master → re-aligned, NOT pushed', () => {
+  const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '7318', gst_percent: 18 }], partMaster, prev(['HW-SC-23-8', '7318']), true, partOpts);
+  assert.equal(r.pushes.size, 0); assert.equal(r.realign.length, 1); assert.equal(r.lines[0].hsn_code, '73181500'); assert.equal(r.lines[0].gst_percent, 18);
+});
+test('parts: line with no part_code (description-only) is ignored', () => {
+  const r = planHsnSync([{ part_code: null, hsn_code: '9999' }], partMaster, null, true, partOpts);
+  assert.equal(r.pushes.size, 0); assert.equal(r.realign.length, 0); assert.equal(r.lines[0].hsn_code, '9999');
+});
+test('parts: master hsn with no rate re-aligns the code and leaves gst_percent alone', () => {
+  const r = planHsnSync([{ part_code: 'UNV-AU-GLUE-01', hsn_code: '35061000', gst_percent: 12 }], partMaster, prev(['UNV-AU-GLUE-01', '35061000']), false, partOpts);
+  assert.equal(r.lines[0].hsn_code, '3506'); assert.equal(r.lines[0].gst_percent, 12);
+});

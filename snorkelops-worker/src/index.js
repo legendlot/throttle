@@ -65,6 +65,9 @@ const canPaySuperAdmin = p => !!p.payment_super_admin;
 // those two roles in store.snorkel_roles (measured 2026-09-08, S358). A viewer's stale
 // July line rewrote six Wooden Garage rows 5%→18% on 2026-09-02 before this existed.
 const canSyncHsnMaster = p => !!(p && (p.snorkel_admin || (p.payment_bank_view && p.sales_order_confirm)));
+// Parts: the same two roles PLUS Procurement Manager (po_request_accept = admin + procurement_manager,
+// measured 2026-09-08) — material_master is procurement's register.
+const canSyncPartHsnMaster = p => canSyncHsnMaster(p) || !!(p && p.po_request_accept);
 const canPayBankView   = p => !!p.payment_bank_view;
 const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
 
@@ -593,7 +596,11 @@ function moulderPaintedPartError(vendorName, violations) {
 //      the master — hsn + gst% — and reported as `hsn_realigned`. Invoiced orders cannot be
 //      edited at all, so this only ever changes an un-invoiced order's tax lines.
 // A product the master has no code for is left alone either way; hsnGaps() names it.
-function planHsnSync(lines, master, prevHsn, allowed) {
+// opts: { key: 'product' | 'part_code', gst: 'gst_pct' | 'gst_percent', prevKey: 'id' | 'part_code' } —
+// the SAME planner serves the sales-order side (product family → product_master) and the PO
+// side (part_code → material_master); only the field names differ (S358 hostile review, #9).
+function planHsnSync(lines, master, prevHsn, allowed, opts = {}) {
+  const KEY = opts.key || 'product', GST = opts.gst || 'gst_pct', PREV = opts.prevKey || 'id';
   const pushes = new Map(), realign = [], blocked = [];
   // First pass: an allowed user typing TWO different codes for one product in the same
   // request is a conflict — refuse both pushes (the master keeps its code and wins on both
@@ -601,29 +608,30 @@ function planHsnSync(lines, master, prevHsn, allowed) {
   const typedByProduct = new Map();
   for (const l of (lines || [])) {
     const v = normHsn(l.hsn_code);
-    const prev = prevHsn ? prevHsn.get(l.id) : undefined;
+    const prev = prevHsn ? prevHsn.get(l[PREV]) : undefined;
     if ((prev === undefined || prev !== v) && v && isPlausibleHsn(v))
-      typedByProduct.set(l.product, (typedByProduct.get(l.product) || new Set()).add(v));
+      if (l[KEY]) typedByProduct.set(l[KEY], (typedByProduct.get(l[KEY]) || new Set()).add(v));
   }
   const conflicted = new Set([...typedByProduct].filter(([, set]) => set.size > 1).map(([p]) => p));
   const out = (lines || []).map(l => {
     const v = normHsn(l.hsn_code);
-    const m = master.get(l.product);
+    if (!l[KEY]) return l;                                  // description-only line — nothing to key on
+    const m = master.get(l[KEY]);
     const cur = m?.hsn || null;
-    const prev = prevHsn ? prevHsn.get(l.id) : undefined;   // undefined = fresh line (create)
+    const prev = prevHsn ? prevHsn.get(l[PREV]) : undefined;   // undefined = fresh line (create)
     const typedNow = prev === undefined || prev !== v;
     if (cur && v === cur) return l;
     if (typedNow && v && isPlausibleHsn(v)) {
-      if (allowed && !conflicted.has(l.product)) { pushes.set(l.product, { from: cur, to: v }); return l; }
-      if (cur) blocked.push({ product: l.product, from: cur, to: v, reason: conflicted.has(l.product) ? 'conflict' : 'role' });
+      if (allowed && !conflicted.has(l[KEY])) { pushes.set(l[KEY], { from: cur, to: v }); return l; }
+      if (cur) blocked.push({ [KEY]: l[KEY], product: l[KEY], from: cur, to: v, reason: conflicted.has(l[KEY]) ? 'conflict' : 'role' });
     }
     if (!cur) return l;
     // A blank line on CREATE is the ordinary "default from the master" fill, not a correction;
     // a blank on an EXISTING line (edit) is a stored gap being closed, so it is reported + logged.
-    if (!v && prev === undefined) return { ...l, hsn_code: cur, ...(m.gst != null ? { gst_pct: m.gst } : {}) };
-    realign.push({ id: l.id || null, product: l.product, from: v || null, to: cur });
+    if (!v && prev === undefined) return { ...l, hsn_code: cur, ...(m.gst != null ? { [GST]: m.gst } : {}) };
+    realign.push({ id: l.id || null, [KEY]: l[KEY], product: l[KEY], from: v || null, to: cur });
     const fixed = { ...l, hsn_code: cur };
-    if (m.gst != null) fixed.gst_pct = m.gst;
+    if (m.gst != null) fixed[GST] = m.gst;
     return fixed;
   });
   return { lines: out, pushes, realign, blocked };
@@ -632,21 +640,29 @@ function planHsnSync(lines, master, prevHsn, allowed) {
 // Apply a plan's pushes to product_master (every active variant of the family) and log
 // everything — pushes, blocked attempts and re-aligned lines — so a wrong master can always
 // be traced to the order that set it. Never fails the order over the master sync.
-async function syncHsnToMaster(plan, actor, actorRole, orderNo) {
+async function syncHsnToMaster(plan, actor, actorRole, orderNo, target = 'product') {
   const applied = [];
-  for (const [product, ch] of plan.pushes) {             // at most a few products per order
-    const r = await sbPublic(
-      `/rest/v1/product_master?product=eq.${encodeURIComponent(product)}&is_active=eq.true`,
-      { method: 'PATCH', body: JSON.stringify({ hsn_code: ch.to }), prefer: 'return=representation' });
-    if (!r.ok) continue;
-    const n = Array.isArray(r.data) ? r.data.length : 0;
-    applied.push({ product, from: ch.from, to: ch.to, variants: n });
-    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', 'PRODUCT', product,
-      `HSN ${ch.from || '(none)'} → ${ch.to} for ${product} (${n} variant${n === 1 ? '' : 's'})${orderNo ? ` from ${orderNo}` : ''}`,
-      { product, from: ch.from, to: ch.to, variants: n, order_no: orderNo || null });
+  const ENT = target === 'part' ? 'PART' : 'PRODUCT';
+  for (const [key, ch] of plan.pushes) {                 // at most a few products/parts per order
+    let n = 1, ok = false;
+    if (target === 'part') {
+      const r = await update('material_master', { hsn_code: ch.to, updated_at: new Date().toISOString() },
+        `part_code=eq.${encodeURIComponent(key)}`);
+      ok = r.ok;
+    } else {
+      const r = await sbPublic(
+        `/rest/v1/product_master?product=eq.${encodeURIComponent(key)}&is_active=eq.true`,
+        { method: 'PATCH', body: JSON.stringify({ hsn_code: ch.to }), prefer: 'return=representation' });
+      ok = r.ok; n = Array.isArray(r.data) ? r.data.length : 0;
+    }
+    if (!ok) continue;
+    applied.push({ product: key, [target === 'part' ? 'part_code' : 'product']: key, from: ch.from, to: ch.to, variants: n });
+    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', ENT, key,
+      `HSN ${ch.from || '(none)'} → ${ch.to} for ${key}${target === 'part' ? '' : ` (${n} variant${n === 1 ? '' : 's'})`}${orderNo ? ` from ${orderNo}` : ''}`,
+      { [target === 'part' ? 'part_code' : 'product']: key, from: ch.from, to: ch.to, variants: n, order_no: orderNo || null });
   }
   for (const b of plan.blocked) {
-    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC_BLOCKED', 'PRODUCT', b.product,
+    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC_BLOCKED', ENT, b.product,
       `HSN ${b.from} → ${b.to} for ${b.product} NOT applied — only Admin/Finance may change a product's HSN${orderNo ? ` (${orderNo})` : ''}`,
       { ...b, order_no: orderNo || null });
   }
@@ -735,30 +751,10 @@ function resolveRequestLineTax(lines, master) {
   });
 }
 
-// Corrections flow back onto the part. Keyed on part_code, so — unlike the product
-// side — this touches exactly one row and no family fan-out is involved.
-async function syncPartHsnToMaster(lines, master, actor, actorRole, poNumber) {
-  const changes = new Map();
-  for (const l of (lines || [])) {
-    if (!l.part_code) continue;
-    const v = normHsn(l.hsn_code);
-    if (!v || !isPlausibleHsn(v)) continue;        // never blank the master, never store junk
-    const cur = master.get(l.part_code)?.hsn || null;
-    if (cur === v) continue;
-    changes.set(l.part_code, { from: cur, to: v });
-  }
-  const applied = [];
-  for (const [part_code, ch] of changes) {
-    const r = await update('material_master', { hsn_code: ch.to, updated_at: new Date().toISOString() },
-      `part_code=eq.${encodeURIComponent(part_code)}`);
-    if (!r.ok) continue;                            // never fail the PO over the master sync
-    applied.push({ part_code, from: ch.from, to: ch.to });
-    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', 'PART', part_code,
-      `HSN ${ch.from || '(none)'} → ${ch.to} for ${part_code}${poNumber ? ` from ${poNumber}` : ''}`,
-      { part_code, from: ch.from, to: ch.to, po_number: poNumber || null });
-  }
-  return applied;
-}
+// The part side runs the SAME master-wins planner as sales orders (S358 hostile review, #9):
+// planHsnSync(rawLines, partMaster, prevByPartCode, canSyncPartHsnMaster(P), PART_HSN_OPTS) then
+// syncHsnToMaster(plan, actor, role, poNumber, 'part'). Keyed on part_code — one row, no fan-out.
+const PART_HSN_OPTS = { key: 'part_code', gst: 'gst_percent', prevKey: 'part_code' };
 
 // Map shipment.status → sales-facing fulfilment label.
 function fulfilmentFromShipment(sh) {
@@ -3119,7 +3115,8 @@ export default {
             const rawLines = Array.isArray(d.lines) ? d.lines : [];
             // HSN/GST default in from the part master; corrections sync back out below.
             const partHsnMaster = rawLines.length ? await partHsnMasterAll() : new Map();
-            const lines = applyPartHsnDefaults(rawLines, partHsnMaster);
+            const partPlan = planHsnSync(rawLines, partHsnMaster, null, canSyncPartHsnMaster(P), PART_HSN_OPTS);
+            const lines = applyPartHsnDefaults(partPlan.lines, partHsnMaster);
             if (lines.length>0) {
               const lineRows = lines.map((l,i) => ({
                 po_number: poNumber, line_no: i+1, product: l.product||null, variant: l.variant||null,
@@ -3135,8 +3132,7 @@ export default {
               }));
               const lr = await insert('po_lines', lineRows);
               if (!lr.ok) return err('PO lines insert failed: '+JSON.stringify(lr.data));
-              await syncPartHsnToMaster(lines, partHsnMaster,
-                authResult?.fullName || postRole, postRole, poNumber);
+              await syncHsnToMaster(partPlan, authResult?.fullName || postRole, postRole, poNumber, 'part');
             }
             await insert('po_revisions', {
               po_number: poNumber, revision: 0, changed_by: postRole,
@@ -3371,7 +3367,9 @@ export default {
               if (dupMouldA) return err('Mould ' + dupMouldA + ' is on more than one line — one PO line per mould (a second line doubles every expected receiving quantity).', 422);
               await sb(`/rest/v1/po_lines?po_number=eq.${encodeURIComponent(d.po_number)}`, { method: 'DELETE' });
               const partHsnMasterA = await partHsnMasterAll();
-              const aLines = applyPartHsnDefaults(d.lines, partHsnMasterA);
+              const prevPartHsn = new Map((linesR.data || []).filter(l => l.part_code).map(l => [l.part_code, normHsn(l.hsn_code)]));
+              const partPlanA = planHsnSync(d.lines, partHsnMasterA, prevPartHsn, canSyncPartHsnMaster(P), PART_HSN_OPTS);
+              const aLines = applyPartHsnDefaults(partPlanA.lines, partHsnMasterA);
               const lineRows = aLines.map((l,i) => ({
                 po_number: d.po_number, line_no: i+1, product: l.product||null, variant: l.variant||null,
                 item_type: l.item_type||'Other', description: l.description||null, part_code: l.part_code||null,
@@ -3385,8 +3383,7 @@ export default {
                 mould_no: l.mould_no || null,
               }));
               await insert('po_lines', lineRows);
-              await syncPartHsnToMaster(aLines, partHsnMasterA,
-                authResult?.fullName || postRole, postRole, d.po_number);
+              await syncHsnToMaster(partPlanA, authResult?.fullName || postRole, postRole, d.po_number, 'part');
             }
             // unit_price ONLY, one row at a time by id — every other column on the line
             // (qty_ordered, qty_received, hsn, receive_format) is left exactly as it stands.
@@ -3450,7 +3447,8 @@ export default {
             // Append above the current highest line_no — never renumber what's there.
             const maxLineNo = curLines.reduce((m,l) => Math.max(m, parseInt(l.line_no)||0), 0);
             const partHsnMasterL = await partHsnMasterAll();
-            const newLinesH = applyPartHsnDefaults(newLines, partHsnMasterL);
+            const partPlanL = planHsnSync(newLines, partHsnMasterL, null, canSyncPartHsnMaster(P), PART_HSN_OPTS);
+            const newLinesH = applyPartHsnDefaults(partPlanL.lines, partHsnMasterL);
             const lineRows = newLinesH.map((l,i) => ({
               po_number: d.po_number, line_no: maxLineNo + i + 1,
               product: l.product||null, variant: l.variant||null,
@@ -3466,8 +3464,7 @@ export default {
             }));
             const lr = await insert('po_lines', lineRows);
             if (!lr.ok) return err('PO line insert failed: '+JSON.stringify(lr.data));
-            await syncPartHsnToMaster(newLinesH, partHsnMasterL,
-              authResult?.fullName || postRole, postRole, d.po_number);
+            await syncHsnToMaster(partPlanL, authResult?.fullName || postRole, postRole, d.po_number, 'part');
             await update('purchase_orders',
               { revision: newRev, updated_at: new Date().toISOString() },
               `po_number=eq.${encodeURIComponent(d.po_number)}`);
