@@ -34,6 +34,7 @@ export default function NewOrderPage() {
       if (!res.ok) throw new Error(res.error || 'Create failed');
       const gaps = res.data?.hsn_gaps || [];
       if (gaps.length) showToast(`Order ${res.data.order_no} created — but no HSN on file for ${gaps.join(', ')}; the GST shown is the form default, not a looked-up rate. Fix the catalogue before invoicing.`, 'error');
+      else if ((res.data?.hsn_blocked || []).length) showToast(`Order ${res.data.order_no} created — HSN kept at the catalogue value for ${res.data.hsn_blocked.map(b => b.product).join(', ')}: only Admin/Finance can change a product's HSN`, 'error');
       else showToast(`Order ${res.data.order_no} created`, 'success');
       router.push(`/sales/orders/detail?id=${encodeURIComponent(res.data.id)}`);
     } catch (e) {

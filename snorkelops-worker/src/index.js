@@ -60,6 +60,11 @@ const canPayRequest    = p => !!p.payment_request;
 const canPayApprove    = p => !!p.payment_approve;
 const canPayExecute    = p => !!p.payment_execute;
 const canPaySuperAdmin = p => !!p.payment_super_admin;
+// Who may change a product family's tax code from an order line. HSN is a statutory
+// classification, so only Snorkel Admin + Finance — the predicate resolves to exactly
+// those two roles in store.snorkel_roles (measured 2026-09-08, S358). A viewer's stale
+// July line rewrote six Wooden Garage rows 5%→18% on 2026-09-02 before this existed.
+const canSyncHsnMaster = p => !!(p && (p.snorkel_admin || (p.payment_bank_view && p.sales_order_confirm)));
 const canPayBankView   = p => !!p.payment_bank_view;
 const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
 
@@ -575,28 +580,67 @@ function moulderPaintedPartError(vendorName, violations) {
         + ` — order ${v.unpainted_part_code} instead`).join('; '), 409);
 }
 
-// Push corrected codes back onto every active variant of the family. Guarded so a
-// blank or a typo can never wipe/corrupt the master, and every write is logged.
-async function syncHsnToMaster(lines, master, actor, actorRole, orderNo) {
-  const changes = new Map();
-  for (const l of (lines || [])) {
+// THE MASTER WINS OVER THE LINE (S358, 2026-09-08). Before this, any plausible code on any
+// line of any order rewrote product_master.hsn_code on every active variant of the family —
+// so a July order still carrying the OLD code undid a deliberate master correction the next
+// time anyone opened it (Wooden Garage 95030010 → 9503, 5% back to 18%, Vinay Ram, viewer,
+// 2026-09-02; Flare/Ghost/Shadow the same way in August). Three rules now:
+//   1. Only a code TYPED IN THIS REQUEST can reach the master — on edit that means the line's
+//      hsn differs from what was stored (prevHsn); on create every line counts as typed.
+//   2. Only Admin/Finance (canSyncHsnMaster) may push; anyone else's typed code is replaced
+//      by the master's and reported back as `hsn_blocked` so the UI can say why.
+//   3. A line that is merely STALE (untouched, disagrees with the master) is re-aligned FROM
+//      the master — hsn + gst% — and reported as `hsn_realigned`. Invoiced orders cannot be
+//      edited at all, so this only ever changes an un-invoiced order's tax lines.
+// A product the master has no code for is left alone either way; hsnGaps() names it.
+function planHsnSync(lines, master, prevHsn, allowed) {
+  const pushes = new Map(), realign = [], blocked = [];
+  const out = (lines || []).map(l => {
     const v = normHsn(l.hsn_code);
-    if (!v || !isPlausibleHsn(v)) continue;          // never blank the master, never store junk
-    const cur = master.get(l.product)?.hsn || null;
-    if (cur === v) continue;
-    changes.set(l.product, { from: cur, to: v });
-  }
+    const m = master.get(l.product);
+    const cur = m?.hsn || null;
+    const prev = prevHsn ? prevHsn.get(l.id) : undefined;   // undefined = fresh line (create)
+    const typedNow = prev === undefined || prev !== v;
+    if (cur && v === cur) return l;
+    if (typedNow && v && isPlausibleHsn(v)) {
+      if (allowed) { pushes.set(l.product, { from: cur, to: v }); return l; }
+      if (cur) blocked.push({ product: l.product, from: cur, to: v });
+    }
+    if (!cur) return l;
+    realign.push({ id: l.id || null, product: l.product, from: v || null, to: cur });
+    const fixed = { ...l, hsn_code: cur };
+    if (m.gst != null) fixed.gst_pct = m.gst;
+    return fixed;
+  });
+  return { lines: out, pushes, realign, blocked };
+}
+
+// Apply a plan's pushes to product_master (every active variant of the family) and log
+// everything — pushes, blocked attempts and re-aligned lines — so a wrong master can always
+// be traced to the order that set it. Never fails the order over the master sync.
+async function syncHsnToMaster(plan, actor, actorRole, orderNo) {
   const applied = [];
-  for (const [product, ch] of changes) {             // at most a few products per order
+  for (const [product, ch] of plan.pushes) {             // at most a few products per order
     const r = await sbPublic(
       `/rest/v1/product_master?product=eq.${encodeURIComponent(product)}&is_active=eq.true`,
       { method: 'PATCH', body: JSON.stringify({ hsn_code: ch.to }), prefer: 'return=representation' });
-    if (!r.ok) continue;                             // never fail the order over the master sync
+    if (!r.ok) continue;
     const n = Array.isArray(r.data) ? r.data.length : 0;
     applied.push({ product, from: ch.from, to: ch.to, variants: n });
     await logActivity(actor, actorRole, 'HSN_MASTER_SYNC', 'PRODUCT', product,
       `HSN ${ch.from || '(none)'} → ${ch.to} for ${product} (${n} variant${n === 1 ? '' : 's'})${orderNo ? ` from ${orderNo}` : ''}`,
       { product, from: ch.from, to: ch.to, variants: n, order_no: orderNo || null });
+  }
+  for (const b of plan.blocked) {
+    await logActivity(actor, actorRole, 'HSN_MASTER_SYNC_BLOCKED', 'PRODUCT', b.product,
+      `HSN ${b.from} → ${b.to} for ${b.product} NOT applied — only Admin/Finance may change a product's HSN${orderNo ? ` (${orderNo})` : ''}`,
+      { ...b, order_no: orderNo || null });
+  }
+  if (plan.realign.length) {
+    await logActivity(actor, actorRole, 'HSN_LINE_REALIGN', 'ORDER', orderNo || '(unknown)',
+      `${plan.realign.length} line${plan.realign.length === 1 ? '' : 's'} re-aligned to the HSN master: ` +
+      plan.realign.map(r => `${r.product} ${r.from || '(none)'} → ${r.to}`).join('; '),
+      { order_no: orderNo || null, lines: plan.realign });
   }
   return applied;
 }
@@ -4463,7 +4507,8 @@ export default {
             const order_no = await nextSeq4('sales_order', 'SO-');
             // HSN/GST default in from the product master, corrections sync back out.
             const hsnMaster = await hsnMasterAll();
-            const lines = applyHsnDefaults(d.lines, hsnMaster).map(computeSalesLine);
+            const hsnPlan = planHsnSync(applyHsnDefaults(d.lines, hsnMaster), hsnMaster, null, canSyncHsnMaster(P));
+            const lines = hsnPlan.lines.map(computeSalesLine);
             const subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
             const tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
             const grand_total = +(subtotal + tax_total).toFixed(2);
@@ -4484,16 +4529,16 @@ export default {
             const lineRows = lines.map((l, i) => ({ ...l, order_id: order.id, sort_order: l.sort_order || i }));
             const li = await insert('sales_order_lines', lineRows, false);
             if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
-            const hsnSynced = await syncHsnToMaster(lines, hsnMaster,
-              authResult?.fullName || postRole, postRole, order_no);
-            return ok({ id: order.id, order_no, hsn_synced: hsnSynced, hsn_gaps: hsnGaps(lines, hsnMaster) });
+            const hsnSynced = await syncHsnToMaster(hsnPlan, authResult?.fullName || postRole, postRole, order_no);
+            return ok({ id: order.id, order_no, hsn_synced: hsnSynced, hsn_realigned: hsnPlan.realign,
+                        hsn_blocked: hsnPlan.blocked, hsn_gaps: hsnGaps(lines, hsnMaster) });
           }
 
           case 'updateSalesOrder': {
             if (!canSalesManage(P)) return err('No permission', 403);
             const d = body.data || {};
             if (!d.id) return err('id required');
-            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=status,invoice_generated&limit=1`);
+            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=order_no,status,invoice_generated&limit=1`);
             if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
             const curO = cur.data[0];
             if (curO.invoice_generated) return err('Invoiced orders cannot be edited', 422);
@@ -4586,13 +4631,15 @@ export default {
               // Same HSN contract as order-create: blanks fill from the master, and a
               // correction typed here syncs back out to the family.
               const hsnMasterU = await hsnMasterAll();
-              mergedLines = applyHsnDefaults(
+              const prevHsn = new Map(existing.map(ex => [ex.id, normHsn(ex.hsn_code)]));
+              const hsnPlanU = planHsnSync(applyHsnDefaults(
                 existing.map(ex => {
                   const inc = d.lines.find(l => l.id === ex.id);
                   return { ...ex, ...(inc || {}) };
                 }), hsnMasterU
-              ).map(m => ({ id: m.id, ...computeSalesLine(m), order_id: d.id }));
-              hsnSyncedOnEdit = { master: hsnMasterU };
+              ), hsnMasterU, prevHsn, canSyncHsnMaster(P));
+              mergedLines = hsnPlanU.lines.map(m => ({ id: m.id, ...computeSalesLine(m), order_id: d.id }));
+              hsnSyncedOnEdit = { master: hsnMasterU, plan: hsnPlanU };
               updates.subtotal    = +mergedLines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
               updates.tax_total   = +mergedLines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
               updates.grand_total = +(updates.subtotal + updates.tax_total).toFixed(2);
@@ -4654,11 +4701,12 @@ export default {
               }
             }
             const hsnSyncedU = hsnSyncedOnEdit
-              ? await syncHsnToMaster(mergedLines, hsnSyncedOnEdit.master,
-                  authResult?.fullName || postRole, postRole, null)
+              ? await syncHsnToMaster(hsnSyncedOnEdit.plan, authResult?.fullName || postRole, postRole, curO.order_no || null)
               : [];
             return ok({ updated: d.id, dispatch_synced: !!frToSync,
                         manifest_synced: !!shipmentToSync, hsn_synced: hsnSyncedU,
+                        hsn_realigned: hsnSyncedOnEdit ? hsnSyncedOnEdit.plan.realign : [],
+                        hsn_blocked: hsnSyncedOnEdit ? hsnSyncedOnEdit.plan.blocked : [],
                         hsn_gaps: hsnSyncedOnEdit ? hsnGaps(mergedLines, hsnSyncedOnEdit.master) : [] });
           }
 

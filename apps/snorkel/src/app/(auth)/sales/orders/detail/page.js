@@ -178,7 +178,11 @@ function OrderDetailInner() {
       if (!res.ok) throw new Error(res.error || 'Update failed');
       const hs = res.data?.hsn_synced || [];
       const gaps = res.data?.hsn_gaps || [];
+      const blocked = res.data?.hsn_blocked || [];
+      const realigned = res.data?.hsn_realigned || [];
       if (gaps.length) showToast(`Items updated — but no HSN on file for ${gaps.join(', ')}; the GST shown is the form default. Fix the catalogue before invoicing.`, 'error');
+      else if (blocked.length) showToast(`Items updated — HSN kept at ${blocked[0].from} for ${blocked.map(b => b.product).join(', ')}: only Admin/Finance can change a product's HSN. Ask them to fix the catalogue.`, 'error');
+      else if (realigned.length) showToast(`Items updated — ${realigned.length} line${realigned.length === 1 ? '' : 's'} re-aligned to the catalogue HSN (${[...new Set(realigned.map(r => `${r.product} → ${r.to}`))].join(', ')}); GST recomputed`, 'success');
       else showToast(hs.length ? `Items updated — HSN ${hs[0].to} saved to ${hs.map(h => h.product).join(', ')} for future orders`
               : res.data?.manifest_synced ? 'Items updated — dispatch manifest updated too'
               : res.data?.dispatch_synced ? 'Items updated — dispatch request updated too'
