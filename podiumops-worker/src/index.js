@@ -774,6 +774,20 @@ async function updateEmployee(body, auth, env) {
   // A person can't be their own (solid or dotted) manager.
   if (patch.secondary_manager_id === body.employee_id) patch.secondary_manager_id = null;
   if (patch.manager_id === body.employee_id) patch.manager_id = null;
+  // ⭐ Exiting someone REQUIRES a real last working day (Afshaan, 2026-09-09, S363) — the same rule
+  // the directory sync now enforces. Closing it there and leaving it open here would just move the
+  // hole: this is the OTHER path that can set status='exited', and the form's date field was
+  // optional. `date_exited` feeds the live SG&A run, so a missing one is not a cosmetic blank.
+  if (patch.status === 'exited') {
+    const existing = patch.date_exited
+      ? null
+      : (await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=date_exited`, env)).data?.[0];
+    const eff = patch.date_exited || existing?.date_exited;
+    if (!eff || !/^\d{4}-\d{2}-\d{2}$/.test(String(eff)))
+      return err('last working day required to exit someone (YYYY-MM-DD)', 400);
+    if (String(eff) > nowIso().slice(0, 10))
+      return err(`last working day is in the future (${eff})`, 400);
+  }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -1545,7 +1559,16 @@ async function importDirectoryCandidates(body, auth, env) {
   if (!googleConfigured(env)) return err('google_not_configured', 400);
   const d = body.data || body;
   const create = Array.isArray(d.create) ? d.create : []; // [{email, department_id, manager_id, job_title}]
-  const exit = Array.isArray(d.exit) ? d.exit : [];        // [email,...]
+  // ⭐ `exit` is [{work_email, date_exited}] — the DATE IS REQUIRED (Afshaan, 2026-09-09, S363).
+  // It used to be a bare [email,...] and this handler stamped `date_exited: nowIso()`, i.e. the day
+  // someone happened to run the sync. That produced batch clusters — 6 people sharing 2026-08-24,
+  // 4 sharing 2026-06-24, 10 of 12 dated exits on just two days — and because the Podium→Odo SG&A
+  // feed charges a full month to anyone employed any part of it, it put ~₹3.36L of phantom cost
+  // into a LIVE P&L. The sync knows *that* someone left and *when it noticed*; it never knew their
+  // last working day. So it no longer guesses: whoever marks the exit types the real date.
+  // ⛔ The old bare-string shape is REJECTED, not silently accepted — tolerating it would leave the
+  // hole open for any caller that had not been updated, which is the whole defect.
+  const exit = Array.isArray(d.exit) ? d.exit : [];        // [{work_email, date_exited}, ...]
   const ignore = Array.isArray(d.ignore) ? d.ignore : [];  // [email,...]
   // S306 move-review. `update` = HR-confirmed department/manager changes for people ALREADY
   // in Podium; `dismiss` = "Podium is right, stop reporting this" — writes no org data, only
@@ -1617,9 +1640,25 @@ async function importDirectoryCandidates(body, auth, env) {
     result.ignored = ignore;
   }
 
-  for (const em of exit) {
+  // Validate EVERY exit before writing ANY of them — a half-applied batch would leave some people
+  // exited and others not, with no way to tell which from the response.
+  const today = nowIso().slice(0, 10);
+  for (const x of exit) {
+    if (typeof x === 'string')
+      return err(`exit now requires a last working day: send {work_email, date_exited}, not a bare email (got "${x}")`, 400);
+    if (!x || !x.work_email) return err('each exit needs a work_email', 400);
+    if (!x.date_exited || !/^\d{4}-\d{2}-\d{2}$/.test(String(x.date_exited)))
+      return err(`last working day required for ${x.work_email} (YYYY-MM-DD) — the sync no longer stamps today's date`, 400);
+    // A future last-working-day is a typo, not a notice period: this field is what the SG&A feed
+    // reads to stop charging someone, so a future date keeps billing them.
+    if (String(x.date_exited) > today)
+      return err(`last working day for ${x.work_email} is in the future (${x.date_exited})`, 400);
+  }
+
+  for (const x of exit) {
+    const em = x.work_email;
     const r = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(em)}&status=eq.active`, env,
-      { method: 'PATCH', body: JSON.stringify({ status: 'exited', date_exited: nowIso().slice(0, 10), updated_at: nowIso() }) });
+      { method: 'PATCH', body: JSON.stringify({ status: 'exited', date_exited: x.date_exited, updated_at: nowIso() }) });
     if (r.ok) {
       result.exited.push(em);
       // Same guarantee as the manual exit path — reports must not be left dangling.

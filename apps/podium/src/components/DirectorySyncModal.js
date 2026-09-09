@@ -27,7 +27,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
         department_id: c.suggested_department_id || '',
         manager_id: c.suggested_manager_id || '',
       })));
-      setDeparted((r.departed || []).map(d => ({ ...d, exit: false })));
+      // ⚠️ `date_exited` starts EMPTY on purpose (S363) and must never be pre-filled with today.
+      // This screen used to send no date at all and the worker stamped `nowIso()` — the default did
+      // the choosing, and 10 of 12 dated exits ended up on the two days someone ran this sync.
+      // Same failure shape as the S308 challan `purpose` default. Whoever marks the exit types the
+      // real last working day; if they do not know it, they should not be ticking the box yet.
+      setDeparted((r.departed || []).map(d => ({ ...d, exit: false, date_exited: '' })));
       // A 'moved' row (Google's OU actually changed) defaults to Update with Google's
       // suggestion pre-filled. A 'differs' row defaults to NO action — Podium is finer
       // grained than Google, so a standing disagreement is usually Podium being right.
@@ -55,7 +60,19 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     const create = rows.filter(r => r.action === 'import')
       .map(r => ({ email: r.email, department_id: r.department_id || null, manager_id: r.manager_id || null, job_title: r.job_title || null }));
     const ignore = rows.filter(r => r.action === 'ignore').map(r => r.email);
-    const exit = departed.filter(d => d.exit).map(d => d.work_email);
+    const exit = departed.filter(d => d.exit).map(d => ({ work_email: d.work_email, date_exited: d.date_exited }));
+    // Caught here as well as in the worker so the person sees WHICH row is missing a date, on the
+    // screen they are looking at, rather than a rejected batch.
+    const undated = departed.filter(d => d.exit && !d.date_exited);
+    if (undated.length) {
+      showToast(`Last working day required for ${undated.map(d => d.full_name).join(', ')}`, 'error');
+      return;
+    }
+    const future = departed.filter(d => d.exit && d.date_exited > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
+    if (future.length) {
+      showToast(`Last working day is in the future for ${future.map(d => d.full_name).join(', ')}`, 'error');
+      return;
+    }
     const update = moves.filter(m => m.action === 'update')
       .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
     const dismiss = moves.filter(m => m.action === 'dismiss').map(m => ({ id: m.id, org_unit: m.org_unit }));
@@ -217,13 +234,34 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
               {departed.length > 0 && (
                 <>
                   <div style={{ ...sectionTitle, marginTop: 16 }}><UserMinus size={13} /> Possibly departed ({departed.length})</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
+                    Google only says the account is gone — it never says when someone last worked.
+                    Enter each person&rsquo;s <strong>real last working day</strong>; it decides the
+                    month their salary stops counting toward SG&amp;A. If you don&rsquo;t know it yet,
+                    leave the row unticked and exit them once HR confirms.
+                  </div>
                   <table style={table}>
-                    <thead><tr><th style={th}>Mark exited</th><th style={th}>Name / email</th><th style={th}>Why</th></tr></thead>
+                    <thead><tr><th style={th}>Mark exited</th><th style={th}>Name / email</th><th style={th}>Last working day *</th><th style={th}>Why</th></tr></thead>
                     <tbody>
                       {departed.map((d, i) => (
                         <tr key={d.id}>
                           <td style={td}><input type="checkbox" checked={d.exit} onChange={e => setDeparted(prev => prev.map((x, j) => j === i ? { ...x, exit: e.target.checked } : x))} /></td>
                           <td style={td}><div style={{ fontWeight: 600 }}>{d.full_name}</div><div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{d.work_email}</div></td>
+                          {/* Required, and deliberately NOT defaulted to today — see the load() note.
+                              Google tells us someone's account is gone, never when they last worked. */}
+                          <td style={td}>
+                            <input
+                              type="date"
+                              value={d.date_exited}
+                              disabled={!d.exit}
+                              max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
+                              onChange={e => setDeparted(prev => prev.map((x, j) => j === i ? { ...x, date_exited: e.target.value } : x))}
+                              style={{ fontFamily: 'var(--font-mono)', fontSize: 12, padding: '4px 6px',
+                                       border: `1px solid ${d.exit && !d.date_exited ? 'var(--state-warning-fg)' : 'var(--border)'}`,
+                                       borderRadius: 4, background: d.exit ? 'var(--surface)' : 'transparent',
+                                       color: 'var(--text-1)', opacity: d.exit ? 1 : 0.4 }}
+                            />
+                          </td>
                           <td style={{ ...td, fontSize: 12, color: 'var(--state-warning-fg)' }}>{d.reason}</td>
                         </tr>
                       ))}

@@ -96,7 +96,19 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
           <Field label="Confirmed on"><Input type="date" mono value={f.confirmed_at} onChange={e => set('confirmed_at', e.target.value)} /></Field>
           <Field label="Status"><Select value={f.status} onChange={e => set('status', e.target.value)}>{EMPLOYEE_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></Field>
           {f.status === 'exited' && <>
-            <Field label="Date exited"><Input type="date" mono value={f.date_exited} onChange={e => set('date_exited', e.target.value)} /></Field>
+            {/* Required (S363): the worker rejects an exit with no date. This is the person's REAL
+                last working day — it decides the month their salary stops counting toward SG&A —
+                not the day the record is being updated. Never pre-fill it with today. */}
+            <Field label="Last working day *">
+              <Input type="date" mono value={f.date_exited}
+                max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
+                onChange={e => set('date_exited', e.target.value)} />
+              {!f.date_exited && (
+                <div style={{ fontSize: 11, color: 'var(--state-warning-fg)', marginTop: 4 }}>
+                  Required — their real last working day, not today&rsquo;s date.
+                </div>
+              )}
+            </Field>
             <Field label="Exit reason"><Input value={f.exit_reason} onChange={e => set('exit_reason', e.target.value)} /></Field>
           </>}
         </Grid>
