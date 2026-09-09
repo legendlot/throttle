@@ -83,7 +83,14 @@ function NewChallanInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editId = searchParams.get('edit');   // present → editing an existing DRAFT (L100)
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
+  // The create row is hidden for anyone lotopsproxy would refuse (S363 hostile review). Depot's
+  // nav carries NO permission gates — every authenticated user reaches this form — and only 7 of
+  // 15 `store.roles` hold `direct_issuance_request`, so 8 roles (store_associate, viewer, the CS
+  // and Ignition roles…) would have seen "+ Add vendor" and been 403'd by `createVendorForDI`.
+  // The failure was a caught toast rather than a break, but offering a control that cannot work is
+  // its own defect. Picking an EXISTING vendor stays available to everyone.
+  const canCreateVendor = !!(perms?.direct_issuance_request || perms?.users_manage);
   const { showToast } = useToast();
   const [editChallanNo, setEditChallanNo] = useState('');
 
@@ -501,8 +508,8 @@ function NewChallanInner() {
                 vendor_name: v.vendor_name, address: v.address, gstin: v.gstin,
               }))}
               placeholder="Search the vendor master… (leave blank for LOT HQ, a customer, or a one-off)"
-              createLabel={q => `+ Add vendor “${q}”`}
-              onCreateOption={createVendor}
+              createLabel={canCreateVendor ? (q => `+ Add vendor “${q}”`) : undefined}
+              onCreateOption={canCreateVendor ? createVendor : undefined}
             />
             {creatingVendor && (
               <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' }}>Creating vendor…</div>

@@ -25,10 +25,12 @@
 -- confirm, and never writes.
 --
 -- ⚠️ POPULATE IT DELIBERATELY, NEVER BY A NAME-MATCHING BACKFILL. Measured
--- 2026-09-09: 122 active operators carry factory_pay, exactly 1 is linked, and 6
--- more share a FIRST NAME with an active salaried employee — all six are
+-- 2026-09-09: 122 active operators carry factory_pay, exactly 1 is linked, and 4
+-- more share a FIRST NAME with an as-yet-UNLINKED active salaried employee (denominator:
+-- active factory_workforce rows carrying factory_pay, first token of operators.name vs first
+-- token of employees.full_name, employee not already linked) — all four are
 -- coincidences (floor workers vs office managers, different surnames), and a
--- backfill on name similarity would have wrongly excluded six real salaries from
+-- backfill on name similarity would have wrongly excluded four real salaries from
 -- SG&A. `f_podium_link_candidates()` requires a full exact name match precisely
 -- because of this, and it currently returns zero rows.
 -- ============================================================================
