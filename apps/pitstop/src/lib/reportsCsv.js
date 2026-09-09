@@ -18,9 +18,17 @@
 
 // A value beginning = + - @ is executed as a formula by Excel/Sheets, and a name containing a
 // comma would split a row into two columns. Also tests \r, which a lone \n check misses.
-// ⚠️ SINGLE IMPLEMENTATION ON PURPOSE — `exportAgentsCsv` used to carry its own weaker copy with
-// neither the formula guard nor \r, so the Agents CSV was the soft one of the three (S365).
+// ⚠️ ONE IMPLEMENTATION FOR THE THREE /reports BUILDERS — `exportAgentsCsv` used to carry its own
+// weaker copy with neither the formula guard nor \r, so the Agents CSV was the soft one of the
+// three (S365). ⛔ `analytics/page.js` STILL has its own private `csvEsc` and `istDay` — the
+// "N sites" hazard is narrowed, not closed; filed as a `[pitstop][bug]`.
+// ⛔ NUMBERS ARE NEVER FORMULA-GUARDED. A negative number starts with `-`, so a blanket guard
+// exported `avg_close_days: -2.5` as the TEXT `'-2.5` — un-summable, and it looks like corruption
+// to the reader. The tickets breakdown rows only began passing through here in S365, which is how
+// a latent trap arrived with a fix; `avg_close_days` divides a signed delta (csops :1841) and is
+// the reachable input. A number cannot be a formula, so it needs no guard.
 export const csvEsc = (v) => {
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   const s = v == null ? '' : String(v);
   const guarded = /^[=+\-@]/.test(s) ? `'${s}` : s;
   return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
@@ -92,7 +100,10 @@ export function buildTicketsCsv({ data, from, to }) {
     lines.push(`Conversations in range (incl. outbound-only),${data.conversations.total ?? ''}`);
   }
   const breakdown = (title, rows) => {
-    if (!rows?.length) return;
+    // `== null`, not `!rows?.length`: before the extraction an EMPTY array still printed its
+    // header row, and only an ABSENT section vanished. Dropping the header of a zero-ticket range
+    // would be an undeclared behaviour change on the one report most likely to be empty.
+    if (rows == null) return;
     lines.push('');
     lines.push(`${title},Total,Replacements,Refunds,Repairs`);
     for (const r of rows) {
@@ -101,7 +112,7 @@ export function buildTicketsCsv({ data, from, to }) {
   };
   breakdown('By Product', data.by_product);
   breakdown('By Platform', data.by_platform);
-  if (data.by_agent?.length) {
+  if (data.by_agent != null) {
     lines.push('');
     // Raised and Closed are on different date bases (raised-in-window vs closed-in-window) — the
     // header says so, because a CSV outlives the screen that explained it.
@@ -123,8 +134,11 @@ export function buildTicketsCsv({ data, from, to }) {
 // ── Agents ──────────────────────────────────────────────────────────────────
 // `cohort` carries the already-resolved filter LABELS ({ channel, tag, agent }) — the page owns
 // turning ids into names, this owns the file.
-export function buildAgentsCsv({ agentData, waitData, dailyData, from, to, cohort = {} }) {
+export function buildAgentsCsv({ agentData, waitData, dailyData, from, to, cohort }) {
   if (!agentData?.by_agent?.length) return null;
+  // `|| {}`, not a default parameter — a default fires on `undefined` ONLY, so an explicit
+  // `cohort: null` threw inside the click handler: the exact class this file was written to end.
+  const co = cohort || {};
   const t = agentData.totals || {};
   // The breakdown is a separate request and may legitimately be absent — the CSV then omits those
   // rows rather than exporting blanks that read as zeroes. Same gate as the panel: only export it
@@ -140,9 +154,9 @@ export function buildAgentsCsv({ agentData, waitData, dailyData, from, to, cohor
   // The basis and the cohort travel WITH the file — a CSV read a week later must not be ambiguous
   // about whether times are 24x7 or business hours.
   lines.push(`Basis,${agentData.range?.business_hours ? 'Business hours' : '24x7'}`);
-  lines.push(`Channel,${csvEsc(cohort.channel || 'All')}`);
-  lines.push(`Tag,${csvEsc(cohort.tag || 'All')}`);
-  lines.push(`Agent,${csvEsc(cohort.agent || 'All')}`);
+  lines.push(`Channel,${csvEsc(co.channel || 'All')}`);
+  lines.push(`Tag,${csvEsc(co.tag || 'All')}`);
+  lines.push(`Agent,${csvEsc(co.agent || 'All')}`);
   lines.push(`Conversations in range,${t.total ?? ''}`);
   lines.push(`Queries (customer-initiated),${t.queries ?? ''}`);
   lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);

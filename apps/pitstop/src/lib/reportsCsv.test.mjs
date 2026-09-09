@@ -26,9 +26,15 @@ const callFixture = () => ({
   range: { from: '2025-12-31T18:30:00.000Z', to: '2026-09-09T18:29:59.999Z', business_hours: false, rows_24x7: 20370 },
   totals: { total: 40, incoming_reached: 31, incoming_not_reached: 9, avg_duration_seconds: 62 },
   by_direction: { incoming: { total: 40, answered: 31, answer_rate_pct: 77.5 }, outgoing: { total: 12, answered: 9, answer_rate_pct: 75 } },
-  by_department: [{ name: 'Support', slug: 'support', total: 40, incoming_reached: 31, incoming_not_reached: 9, outgoing_total: 12, outgoing_answered: 9, answer_rate_pct: 77.5 }],
-  by_account: [{ name: 'MyOp A', slug: 'a', total: 40, answered: 31, missed: 9, answer_rate_pct: 77.5 }],
-  by_agent: [{ name: 'Dhiraj Sharma', incoming_answered: 14, outgoing_total: 5, outgoing_answered: 4, missed_returned: 2, avg_handle_seconds: 60, tickets_opened: 3 }],
+  // ⚠️ BOTH sides of every alias, with DIFFERENT values on purpose. `finishDept`/`finishAccount`
+  // (csops :2544-:2555) ALWAYS set `incoming_reached` + `incoming_not_reached`, and `byAgent`
+  // always carries `answered_calls` AND `incoming_answered` — so a live row has both, and a
+  // fixture with only one side cannot tell `a ?? b` from `b ?? a`. The legacy `answered`/`missed`
+  // are the RAW provider counts across BOTH directions (the "false 45" csops :2564 warns about),
+  // so picking them for an inbound column is a real, silent wrong number.
+  by_department: [{ name: 'Support', slug: 'support', total: 40, incoming_reached: 31, incoming_not_reached: 9, answered: 38, missed: 2, outgoing_total: 12, outgoing_answered: 9, answer_rate_pct: 77.5 }],
+  by_account: [{ name: 'MyOp A', slug: 'a', total: 40, incoming_reached: 31, incoming_not_reached: 9, answered: 38, missed: 2, answer_rate_pct: 77.5 }],
+  by_agent: [{ name: 'Dhiraj Sharma', incoming_answered: 14, answered_calls: 19, outgoing_total: 5, outgoing_answered: 4, missed_returned: 2, avg_handle_seconds: 60, tickets_opened: 3 }],
   daily: [{ date: '2026-09-08', in_total: 40, in_answered: 31, out_total: 12, out_answered: 9, dur_sum: 2480, dur_count: 40 }],
   daily_by_agent: [{ name: 'Dhiraj Sharma', days: [{ date: '2026-09-08', in_answered: 14, out_total: 5, out_answered: 4, dur_sum: 900, dur_count: 15 }] }],
   hourly: [{ hour: 23, count: 56 }],
@@ -219,7 +225,46 @@ test('the calls CSV carries every panel the tab draws', () => {
                          'Daily trend (', 'Hourly distribution (IST),']) {
     assert.ok(find(csv, section), `missing section: ${section}`);
   }
-  // The older-row alias: by_account uses `answered`/`missed`, not `incoming_reached`.
   assert.equal(after(csv, 'By MyOp Account,'), 'MyOp A,40,31,9,0,0,77.5');
   assert.equal(after(csv, 'Hourly distribution (IST),'), '23,56');
+});
+
+test('REGRESSION S365-5: the inbound aliases pick `incoming_*`, never the raw provider count', () => {
+  // A live row carries BOTH. `answered`/`missed` are the provider's own words counted across BOTH
+  // directions — the number csops :2564 says must never be the inbound headline. Getting the `??`
+  // order backwards is silent: the column still fills, with the wrong figure.
+  // The session's own mutation set MISSED this; the S365 hostile review found it by swapping the
+  // alias order and watching all 23 tests stay green.
+  const csv = buildCallsCsv({ callData: callFixture(), from: 'a', to: 'b' });
+  assert.equal(after(csv, 'By Department,'), 'Support,40,31,9,12,9,77.5', 'dept must use incoming_reached (31), not answered (38)');
+  assert.equal(after(csv, 'By MyOp Account,'), 'MyOp A,40,31,9,0,0,77.5', 'account must use incoming_reached (31), not answered (38)');
+  assert.equal(after(csv, 'By Agent,'), 'Dhiraj Sharma,14,5,4,2,60,3', 'agent must use incoming_answered (14), not answered_calls (19)');
+});
+
+test('a negative number is NOT formula-guarded — it stays a number', () => {
+  // `avg_close_days` divides a signed delta (csops :1841), so it can be negative. A blanket
+  // `^[=+\-@]` guard exported it as the TEXT `'-2.5` — un-summable, and it reads as corruption.
+  assert.equal(csvEsc(-2.5), '-2.5');
+  assert.equal(csvEsc(-0), '0');
+  const csv = buildTicketsCsv({ data: { range: {}, by_agent: [{ name: 'A', total: 1, closed: 2, avg_close_days: -2.5 }] }, from: 'a', to: 'b' });
+  assert.equal(after(csv, 'By Agent,'), 'A,1,2,-2.5');
+  // A STRING that looks like a formula is still guarded.
+  assert.equal(csvEsc('-2.5'), "'-2.5");
+});
+
+test('an EMPTY section keeps its header; only an ABSENT one is omitted', () => {
+  // A zero-ticket range printed `By Product,Total,…` with no rows before the extraction; dropping
+  // the header would be an undeclared change on the report most likely to be empty.
+  const empty = buildTicketsCsv({ data: { range: { total_rows: 0 }, by_product: [], by_platform: [], by_agent: [] }, from: 'a', to: 'b' });
+  assert.ok(empty.includes('By Product,Total,Replacements,Refunds,Repairs'));
+  assert.ok(empty.includes('By Agent,Raised in range,Closed in range,Avg close (days)'));
+  const absent = buildTicketsCsv({ data: { range: { total_rows: 0 } }, from: 'a', to: 'b' });
+  assert.equal(absent.includes('By Product'), false);
+});
+
+test('an explicit `cohort: null` does not throw', () => {
+  // A default parameter fires on `undefined` ONLY. This threw inside the click handler — the exact
+  // class the extraction was meant to end.
+  const csv = buildAgentsCsv({ agentData: { by_agent: [{ name: 'X' }], totals: {} }, from: 'a', to: 'b', cohort: null });
+  assert.equal(find(csv, 'Channel,'), 'Channel,All');
 });

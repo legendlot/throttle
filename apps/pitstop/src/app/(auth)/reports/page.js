@@ -14,7 +14,7 @@ import { dateStr } from '@throttle/domain';
 // shipped from this file in one day while every suite in the repo stayed green). What stays here
 // is only the Blob/anchor plumbing, which is the part a unit test could not have caught anyway.
 import {
-  csvEsc, istDay, CALL_METRICS, finishCallRow, grainWord,
+  istDay, CALL_METRICS, finishCallRow, grainWord,
   buildTicketsCsv, buildAgentsCsv, buildCallsCsv,
 } from '../../../lib/reportsCsv.js';
 
@@ -244,6 +244,8 @@ export default function ReportsPage() {
   function exportCallsCsv() {
     download(buildCallsCsv({ callData, from, to }), `pitstop-calls-${from}-to-${to}.csv`);
   }
+  // Options for the tickets-tab filters. A value that is selected but absent from the current
+  // response (the date range moved under it) is still listed — otherwise the control silently
   // blanks to "All" while the report is still filtered by it.
   function ticketOptions(key) {
     const opts = data?.filter_options?.[key] || [];

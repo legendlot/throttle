@@ -49,6 +49,15 @@ jobs:
       - name: Lint (rules-of-hooks + no-undef)
         run: npm run lint:ci
 
+      # Unit gate (S365). Same reasoning as the lint gate above, one step further on: the /reports
+      # CSV builders shipped FOUR silent defects in a single day — a wrong file, two blank columns
+      # and an off-by-one date — and every suite in the repo stayed green, because none of them ran
+      # on a push. Tests that only run when a human types `npm test` did not fail any of them.
+      # ⚠️ The glob is `src/lib/*.test.mjs` (apps/pitstop/package.json), so a test placed anywhere
+      # else in this app is silently NOT run — put new ones beside the module they cover.
+      - name: Test Pitstop
+        run: npm test --prefix apps/pitstop
+
       - name: Build Pitstop
         run: |
           set -o pipefail
