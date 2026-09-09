@@ -5265,9 +5265,18 @@ export default {
             const famResults = await Promise.all(fams.map(f =>
               rpcSales('f_pnl', { p_from: from, p_to: to, p_channels: byFam[f.key], p_ad_platforms: f.ads, p_channel_key: f.key })
                 .then(r => ({ key: f.key, label: f.label, rows: (r.ok ? (r.data || []) : []) }))));
-            const [companyR, sgaR] = await Promise.all([
+            const [companyR, sgaR, uncostedR] = await Promise.all([
               rpcSales('f_pnl', { p_from: from, p_to: to, p_channels: [], p_ad_platforms: [], p_channel_key: 'all' }),   // company-level manual (brand)
               rpcSales('f_pnl_sga', { p_from: from, p_to: to }),                                                          // SG&A seam (Podium later)
+              // ⛔ COGS THAT IS MISSING MUST NOT LOOK LIKE MARGIN. `f_pnl`'s cogs_agg uses a CROSS
+              // JOIN LATERAL on `effective_from <= month-end`, so a product with no cost layer at or
+              // before that month DROPS OUT of the join — its revenue is still counted, its COGS
+              // silently is not, and the month renders as excellent margin instead of missing data.
+              // Proven 2026-09-09 (S364): deleting ONE layer (MCBK FY24-25) removed ₹3,17,520 of
+              // COGS from f_pnl with no other signal anywhere. It had hidden ₹17,28,717 across 12
+              // codes for months. This detector is the signal; `uncosted` is non-empty exactly when
+              // the P&L above it is overstating GM.
+              rpcSales('f_pnl_uncosted', { p_from: from, p_to: to, p_channels: [] }),
             ]);
             const company = companyR.ok ? (companyR.data || []) : [];
             const sga = {}; for (const r of (sgaR.ok ? (sgaR.data || []) : [])) sga[r.month] = Number(r.sga) || 0;
@@ -5323,7 +5332,18 @@ export default {
                 }
               }
             } catch (_) { sga_meta = { source: 'unknown' }; /* never fail the P&L over provenance — but never claim 'manual' either */ }
-            return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta });
+            // `uncosted` is the anti-silence signal: non-empty means the COGS line above it is
+            // INCOMPLETE and GM is overstated by roughly (units × the cost that should have applied).
+            // Never let a failed read render as "all costed" — that is the reassuring direction,
+            // the same trap `sga_meta` records two blocks up.
+            const uncosted = uncostedR.ok
+              ? { ok: true,
+                  rows: (uncostedR.data || []).map(r => ({
+                    month: r.month, product_code: r.product_code,
+                    units: Number(r.units) || 0, gross: Number(r.gross) || 0 })),
+                  gross_total: (uncostedR.data || []).reduce((a, r) => a + (Number(r.gross) || 0), 0) }
+              : { ok: false, rows: [], gross_total: 0, error: 'uncosted check unavailable' };
+            return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })), sga_meta, uncosted });
           }
           case 'getPnlByProduct': {   // S189 — per-product P&L; through CM2 when scoped to a family (S325)
             if (!canSuperAdmin(P)) return err('No permission', 403);
