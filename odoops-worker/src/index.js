@@ -3392,8 +3392,30 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
   // Do NOT reimplement that ladder here: keeping it in one place is the point — the exact-match
   // rule lived in both call sites and neither learnt the channels that spell a SKU differently,
   // which excluded ₹48.75L of GT/Cred/Amazon sales from sales_fact (found 2026-08-07).
+  // ⛔ A SKU the business has DECLARED an accessory must never reach the fuzzy matcher (S364,
+  // 2026-09-09). `sales.accessory_rules` is the register of "this is a memo line, not a product";
+  // letting `match_channel_skus` normalise `lotsp-flare-remote` into FLXXR books a SPARE REMOTE as
+  // a product unit, which is the exact thing §S289 put in the "Accessories & others" memo line.
+  // The exact/ean/product_code passes above still win — this only gates the NORMALISED fallback,
+  // so a real catalogue SKU that happens to contain an accessory word is unaffected.
+  // ⚠️ Deleting the bad sku_map rows WITHOUT this guard silently reverts: the next run re-creates
+  // them with match_on='auto'. Measured 2026-09-09: 2 live rows (`lotsp-flare-remote`→FLXXR,
+  // `lotsp-ghost-remote`→GHXXR); denominator = all 'auto' sku_map rows matching an active rule.
+  const accR = await sbSales('/rest/v1/accessory_rules?is_active=eq.true&select=match_kind,pattern');
+  const accRules = accR.ok && Array.isArray(accR.data) ? accR.data : [];
+  const isAccessory = (s) => {
+    const v = String(s || '').toLowerCase();
+    return accRules.some(r => {
+      const p = String(r.pattern || '').toLowerCase();
+      if (!p) return false;
+      if (r.match_kind === 'prefix') return v.startsWith(p);
+      if (r.match_kind === 'exact') return v === p;
+      if (r.match_kind === 'contains') return v.includes(p);
+      return false;
+    });
+  };
   const byNorm = {};
-  const stillUnknown = unknown.filter(s => !(bySku[s] || byEan[s] || byCode[s]));
+  const stillUnknown = unknown.filter(s => !(bySku[s] || byEan[s] || byCode[s]) && !isAccessory(s));
   if (stillUnknown.length) {
     const mR = await rpcSales('match_channel_skus', { p_skus: stillUnknown });
     for (const row of (mR.ok && Array.isArray(mR.data) ? mR.data : [])) {
