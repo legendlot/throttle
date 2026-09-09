@@ -391,6 +391,9 @@ export default function JourneysPage() {
   }, [j.triggerType, j.triggerEvent, j.triggerSegmentId, j.triggerFilter, segments]);
 
   const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
+  // S362 — canvas expand. Declared HERE, unconditionally: the editor lives inside
+  // `if (view === 'form')` and a hook in that branch would change hook order between views.
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
 
   function updateSelectedConfig(cfg) {
     setNodesRaw((ns) => ns.map((n) => (n.id === selected ? { ...n, data: { ...n.data, config: cfg } } : n)));
@@ -538,6 +541,17 @@ export default function JourneysPage() {
 
   if (view === 'form') {
     const editable = canBuild;
+    // Built ONCE and rendered in exactly ONE place: docked inside the expanded canvas, or in its
+    // normal position below it. Two live copies of the same form would mean duplicate DOM ids and
+    // split focus, so the render below suppresses one. ⚠️ It must be built HERE, after `editable`
+    // — JSX evaluates props eagerly, so building it above that `const` throws a TDZ
+    // ReferenceError and white-screens the editor (PATTERN-362).
+    const flowDrawer = (
+      <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates} senders={senders}
+        eventDefs={eventDefs}
+        onChange={updateSelectedConfig} onDelete={deleteSelected} onReplicate={replicateSelected}
+        disabled={busy || !editable} />
+    );
     return (
       <div className="pg">
         <div className="po-head">
@@ -893,11 +907,9 @@ export default function JourneysPage() {
           they started on</b>, so a change never rewrites a conversation already under way.</p>
         </>}>
           <JourneyCanvas nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
-            onSelect={setSelected} readOnly={busy || !editable} />
-          <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates} senders={senders}
-            eventDefs={eventDefs}
-            onChange={updateSelectedConfig} onDelete={deleteSelected} onReplicate={replicateSelected}
-            disabled={busy || !editable} />
+            onSelect={setSelected} readOnly={busy || !editable}
+            aside={flowDrawer} onExpandedChange={setCanvasExpanded} />
+          {!canvasExpanded && flowDrawer}
         </Panel>
 
         <Panel title="Lifecycle" pad infoWidth={340} info={<>

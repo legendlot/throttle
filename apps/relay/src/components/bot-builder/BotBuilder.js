@@ -252,6 +252,9 @@ export default function BotBuilder() {
     setSelected(null);
   };
 
+  // S362 — canvas expand. Above the early return below, so hook order never depends on `loading`.
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
+
   if (loading) return <div style={{ padding: 24 }}><Spinner /></div>;
 
   if (view === 'list') {
@@ -290,6 +293,22 @@ export default function BotBuilder() {
     );
   }
 
+  // S362 — the settings/step/test panel, built ONCE. Passed to the canvas as `aside` so it docks
+  // beside the flow when expanded, and rendered in its normal right-hand column otherwise —
+  // never both, or two live copies of the same form would fight over ids and focus.
+  const sidePanel = (
+    <Panel title={settings ? 'Bot settings' : selectedNode ? 'Step' : 'Test'} pad>
+      {settings
+        ? <BotSettings bot={bot || {}} setBot={setBot} sharedBots={sharedBots}
+            canActivate={canActivate} session={session} showToast={showToast} />
+        : selectedNode
+          ? <BotDrawer nodeId={selectedNode.id} config={selectedNode.data?.config}
+              onChange={updateSelectedConfig} onDelete={deleteSelected} readOnly={busy || !canBuild}
+              sharedBots={sharedBots} />
+          : <TestPanel botId={bot?.id} definition={currentDefinitionSafe(nodes, edges, bot)} session={session} />}
+    </Panel>
+  );
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -314,20 +333,10 @@ export default function BotBuilder() {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', gap: 14, alignItems: 'start' }}>
         <div>
           <JourneyCanvas mode="bot" nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
-            onSelect={setSelected} readOnly={busy || !canBuild} />
+            onSelect={setSelected} readOnly={busy || !canBuild}
+            aside={sidePanel} onExpandedChange={setCanvasExpanded} />
         </div>
-        <div>
-          <Panel title={settings ? 'Bot settings' : selectedNode ? 'Step' : 'Test'} pad>
-            {settings
-              ? <BotSettings bot={bot || {}} setBot={setBot} sharedBots={sharedBots}
-                  canActivate={canActivate} session={session} showToast={showToast} />
-              : selectedNode
-                ? <BotDrawer nodeId={selectedNode.id} config={selectedNode.data?.config}
-                    onChange={updateSelectedConfig} onDelete={deleteSelected} readOnly={busy || !canBuild}
-                    sharedBots={sharedBots} />
-                : <TestPanel botId={bot?.id} definition={currentDefinitionSafe(nodes, edges, bot)} session={session} />}
-          </Panel>
-        </div>
+        {!canvasExpanded && <div>{sidePanel}</div>}
       </div>
     </div>
   );

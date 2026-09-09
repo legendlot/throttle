@@ -2,13 +2,13 @@
 // The React Flow canvas. Controlled: the PAGE owns nodes/edges state; this renders
 // them + palette + lint strip and reports changes up. Client-only (page imports it
 // via next/dynamic ssr:false — React Flow touches window).
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ReactFlow, Background, Controls, Handle, Position,
+  ReactFlow, Background, Controls, Handle, Position, Panel as RFPanel,
   applyNodeChanges, applyEdgeChanges, addEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag, Share2 } from 'lucide-react';
+import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag, Share2, Maximize2, Minimize2 } from 'lucide-react';
 import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
 import { humanOutcome } from './labels.js';
 import { isNot } from '@/lib/journeyTrigger.js';
@@ -181,7 +181,24 @@ const BOT_NEW_STEP = {
 let seq = 0;
 const newId = (t) => `${t}_${Date.now().toString(36)}${(seq++).toString(36)}`;
 
-export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSelect, readOnly, mode = 'journey' }) {
+export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSelect, readOnly, mode = 'journey', aside = null, onExpandedChange }) {
+  // EXPAND (S362) — Pruthvi, 2026-09-09: the boxed canvas is too short to read a real flow.
+  // Full-viewport layer, Esc to leave, and the host's own drawer/panel docked beside it via
+  // `aside` so a node stays configurable while expanded.
+  // ⚠️ The host must HIDE its own copy of that panel while expanded (it gets `onExpandedChange`).
+  // Rendering the drawer in both places would mount two live copies of the same form — duplicate
+  // DOM ids and split focus — which is why this takes the node rather than cloning it.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { if (onExpandedChange) onExpandedChange(expanded); }, [expanded, onExpandedChange]);
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false); };
+    // The overlay covers the page, so a scrolling body behind it is only ever a surprise on exit.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow; };
+  }, [expanded]);
   // FIT WHEN THE GRAPH ARRIVES, not when the component mounts. React Flow's `fitView`
   // prop runs once at init, and the page loads a journey asynchronously — so at mount
   // there are zero nodes, the fit is a no-op, and the graph then renders at default
@@ -232,6 +249,45 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
 
   const lint = localLint(nodes, edges, mode);
 
+  // ONE ReactFlow element, rendered into one of two shells below. Deliberately a variable and
+  // NOT two copies of the JSX — a duplicated config is exactly how the next person changes
+  // fitView or deleteKeyCode in one place and silently leaves the other behind.
+  const flow = (
+      <ReactFlow
+        nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
+        onNodeClick={(_, n) => onSelect && onSelect(n.id)}
+        onPaneClick={() => onSelect && onSelect(null)}
+        nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable
+        // Both keys, deliberately. Backspace-only meant a full-size keyboard's Delete key
+        // did nothing on a selected node or edge, with no feedback explaining why — and
+        // Delete is the key most people reach for first. React Flow accepts an array.
+        deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+        fitView
+        // `fitView` alone zooms until the graph FILLS the box, so a 2-node journey
+        // rendered enormous and a fresh one nearly full-screen. maxZoom 1 means fit
+        // never magnifies past actual size — it may only zoom OUT to fit. minZoom
+        // lets a long flow shrink far enough to be seen whole.
+        fitViewOptions={{ padding: 0.22, maxZoom: 1, minZoom: 0.25 }}
+        minZoom={0.25} maxZoom={1.75}
+        onInit={(inst) => { instRef.current = inst; }}
+        proOptions={{ hideAttribution: true }}>
+        <Background gap={16} />
+        <Controls showInteractive={false} position="bottom-left" />
+        {/* Inside the flow, so it is present in BOTH shells and in readOnly mode — the palette
+            row above is hidden when readOnly, and reading a flow is exactly when you want room. */}
+        <RFPanel position="top-right">
+          <button type="button" className="btn" onClick={() => setExpanded((v) => !v)}
+            title={expanded ? 'Exit full screen (Esc)' : 'Expand to full screen'}
+            aria-label={expanded ? 'Exit full screen' : 'Expand to full screen'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            {expanded ? 'Exit' : 'Expand'}
+          </button>
+        </RFPanel>
+      </ReactFlow>
+  );
+
   return (
     <div>
       {!readOnly && (
@@ -250,33 +306,26 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
           <span>{lint.join(' · ')}</span>
         </div>
       )}
-      {/* Sized against the VIEWPORT, not a fixed 480px. A journey is a wide graph and the
-          old box showed roughly two nodes at a time, so reading one meant panning. Clamped
-          so it still behaves on a laptop (min) and does not swallow a large screen (max). */}
-      <div style={{ height: 'clamp(520px, 68vh, 860px)', border: '1px solid var(--bd, #ddd)', borderRadius: 10 }}>
-        <ReactFlow
-          nodes={nodes} edges={edges} nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
-          onNodeClick={(_, n) => onSelect && onSelect(n.id)}
-          onPaneClick={() => onSelect && onSelect(null)}
-          nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable
-          // Both keys, deliberately. Backspace-only meant a full-size keyboard's Delete key
-          // did nothing on a selected node or edge, with no feedback explaining why — and
-          // Delete is the key most people reach for first. React Flow accepts an array.
-          deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
-          fitView
-          // `fitView` alone zooms until the graph FILLS the box, so a 2-node journey
-          // rendered enormous and a fresh one nearly full-screen. maxZoom 1 means fit
-          // never magnifies past actual size — it may only zoom OUT to fit. minZoom
-          // lets a long flow shrink far enough to be seen whole.
-          fitViewOptions={{ padding: 0.22, maxZoom: 1, minZoom: 0.25 }}
-          minZoom={0.25} maxZoom={1.75}
-          onInit={(inst) => { instRef.current = inst; }}
-          proOptions={{ hideAttribution: true }}>
-          <Background gap={16} />
-          <Controls showInteractive={false} position="bottom-left" />
-        </ReactFlow>
-      </div>
+      {/* Boxed by default; expanded it fills the viewport with the host's own panel docked on
+          the right. Toggling remounts the flow, which re-runs fitView — wanted here, since the
+          point of expanding is to see the graph reframed to the new space. */}
+      {expanded ? (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--surface, #fff)',
+          display: 'grid', gridTemplateColumns: aside ? 'minmax(0, 1fr) 380px' : 'minmax(0, 1fr)',
+        }}>
+          <div style={{ minWidth: 0, height: '100vh' }}>{flow}</div>
+          {aside && (
+            <div style={{ overflowY: 'auto', height: '100vh', borderLeft: '1px solid var(--bd, #ddd)', padding: 12 }}>
+              {aside}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ height: 'clamp(520px, 68vh, 860px)', border: '1px solid var(--bd, #ddd)', borderRadius: 10 }}>
+          {flow}
+        </div>
+      )}
     </div>
   );
 }
