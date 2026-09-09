@@ -16,6 +16,13 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download } from 'lucide-react';
 import { csopsGet, joinMulti } from '../../../lib/csopsFetch.js';
+// ⛔ IMPORT THESE, NEVER RE-DECLARE THEM. This screen carried private copies of both until
+// 2026-09-09 (S367) and each had drifted into a real defect the shared version had already fixed:
+// its `istDay` had NO fallback, so an unparseable range threw a RangeError inside a CSV click
+// handler (a dead button, the exact class fixed on /reports), and its `csvEsc` lacked the number
+// carve-out, so a negative number exported as the TEXT `'-2.5` — un-summable, and it reads as
+// corruption. Two copies of a rule is how both happened; see reportsCsv.js's header.
+import { csvEsc, istDay } from '../../../lib/reportsCsv.js';
 import { KpiCard, MultiSelect, Panel, selectStyle, inputStyle } from '../../../components/kit/index.js';
 import { TrendChart } from '../../../components/kit/Chart.js';
 
@@ -84,19 +91,6 @@ function sortBy(sort, nameOf, countOf) {
   return (a, b) => countOf(b) - countOf(a) || String(nameOf(a)).localeCompare(String(nameOf(b)));
 }
 const sortRanked = (rows, sort) => [...(rows || [])].sort(sortBy(sort, r => r.name, r => r.count));
-
-// `range.from/to` are ISO instants for IST midnight/end-of-day, so slicing them to 10 chars
-// yields the UTC date — a September MTD export labelled itself "2026-08-31 to …", a day early,
-// because 1 Sep 00:00 IST is 31 Aug 18:30 UTC. Shift into IST before taking the calendar date.
-const istDay = (iso) => new Date(Date.parse(iso) + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-
-const csvEsc = (v) => {
-  let s = v == null ? '' : String(v);
-  // A product or category beginning = + - @ is executed as a formula by Excel/Sheets.
-  // Prefix an apostrophe so it renders as the text it is.
-  if (/^[=+\-@]/.test(s)) s = "'" + s;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 export default function AnalyticsPage() {
   const { session, perms } = useAuth();
