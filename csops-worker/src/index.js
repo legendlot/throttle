@@ -26,6 +26,7 @@ import {
 import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { partitionBySupport } from './ticket-thread.js';
 import { botOutboundRows, botThreadPatch, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
+import { isUniqueViolation, adoptNumberlessThread } from './thread-adopt.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
 import { mapExotelStatus } from './telephony/exotel-adapter.js';
@@ -5148,6 +5149,8 @@ function withinCustomerWindow(thread) {
   return new Date(thread.customer_window_until).getTime() > Date.now();
 }
 
+// S362 — adoption of the phone's existing numberless thread on a 23505 lives in
+// ./thread-adopt.js (with the measurements and the channel/relay_web guard that explain it).
 // Find-or-create the thread for a given customer_phone. Phase C uses
 // waba_phone_number_id=NULL (placeholder); Phase C2 will pass the real one and
 // the unique constraint will split threads per WABA number.
@@ -5168,6 +5171,12 @@ async function findOrCreateWaThread(customer_phone, env, { create = true } = {})
     method: 'POST',
     body: JSON.stringify({ customer_phone: norm }),
   });
+  // S362 — the lookup above already ran, so a 23505 here is a race with a concurrent
+  // creator. Adopt what they created rather than returning null and losing the write.
+  if (!ins.data?.[0] && isUniqueViolation(ins)) {
+    const adopted = await adoptNumberlessThread(norm, env, null, { sb });
+    if (adopted) return { thread: adopted, created: false };
+  }
   return { thread: ins.data?.[0] || null, created: true };
 }
 
@@ -6475,6 +6484,13 @@ async function biteSpeedFindOrCreateThread(payload, env, { create = true } = {})
   });
   if (!ins.ok) {
     console.error(`[bitespeed] cs_wa_threads INSERT failed status=${ins.status} body=${JSON.stringify(ins.data)?.slice(0, 300)}`);
+    // S362 — the by-phone lookup above already ran, so a 23505 here is a race with a
+    // concurrent creator (the web bot is the likely one now that it also writes on identity).
+    if (isUniqueViolation(ins) && phone) {
+      const adopted = await adoptNumberlessThread(phone, env,
+        convId != null ? { provider_thread_ref: String(convId), provider_account_id: accountIdStr } : null, { sb });
+      if (adopted) return { thread: adopted };
+    }
   }
   return { thread: ins.data?.[0] || null };
 }
@@ -6779,8 +6795,14 @@ async function handleRelayWebForward(b, env) {
   // Identity lands AFTER the thread exists (collect runs on turn 2) — patch it in the
   // first time it arrives, else every web thread shows no phone forever.
   if (thread && !thread.customer_phone && b.identity?.phone) {
-    await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH',
-      body: JSON.stringify({ customer_phone: `+91${b.identity.phone}` }) }).catch(() => {});
+    const up = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH',
+      body: JSON.stringify({ customer_phone: `+91${b.identity.phone}` }) });
+    // S362 — a 23505 here means the phone already owns a numberless thread while THIS web
+    // session had already built its own on an earlier turn. We deliberately do NOT merge:
+    // the earlier turns' messages already sit on this thread, and moving them is a bigger and
+    // riskier operation than this fix. But it must not be silent (it was, behind `.catch(()=>{})`):
+    // the transcript stays visible in the inbox, just unlinked from the customer's phone.
+    if (!up.ok) console.error('[relay-web] identity phone patch failed', up.status, JSON.stringify(up.data).slice(0, 200));
   }
   // Same for email (S355) — the create path already seeds customer_handle from identity.email
   // when it's known on turn 1; this covers the far more common case where email lands later.
@@ -6789,15 +6811,25 @@ async function handleRelayWebForward(b, env) {
       body: JSON.stringify({ customer_handle: String(b.identity.email).toLowerCase() }) }).catch(() => {});
   }
   if (!thread) {
+    const phone = b.identity?.phone ? `+91${b.identity.phone}` : null;
     const ins = await sb('/rest/v1/cs_wa_threads', env, {
       method: 'POST',
       body: JSON.stringify({
         channel: 'web', relay_web: true, relay_web_session_id: b.session_id,
-        customer_phone: b.identity?.phone ? `+91${b.identity.phone}` : null,
+        customer_phone: phone,
         customer_handle: b.identity?.email || 'Web visitor',
       }),
     });
     thread = ins.data?.[0];
+    // S362 — THE FIX (Afshaan chose option (a), 2026-09-09). This is the one site where the
+    // 23505 was not a race but the NORMAL path for a returning customer: the lookup above keys
+    // on `relay_web_session_id`, which is new every session, so a phone that already owns any
+    // numberless thread could never get a row here. Every such customer 500'd and lost the
+    // whole transcript. Adopt the incumbent and carry on — see adoptNumberlessThread for why
+    // `channel` and `relay_web` are deliberately left alone.
+    if (!thread && isUniqueViolation(ins) && phone) {
+      thread = await adoptNumberlessThread(phone, env, { relay_web_session_id: b.session_id }, { sb });
+    }
     if (!thread) {
       // S359: log the PostgREST error — the 500 was silent while cs_wa_threads_phone_null_waba_idx rejected every returning phone.
       console.error('[relay-web] thread create failed', ins.status, JSON.stringify(ins.data).slice(0, 200));
