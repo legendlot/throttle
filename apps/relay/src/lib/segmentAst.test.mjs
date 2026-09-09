@@ -18,9 +18,10 @@ import { structuralWarnings, ruleWarnings } from './segmentAst.js';
 let pass = 0;
 const t = (name, fn) => { fn(); pass += 1; console.log('  ok  ' + name); };
 
-const noneGroup = { type: 'group', group: 'none', rows: [] };
-const anyGroup = { type: 'group', group: 'any', rows: [] };
 const row = { type: 'attr', attr: 'city', op: 'eq', value: 'Pune' };
+const noneGroup = { type: 'group', group: 'none', rows: [row] };
+const emptyNone = { type: 'group', group: 'none', rows: [] };
+const anyGroup = { type: 'group', group: 'any', rows: [row] };
 
 t('NONE directly inside ANY warns, and warns as widening', () => {
   const w = structuralWarnings('any', [row, noneGroup]);
@@ -46,6 +47,15 @@ t('two offending groups produce ONE warning that counts them, not two identical 
   const w = structuralWarnings('any', [noneGroup, row, { ...noneGroup }]);
   assert.equal(w.length, 1);
   assert.match(w[0].text, /^2 /);
+});
+
+t('an EMPTY exclusion group is NOT warned about — itemsToDef drops it, so it widens nothing', () => {
+  // Fires the moment someone clicks "add exclusion group": a red "the audience is everyone"
+  // banner before a single condition is typed. Caught by the S362 hostile review, which noticed
+  // every original test used rows: [] and so could not have failed on this.
+  assert.deepEqual(structuralWarnings('any', [row, emptyNone]), []);
+  assert.equal(structuralWarnings('any', [row, emptyNone, noneGroup]).length, 1, 'the populated one still counts');
+  assert.match(structuralWarnings('any', [row, emptyNone, noneGroup])[0].text, /^A /, 'and counts as ONE, not two');
 });
 
 t('empty and missing items are not a throw', () => {

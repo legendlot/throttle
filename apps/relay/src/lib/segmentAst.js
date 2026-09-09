@@ -372,7 +372,13 @@ function eventWarning(row, count) {
 // builder refuses to render those anyway (`tooDeep`), so a warning there would be unreachable.
 function structuralWarnings(group, items) {
   if (group !== 'any') return [];
-  const n = (items || []).filter((it) => it && it.type === 'group' && it.group === 'none').length;
+  // ⚠️ `rows.length` matters (S362 hostile review). `itemsToDef` DROPS an empty group before
+  // saving, so an empty `Match NONE of` widens nothing — banner-ing it would fire a red
+  // "the audience is currently everyone" the instant someone clicks "add exclusion group",
+  // before they have typed a condition. The original 7 tests all used `rows: []`, so the suite
+  // could not see it: the fixture was the bug.
+  const n = (items || []).filter((it) => it && it.type === 'group' && it.group === 'none'
+    && Array.isArray(it.rows) && it.rows.length > 0).length;
   if (!n) return [];
   return [{
     kind: 'structure',

@@ -9,15 +9,21 @@
 // `handleRelayWebForward` — looks up by `relay_web_session_id`, which is NEW EVERY SESSION,
 // so the lookup can never find the phone's existing thread. Every returning customer hit
 // the conflict, csops answered 500, and commsops dropped the entire transcript on the floor
-// (found by the S359 hostile review; 10,254 numberless threads were live landmines).
+// (found by the S359 hostile review; 10,253 such threads were live landmines).
 //
 // Adopting the incumbent is the only correct outcome: a second numberless row for the same
-// phone cannot exist by construction, so there is nothing else to create. Afshaan chose this
-// (option (a)) over scoping the index to WhatsApp, which would have removed the uniqueness
-// guard from the Chatwoot webhook's instagram/messenger/email inserts.
+// phone cannot exist by construction, so there is nothing else to create. Afshaan chose this,
+// option (a), over scoping the index to WhatsApp.
+// ⚠️ THE REASON FIRST RECORDED FOR REJECTING (b) WAS WRONG, corrected by the S362 hostile review.
+// It said the index is "the only uniqueness guard for the Chatwoot webhook's
+// instagram/messenger/email inserts". It is not: those rows carry `customer_phone = NULL`
+// (measured 2026-09-09 — instagram 4 with a phone vs 4,483 without, email 0 vs 2,650, messenger
+// 0 vs 23) and a UNIQUE index never constrains NULLs. Their real guard is
+// `cs_wa_threads_provider_ref_uniq`. Option (a) is still right, on the "one customer, one thread"
+// argument alone — but do not defend it with the duplicate-channels claim.
 //
 // ⚠️ MEASURED 2026-09-09 BEFORE WRITING THIS, and it is the whole reason for the guard below:
-// of the 10,254 numberless threads, 8,977 are legacy `whatsapp`, 1,272 are `web` (only 3 of
+// of the 10,253 threads that have a phone AND no waba id, 8,977 are legacy `whatsapp`, 1,272 are `web` (only 3 of
 // them relay_web) and 4 are instagram. So the thread we adopt is USUALLY NOT the same channel
 // as the row we were trying to insert. That is what "one customer, one thread" costs here, and
 // it is accepted — but it is why adoption must NEVER relabel the thread it adopts.
@@ -31,9 +37,17 @@
 /** Keys adoption may never write onto a thread it did not create. See the header. */
 export const ADOPT_PROTECTED_KEYS = Object.freeze(['channel', 'relay_web']);
 
-/** PostgREST surfaces a unique violation as HTTP 409; the body carries SQLSTATE 23505. */
+/**
+ * PostgREST surfaces a unique violation as HTTP 409 carrying SQLSTATE 23505.
+ * ⚠️ THE SQLSTATE IS THE TEST, NOT THE STATUS (S362 hostile review). PostgREST also maps
+ * foreign-key (23503) and exclusion violations to 409, and adopting on one of those would convert
+ * a diagnosable error into a silent behaviour change. The status stays only as a fallback for a
+ * 409 whose body did not parse.
+ */
 export function isUniqueViolation(res) {
-  return res?.status === 409 || res?.data?.code === '23505';
+  const code = res?.data?.code;
+  if (code) return code === '23505';
+  return res?.status === 409;
 }
 
 /**

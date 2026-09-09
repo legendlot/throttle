@@ -15,16 +15,21 @@
 // `variant.sku` and has no idea what a LOT code is, so the form captures the SKU. The two
 // pre-existing test submissions stored a Shopify VARIANT ID under a field called `product_code` —
 // neither grain, matching nothing, while looking perfectly correct. The field is `variant_sku`
-// now so the name states what the value is. 78 of 78 restock SKUs resolve in sales.sku_map.
+// now so the name states what the value is. Measured 2026-09-09: 46 of 46 distinct variant-restock
+// SKUs in the last 30 days resolve in `sales.sku_map` (denominator = distinct `sku` on
+// `direction='restock' AND scope='variant'` rows in that window). ⚠️ An earlier draft of this line
+// said "78 of 78" — that figure matched no window/scope combination and was corrected by the S362
+// hostile review.
 //
 // PULL + IN-PROCESS ingest, for the same two reasons shipment-events.js documents: a Worker
 // cannot fetch() a sibling Worker on the same workers.dev zone (error 1042), and ingest() is what
 // performs journey-trigger matching — writing to comms.events directly records the event and
 // starts nothing.
 //
-// ⛔ THIS EMITS; IT DOES NOT SEND. ingest() only enrols into journeys whose status is ACTIVE, so
-// while "Back in stock — requested alert" sits in draft the events accumulate and no customer is
-// mailed. Activating that journey is the entire go-live switch.
+// ⛔ THIS EMITS; IT DOES NOT SEND — and it does not even emit until the journey is ACTIVE.
+// See the gate at the top of emitRestockEvents: `ingest()` enrols at event time only, so emitting
+// into a draft journey would consume the signup and silently guarantee the customer never hears
+// back. The gate is what makes "activate the journey" an honest go-live switch.
 
 const A = require('./auth.js');
 
@@ -37,6 +42,10 @@ const RESTOCK_SINCE = '2026-09-09T00:00:00Z';
 // invocation — this is bounded for latency and for the shared cron budget, not by that limit.
 const CLAIM_LIMIT = 200;
 const EMIT_LIMIT = 50;
+// After this many failed attempts a row stops being retried and becomes a visible stuck alert
+// rather than a head-of-queue blocker. See the pending read.
+const MAX_ATTEMPTS = 5;
+const EVENT_NAME = 'back_in_stock';
 
 /**
  * Claim newly-restocked signups, then emit a `back_in_stock` event for every pending row.
@@ -48,6 +57,24 @@ const EMIT_LIMIT = 50;
  * instead picks up new claims and previous failures in the same query.
  */
 async function emitRestockEvents(env, ingest) {
+  // 0. ⛔ DO NOTHING UNTIL THERE IS SOMETHING TO ENROL INTO (S362 hostile review).
+  //
+  // `ingest()` matches journeys `status=eq.active` and enrols AT EVENT TIME. There is no
+  // retro-enrolment. So emitting while the journey is still in draft does not "accumulate events
+  // ready to fire" — it BURNS the signup: the event is written, the ledger row is stamped, and
+  // `UNIQUE(submission_id)` means the RPC can never hand that submission out again. The customer
+  // asked to be told, and activating the journey later would never tell them.
+  //
+  // The earlier note in this file (and in decisions.md) claiming activation is the whole go-live
+  // switch was WRONG in exactly that way. It is the switch, but only because this gate now holds
+  // the queue closed until it is thrown.
+  const jr = await A.sbComms(
+    '/rest/v1/journeys?status=eq.active&select=id,trigger&limit=50', env);
+  const live = (Array.isArray(jr.data) ? jr.data : [])
+    .some((j) => j?.trigger?.type === 'event' && j?.trigger?.name === EVENT_NAME);
+  if (!jr.ok) return { error: 'journey_check_failed', status: jr.status };
+  if (!live) return { skipped: 'no_active_journey' };
+
   // 1. claim — one statement, so two overlapping ticks cannot both take the same signup.
   const claim = await A.sbComms('/rest/v1/rpc/claim_restock_notifications', env, {
     method: 'POST',
@@ -57,8 +84,14 @@ async function emitRestockEvents(env, ingest) {
   const claimed = typeof claim.data === 'number' ? claim.data : 0;
 
   // 2. emit everything still pending, whatever tick claimed it.
+  // ⚠️ `attempts=lt.MAX_ATTEMPTS` is load-bearing, not tidiness (S362 hostile review). A row that
+  // can never emit — no profile and no email, which `ingest` refuses — sits at the head of
+  // `flipped_at ASC` forever. EMIT_LIMIT of them would re-fail every tick and no NEW signup would
+  // ever be emitted again. The cap turns a permanent outage into a bounded, visible backlog:
+  //   select * from comms.restock_notifications where event_emitted_at is null and attempts >= 5;
   const pend = await A.sbComms(
     '/rest/v1/restock_notifications?event_emitted_at=is.null'
+    + `&attempts=lt.${MAX_ATTEMPTS}`
     + '&select=id,profile_id,email,variant_sku,product_code,product_title,product_url,qty_after,flipped_at,attempts'
     + `&order=flipped_at.asc&limit=${EMIT_LIMIT}`, env);
   if (!pend.ok) return { claimed, error: 'pending_read_failed', status: pend.status };
@@ -74,7 +107,7 @@ async function emitRestockEvents(env, ingest) {
     const res = await ingest(env, {
       profile_id: r.profile_id || null,
       identifiers: r.email ? [{ type: 'email', value: r.email, is_verified: false }] : undefined,
-      name: 'back_in_stock',
+      name: EVENT_NAME,
       source: 'restock_watch',
       // The flip is when it became true, not when this cron noticed.
       occurred_at: r.flipped_at,

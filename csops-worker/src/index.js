@@ -6725,7 +6725,12 @@ function waTransport(env) {
 // one. Testing only for a missing provider ref would also capture a BiteSpeed thread whose refs
 // had not landed yet and wrongly answer it through Relay.
 function isRelayThread(thread, env) {
-  if (thread?.relay_web) return true;   // web-bot thread (S312): replies go to commsops, NEVER Chatwoot
+  // ⚠️ `relay_web_session_id` too, not just `relay_web` (S362 hostile review). Adoption on a 23505
+  // attaches a web session to an EXISTING thread and deliberately does not relabel its `channel`
+  // or `relay_web` — and 87.6% of adoptable threads are legacy `whatsapp`. Keying only on
+  // `relay_web` sent those to the Chatwoot/WhatsApp branch, where the agent's reply 422'd on a
+  // stale 24h window and the customer sitting in the widget was never answered.
+  if (thread?.relay_web || thread?.relay_web_session_id) return true;   // web-bot thread (S312): replies go to commsops, NEVER Chatwoot
   if ((thread?.channel || 'whatsapp') !== 'whatsapp') return false;   // legacy web stays on (dead) Chatwoot
   return waTransport(env) === 'relay' || !!(thread?.waba_phone_number_id && !thread?.provider_thread_ref);
 }
@@ -6788,6 +6793,10 @@ function relayWaKind(type) {
 // turn's lines to cs_wa_messages. NB the widget conversation has no Chatwoot, no WABA
 // number and no 24h window — the ONLY columns that make it a thread are channel='web' +
 // the relay_web marker pair.
+// Per-isolate, best-effort: bounds the log noise from a phone that can never be linked. Losing it
+// on an isolate recycle just means one more line, which is the right failure direction.
+const PHONE_PATCH_LOGGED = new Set();
+
 async function handleRelayWebForward(b, env) {
   let thread = (await sb(
     `/rest/v1/cs_wa_threads?relay_web_session_id=eq.${encodeURIComponent(b.session_id)}&select=id,thread_state,customer_phone,customer_handle,assigned_agent_id&limit=1`, env
@@ -6802,7 +6811,12 @@ async function handleRelayWebForward(b, env) {
     // the earlier turns' messages already sit on this thread, and moving them is a bigger and
     // riskier operation than this fix. But it must not be silent (it was, behind `.catch(()=>{})`):
     // the transcript stays visible in the inbox, just unlinked from the customer's phone.
-    if (!up.ok) console.error('[relay-web] identity phone patch failed', up.status, JSON.stringify(up.data).slice(0, 200));
+    // Logged once per THREAD, not per turn: the guard condition above stays true forever once this
+    // fails, so an unguarded log repeated on every message of the session (S362 hostile review).
+    if (!up.ok && !PHONE_PATCH_LOGGED.has(thread.id)) {
+      PHONE_PATCH_LOGGED.add(thread.id);
+      console.error('[relay-web] identity phone patch failed', up.status, JSON.stringify(up.data).slice(0, 200));
+    }
   }
   // Same for email (S355) — the create path already seeds customer_handle from identity.email
   // when it's known on turn 1; this covers the far more common case where email lands later.
@@ -7608,8 +7622,26 @@ async function logRelayWaFailure(thread, fields, reason, auth, env) {
   }).catch((e) => console.error('[relay-wa] failure-log insert failed', e?.message));
 }
 
+// Which rail is this thread's conversation actually ON right now?
+//
+// ⚠️ NEITHER `relay_web` NOR `relay_web_session_id` ANSWERS THIS ON ITS OWN, and that is the whole
+// lesson of the S362 hostile review. A thread adopted by a web session keeps `relay_web=false`
+// (routing the live web chat to WhatsApp — a 422 the customer never sees answered), and once
+// `relay_web_session_id` is stamped it stays stamped forever, so keying on it instead would send a
+// LATER WhatsApp reply into a dead widget. The rail belongs to the CONVERSATION, not the thread,
+// so read it off the newest message — which is the only thing that knows.
+async function threadOnWebRail(thread, env) {
+  if (!thread?.relay_web_session_id) return !!thread?.relay_web;
+  if (thread.relay_web) return true;                       // a pure Relay web thread, no query needed
+  const r = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}`
+    + '&select=channel&order=created_at.desc&limit=1', env);
+  // Fail toward the web rail: the only threads reaching this line carry a web session, and a
+  // wrong WhatsApp send is a message to a customer, while a wrong web send is a widget post.
+  return (r.data?.[0]?.channel || 'web') === 'web';
+}
+
 async function sendWaReplyViaRelay(thread, text, auth, env) {
-  if (thread.relay_web) return sendWebReplyViaRelay(thread, text, auth, env);
+  if (await threadOnWebRail(thread, env)) return sendWebReplyViaRelay(thread, text, auth, env);
   const until = thread.customer_window_until ? new Date(thread.customer_window_until).getTime() : 0;
   if (!(until > Date.now()))
     return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
