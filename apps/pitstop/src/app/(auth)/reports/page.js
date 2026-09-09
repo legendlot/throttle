@@ -361,7 +361,17 @@ export default function ReportsPage() {
     // ⚠️ The RANGE comes off the response, not the `from`/`to` pickers — same rule as `Basis`
     // below, and for a sharper reason: `callData` is not cleared when a refetch starts or fails,
     // so a failed reload would have stamped the NEW dates onto the OLD numbers.
-    lines.push(`Pitstop Call Report,${(callData.range?.from || from).slice(0, 10)} to ${(callData.range?.to || to).slice(0, 10)}`);
+    // ⛔ AND IT MUST BE CONVERTED TO IST FIRST — `.slice(0, 10)` on the raw value is PATTERN-221,
+    // the bug this file already carries a warning about 300 lines up. `range.from` is what the
+    // page SENT: `istBoundary` turns "2026-01-01" into `2026-01-01T00:00+05:30` →
+    // `2025-12-31T18:30:00Z`, so slicing the ISO string names the PREVIOUS day. Shipped that way
+    // in 90a2fb72 for one deploy — the header read "2025-12-31" while the picker read
+    // "2026-01-01" — caught by the trend re-smoke, which reported the first line in passing.
+    const istDay = (iso, fallback) => {
+      const t = Date.parse(iso || '');
+      return Number.isNaN(t) ? fallback : new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    };
+    lines.push(`Pitstop Call Report,${istDay(callData.range?.from, from)} to ${istDay(callData.range?.to, to)}`);
     // Same reason the Agents CSV stamps its basis: a business-hours export read next week must
     // not be mistaken for the whole day. Read off the RESPONSE, not the live checkbox.
     lines.push(`Basis,${callData.range?.business_hours ? 'Business hours' : '24x7'}`);
