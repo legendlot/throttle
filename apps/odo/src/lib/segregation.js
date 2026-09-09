@@ -18,12 +18,21 @@ export const GST_RATE = 0.18;
 //   amazon_spapi — `tax_ingest` is ~0; the exact GST arrives through Finances WEEKS later and is
 //                  only 26% settled at ≤14 days old, so "exact when present" would overstate net
 //                  on every recent day. S166 stands for Amazon.
-//   uniware      — Firstcry stages `discount` at 68–95% of gross while its tax is computed on the
-//                  FULL gross (tax > post-discount base on 124 of 232 rows / 90d), so exact tax
-//                  there makes an already-wrong base worse; Cred would move ~₹230/month. Add
-//                  `uniware` once the Firstcry discount field is understood (backlog [odo]).
 //   qc_upload / Export — zero-rated export sales need an explicit 0% rule here, not a strip.
-export const TAX_AT_INGEST_ADAPTERS = new Set(['shopify', 'snorkel_internal']);
+// ✅ `uniware` ADDED 2026-09-09 (S364) — the condition this note set has been met. It read:
+//   "Firstcry stages `discount` at 68–95% of gross while its tax is computed on the FULL gross …
+//    add `uniware` once the Firstcry discount field is understood."
+// ⛔ **Both halves of that diagnosis were wrong, and the second one inverted the cause.** Uniware's
+// `discount` is ALREADY deducted from `sellingPrice`, so the tax was never "computed on the full
+// gross" — it is computed on the price the customer actually paid, correctly. What was wrong was
+// OUR base: staging the discount made `gross − discount` a fraction of the real base (₹101.90 on a
+// ₹2,050.45 order), so the flat strip returned ~₹15 of GST where Uniware had charged ₹312.78.
+// The adapter now stages `discount` as 0 (see `uniMapOrder`), which makes the base right, and
+// `tax_ingest` here has ALWAYS been Uniware's real per-line GST — IGST+SGST+CGST+UTGST summed at
+// ingest, never a strip. So this Set was the only thing still throwing it away.
+// 📎 The lesson: "their tax looks wrong against our base" was read as a defect in THEIR number
+// three times before anyone checked whether OUR base was the broken side.
+export const TAX_AT_INGEST_ADAPTERS = new Set(['shopify', 'snorkel_internal', 'uniware']);
 
 // GST to strip from ONE f_order_rollup row's post-discount, tax-inclusive base. A row is a
 // sale_date × channel DAY, not an order, so "the tax is present" is not enough — a day where 1 of

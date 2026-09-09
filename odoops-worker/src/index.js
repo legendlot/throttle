@@ -1922,7 +1922,19 @@ function uniMapOrder(so) {
   for (const it of (so.saleOrderItems || [])) {
     const itemCancelled = cancelledOrder || String(it.statusCode || '').toUpperCase() === 'CANCELLED' || !!it.cancelledBySeller;
     const gross = num(it.sellingPrice);
-    const disc  = num(it.discount);
+    // ⛔ `it.discount` IS ALREADY TAKEN OFF `sellingPrice` — staging it DOUBLE-SUBTRACTS (S364,
+    // 2026-09-09). Proven from Uniware itself, not inferred: on every line
+    //   (sellingPrice − GST) + discount === sellingPriceWithoutTaxesAndDiscount
+    // exactly — Firstcry W37569790RMZCEB49411 (2050.45 − 312.78) + 1948.55 = 3686.22, and
+    // Flipkart 5039dbc4… (2029 − 309.51) + 81 = 1800.49. So `discount` is the amount Uniware has
+    // ALREADY deducted to reach the price the customer paid, and `sellingPrice` is the net.
+    // The ladder subtracts `discount` again at `apps/odo/src/lib/segregation.js` (`netDisc`), and
+    // `rowGst` bases its strip on `gross − discount` too, so a staged discount corrupted BOTH.
+    // ⚠️ It was NOT a rounding-scale problem: Firstcry discounts ran 66.7%–124.5% of gross, which
+    // drove that channel's 90-day net NEGATIVE (−₹10,936 on ₹5,48,452 gross). A discount exceeding
+    // gross was the tell; it was read as "a weird discount field" for weeks instead.
+    // Kept in `raw.mrpDiscount` for reference — it is real data, it just is not a ladder discount.
+    const disc  = 0;
     const tax   = num(it.totalIntegratedGst) + num(it.totalStateGst) + num(it.totalCentralGst) + num(it.totalUnionTerritoryGst);
     // include in order-grain gross: cancelled order → all items (= cancelled value); live order → live items only
     if (cancelledOrder || !itemCancelled) { oGross += gross; oDisc += disc; oTax += tax; }
@@ -1934,7 +1946,8 @@ function uniMapOrder(so) {
       channel_sku: it.ean || it.itemSku || it.sellerSkuCode || null, title: it.itemName || null,
       qty: 1, gross_value: gross, discount_value: disc, tax_value: tax, row_type: 'sale',
       occurred_at: occurred, sale_date: saleDate, order_status: status, is_cancelled: itemCancelled,
-      raw: { ean: it.ean, sellerSku: it.sellerSkuCode, fsn: it.channelProductId, statusCode: it.statusCode },
+      raw: { ean: it.ean, sellerSku: it.sellerSkuCode, fsn: it.channelProductId, statusCode: it.statusCode,
+             mrpDiscount: num(it.discount) || undefined },
     });
   }
   const order = {
