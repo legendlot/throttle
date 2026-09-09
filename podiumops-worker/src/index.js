@@ -1558,7 +1558,21 @@ async function importDirectoryCandidates(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!googleConfigured(env)) return err('google_not_configured', 400);
   const d = body.data || body;
-  const create = Array.isArray(d.create) ? d.create : []; // [{email, department_id, manager_id, job_title}]
+  // ⭐ `date_joined` IS REQUIRED on every import (S363) — the mirror of the exit-date rule below.
+  // This path created people with NO joining date at all, and a NULL `date_joined` is not neutral:
+  // `sales.f_podium_salary_run` and `_coverage` both gate on `(e.date_joined IS NULL OR
+  // e.date_joined <= m_end)`, so an undated person is "employed" in EVERY month ever — including
+  // months before their row existed. Measured 2026-09-09: 8 active employees had no joining date,
+  // ALL of them created by this sync, and three September joiners were being reported as August
+  // coverage gaps. The cost side happens to be protected (the run also requires
+  // `effective_date <= m_end`, so someone with no applicable comp row contributes ₹0), but that is
+  // a second guard doing this one's job — backfill a CTC with an early effective_date and the
+  // phantom cost becomes real. Google knows when it created an account; it does not know when
+  // somebody started work.
+  // ⚠️ Unlike `date_exited`, a FUTURE `date_joined` is legitimate — people are onboarded before
+  // they start (a 2 Sep start recorded in August is exactly how `eligible` moved 65→64). So this
+  // validates the format only and deliberately does NOT cap at today.
+  const create = Array.isArray(d.create) ? d.create : []; // [{email, date_joined, department_id, manager_id, job_title}]
   // ⭐ `exit` is [{work_email, date_exited}] — the DATE IS REQUIRED (Afshaan, 2026-09-09, S363).
   // It used to be a bare [email,...] and this handler stamped `date_exited: nowIso()`, i.e. the day
   // someone happened to run the sync. That produced batch clusters — 6 people sharing 2026-08-24,
@@ -1580,6 +1594,13 @@ async function importDirectoryCandidates(body, auth, env) {
   // Bookkeeping only — the OU observed for people with nothing to review (see below).
   const baselineIn = Array.isArray(d.baseline) ? d.baseline : []; // [{id, org_unit}]
   if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
+  // Validate every import BEFORE writing any of them, same as the exit list below: a half-applied
+  // batch would leave some people created and others not, with no way to tell which from here.
+  for (const c of create) {
+    if (!c || !c.email) return err('each import needs an email', 400);
+    if (!c.date_joined || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date_joined)))
+      return err(`joining date required for ${c.email} (YYYY-MM-DD) — Google knows when it made the account, not when they started`, 400);
+  }
   if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
   if (baselineIn.length > 2000) return err('baseline list too large', 400);
   const result = { created: [], exited: [], ignored: [], updated: [], dismissed: [], baselined: 0, reassigned: [], reassign_needs_attention: [], errors: [] };
@@ -1696,6 +1717,9 @@ async function importDirectoryCandidates(body, auth, env) {
         department_id: c.department_id || null,
         manager_id: c.manager_id || null,
         job_title: c.job_title || gu.organizations?.[0]?.title || null,
+        // Validated above. Never defaulted — an undated employee is counted as employed in every
+        // month that has ever existed (see the note on `create`).
+        date_joined: c.date_joined,
         status: 'active',
         auth_user_id: authMap[em] || null,
         google_user_id: gu.id || null,

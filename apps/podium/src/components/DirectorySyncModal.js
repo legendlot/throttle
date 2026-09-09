@@ -22,8 +22,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     try {
       const r = await podiumopsGet('getDirectorySyncPreview', {}, session);
       setData(r);
+      // `date_joined` starts EMPTY and is required — the mirror of the exit-date rule below.
+      // Google knows when it created the account, never when the person started work, and an
+      // employee with no joining date counts as employed in EVERY month the salary run has ever
+      // covered. All 8 undated employees found on 2026-09-09 were created by this screen.
       setRows((r.new_candidates || []).map(c => ({
-        ...c, action: 'import',
+        ...c, action: 'import', date_joined: '',
         department_id: c.suggested_department_id || '',
         manager_id: c.suggested_manager_id || '',
       })));
@@ -58,8 +62,13 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
 
   async function submit() {
     const create = rows.filter(r => r.action === 'import')
-      .map(r => ({ email: r.email, department_id: r.department_id || null, manager_id: r.manager_id || null, job_title: r.job_title || null }));
+      .map(r => ({ email: r.email, date_joined: r.date_joined, department_id: r.department_id || null, manager_id: r.manager_id || null, job_title: r.job_title || null }));
     const ignore = rows.filter(r => r.action === 'ignore').map(r => r.email);
+    const undatedJoins = rows.filter(r => r.action === 'import' && !r.date_joined);
+    if (undatedJoins.length) {
+      showToast(`Joining date required for ${undatedJoins.map(r => r.full_name).join(', ')}`, 'error');
+      return;
+    }
     const exit = departed.filter(d => d.exit).map(d => ({ work_email: d.work_email, date_exited: d.date_exited }));
     // Caught here as well as in the worker so the person sees WHICH row is missing a date, on the
     // screen they are looking at, rather than a rejected batch.
@@ -142,7 +151,8 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                   <div style={sectionTitle}><UserPlus size={13} /> New people ({rows.length})</div>
                   <table style={table}>
                     <thead><tr>
-                      <th style={th}>Import</th><th style={th}>Name / email</th><th style={th}>Google OU</th>
+                      <th style={th}>Import</th><th style={th}>Name / email</th><th style={th}>Joining date *</th>
+                      <th style={th}>Google OU</th>
                       <th style={th}>Department</th><th style={th}>Manager</th><th style={th}>Login</th>
                     </tr></thead>
                     <tbody>
@@ -157,6 +167,20 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                           <td style={td}>
                             <div style={{ fontWeight: 600 }}>{r.full_name}</div>
                             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{r.email}</div>
+                          </td>
+                          {/* Required, empty by default. NO `max`: unlike an exit date, a future
+                              joining date is legitimate — people are onboarded before they start. */}
+                          <td style={td}>
+                            <input
+                              type="date"
+                              value={r.date_joined}
+                              disabled={r.action !== 'import'}
+                              onChange={e => setRow(r.email, { date_joined: e.target.value })}
+                              style={{ fontFamily: 'var(--font-mono)', fontSize: 12, padding: '4px 6px',
+                                       border: `1px solid ${r.action === 'import' && !r.date_joined ? 'var(--state-warning-fg)' : 'var(--border)'}`,
+                                       borderRadius: 4, background: r.action === 'import' ? 'var(--surface)' : 'transparent',
+                                       color: 'var(--text-1)', opacity: r.action === 'import' ? 1 : 0.4 }}
+                            />
                           </td>
                           <td style={{ ...td, fontSize: 11, color: 'var(--text-3)' }}>{r.org_unit || '—'}</td>
                           <td style={td}>
