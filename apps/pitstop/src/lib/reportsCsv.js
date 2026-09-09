@@ -20,8 +20,12 @@
 // comma would split a row into two columns. Also tests \r, which a lone \n check misses.
 // ⚠️ ONE IMPLEMENTATION FOR THE THREE /reports BUILDERS — `exportAgentsCsv` used to carry its own
 // weaker copy with neither the formula guard nor \r, so the Agents CSV was the soft one of the
-// three (S365). ⛔ `analytics/page.js` STILL has its own private `csvEsc` and `istDay` — the
-// "N sites" hazard is narrowed, not closed; filed as a `[pitstop][bug]`.
+// three (S365). ✅ `analytics/page.js` now IMPORTS both (S367, 2026-09-09) — this is the only
+// copy, and it must stay that way. Both of its private copies had silently drifted into real
+// defects while sitting next to a correct implementation: its `istDay` had no fallback and threw
+// a RangeError inside a CSV click handler, its `csvEsc` lacked the number carve-out and exported
+// -2.5 as the text `'-2.5. That is the "N sites" hazard's slower sibling — not fixing N−1 of N,
+// but fixing 1 and letting the copies rot.
 // ⛔ NUMBERS ARE NEVER FORMULA-GUARDED. A negative number starts with `-`, so a blanket guard
 // exported `avg_close_days: -2.5` as the TEXT `'-2.5` — un-summable, and it looks like corruption
 // to the reader. The tickets breakdown rows only began passing through here in S365, which is how
