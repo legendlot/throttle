@@ -343,8 +343,11 @@ function DetailContent() {
         </div>
       </div>
 
+      {/* `open` is REQUIRED — @throttle/ui's Modal is `if (!open) return null` (Modal.js:32),
+          so the outer `voidOpen &&` guard alone renders nothing. Without it the Void button
+          was dead from 2026-06-03 to 2026-09-09: 464 gate passes, none ever voided. */}
       {voidOpen && (
-        <Modal title="Void Gate Pass" onClose={() => setVoidOpen(false)}>
+        <Modal open={voidOpen} title="Void Gate Pass" onClose={() => setVoidOpen(false)}>
           <div style={{ padding: 4 }}>
             <p style={{ fontSize: 13, color: 'var(--t2)', marginTop: 0 }}>Voiding keeps the record (it prints with a VOID watermark) but marks it cancelled. Reason is required.</p>
             <label style={lbl}>Reason</label>
