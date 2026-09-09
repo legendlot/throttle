@@ -37,6 +37,7 @@ const FORMS = require('./forms.js');
 const FWIDGET = require('./form-widget.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
+const RESTOCKEV = require('./restock-events.js'); // SP3 back-in-stock alerts (S362)
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
 const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
@@ -2579,6 +2580,15 @@ async function runScheduled(env) {
     if (r?.customers) console.log('shopify_tag_sync', JSON.stringify(r));
     else if (r?.skipped && r.skipped !== 'too_soon') console.log('shopify_tag_sync_skipped', r.skipped);
   } catch (e) { console.log('shopify_tag_sync_error', e?.message || String(e)); }
+
+  // 0d. SP3 back-in-stock. Joins `sales.stock_alert_outbox` restock flips (Odo's existing
+  // detector) to back-in-stock signups and emits one `back_in_stock` event per signup, ever.
+  // ⛔ EMITS ONLY — ingest enrols into ACTIVE journeys, so nothing sends while the
+  // "Back in stock — requested alert" journey sits in draft. Best-effort like its neighbours.
+  try {
+    const r = await RESTOCKEV.emitRestockEvents(env, ingest);
+    if (r?.claimed || r?.emitted || r?.failed) console.log('restock_events', JSON.stringify(r));
+  } catch (e) { console.log('restock_events_error', e?.message || String(e)); }
 
   // 1. due scheduled campaigns
   try {

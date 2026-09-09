@@ -3,7 +3,12 @@
 // styles, no framework and no external assets beyond Cloudflare's own Turnstile script.
 //
 // Usage on the storefront:
-//   <div data-lot-form="back-in-stock" data-product="GH-PB-49"></div>
+//   <div data-lot-form="back-in-stock" data-product="{{ variant.sku }}"></div>
+//
+// ⚠️ `data-product` MUST be the SHOPIFY VARIANT SKU (e.g. shadow-tarmac-black), which is what
+// `sales.stock_alert_outbox.sku` is keyed on and therefore what the SP3 restock join matches.
+// It is NOT the LOT product_code (SHTK) and NOT the Shopify variant ID — the first storefront
+// test sent variant IDs, which would have matched nothing forever while looking correct (S362).
 //   <script src="https://commsops.<...>.workers.dev/f/widget.js?form=back-in-stock" defer></script>
 function formWidgetJs(slug, workerBase, siteKey) {
   const s = JSON.stringify(String(slug || ''));
@@ -70,7 +75,7 @@ function formWidgetJs(slug, workerBase, siteKey) {
     msg.textContent='Sending...';
     var payload={form:SLUG, turnstile_token:token, source_url:location.href,
       email:f.email.value, website:f.website.value,
-      product_code:(host.getAttribute('data-product')||''),
+      variant_sku:(host.getAttribute('data-product')||''),
       channels: wa.checked?['email','whatsapp']:['email']};
     if(wa.checked) payload.phone=phone.value;
     fetch(BASE+'/f/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
