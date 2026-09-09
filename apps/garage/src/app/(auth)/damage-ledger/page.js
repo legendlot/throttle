@@ -97,12 +97,17 @@ export default function DamageLedgerPage() {
   // one row per part code — material_current repeats a cross-product part once per
   // product, so the first row wins and the label carries its product only when the
   // part belongs to exactly one.
-  const [materials, setMaterials] = useState([]);
+  const [materials,  setMaterials]  = useState([]);
+  const [matLoading, setMatLoading] = useState(true);
   useEffect(() => {
     if (!session) return;
+    setMatLoading(true);
     garageFetch('getMaterials', {}, session)
       .then(d => setMaterials(Array.isArray(d) ? d : []))
-      .catch(() => {});
+      .catch(() => {})
+      // A failed list must not leave the picker spinning forever — the form still opens,
+      // the picker just has nothing to offer until the page is refreshed.
+      .finally(() => setMatLoading(false));
   }, [session]);
   const partOpts = useMemo(() => {
     const byCode = new Map();
@@ -602,8 +607,8 @@ export default function DamageLedgerPage() {
                 part_name: opt ? (opt.part_name || '') : recordForm.part_name,
                 product:   opt ? (opt.product   || '') : recordForm.product,
               })}
-              placeholder="Type part code or name…"
-              loading={!materials.length}
+              placeholder={matLoading ? 'Loading parts…' : (materials.length ? 'Type part code or name…' : 'Part list did not load — refresh the page')}
+              loading={matLoading}
             />
           </div>
           <div>
