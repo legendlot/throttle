@@ -9,6 +9,14 @@ import { KpiCard, MultiSelect, btnGhost } from '../../../components/kit/index.js
 // so it is imported directly — same as the analytics page does.
 import { TrendChart } from '../../../components/kit/Chart.js';
 import { dateStr } from '@throttle/domain';
+// The three CSV builders are pure `payload -> string` functions in lib, so they can be tested
+// without a browser or React — see reportsCsv.js's header for why (S365: four silent defects
+// shipped from this file in one day while every suite in the repo stayed green). What stays here
+// is only the Blob/anchor plumbing, which is the part a unit test could not have caught anyway.
+import {
+  csvEsc, istDay, CALL_METRICS, finishCallRow, grainWord,
+  buildTicketsCsv, buildAgentsCsv, buildCallsCsv,
+} from '../../../lib/reportsCsv.js';
 
 // IST-EXPLICIT range boundaries (S344) — same fix as analytics/page.js, and the same bug: these
 // used the VIEWER's midnight via setHours(), so a non-IST browser shifted the whole range and every
@@ -31,24 +39,9 @@ const istBoundary = (d, endOfDay) => {
     : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   return new Date(`${ymd}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
 };
-// The inverse of `istBoundary`, and the ONLY correct way to display a range echoed back by a
-// handler. ⛔ `.slice(0, 10)` on those values is PATTERN-221: `istBoundary('2026-01-01')` is
-// `2025-12-31T18:30:00Z`, so slicing names the PREVIOUS day. Both readers of a `range.from`
-// were doing exactly that (2026-09-09, S365) — the Calls KPI card had shown a start date one
-// day early since it shipped, and the new Calls CSV header reproduced it within the hour.
-// Module-level on purpose: two call sites drifted apart once already.
-const istDay = (iso, fallback = '') => {
-  const t = Date.parse(iso || '');
-  return Number.isNaN(t) ? fallback : new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-};
-// A value beginning = + - @ is executed as a formula by Excel/Sheets, and an agent name
-// containing a comma would split the cohort line into two columns. Same helper the analytics
-// export already has (hostile review S344, finding 7).
-const csvEsc = (v) => {
-  let x = v == null ? '' : String(v);
-  if (/^[=+\-@]/.test(x)) x = "'" + x;
-  return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
-};
+// `istDay` (the inverse of `istBoundary`) and `csvEsc` now live in lib/reportsCsv.js — imported
+// above. Both are shared with the builders, and a second copy is exactly how the Agents export
+// ended up with a weaker escaper than the other two.
 function toIsoStart(date) { return istBoundary(date, false); }
 function toIsoEnd(date)   { return istBoundary(date, true); }
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
@@ -212,263 +205,45 @@ export default function ReportsPage() {
     return () => { alive = false; };
   }, [session, view, from, to, agChannels, agTags, agAgents, businessHours, dailyGrain]);
 
-  function exportCsv() {
-    // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
-    // ⚠️ The Calls tab did EXACTLY that until 2026-09-09 — and the failure was silent in the
-    // worst way: `data` still holds the tickets payload from the Tickets tab (only that view
-    // calls `setData`), so the button was enabled and downloaded a plausible, correctly-named
-    // tickets report while you were looking at call figures. A blank file would have been safer.
-    if (view === 'agents') return exportAgentsCsv();
-    if (view === 'calls') return exportCallsCsv();
-    if (!data) return;
-    const lines = [];
-    lines.push(`Pitstop Report,${from} to ${to}`);
-    // The cohort travels WITH the file, same reason the Agents CSV carries its basis and
-    // channel: a filtered export read next week must not be mistaken for the whole month.
-    // Read off the RESPONSE, never the live controls — `data` holds the previous payload
-    // until a refetch resolves, so the controls could stamp new filters onto old numbers.
-    const applied = data.applied_filters || {};
-    lines.push(`Agent,${csvEsc((applied.agent || []).join(' · ') || 'All')}`);
-    lines.push(`Support channel,${csvEsc((applied.channel || []).join(' · ') || 'All')}`);
-    lines.push(`Tickets raised,${data.range.total_rows}`);
-    if (data.range.range_total != null && data.range.range_total !== data.range.total_rows) {
-      lines.push(`Tickets raised in range (before filters),${data.range.range_total}`);
-    }
-    if (data.conversations) {
-      // `unfiltered` = the counts RPC is date-ranged only, so this figure is the WHOLE range
-      // even when the ticket numbers above are a one-agent slice. Say so in the file.
-      lines.push(`Conversations handled${data.conversations.unfiltered ? ' (whole range — not filtered)' : ''},${data.conversations.handled}`);
-      lines.push(`Conversations in range (incl. outbound-only),${data.conversations.total}`);
-    }
-    lines.push('');
-    lines.push('By Product,Total,Replacements,Refunds,Repairs');
-    for (const r of data.by_product) {
-      lines.push(`${r.name},${r.total},${r.replacement || 0},${r.refund || 0},${r.repair || 0}`);
-    }
-    lines.push('');
-    lines.push('By Platform,Total,Replacements,Refunds,Repairs');
-    for (const r of data.by_platform) {
-      lines.push(`${r.name},${r.total},${r.replacement || 0},${r.refund || 0},${r.repair || 0}`);
-    }
-    lines.push('');
-    // Raised and Closed are on different date bases (raised-in-window vs closed-in-window) —
-    // the header says so, because a CSV outlives the screen that explained it.
-    lines.push('By Agent,Raised in range,Closed in range,Avg close (days)');
-    for (const r of data.by_agent) {
-      lines.push(`${r.name},${r.total},${r.closed},${r.avg_close_days ?? ''}`);
-    }
-    lines.push('');
-    lines.push('Cost Summary');
-    lines.push(`Return cost (₹),${data.cost_summary.return_cost_inr}`);
-    lines.push(`Replacement cost (₹),${data.cost_summary.replacement_cost_inr}`);
-    lines.push(`Refund amount (₹),${data.cost_summary.refund_amount_inr}`);
-    // BOM first — Excel ignores the MIME charset on a double-clicked .csv (S349 review).
-    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  // ── CSV exports ───────────────────────────────────────────────────────────
+  // Each tab exports its OWN file. ⚠️ The Calls tab silently handed you the TICKETS csv until
+  // 2026-09-09: only the Tickets view calls `setData`, so `data` still held the tickets payload
+  // and the download was a plausible, correctly-named ticket report. A blank file would have been
+  // safer than a wrong one that looks right — hence a builder per tab, each gated on its own
+  // payload, and each one unit-tested in lib/reportsCsv.test.mjs.
+  function download(text, name) {
+    if (text == null) return;
+    const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pitstop-report-${from}-to-${to}.csv`;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportCsv() {
+    if (view === 'agents') return exportAgentsCsv();
+    if (view === 'calls') return exportCallsCsv();
+    download(buildTicketsCsv({ data, from, to }), `pitstop-report-${from}-to-${to}.csv`);
   }
 
   function exportAgentsCsv() {
-    if (!agentData?.by_agent?.length) return;
-    const esc = (v) => {
-      const s = v == null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const t = agentData.totals || {};
-    // Breakdown is a separate request and may legitimately be absent — the CSV then
-    // simply omits those rows rather than exporting blanks that read as zeroes.
-    // Same gate as the panel: only export the breakdown when its own total agrees
-    // with the report's, or the CSV carries three numbers that do not add up to the
-    // "Avg to close" two rows above them.
-    const wRaw = waitData?.totals || null;
-    const wt = (wRaw && t.avg_resolution_min != null && wRaw.avg_resolution_min != null
-      && Math.abs(Number(wRaw.avg_resolution_min) - Number(t.avg_resolution_min))
-         <= Math.max(60, 0.10 * Number(t.avg_resolution_min))) ? wRaw : null;
-    const wByAgent = new Map((waitData?.by_agent || []).map(x => [x.agent_id || x.name, x]));
-    const lines = [];
-    lines.push(`Pitstop Agent Conversation Report,${from} to ${to}`);
-    // The basis and the cohort travel WITH the file — a CSV read a week later
-    // must not be ambiguous about whether times are 24x7 or business hours.
-    lines.push(`Basis,${agentData.range?.business_hours ? 'Business hours' : '24x7'}`);
-    lines.push(`Channel,${esc(agChannels.length ? agChannels.map(c => CHANNEL_OPTS.find(o => o.v === c)?.l || c).join(' | ') : 'All')}`);
-    lines.push(`Tag,${esc(agTags.length ? agTags.map(id => tags.find(x => x.id === id)?.name || id).join(' | ') : 'All')}`);
-    lines.push(`Agent,${esc(agAgents.length ? agAgents.map(id => agRoster.find(a => a.v === id)?.l || id).join(' | ') : 'All')}`);
-    lines.push(`Conversations in range,${t.total ?? ''}`);
-    lines.push(`Queries (customer-initiated),${t.queries ?? ''}`);
-    lines.push(`Outbound-only (not queries),${t.outbound_only ?? ''}`);
-    lines.push(`No stored history,${t.no_history ?? ''}`);
-    lines.push(`Assigned in range,${t.assigned ?? ''}`);
-    lines.push(`Handled in range,${t.handled ?? ''}`);
-    lines.push(`Closed in range,${t.closed ?? ''}`);
-    lines.push('');
-    // The decomposition travels with the file for the same reason Basis does: "avg to
-    // close" is the FULL wall clock, and a reader a week later must be able to see how
-    // much of it was waiting rather than working, without re-running the report.
-    lines.push(`Avg to close (min) — full wall clock,${t.avg_resolution_min ?? ''}`);
-    if (wt) {
-      lines.push(`  of which waiting on customer (min),${wt.avg_customer_wait_min ?? ''}`);
-      lines.push(`  of which waiting to be closed (min),${wt.avg_close_lag_min ?? ''}`);
-    }
-    lines.push('');
-    // The date basis travels WITH the file, same reason as Basis/Channel above: a CSV
-    // read next week must not leave anyone guessing which day a closure landed on.
-    lines.push('Assigned/Handled/Resolved/Closed counted on,The day the activity happened');
-    lines.push('Queries/Open/Answered/rates/averages counted on,The day the conversation was raised');
-    lines.push('');
-    lines.push('Agent,Assigned,Handled,Open,Resolved,Closed (operational),Closed (no reason),Closed,Closed rate %,Resolution rate %,Answered,Never answered,Answer rate %,Avg first reply (min),Avg reply (min),Avg to close (min),Avg waiting on customer (min),Avg waiting to be closed (min),Waiting on us,Waiting on customer');
-    for (const r of agentData.by_agent) {
-      lines.push([r.name, r.assigned, r.handled, r.open, r.resolved, r.closed_ops, r.closed_unspecified,
-        r.closed, r.resolution_rate, r.resolve_rate, r.answered, r.unanswered,
-        r.answer_rate, r.avg_frt_min, r.avg_response_min, r.avg_resolution_min,
-        wt ? wByAgent.get(r.agent_id || r.name)?.avg_customer_wait_min : '',
-        wt ? wByAgent.get(r.agent_id || r.name)?.avg_close_lag_min : '',
-        r.waiting_agent, r.waiting_customer].map(esc).join(','));
-    }
-    // Daily trend (S349b) — every metric, one row per day for the team, then per agent. Only when
-    // the panel actually loaded: an absent block is honest, a block of blanks reads as zeros.
-    if (dailyData?.days?.length) {
-      const M = dailyData.metrics || [];
-      lines.push('');
-      const gw = grainWord(dailyData.range?.grain);
-      lines.push(`${gw.title} trend (${dailyData.range?.business_hours ? 'business hours' : '24x7'}),${dailyData.days.length} ${gw.plural}`);
-      lines.push([gw.bucket, 'Agent', ...M.map(m => m.label + (m.kind === 'minutes' ? ' (min)' : m.kind === 'pct' ? ' %' : ''))].map(esc).join(','));
-      for (const d of dailyData.days) lines.push([d.day, 'All agents', ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
-      for (const a of (dailyData.by_agent || [])) {
-        for (const d of a.days) lines.push([d.day, a.name, ...M.map(m => d[m.key] ?? '')].map(esc).join(','));
-      }
-    }
-    // BOM first: agent names and the "— unassigned —" bucket are non-ASCII (S349 review).
-    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `pitstop-agents-${from}-to-${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // The page owns turning filter IDs into names; the builder owns the file.
+    const label = (ids, resolve) => ids.length ? ids.map(resolve).join(' | ') : '';
+    download(buildAgentsCsv({
+      agentData, waitData, dailyData, from, to,
+      cohort: {
+        channel: label(agChannels, c => CHANNEL_OPTS.find(o => o.v === c)?.l || c),
+        tag:     label(agTags,     id => tags.find(x => x.id === id)?.name || id),
+        agent:   label(agAgents,   id => agRoster.find(a => a.v === id)?.l || id),
+      },
+    }), `pitstop-agents-${from}-to-${to}.csv`);
   }
 
-  // Calls CSV (2026-09-09) — every panel the Calls tab draws, in the order it draws them, so a
-  // reader of the file can find each number on the screen it came from.
-  //
-  // ⚠️ Column names are taken from the TABLE HEADERS, not the payload keys, and the `??` aliases
-  // mirror `CallsBreakdown` exactly — the worker sends `incoming_reached` on newer rows and
-  // `answered` on older ones, and the screen already falls back. A CSV that read the raw key
-  // would print blanks for the same rows the table renders fine.
-  // ⚠️ "Not reached" is deliberately NOT called "missed" here, for the reason the panel comment
-  // gives: it includes IVR drop-offs and hang-ups before routing, so it is not all our failure
-  // to answer. The CSV outlives the screen that explained that, so it carries the wording.
   function exportCallsCsv() {
-    // `totals.total` (not just `totals`): the worker always returns a totals object, `total: 0`
-    // included, so gating on its presence let the button stay live while the panel said "No calls
-    // in range" — and exported a file with a 0 and no sections. Matches `CallsPanel`'s own test.
-    if (!callData?.totals?.total) return;
-    const t = callData.totals;
-    const lines = [];
-    // ⚠️ The RANGE comes off the response, not the `from`/`to` pickers — same rule as `Basis`
-    // below, and for a sharper reason: `callData` is not cleared when a refetch starts or fails,
-    // so a failed reload would have stamped the NEW dates onto the OLD numbers.
-    // ⛔ Converted to IST first — see `istDay` at the top of the file. Slicing the raw value is
-    // PATTERN-221, and this line shipped that way in 90a2fb72 for one deploy.
-    lines.push(`Pitstop Call Report,${istDay(callData.range?.from, from)} to ${istDay(callData.range?.to, to)}`);
-    // Same reason the Agents CSV stamps its basis: a business-hours export read next week must
-    // not be mistaken for the whole day. Read off the RESPONSE, not the live checkbox.
-    lines.push(`Basis,${callData.range?.business_hours ? 'Business hours' : '24x7'}`);
-    if (callData.range?.business_hours && callData.range?.rows_24x7 != null) {
-      lines.push(`Calls in range outside business hours (excluded),${Number(callData.range.rows_24x7) - Number(t.total || 0)}`);
-    }
-    lines.push('');
-    lines.push(`Total calls,${t.total ?? ''}`);
-    lines.push(`Reached an agent (inbound),${t.incoming_reached ?? ''}`);
-    lines.push(`Didn't reach an agent (inbound — incl. IVR drop-offs),${t.incoming_not_reached ?? ''}`);
-    lines.push(`Inbound answer rate %,${callData.by_direction?.incoming?.answer_rate_pct ?? ''}`);
-    lines.push(`Avg duration (seconds),${t.avg_duration_seconds ?? ''}`);
-    lines.push('');
-
-    // Departments and MyOp accounts share a shape — same header, same aliases (variant 'dept'
-    // and 'account' render through one branch of CallsBreakdown).
-    const breakdown = (title, rows) => {
-      lines.push(`${title},Total,Answered (in),Not reached (in),Outgoing,Connected,Answer rate (in) %`);
-      for (const r of (rows || [])) {
-        lines.push([r.name, r.total, r.incoming_reached ?? r.answered, r.incoming_not_reached ?? r.missed,
-          r.outgoing_total ?? 0, r.outgoing_answered ?? 0, r.answer_rate_pct ?? ''].map(csvEsc).join(','));
-      }
-      lines.push('');
-    };
-    breakdown('By Department', callData.by_department);
-    breakdown('By MyOp Account', callData.by_account);
-
-    const d = callData.by_direction;
-    if (d) {
-      lines.push('By Direction,Total,Answered,Answer rate %');
-      lines.push(['Incoming', d.incoming?.total ?? 0, d.incoming?.answered ?? 0, d.incoming?.answer_rate_pct ?? ''].map(csvEsc).join(','));
-      lines.push(['Outgoing', d.outgoing?.total ?? 0, d.outgoing?.answered ?? 0, d.outgoing?.answer_rate_pct ?? ''].map(csvEsc).join(','));
-      lines.push('');
-    }
-
-    lines.push('By Agent,Answered (in),Outgoing,Connected,Not reached → returned,Avg handle (seconds),Tickets opened');
-    for (const r of (callData.by_agent || [])) {
-      lines.push([r.name, r.incoming_answered ?? r.answered_calls, r.outgoing_total ?? 0, r.outgoing_answered ?? 0,
-        r.missed_returned, r.avg_handle_seconds ?? '', r.tickets_opened].map(csvEsc).join(','));
-    }
-    lines.push('');
-
-    // ⚠️ DAY grain always, even when the on-screen trend is set to week or month. `CallTrend`
-    // owns that toggle in its own state and the page cannot read it, so the file states its
-    // grain rather than guessing at the panel's. Day is the grain the worker actually sends;
-    // the rollup is a view concern (see `foldCalls`).
-    // ⛔ TWO TRAPS HERE, BOTH FROM COPYING `exportAgentsCsv`'s TREND BLOCK — it looks like the
-    // same job and the payload is NOT the same shape (both shipped broken in c5a083de, caught by
-    // the S365 hostile review before anyone used the file):
-    //   1. The date key is `date`, NOT `day`. `getCallReports` builds `{ date: day, … }`
-    //      (csops `index.js:2437`); only the AGENTS trend is server-folded into `day`. `row.day`
-    //      was `undefined` on every row, so the whole Day column exported blank.
-    //   2. `in_missed` / `answer_rate` / `avg_duration` DO NOT EXIST in the payload — they are
-    //      derived by `finishCallRow()` during `foldCalls()`, which only the on-screen panel
-    //      runs. Reading them raw blanked 3 of the 7 metric columns.
-    // Both failed SILENTLY into empty cells: the file still had the right shape, the right
-    // headers and the right row count. Nothing but reading the data would have shown it.
-    if (callData.daily?.length) {
-      lines.push(`Daily trend (${callData.range?.business_hours ? 'business hours' : '24x7'}),${callData.daily.length} days`);
-      lines.push(['Day', 'Agent', ...CALL_METRICS.map(m => m.label + (m.kind === 'pct' ? ' %' : m.kind === 'seconds' ? ' (seconds)' : ''))].map(csvEsc).join(','));
-      for (const raw of callData.daily) {
-        const row = finishCallRow(raw, true);
-        lines.push([row.date, 'All agents', ...CALL_METRICS.map(m => row[m.key] ?? '')].map(csvEsc).join(','));
-      }
-      // Per-agent rows: `finishCallRow(row, false)` nulls the two inbound-derived metrics on
-      // purpose (a call nobody took has no agent, and deriving them per agent gave negative
-      // "missed"), which is the same set `CALL_METRICS` marks `teamOnly`. Blanked either way —
-      // every row keeps the same 9 columns as the header.
-      for (const a of (callData.daily_by_agent || [])) {
-        for (const raw of (a.days || [])) {
-          const row = finishCallRow(raw, false);
-          lines.push([row.date, a.name, ...CALL_METRICS.map(m => m.teamOnly ? '' : (row[m.key] ?? ''))].map(csvEsc).join(','));
-        }
-      }
-      lines.push('');
-    }
-
-    if (callData.hourly?.length) {
-      lines.push('Hourly distribution (IST),Calls');
-      for (const h of callData.hourly) lines.push([h.hour, h.count].map(csvEsc).join(','));
-    }
-
-    // BOM first — Excel ignores the MIME charset on a double-clicked .csv (S349 review), and
-    // this file carries an apostrophe and an arrow in its headers.
-    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `pitstop-calls-${from}-to-${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    download(buildCallsCsv({ callData, from, to }), `pitstop-calls-${from}-to-${to}.csv`);
   }
-
-  // Options for the tickets-tab filters. A value that is selected but absent from the current
-  // response (the date range moved under it) is still listed — otherwise the control silently
   // blanks to "All" while the report is still filtered by it.
   function ticketOptions(key) {
     const opts = data?.filter_options?.[key] || [];
@@ -698,11 +473,6 @@ const DAILY_TOP_AGENTS = 6;
 const DAILY_MAX_DAYS = 62;     // mirrors csops MAX_DAILY_DAYS — the page clamps so the worker never has to refuse
 const MONTH_MAX_BUCKETS = 24;  // mirrors csops MAX_MONTH_BUCKETS
 const GRAINS = [['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']];
-function grainWord(g) {
-  if (g === 'month') return { title: 'Monthly', plural: 'months', bucket: 'Month' };
-  if (g === 'week')  return { title: 'Weekly',  plural: 'weeks',  bucket: 'Week beginning' };
-  return { title: 'Daily', plural: 'days', bucket: 'Day' };
-}
 const fmtSecs = (s) => s == null || isNaN(s) ? '—' : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 const DAILY_COLORS = ['#7b93ff', '#25D366', '#F59E0B', '#E1306C', '#0084FF', '#a78bfa', '#f472b6'];
 const fmtDay = (d, grain) => {
@@ -1106,31 +876,14 @@ function CallsPanel({ data, businessHours = false }) {
 // team rows and per-day per-agent rows into day / Monday-week / month buckets on the page. Only
 // SUMS are folded (counts, duration sum + count); the rate and the average are derived per bucket
 // AFTER the fold, so a weekly answer rate is the week's own rate, never a mean of daily rates.
-const CALL_METRICS = [
-  { key: 'in_total',     label: 'Inbound',                 kind: 'count', teamOnly: true },
-  { key: 'in_answered',  label: 'Reached an agent',        kind: 'count' },
-  { key: 'in_missed',    label: 'Did not reach an agent',  kind: 'count', teamOnly: true },
-  { key: 'answer_rate',  label: 'Inbound answer rate',     kind: 'pct',   teamOnly: true },
-  { key: 'out_total',    label: 'Outbound',                kind: 'count' },
-  { key: 'out_answered', label: 'Outbound answered',       kind: 'count' },
-  { key: 'avg_duration', label: 'Avg duration',            kind: 'seconds' },
-];
+// `CALL_METRICS` + `finishCallRow` are imported from lib/reportsCsv.js — the panel below and the
+// CSV builder must agree on the metric list and on how the three derived figures are computed.
 function bucketOf(date, grain) {
   if (grain === 'month') return `${date.slice(0, 7)}-01`;
   if (grain === 'week') { const dt = new Date(`${date}T00:00:00Z`); dt.setUTCDate(dt.getUTCDate() - (dt.getUTCDay() + 6) % 7); return dt.toISOString().slice(0, 10); }
   return date;
 }
 const CALL_SUMS = ['in_total', 'in_answered', 'out_total', 'out_answered', 'dur_sum', 'dur_count'];
-function finishCallRow(r, isTeam) {
-  return {
-    ...r,
-    // Inbound totals exist only on the team rows (a call nobody took has no agent), so the two
-    // derived inbound figures are team-only too — deriving them per agent gave negative "missed".
-    in_missed:    isTeam ? (r.in_total || 0) - (r.in_answered || 0) : null,
-    answer_rate:  isTeam && r.in_total ? +((100 * r.in_answered) / r.in_total).toFixed(1) : null,
-    avg_duration: r.dur_count ? Math.round(r.dur_sum / r.dur_count) : null,
-  };
-}
 function foldCalls(daily = [], byAgent = [], grain) {
   const ok = (d) => typeof d?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.date);
   const fold = (rows) => {
