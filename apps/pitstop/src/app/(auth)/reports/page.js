@@ -204,7 +204,12 @@ export default function ReportsPage() {
 
   function exportCsv() {
     // Tab-aware: the Agents tab must not silently hand you the Tickets CSV.
+    // ⚠️ The Calls tab did EXACTLY that until 2026-09-09 — and the failure was silent in the
+    // worst way: `data` still holds the tickets payload from the Tickets tab (only that view
+    // calls `setData`), so the button was enabled and downloaded a plausible, correctly-named
+    // tickets report while you were looking at call figures. A blank file would have been safer.
     if (view === 'agents') return exportAgentsCsv();
+    if (view === 'calls') return exportCallsCsv();
     if (!data) return;
     const lines = [];
     lines.push(`Pitstop Report,${from} to ${to}`);
@@ -336,6 +341,99 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Calls CSV (2026-09-09) — every panel the Calls tab draws, in the order it draws them, so a
+  // reader of the file can find each number on the screen it came from.
+  //
+  // ⚠️ Column names are taken from the TABLE HEADERS, not the payload keys, and the `??` aliases
+  // mirror `CallsBreakdown` exactly — the worker sends `incoming_reached` on newer rows and
+  // `answered` on older ones, and the screen already falls back. A CSV that read the raw key
+  // would print blanks for the same rows the table renders fine.
+  // ⚠️ "Not reached" is deliberately NOT called "missed" here, for the reason the panel comment
+  // gives: it includes IVR drop-offs and hang-ups before routing, so it is not all our failure
+  // to answer. The CSV outlives the screen that explained that, so it carries the wording.
+  function exportCallsCsv() {
+    if (!callData?.totals) return;
+    const t = callData.totals;
+    const lines = [];
+    lines.push(`Pitstop Call Report,${from} to ${to}`);
+    // Same reason the Agents CSV stamps its basis: a business-hours export read next week must
+    // not be mistaken for the whole day. Read off the RESPONSE, not the live checkbox.
+    lines.push(`Basis,${callData.range?.business_hours ? 'Business hours' : '24x7'}`);
+    if (callData.range?.business_hours && callData.range?.rows_24x7 != null) {
+      lines.push(`Calls in range outside business hours (excluded),${Number(callData.range.rows_24x7) - Number(t.total || 0)}`);
+    }
+    lines.push('');
+    lines.push(`Total calls,${t.total ?? ''}`);
+    lines.push(`Reached an agent (inbound),${t.incoming_reached ?? ''}`);
+    lines.push(`Didn't reach an agent (inbound — incl. IVR drop-offs),${t.incoming_not_reached ?? ''}`);
+    lines.push(`Inbound answer rate %,${callData.by_direction?.incoming?.answer_rate_pct ?? ''}`);
+    lines.push(`Avg duration (seconds),${t.avg_duration_seconds ?? ''}`);
+    lines.push('');
+
+    // Departments and MyOp accounts share a shape — same header, same aliases (variant 'dept'
+    // and 'account' render through one branch of CallsBreakdown).
+    const breakdown = (title, rows) => {
+      lines.push(`${title},Total,Answered (in),Not reached (in),Outgoing,Connected,Answer rate (in) %`);
+      for (const r of (rows || [])) {
+        lines.push([r.name, r.total, r.incoming_reached ?? r.answered, r.incoming_not_reached ?? r.missed,
+          r.outgoing_total ?? 0, r.outgoing_answered ?? 0, r.answer_rate_pct ?? ''].map(csvEsc).join(','));
+      }
+      lines.push('');
+    };
+    breakdown('By Department', callData.by_department);
+    breakdown('By MyOp Account', callData.by_account);
+
+    const d = callData.by_direction;
+    if (d) {
+      lines.push('By Direction,Total,Answered,Answer rate %');
+      lines.push(['Incoming', d.incoming?.total ?? 0, d.incoming?.answered ?? 0, d.incoming?.answer_rate_pct ?? ''].map(csvEsc).join(','));
+      lines.push(['Outgoing', d.outgoing?.total ?? 0, d.outgoing?.answered ?? 0, d.outgoing?.answer_rate_pct ?? ''].map(csvEsc).join(','));
+      lines.push('');
+    }
+
+    lines.push('By Agent,Answered (in),Outgoing,Connected,Not reached → returned,Avg handle (seconds),Tickets opened');
+    for (const r of (callData.by_agent || [])) {
+      lines.push([r.name, r.incoming_answered ?? r.answered_calls, r.outgoing_total ?? 0, r.outgoing_answered ?? 0,
+        r.missed_returned, r.avg_handle_seconds ?? '', r.tickets_opened].map(csvEsc).join(','));
+    }
+    lines.push('');
+
+    // ⚠️ DAY grain always, even when the on-screen trend is set to week or month. `CallTrend`
+    // owns that toggle in its own state and the page cannot read it, so the file states its
+    // grain rather than guessing at the panel's. Day is the grain the worker actually sends;
+    // the rollup is a view concern (see `foldCalls`).
+    if (callData.daily?.length) {
+      lines.push(`Daily trend (${callData.range?.business_hours ? 'business hours' : '24x7'}),${callData.daily.length} days`);
+      lines.push(['Day', 'Agent', ...CALL_METRICS.map(m => m.label + (m.kind === 'pct' ? ' %' : m.kind === 'seconds' ? ' (seconds)' : ''))].map(csvEsc).join(','));
+      for (const row of callData.daily) {
+        lines.push([row.day, 'All agents', ...CALL_METRICS.map(m => row[m.key] ?? '')].map(csvEsc).join(','));
+      }
+      // Per-agent rows carry only the metrics that are not team-level (`teamOnly`); a blank is
+      // printed for the rest so every row keeps the same column count.
+      for (const a of (callData.daily_by_agent || [])) {
+        for (const row of (a.days || [])) {
+          lines.push([row.day, a.name, ...CALL_METRICS.map(m => m.teamOnly ? '' : (row[m.key] ?? ''))].map(csvEsc).join(','));
+        }
+      }
+      lines.push('');
+    }
+
+    if (callData.hourly?.length) {
+      lines.push('Hourly distribution (IST),Calls');
+      for (const h of callData.hourly) lines.push([h.hour, h.count].map(csvEsc).join(','));
+    }
+
+    // BOM first — Excel ignores the MIME charset on a double-clicked .csv (S349 review), and
+    // this file carries an apostrophe and an arrow in its headers.
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pitstop-calls-${from}-to-${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Options for the tickets-tab filters. A value that is selected but absent from the current
   // response (the date range moved under it) is still listed — otherwise the control silently
   // blanks to "All" while the report is still filtered by it.
@@ -384,7 +482,15 @@ export default function ReportsPage() {
             style={{ ...btnGhost, padding: '5px 10px', fontSize: 11.5 }} title="The 1st of this month to today">
             MTD
           </button>
-          <button onClick={exportCsv} disabled={view === 'agents' ? !agentData?.by_agent?.length : !data} style={btnGhost}>
+          {/* Each tab gates on ITS OWN payload. Until 2026-09-09 the Calls tab gated on `data` —
+              the TICKETS payload — so the button was live on Calls purely because the user had
+              visited Tickets first, and dead on a hard refresh straight onto Calls. Both halves
+              of that were wrong, and the enabled half shipped the wrong file. */}
+          <button onClick={exportCsv}
+            disabled={view === 'agents' ? !agentData?.by_agent?.length
+                    : view === 'calls'  ? !callData?.totals
+                    : !data}
+            style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
           </button>
         </div>
