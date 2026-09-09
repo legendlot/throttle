@@ -55,6 +55,11 @@ jobs:
       # on a push. Tests that only run when a human types `npm test` did not fail any of them.
       # ⚠️ The glob is `src/lib/*.test.mjs` (apps/pitstop/package.json), so a test placed anywhere
       # else in this app is silently NOT run — put new ones beside the module they cover.
+      # ⛔ THE GLOB MUST STAY UNQUOTED so the SHELL expands it. It was `'src/lib/*.test.mjs'` and
+      # this step failed on its very first run: node's own glob handling in `--test` arrived after
+      # v20, and this runner is node 20, so it took the pattern literally ("Could not find
+      # .../src/lib/*.test.mjs"). It passed locally on node 25, which is exactly how it got
+      # committed. Unquoted, the shell hands node explicit paths and every version works.
       - name: Test Pitstop
         run: npm test --prefix apps/pitstop
 

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test 'src/lib/*.test.mjs'"
+    "test": "node --test src/lib/*.test.mjs"
   },
   "dependencies": {
     "next": "14.2.35",
