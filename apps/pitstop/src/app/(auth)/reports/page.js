@@ -31,6 +31,16 @@ const istBoundary = (d, endOfDay) => {
     : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   return new Date(`${ymd}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
 };
+// The inverse of `istBoundary`, and the ONLY correct way to display a range echoed back by a
+// handler. ⛔ `.slice(0, 10)` on those values is PATTERN-221: `istBoundary('2026-01-01')` is
+// `2025-12-31T18:30:00Z`, so slicing names the PREVIOUS day. Both readers of a `range.from`
+// were doing exactly that (2026-09-09, S365) — the Calls KPI card had shown a start date one
+// day early since it shipped, and the new Calls CSV header reproduced it within the hour.
+// Module-level on purpose: two call sites drifted apart once already.
+const istDay = (iso, fallback = '') => {
+  const t = Date.parse(iso || '');
+  return Number.isNaN(t) ? fallback : new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+};
 // A value beginning = + - @ is executed as a formula by Excel/Sheets, and an agent name
 // containing a comma would split the cohort line into two columns. Same helper the analytics
 // export already has (hostile review S344, finding 7).
@@ -361,16 +371,8 @@ export default function ReportsPage() {
     // ⚠️ The RANGE comes off the response, not the `from`/`to` pickers — same rule as `Basis`
     // below, and for a sharper reason: `callData` is not cleared when a refetch starts or fails,
     // so a failed reload would have stamped the NEW dates onto the OLD numbers.
-    // ⛔ AND IT MUST BE CONVERTED TO IST FIRST — `.slice(0, 10)` on the raw value is PATTERN-221,
-    // the bug this file already carries a warning about 300 lines up. `range.from` is what the
-    // page SENT: `istBoundary` turns "2026-01-01" into `2026-01-01T00:00+05:30` →
-    // `2025-12-31T18:30:00Z`, so slicing the ISO string names the PREVIOUS day. Shipped that way
-    // in 90a2fb72 for one deploy — the header read "2025-12-31" while the picker read
-    // "2026-01-01" — caught by the trend re-smoke, which reported the first line in passing.
-    const istDay = (iso, fallback) => {
-      const t = Date.parse(iso || '');
-      return Number.isNaN(t) ? fallback : new Date(t + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-    };
+    // ⛔ Converted to IST first — see `istDay` at the top of the file. Slicing the raw value is
+    // PATTERN-221, and this line shipped that way in 90a2fb72 for one deploy.
     lines.push(`Pitstop Call Report,${istDay(callData.range?.from, from)} to ${istDay(callData.range?.to, to)}`);
     // Same reason the Agents CSV stamps its basis: a business-hours export read next week must
     // not be mistaken for the whole day. Read off the RESPONSE, not the live checkbox.
@@ -1047,7 +1049,10 @@ function CallsPanel({ data, businessHours = false }) {
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
-        <KpiCard label="Total calls"  value={data.totals.total.toLocaleString()}    sub={`${data.range.from.slice(0,10)} → ${data.range.to.slice(0,10)}`} tone="var(--info-fg)" size={25} />
+        {/* `istDay`, not `.slice(0,10)` — this card showed a start date ONE DAY EARLY from the
+            day it shipped (a Jan-1 range read "2025-12-31"), because `range.from` is the IST
+            midnight the page sent, expressed in UTC. PATTERN-221. Fixed 2026-09-09, S365. */}
+        <KpiCard label="Total calls"  value={data.totals.total.toLocaleString()}    sub={`${istDay(data.range.from)} → ${istDay(data.range.to)}`} tone="var(--info-fg)" size={25} />
         {/* ⚠️ These two were "Answered" (provider status, both directions) and "Missed"
             (totals.missed). Missed was FALSE for the whole MyOperator era — that system only
             wrote 'missed' in one narrow case that almost never fired, so it logged 45 missed
