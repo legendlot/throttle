@@ -355,8 +355,38 @@ function eventWarning(row, count) {
 //
 // `eventCounts` is an optional { leafKey: number } of per-leaf match counts; absent means the
 // event checks simply contribute nothing, so every existing caller and test is unchanged.
+// ── A `Match NONE of` group sitting DIRECTLY under a `Match ANY of` root ────────────────────
+//
+// This is the widest possible way to get a segment wrong and it reads as correct to anyone who
+// has not thought about the algebra. OR-ing an exclusion in does not exclude: `A OR B OR NOT C`
+// matches everyone who is merely NOT C, so the group meant to REMOVE people is the one adding
+// nearly all of them.
+//
+// Mishica walked into it on 2026-09-09: viewed-A OR viewed-B, plus an exclusion group added as a
+// third OR-member. The rule matched **227,067** instead of ~1,992 and looked entirely reasonable
+// on screen — the same "a too-big count has no tell" problem the inert-under-NONE banner exists
+// for. The fix she was given is the nesting: a `Match ALL of` root containing the `ANY` group and
+// the `NONE` group, so the exclusion intersects instead of unions.
+//
+// Only DIRECT children of the root are checked. A NONE nested deeper is a different shape and the
+// builder refuses to render those anyway (`tooDeep`), so a warning there would be unreachable.
+function structuralWarnings(group, items) {
+  if (group !== 'any') return [];
+  const n = (items || []).filter((it) => it && it.type === 'group' && it.group === 'none').length;
+  if (!n) return [];
+  return [{
+    kind: 'structure',
+    widening: true,
+    text: n === 1
+      ? 'A “Match NONE of” group sits inside “Match ANY of”, so it excludes nobody — it ADDS everyone it was meant to remove. Change the top of the rule to “Match ALL of”, and keep your OR conditions in their own group inside it.'
+      : `${n} “Match NONE of” groups sit inside “Match ANY of”, so they exclude nobody — they ADD everyone they were meant to remove. Change the top of the rule to “Match ALL of”, and keep your OR conditions in their own group inside it.`,
+  }];
+}
+
 function ruleWarnings(group, items, eventCounts) {
-  return flattenItems(group, items)
+  // Structural first: when the shape is wrong, every per-row warning below is a detail about a
+  // rule that does not mean what it says.
+  return structuralWarnings(group, items).concat(flattenItems(group, items)
     .flatMap(({ row, group: g }) => {
       const out = [];
       const inert = row && row.type === 'event'
@@ -368,7 +398,7 @@ function ruleWarnings(group, items, eventCounts) {
       const under = coverageWarning(row);
       if (under) out.push({ text: under, kind: 'undercount', widening: false });
       return out;
-    })
+    }))
     // Inert-and-widening first (silently everyone), then the rest of the inert ones (silently
     // nobody), then undercounts (quietly fewer than you meant).
     .sort((a, b) => (Number(b.widening) - Number(a.widening))
@@ -388,5 +418,5 @@ function eventLeaves(group, items) {
 
 export { blankRow, normalizeWithin, csvToArr, toRow, toLeaf, parseDef, itemsToDef, countConditions, groupKeyOf, GROUP_KEYS,
   ATTR_TYPES, OPS_BY_TYPE, EMPTY_ATTRS, attrType, opsForAttr, conditionWarning, defaultOpFor, flattenItems, ruleWarnings,
-  eventLeafKey, eventWarning, eventLeaves,
+  eventLeafKey, eventWarning, eventLeaves, structuralWarnings,
   ATTR_COVERAGE, SPARSE_BELOW_PCT, meansNone, coverageWarning };
