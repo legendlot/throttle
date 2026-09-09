@@ -2,7 +2,8 @@
 -- 0003_employees_operator_link
 --
 -- ⚠️ THIS MIGRATION DOCUMENTS SCHEMA THAT IS ALREADY LIVE. It was applied to
--- lot-production ad hoc, with no migration file, some time before 2026-09-09.
+-- lot-production ad hoc, with no migration file, in S330 (2026-09-02) — dated from
+-- reference/db-schema.md, which recorded the column a week before this file existed.
 -- Written retroactively (S363) so the repo stops disagreeing with the database.
 -- It is written to be IDEMPOTENT and is therefore safe to run against a database
 -- that already has these objects — which production does. Run it only to bring a
