@@ -105,6 +105,7 @@ function NewChallanInner() {
   // all 144 existing challans predate this field. Never make it required.
   const [vendorCode, setVendorCode] = useState('');
   const [vendors, setVendors]       = useState([]);
+  const [creatingVendor, setCreatingVendor] = useState(false);
 
   // ⚠️ Starts EMPTY on purpose (S308). It used to default to 'Material transfer', and the
   // default did the choosing: 128 of 128 challans since 2026-06-02 carry it and `Job work` has
@@ -197,6 +198,33 @@ function NewChallanInner() {
     })();
     return () => { cancelled = true; };
   }, [editId, session]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Inline vendor create (Piyush's ask was "select from drop down OR create a new one").
+  // Reuses lotopsproxy's existing `createVendorForDI` — the same action Garage's Direct
+  // Issuance form uses — rather than adding a second create path; it bridges to snorkelops,
+  // which owns the vendor master. Depot's roles pass its guard via `direct_issuance_request`.
+  // Only fires from the explicit "+ Add vendor" row: Combobox deliberately does NOT wire
+  // onCreateOption to blur, so clicking away can never mint a vendor.
+  // A newly created vendor has a name but no address/GSTIN yet, so we prefill the name and
+  // leave the other two for the operator — the free-text recipient block stays authoritative.
+  async function createVendor(name) {
+    const vendor_name = String(name || '').trim();
+    if (!vendor_name || creatingVendor) return;
+    setCreatingVendor(true);
+    try {
+      const r = await workerFetch('createVendorForDI', { data: { vendor_name } }, session);
+      if (!r?.ok) { showToast(r?.error || 'Could not add vendor — add it in Snorkel instead', 'error'); return; }
+      const created = { vendor_code: r.data.vendor_code, vendor_name: r.data.vendor_name,
+                        category: null, address: '', gstin: '' };
+      // Add to the local list FIRST so the Combobox can resolve the label it is about to show.
+      setVendors(prev => [...prev, created]);
+      setVendorCode(created.vendor_code);
+      setToName(created.vendor_name);
+      showToast(`${created.vendor_name} added as ${created.vendor_code} — add their address below`, 'success');
+    } catch (e) {
+      showToast(e.message || 'Could not add vendor', 'error');
+    } finally { setCreatingVendor(false); }
+  }
 
   // When user picks a different From address from the dropdown, prefill but leave editable
   function onPickFromId(id) {
@@ -465,7 +493,12 @@ function NewChallanInner() {
                 vendor_name: v.vendor_name, address: v.address, gstin: v.gstin,
               }))}
               placeholder="Search the vendor master… (leave blank for LOT HQ, a customer, or a one-off)"
+              createLabel={q => `+ Add vendor “${q}”`}
+              onCreateOption={createVendor}
             />
+            {creatingVendor && (
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' }}>Creating vendor…</div>
+            )}
             {vendorCode && (
               <button
                 onClick={() => setVendorCode('')}
