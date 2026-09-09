@@ -220,7 +220,15 @@ function NewChallanInner() {
       setVendors(prev => [...prev, created]);
       setVendorCode(created.vendor_code);
       setToName(created.vendor_name);
-      showToast(`${created.vendor_name} added as ${created.vendor_code} — add their address below`, 'success');
+      // ⛔ CLEAR the other two, do not just leave them (S363 hostile review). Picking vendor A fills
+      // all three fields; if the operator then realises it is the wrong party, types B and creates
+      // them, only the NAME changed — the challan would print B's name against A's address and A's
+      // GSTIN. A populated, plausible, wrong address is worse than an empty one, and the toast that
+      // says "add their address below" reads as satisfied when the box is not empty. A brand-new
+      // vendor has neither, so blank is the truthful state.
+      setToAddress('');
+      setToGstin('');
+      showToast(`${created.vendor_name} added as ${created.vendor_code} — add their address and GSTIN below`, 'success');
     } catch (e) {
       showToast(e.message || 'Could not add vendor', 'error');
     } finally { setCreatingVendor(false); }

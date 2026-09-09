@@ -652,9 +652,35 @@ const EMPLOYEE_FIELDS = [
   'gender', 'blood_group', 'pan_number',
 ];
 
+// ⭐ ONE date validator for all three write paths (S363 hostile review). The first version of this
+// change guarded the sync and `updateEmployee` and MISSED `createEmployee` — because it was found by
+// grepping the literal `status: 'exited'`, and this path sets status from `pickFields`, so the string
+// never appears. The commit claimed "only two code paths can set status='exited' and both are guarded";
+// there were three. Duplicated logic is what let the third hide, so there is now exactly one copy.
+// ⚠️ A REGEX IS NOT A DATE CHECK: `/^\d{4}-\d{2}-\d{2}$/` accepts 2026-02-30 and 2026-04-31, which
+// then reach Postgres and throw 22008 mid-loop — the half-applied batch the sync's comment promises
+// is impossible. Round-trip through Date so an impossible day is rejected before any write.
+// `String(v)` alone also let `['2026-09-01']` pass, hence the typeof check.
+function badDate(v, label, { allowFuture = false } = {}) {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return `${label} required (YYYY-MM-DD)`;
+  const d = new Date(v + 'T00:00:00Z');
+  if (!Number.isFinite(d.getTime()) || d.toISOString().slice(0, 10) !== v) return `${label} is not a real date (${v})`;
+  if (!allowFuture && v > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }))
+    return `${label} is in the future (${v})`;
+  return null;
+}
+
 async function createEmployee(body, auth, env) {
   const gate = requireHr(auth); if (gate) return gate;
   if (!body.full_name) return err('full_name required', 400);
+  // The New Person form offers "Exited" in its Status select and sends every field, so this path
+  // could mint a row that is exited with no last working day — reproducing both defects S363 shipped
+  // to close. A future joining date is legitimate here (onboarded before they start); a future last
+  // working day is not.
+  if (body.date_joined) { const e = badDate(body.date_joined, 'Joining date', { allowFuture: true }); if (e) return err(e, 400); }
+  if (body.status === 'exited') {
+    const e = badDate(body.date_exited, 'Last working day', {}); if (e) return err(e, 400);
+  }
   let code = String(body.employee_code || '').trim();
   if (!code) { code = await mintEmployeeCode(env); if (!code) return err('failed_to_mint_employee_code', 500); }
   const row = { employee_code: code, created_by: auth.userId, ...pickFields(body, EMPLOYEE_FIELDS) };
@@ -778,15 +804,27 @@ async function updateEmployee(body, auth, env) {
   // the directory sync now enforces. Closing it there and leaving it open here would just move the
   // hole: this is the OTHER path that can set status='exited', and the form's date field was
   // optional. `date_exited` feeds the live SG&A run, so a missing one is not a cosmetic blank.
-  if (patch.status === 'exited') {
-    const existing = patch.date_exited
-      ? null
-      : (await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=date_exited`, env)).data?.[0];
-    const eff = patch.date_exited || existing?.date_exited;
-    if (!eff || !/^\d{4}-\d{2}-\d{2}$/.test(String(eff)))
-      return err('last working day required to exit someone (YYYY-MM-DD)', 400);
-    if (String(eff) > nowIso().slice(0, 10))
-      return err(`last working day is in the future (${eff})`, 400);
+  // ⛔ The first version of this guard fell back to the STORED date when the patch omitted one —
+  // which approved the exact request that removes it (S363 hostile review). `clean(f)` in
+  // EmployeeForm always sends `date_exited`, mapping an emptied box to `null`, so blanking the field
+  // and saving passed the check on the stored value and then PATCHed `date_exited: null` anyway.
+  // Decide on the RESULTING row, and treat "explicitly cleared" as its own rejection.
+  if (patch.status === 'exited' || 'date_exited' in patch) {
+    const cur = (await sb(`/rest/v1/employees?id=eq.${body.employee_id}&select=status,date_exited`, env)).data?.[0] || {};
+    const resultingStatus = 'status' in patch ? patch.status : cur.status;
+    const clearing = 'date_exited' in patch && !patch.date_exited;
+    if (resultingStatus === 'exited') {
+      if (clearing) return err('cannot clear the last working day of an exited employee', 400);
+      // Only demand a date when this edit INTRODUCES the exit, or supplies one. An already-exited
+      // row with a null date is pre-existing bad data (EMP-056) tracked in the open [podium] ask —
+      // blocking every unrelated edit to it, down to a phone number, would be a worse bug than the
+      // gap. Validate whatever date IS being written, always.
+      if ('date_exited' in patch && patch.date_exited) {
+        const e = badDate(patch.date_exited, 'Last working day', {}); if (e) return err(e, 400);
+      } else if (cur.status !== 'exited') {
+        return err('last working day required to exit someone (YYYY-MM-DD)', 400);
+      }
+    }
   }
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
@@ -1598,8 +1636,9 @@ async function importDirectoryCandidates(body, auth, env) {
   // batch would leave some people created and others not, with no way to tell which from here.
   for (const c of create) {
     if (!c || !c.email) return err('each import needs an email', 400);
-    if (!c.date_joined || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date_joined)))
-      return err(`joining date required for ${c.email} (YYYY-MM-DD) — Google knows when it made the account, not when they started`, 400);
+    // allowFuture: people are onboarded before they start.
+    const e = badDate(c.date_joined, `Joining date for ${c.email}`, { allowFuture: true });
+    if (e) return err(`${e} — Google knows when it made the account, not when they started`, 400);
   }
   if (update.length + dismiss.length > 60) return err('resolve at most 60 changes per sync — run again for the rest', 400);
   if (baselineIn.length > 2000) return err('baseline list too large', 400);
@@ -1663,17 +1702,14 @@ async function importDirectoryCandidates(body, auth, env) {
 
   // Validate EVERY exit before writing ANY of them — a half-applied batch would leave some people
   // exited and others not, with no way to tell which from the response.
-  const today = nowIso().slice(0, 10);
   for (const x of exit) {
     if (typeof x === 'string')
       return err(`exit now requires a last working day: send {work_email, date_exited}, not a bare email (got "${x}")`, 400);
     if (!x || !x.work_email) return err('each exit needs a work_email', 400);
-    if (!x.date_exited || !/^\d{4}-\d{2}-\d{2}$/.test(String(x.date_exited)))
-      return err(`last working day required for ${x.work_email} (YYYY-MM-DD) — the sync no longer stamps today's date`, 400);
-    // A future last-working-day is a typo, not a notice period: this field is what the SG&A feed
-    // reads to stop charging someone, so a future date keeps billing them.
-    if (String(x.date_exited) > today)
-      return err(`last working day for ${x.work_email} is in the future (${x.date_exited})`, 400);
+    // No allowFuture: this field is what the SG&A feed reads to STOP charging someone, so a future
+    // date keeps billing them — it is a typo, never a notice period.
+    const e = badDate(x.date_exited, `Last working day for ${x.work_email}`, {});
+    if (e) return err(`${e} — the sync no longer stamps today's date`, 400);
   }
 
   for (const x of exit) {
