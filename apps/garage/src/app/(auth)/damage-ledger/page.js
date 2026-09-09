@@ -93,10 +93,10 @@ export default function DamageLedgerPage() {
   // Part picker for Record Damage — the same part list GRN searches, so picking a code
   // fills the name and product in (Piyush, #bugs 2026-09-09: "part code is not auto
   // populating, like how it happens in GRN"). Every part-code field is a Combobox
-  // (PATTERN-160); this was the one plain text box left on a Garage form. The list is
-  // one row per part code — material_current repeats a cross-product part once per
-  // product, so the first row wins and the label carries its product only when the
-  // part belongs to exactly one.
+  // (PATTERN-160); this was the one plain text box left on a Garage form. Pick-only, like
+  // GRN's picker — a code that is not in the active part list cannot be recorded here.
+  // material_current is one row per part_code (it is material_master WHERE is_active), so
+  // no de-duplication is needed and the label always carries the part's product.
   const [materials,  setMaterials]  = useState([]);
   const [matLoading, setMatLoading] = useState(true);
   useEffect(() => {
@@ -109,21 +109,14 @@ export default function DamageLedgerPage() {
       // the picker just has nothing to offer until the page is refreshed.
       .finally(() => setMatLoading(false));
   }, [session]);
-  const partOpts = useMemo(() => {
-    const byCode = new Map();
-    for (const m of materials) {
-      if (!m?.part_code) continue;
-      const cur = byCode.get(m.part_code);
-      if (cur) { if (m.product && !cur.products.includes(m.product)) cur.products.push(m.product); continue; }
-      byCode.set(m.part_code, { part_code: m.part_code, part_name: m.part_name || '', products: m.product ? [m.product] : [] });
-    }
-    return [...byCode.values()].map(p => ({
-      value: p.part_code,
-      label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}${p.products.length === 1 ? ' (' + p.products[0] + ')' : ''}`,
-      part_name: p.part_name,
-      product: p.products.length === 1 ? p.products[0] : '',
-    }));
-  }, [materials]);
+  const partOpts = useMemo(() => materials
+    .filter(m => m?.part_code)
+    .map(m => ({
+      value: m.part_code,
+      label: `${m.part_code}${m.part_name ? ' — ' + m.part_name : ''}${m.product ? ' (' + m.product + ')' : ''}`,
+      part_name: m.part_name || '',
+      product: m.product || '',
+    })), [materials]);
 
   async function loadLedger() {
     if (!session) return;

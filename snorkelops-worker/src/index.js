@@ -1288,8 +1288,10 @@ async function withPartProducts(lines) {
   const productByCode = {};
   for (let i = 0; i < codes.length; i += 200) {
     const chunk = codes.slice(i, i + 200);
+    // limit is deliberately above the chunk size: part_code is unique by convention only (no
+    // constraint), and a limit equal to the chunk would silently drop the tail on a duplicate.
     const r = await query('material_master',
-      `?part_code=in.(${chunk.map(encodeURIComponent).join(',')})&select=part_code,product&limit=200`);
+      `?part_code=in.(${chunk.map(encodeURIComponent).join(',')})&select=part_code,product&limit=1000`);
     for (const m of (r.ok && Array.isArray(r.data) ? r.data : [])) {
       if (!blank(m.product)) productByCode[m.part_code] = m.product;
     }
