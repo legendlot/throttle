@@ -352,10 +352,16 @@ export default function ReportsPage() {
   // gives: it includes IVR drop-offs and hang-ups before routing, so it is not all our failure
   // to answer. The CSV outlives the screen that explained that, so it carries the wording.
   function exportCallsCsv() {
-    if (!callData?.totals) return;
+    // `totals.total` (not just `totals`): the worker always returns a totals object, `total: 0`
+    // included, so gating on its presence let the button stay live while the panel said "No calls
+    // in range" — and exported a file with a 0 and no sections. Matches `CallsPanel`'s own test.
+    if (!callData?.totals?.total) return;
     const t = callData.totals;
     const lines = [];
-    lines.push(`Pitstop Call Report,${from} to ${to}`);
+    // ⚠️ The RANGE comes off the response, not the `from`/`to` pickers — same rule as `Basis`
+    // below, and for a sharper reason: `callData` is not cleared when a refetch starts or fails,
+    // so a failed reload would have stamped the NEW dates onto the OLD numbers.
+    lines.push(`Pitstop Call Report,${(callData.range?.from || from).slice(0, 10)} to ${(callData.range?.to || to).slice(0, 10)}`);
     // Same reason the Agents CSV stamps its basis: a business-hours export read next week must
     // not be mistaken for the whole day. Read off the RESPONSE, not the live checkbox.
     lines.push(`Basis,${callData.range?.business_hours ? 'Business hours' : '24x7'}`);
@@ -402,17 +408,32 @@ export default function ReportsPage() {
     // owns that toggle in its own state and the page cannot read it, so the file states its
     // grain rather than guessing at the panel's. Day is the grain the worker actually sends;
     // the rollup is a view concern (see `foldCalls`).
+    // ⛔ TWO TRAPS HERE, BOTH FROM COPYING `exportAgentsCsv`'s TREND BLOCK — it looks like the
+    // same job and the payload is NOT the same shape (both shipped broken in c5a083de, caught by
+    // the S365 hostile review before anyone used the file):
+    //   1. The date key is `date`, NOT `day`. `getCallReports` builds `{ date: day, … }`
+    //      (csops `index.js:2437`); only the AGENTS trend is server-folded into `day`. `row.day`
+    //      was `undefined` on every row, so the whole Day column exported blank.
+    //   2. `in_missed` / `answer_rate` / `avg_duration` DO NOT EXIST in the payload — they are
+    //      derived by `finishCallRow()` during `foldCalls()`, which only the on-screen panel
+    //      runs. Reading them raw blanked 3 of the 7 metric columns.
+    // Both failed SILENTLY into empty cells: the file still had the right shape, the right
+    // headers and the right row count. Nothing but reading the data would have shown it.
     if (callData.daily?.length) {
       lines.push(`Daily trend (${callData.range?.business_hours ? 'business hours' : '24x7'}),${callData.daily.length} days`);
       lines.push(['Day', 'Agent', ...CALL_METRICS.map(m => m.label + (m.kind === 'pct' ? ' %' : m.kind === 'seconds' ? ' (seconds)' : ''))].map(csvEsc).join(','));
-      for (const row of callData.daily) {
-        lines.push([row.day, 'All agents', ...CALL_METRICS.map(m => row[m.key] ?? '')].map(csvEsc).join(','));
+      for (const raw of callData.daily) {
+        const row = finishCallRow(raw, true);
+        lines.push([row.date, 'All agents', ...CALL_METRICS.map(m => row[m.key] ?? '')].map(csvEsc).join(','));
       }
-      // Per-agent rows carry only the metrics that are not team-level (`teamOnly`); a blank is
-      // printed for the rest so every row keeps the same column count.
+      // Per-agent rows: `finishCallRow(row, false)` nulls the two inbound-derived metrics on
+      // purpose (a call nobody took has no agent, and deriving them per agent gave negative
+      // "missed"), which is the same set `CALL_METRICS` marks `teamOnly`. Blanked either way —
+      // every row keeps the same 9 columns as the header.
       for (const a of (callData.daily_by_agent || [])) {
-        for (const row of (a.days || [])) {
-          lines.push([row.day, a.name, ...CALL_METRICS.map(m => m.teamOnly ? '' : (row[m.key] ?? ''))].map(csvEsc).join(','));
+        for (const raw of (a.days || [])) {
+          const row = finishCallRow(raw, false);
+          lines.push([row.date, a.name, ...CALL_METRICS.map(m => m.teamOnly ? '' : (row[m.key] ?? ''))].map(csvEsc).join(','));
         }
       }
       lines.push('');
@@ -488,7 +509,7 @@ export default function ReportsPage() {
               of that were wrong, and the enabled half shipped the wrong file. */}
           <button onClick={exportCsv}
             disabled={view === 'agents' ? !agentData?.by_agent?.length
-                    : view === 'calls'  ? !callData?.totals
+                    : view === 'calls'  ? !callData?.totals?.total
                     : !data}
             style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
