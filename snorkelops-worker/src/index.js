@@ -1272,6 +1272,33 @@ function poDdMmYyyy(d) {
 // The document data. Same queries as the getPrintPOData handler, minus the request-time
 // permission gating — this runs server-side for a known requester, and the China case is
 // handled by the caller refusing to attach a PDF at all (see notifyRequesterPoRaised).
+// Fill `product` on PO lines that name a part but no product, from the part master
+// (Joseph, #bugs 2026-09-09: the printed PO read "Manual / License (Green)" with no way to
+// tell WHICH product's manual). The PO form never sets po_lines.product for Part lines —
+// 1,038 of 1,146 lines raised since June are blank, 842 of them resolvable this way
+// (measured 2026-09-09). Used on every read path that renders lines (getPO, getPrintPOData,
+// loadPoDocData) AND on the three insert sites so new rows store it. One batched IN read;
+// lines that already carry a product are left alone. lotopsproxy has the same helper for
+// the Garage print — keep the two in step.
+async function withPartProducts(lines) {
+  const rows = Array.isArray(lines) ? lines : [];
+  const blank = (v) => !(v && String(v).trim());
+  const codes = [...new Set(rows.filter(l => l && l.part_code && blank(l.product)).map(l => l.part_code))];
+  if (!codes.length) return rows;
+  const productByCode = {};
+  for (let i = 0; i < codes.length; i += 200) {
+    const chunk = codes.slice(i, i + 200);
+    const r = await query('material_master',
+      `?part_code=in.(${chunk.map(encodeURIComponent).join(',')})&select=part_code,product&limit=200`);
+    for (const m of (r.ok && Array.isArray(r.data) ? r.data : [])) {
+      if (!blank(m.product)) productByCode[m.part_code] = m.product;
+    }
+  }
+  return rows.map(l => (l && l.part_code && blank(l.product) && productByCode[l.part_code])
+    ? { ...l, product: productByCode[l.part_code] }
+    : l);
+}
+
 async function loadPoDocData(poNumber) {
   const [headerR, linesR, regR] = await Promise.all([
     query('purchase_orders', `?po_number=eq.${encodeURIComponent(poNumber)}&limit=1`),
@@ -1301,7 +1328,7 @@ async function loadPoDocData(poNumber) {
     const upR = await query('users_profile', `?id=eq.${encodeURIComponent(po.raised_by_user_id)}&select=full_name&limit=1`);
     if (upR.ok && upR.data?.[0]?.full_name) preparedByName = upR.data[0].full_name;
   }
-  return { po, vendor, company, deliveryAddress, lines: linesR.data || [], prepared_by_name: preparedByName };
+  return { po, vendor, company, deliveryAddress, lines: await withPartProducts(linesR.data || []), prepared_by_name: preparedByName };
 }
 
 // LOT logo, inlined as a data URI (S344). The print page uses /lot-logo.png, but a
@@ -1318,6 +1345,17 @@ const LOT_LOGO_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAAF
 // images (the print page's /lot-logo.png is skipped — Browser Rendering would have to
 // fetch it from the public origin, and a broken image on a vendor document is worse
 // than no image; the letterhead text carries the identity).
+// Second line under Particulars: which product (and variant / colour) the line is for.
+// Mirrors lineContext() on the Snorkel print page — skipped when the description already
+// names the product, so FBU / unit lines do not print it twice.
+function poLineContext(l) {
+  const desc = String(l?.description || '').toLowerCase();
+  const parts = [l?.product, l?.variant, l?.color].map(v => (v == null ? '' : String(v).trim())).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts[0] && desc.includes(parts[0].toLowerCase())) return '';
+  return parts.join(' · ');
+}
+
 function poPrintHtml(d) {
   const { po, vendor, company, deliveryAddress, lines, prepared_by_name } = d;
   const tax = computePoTax(lines, po.currency, vendor?.gstin || null, company?.gstin || null);
@@ -1329,9 +1367,10 @@ function poPrintHtml(d) {
     : '<div>&mdash;</div>';
   const rows = (lines || []).map((l, i) => {
     const amount = poLineAmount(l);
+    const ctx = poLineContext(l);
     return `<tr>
       <td class="c">${i + 1}</td>
-      <td>${esc(l.description || l.part_code || '')}</td>
+      <td>${esc(l.description || l.part_code || '')}${ctx ? `<div style="font-size:10px;color:#444;margin-top:1px">${esc(ctx)}</div>` : ''}</td>
       ${tax.showGst ? `<td>${esc(l.hsn_code || '')}</td>` : ''}
       ${tax.showGst ? `<td class="n">${l.gst_percent != null ? esc(parseFloat(l.gst_percent)) + '%' : ''}</td>` : ''}
       <td class="n">${Number(l.qty_ordered || 0).toLocaleString('en-IN')}</td>
@@ -2332,11 +2371,12 @@ export default {
                 `?vendor_name=ilike.${encodeURIComponent(poRow.vendor_name)}&limit=1`);
               vendor = vR.data?.[0] || null;
             }
+            const detailLines = await withPartProducts(lines.data || []);
             if (poRow.source === 'China' && !canChina) {
               return ok({
                 po: stripChinaPOHeader(poRow),
                 vendor,
-                lines: (lines.data || []).map(stripChinaPOLine),
+                lines: detailLines.map(stripChinaPOLine),
                 revisions: [],
                 _china_restricted: true,
               });
@@ -2361,7 +2401,7 @@ export default {
               const regR = await query('company_addresses', `?is_registered_office=eq.true&limit=1`);
               delivery_address = regR.data?.[0] || null;
             }
-            return ok({ po: poRow, vendor, lines: lines.data||[], revisions: revisions.data||[], delivery_address });
+            return ok({ po: poRow, vendor, lines: detailLines, revisions: revisions.data||[], delivery_address });
           }
 
           case 'getPrintPOData': {
@@ -2401,16 +2441,17 @@ export default {
             }
             const canChina = canViewChina(P);
             if (poRow.status === 'Soft' && !canChina) return err('PO not found');
+            const printLines = await withPartProducts(linesR.data || []);
             if (poRow.source === 'China' && !canChina) {
               return ok({
                 po: stripChinaPOHeader(poRow),
                 vendor, company, deliveryAddress,
-                lines: (linesR.data || []).map(stripChinaPOLine),
+                lines: printLines.map(stripChinaPOLine),
                 prepared_by_name: preparedByName,
                 _china_restricted: true,
               });
             }
-            return ok({ po: poRow, vendor, company, deliveryAddress, lines: linesR.data || [], prepared_by_name: preparedByName });
+            return ok({ po: poRow, vendor, company, deliveryAddress, lines: printLines, prepared_by_name: preparedByName });
           }
 
           case 'getReorderRequests': {
@@ -3136,7 +3177,7 @@ export default {
             // HSN/GST default in from the part master; corrections sync back out below.
             const partHsnMaster = rawLines.length ? await partHsnMasterAll() : new Map();
             const partPlan = planHsnSync(rawLines, partHsnMaster, null, canSyncPartHsnMaster(P), PART_HSN_OPTS);
-            const lines = applyPartHsnDefaults(partPlan.lines, partHsnMaster);
+            const lines = await withPartProducts(applyPartHsnDefaults(partPlan.lines, partHsnMaster));
             if (lines.length>0) {
               const lineRows = lines.map((l,i) => ({
                 po_number: poNumber, line_no: i+1, product: l.product||null, variant: l.variant||null,
@@ -3413,7 +3454,7 @@ export default {
               const partHsnMasterA = await partHsnMasterAll();
               const prevPartHsn = new Map((linesR.data || []).filter(l => l.part_code).map(l => [l.part_code, normHsn(l.hsn_code)]));
               const partPlanA = planHsnSync(d.lines, partHsnMasterA, prevPartHsn, canSyncPartHsnMaster(P), PART_HSN_OPTS);
-              const aLines = applyPartHsnDefaults(partPlanA.lines, partHsnMasterA);
+              const aLines = await withPartProducts(applyPartHsnDefaults(partPlanA.lines, partHsnMasterA));
               const lineRows = aLines.map((l,i) => ({
                 po_number: d.po_number, line_no: i+1, product: l.product||null, variant: l.variant||null,
                 item_type: l.item_type||'Other', description: l.description||null, part_code: l.part_code||null,
@@ -3579,7 +3620,7 @@ export default {
             const maxLineNo = curLines.reduce((m,l) => Math.max(m, parseInt(l.line_no)||0), 0);
             const partHsnMasterL = await partHsnMasterAll();
             const partPlanL = planHsnSync(newLines, partHsnMasterL, null, canSyncPartHsnMaster(P), PART_HSN_OPTS);
-            const newLinesH = applyPartHsnDefaults(partPlanL.lines, partHsnMasterL);
+            const newLinesH = await withPartProducts(applyPartHsnDefaults(partPlanL.lines, partHsnMasterL));
             const lineRows = newLinesH.map((l,i) => ({
               po_number: d.po_number, line_no: maxLineNo + i + 1,
               product: l.product||null, variant: l.variant||null,

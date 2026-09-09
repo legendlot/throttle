@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
-import { workerFetch } from '@throttle/db';
-import { Modal, Spinner, useToast, EmptyState, buildDamageManifestHtml, printWindow } from '@throttle/ui';
+import { workerFetch, garageFetch } from '@throttle/db';
+import { Modal, Spinner, useToast, EmptyState, Combobox, buildDamageManifestHtml, printWindow } from '@throttle/ui';
 
 const STATUS_TABS = [
   { id: 'pending',                label: 'Pending',           tone: 'yellow' },
@@ -89,6 +89,36 @@ export default function DamageLedgerPage() {
 
   // Reprint manifest by batch_no
   const [reprintBatch, setReprintBatch] = useState('');
+
+  // Part picker for Record Damage — the same part list GRN searches, so picking a code
+  // fills the name and product in (Piyush, #bugs 2026-09-09: "part code is not auto
+  // populating, like how it happens in GRN"). Every part-code field is a Combobox
+  // (PATTERN-160); this was the one plain text box left on a Garage form. The list is
+  // one row per part code — material_current repeats a cross-product part once per
+  // product, so the first row wins and the label carries its product only when the
+  // part belongs to exactly one.
+  const [materials, setMaterials] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    garageFetch('getMaterials', {}, session)
+      .then(d => setMaterials(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [session]);
+  const partOpts = useMemo(() => {
+    const byCode = new Map();
+    for (const m of materials) {
+      if (!m?.part_code) continue;
+      const cur = byCode.get(m.part_code);
+      if (cur) { if (m.product && !cur.products.includes(m.product)) cur.products.push(m.product); continue; }
+      byCode.set(m.part_code, { part_code: m.part_code, part_name: m.part_name || '', products: m.product ? [m.product] : [] });
+    }
+    return [...byCode.values()].map(p => ({
+      value: p.part_code,
+      label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}${p.products.length === 1 ? ' (' + p.products[0] + ')' : ''}`,
+      part_name: p.part_name,
+      product: p.products.length === 1 ? p.products[0] : '',
+    }));
+  }, [materials]);
 
   async function loadLedger() {
     if (!session) return;
@@ -560,9 +590,21 @@ export default function DamageLedgerPage() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div>
             <label style={labelStyle}>Part Code <span style={{ color: '#ff7070' }}>*</span></label>
-            <input type="text" value={recordForm.part_code}
-              onChange={e => setRecordForm({ ...recordForm, part_code: e.target.value })}
-              style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} autoFocus />
+            <Combobox
+              value={recordForm.part_code}
+              options={partOpts}
+              portal
+              onChange={(v, opt) => setRecordForm({
+                ...recordForm,
+                part_code: v || '',
+                // Picking a code fills name + product from the part master; clearing keeps
+                // whatever was typed so nothing is lost mid-form.
+                part_name: opt ? (opt.part_name || '') : recordForm.part_name,
+                product:   opt ? (opt.product   || '') : recordForm.product,
+              })}
+              placeholder="Type part code or name…"
+              loading={!materials.length}
+            />
           </div>
           <div>
             <label style={labelStyle}>Part Name <span style={{ color: '#ff7070' }}>*</span></label>

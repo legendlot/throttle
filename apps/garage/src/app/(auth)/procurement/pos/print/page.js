@@ -47,6 +47,19 @@ function fmtMoney(n, curr) {
   return `${sym}${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Second line under Particulars: which product (and variant / colour) the line is for.
+// Part lines arrive with `product` filled in by lotopsproxy from the part master (Joseph,
+// #bugs 2026-09-09 — "Manual" and "License (Green)" alone do not say whose). Skipped when
+// the description already names the product, so FBU / unit lines do not print it twice.
+// Same helper as the Snorkel print page — keep the two in step.
+function lineContext(l) {
+  const desc = String(l?.description || '').toLowerCase();
+  const parts = [l?.product, l?.variant, l?.color].map(v => (v == null ? '' : String(v).trim())).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts[0] && desc.includes(parts[0].toLowerCase())) return '';
+  return parts.join(' · ');
+}
+
 
 function PrintPOContent() {
   const { session } = useAuth();
@@ -224,7 +237,10 @@ function PrintPOContent() {
               return (
                 <tr key={l.id ?? i}>
                   <td className="center">{i + 1}</td>
-                  <td>{l.description || l.part_code || ''}</td>
+                  <td>
+                    {l.description || l.part_code || ''}
+                    {lineContext(l) && <div style={{ fontSize: 10, color: '#444', marginTop: 1 }}>{lineContext(l)}</div>}
+                  </td>
                   {tax.showGst && <td>{l.hsn_code || ''}</td>}
                   {tax.showGst && <td className="num">{l.gst_percent != null ? `${parseFloat(l.gst_percent)}%` : ''}</td>}
                   <td className="num">{Number(l.qty_ordered || 0).toLocaleString('en-IN')}</td>

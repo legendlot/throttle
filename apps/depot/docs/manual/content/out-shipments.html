@@ -33,6 +33,8 @@
 
 <p><strong>Order notes now show here too.</strong> If the sales order behind a shipment carries a note in Snorkel, the shipment&rsquo;s row carries a &#128221; marker in the list (hover it to read without opening), and the open drawer shows an amber <strong>Order notes &mdash; from Snorkel</strong> block under the header, the same box you&rsquo;d see on the fulfilment request. It is read straight from the order, so if sales edits the note it updates here too. This is separate from the shipment&rsquo;s own <strong>Internal notes</strong> field, which is unchanged.</p>
 
+<p><strong>Ship-to address and pincode.</strong> For a shipment raised from a Snorkel sales order, the open drawer shows a blue <strong>Ship to</strong> block with the partner&rsquo;s name, address, city, state and <strong>PIN</strong>, and the row carries a small <strong>PIN</strong> chip (hover it for the full address). The address comes from the partner&rsquo;s record in Snorkel &mdash; the shipping address if one is filled in, otherwise the billing address, and the block says which. If it reads &ldquo;No address on the partner record&rdquo;, ask sales to add it under Snorkel &rarr; Sales &rarr; Partners; nothing needs changing on the shipment. Warehouse consignments (Amazon, Flipkart) have no partner and show no block.</p>
+
 <div class="callout note">
   <div class="c-title">&#9432; Partial dispatch: shipping with an unpacked balance</div>
   <p>Mark Shipped now checks the manifest first. If every line is fully packed it ships exactly as before. If any line still has units unpacked, it asks: <em>&ldquo;N units on M line(s) are not packed. Ship the packed units now and move the balance to a NEW shipment?&rdquo;</em></p>

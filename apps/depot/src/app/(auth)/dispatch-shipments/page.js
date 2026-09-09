@@ -1036,6 +1036,16 @@ export default function DispatchShipmentsPage() {
                           {/* Order notes from the Snorkel SO — same marker as the request list
                               (Varnit, #bugs 2026-09-07: they vanished once a request was accepted). */}
                           {s.so_notes && <span title={s.so_notes} style={{ cursor: 'help', flexShrink: 0 }}>📝</span>}
+                          {/* Ship-to pincode from the partner record (Varnit, #bugs 2026-09-09);
+                              hover for the full address, open the drawer for the block. */}
+                          {s.so_ship_pincode && (
+                            <span className="num"
+                              title={[s.so_partner_name, s.so_ship_address, [s.so_ship_city, s.so_ship_state].filter(Boolean).join(', ')].filter(Boolean).join('\n')}
+                              style={{ fontSize: 9, fontWeight: 700, color: 'var(--t2)', border: '1px solid var(--border)',
+                                borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' }}>
+                              PIN {s.so_ship_pincode}
+                            </span>
+                          )}
                           {ready && <ToneBadge tone="ok">Ready</ToneBadge>}
                           {/* Stale-draft nudge, 7 days (Afshaan 2026-07-31). A draft only
                               closes when its LAST box is dispatched out, so an unfinished
@@ -1153,6 +1163,37 @@ export default function DispatchShipmentsPage() {
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em',
                       textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>Order notes — from Snorkel</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{detailShipment.so_notes}</div>
+                  </div>
+                )}
+
+                {/* Ship-to — the partner's address read through the Snorkel order (Varnit, #bugs
+                    2026-09-09: no shipment showed an address; there is none on the shipment or
+                    the order, only on the partner). Shipping address first, billing address as
+                    the fallback — 20 of 229 partners carry a shipping address, 120 a billing one
+                    (measured 2026-09-09) — and the source is named so nobody ships to a billing
+                    address without knowing it. Only for order-backed shipments; a warehouse
+                    consignment has no partner. */}
+                {detailShipment.sales_order_id && (
+                  <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 6,
+                    background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--info-fg, #3b82f6)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em',
+                      textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>
+                      Ship to{detailShipment.so_ship_address_source === 'billing'
+                        ? ' — billing address (the partner has no shipping address on file)'
+                        : ' — from the partner record'}
+                    </div>
+                    {detailShipment.so_partner_name && (
+                      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{detailShipment.so_partner_name}</div>
+                    )}
+                    {detailShipment.so_ship_address
+                      ? <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{detailShipment.so_ship_address}</div>
+                      : <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No address on the partner record — add it in Snorkel → Sales → Partners.</div>}
+                    {(detailShipment.so_ship_city || detailShipment.so_ship_state || detailShipment.so_ship_pincode) && (
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', marginTop: 2 }}>
+                        {[detailShipment.so_ship_city, detailShipment.so_ship_state].filter(Boolean).join(', ')}
+                        {detailShipment.so_ship_pincode && <span style={{ fontWeight: 700, marginLeft: 6 }}>PIN {detailShipment.so_ship_pincode}</span>}
+                      </div>
+                    )}
                   </div>
                 )}
 
