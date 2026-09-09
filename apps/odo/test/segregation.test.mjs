@@ -43,7 +43,23 @@ test('guard: zero, blank, partial capture, above-rate and tax≥base all fall to
   near(rowGst({ adapter_kind: 'snorkel_internal', gross: 2050, discount: 1948, tax_ingest: 313 }), flat(102), 'tax > base (Firstcry shape)');
   near(rowGst({ adapter_kind: 'shopify', gross: 1000, discount: 0, tax_ingest: 1000 }), flat(1000), 'tax == base');
   near(rowGst({ adapter_kind: 'shopify', gross: 0, discount: 0, tax_ingest: 0.4 }), 0, 'zero base → 0, not negative');
-  near(rowGst({ adapter_kind: 'uniware', gross: 2099, discount: 1400, tax_ingest: 320 }), flat(699), 'uniware is NOT an ingest adapter yet');
+  // ⛔ THIS ASSERTION USED TO PASS VACUOUSLY (S364 hostile review, finding 7). It was written as
+  // `{gross: 2099, discount: 1400, tax_ingest: 320}` → `flat(699)`, labelled "uniware is NOT an
+  // ingest adapter yet". Adding 'uniware' to the Set did NOT flip it: base = 2099−1400 = 699, and
+  // 320 is outside the 3–20% plausibility band for that base, so it fell through to flat() either
+  // way. Removing 'uniware' again would still leave the suite green — i.e. zero regression cover on
+  // the whole S364 money change. The 1400 discount was itself the bug (Uniware had already deducted
+  // it), so the post-fix shape has discount = 0 and the staged tax is trusted.
+  near(rowGst({ adapter_kind: 'uniware', gross: 2099, discount: 0, tax_ingest: 320 }), 320, 'uniware trusts the GST Uniware staged (discount is 0 post-S364)');
+  // ⭐ The case that actually motivated S364, and the one that discriminates hardest: a 5% L.O.T
+  // Build line on Firstcry. Trusted = 50; the flat strip would say 160.17 — 110 rupees apart, vs
+  // only 0.19 on the 18% shape above (which clears `near`'s 0.005 tolerance, but barely). If
+  // 'uniware' is ever dropped from the Set again, THIS is the assertion that fails loudly.
+  near(rowGst({ adapter_kind: 'uniware', gross: 1050, discount: 0, tax_ingest: 50 }), 50, '5% line keeps its real GST instead of an 18% strip');
+  assert.ok(TAX_AT_INGEST_ADAPTERS.has('uniware'), 'uniware IS an ingest adapter (S364)');
+  // The old shape must still fall back — a stale row that somehow carries a discount cannot be
+  // allowed to make the base tiny and the staged tax look implausible without the strip catching it.
+  near(rowGst({ adapter_kind: 'uniware', gross: 2099, discount: 1400, tax_ingest: 320 }), flat(699), 'implausible rate vs base still falls back to the strip');
   assert.ok(!TAX_AT_INGEST_ADAPTERS.has('amazon_spapi'));
 });
 

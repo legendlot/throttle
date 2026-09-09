@@ -3415,11 +3415,20 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
   // them with match_on='auto'. Measured 2026-09-09: 2 live rows (`lotsp-flare-remote`→FLXXR,
   // `lotsp-ghost-remote`→GHXXR); denominator = all 'auto' sku_map rows matching an active rule.
   const accR = await sbSales('/rest/v1/accessory_rules?is_active=eq.true&select=match_kind,pattern');
-  const accRules = accR.ok && Array.isArray(accR.data) ? accR.data : [];
+  // ⛔ FAIL CLOSED. If this one read errors we must NOT continue with an empty rule set: `isAccessory`
+  // would return false for everything and the fuzzy matcher would re-create exactly the spare-remote
+  // rows this guard exists to prevent — silently, with no log line. Found by the S364 hostile review,
+  // which caught the same silent-revert happening for real via `sales.reconcile_unmapped_sku()`.
+  if (!accR.ok) throw new Error('accessory_rules read failed; refusing to fuzzy-match without the guard');
+  const accRules = Array.isArray(accR.data) ? accR.data : [];
+  // Normalise the same way `sales.match_channel_sku` does (trim + collapse whitespace). Without this
+  // a GT free-text line composing ' Ghost Remote' or 'Ghost  Remote' misses the exact rule here but
+  // still normalises to GHXXR in the fuzzy matcher — guard bypassed, spare booked as a product.
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const isAccessory = (s) => {
-    const v = String(s || '').toLowerCase();
+    const v = norm(s);
     return accRules.some(r => {
-      const p = String(r.pattern || '').toLowerCase();
+      const p = norm(r.pattern);
       if (!p) return false;
       if (r.match_kind === 'prefix') return v.startsWith(p);
       if (r.match_kind === 'exact') return v === p;
