@@ -84,7 +84,12 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
     }
     const update = moves.filter(m => m.action === 'update')
       .map(m => ({ id: m.id, department_id: m.department_id || null, manager_id: m.manager_id || null, org_unit: m.org_unit }));
-    const dismiss = moves.filter(m => m.action === 'dismiss').map(m => ({ id: m.id, org_unit: m.org_unit }));
+    // S369: `mgr_google_email` is what makes a MANAGER-ONLY dismissal stick. Sending only the org
+    // unit left the worker nothing to bank for a row that was flagged purely on the manager, so
+    // Dismiss silenced it for exactly zero syncs. Undefined on OU-only rows, and the worker
+    // deliberately does not blank the baseline when it is absent.
+    const dismiss = moves.filter(m => m.action === 'dismiss')
+      .map(m => ({ id: m.id, org_unit: m.org_unit, mgr_google_email: m.mgr_google_email || null }));
     if (!create.length && !ignore.length && !exit.length && !update.length && !dismiss.length && !baseline.length) { showToast('Nothing selected', 'error'); return; }
     if (create.length > 20) { showToast('Import at most 20 at a time', 'error'); return; }
     setSubmitting(true);

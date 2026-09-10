@@ -1421,6 +1421,45 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // persist ''; it reads back falsy and permanently breaks move detection for that person.
 function normOu(s) { return (s === undefined || s === null || s === '') ? null : String(s); }
 
+// Email as a comparison key. Same falsy-empty-string discipline as normOu: '' and NULL must mean
+// the same thing, or a blank baseline reads as "dismissed" against a blank Google value.
+export function normEmail(s) {
+  if (s === undefined || s === null) return null;
+  const t = String(s).trim().toLowerCase();
+  return t === '' ? null : t;
+}
+
+/**
+ * Does Google's manager disagree with Podium's, in a way a human has NOT already dismissed?
+ *
+ * S369 — the manager-side twin of the `google_org_unit` baseline. Before this, "Dismiss" wrote
+ * only the org unit, so a row that entered `changed` SOLELY because the manager differed had
+ * nothing to baseline and returned on every single sync (found by the S306 hostile review).
+ *
+ * ⚠️ The baseline records only GOOGLE's side, exactly as `google_org_unit` does. The consequence
+ * worth knowing: after a dismissal, editing PODIUM's manager to a third person does NOT re-raise
+ * the row, because Google still names the same person we already declined. That is deliberate —
+ * the dismissal means "we are not taking Google's answer for this person", and re-asking because
+ * we changed our own mind is the noise Dismiss exists to stop. Google naming someone ELSE is new
+ * information and does re-raise it.
+ *
+ * @param gMgrId          Podium employee id resolved from Google's manager email (null if none/exited)
+ * @param empManagerId    the employee's current manager_id in Podium
+ * @param empId           the employee's own id — never propose someone as their own manager
+ * @param googleMgrEmail  the manager email Google reports right now
+ * @param baselineEmail   `employees.google_manager_email` — what was dismissed before, if anything
+ */
+export function mgrDisagrees(gMgrId, empManagerId, empId, googleMgrEmail, baselineEmail) {
+  if (!gMgrId) return false;                       // Google has no usable manager for this person
+  if (gMgrId === empManagerId) return false;       // we already agree
+  if (gMgrId === empId) return false;              // self-management is never a suggestion
+  const live = normEmail(googleMgrEmail);
+  const seen = normEmail(baselineEmail);
+  // Dismissed, and Google has not changed its mind since.
+  if (seen && live && seen === live) return false;
+  return true;
+}
+
 function ouExcluded(ou, excluded) {
   return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
 }
@@ -1441,7 +1480,7 @@ async function getDirectorySyncPreview(url, auth, env) {
   const [sres, igRes, eRes, dRes] = await Promise.all([
     sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
     sb(`/rest/v1/directory_ignored?select=email`, env),
-    sb(`/rest/v1/employees?select=id,full_name,work_email,status,department_id,manager_id,google_org_unit&limit=5000`, env),
+    sb(`/rest/v1/employees?select=id,full_name,work_email,status,department_id,manager_id,google_org_unit,google_manager_email&limit=5000`, env),
     sb(`/rest/v1/departments?select=id,name&limit=500`, env),
   ]);
   const excluded = (sres.ok && sres.data?.[0]?.directory_excluded_ous) || ['/Admin and general'];
@@ -1498,7 +1537,8 @@ async function getDirectorySyncPreview(url, auth, env) {
     // to the top of the org chart as pseudo-roots) that S306 had to repair by hand.
     const gMgrRaw = rel ? empByEmail.get(String(rel.value).toLowerCase()) : null;
     const gMgr = gMgrRaw && gMgrRaw.status !== 'exited' ? gMgrRaw : null;
-    const mgrDiffers = !!gMgr && gMgr.id !== emp.manager_id && gMgr.id !== emp.id;
+    const gMgrEmail = rel ? normEmail(rel.value) : null;
+    const mgrDiffers = mgrDisagrees(gMgr?.id, emp.manager_id, emp.id, gMgrEmail, emp.google_manager_email);
 
     if (!ouMoved && !deptDiffers && !mgrDiffers) {
       // Nothing for a human to decide — but if we have never recorded this person's OU we
@@ -1532,6 +1572,9 @@ async function getDirectorySyncPreview(url, auth, env) {
       mgr_current_name: emp.manager_id ? (empById.get(emp.manager_id)?.full_name || '—') : null,
       mgr_suggested_id: mgrDiffers ? gMgr.id : null,
       mgr_suggested_name: mgrDiffers ? gMgr.full_name : null,
+      // The value Dismiss must bank to make a manager-only row stay dismissed. Without it the
+      // client has nothing to send back and the row returns on the next sync (S369).
+      mgr_google_email: mgrDiffers ? gMgrEmail : null,
     });
   }
   for (const gu of gusers) {
@@ -1690,8 +1733,14 @@ async function importDirectoryCandidates(body, auth, env) {
 
   for (const x of dismiss) {
     if (!x || !x.id) { result.errors.push('dismiss: missing employee id'); continue; }
+    // S369: bank BOTH baselines. `google_org_unit` alone left a manager-only disagreement with
+    // nothing to remember, so Dismiss silenced it for exactly zero syncs. Only write the manager
+    // baseline when the caller actually sends one — a plain OU dismissal must not blank it.
+    const patch = { google_org_unit: normOu(x.org_unit), updated_at: nowIso() };
+    const dismissedMgr = normEmail(x.mgr_google_email);
+    if (dismissedMgr) patch.google_manager_email = dismissedMgr;
     const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(x.id)}&status=neq.exited`, env,
-      { method: 'PATCH', body: JSON.stringify({ google_org_unit: normOu(x.org_unit), updated_at: nowIso() }) });
+      { method: 'PATCH', body: JSON.stringify(patch) });
     if (r.ok) result.dismissed.push(x.id); else result.errors.push(`dismiss ${x.id}: ${JSON.stringify(r.data)}`);
   }
 

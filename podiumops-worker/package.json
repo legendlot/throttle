@@ -1,14 +1,15 @@
 {
   "name": "podiumops-worker",
   "version": "1.0.0",
-  "description": "Podium People & Performance OS API — Cloudflare Worker",
+  "description": "Podium People & Performance OS API \u2014 Cloudflare Worker",
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "test": "node --test test/*.test.mjs"
   },
-  "type": "commonjs",
+  "type": "module",
   "devDependencies": {
     "wrangler": "^4.83.0"
   }
