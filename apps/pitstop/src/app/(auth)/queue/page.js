@@ -103,9 +103,18 @@ export default function QueuePage() {
   // Reset to the first page whenever the tab / any filter / dept changes.
   useEffect(() => { setPage(0); }, [activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, sortBy, searchQ, deptSlug]);
 
+  // Carry the live filter query string into the ticket URL so the detail page's Back link can
+  // restore it (Pruthvi, #bugs 1789026589.229569). Filters live only in this page's query string,
+  // so without this the round trip to a ticket resets the list to unfiltered.
+  function ticketHref(ticketNo) {
+    const qs = searchParams.toString();
+    const base = `/queue/detail/?ticket_no=${encodeURIComponent(ticketNo)}`;
+    return qs ? `${base}&from=${encodeURIComponent(qs)}` : base;
+  }
+
   const { focusedIdx, setFocusedIdx } = useListNav(
     tickets.length,
-    (i) => { const t = tickets[i]; if (t) router.push(`/queue/detail/?ticket_no=${t.ticket_no}`); }
+    (i) => { const t = tickets[i]; if (t) router.push(ticketHref(t.ticket_no)); }
   );
 
   function setParam(key, value) {
@@ -314,7 +323,7 @@ export default function QueuePage() {
                     background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
                     boxShadow: focusedIdx === i ? 'inset 0 0 0 2px var(--accent-ring)' : 'none' }}
                   onMouseEnter={() => setFocusedIdx(i)}
-                  onClick={() => router.push(`/queue/detail/?ticket_no=${t.ticket_no}`)}>
+                  onClick={() => router.push(ticketHref(t.ticket_no))}>
                   <td style={{ ...TD }}><span className="num" style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>{t.ticket_no}</span></td>
                   <td style={TD}>
                     <div style={{ color: 'var(--t1)', fontWeight: 600 }}>{t.customer_name || '—'}</div>

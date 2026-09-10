@@ -176,9 +176,17 @@ export default function TicketDetailPage() {
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
+// Rebuilds the queue URL the user actually came from, so their filters survive the round trip
+// (Pruthvi, #bugs 1789026589.229569, 2026-09-10). The queue keeps every filter — tab, disposition,
+// category, platform, agent, stage, tag, sort, q — in its OWN query string, so a hardcoded
+// href="/queue" silently discarded all of them and dropped the user back on an unfiltered list.
+// `from` carries that query string; entry points that are not the queue (calls, inbox, CallPop,
+// the command palette, a related-ticket link) pass none and correctly fall back to a bare queue.
 function BackLink() {
+  const sp = useSearchParams();
+  const from = sp.get('from');
   return (
-    <Link href="/queue" style={{
+    <Link href={from ? `/queue?${from}` : '/queue'} style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
       color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 11,
       textDecoration: 'none', marginBottom: 'var(--space-3)',
