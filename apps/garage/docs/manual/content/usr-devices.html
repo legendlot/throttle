@@ -1,10 +1,14 @@
-<p class="lead">The Device Register lists every handset that has used the LOT Scanner app, so an admin can label and classify phones without touching SQL. It is a rollout checklist and an observation tool, not a security gate: nothing on this screen blocks a phone from scanning.</p>
+<p class="lead">The phone fleet: every handset that has used the LOT Scanner app, plus every station slot in the register. Label a phone, pin it to a station, stop it scanning, or pair the attendance gate phone. Reached from <strong>Users &amp; Roles &rarr; Phones</strong>.</p>
+<div class="callout danger">
+  <div class="c-title">&#9940; This screen is no longer observe-only</div>
+  <p>Setting a handset to <strong>BLOCKED</strong> genuinely refuses it on every scanner action, within about 30 seconds. Earlier versions of this guide said nothing here blocked a phone &mdash; that stopped being true on 10 September 2026. The two <em>flags</em> further down are still observation only; blocking and locking are not.</p>
+</div>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Labelling and watching scanner handsets.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: label, set status, flag (observe only).</div></div>
-  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> users_manage only</div></div>
-  <div class="g-cell"><div class="g-lbl">Live?</div><div class="g-val">Observing now; nothing blocks yet.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Naming, pinning, blocking and pairing scanner phones.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: label, station, lock, block, pair.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> super admin only</div></div>
+  <div class="g-cell"><div class="g-lbl">Live?</div><div class="g-val">Blocking and locking are LIVE.</div></div>
 </div>
 
 <div class="callout danger">
@@ -50,3 +54,15 @@
   <div class="c-title">&#9432; Label the phone while you are holding it</div>
   <p>Label a device the moment the app is installed on it, while you are standing next to it and know exactly which station it belongs to. Come back to it later, once several unlabelled phones have appeared, and you are guessing between identical hardware IDs with no way to tell them apart.</p>
 </div>
+
+<h2 class="sec">Locking a phone to its station</h2>
+<p>Each phone card has a <strong>Lock</strong> toggle. Locked means the handset cannot be pointed at a different station from the phone itself &mdash; the station and line pickers grey out, and if someone has already moved it, it is moved back and told why.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Locking only works on the app, and only one station per handset</div>
+  <p>The lock is tied to the <strong>handset</strong>, not to the station code, because a phone&rsquo;s station code is simply whatever its operator picked. A phone using the scanner <strong>website</strong> sends no handset ID and cannot be locked at all &mdash; each card says which of the two it is.</p>
+  <p>A handset can be locked to <strong>one</strong> station. If you try to lock a second station onto a phone that is already locked elsewhere, Garage refuses and names the other one: unlock that first. This is not a nicety &mdash; two locks on one handset would quietly stop both from working, and it could not be undone.</p>
+</div>
+
+<h2 class="sec">Pairing &mdash; one phone only</h2>
+<p>Only the <strong>attendance gate phone</strong> is ever paired; it is the only card that offers the button. Pairing mints a signing key, and that key is only ever checked when somebody clocks in or out, so pairing a station phone would create a key nothing looks at. Floor phones need no code at all: install the app, then department PIN &rarr; station &rarr; line, on the phone.</p>
