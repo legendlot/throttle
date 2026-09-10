@@ -33,8 +33,12 @@ function widgetJs(botId, workerBase) {
       '<span>Legend of Toys</span><button id="lotchat-x" aria-label="Close chat" style="background:none;border:none;color:#F2CD1A;font-size:18px;cursor:pointer;">\\u2715</button></div>' +
     '<div id="lotchat-msgs" style="flex:1;overflow-y:auto;padding:12px;background:#f7f7f7;"></div>' +
     '<form id="lotchat-form" style="display:flex;gap:6px;padding:10px;border-top:1px solid #e5e5e5;background:#fff;">' +
-      '<input id="lotchat-inp" autocomplete="off" placeholder="Type a message\\u2026" style="flex:1;border:1px solid #ddd;border-radius:8px;padding:9px 11px;font-size:14px;outline:none;" />' +
-      '<button type="submit" style="border:none;border-radius:8px;background:#F2CD1A;font-weight:700;padding:0 14px;cursor:pointer;">Send</button></form>';
+      // ⚠️ color + background are EXPLICIT for the same reason the quick-reply chips below are:
+      // the storefront theme is white-on-dark, and anything that does not set its own colour
+      // inherits it. S312 fixed the chips and MISSED these two, so the typed text was white on
+      // the white field and effectively invisible (Pruthvi, #bugs 1789035615.784329, 2026-09-10).
+      '<input id="lotchat-inp" autocomplete="off" placeholder="Type a message\\u2026" style="flex:1;border:1px solid #ddd;border-radius:8px;padding:9px 11px;font-size:14px;outline:none;color:#111;background:#fff;" />' +
+      '<button type="submit" style="border:none;border-radius:8px;background:#F2CD1A;color:#111;font-weight:700;padding:0 14px;cursor:pointer;">Send</button></form>';
   document.body.appendChild(btn);
   document.body.appendChild(panel);
 
