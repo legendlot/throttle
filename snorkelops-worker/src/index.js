@@ -262,6 +262,14 @@ async function pageAll(queryFn, table, params, pageSize = 1000) {
 }
 
 const PO_PAGE_LIMIT  = 2000;
+// The line-level PO export (getPOLinesBulk) reads po_lines in ONE shot, so it needs its own cap,
+// picked the same way PO_PAGE_LIMIT was: against PostgREST's `db-max-rows` (5,000), which clamps
+// silently with no error and no header the caller reads. Measured 2026-09-10: 1,622 po_lines rows
+// exist in total (1,422 on non-cancelled POs), growing at roughly 4 lines per PO on ~4.8 POs/day
+// — about 600 lines a month, so 3,000 is ~2 years of headroom while staying 40% clear of the hard
+// clamp. Anything at or above 5,000 would be fiction. The response returns the exact count so the
+// cap can never pass as a complete answer.
+const PO_LINES_PAGE_LIMIT = 3000;
 const PAY_PAGE_LIMIT = 400;
 const FIN_PAGE_LIMIT = 300;
 async function insert(table, body, single = false) {
@@ -2404,6 +2412,61 @@ export default {
               delivery_address = regR.data?.[0] || null;
             }
             return ok({ po: poRow, vendor, lines: detailLines, revisions: revisions.data||[], delivery_address });
+          }
+
+          // Line-level feed for the PO list's "Export + lines" button (Prarthi, #bugs
+          // 2026-09-10). The header Export needs no server work — it is built from rows getPOs
+          // already gated. This one CANNOT borrow that: the lines are a second read, so the
+          // China/Soft gate is re-applied here, byte for byte the same policy as getPO above.
+          // That is the recurring failure this guards against — a permission taught to one
+          // surface and not the next.
+          // The pure statement of the same decision lives in apps/snorkel/src/lib/poExport.js
+          // (`gatePoLines`, covered by snorkelops-worker/test/po-export.test.mjs); this worker
+          // is a zero-import single file with no bundler, so it cannot import it — the copy
+          // below is deliberate and must move with it.
+          case 'getPOLinesBulk': {
+            if (!canView(P)) return err('No permission', 403);
+            const status = url.searchParams.get('status')     || '';
+            const source = url.searchParams.get('source')     || '';
+            const type   = url.searchParams.get('order_type') || '';
+            // Same filter + cap + exact count as getPOs, so the header set the client is
+            // exporting and the header set we gate against are the same set.
+            let filter = `?order=created_at.desc&limit=${PO_PAGE_LIMIT}`;
+            if (status) filter += `&status=eq.${encodeURIComponent(status)}`;
+            if (source) filter += `&source=eq.${encodeURIComponent(source)}`;
+            if (type)   filter += `&order_type=eq.${encodeURIComponent(type)}`;
+            const headR = await query('po_summary', filter, { prefer: 'count=exact' });
+            if (!headR.ok) return err(headR.data);
+            const canChina = canViewChina(P);
+            // The allowed set. A Soft PO for a caller without po_china is dropped ENTIRELY —
+            // no header, no lines — and a China PO survives but is marked for the strip.
+            const allowed = new Map();
+            for (const row of headR.data || []) {
+              if (row.status === 'Soft' && !canChina) continue;
+              allowed.set(row.po_number, row.source === 'China' && !canChina);
+            }
+            // ⛔ Read the lines ONCE and filter in JS. A `?po_number=in.(...)` built from the
+            // allowed set would be hundreds of PO numbers joined into a multi-KB query string
+            // — the shape that has already broken a read in this codebase once.
+            const linesR = await query('po_lines',
+              `?order=po_number.asc,line_no.asc&limit=${PO_LINES_PAGE_LIMIT}`,
+              { prefer: 'count=exact' });
+            if (!linesR.ok) return err(linesR.data);
+            const fetched = Array.isArray(linesR.data) ? linesR.data.length : 0;
+            const linesByPo = {};
+            for (const line of linesR.data || []) {
+              if (!allowed.has(line.po_number)) continue;      // not visible, or not on this page
+              const strip = allowed.get(line.po_number);
+              (linesByPo[line.po_number] ||= []).push(strip ? stripChinaPOLine(line) : line);
+            }
+            // ⚠️ `total`/`truncated` are measured against the RAW po_lines read — every line in
+            // the table, not just the filtered POs' — because po_lines carries no status/source
+            // to filter on. So a filtered export can be warned as partial when it is in fact
+            // complete. That is the safe direction: a spreadsheet that over-warns is annoying,
+            // one that silently totals a short file is wrong.
+            const total     = totalFromRange(linesR.range);
+            const truncated = total === null ? fetched >= PO_LINES_PAGE_LIMIT : total > fetched;
+            return ok({ linesByPo, total, fetched, limit: PO_LINES_PAGE_LIMIT, truncated });
           }
 
           case 'getPrintPOData': {

@@ -8,6 +8,7 @@ import { Plus, ArrowRight, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone } from '@/components/format.js';
 import { csvCell } from '@/lib/sales.js';
+import { buildPoLinesCsv } from '@/lib/poExport.js';
 import { todayStr } from '@throttle/domain';
 
 const PO_STATUSES = ['Soft', 'Draft', 'Pending Approval', 'Approved', 'Sent', 'Confirmed & Payment Done', 'Partially Received', 'Closed', 'Cancelled'];
@@ -27,6 +28,7 @@ export default function POListPage() {
   const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [exportingLines, setExportingLines] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -133,6 +135,69 @@ export default function POListPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Second, SEPARATE export: one row per PO LINE (Prarthi, #bugs 2026-09-10). It does not
+  // replace exportCsv above — that one deliberately mirrors the screen for Priya (S334), and two
+  // people want two different files.
+  // ⚠️ The lines are a SECOND read, so they do NOT inherit getPOs' China/Soft gate the way the
+  // header export does. `getPOLinesBulk` re-applies exactly that gate server-side; this function
+  // only formats what comes back. Never build this file from a raw po_lines read.
+  async function exportCsvWithLines() {
+    if (!session) return;
+    let payload;
+    setExportingLines(true);
+    try {
+      const params = {};
+      if (filters.status) params.status = filters.status;
+      if (filters.source) params.source = filters.source;
+      if (filters.order_type) params.order_type = filters.order_type;
+      payload = await garageFetch('getPOLinesBulk', params, session);
+    } catch (e) {
+      showToast(e.message || 'Failed to load PO lines', 'error');
+      return;
+    } finally {
+      setExportingLines(false);
+    }
+    const linesByPo = payload?.linesByPo || {};
+    // ⚠️ TWO ways this file can be short and only one of them is the S334 one: the PO list may
+    // have been cut at PO_PAGE_LIMIT, or the LINE read may have been cut at its own cap. Either
+    // makes the file partial, and a partial line file is the more dangerous of the two — a PO
+    // present with only some of its lines totals to a plausible, wrong number.
+    const partial = !!truncation || !!payload?.truncated;
+    if (partial) {
+      const ok = window.confirm(
+        `This export is PARTIAL.\n\n` +
+        (truncation
+          ? (truncation.total != null
+              ? `${truncation.total} purchase orders match your filters, but only the first ${truncation.limit} were loaded. `
+              : `More purchase orders match your filters than the first ${truncation.limit} that were loaded. `)
+          : '') +
+        (payload?.truncated
+          ? (payload.total != null
+              ? `${payload.total} PO lines exist, but only the first ${payload.limit} were loaded. `
+              : `More PO lines exist than the first ${payload.limit} that were loaded. `)
+          : '') +
+        `Any total you calculate from this file will be too low.\n\nExport the partial file anyway?`
+      );
+      if (!ok) return;
+    }
+    // Built from `filteredRows` so the on-screen text search is honoured, exactly like the
+    // header export.
+    const csv = buildPoLinesCsv({ filteredRows, linesByPo, canChina: !!perms?.po_china });
+    const rowCount = csv.split('\n').length - 1;
+    if (!rowCount) { showToast('No PO lines to export for these filters', 'error'); return; }
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // Same PARTIAL marker as the header export, for the same reason: the filename is the only
+    // part of the warning that survives the file being saved, renamed or emailed on.
+    a.download = partial
+      ? `lot-purchase-order-lines-PARTIAL-${rowCount}-${todayStr()}.csv`
+      : `lot-purchase-order-lines-${rowCount}-${todayStr()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (perms && !perms.procurement_view) {
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
@@ -144,6 +209,7 @@ export default function POListPage() {
       <PageHead title="Purchase Orders" sub="All purchase orders raised across categories."
         actions={<>
           <Btn onClick={exportCsv} disabled={!filteredRows.length}><Download size={14} /> Export</Btn>
+          <Btn onClick={exportCsvWithLines} disabled={!filteredRows.length || exportingLines}><Download size={14} /> {exportingLines ? 'Loading lines…' : 'Export + lines'}</Btn>
           {perms?.po_create && <Btn kind="primary" onClick={() => router.push('/procurement/pos/new')}><Plus size={14} /> New PO</Btn>}
         </>} />
 
