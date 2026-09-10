@@ -51,7 +51,9 @@ test('postPO: an INACTIVE id is refused by label — no PO may be created pointi
 });
 
 test("postPO: '' is a PO with no delivery address, not an error and not '' into an int8 column", () => {
-  for (const blank of ['', '   ', [], [null]]) {
+  // Only STRING blanks mean "no address". An empty array is not a blank, it is a wrong type —
+  // see the array test below (normalised S370).
+  for (const blank of ['', '   ']) {
     const r = runDoor('create', blank);
     assert.equal(r.action, 'skip', `blank payload ${JSON.stringify(blank)}`);
     assert.equal(r.id, null);
@@ -63,12 +65,17 @@ test('postPO: null and absent are both a legitimate no-address create', () => {
   assert.equal(runDoor('create', undefined).action, 'skip');
 });
 
-test('postPO: an ARRAY of one digit resolves like the digit — the documented drift from amendPO', () => {
-  // NOT a normalisation target without a decision: postPO stringifies+trims before every test,
-  // so [2] behaves as '2' here while amendPO refuses it on TYPE. Recorded, not fixed.
+test('postPO: an ARRAY is refused on TYPE, like every other door (normalised S370)', () => {
+  // Until 2026-09-10 this door stringified+trimmed first, so [2] created a PO against address 2
+  // while the SAME payload 422'd on an amend. Afshaan settled it: all three doors reject.
+  // Safe to tighten — both send sites pass parseInt(), a number or null, never an array.
+  for (const arr of [[2], ['2'], [], [null]]) {
+    const r = runDoor('create', arr);
+    assert.equal(r.action, 'reject', `array payload ${JSON.stringify(arr)}`);
+    assert.equal(r.status, 422);
+  }
   const r = runDoor('create', [2]);
-  assert.equal(r.action, 'accept');
-  assert.equal(r.id, 2);
+  assert.equal(r.action, 'reject');
   // A multi-element array is still refused — String([2,3]) === '2,3' fails the digits regex.
   const multi = runDoor('create', [2, 3]);
   assert.equal(multi.action, 'reject');
@@ -169,10 +176,14 @@ test("changePODeliveryAddress: '' and null are a MISSING required field, never a
   assert.equal(runDoor('change', '   ').status, 422);
 });
 
-test('changePODeliveryAddress: an ARRAY of one digit resolves like the digit — same drift as postPO', () => {
-  const r = runDoor('change', [2], { currentId: null });
-  assert.equal(r.action, 'accept');
-  assert.equal(r.id, 2);
+test('changePODeliveryAddress: an ARRAY is refused on TYPE (normalised S370)', () => {
+  // [] and [null] already 422'd here via the digits regex; [2] did NOT, because String([2]) is
+  // '2' and resolved to an address the caller never named. Now refused on TYPE, which says why.
+  for (const arr of [[2], ['2'], [], [null]]) {
+    const r = runDoor('change', arr, { currentId: null });
+    assert.equal(r.action, 'reject', `array payload ${JSON.stringify(arr)}`);
+    assert.equal(r.status, 422);
+  }
 });
 
 test("changePODeliveryAddress: re-sending the PO's own address is a NO-OP, not a write", () => {

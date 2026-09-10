@@ -34,10 +34,20 @@
 //                        undefined/null/'' is a missing required field, never a clear.
 export function parseDeliveryAddressId(raw, mode) {
   if (mode === 'create') {
-    // Trim-then-blank, on purpose: creating a PO with no address is legitimate.
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      return { action: 'skip', id: null };
+    if (raw === undefined || raw === null) return { action: 'skip', id: null };
+    // S370: arrays and objects rejected on TYPE here too. Until 2026-09-10 only `amend` did
+    // this, so `[2]` created a PO against address 2 while the same payload 422'd on an amend —
+    // three doors to one column disagreeing about what a payload MEANS. Normalised to the
+    // strictest door, which is the one that got hostile-review scrutiny.
+    // ⚠️ This is AFTER the strict null check and BEFORE the trim-blank one, deliberately: `[]`
+    // and `[null]` now reject (they are arrays), while `''` and '   ' still mean "no address",
+    // which is a legitimate PO. Safe to tighten — both send sites pass parseInt(), i.e. a number
+    // or null, never an array (verified across apps/ 2026-09-10; no other app touches it).
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
     }
+    // Trim-then-blank, on purpose: creating a PO with no address is legitimate.
+    if (String(raw).trim() === '') return { action: 'skip', id: null };
   } else if (mode === 'amend') {
     // Not sent at all = leave the stored address alone (the Amend modal is header-only and never
     // sends this field, so the normal amend path is unaffected).
@@ -52,6 +62,13 @@ export function parseDeliveryAddressId(raw, mode) {
   } else if (mode === 'change') {
     if (raw === undefined || raw === null || raw === '') {
       return { action: 'reject', error: 'delivery_address_id required', status: 400 };
+    }
+    // S370: same type rejection as the other two modes. `[]` and `[null]` already 422'd here
+    // (via the digits regex below), but `[2]` did NOT — String([2]) === '2' passed the regex and
+    // resolved to a real address the caller never named. Rejecting on TYPE says why, and says it
+    // in the same voice as the other doors.
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
     }
   }
   // parseInt COERCES — parseInt('2abc',10)===2, and 2.9 survives Number.isFinite — so the digits

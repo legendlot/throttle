@@ -1294,9 +1294,15 @@ function computeTds({ invoiceTotal, rate }) {
 // a missing required field.
 function parseDeliveryAddressId(raw, mode) {
   if (mode === 'create') {
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      return { action: 'skip', id: null };
+    if (raw === undefined || raw === null) return { action: 'skip', id: null };
+    // S370: arrays/objects rejected on TYPE here too — until 2026-09-10 only `amend` did, so
+    // `[2]` created a PO against address 2 while the same payload 422'd on an amend. AFTER the
+    // strict null check and BEFORE the trim-blank one: `[]`/`[null]` reject, '' still means
+    // "no address", which is a legitimate PO.
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
     }
+    if (String(raw).trim() === '') return { action: 'skip', id: null };
   } else if (mode === 'amend') {
     if (raw === undefined) return { action: 'skip', id: null };
     if (raw === null || raw === '') return { action: 'clear', id: null };
@@ -1308,6 +1314,11 @@ function parseDeliveryAddressId(raw, mode) {
   } else if (mode === 'change') {
     if (raw === undefined || raw === null || raw === '') {
       return { action: 'reject', error: 'delivery_address_id required', status: 400 };
+    }
+    // S370: same type rejection as the other two. `[]`/`[null]` already 422'd via the regex, but
+    // `[2]` did NOT — String([2]) === '2' resolved to an address the caller never named.
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
     }
   }
   // parseInt COERCES ('2abc' → 2, 2.9 survives Number.isFinite), so the digits are checked with a
