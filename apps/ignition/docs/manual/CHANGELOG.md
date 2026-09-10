@@ -3,6 +3,22 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.12.0] - 2026-09-10
+### Added
+- Engagement detail: the Logistics card now shows live courier status alongside the
+  hand-entered Shipping order / Tracking / Shipping date / Delivered fields: a Courier
+  lifecycle badge (Pending, Manifested, In transit, Out for delivery, Delivered, RTO,
+  Cancelled) plus courier name, an AWB row (linked to Delhivery's public tracking page for
+  Delhivery parcels, plain text otherwise), and Dispatched / Delivered (courier) timestamps
+  in IST. Documented "matched by order prefix", "Awaiting courier sync" and "Sent via
+  <courier> - no tracking" as normal, non-error states, and added a callout that stage and
+  courier lifecycle are different things that will often disagree, and a deal's stage
+  should never be changed just to match the courier.
+- Schedule: the "overdue to post" clock now counts from the courier's actual delivery date
+  where known, not from a stage-click date. Added two new panels above the chasing list:
+  parcels that came back (RTO/cancelled, do not chase the creator) and parcels stuck in
+  transit 14+ days (chase the courier, not the creator).
+
 ## [1.11.1] - 2026-09-04
 ### Fixed
 - Engagement detail: corrected the Video #1/Post-live callout. Only the posted date is a
