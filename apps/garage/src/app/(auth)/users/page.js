@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, useEscapeClose } from '@throttle/ui';
 
+import DevicesPage from '../devices/page';
 const PERM_DEFS = [
   { group: 'Core Tabs', items: [
     { key: 'dashboard',    label: 'Dashboard',     type: 'bool'  },
@@ -416,6 +417,12 @@ export default function UsersPage() {
         {myRole === 'super_admin' && (
           <button type="button" style={tabBtnStyle(activeTab === 'scannerpins')} onClick={() => setActiveTab('scannerpins')}>Scanner PINs</button>
         )}
+        {/* The phone fleet, surfaced HERE because the /devices nav item sits under a collapsed
+            SETUP & MORE group and was effectively invisible (Afshaan, 2026-09-10). Same
+            component as the standalone page — not a copy. */}
+        {myRole === 'super_admin' && (
+          <button type="button" style={tabBtnStyle(activeTab === 'devices')} onClick={() => setActiveTab('devices')}>Phones</button>
+        )}
       </div>
 
       {activeTab === 'users' && (
@@ -455,6 +462,8 @@ export default function UsersPage() {
           <AttendanceDevice session={session} showToast={showToast} />
         </>
       )}
+
+      {activeTab === 'devices' && myRole === 'super_admin' && <DevicesPage embedded />}
 
       {activeTab === 'roles' && (
         rolesView === 'list' ? (

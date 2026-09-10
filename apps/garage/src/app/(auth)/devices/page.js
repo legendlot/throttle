@@ -120,7 +120,10 @@ function PairCode({ pair, onDone }) {
   );
 }
 
-export default function DevicesPage() {
+// `embedded` renders this same page as a TAB inside Users & Roles (Afshaan, 2026-09-10: the
+// nav item lives under a collapsed SETUP & MORE group and he could not find it). ONE component,
+// two places — do not fork it, or the two copies drift the way the two enrolment surfaces did.
+export default function DevicesPage({ embedded = false }) {
   // ⚠️ Key loads on userId, NEVER on the session object: onAuthStateChange re-fires on tab
   // switch and a real token refresh lands ~hourly, and this page holds unsaved edits.
   // ⚠️ And do NOT close over `session` either — workerFetch does not self-heal a stale token,
@@ -332,10 +335,12 @@ export default function DevicesPage() {
   }
 
   return (
-    <div style={{ padding: '16px clamp(12px,3vw,24px) 40px', maxWidth: 1200, margin: '0 auto' }}>
+    <div style={embedded
+      ? { padding: 0 }
+      : { padding: '16px clamp(12px,3vw,24px) 40px', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
-        <Smartphone size={22} />
-        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Devices</h1>
+        {!embedded && <Smartphone size={22} />}
+        {!embedded && <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Devices</h1>}
         <button onClick={load} disabled={loading}
           style={{ ...btnCss, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6,
                    opacity: loading ? .6 : 1 }}>
