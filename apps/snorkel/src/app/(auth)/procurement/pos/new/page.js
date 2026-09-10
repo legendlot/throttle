@@ -385,13 +385,21 @@ function NewPOPage() {
       let filtered = rows;
       if (bomGroup && bomGroup !== 'full') {
         const groupCats = {
-          car:         ['Car', 'Body'],
+          // car = "the main unit": Car/Body plus other whole-product bodies (Drone, Train).
+          car:         ['Car', 'Body', 'Drone', 'Train'],
           remote:      ['Remote'],
-          accessories: ['Accessories'],
+          // Charger Cable is an accessory, not a body or a consumable.
+          accessories: ['Accessories', 'Charger Cable'],
           metal:       ['Metal'],
           packaging:   ['Packaging'],
-          para:        ['Para', 'License', 'Comic'],
-          consumables: ['Consumables', 'Batteries', 'Chemical'],
+          para:        ['Para', 'License', 'Comic', 'Sticker'],
+          // 'Battery' added alongside 'Batteries' — the predicate is category.includes(chip),
+          // and 'Battery'/'RC Battery' don't include the plural 'Batteries' (singular/plural miss).
+          consumables: ['Consumables', 'Batteries', 'Battery', 'Chemical', 'Fastener'],
+          // SKD (part_category 'SKD') is DELIBERATELY left unreachable from every chip above
+          // (Afshaan, 2026-09-10). RULE-SKD-001: SKD is format-isolated, and this tab multiplies
+          // by a units quantity, so an SKD row surfaced on a CKD product's checklist would be
+          // wrong by design. Do not add an SKD chip here.
         }[bomGroup] || [];
         filtered = rows.filter((r) => groupCats.some((c) => (r.category || '').toLowerCase().includes(c.toLowerCase())));
       }
