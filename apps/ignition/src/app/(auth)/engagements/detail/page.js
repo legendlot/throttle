@@ -1607,6 +1607,23 @@ function courierLabel(courier, provider) {
   return `${courierText(c)} · ${courierText(p)}`;
 }
 
+// Where the AWB should take you. `ecom_shipments.tracking_link` is the intended source but is a
+// DEAD column — 0 of 30,969 rows carry one, ever (measured 2026-09-10) — so it is honoured first
+// and then fallen back on.
+//
+// Delhivery's public tracking page needs no login for status and reflects real per-package state
+// (verified 2026-09-10 on two live AWBs: a delivered one reads "Order Delivered", an RTO reads
+// "Out for Return" with an expected return date). It covers 187 of the 256 matched deals.
+// ⛔ Only Delhivery. `self` has no carrier to link to, and Shiprocket's URL pattern was NOT
+// verified — guessing a vendor URL and shipping it to the team is how a dead link gets trusted.
+function trackingUrlFor(shipment) {
+  if (shipment.tracking_link) return shipment.tracking_link;
+  const awb = String(shipment.tracking_number || '').trim();
+  const carrier = `${shipment.courier || ''} ${shipment.shipping_provider || ''}`.toLowerCase();
+  if (!awb || !carrier.includes('delhivery')) return null;
+  return `https://www.delhivery.com/track/package/${encodeURIComponent(awb)}`;
+}
+
 function LifecycleBadge({ lifecycle }) {
   const p = LIFECYCLE_PALETTE[lifecycle] || LIFECYCLE_PALETTE.unknown;
   return (
@@ -1646,11 +1663,12 @@ function ShipmentRows({ shipment, orderId }) {
           {name && <span>{name}</span>}
         </span>
       } />
-      {shipment.tracking_number && (
-        <KV label="AWB" value={shipment.tracking_link
-          ? <a href={shipment.tracking_link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--state-info-fg)' }}>{shipment.tracking_number}</a>
-          : shipment.tracking_number} />
-      )}
+      {shipment.tracking_number && (() => {
+        const url = trackingUrlFor(shipment);
+        return <KV label="AWB" value={url
+          ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--state-info-fg)' }}>{shipment.tracking_number}</a>
+          : shipment.tracking_number} />;
+      })()}
       {shipment.dispatched_at && <KV label="Dispatched" value={istStamp(shipment.dispatched_at)} />}
       {shipment.delivered_at && <KV label="Delivered (courier)" value={istStamp(shipment.delivered_at)} />}
     </>
