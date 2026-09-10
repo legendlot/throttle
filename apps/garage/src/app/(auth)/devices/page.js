@@ -433,9 +433,12 @@ export default function DevicesPage() {
                 {d.is_attendance_device &&
                   <span title="The gate phone — attendance is locked to it"
                         style={{ fontSize: 10, fontWeight: 800, color: '#F2CD1A' }}>ATTENDANCE</span>}
-                {d.has_key
+                {/* The key icon is shown ONLY where a key means something — the gate phone.
+                    On a station phone a greyed-out key read as "this phone is not set up yet",
+                    which it never was: station phones do not hold keys by design. */}
+                {d.is_attendance_device && (d.has_key
                   ? <KeyRound size={13} style={{ color: '#22c55e' }} title={`Paired — key from ${istStamp(d.enrolled_at)}`} />
-                  : <KeyRound size={13} style={{ opacity: .35 }} title="Not paired — holds no signing key" />}
+                  : <KeyRound size={13} style={{ color: '#DE2A2A' }} title="NOT paired — the gate phone cannot sign attendance" />)}
                 <span style={{ marginLeft: 'auto', fontSize: 11, opacity: .7 }}
                       title={istStamp(d.last_seen)}>{ago(d.last_seen)}</span>
               </div>
@@ -518,11 +521,26 @@ export default function DevicesPage() {
               )}
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 'auto' }}>
-                <button onClick={() => mintPair(d.device_code)} disabled={busy}
-                  title="Mints an 8-digit code to type into the Scanner app on that phone. Single use, expires in 15 minutes."
-                  style={{ ...btnCss, color: '#F2CD1A', borderColor: 'rgba(242,205,26,.45)' }}>
-                  {busy ? '…' : d.has_key ? 'Re-pair this phone' : 'Pair this phone'}
-                </button>
+                {/* ⛔ PAIRING IS OFFERED ON THE ATTENDANCE PHONE ONLY, AND THAT IS THE WHOLE
+                    POINT (Afshaan, 2026-09-10 — "I do not understand why we need to continue to
+                    enroll"). A pairing code mints a SIGNING KEY, and a signing key is read on
+                    exactly three actions — recordAttendance / recordBreak / getOperatorByCode
+                    (ATTENDANCE_ACTIONS in 01_worker/lib/device-lock.js), and only while
+                    store.settings.attendance_device_enforce='on'. Pairing a PKG or INW phone
+                    therefore does LITERALLY NOTHING: it mints a key nothing will ever check.
+                    Showing the button on all 76 rows invited the floor to pair ~50 phones for no
+                    reason, which is exactly what happened. Do not put it back on every row. */}
+                {d.is_attendance_device ? (
+                  <button onClick={() => mintPair(d.device_code)} disabled={busy}
+                    title="Mints an 8-digit code to type into the Scanner app on the gate phone. Single use, expires in 15 minutes."
+                    style={{ ...btnCss, color: '#F2CD1A', borderColor: 'rgba(242,205,26,.45)' }}>
+                    {busy ? '…' : d.has_key ? 'Re-pair this phone' : 'Pair this phone'}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 11, opacity: .55, alignSelf: 'center' }}>
+                    No pairing needed — only the attendance gate phone is paired.
+                  </span>
+                )}
                 {dirty && (
                   <button onClick={() => saveDevice(d.device_code, {
                             label:   val('label'),
