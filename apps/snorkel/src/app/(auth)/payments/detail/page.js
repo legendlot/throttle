@@ -8,6 +8,7 @@ import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { STATUS_TONE, STATUS_LABEL, money } from '../PaymentList.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
+import { computeTds, netPayable, hasTds } from '@/lib/tds.js';
 
 export default function PaymentRequestDetail() {
   const sp = useSearchParams();
@@ -23,7 +24,8 @@ export default function PaymentRequestDetail() {
   const [holdOpen, setHoldOpen] = useState(false);
   const [holdNote, setHoldNote] = useState('');
   const [payOpen, setPayOpen] = useState(false);
-  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '' });
+  // tds_rate is the % as typed. '' = TDS not applicable — it is NOT 0, and nothing is sent.
+  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '', tds_rate: '' });
   const [proof, setProof] = useState([]);
   const [invOpen, setInvOpen] = useState(false);
   const [inv, setInv] = useState([]);
@@ -122,6 +124,9 @@ export default function PaymentRequestDetail() {
   }
 
   async function confirmPaid() {
+    // Refuse here what the worker would refuse anyway, so finance sees WHY without a round-trip.
+    const tdsCheck = computeTds({ invoiceTotal: d?.request?.invoice_total, rate: pay.tds_rate.trim() });
+    if (tdsCheck.error) return showToast(tdsCheck.error, 'error');
     setBusy(true);
     try {
       const s = await getValidSession();
@@ -129,6 +134,9 @@ export default function PaymentRequestDetail() {
         ids: [Number(id)], payment_ref: pay.payment_ref || null,
         payment_mode: pay.payment_mode || null,
         paid_amount: pay.paid_amount === '' ? null : Number(pay.paid_amount),
+        // Rate only — the worker derives tds_amount from invoice_total and never trusts a
+        // client-sent figure. Omitted entirely when blank, which leaves both columns NULL.
+        ...(pay.tds_rate.trim() === '' ? {} : { tds_rate: Number(pay.tds_rate) }),
       } }, s);
       // proof attaches to the request, which is what removes the "is it done?" round-trip
       for (const item of proof) await uploadPaymentDoc(item, 'payment_proof', s);
@@ -190,6 +198,14 @@ export default function PaymentRequestDetail() {
               <>
                 <Row k="Paid" v={`${r.paid_by_name || '—'} · ${fmtDateShort(r.paid_at)}`} />
                 <Row k="Reference / UTR" v={r.payment_ref} />
+                {/* Only when TDS actually applies. A NULL rate renders NOTHING — never "0%"
+                    or "₹0", which would read as a deduction that was never made. */}
+                {hasTds(r) && (
+                  <>
+                    <Row k="TDS" v={`${Number(r.tds_rate)}% on ${money(r.invoice_total, r.currency)} = ${money(r.tds_amount, r.currency)}`} />
+                    <Row k="Net released" v={money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount: r.tds_amount }), r.currency)} />
+                  </>
+                )}
                 <Row k="Paid amount" v={r.paid_amount != null ? money(r.paid_amount, r.currency) : null} />
               </>
             )}
@@ -355,6 +371,30 @@ export default function PaymentRequestDetail() {
               {['neft','rtgs','imps','upi','card','auto_debit','cash','other'].map(m =>
                 <option key={m} value={m}>{m.toUpperCase()}</option>)}
             </select>
+            {/* TDS rate only — the amount is derived, never typed (Priya, 2026-09-09). Blank
+                means not applicable: nothing is stored and the payment behaves as it always has.
+                Typing a rate re-defaults Amount paid to the net; finance can still adjust it. */}
+            <label style={{ fontSize: 12, color: 'var(--t2)' }}>TDS rate % (optional)</label>
+            <input type="number" inputMode="decimal" min={0} max={100} step="0.01"
+              value={pay.tds_rate}
+              onChange={e => {
+                const rate = e.target.value;
+                const { tdsAmount } = computeTds({ invoiceTotal: r.invoice_total, rate: rate.trim() });
+                const net = netPayable({ amountToPay: r.amount_to_pay, tdsAmount });
+                setPay(p => ({ ...p, tds_rate: rate,
+                               paid_amount: net == null ? p.paid_amount : String(net) }));
+              }}
+              style={{ width: '100%', padding: 10, fontSize: 16, borderRadius: 8, marginBottom: 4,
+                       border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }} />
+            {pay.tds_rate.trim() !== '' && (() => {
+              const { tdsAmount, error } = computeTds({ invoiceTotal: r.invoice_total, rate: pay.tds_rate.trim() });
+              return (
+                <div style={{ fontSize: 12, marginBottom: 12,
+                              color: error ? 'var(--red-fg)' : 'var(--t2)' }}>
+                  {error || `TDS ${money(tdsAmount, r.currency)} on ${money(r.invoice_total, r.currency)} · net ${money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount }), r.currency)}`}
+                </div>
+              );
+            })()}
             <label style={{ fontSize: 12, color: 'var(--t2)' }}>Amount paid</label>
             <input type="number" inputMode="decimal" value={pay.paid_amount}
               onChange={e => setPay(p => ({ ...p, paid_amount: e.target.value }))}

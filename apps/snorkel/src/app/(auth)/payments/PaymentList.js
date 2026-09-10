@@ -7,6 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { STATUS_TABS, isINR, filterByTab, valueRowsForTab, otherStatusRows } from '@/lib/paymentList.js';
+import { netPayable, hasTds } from '@/lib/tds.js';
 
 export const STATUS_TONE = {
   submitted: 'gray', pending_approval: 'yellow', approved: 'blue', held: 'orange',
@@ -226,7 +227,17 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                       </td>
                       <td>{r.payee?.name || '—'}</td>
                       <td style={{ maxWidth: 260 }}>{r.purpose}</td>
-                      <td style={{ textAlign: 'right' }}>{money(r.amount_to_pay, r.currency)}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        {money(r.amount_to_pay, r.currency)}
+                        {/* Only where TDS applies — a NULL rate renders nothing at all, never
+                            "0%", which would read as a deduction nobody made. */}
+                        {hasTds(r) && (
+                          <div style={{ fontSize: 10, color: 'var(--t2)' }}>
+                            less {Number(r.tds_rate)}% TDS · net{' '}
+                            {money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount: r.tds_amount }), r.currency)}
+                          </div>
+                        )}
+                      </td>
                       <td>{r.needed_by ? fmtDateShort(r.needed_by) : '—'}</td>
                       <td>
                         <Badge tone={STATUS_TONE[r.status]} label={STATUS_LABEL[r.status]} />

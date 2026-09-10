@@ -1250,6 +1250,33 @@ function computePoTax(lines, currency, vendorGstin = null, companyGstin = PO_DEF
     showGst: true, isCgstSgst, halfRate, fullRate };
 }
 
+// ⚠️⚠️ TDS — VERBATIM PORT of computeTds from apps/snorkel/src/lib/tds.js. ⚠️⚠️
+// Finance sees a number on screen before it clicks Mark paid; the worker stores the number it
+// derives ITSELF from invoice_total, and the two must agree to the paisa — so change these two
+// together. The spec both sides satisfy is snorkelops-worker/test/tds.test.mjs, which imports
+// the app-side copy. The worker is a zero-import single file and cannot import out of apps/.
+// The amount is NEVER taken from the client: a hand-entered rupee figure is the exact error
+// class this field was asked for (Priya, 2026-09-09) — see reference/decisions.md.
+function tdsNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function computeTds({ invoiceTotal, rate }) {
+  const r = tdsNum(rate);
+  if (r === null) {
+    // Absent = not applicable. Unparseable ('12x') is an error, never a silent "no TDS".
+    if (rate === null || rate === undefined || rate === '') return { tdsAmount: null, error: null };
+    return { tdsAmount: null, error: 'TDS rate must be a number' };
+  }
+  if (r < 0 || r > 100) return { tdsAmount: null, error: 'TDS rate must be between 0 and 100' };
+  const total = tdsNum(invoiceTotal);
+  if (total === null) return { tdsAmount: null, error: 'TDS needs an invoice total to compute on' };
+  if (total < 0) return { tdsAmount: null, error: 'Invoice total cannot be negative' };
+  // + Number.EPSILON so 1.005 does not round down; the column is numeric(…,2)-shaped money.
+  return { tdsAmount: Math.round((total * r / 100 + Number.EPSILON) * 100) / 100, error: null };
+}
+
 // Presentation helpers — also mirrored from the print page.
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -4462,6 +4489,26 @@ export default {
               status: 'paid', paid_by_user_id: userId, paid_by_name: authResult?.fullName || null,
               paid_at: now, updated_at: now,
             };
+
+            // TDS (optional). Finance sends a RATE; the AMOUNT is derived here from the row's own
+            // invoice_total and never read off the payload — a client-sent rupee figure is the
+            // error class the field exists to close. NULL rate = not applicable: the request is
+            // paid exactly as it was before this field existed, with both columns left NULL.
+            // ⛔ One id only when a rate is sent: this PATCH is a single batched write, but
+            // tds_amount is per-invoice, so one rate across several rows would write one row's
+            // deduction onto all of them. Both UI callers send a single id.
+            if (d.tds_rate !== undefined && d.tds_rate !== null && d.tds_rate !== '') {
+              if (ids.length !== 1) return err('TDS applies to one payment at a time — mark these paid individually');
+              const inv = await query('payment_requests',
+                `?id=eq.${encodeURIComponent(ids[0])}&select=invoice_total&limit=1`);
+              if (!inv.ok || !inv.data[0]) return err('Not found', 404);
+              const { tdsAmount, error: tdsError } = computeTds({
+                invoiceTotal: inv.data[0].invoice_total, rate: d.tds_rate,
+              });
+              if (tdsError) return err(tdsError);
+              patch.tds_rate   = Number(d.tds_rate);
+              patch.tds_amount = tdsAmount;
+            }
             if (d.payment_ref)   patch.payment_ref   = d.payment_ref;
             if (d.payment_mode)  patch.payment_mode  = d.payment_mode;
             if (d.payment_note)  patch.payment_note  = d.payment_note;

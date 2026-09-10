@@ -7,6 +7,7 @@ import { Spinner, useToast, Modal } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { money } from '../PaymentList.js';
+import { computeTds, netPayable } from '@/lib/tds.js';
 
 const todayISO = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -37,6 +38,9 @@ export default function FinanceQueuePage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
   const [refs, setRefs] = useState({});
+  // TDS rate per row, as typed (a string). Empty = not applicable — NOT zero, so it must stay
+  // out of the payload entirely rather than going down as 0.
+  const [tdsRates, setTdsRates] = useState({});
   const [onlyUrgent, setOnlyUrgent] = useState(false);
   // ⚠️ getFinanceQueue admits execute OR super_admin, but markPaymentPaid requires EXECUTE alone
   // (snorkelops:3932). So a super admin could open this queue and click a Mark-paid button that
@@ -127,11 +131,19 @@ export default function FinanceQueuePage() {
   }
 
   async function pay(r) {
+    const rate = (tdsRates[r.id] ?? '').trim();
+    // Refuse here what the worker would refuse anyway, so finance sees WHY before the round-trip.
+    const { tdsAmount, error } = computeTds({ invoiceTotal: r.invoice_total, rate });
+    if (error) return showToast(error, 'error');
     setBusy(r.id);
     try {
       const s = await getValidSession();
       const raw = await workerFetch('markPaymentPaid', { data: {
-        ids: [r.id], payment_ref: (refs[r.id] || '').trim() || null, paid_amount: r.amount_to_pay,
+        ids: [r.id], payment_ref: (refs[r.id] || '').trim() || null,
+        // The net is what actually leaves the bank. With no TDS this is amount_to_pay, unchanged.
+        paid_amount: netPayable({ amountToPay: r.amount_to_pay, tdsAmount }),
+        // Rate only — the worker derives the amount from invoice_total and never trusts ours.
+        ...(rate === '' ? {} : { tds_rate: Number(rate) }),
       } }, s);
       // snorkelops wraps replies as `{ ok, data }` — read the payload. Off the wrapper, `paid` was
       // undefined and EVERY successful payment toasted "It had already moved" (hostile review S345).
@@ -142,6 +154,7 @@ export default function FinanceQueuePage() {
         showToast(`${r.request_no} marked paid`, 'success');
       }
       setRefs(p => { const n = { ...p }; delete n[r.id]; return n; });
+      setTdsRates(p => { const n = { ...p }; delete n[r.id]; return n; });
       await load();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
@@ -209,6 +222,11 @@ export default function FinanceQueuePage() {
         const bank = (d.banks[r.payee_id] || [])[0];
         const docs = d.documents[r.id] || [];
         const late = r.needed_by && r.needed_by < todayISO();
+        // Live as the rate is typed — finance sees the deduction and the net BEFORE committing,
+        // which is the only version of "avoid TDS-related errors" that holds.
+        const rate = (tdsRates[r.id] ?? '').trim();
+        const tdsPreview = computeTds({ invoiceTotal: r.invoice_total, rate });
+        const net = netPayable({ amountToPay: r.amount_to_pay, tdsAmount: tdsPreview.tdsAmount });
         return (
           <Panel key={r.id} title={`${r.request_no} · ${r.payee?.name || 'Unknown payee'}`}>
             <div style={{ padding: 16, display: 'grid', gap: 14,
@@ -283,12 +301,32 @@ export default function FinanceQueuePage() {
                     placeholder="UTR / reference"
                     value={refs[r.id] || ''}
                     onChange={e => setRefs(p => ({ ...p, [r.id]: e.target.value }))} />
-                  <Btn kind="primary" disabled={busy === r.id} onClick={() => pay(r)}>
+                  {/* Finance types the RATE only. Leave it blank when TDS does not apply — blank
+                      is NOT 0%, and nothing is stored. The amount below is derived, never typed,
+                      which is the whole point of the field (Priya, 2026-09-09). */}
+                  <input style={{ ...inp, width: 120 }} type="number" inputMode="decimal"
+                    min={0} max={100} step="0.01"
+                    placeholder="TDS %"
+                    value={tdsRates[r.id] ?? ''}
+                    onChange={e => setTdsRates(p => ({ ...p, [r.id]: e.target.value }))} />
+                  <Btn kind="primary" disabled={busy === r.id || !!tdsPreview.error} onClick={() => pay(r)}>
                     {busy === r.id ? 'Saving…' : 'Mark paid'}
                   </Btn>
                   {canHold && (
                     <Btn disabled={busy === r.id}
                       onClick={() => { setHoldFor(r); setHoldNote(''); }}>Hold</Btn>
+                  )}
+                  {/* Nothing renders with a blank rate — a request without TDS must look exactly
+                      as it did before this field existed. */}
+                  {rate !== '' && (
+                    <div style={{ flexBasis: '100%', fontSize: 12,
+                                  color: tdsPreview.error ? 'var(--red-fg)' : 'var(--t2)' }}>
+                      {tdsPreview.error
+                        ? tdsPreview.error
+                        : <>TDS {rate}% on {money(r.invoice_total, r.currency)} ={' '}
+                           {money(tdsPreview.tdsAmount, r.currency)} · net{' '}
+                           <b>{money(net, r.currency)}</b></>}
+                    </div>
                   )}
                 </div>
               ) : (
