@@ -30,7 +30,7 @@
 // ════════════════════════════════════════════════════════════════════
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
-import { workerFetch, getValidSession } from '@throttle/db';
+import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Smartphone, RefreshCw, Search, Lock, Unlock, KeyRound, ShieldAlert } from 'lucide-react';
 
@@ -143,18 +143,27 @@ export default function DevicesPage() {
       const s = await getValidSession();
       // ONE call for the register, the hardware, the bindings and the census. The second call
       // is only for the two display-only toggles' dry run, which getDeviceHw owns.
-      const [r, hwR] = await Promise.all([
-        workerFetch('getDeviceFleet', {}, s),
+      // ⛔ `getDeviceFleet` IS A **GET** HANDLER — it lives in worker.js's `switch (action)`
+      // (the URL `?action=` router), NOT the POST `switch (body.action)` one. So it MUST go
+      // through `garageFetch`. Calling it with `workerFetch` fell through the POST switch to
+      // "Unknown action" and came back 400, which rendered as an EMPTY register — "Phones (0)"
+      // on a floor with 67 device rows. Caught by the browser smoke, not by any build or test:
+      // both helpers type-check identically and the page still rendered.
+      // ⚠️ THE TWO HELPERS HAVE DIFFERENT CONTRACTS, so this is not a one-word swap:
+      //   garageFetch → GET, **unwraps to `body.data`** and **THROWS** on a non-2xx
+      //   workerFetch → POST, returns the RAW envelope `{ ok, data, error }`
+      // Hence no `.ok` test on the fleet (a failure lands in the catch below), and `getDeviceHw`
+      // keeps its envelope check unchanged — it is genuinely a POST handler.
+      const [fleet, hwR] = await Promise.all([
+        garageFetch('getDeviceFleet', {}, s),
         workerFetch('getDeviceHw', {}, s),
       ]);
-      if (r?.ok) {
-        setDevices(r.data?.devices || []);
-        setHw(r.data?.hw || []);
-        setBind(r.data?.bindings || []);
-        setCensus(r.data?.census || null);
-        setCaps(r.data?.caps || null);
-        setSet(r.data?.settings || {});
-      } else toast?.error?.(r?.error || 'Could not load the fleet');
+      setDevices(fleet?.devices || []);
+      setHw(fleet?.hw || []);
+      setBind(fleet?.bindings || []);
+      setCensus(fleet?.census || null);
+      setCaps(fleet?.caps || null);
+      setSet(fleet?.settings || {});
       // ⚠️ getDeviceHw is users_manage, getDeviceFleet is super_admin — so this one can
       // succeed while the other 403s, and never the reverse. A missing dry run only costs the
       // two flag counts, so it is not treated as an error.
