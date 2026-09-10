@@ -1277,6 +1277,70 @@ function computeTds({ invoiceTotal, rate }) {
   return { tdsAmount: Math.round((total * r / 100 + Number.EPSILON) * 100) / 100, error: null };
 }
 
+// ⚠️⚠️ delivery_address_id — VERBATIM PORT of apps/snorkel/src/lib/deliveryAddress.js. ⚠️⚠️
+// THREE doors write purchase_orders.delivery_address_id (postPO, amendPO,
+// changePODeliveryAddress) and each used to carry its own copy of these checks — which is how
+// three defects shipped in one day (2026-09-10). The single written statement is the app-side
+// file; the worker is a zero-import single file and cannot import out of apps/, so this is a
+// copy that must be changed TOGETHER with it. The spec both sides satisfy is
+// snorkelops-worker/test/po-delivery-address.test.mjs, which imports the app-side copy.
+// ⚠️ These are pure DECISIONS, and half the contract is ORDER: the caller must return on a
+// terminal decision BEFORE it writes anything — in amendPO that means before the po_revisions
+// snapshot, because a rejected amend that has already snapshotted leaves an orphan revision row.
+// No test at this level can see that; only the placement in the handler can.
+// The modes differ ON PURPOSE — see the app-side comment: 'create' trims before the blank test
+// (a PO with no address is normal), 'amend' treats a STRICT null/'' as a destructive CLEAR and
+// is the only mode that rejects arrays/objects on TYPE, 'change' exists only to SET so blank is
+// a missing required field.
+function parseDeliveryAddressId(raw, mode) {
+  if (mode === 'create') {
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      return { action: 'skip', id: null };
+    }
+  } else if (mode === 'amend') {
+    if (raw === undefined) return { action: 'skip', id: null };
+    if (raw === null || raw === '') return { action: 'clear', id: null };
+    // String([2]) === '2' passes the regex below and would resolve to a real address the caller
+    // never named, so arrays and objects are rejected on TYPE.
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
+    }
+  } else if (mode === 'change') {
+    if (raw === undefined || raw === null || raw === '') {
+      return { action: 'reject', error: 'delivery_address_id required', status: 400 };
+    }
+  }
+  // parseInt COERCES ('2abc' → 2, 2.9 survives Number.isFinite), so the digits are checked with a
+  // regex FIRST and the PARSED number is what gets written, never the raw payload value.
+  if (!/^\d+$/.test(String(raw).trim())) {
+    return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
+  }
+  const id = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(id)) {
+    return { action: 'reject', error: 'delivery_address_id must be an id', status: 422 };
+  }
+  return { action: 'lookup', id };
+}
+function decideDeliveryAddress({ mode, id, lookupOk, address, currentId = null }) {
+  // A failed lookup is not a missing address — blaming the transport failure on the id sends the
+  // caller off to fix a row that is fine.
+  if (!lookupOk) return { action: 'reject', error: 'Address lookup failed', status: 502 };
+  if (!address) return { action: 'reject', error: 'Delivery address not found', status: 404 };
+  // The no-op exemption runs BEFORE the active check (S360 #11): re-sending the PO's OWN address
+  // changes nothing and must survive that address being deactivated later.
+  const isCurrent = currentId != null && Number(currentId) === id;
+  if (isCurrent) {
+    if (mode === 'change') return { action: 'noop', id, address };
+    return { action: 'accept', id, address };
+  }
+  // A PO must never point at a deactivated address — the print letterhead and the "where to
+  // ship" answer both read this row straight out.
+  if (!address.active) {
+    return { action: 'reject', error: `${address.label} is deactivated — pick an active address`, status: 400 };
+  }
+  return { action: 'accept', id, address };
+}
+
 // Presentation helpers — also mirrored from the print page.
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -3310,30 +3374,25 @@ export default {
             if (mouldViolC.length) return moulderPaintedPartError(d.vendor_name, mouldViolC);
             // delivery_address_id needs the same checks changePODeliveryAddress and amendPO run —
             // this is the THIRD door onto the same column (PO creation itself), and a raw payload
-            // copy would let a PO be created pointing at a deleted or deactivated address. Only
-            // runs when the field is actually sent; null/absent stays a legitimate "no delivery
-            // address" and must keep working.
-            // '' means CLEAR (write null), not "not sent": the address <select>'s empty option
-            // posts '', and the old pre-check skipped the guard on '' and then sent '' straight
-            // into an int8 column (22P02). changePODeliveryAddress refuses '' instead because
-            // clearing is not what that action is for; creating a PO with no address is normal.
+            // copy would let a PO be created pointing at a deleted or deactivated address. The
+            // shared decision is parseDeliveryAddressId/decideDeliveryAddress above (spec:
+            // apps/snorkel/src/lib/deliveryAddress.js). Mode 'create' trims before the blank test
+            // — the address <select>'s empty option posts '', and creating a PO with no address
+            // is normal; changePODeliveryAddress refuses '' instead because clearing is not what
+            // that action is for. It runs HERE, before nextSeq, so a refusal burns no PO number.
             let newPoDeliveryAddressId = null;
-            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null
-                && String(d.delivery_address_id).trim() !== '') {
-              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
-                return err('delivery_address_id must be an id', 422);
-              }
-              const newPoAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
-              if (!Number.isFinite(newPoAddrId)) return err('delivery_address_id must be an id', 422);
-              const newPoAddrR = await query('company_addresses', `?id=eq.${newPoAddrId}&limit=1`);
-              // A failed lookup is not a missing address — see amendPO.
-              if (!newPoAddrR.ok) return err('Address lookup failed', 502);
-              const newPoAddr = newPoAddrR.data?.[0] || null;
-              if (!newPoAddr) return err('Delivery address not found', 404);
-              if (!newPoAddr.active) return err(`${newPoAddr.label} is deactivated — pick an active address`, 400);
+            const newPoAddrParse = parseDeliveryAddressId(d.delivery_address_id, 'create');
+            if (newPoAddrParse.action === 'reject') return err(newPoAddrParse.error, newPoAddrParse.status);
+            if (newPoAddrParse.action === 'lookup') {
+              const newPoAddrR = await query('company_addresses', `?id=eq.${newPoAddrParse.id}&limit=1`);
+              const newPoAddrD = decideDeliveryAddress({
+                mode: 'create', id: newPoAddrParse.id, lookupOk: newPoAddrR.ok,
+                address: newPoAddrR.data?.[0] || null, currentId: null,
+              });
+              if (newPoAddrD.action === 'reject') return err(newPoAddrD.error, newPoAddrD.status);
               // Write the PARSED number, as changePODeliveryAddress does — `[2]` passes the regex
               // via String() and resolves to a real address, but must never reach int8 raw.
-              newPoDeliveryAddressId = newPoAddrId;
+              newPoDeliveryAddressId = newPoAddrD.id;
             }
             const srcCode  = countryToISO(d.source||'Other');
             const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
@@ -3603,39 +3662,26 @@ export default {
             // '' and creating a PO with no address is normal, so anything blank-ish is a
             // no-address create. Here it is a DESTRUCTIVE overwrite of a stored address, so
             // '   ', [] and [null] (all '' after String()+trim) must be refused, not obeyed:
-            // no caller means "wipe the delivery address" by sending whitespace.
-            const amendAddressSent = d.delivery_address_id !== undefined;
-            const amendAddressClear = d.delivery_address_id === null || d.delivery_address_id === '';
+            // no caller means "wipe the delivery address" by sending whitespace. Mode 'amend' of
+            // the shared decision above (spec: apps/snorkel/src/lib/deliveryAddress.js) is the
+            // only mode that rejects arrays/objects on TYPE for exactly that reason.
+            const amendAddrParse = parseDeliveryAddressId(d.delivery_address_id, 'amend');
+            if (amendAddrParse.action === 'reject') return err(amendAddrParse.error, amendAddrParse.status);
+            const amendAddressSent = amendAddrParse.action !== 'skip';
             let amendDeliveryAddressId = null;
-            if (amendAddressSent && !amendAddressClear) {
-              // Only a string or a number can be an id. Arrays and objects are rejected on TYPE,
-              // because String([2]) === '2' passes the regex below and would resolve to a real
-              // address the caller never named.
-              if (typeof d.delivery_address_id !== 'string' && typeof d.delivery_address_id !== 'number') {
-                return err('delivery_address_id must be an id', 422);
-              }
-              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
-                return err('delivery_address_id must be an id', 422);
-              }
-              const amendAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
-              if (!Number.isFinite(amendAddrId)) return err('delivery_address_id must be an id', 422);
-              const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrId}&limit=1`);
-              // A failed lookup is not a missing address — blaming the transport failure on the
-              // id sends the caller off to fix a row that is fine.
-              if (!amendAddrR.ok) return err('Address lookup failed', 502);
-              const amendAddr = amendAddrR.data?.[0] || null;
-              if (!amendAddr) return err('Delivery address not found', 404);
-              // Mirrors changePODeliveryAddress's S360 #11 exemption: re-sending the PO's OWN
-              // address is a no-op and must survive that address being deactivated later. A
-              // client that echoes the PO header back on amend would otherwise lose its vendor,
-              // terms and date edits to a 400 on a field it never changed.
-              const amendAddrIsCurrent =
-                po.delivery_address_id != null && Number(po.delivery_address_id) === amendAddrId;
-              if (!amendAddrIsCurrent && !amendAddr.active) {
-                return err(`${amendAddr.label} is deactivated — pick an active address`, 400);
-              }
+            if (amendAddrParse.action === 'lookup') {
+              const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrParse.id}&limit=1`);
+              // `currentId` carries the S360 #11 exemption: re-sending the PO's OWN address is a
+              // no-op and must survive that address being deactivated later. A client that echoes
+              // the PO header back on amend would otherwise lose its vendor, terms and date edits
+              // to a 400 on a field it never changed.
+              const amendAddrD = decideDeliveryAddress({
+                mode: 'amend', id: amendAddrParse.id, lookupOk: amendAddrR.ok,
+                address: amendAddrR.data?.[0] || null, currentId: po.delivery_address_id,
+              });
+              if (amendAddrD.action === 'reject') return err(amendAddrD.error, amendAddrD.status);
               // The PARSED number is what gets written, never the raw payload value.
-              amendDeliveryAddressId = amendAddrId;
+              amendDeliveryAddressId = amendAddrD.id;
             }
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
             // The full-line-replace guards run HERE, with the other pre-insert guards, not down
@@ -3758,8 +3804,15 @@ export default {
             if (!canRaisePO(P)) return err('No permission to change the delivery address', 403);
             const d = body.data || {};
             if (!d.po_number) return err('po_number required');
-            if (d.delivery_address_id === undefined || d.delivery_address_id === null || d.delivery_address_id === '') {
-              return err('delivery_address_id required');
+            // Mode 'change' of the shared decision (spec: apps/snorkel/src/lib/deliveryAddress.js)
+            // — this action exists only to SET an address, so blank is a missing required field,
+            // never a clear. Parsed ONCE here, but the rejection is surfaced in TWO places to
+            // keep the response codes this door already gives: the missing-field 400 comes back
+            // before the PO is even read, the malformed-id 422 only after the status guards below
+            // (a Cancelled PO answers "cannot be amended", as it always has).
+            const changeAddrParse = parseDeliveryAddressId(d.delivery_address_id, 'change');
+            if (changeAddrParse.action === 'reject' && changeAddrParse.status === 400) {
+              return err(changeAddrParse.error, changeAddrParse.status);
             }
             const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
             if (!existing.ok||!existing.data[0]) return err('PO not found');
@@ -3779,28 +3832,26 @@ export default {
               return err('Soft POs are promoted, not amended — use Promote', 400);
             }
             // S360 hostile review #7: parseInt COERCES — parseInt('2abc',10)===2, and [2] and 2.9
-            // all survive Number.isFinite and would resolve to a real address. amendPO passes the
-            // value raw so Postgres rejects it with 22P02; this door has to reject it itself or it
-            // is LOOSER than the action it claims to mirror.
-            if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
-              return err('delivery_address_id must be an id', 422);
-            }
-            const newAddrId = parseInt(d.delivery_address_id, 10);
-            if (!Number.isFinite(newAddrId)) return err('delivery_address_id must be an id', 422);
+            // all survive Number.isFinite and would resolve to a real address. The regex-first
+            // parse that refuses them lives in parseDeliveryAddressId; this is where its 422
+            // surfaces (see the split noted at the top of this case).
+            if (changeAddrParse.action === 'reject') return err(changeAddrParse.error, changeAddrParse.status);
+            const newAddrId = changeAddrParse.id;
             // A PO must never point at a deactivated address — the print letterhead and the
-            // "where to ship" answer both read this row straight out.
+            // "where to ship" answer both read this row straight out. S360 hostile review #11:
+            // the no-op check runs BEFORE the active check inside decideDeliveryAddress, so
+            // re-submitting a PO's own address stays a no-op even if it has since been
+            // deactivated — refusing there would error on a request that changes nothing.
             const addrR = await query('company_addresses', `?id=eq.${newAddrId}&limit=1`);
-            // A failed lookup is not a missing address — see amendPO.
-            if (!addrR.ok) return err('Address lookup failed', 502);
-            const newAddr = addrR.data?.[0] || null;
-            if (!newAddr) return err('Delivery address not found', 404);
-            // S360 hostile review #11: the no-op check runs BEFORE the active check on purpose.
-            // Re-submitting a PO's own address must stay a no-op even if that address has since
-            // been deactivated — refusing there would error on a request that changes nothing.
-            if (po.delivery_address_id != null && Number(po.delivery_address_id) === newAddrId) {
+            const changeAddrD = decideDeliveryAddress({
+              mode: 'change', id: newAddrId, lookupOk: addrR.ok,
+              address: addrR.data?.[0] || null, currentId: po.delivery_address_id,
+            });
+            if (changeAddrD.action === 'reject') return err(changeAddrD.error, changeAddrD.status);
+            const newAddr = changeAddrD.address;
+            if (changeAddrD.action === 'noop') {
               return ok({ po_number: d.po_number, changed: false, delivery_address: newAddr });
             }
-            if (!newAddr.active) return err(`${newAddr.label} is deactivated — pick an active address`, 400);
             let oldAddr = null;
             if (po.delivery_address_id) {
               const oaR = await query('company_addresses', `?id=eq.${po.delivery_address_id}&limit=1`);
