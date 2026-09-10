@@ -53,6 +53,31 @@ test('an out-of-range or non-numeric rate is rejected, never silently ignored', 
   assert.equal(computeTds({ invoiceTotal: 1000, rate: 100 }).tdsAmount, 1000);
 });
 
+// S370 (hostile review): Number() coerces non-scalars, so before the TYPE guard `rate: []`
+// returned {tdsAmount: 0} with no error, `true` gave 1%, `[5]` gave 5% and `false` gave 0.
+// A 0 is not a harmless default here — hasTds() calls it real, the UIs render "less 0% TDS"
+// and the Tally-bound payments export writes it into a column Finance reconciles against a
+// bank. Same guard shape as parseDeliveryAddressId, same class of defect, same day.
+test('a non-scalar rate is REJECTED on type, never coerced into a false 0%', () => {
+  for (const rate of [true, false, [], [5], ['5'], {}, () => 5]) {
+    const { tdsAmount, error } = computeTds({ invoiceTotal: 1000, rate });
+    assert.equal(error, 'TDS rate must be a number', `rate ${JSON.stringify(rate)} must be rejected`);
+    assert.equal(tdsAmount, null);
+  }
+});
+
+test('the type guard does not swallow the two states that already worked', () => {
+  // '' and null still mean "not applicable": no error, no amount.
+  for (const rate of [null, undefined, '']) {
+    const { tdsAmount, error } = computeTds({ invoiceTotal: 1000, rate });
+    assert.equal(error, null);
+    assert.equal(tdsAmount, null);
+  }
+  // '12x' still errors, and a numeric string still computes.
+  assert.equal(computeTds({ invoiceTotal: 1000, rate: '12x' }).error, 'TDS rate must be a number');
+  assert.equal(computeTds({ invoiceTotal: 1000, rate: '2' }).tdsAmount, 20);
+});
+
 test('a rate with no invoice total to compute on is refused, not treated as zero', () => {
   const { tdsAmount, error } = computeTds({ invoiceTotal: null, rate: 10 });
   assert.ok(error);

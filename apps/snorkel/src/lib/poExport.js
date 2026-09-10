@@ -53,13 +53,18 @@ export const PO_LINES_COLUMNS = [
 // header export; `linesByPo` is the worker's already-gated payload. POs with no lines in the
 // payload contribute no row — this is a line-level file, and the header export is what covers
 // "which POs exist". The truncation marker in the filename is what says a PO could be missing.
-export function buildPoLinesCsv({ filteredRows, linesByPo, canChina }) {
+// ⚠️ `vendorByPo` (po_number → vendor_code) comes from the worker, NOT from `filteredRows`:
+// those are `store.po_summary` rows and that view has NO vendor_code column (23 columns,
+// verified against information_schema 2026-09-10), so reading `p.vendor_code` here shipped an
+// empty cell on every row of every export. Absent from the map = blank, never `undefined`.
+export function buildPoLinesCsv({ filteredRows, linesByPo, vendorByPo, canChina }) {
   const rows = [PO_LINES_COLUMNS.join(',')];
   for (const p of filteredRows || []) {
     const restricted = p.source === 'China' && !canChina;
     for (const l of (linesByPo?.[p.po_number] || [])) {
       rows.push([
-        p.po_number, p.revision || 0, p.order_type, p.source, p.vendor_name, p.vendor_code,
+        p.po_number, p.revision || 0, p.order_type, p.source, p.vendor_name,
+        vendorByPo?.[p.po_number] || '',
         p.status, p.expected_delivery || '',
         l.line_no ?? '', l.part_code || '', l.description || '',
         l.product || '', l.variant || '', l.color || '',

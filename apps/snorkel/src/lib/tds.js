@@ -33,12 +33,30 @@ export function round2(v) {
 // A part payment (amount_to_pay < invoice_total) is the case flagged back to Priya — see
 // reference/decisions.md, "Payment-request TDS".
 export function computeTds({ invoiceTotal, rate }) {
-  const r = num(rate);
-  if (r === null) {
-    // Distinguish "absent" from "unparseable": '12x' must not silently mean no TDS.
-    if (rate === null || rate === undefined || rate === '') return { tdsAmount: null, error: null };
+  // Absent = not applicable. Checked FIRST, because `null` is typeof 'object' and would be
+  // caught by the type guard below.
+  // ⚠️ WHITESPACE COUNTS AS ABSENT, and that is not cosmetic: `Number('  ') === 0`, so a
+  // space-only rate used to write a REAL "0% TDS applied" — the same Number('')===0
+  // false-positive this workspace has been bitten by before, and the same consequence as the
+  // non-scalar case below. Not reachable from the UI (the client `.trim()`s before sending) but
+  // reachable by any direct POST. Trim only for the ABSENT test; the raw value still flows on,
+  // so '  5  ' keeps working.
+  if (rate === null || rate === undefined ||
+      (typeof rate === 'string' && rate.trim() === '')) {
+    return { tdsAmount: null, error: null };
+  }
+  // S370: reject on TYPE before coercing — same guard shape, and the same defect class, as
+  // parseDeliveryAddressId in deliveryAddress.js (fixed the same day). Number() coerces:
+  // `[]`→0, `true`→1, `[5]`→5, `false`→0, so a non-scalar payload used to write a FALSE
+  // "0% TDS applied". A 0 here is NOT harmless — hasTds() calls it real, the UIs render
+  // "less 0% TDS" and buildPaymentsExportCsv writes it into a column Finance reconciles
+  // against a bank statement.
+  if (typeof rate !== 'string' && typeof rate !== 'number') {
     return { tdsAmount: null, error: 'TDS rate must be a number' };
   }
+  const r = num(rate);
+  // Unparseable: '12x' must not silently mean no TDS.
+  if (r === null) return { tdsAmount: null, error: 'TDS rate must be a number' };
   if (r < 0 || r > 100) return { tdsAmount: null, error: 'TDS rate must be between 0 and 100' };
   const total = num(invoiceTotal);
   if (total === null) return { tdsAmount: null, error: 'TDS needs an invoice total to compute on' };

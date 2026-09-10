@@ -158,6 +158,9 @@ export default function POListPage() {
       setExportingLines(false);
     }
     const linesByPo = payload?.linesByPo || {};
+    // po_summary carries no vendor_code (23 columns, not among them), so the Vendor Code column
+    // can only come from the worker's purchase_orders read — never from `filteredRows`.
+    const vendorByPo = payload?.vendorByPo || {};
     // ⚠️ TWO ways this file can be short and only one of them is the S334 one: the PO list may
     // have been cut at PO_PAGE_LIMIT, or the LINE read may have been cut at its own cap. Either
     // makes the file partial, and a partial line file is the more dangerous of the two — a PO
@@ -171,7 +174,7 @@ export default function POListPage() {
               ? `${truncation.total} purchase orders match your filters, but only the first ${truncation.limit} were loaded. `
               : `More purchase orders match your filters than the first ${truncation.limit} that were loaded. `)
           : '') +
-        (payload?.truncated
+        (payload?.line_truncated
           ? (payload.total != null
               ? `${payload.total} PO lines exist, but only the first ${payload.limit} were loaded. `
               : `More PO lines exist than the first ${payload.limit} that were loaded. `)
@@ -182,7 +185,7 @@ export default function POListPage() {
     }
     // Built from `filteredRows` so the on-screen text search is honoured, exactly like the
     // header export.
-    const csv = buildPoLinesCsv({ filteredRows, linesByPo, canChina: !!perms?.po_china });
+    const csv = buildPoLinesCsv({ filteredRows, linesByPo, vendorByPo, canChina: !!perms?.po_china });
     const rowCount = csv.split('\n').length - 1;
     if (!rowCount) { showToast('No PO lines to export for these filters', 'error'); return; }
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });

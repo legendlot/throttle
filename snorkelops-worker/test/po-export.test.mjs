@@ -7,15 +7,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gatePoLines, buildPoLinesCsv, PO_LINES_COLUMNS } from '../../apps/snorkel/src/lib/poExport.js';
 
+// ⚠️ These are `store.po_summary` rows, and that view has NO vendor_code column (23 columns,
+// verified against information_schema 2026-09-10). The fixtures used to hand-write one, which is
+// why the suite stayed green while every real export shipped a blank Vendor Code cell. The code
+// now comes from the worker's separate purchase_orders read, as `vendorByPo` below.
 const headers = [
   { po_number: 'IN-PRD-0001', status: 'Approved', source: 'India', revision: 1,
-    order_type: 'Product', vendor_name: 'Acme Ltd', vendor_code: 'V001', expected_delivery: '2026-09-20' },
+    order_type: 'Product', vendor_name: 'Acme Ltd', expected_delivery: '2026-09-20' },
   { po_number: 'CN-PRD-0002', status: 'Sent', source: 'China', revision: 0,
-    order_type: 'Product', vendor_name: 'MJ Toys', vendor_code: 'V002', expected_delivery: '2026-10-01' },
+    order_type: 'Product', vendor_name: 'MJ Toys', expected_delivery: '2026-10-01' },
   { po_number: 'CN-SOFT-0003', status: 'Soft', source: 'China', revision: 0,
-    order_type: 'Product', vendor_name: 'MJ Toys', vendor_code: 'V002', expected_delivery: null },
+    order_type: 'Product', vendor_name: 'MJ Toys', expected_delivery: null },
 ];
 const headersByPo = Object.fromEntries(headers.map(h => [h.po_number, h]));
+// po_number → vendor_code, exactly the map `getPOLinesBulk` returns.
+const vendorByPo = { 'IN-PRD-0001': 'V001', 'CN-PRD-0002': 'V002', 'CN-SOFT-0003': 'V002' };
 
 const lines = [
   { po_number: 'IN-PRD-0001', line_no: 1, part_code: 'SH-PB-46', description: 'Shadow top',
@@ -88,7 +94,7 @@ test('one CSV row per line, and China rows render the Restricted marker not a nu
   const gated = gatePoLines({ lines, headersByPo, canChina });
   // filteredRows is the client list: getPOs would already have dropped the Soft PO too.
   const filteredRows = headers.filter(h => h.status !== 'Soft');
-  const csv = buildPoLinesCsv({ filteredRows, linesByPo: linesByPoFrom(gated), canChina });
+  const csv = buildPoLinesCsv({ filteredRows, linesByPo: linesByPoFrom(gated), vendorByPo, canChina });
   const rows = csv.split('\n');
 
   assert.equal(rows[0], PO_LINES_COLUMNS.join(','));
@@ -111,7 +117,7 @@ test('one CSV row per line, and China rows render the Restricted marker not a nu
 test('with po_china the CSV carries every line and the real numbers', () => {
   const canChina = true;
   const gated = gatePoLines({ lines, headersByPo, canChina });
-  const csv = buildPoLinesCsv({ filteredRows: headers, linesByPo: linesByPoFrom(gated), canChina });
+  const csv = buildPoLinesCsv({ filteredRows: headers, linesByPo: linesByPoFrom(gated), vendorByPo, canChina });
   const rows = csv.split('\n');
   assert.equal(rows.length - 1, 4);
   const priceIdx = PO_LINES_COLUMNS.indexOf('Unit Price');
@@ -128,7 +134,20 @@ test('a comma in a description is quoted, not allowed to shift the columns', () 
                    unit_price: 5, total_value: 50 }];
   const csv = buildPoLinesCsv({
     filteredRows: [headersByPo['IN-PRD-0001']],
-    linesByPo: { 'IN-PRD-0001': trick }, canChina,
+    linesByPo: { 'IN-PRD-0001': trick }, vendorByPo, canChina,
   });
   assert.match(csv.split('\n')[1], /"Top, Black, glossy"/);
+});
+
+test('Vendor Code comes from the worker map, not from the po_summary row', () => {
+  const canChina = true;
+  const gated = gatePoLines({ lines, headersByPo, canChina });
+  const idx = PO_LINES_COLUMNS.indexOf('Vendor Code');
+  const csv = buildPoLinesCsv({ filteredRows: headers, linesByPo: linesByPoFrom(gated), vendorByPo, canChina });
+  assert.deepEqual(csv.split('\n').slice(1).map(r => r.split(',')[idx]), ['V001', 'V002', 'V002', 'V002']);
+
+  // A PO missing from the map renders BLANK — never `undefined`, never the row's own (absent)
+  // field. This is also what every export did before S370, on every row.
+  const noMap = buildPoLinesCsv({ filteredRows: headers, linesByPo: linesByPoFrom(gated), canChina });
+  assert.deepEqual(noMap.split('\n').slice(1).map(r => r.split(',')[idx]), ['', '', '', '']);
 });

@@ -1263,12 +1263,26 @@ function tdsNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 function computeTds({ invoiceTotal, rate }) {
-  const r = tdsNum(rate);
-  if (r === null) {
-    // Absent = not applicable. Unparseable ('12x') is an error, never a silent "no TDS".
-    if (rate === null || rate === undefined || rate === '') return { tdsAmount: null, error: null };
+  // Absent = not applicable. Checked FIRST, because `null` is typeof 'object' and would be
+  // caught by the type guard below.
+  // ⚠️ WHITESPACE COUNTS AS ABSENT: `Number('  ') === 0`, so a space-only rate used to write a
+  // REAL "0% TDS applied" — the same Number('')===0 false-positive this workspace has been bitten
+  // by before. Not reachable from the UI (the client trims) but reachable by any direct POST.
+  // Trim only for the ABSENT test; the raw value still flows on, so '  5  ' keeps working.
+  if (rate === null || rate === undefined ||
+      (typeof rate === 'string' && rate.trim() === '')) {
+    return { tdsAmount: null, error: null };
+  }
+  // S370: reject on TYPE before coercing — same guard shape, and the same defect class, as
+  // parseDeliveryAddressId below (fixed the same day). Number() coerces: `[]`→0, `true`→1,
+  // `[5]`→5, `false`→0, so a non-scalar payload used to write a FALSE "0% TDS applied". A 0
+  // here is NOT harmless — hasTds() calls it real and the Tally-bound export writes it.
+  if (typeof rate !== 'string' && typeof rate !== 'number') {
     return { tdsAmount: null, error: 'TDS rate must be a number' };
   }
+  const r = tdsNum(rate);
+  // Unparseable ('12x') is an error, never a silent "no TDS".
+  if (r === null) return { tdsAmount: null, error: 'TDS rate must be a number' };
   if (r < 0 || r > 100) return { tdsAmount: null, error: 'TDS rate must be between 0 and 100' };
   const total = tdsNum(invoiceTotal);
   if (total === null) return { tdsAmount: null, error: 'TDS needs an invoice total to compute on' };
@@ -2612,6 +2626,18 @@ export default {
               if (row.status === 'Soft' && !canChina) continue;
               allowed.set(row.po_number, row.source === 'China' && !canChina);
             }
+            // Vendor code comes from purchase_orders, NOT from the client's rows: `po_summary`
+            // is a view with 23 columns and vendor_code is not one of them (verified against
+            // information_schema 2026-09-10), so the CSV's Vendor Code cell was blank on every
+            // row of every export. Same filter/order/limit as the header read above, so this
+            // covers exactly the same page of POs — and only allowed POs enter the map, so a
+            // Soft PO hidden from this caller leaks nothing.
+            const vendR = await query('purchase_orders', `${filter}&select=po_number,vendor_code`);
+            if (!vendR.ok) return err(vendR.data);
+            const vendorByPo = {};
+            for (const row of vendR.data || []) {
+              if (allowed.has(row.po_number) && row.vendor_code) vendorByPo[row.po_number] = row.vendor_code;
+            }
             // ⛔ Read the lines ONCE and filter in JS. A `?po_number=in.(...)` built from the
             // allowed set would be hundreds of PO numbers joined into a multi-KB query string
             // — the shape that has already broken a read in this codebase once.
@@ -2620,8 +2646,14 @@ export default {
               { prefer: 'count=exact' });
             if (!linesR.ok) return err(linesR.data);
             const fetched = Array.isArray(linesR.data) ? linesR.data.length : 0;
+            // Fill `product` from the part master before gating, like every other read path that
+            // renders lines (getPO, getPrintPOData, loadPoDocData). Without it 1,248 of 1,622
+            // lines exported a BLANK Product column — the PO form never sets po_lines.product
+            // for Part lines. Enrichment only ADDS product to a blank field, so it cannot
+            // reintroduce a money field the China strip below removes (the strip runs after).
+            const enriched = await withPartProducts(linesR.data || []);
             const linesByPo = {};
-            for (const line of linesR.data || []) {
+            for (const line of enriched) {
               if (!allowed.has(line.po_number)) continue;      // not visible, or not on this page
               const strip = allowed.get(line.po_number);
               (linesByPo[line.po_number] ||= []).push(strip ? stripChinaPOLine(line) : line);
@@ -2632,8 +2664,18 @@ export default {
             // complete. That is the safe direction: a spreadsheet that over-warns is annoying,
             // one that silently totals a short file is wrong.
             const total     = totalFromRange(linesR.range);
-            const truncated = total === null ? fetched >= PO_LINES_PAGE_LIMIT : total > fetched;
-            return ok({ linesByPo, total, fetched, limit: PO_LINES_PAGE_LIMIT, truncated });
+            const lineTrunc = total === null ? fetched >= PO_LINES_PAGE_LIMIT : total > fetched;
+            // ⚠️ The HEADER read is capped too (PO_PAGE_LIMIT), and past that cap every line of
+            // every PO on page 2+ is dropped by the `allowed` gate — silently, because the gate
+            // cannot tell "not visible" from "not on this page". So `truncated` folds BOTH sides
+            // in; `head_truncated` is returned beside it so a caller can say which. Measured the
+            // same way as getPOs: exact count when the range header parses, else the cap itself.
+            const headFetched = Array.isArray(headR.data) ? headR.data.length : 0;
+            const headTotal   = totalFromRange(headR.range);
+            const headTrunc   = headTotal === null ? headFetched >= PO_PAGE_LIMIT : headTotal > headFetched;
+            return ok({ linesByPo, vendorByPo, total, fetched, limit: PO_LINES_PAGE_LIMIT,
+                        truncated: lineTrunc || headTrunc,
+                        line_truncated: lineTrunc, head_truncated: headTrunc });
           }
 
           case 'getPrintPOData': {

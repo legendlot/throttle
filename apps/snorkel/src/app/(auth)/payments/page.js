@@ -13,8 +13,9 @@ import PaymentList from './PaymentList.js';
 // The Tally / vendor-ledger export (Priya, #bugs 2026-09-07). PAID ONLY — UTR and payment date
 // only exist once paid, and an unpaid row cannot be booked without inviting a double entry when
 // it later pays.
-// ⚠️ Shown ONLY to the roles `getPaidPaymentsExport` lets through (approve / execute /
-// super_admin). Never render a button that hands its user a 403 — and this file carries UTRs.
+// ⚠️ Shown ONLY to the roles `getPaidPaymentsExport` lets through (payment_request AND one of
+// approve / execute / super_admin). Never render a button that hands its user a 403 — and this
+// file carries UTRs.
 function PaidPaymentsExport() {
   const { showToast } = useToast();
   // Every range picker in every LOT app opens on Today — house rule, not a per-screen choice.
@@ -132,9 +133,14 @@ function PaidPaymentsExport() {
 
 export default function MyPaymentRequestsPage() {
   const { perms } = useAuth();
-  // Same three permissions the worker's guard tests, in the same order — a button that 403s is a
-  // permission taught to one surface and not the next.
-  const canExport = !!(perms?.payment_approve || perms?.payment_execute || perms?.payment_super_admin);
+  // Same FOUR permissions the worker's guard tests, in the same order — a button that 403s is a
+  // permission taught to one surface and not the next. `getPaidPaymentsExport` gates on
+  // payment_request FIRST (an AND), then on any of approve/execute/super_admin. Latent today
+  // (every current grant holder has payment_request via admin/finance_manager; jarvis_ro is the
+  // only role without it), but a role granted execute alone would render the panel and 403 on
+  // every mount.
+  const canExport = !!(perms?.payment_request &&
+    (perms.payment_approve || perms.payment_execute || perms.payment_super_admin));
   return (
     <PaymentList
       scope="mine"
