@@ -187,7 +187,13 @@ t('changing the attribute moves a now-invalid operator instead of leaving it ine
 });
 
 t('attributes that match nobody are called out by name', () => {
-  for (const dead of ['first', 'locale']) {
+  // ⚠️ `locale` was here and was REMOVED 2026-09-10 (S368) — this assertion had been red since
+  // S337 (2026-09-03) and no hostile review ran it, because apps/relay/test was missing from the
+  // hostile-review step-0 list. It is a STALE TEST, not a defect: S337 dropped the locale COLUMN
+  // (migration 0061 — non-null on 0 of 217,136 profiles), so segmentAst.js deliberately removed it
+  // from EMPTY_ATTRS with "there is no column to warn about". Nothing can warn about an attribute
+  // that no longer exists.
+  for (const dead of ['first']) {
     const w = conditionWarning({ type: 'attr', attr: dead, op: 'eq', value: 'x' });
     assert.ok(w && /matches nobody/i.test(w), `${dead} must warn`);
   }
