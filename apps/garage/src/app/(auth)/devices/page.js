@@ -199,6 +199,18 @@ export default function DevicesPage() {
     return m;
   }, [bindings]);
 
+  // ⛔ HANDSETS BOUND TO A CODE, KEYED FROM `bindings` — NOT from `claimed_device_code`.
+  // `hwByCode` above keys on the claim, which `record_device_hw` REWRITES on every scan. So the
+  // moment a handset is re-pointed, the row of the code it left has no `h` and the lock copy
+  // below would tell the admin "this one has never reported app hardware" for a phone that is
+  // locked and IS being forced back by the scanner. A binding is permanent; the claim is not.
+  // (S371 hostile review, finding 3.)
+  const boundHwByCode = useMemo(() => {
+    const m = {};
+    for (const b of bindings) if (b.device_code) (m[b.device_code] ||= []).push(b.hw_id);
+    return m;
+  }, [bindings]);
+
   // ── Writes ────────────────────────────────────────────────────────────────
   // ⚠️ workerFetch flattens its body as {action, ...body} and every handler reads body.data —
   // so the payload MUST be wrapped. Flat yields "device_code required" from a call that looks
@@ -397,6 +409,8 @@ export default function DevicesPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(340px,1fr))', gap: 12 }}>
         {shownDevices.map(d => {
           const h       = hwByCode[d.device_code];
+          // Every handset that has EVER scanned as this code — survives a re-claim.
+          const boundHw = boundHwByCode[d.device_code] || [];
           const draft   = drafts[d.device_code] || {};
           const val     = (k) => (draft[k] !== undefined ? draft[k] : (d[k] ?? '') );
           const setD    = (k, v) => setDrafts(x => ({ ...x, [d.device_code]: { ...(x[d.device_code] || {}), [k]: v } }));
@@ -465,10 +479,13 @@ export default function DevicesPage() {
                 </span>
               </button>
               <div style={{ fontSize: 11, opacity: .7, marginTop: -4, lineHeight: 1.4 }}>
-                {h
-                  ? 'Binds on this handset: it is running the LOT Scanner app.'
-                  : 'Only binds on a phone running the LOT Scanner app — this one has never ' +
-                    'reported app hardware. A phone using the scanner WEBSITE cannot be locked.'}
+                {boundHw.length === 0
+                  ? 'Only binds on a phone running the LOT Scanner app — no handset has ever ' +
+                    'scanned as this code. A phone using the scanner WEBSITE cannot be locked.'
+                  : boundHw.length === 1
+                    ? 'Binds on the handset that scans as this code (' + boundHw[0].slice(0, 8) + '…).'
+                    : `⚠️ ${boundHw.length} different handsets have scanned as this code — a lock ` +
+                      'here binds whichever one it is, which may not be the one you mean.'}
               </div>
 
               {/* scanning status — the hardware row, if this phone runs the app */}
