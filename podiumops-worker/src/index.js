@@ -1736,7 +1736,15 @@ async function importDirectoryCandidates(body, auth, env) {
     // S369: bank BOTH baselines. `google_org_unit` alone left a manager-only disagreement with
     // nothing to remember, so Dismiss silenced it for exactly zero syncs. Only write the manager
     // baseline when the caller actually sends one — a plain OU dismissal must not blank it.
-    const patch = { google_org_unit: normOu(x.org_unit), updated_at: nowIso() };
+    // ⚠️ S369 hostile review: the "never blank a baseline" guard was applied to the NEW column
+    // only — the line being edited — while `google_org_unit` was still written unconditionally.
+    // Dismissing a row whose Google account has no orgUnitPath then wiped a good OU baseline, and
+    // a null `prevOu` permanently downgrades that person's next real move to `differs` (the exact
+    // poison the comment in collectChange warns about). The UPDATE path already guarded this.
+    // N−1 of N sites, PATTERN-218.
+    const patch = { updated_at: nowIso() };
+    const dismissedOu = normOu(x.org_unit);
+    if (dismissedOu !== null) patch.google_org_unit = dismissedOu;
     const dismissedMgr = normEmail(x.mgr_google_email);
     if (dismissedMgr) patch.google_manager_email = dismissedMgr;
     const r = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(x.id)}&status=neq.exited`, env,

@@ -210,7 +210,11 @@ function ChasingList({ session, router }) {
     </div>
   );
   if (failed) return <Notice />;
-  if (!data || (!data.count && !returned.length && !stuck.length)) return degraded ? <Notice /> : null;
+  // ⚠️ S369 hostile review: this line rescued only `degraded`, so the truncation and courier
+  // notices were unreachable in the ONE case they exist for — an empty-looking list. A scan that
+  // stopped at the cap with nothing yet overdue rendered as a blank, reassuring page. Gate on the
+  // notice itself, so any reason to distrust the list survives the empty short-circuit.
+  if (!data || (!data.count && !returned.length && !stuck.length)) return notice ? <Notice /> : null;
   return (
     <>
     {notice && <Notice />}

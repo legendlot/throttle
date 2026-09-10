@@ -205,8 +205,14 @@ function declaredGap(e, gapKey) {
   if (!gapKey) return false;
   const gaps = e.metric_gaps;
   if (!gaps || typeof gaps !== 'object' || Array.isArray(gaps)) return false;
+  // `Object.hasOwn` so an inherited key ('constructor', 'toString') can never read as a reason.
+  if (!Object.hasOwn(gaps, gapKey)) return false;
   const reason = gaps[gapKey];
-  return typeof reason === 'string' ? reason.trim() !== '' : !!reason;
+  // ⚠️ S369 hostile review: the reason must be one of the RECOGNISED ones, not merely truthy.
+  // Nothing validates `metric_gaps` on the way in, so `{views: 'x'}` or `{views: {a:1}}` would
+  // otherwise flip a deal to Complete — and the backlog names this flag as what a record LOCK
+  // will be built on. An unrecognised reason is not an answer.
+  return typeof reason === 'string' && Object.hasOwn(GAP_REASONS, reason.trim());
 }
 
 /**

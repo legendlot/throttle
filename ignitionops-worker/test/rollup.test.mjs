@@ -62,3 +62,36 @@ test('string numbers from PostgREST are summed as numbers, whitespace is not a v
   const r = rollupVideos([v(1, { views: '12' }), v(2, { views: ' ' })]);
   assert.equal(r.views, 12);
 });
+
+// ── S369 hostile review: a rolled-up reason must cover EVERY take that is missing the number ──
+// Since S369 a declared gap satisfies metricsCompleteness, so a reason that leaks up from ONE
+// take marks the whole deal Complete while another take's hole is real and unexplained.
+test('a reason rolls up only when every null take declared one', () => {
+  const both = rollupVideos([
+    { seq: 1, views: null, metric_gaps: { views: 'gated_data' } },
+    { seq: 2, views: null, metric_gaps: { views: 'internal_gap' } },
+  ]);
+  assert.equal(both.views, null);
+  assert.equal(both.metric_gaps.views, 'gated_data', 'both explained -> the reason stands');
+
+  const onlyOne = rollupVideos([
+    { seq: 1, views: null, metric_gaps: { views: 'gated_data' } },
+    { seq: 2, views: null, metric_gaps: {} },              // nobody filled this take in
+  ]);
+  assert.equal(onlyOne.views, null);
+  assert.equal(onlyOne.metric_gaps.views, undefined, 'one unexplained hole -> NOT explained');
+});
+
+test('a take with a real number needs no reason, and a stale reason never survives it', () => {
+  const out = rollupVideos([
+    { seq: 1, views: 100, metric_gaps: { views: 'gated_data' } },
+    { seq: 2, views: null, metric_gaps: {} },
+  ]);
+  assert.equal(out.views, 100, 'a real number on any take is the rollup');
+  assert.equal(out.metric_gaps.views, undefined, 'a reason behind a real number is stale');
+});
+
+test('the single-take case (497 of 497 deals today) is unchanged', () => {
+  const out = rollupVideos([{ seq: 1, views: null, metric_gaps: { views: 'system_timing' } }]);
+  assert.equal(out.metric_gaps.views, 'system_timing');
+});

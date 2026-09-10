@@ -11,6 +11,16 @@ import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 import { metricsCompleteness } from '../../../lib/metrics.js';
 
+// S369 — a deal can be Complete because a metric was EXPLAINED (a recorded metric_gaps reason)
+// rather than captured. The tick used to promise "all metrics captured" either way, which claims
+// numbers we do not hold. Same wording as the detail pill and the manual, deliberately.
+function completenessTitle(r) {
+  const { viaGaps = [] } = metricsCompleteness(r);
+  return viaGaps.length
+    ? `Complete — ${viaGaps.join(', ')} explained, not captured`
+    : 'Complete — all metrics captured';
+}
+
 // 'Live' is the terminal success stage (S214 ⑤) — the old 'Completed' tab is gone.
 const TABS = [
   { id: 'all',       label: 'All',       filter: null },
@@ -526,9 +536,9 @@ export default function EngagementsPage() {
                           table; the filter is where you go looking for those. */}
                       {metricsCompleteness(r).complete && (
                         <span
-                          title="Complete — all metrics captured"
+                          title={completenessTitle(r)}
                           role="img"
-                          aria-label="Complete — all metrics captured"
+                          aria-label={completenessTitle(r)}
                           style={{
                             marginLeft: 6, color: 'var(--state-success-fg)',
                             fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'help',

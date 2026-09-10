@@ -688,14 +688,21 @@ function CostEdit({ label, value, onChange }) {
  *  Green = complete; muted = live but still missing numbers, named in `missing` order so the
  *  reader knows what to go and enter. Nothing at all before the deal is live. */
 function CompletenessPill({ completeness }) {
-  const { live, complete, missing } = completeness;
+  // `viaGaps` = checks passed by a RECORDED REASON rather than a number (S369). Saying "all
+  // metrics captured" over an explained gap claims data we do not hold — the pill has to
+  // distinguish measured from explained, which is the whole reason the field exists.
+  const { live, complete, missing, viaGaps = [] } = completeness;
   if (!live) return null;
   const p = complete
     ? { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' }
     : { fg: 'var(--text-3)',           bg: 'var(--surface-2)' };
   return (
     <span
-      title={complete ? 'All metrics captured' : `Missing: ${missing.join(', ')}`}
+      title={complete
+        ? (viaGaps.length
+            ? `All metrics answered — ${viaGaps.join(', ')} explained, not captured`
+            : 'All metrics captured')
+        : `Missing: ${missing.join(', ')}`}
       style={{
         display: 'inline-flex',
         padding: '2px 8px',
@@ -710,7 +717,9 @@ function CompletenessPill({ completeness }) {
         borderRadius: 'var(--radius-sm)',
       }}
     >
-      {complete ? 'Complete' : `Incomplete · missing: ${missing.join(', ')}`}
+      {complete
+        ? (viaGaps.length ? `Complete · ${viaGaps.length} explained` : 'Complete')
+        : `Incomplete · missing: ${missing.join(', ')}`}
     </span>
   );
 }

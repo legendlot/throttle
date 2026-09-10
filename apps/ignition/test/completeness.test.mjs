@@ -81,3 +81,29 @@ test('views uses > 0 and likes uses != null — a real zero differs between them
   assert.deepEqual(metricsCompleteness(live({ views: 0 })).missing, ['Views']);
   assert.equal(metricsCompleteness(live({ likes: 0 })).complete, true, 'zero likes is a real answer');
 });
+
+// ── S369 hostile review ────────────────────────────────────────────────────────────────────
+// Nothing validates metric_gaps on the way in, and this flag is what a record LOCK is to be
+// built on — so an unrecognised reason must NOT count as an answer.
+test('only a RECOGNISED reason counts — arbitrary strings and objects do not', () => {
+  for (const bad of ['x', 'gated', 'internal gap', 'INTERNAL_GAP ', { a: 1 }, ['gated_data'], 1]) {
+    const r = metricsCompleteness(live({ followers_gained: null, metric_gaps: { followers_gained: bad } }));
+    assert.equal(r.complete, false, `reason ${JSON.stringify(bad)} must not count`);
+  }
+});
+
+test('the three real reasons all count', () => {
+  for (const good of ['internal_gap', 'gated_data', 'system_timing', '  gated_data  ']) {
+    const r = metricsCompleteness(live({ followers_gained: null, metric_gaps: { followers_gained: good } }));
+    assert.equal(r.complete, true, `reason ${JSON.stringify(good)} should count`);
+  }
+});
+
+test('an INHERITED key is never mistaken for a reason', () => {
+  const proto = { followers_gained: 'gated_data' };
+  const gaps = Object.create(proto);
+  assert.equal(metricsCompleteness(live({ followers_gained: null, metric_gaps: gaps })).complete, false);
+  // and the classic prototype keys are not reasons for anything
+  const r = metricsCompleteness(live({ followers_gained: null, metric_gaps: { constructor: 'gated_data' } }));
+  assert.equal(r.complete, false);
+});

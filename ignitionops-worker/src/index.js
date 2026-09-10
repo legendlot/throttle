@@ -876,11 +876,19 @@ export function rollupVideos(videos) {
   out.post_date = first.post_date || null;
   out.video_link = first.video_link || null;
   out.follower_count_at_post = vnum(first.follower_count_at_post);
+  // ⚠️ S369 hostile review: a reason may only roll up when EVERY take that is missing the number
+  // declared one. The old rule took the first reason it found, so on a two-take deal where take A
+  // said "gated data" and take B was simply never filled in, the deal reported an explained gap —
+  // and since S369 a declared gap satisfies `metricsCompleteness`, that marks the whole deal
+  // Complete while B's hole is real and unexplained. Unreachable while takes are 1:1 with deals
+  // (497 of 497 today); it arms itself the first time anyone presses "Add video".
   const gaps = {};
-  for (const r of rows) {
-    for (const [k, reason] of Object.entries(r.metric_gaps || {})) {
-      if (out[k] == null && reason && !gaps[k]) gaps[k] = reason;
-    }
+  for (const k of VIDEO_SUM_METRICS) {
+    if (out[k] != null) continue;                      // a real number needs no reason
+    const nulls = rows.filter(r => vnum(r[k]) == null);
+    if (!nulls.length) continue;
+    const reasons = nulls.map(r => (r.metric_gaps || {})[k]).filter(Boolean);
+    if (reasons.length === nulls.length) gaps[k] = reasons[0];
   }
   out.metric_gaps = gaps;
   return out;
@@ -3199,7 +3207,11 @@ async function getPostReminderDue(url, auth, env) {
   // S369: this was the LAST place the chasing list could come back short and still look complete.
   // The `count=exact` and the log line were already here — what was missing is that a
   // `console.error` nobody tails is not a signal. It rides out with the other two degraded flags.
-  const scanTruncated = (scanTotal != null && scanTotal > CHASE_SCAN_MAX) ? scanTotal : 0;
+  // ⚠️ S369 hostile review: `rangeTotal` returns null when the Content-Range carries no total, so
+  // keying only off `scanTotal` reported "not truncated" on a read that came back exactly full.
+  // -1 means "full page, true total unknown" and the page says "at least" rather than a figure.
+  let scanTruncated = (scanTotal != null && scanTotal > CHASE_SCAN_MAX) ? scanTotal : 0;
+  if (!scanTruncated && scanTotal == null && (r.data || []).length >= CHASE_SCAN_MAX) scanTruncated = -1;
   if (scanTruncated) {
     console.error(`[getPostReminderDue] scan truncated: ${scanTotal} candidates > ${CHASE_SCAN_MAX} — the chasing list is INCOMPLETE`);
   }
