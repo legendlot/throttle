@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.13.0] - 2026-09-10
+### Changed
+- Engagements list + engagement detail: documented that a declared gap reason (Internal
+  gap / Gated data / System timing) recorded on the per-video Performance card now
+  satisfies the Views, Likes or Followers gained completeness check, so a deal can be
+  Complete with a metric explained rather than captured. Cost has no gap reason and must
+  still be a real total greater than zero. Updated the green tick hover text and the
+  "Not complete" filter description accordingly.
+
 ## [1.12.0] - 2026-09-10
 ### Added
 - Engagement detail: the Logistics card now shows live courier status alongside the
