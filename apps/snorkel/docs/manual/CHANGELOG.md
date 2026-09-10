@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.17.4] - 2026-09-10
+### Added
+- Purchase Orders list: documented the new "Export + lines" button (one row per line item, carrying PO header context plus Line No, Part Code, Description, Product, Variant, Colour, Qty Ordered, Qty Received, Unit, Unit Price, Total Value, HSN, GST %), alongside the existing PO-per-row Export; noted the China/restricted-access rule and the PARTIAL-filename confirmation cover both buttons.
+- Finance Queue: documented the new TDS rate (%) field at Mark as Paid, entered by whoever is authorised to pay; the live deduction/net calculation; Amount Paid defaulting to the net; that a blank rate means no TDS (not the same as 0); and that view-only users (including super admins) see any recorded TDS read-only.
+- Payment requests (My Requests): documented the new "Export paid payments" panel (date range, Export CSV) for approvers/Finance/admins, paid requests only, columns including any TDS deducted, for Tally reconciliation; noted the range defaults to today.
+
 ## [1.16.0] - 2026-09-08
 ### Added
 - PO Detail: documented changing an issued PO's delivery address (Ship to dropdown of active company addresses) via the new Change button next to the Delivery address block; this is the one amendment that does not bump the revision or raise a new PO number, instead written to the activity log with the old/new address and who changed it; a repeat pick of the same address is a no-op and writes nothing; deactivated addresses cannot be selected.

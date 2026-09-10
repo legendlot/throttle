@@ -21,11 +21,25 @@ looking for them.</p>
 <h3>Paying</h3>
 <ol class="steps">
   <li>Make the payment in your bank.</li>
+  <li>If tax was deducted at source, enter the <strong>TDS rate (%)</strong> on the card. The
+      deduction and the resulting net are calculated and shown live as you type.</li>
   <li>Put the UTR or reference in the box on the card.</li>
   <li>Tap <strong>Mark paid</strong>.</li>
 </ol>
 <p>The person who raised it is told immediately, with the UTR. That is what stops the
 &ldquo;is it done?&rdquo; messages.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; TDS is entered by Finance, not the requester</div>
+  <p>The <strong>TDS rate (%)</strong> field lives on this card, at the point of marking paid &mdash;
+  the person who raised the request never sees or enters it; they only upload the invoice and its
+  details. Enter the rate that applies to the invoice and the deduction is worked out from the
+  invoice total automatically. The <strong>amount released is net of TDS</strong>, and the
+  <strong>Amount Paid</strong> field defaults to that net figure, so what you record as paid already
+  has the deduction taken out.</p>
+  <p>Leaving the rate blank means TDS does not apply to this payment &mdash; it is not the same as
+  entering 0. A payment with no TDS looks exactly as it always did: full amount, no deduction shown.</p>
+</div>
 
 <div class="callout note">
   <div class="c-title">&#9432; You can reject a request yourself</div>
@@ -51,10 +65,11 @@ looking for them.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; Only the people who actually pay see the UTR box</div>
-  <p>The UTR field and <strong>Mark paid</strong> button only appear for whoever is authorised to make
-  the payment. Everyone else who can open this queue &mdash; managers and admins included &mdash; sees
-  &ldquo;View only &mdash; payments are marked by finance.&rdquo; instead, with the rest of the card (bank
-  details, invoice, amount) still visible. Being in the Finance role is not by itself enough to pay; that
+  <p>The UTR field, the <strong>TDS rate (%)</strong> field and <strong>Mark paid</strong> button only
+  appear editable for whoever is authorised to make the payment. Everyone else who can open this queue
+  &mdash; managers and super admins included &mdash; sees &ldquo;View only &mdash; payments are marked by
+  finance.&rdquo; instead, with the rest of the card (bank details, invoice, amount, and any TDS already
+  recorded) still visible read-only. Being in the Finance role is not by itself enough to pay; that
   is granted to specific people so the button is never offered to someone it would just reject.</p>
 </div>
 
