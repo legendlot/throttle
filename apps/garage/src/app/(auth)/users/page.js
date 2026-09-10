@@ -1023,6 +1023,16 @@ function AttendanceDevice({ session, showToast }) {
           gets you nothing. <strong style={{ color: 'var(--yellow)' }}>Not enforced yet:</strong> enrol the
           gate phone and confirm it signs before the lock is switched on, or every clock-in fails.
         </p>
+        {/* ⛔ THIS LINE EXISTS BECAUSE THE PANEL READ AS A FLEET-WIDE TASK (Afshaan, 2026-09-10:
+            "I do not understand why we need to continue to enroll"). The old counter said
+            "1 of 76 devices enrolled", which invites you to enrol the other 75. A signing key is
+            read on THREE actions only — recordAttendance / recordBreak / getOperatorByCode — so
+            enrolling a station phone mints a key nothing ever checks. Do not soften this back. */}
+        <p style={{ color: 'var(--t2)', fontSize: 11, fontFamily: 'var(--mono)', marginTop: -6, marginBottom: 14, lineHeight: 1.55 }}>
+          <strong>Exactly one phone is ever enrolled — this one.</strong> Floor scanners need no
+          pairing and no code: install the app, then department PIN → station → line on the phone
+          itself. Manage the rest of the fleet under <strong>Phones</strong>.
+        </p>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>CURRENT</span>
@@ -1034,8 +1044,12 @@ function AttendanceDevice({ session, showToast }) {
                   : <span style={{ color: 'var(--red)' }}> · NOT enrolled — it cannot sign</span>}
               </span>
             : <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>none set</span>}
+          {/* NOT "{enrolled} of {devices.length} devices enrolled" — that framing is what made
+              the floor start pairing ~50 phones for no reason. 76 is the register size, not a
+              target. */}
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-            {enrolled} of {devices.length} devices enrolled
+            {enrolled === 1 ? 'gate phone enrolled' : `${enrolled} phones hold a key`}
+            {' · '}{devices.length} phones in the register
           </span>
         </div>
 
