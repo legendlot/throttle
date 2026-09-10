@@ -163,6 +163,17 @@ const td = { padding: '10px 12px' };
 // ⚠️ It LISTS, it does not send. Nothing in Ignition can email a creator yet — the send path
 // needs a Relay template and an influencer comms profile. Until then this is the worklist
 // someone works by hand, which is strictly better than the nothing that was here before.
+// Where the 10-day clock actually started. `history` is a STAGE-CLICK date, not a delivery — it
+// keeps the bare "12d" it has always had, and only a real courier delivery gets to say
+// "delivered". The team has to be able to tell the two apart without opening the deal.
+function clockLabel(d) {
+  const n = d.days_since;
+  if (d.anchor_source === 'courier') return `delivered ${n}d ago`;
+  if (d.anchor_source === 'delivered_date') return `delivered ${n}d ago (typed)`;
+  if (d.anchor_source === 'shipping_date') return `shipped ${n}d ago (typed)`;
+  return `${n}d`;
+}
+
 function ChasingList({ session, router }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(false);
@@ -170,8 +181,11 @@ function ChasingList({ session, router }) {
     if (!session) return;
     ignitionopsGet('getPostReminderDue', { days: 10 }, session).then(setData).catch(() => setData(null));
   }, [session]);
-  if (!data || !data.count) return null;
+  const returned = data?.returned || [];
+  if (!data || (!data.count && !returned.length)) return null;
   return (
+    <>
+    {data.count > 0 && (
     <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
       <button onClick={() => setOpen(o => !o)}
         style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
@@ -190,7 +204,7 @@ function ChasingList({ session, router }) {
               style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
-              <span style={{ color: 'var(--text-3)' }}>{d.days_since}d</span>
+              <span style={{ color: 'var(--text-3)' }}>{clockLabel(d)}</span>
               {!d.email && <span style={{ color: 'var(--state-error-fg)' }}>no email</span>}
               {!d.has_tracking_link && <span style={{ color: 'var(--text-3)' }}>no link</span>}
             </div>
@@ -198,5 +212,32 @@ function ChasingList({ session, router }) {
         </div>
       )}
     </div>
+    )}
+
+    {returned.length > 0 && (
+      <div style={{ marginBottom: 12, border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)', background: 'var(--state-error-bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
+          <span style={{ color: 'var(--state-error-fg)', fontWeight: 700 }}>{returned.length}</span>
+          <span>parcel{returned.length === 1 ? '' : 's'} came back — the creator never received the product, so do not chase</span>
+        </div>
+        <div style={{ borderTop: '1px solid var(--state-error)' }}>
+          {returned.map(d => (
+            <div key={d.engagement_no}
+              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-error)', fontSize: 12, cursor: 'pointer' }}>
+              <span style={{ color: 'var(--state-error-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
+              <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
+              <span style={{ color: 'var(--state-error-fg)' }}>{d.lifecycle === 'cancelled' ? 'cancelled' : 'returned to origin'}</span>
+              {Number.isFinite(d.days_since) && (
+                <span style={{ color: 'var(--text-3)' }}>{d.days_since}d ago</span>
+              )}
+              {d.courier && <span style={{ color: 'var(--text-3)' }}>{d.courier}</span>}
+              <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{d.stage}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+    </>
   );
 }

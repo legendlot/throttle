@@ -3155,7 +3155,7 @@ async function getPostReminderDue(url, auth, env) {
   // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
   // posted, and nobody has already written the deal off.
   const r = await sb(
-    '/rest/v1/engagements?select=id,engagement_no,stage,post_date,delivered_date,shipping_date,utm_link,gifted_no_post,'
+    '/rest/v1/engagements?select=id,engagement_no,stage,post_date,delivered_date,shipping_date,shipping_order_id,utm_link,gifted_no_post,'
     + 'influencer:influencer_id(influencer_code,channel_name,person_name,email,do_not_ship)'
     + '&post_date=is.null&gifted_no_post=not.is.true'
     + '&stage=in.(shipped,delivered,scheduled,draft,posting,delayed)'
@@ -3192,30 +3192,79 @@ async function getPostReminderDue(url, auth, env) {
     for (const h of (hr.data || [])) if (!entered.has(h.engagement_id)) entered.set(h.engagement_id, h.created_at);
   }
 
+  // ⚠️ …and because both those columns are empty, EVERY row above fell through to
+  // `engagement_history`, which records when somebody CLICKED the stage button — not when the
+  // parcel arrived. Measured 2026-09-10 over the 266 deals in this scope that match an
+  // `ecom_shipments` row: only 78 parcels are actually `delivered`. 68 in_transit + 5 pending +
+  // 2 out_for_delivery creators do not have the product yet, and 4 rto parcels came BACK. So the
+  // list as it stood nagged 79 people who had nothing to post about.
+  // The courier is the only real delivery clock we have — one batched RPC for the whole scan.
+  const statusByKey = await fetchShipmentStatus(rows.map(e => e.shipping_order_id), env);
+  // In flight = the goods are not with the creator, so there is nothing to chase yet.
+  const IN_FLIGHT = new Set(['pending', 'manifested', 'in_transit', 'out_for_delivery']);
+  // Came back / never went = not chaseable either, but surfaced separately (see `returned`).
+  const CAME_BACK = new Set(['rto', 'cancelled']);
+
+  // ⚠️ Courier truth only overrides when a shipment actually MATCHED. Porter/DTDC hand-delivery
+  // and not-yet-ingested references (RULE: `shipping_order_id` legitimately holds a courier NAME
+  // on 50 of 358 populated deals) come back unmatched — those keep today's behaviour exactly,
+  // because we have no delivery data for them and an unknown parcel is not evidence of anything.
+  const returned = [];
   const due = rows
     .map(e => {
       if (e.influencer?.do_not_ship) return null;
-      const explicit = e.delivered_date || e.shipping_date || null;
-      const anchorRaw = explicit || entered.get(e.id) || null;
+      const key = shipKey(e.shipping_order_id);
+      const ship = key ? statusByKey[key] : null;
+      const lifecycle = ship?.lifecycle || null;
+      if (lifecycle && IN_FLIGHT.has(lifecycle)) return null;
+
+      const courierDelivered = lifecycle === 'delivered' ? (ship.delivered_at || null) : null;
+      // A parcel that came back is dated from WHEN IT CAME BACK, not from a stage click — that is
+      // the number someone acts on ("returned 6 days ago"), and `lifecycle_changed_at` is the
+      // courier's own transition clock (migration 0036; NULL on pre-fix rows, hence the fallbacks).
+      const cameBack = !!(lifecycle && CAME_BACK.has(lifecycle));
+      const returnedAt = cameBack ? (ship.lifecycle_changed_at || null) : null;
+      const anchorRaw = returnedAt || courierDelivered || e.delivered_date || e.shipping_date || entered.get(e.id) || null;
       if (!anchorRaw) return null;
       const anchorDay = String(anchorRaw).slice(0, 10);
-      if (anchorDay > cutoff) return null;
-      return {
+      // ⛔ The age gate is a CHASING rule — "have they had it long enough to have posted?" — and it
+      // must NOT apply to a returned parcel. Measured 2026-09-10: of the 4 RTOs in scope, 2 were
+      // 6 and 9 days old, so an age-gated `returned` list would have HIDDEN the two freshest —
+      // exactly the ones still worth acting on. A returned parcel is urgent when it is new.
+      if (!cameBack && anchorDay > cutoff) return null;
+      const row = {
         engagement_no: e.engagement_no, stage: e.stage,
         influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code,
         email: e.influencer?.email || null,
-        trigger: e.delivered_date ? 'delivered'
-          : e.shipping_date ? 'shipped'
-            : `reached ${e.stage} (no delivery date recorded)`,
+        trigger: returnedAt ? 'returned to us (courier)'
+          : courierDelivered ? 'delivered (courier)'
+            : e.delivered_date ? 'delivered'
+              : e.shipping_date ? 'shipped'
+                : `reached ${e.stage} (no delivery date recorded)`,
+        anchor_source: (returnedAt || courierDelivered) ? 'courier'
+          : e.delivered_date ? 'delivered_date'
+            : e.shipping_date ? 'shipping_date'
+              : 'history',
         days_since: Math.floor((Date.now() - new Date(anchorRaw).getTime()) / 86400000),
         has_tracking_link: !!e.utm_link,
+        lifecycle,
+        delivered_at: ship?.delivered_at || null,
+        courier: ship?.courier || null,
+        tracking_number: ship?.tracking_number || null,
       };
+      // ⚠️ Do NOT just drop these. They pass every chasing gate today, so dropping them would
+      // make 4 real deals vanish off the page with no explanation — worse than leaving them on.
+      // They go out under their own heading instead: the parcel came back, nobody received it.
+      if (cameBack) { returned.push(row); return null; }
+      return row;
     })
     .filter(Boolean)
     .sort((a, b) => b.days_since - a.days_since);
+  returned.sort((a, b) => b.days_since - a.days_since);
   return ok({
     days, due, count: due.length,
     unreachable: due.filter(d => !d.email).length,
+    returned,
     armed: false,
   });
 }
