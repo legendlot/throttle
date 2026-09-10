@@ -39,7 +39,7 @@ function AuthLayoutInner({ children }) {
   const { user, session, role, signOut, perms, loading } = useAuth();
   const pathname = usePathname();
   const router   = useRouter();
-  const nav = useGarageNav(perms || {});
+  const nav = useGarageNav(perms || {}, role);
   const { alertCount } = useGarageAlerts(session);
   const { refreshing } = useRefreshState();
 

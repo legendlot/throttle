@@ -102,10 +102,12 @@ export const GARAGE_NAV_DRAWER = {
     { id: 'library-downloads', label: 'Downloads',      route: '/library/downloads', icon: Download,  desc: 'Exports & sheets' },
     { id: 'procurement-pos',   label: 'Purchase Orders', route: '/procurement/pos',  icon: FileText,  desc: 'Read-only PO reference', gate: (p) => hasPermission(p, 'procurement_view') },
     { id: 'users',             label: 'Users',          route: '/users',             icon: Users,     desc: 'Accounts & roles', gate: (p) => hasPermission(p, 'users_view') || hasPermission(p, 'users_manage') },
-    // ⚠️ Gated on users_manage ALONE, unlike Users above — the worker's getDeviceHw/setDeviceHw
-    // enforce users_manage and `users_view` has ZERO readers in the worker, so gating this on
-    // users_view would show the item to someone who then gets a 403 on every request.
-    { id: 'devices',           label: 'Device Register', route: '/devices',          icon: Smartphone, desc: 'Handsets running the Scanner app', gate: (p) => hasPermission(p, 'users_manage') },
+    // ⚠️ ROLE-gated, not permission-gated — the only item here that is. The console's own
+    // handlers (getDeviceFleet, setDeviceStation, getDevices, createDeviceEnrolment) all
+    // enforce `role === 'super_admin'`, and there is no permission key that means super admin:
+    // users_manage is held by cs_lead and gate_ops too, so gating on it would show the item to
+    // someone who then gets a 403 on every request. Afshaan, 2026-09-10: super admin only.
+    { id: 'devices',           label: 'Devices',        route: '/devices',           icon: Smartphone, desc: 'Scanner phones — station, lock, pairing', gate: (p, role) => role === 'super_admin' },
     { id: 'manual',            label: 'System Manual',  route: '/manual',            icon: BookOpen,  desc: 'Operations manual' },
   ],
 };
@@ -113,7 +115,10 @@ export const GARAGE_NAV_DRAWER = {
 // Default pinned screens (user-managed thereafter, persisted to localStorage g-pins).
 export const DEFAULT_PINS = ['/issue-queue', '/stock', '/grn'];
 
-const passesGate = (item, perms) => !item.gate || item.gate(perms);
+// ⚠️ `role` is the SECOND argument and every gate must keep accepting perms first — the
+// existing 30-odd gates ignore it. Only /devices reads it, because super_admin is a role and
+// not a permission key (see that item).
+const passesGate = (item, perms, role) => !item.gate || item.gate(perms, role);
 
 /**
  * Returns the permission-filtered nav for the current user:
@@ -121,19 +126,19 @@ const passesGate = (item, perms) => !item.gate || item.gate(perms);
  * A primary group is dropped if its own gate fails or it has no visible items.
  * Singles (Overview) survive on their own gate.
  */
-export function useGarageNav(perms = {}) {
+export function useGarageNav(perms = {}, role = null) {
   const primary = GARAGE_NAV_PRIMARY
     .map((g) => {
-      if (g.single) return passesGate(g, perms) ? g : null;
-      if (g.gate && !g.gate(perms)) return null;
-      const items = (g.items || []).filter((i) => passesGate(i, perms));
+      if (g.single) return passesGate(g, perms, role) ? g : null;
+      if (g.gate && !g.gate(perms, role)) return null;
+      const items = (g.items || []).filter((i) => passesGate(i, perms, role));
       return items.length ? { ...g, items } : null;
     })
     .filter(Boolean);
 
   const drawer = {
     ...GARAGE_NAV_DRAWER,
-    items: GARAGE_NAV_DRAWER.items.filter((i) => passesGate(i, perms)),
+    items: GARAGE_NAV_DRAWER.items.filter((i) => passesGate(i, perms, role)),
   };
 
   return { primary, drawer };
