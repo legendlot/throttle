@@ -1,5 +1,15 @@
 # Changelog — Depot Operations Manual
 
+## 1.16.0 — 2026-09-10 (Session 370)
+
+- **Scan Feed:** search now takes a courier AWB as well as a UPC or box label, and works both
+  ways, search an AWB to see the unit(s) on it, or a unit's UPC to see its AWB. A new AWB column
+  appears in the table only in search mode. Documented the three things the floor needs to know:
+  one AWB is often many units (bulk cartons of 32/64), AWBs are only captured at Pack from 9 Sep
+  2026 onwards (so older boxes read "not captured"), and courier labels containing letters are
+  never recorded and so can't be searched. Also corrected the search's minimum length in the
+  manual text from four characters to the actual three.
+
 ## 1.13.0 — 2026-09-07 (Session 354)
 
 - **Channel Master:** dispatch channels get a fourth type, **Export** (green badge), alongside
