@@ -1588,6 +1588,25 @@ function courierText(raw) {
 // wrong answer that looks right.
 const istStamp = ts => new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
+// `courier` and `shipping_provider` are two Uniware fields that usually say the SAME thing:
+// measured 2026-09-10 over the 256 matched deals, 64 read "self"/"SELF" and 4 "shiprocket"/
+// "SHIPROCKET" — 27% would render the name twice. Only Delhivery's provider adds anything
+// ("DELHIVERY_SURFACE" = the surface service), so keep the extra and drop the echo.
+function courierLabel(courier, provider) {
+  const norm = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const c = String(courier || '').trim();
+  const p = String(provider || '').trim();
+  if (!c) return courierText(p);
+  const cn = norm(c), pn = norm(p);
+  if (!pn || pn === cn) return courierText(c);
+  // "DELHIVERY_SURFACE" under courier "delhivery" -> "Delhivery · Surface"
+  if (pn.startsWith(cn)) {
+    const extra = p.slice(c.length).replace(/^[^A-Za-z0-9]+/, '');
+    return extra ? `${courierText(c)} · ${courierText(extra.toLowerCase())}` : courierText(c);
+  }
+  return `${courierText(c)} · ${courierText(p)}`;
+}
+
 function LifecycleBadge({ lifecycle }) {
   const p = LIFECYCLE_PALETTE[lifecycle] || LIFECYCLE_PALETTE.unknown;
   return (
@@ -1618,7 +1637,7 @@ function ShipmentRows({ shipment, orderId }) {
     );
   }
 
-  const name = [shipment.courier, shipment.shipping_provider].filter(Boolean).join(' · ');
+  const name = courierLabel(shipment.courier, shipment.shipping_provider);
   return (
     <>
       <KV label="Courier" value={
