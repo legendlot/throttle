@@ -3158,16 +3158,25 @@ export default {
             // copy would let a PO be created pointing at a deleted or deactivated address. Only
             // runs when the field is actually sent; null/absent stays a legitimate "no delivery
             // address" and must keep working.
-            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null && d.delivery_address_id !== '') {
+            // '' means CLEAR (write null), not "not sent": the address <select>'s empty option
+            // posts '', and the old pre-check skipped the guard on '' and then sent '' straight
+            // into an int8 column (22P02). changePODeliveryAddress refuses '' instead because
+            // clearing is not what that action is for; creating a PO with no address is normal.
+            let newPoDeliveryAddressId = null;
+            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null
+                && String(d.delivery_address_id).trim() !== '') {
               if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
                 return err('delivery_address_id must be an id', 422);
               }
-              const newPoAddrId = parseInt(d.delivery_address_id, 10);
+              const newPoAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
               if (!Number.isFinite(newPoAddrId)) return err('delivery_address_id must be an id', 422);
               const newPoAddrR = await query('company_addresses', `?id=eq.${newPoAddrId}&limit=1`);
               const newPoAddr = newPoAddrR.data?.[0] || null;
               if (!newPoAddr) return err('Delivery address not found', 404);
               if (!newPoAddr.active) return err(`${newPoAddr.label} is deactivated — pick an active address`, 400);
+              // Write the PARSED number, as changePODeliveryAddress does — `[2]` passes the regex
+              // via String() and resolves to a real address, but must never reach int8 raw.
+              newPoDeliveryAddressId = newPoAddrId;
             }
             const srcCode  = countryToISO(d.source||'Other');
             const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
@@ -3187,7 +3196,7 @@ export default {
               transit_days: d.transit_days||null, actual_arrival_date: null,
               raised_by: postRole, raised_by_user_id: userId, raised_date: todayISO(),
               notes: d.notes||null,
-              delivery_address_id: d.delivery_address_id ?? null,
+              delivery_address_id: newPoDeliveryAddressId,
               source_request_no: d.source_request_no || null,
             });
             if (!r.ok) return err('PO insert failed: '+JSON.stringify(r.data));
@@ -3424,6 +3433,39 @@ export default {
               }
               lp.unit_price = Number(p);
             }
+            // delivery_address_id needs the same checks changePODeliveryAddress runs — this is
+            // the OTHER door onto the same column, and a generic field copy with no validation
+            // would leave it narrower there than here. Only runs when the field is actually sent;
+            // the Amend modal never sends it, so the normal amend path is unaffected.
+            // It sits with the other pre-insert guards on purpose: a rejected amend must leave
+            // no po_revisions row. That path never bumps purchase_orders.revision, and
+            // po_revisions has no unique key, so an orphan snapshot collides with the next
+            // successful amend and Revision History shows one revision twice.
+            // '' means CLEAR (write null), not "not sent" — same call as postPO.
+            const amendAddressSent = d.delivery_address_id !== undefined;
+            let amendDeliveryAddressId = null;
+            if (amendAddressSent && d.delivery_address_id !== null
+                && String(d.delivery_address_id).trim() !== '') {
+              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
+                return err('delivery_address_id must be an id', 422);
+              }
+              const amendAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
+              if (!Number.isFinite(amendAddrId)) return err('delivery_address_id must be an id', 422);
+              const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrId}&limit=1`);
+              const amendAddr = amendAddrR.data?.[0] || null;
+              if (!amendAddr) return err('Delivery address not found', 404);
+              // Mirrors changePODeliveryAddress's S360 #11 exemption: re-sending the PO's OWN
+              // address is a no-op and must survive that address being deactivated later. A
+              // client that echoes the PO header back on amend would otherwise lose its vendor,
+              // terms and date edits to a 400 on a field it never changed.
+              const amendAddrIsCurrent =
+                po.delivery_address_id != null && Number(po.delivery_address_id) === amendAddrId;
+              if (!amendAddrIsCurrent && !amendAddr.active) {
+                return err(`${amendAddr.label} is deactivated — pick an active address`, 400);
+              }
+              // The PARSED number is what gets written, never the raw payload value.
+              amendDeliveryAddressId = amendAddrId;
+            }
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
             // Resolve the price edits against the stored rows BEFORE the snapshot — a price
@@ -3449,27 +3491,20 @@ export default {
               change_summary: (d.change_summary||`Amendment to Rev ${newRev}`) + (priceEdits.length ? ` · prices: ${priceSummary}` : ''),
               snapshot: JSON.stringify({ header: po, lines: linesR.data||[] }),
             });
-            // delivery_address_id needs the same checks changePODeliveryAddress runs — this is
-            // the OTHER door onto the same column, and a generic field copy with no validation
-            // would leave it narrower there than here. Only runs when the field is actually sent;
-            // the Amend modal never sends it, so the normal amend path is unaffected.
-            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null && d.delivery_address_id !== '') {
-              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
-                return err('delivery_address_id must be an id', 422);
-              }
-              const amendAddrId = parseInt(d.delivery_address_id, 10);
-              if (!Number.isFinite(amendAddrId)) return err('delivery_address_id must be an id', 422);
-              const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrId}&limit=1`);
-              const amendAddr = amendAddrR.data?.[0] || null;
-              if (!amendAddr) return err('Delivery address not found', 404);
-              if (!amendAddr.active) return err(`${amendAddr.label} is deactivated — pick an active address`, 400);
-            }
             const updates = { revision: newRev, updated_at: new Date().toISOString() };
             ['vendor_name','vendor_code','currency','payment_terms','incoterms','expected_delivery','lead_time_days',
               'port_of_loading','freight_forwarder','forwarder_code','expected_ready_date','shipping_date',
               'shipping_mode','transit_days','actual_arrival_date','invoice_number','invoice_value',
-              'quality_hold','notes','delivery_address_id','po_category'].forEach(f => { if (d[f]!==undefined) updates[f]=d[f]; });
-            await update('purchase_orders', updates, `po_number=eq.${encodeURIComponent(d.po_number)}`);
+              'quality_hold','notes','po_category'].forEach(f => { if (d[f]!==undefined) updates[f]=d[f]; });
+            // Off the generic copy list: it must carry the VALIDATED, PARSED id (or null to clear).
+            if (amendAddressSent) updates.delivery_address_id = amendDeliveryAddressId;
+            // The PATCH result must be checked — a failed write returned 200 to the caller with
+            // the revision row already snapshotted, which is what made a bad delivery_address_id
+            // silent instead of loud. (Row COUNT is not checked here, unlike
+            // changePODeliveryAddress: by this point the snapshot is written, so the honest
+            // signal is the transport failure itself.)
+            const amendUpd = await update('purchase_orders', updates, `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            if (!amendUpd.ok) return err('PO amendment failed: '+JSON.stringify(amendUpd.data), 500);
             if (Array.isArray(d.lines)&&d.lines.length>0) {
               // GUARD (2026-07-20): this path DELETEs every line and re-inserts from the client
               // payload — it renumbers line_no and rewrites qty_received. On a PO with goods
