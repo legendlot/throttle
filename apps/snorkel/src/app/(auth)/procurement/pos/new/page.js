@@ -366,7 +366,12 @@ function NewPOPage() {
   }, [readyDate]);
 
   // BOM checklist load
-  async function loadBomChecklist() {
+  // `groupOverride` exists because the chip handler must not read `bomGroup` from state:
+  // setBomGroup() is async and a setTimeout(...,0) fires BEFORE React re-renders, so the
+  // closure still holds the PREVIOUS group and the table lands one click stale
+  // (pre-existing since e04d2555f, 2026-06-02; found by the S369 smoke). Callers that
+  // already have the new key pass it explicitly; everyone else falls back to state.
+  async function loadBomChecklist(groupOverride) {
     if (!bomProduct) { showToast('Select a product', 'error'); return; }
     setBomLoading(true);
     try {
@@ -382,8 +387,9 @@ function NewPOPage() {
         checked:   true,
       }));
       // Filter by group
+      const group = groupOverride !== undefined ? groupOverride : bomGroup;
       let filtered = rows;
-      if (bomGroup && bomGroup !== 'full') {
+      if (group && group !== 'full') {
         const groupCats = {
           // car = "the main unit": Car/Body plus other whole-product bodies (Drone, Train).
           car:         ['Car', 'Body', 'Drone', 'Train'],
@@ -400,7 +406,7 @@ function NewPOPage() {
           // (Afshaan, 2026-09-10). RULE-SKD-001: SKD is format-isolated, and this tab multiplies
           // by a units quantity, so an SKD row surfaced on a CKD product's checklist would be
           // wrong by design. Do not add an SKD chip here.
-        }[bomGroup] || [];
+        }[group] || [];
         filtered = rows.filter((r) => groupCats.some((c) => (r.category || '').toLowerCase().includes(c.toLowerCase())));
       }
       // A-6: apply selected category's bom_filter on top (cards like Metal/Electronics/
@@ -1126,7 +1132,7 @@ function BomMode(props) {
   // on a pre-filtered card. (Re-runs with fresh deps, so no stale-closure risk.)
   useEffect(() => {
     if (cardFilter && bomProduct) {
-      const t = setTimeout(loadBomChecklist, 0);
+      const t = setTimeout(() => loadBomChecklist(), 0);
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1162,7 +1168,7 @@ function BomMode(props) {
           <StatusBadge label={cardFilterLabel} tone="blue" />
           <span style={{ fontSize: 11, color: 'var(--t3)' }}>— set by the selected PO category</span>
           {bomProduct && (
-            <button style={modeBtn(false)} onClick={() => setTimeout(loadBomChecklist, 0)}>↻ Reload</button>
+            <button style={modeBtn(false)} onClick={() => setTimeout(() => loadBomChecklist(), 0)}>↻ Reload</button>
           )}
         </div>
       ) : (
@@ -1171,7 +1177,7 @@ function BomMode(props) {
             <button
               key={g.key}
               style={modeBtn(bomGroup === g.key)}
-              onClick={() => { setBomGroup(g.key); setTimeout(loadBomChecklist, 0); }}
+              onClick={() => { setBomGroup(g.key); setTimeout(() => loadBomChecklist(g.key), 0); }}
             >
               {g.label}
             </button>
