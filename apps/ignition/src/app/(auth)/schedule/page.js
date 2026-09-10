@@ -192,8 +192,12 @@ function ChasingList({ session, router }) {
   const returned = data?.returned || [];
   const stuck = data?.stuck || [];
   const degraded = Number(data?.anchor_degraded || 0) > 0;
+  const courierDown = data?.courier_degraded === true;
   const notice = failed
     ? 'Chasing list unavailable — could not load post reminders. Nobody has been checked; reload before assuming there is nothing to chase.'
+    // Courier first: without it, parcels still in transit come BACK onto the list and the
+    // stuck/returned panels read as empty. That is a wronger list than a few missing dates.
+    : courierDown ? 'Courier status could not be loaded — parcels still in transit may be listed below, and the stuck and returned panels are not reliable.'
     : degraded ? 'Some deals could not be dated and are missing from the list below — treat it as incomplete.'
     : null;
   const Notice = () => (

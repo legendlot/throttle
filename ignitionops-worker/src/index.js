@@ -631,6 +631,9 @@ export const shipKey = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').toUpper
  * A failure returns `{}` on purpose: shipment status is decoration on a deal read, and a deal
  * must still open when Uniware or the RPC is down.
  */
+// Marks a status map that came back from a FAILED read rather than a genuinely empty one.
+const DEGRADED = Symbol('degraded');
+
 async function fetchShipmentStatus(orderIds, env) {
   const keys = [...new Set((orderIds || []).map(shipKey).filter(Boolean))];
   if (!keys.length) return {};
@@ -643,7 +646,12 @@ async function fetchShipmentStatus(orderIds, env) {
   }).catch(e => ({ ok: false, status: 'network_error', data: String(e) }));
   if (!r.ok) {
     console.error(`[fetchShipmentStatus] ${r.status}: ${JSON.stringify(r.data)}`);
-    return {};
+    // S369 hostile review: the caller must be able to tell "no courier row for this deal" from
+    // "the courier read did not happen". They are NOT the same and the second is the dangerous
+    // one — with no lifecycle, the chasing list stops excluding in-flight parcels (81 of 212 in
+    // scope) and the `stuck`/`returned` panels silently empty, which is the exact wrong-list this
+    // path exists to prevent. Non-enumerable so every `for…in` / Object.keys walk is unchanged.
+    return Object.defineProperty({}, DEGRADED, { value: true });
   }
   // `order_key` is the CALLER'S normalised key, not the matched shipment's — v2 of the RPC keys a
   // leading-LOT-token prefix match (`#LOT43838 Complete` → `LOT43838`) under the key we sent, so an
@@ -3246,6 +3254,7 @@ async function getPostReminderDue(url, auth, env) {
   // deal in scope, gate or no gate, which is not the list anyone was shown.)
   // The courier is the only real delivery clock we have — one batched RPC for the whole scan.
   const statusByKey = await fetchShipmentStatus(rows.map(e => e.shipping_order_id), env);
+  const courierDegraded = statusByKey[DEGRADED] === true;
   // In flight = the goods are not with the creator, so there is nothing to chase yet.
   const IN_FLIGHT = new Set(['pending', 'manifested', 'in_transit', 'out_for_delivery']);
   // Came back / never went = not chaseable either, but surfaced separately (see `returned`).
@@ -3364,6 +3373,8 @@ async function getPostReminderDue(url, auth, env) {
     // so — an incomplete chasing list that looks complete is the failure this whole path exists
     // to prevent. `stuck`/`returned` are unaffected: neither uses the anchor map.
     anchor_degraded: anchorDegraded,
+    // >0/true means the list below is NOT trustworthy — see the notes on each read.
+    courier_degraded: courierDegraded,
     armed: false,
   });
 }
