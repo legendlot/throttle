@@ -193,8 +193,12 @@ function ChasingList({ session, router }) {
   const stuck = data?.stuck || [];
   const degraded = Number(data?.anchor_degraded || 0) > 0;
   const courierDown = data?.courier_degraded === true;
+  const truncated = Number(data?.scan_truncated || 0);
   const notice = failed
     ? 'Chasing list unavailable — could not load post reminders. Nobody has been checked; reload before assuming there is nothing to chase.'
+    // Truncation first when it happens: deals past the cap were never looked at, so they are
+    // missing from EVERY panel below, not just the chasing count.
+    : truncated ? `Only the first ${data.scan_cap} of ${truncated} candidate deals were checked — every panel below is incomplete. Raise the scan cap.`
     // Courier first: without it, parcels still in transit come BACK onto the list and the
     // stuck/returned panels read as empty. That is a wronger list than a few missing dates.
     : courierDown ? 'Courier status could not be loaded — parcels still in transit may be listed below, and the stuck and returned panels are not reliable.'

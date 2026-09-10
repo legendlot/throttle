@@ -3196,7 +3196,11 @@ async function getPostReminderDue(url, auth, env) {
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   const scanTotal = rangeTotal(r.range);
-  if (scanTotal != null && scanTotal > CHASE_SCAN_MAX) {
+  // S369: this was the LAST place the chasing list could come back short and still look complete.
+  // The `count=exact` and the log line were already here — what was missing is that a
+  // `console.error` nobody tails is not a signal. It rides out with the other two degraded flags.
+  const scanTruncated = (scanTotal != null && scanTotal > CHASE_SCAN_MAX) ? scanTotal : 0;
+  if (scanTruncated) {
     console.error(`[getPostReminderDue] scan truncated: ${scanTotal} candidates > ${CHASE_SCAN_MAX} — the chasing list is INCOMPLETE`);
   }
   const rows = r.data || [];
@@ -3375,6 +3379,10 @@ async function getPostReminderDue(url, auth, env) {
     anchor_degraded: anchorDegraded,
     // >0/true means the list below is NOT trustworthy — see the notes on each read.
     courier_degraded: courierDegraded,
+    // Total candidates when the outer scan hit CHASE_SCAN_MAX, else 0. Deals beyond the cap were
+    // never examined, so they are missing from every panel, not just `due`.
+    scan_truncated: scanTruncated,
+    scan_cap: CHASE_SCAN_MAX,
     armed: false,
   });
 }
