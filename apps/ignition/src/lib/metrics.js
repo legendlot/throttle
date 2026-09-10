@@ -175,21 +175,58 @@ export function liveDataWarnings(e = {}, platform) {
 // the retired `completed`). Measured 2026-09-04: 0 rows sit at `completed`, so the two agree on
 // every real row today; if one ever appears it renders as not-live here, i.e. no pill, rather than
 // a wrong claim.
+//
+// ⭐ A DECLARED GAP SATISFIES A CHECK (Afshaan, 2026-09-10, S369). `metric_gaps` already carries a
+// REASON per metric (`GAP_REASONS`: internal_gap / gated_data / system_timing) and `unexplainedGaps`
+// below already treats a reason as a known state rather than a hole. This function was the one
+// place that ignored it, so a deal whose gap Reann had explicitly recorded could never be complete
+// — and `followers_gained` is null on every deal ever, which made `complete` true on ZERO of 497
+// deals (measured 2026-09-10). "We know why this number will never exist" is a finished answer.
+//
+// `gapKey` matches the `metric_gaps` key AND the DB column (see RAW_METRICS). ⚠️ **Cost has NO
+// gapKey on purpose: `total_cost` is not a platform metric**, it is a computed money column, and
+// `metric_gaps` only ever spoke about RAW_METRICS. A deal with no cost is genuinely not costed,
+// which is a different problem from a metric the platform will not show us — so cost stays
+// required. If that is ever wanted, it needs its own field, not a borrowed one.
+// ⚠️ `follower_count_at_post` is deliberately NOT gap-satisfiable either (see REQUIRED_METRICS
+// below) — it is not one of these checks, and must not be added as one.
 const COMPLETENESS_CHECKS = [
-  { label: 'Views',            test: (e) => num(e.views) > 0 },
-  { label: 'Likes',            test: (e) => num(e.likes) != null },
-  { label: 'Followers gained', test: (e) => num(e.followers_gained) != null },
-  { label: 'Cost',             test: (e) => num(e.total_cost) > 0 },
+  { label: 'Views',            gapKey: 'views',            test: (e) => num(e.views) > 0 },
+  { label: 'Likes',            gapKey: 'likes',            test: (e) => num(e.likes) != null },
+  { label: 'Followers gained', gapKey: 'followers_gained', test: (e) => num(e.followers_gained) != null },
+  { label: 'Cost',             gapKey: null,               test: (e) => num(e.total_cost) > 0 },
 ];
 
+// A gap counts only when it names a reason. Same truthiness rule `unexplainedGaps` already uses,
+// plus the guards `num()` needs for the same reason: `metric_gaps` is jsonb, so it can arrive as
+// an array, a string or null, and `{}[k]` on those would not throw — it would quietly read as
+// "no gap" for an array and as a CHARACTER for a string. Whitespace is not a reason.
+function declaredGap(e, gapKey) {
+  if (!gapKey) return false;
+  const gaps = e.metric_gaps;
+  if (!gaps || typeof gaps !== 'object' || Array.isArray(gaps)) return false;
+  const reason = gaps[gapKey];
+  return typeof reason === 'string' ? reason.trim() !== '' : !!reason;
+}
+
 /**
- * @param e engagement row
- * @returns { live, complete, missing[] } — `missing` in COMPLETENESS_CHECKS order, and populated
- *          even when the deal is not live so a caller can say what a not-yet-live deal still needs.
- *          `complete` is false unless the deal is live.
+ * @param e engagement row — needs `stage`, the metric columns, and `metric_gaps`. Both callers
+ *          select `*`, so the gaps are present; a caller that hand-picks columns and omits
+ *          `metric_gaps` would silently see every gap as unfilled.
+ * @returns { live, complete, missing[], viaGaps[] } — `missing` in COMPLETENESS_CHECKS order, and
+ *          populated even when the deal is not live so a caller can say what a not-yet-live deal
+ *          still needs. `viaGaps` lists the checks passed by a DECLARED REASON rather than a
+ *          number, so a UI can distinguish "measured" from "explained" instead of implying we
+ *          have data we do not. `complete` is false unless the deal is live.
  */
 export function metricsCompleteness(e = {}) {
   const live = String(e.stage || '').toLowerCase() === 'live';
-  const missing = COMPLETENESS_CHECKS.filter(c => !c.test(e)).map(c => c.label);
-  return { live, complete: live && missing.length === 0, missing };
+  const missing = [];
+  const viaGaps = [];
+  for (const c of COMPLETENESS_CHECKS) {
+    if (c.test(e)) continue;
+    if (declaredGap(e, c.gapKey)) viaGaps.push(c.label);
+    else missing.push(c.label);
+  }
+  return { live, complete: live && missing.length === 0, missing, viaGaps };
 }
