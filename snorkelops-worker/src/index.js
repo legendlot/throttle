@@ -1752,6 +1752,55 @@ export default {
                         total, fetched, limit: PAY_PAGE_LIMIT, truncated });
           }
 
+          // The Tally / vendor-ledger export (Priya, #bugs 2026-09-07). PAID ONLY, by date range.
+          // UTR and payment date only exist once a request is paid, and an unpaid row cannot be
+          // booked — exporting one invites a double entry when it later pays.
+          // ⚠️ This is money data with UTRs on it, so it carries the SAME privilege test as
+          // getPaymentRequests' privileged branch above. `getPOs` in this file has no guard at
+          // all; that is a filed defect, not the pattern to copy here.
+          // The CSV itself is built client-side from these rows by
+          // apps/snorkel/src/lib/paymentsExport.js (covered by test/payments-export.test.mjs) —
+          // this worker is a zero-import single file and cannot import out of apps/.
+          case 'getPaidPaymentsExport': {
+            if (!canPayRequest(P)) return err('No permission', 403);
+            if (!(canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P)))
+              return err('No permission', 403);
+            const from = url.searchParams.get('from') || '';
+            const to   = url.searchParams.get('to')   || '';
+            // ⛔ Absent or malformed dates must REFUSE, never fall through to "everything": a
+            // silently unbounded export of every payment ever made is exactly the file that gets
+            // totalled in a spreadsheet and believed.
+            const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(`${s}T00:00:00Z`).getTime());
+            if (!isDate(from) || !isDate(to))
+              return err('from and to are required as YYYY-MM-DD dates', 400);
+            if (from > to) return err('from must not be after to', 400);
+            // Inclusive of BOTH days, on the IST calendar — Tally books the IST date, and
+            // `paid_at` is a timestamptz stored in UTC, so a plain date comparison would drop
+            // every payment made after 18:30 IST on the last day. `to` + 1 day at IST midnight
+            // is the exclusive upper bound.
+            const toNext = new Date(`${to}T00:00:00Z`);
+            toNext.setUTCDate(toNext.getUTCDate() + 1);
+            const upper = `${toNext.toISOString().slice(0, 10)}T00:00:00+05:30`;
+            // ONE read: the payee name and category label come back as PostgREST embeds off the
+            // two FKs (payee_id, category_key) — batched by definition, never a fetch per row.
+            const q = `?status=eq.paid`
+              + `&paid_at=gte.${encodeURIComponent(`${from}T00:00:00+05:30`)}`
+              + `&paid_at=lt.${encodeURIComponent(upper)}`
+              + `&select=*,payee:payment_payees(id,payee_code,name,payee_type,gstin),category:payment_categories(category_key,label)`
+              + `&order=paid_at.asc&limit=${PAY_PAGE_LIMIT}`;
+            const r = await query('payment_requests', q, { prefer: 'count=exact' });
+            if (!r.ok) return err(r.data);
+            const fetched   = Array.isArray(r.data) ? r.data.length : 0;
+            // 7 payments exist today, so the cap is nowhere near — but PostgREST clamps every
+            // response at db-max-rows (5,000) with no error and no header the caller reads, and
+            // this table only grows. Same truncation shape as getPOs/getPaymentRequests so the
+            // client's PARTIAL marker works without a second idiom.
+            const total     = totalFromRange(r.range);
+            const truncated = total === null ? fetched >= PAY_PAGE_LIMIT : total > fetched;
+            return ok({ rows: r.data || [], from, to,
+                        total, fetched, limit: PAY_PAGE_LIMIT, truncated });
+          }
+
           case 'getPaymentRequest': {
             if (!canPayRequest(P)) return err('No permission', 403);
             const id = url.searchParams.get('id');

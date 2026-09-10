@@ -28,7 +28,10 @@ export function money(v, cur = 'INR') {
 
 // Shared list used by My Requests / Approvals / Finance Queue. `scope` decides both the server
 // filter and whether bulk selection is offered.
-export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, emptyHint, showNewCta }) {
+// `beforeList` is an optional node rendered directly under the page title (My Requests uses it
+// for the privileged paid-payments export). Nothing renders when it is absent, so Approvals and
+// the Finance Queue are byte-identical to before.
+export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, emptyHint, showNewCta, beforeList }) {
   const { userId } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
@@ -105,6 +108,8 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   return (
     <>
       <PageHead title={title} sub={sub} />
+
+      {beforeList}
 
       {truncation && (
         <div style={{
