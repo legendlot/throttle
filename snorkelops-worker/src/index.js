@@ -3153,6 +3153,22 @@ export default {
             }
             const mouldViolC = await moulderPaintedPartViolations(vendorCode, d.lines);
             if (mouldViolC.length) return moulderPaintedPartError(d.vendor_name, mouldViolC);
+            // delivery_address_id needs the same checks changePODeliveryAddress and amendPO run —
+            // this is the THIRD door onto the same column (PO creation itself), and a raw payload
+            // copy would let a PO be created pointing at a deleted or deactivated address. Only
+            // runs when the field is actually sent; null/absent stays a legitimate "no delivery
+            // address" and must keep working.
+            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null && d.delivery_address_id !== '') {
+              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
+                return err('delivery_address_id must be an id', 422);
+              }
+              const newPoAddrId = parseInt(d.delivery_address_id, 10);
+              if (!Number.isFinite(newPoAddrId)) return err('delivery_address_id must be an id', 422);
+              const newPoAddrR = await query('company_addresses', `?id=eq.${newPoAddrId}&limit=1`);
+              const newPoAddr = newPoAddrR.data?.[0] || null;
+              if (!newPoAddr) return err('Delivery address not found', 404);
+              if (!newPoAddr.active) return err(`${newPoAddr.label} is deactivated — pick an active address`, 400);
+            }
             const srcCode  = countryToISO(d.source||'Other');
             const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
             const seq      = await nextSeq('po','');
