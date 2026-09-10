@@ -211,7 +211,7 @@ export default function ScanFeedPage() {
 
         <div style={{ flex: 1 }} />
 
-        <input data-search-primary type="text" placeholder="Search UPC / box label…  · /" style={searchInput}
+        <input data-search-primary type="text" placeholder="Search UPC / box label / AWB…  · /" style={searchInput}
           value={upcSearch} onChange={e => setUpcSearch(e.target.value)} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }}>
           <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
@@ -255,14 +255,31 @@ export default function ScanFeedPage() {
         ) : displayRows.length === 0 ? (
           <div style={{ padding: '36px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--t3)' }}>
             <Icon name="scan" size={20} />
-            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No dispatch scans found</span>
+            {/* An 11–14 digit all-numeric search is an AWB (a UPC is LOT-<8 digits>, so they
+                cannot collide). AWBs are captured at PACK only from 2026-09-09, so "no match" is
+                overwhelmingly "this box predates the capture", NOT "this AWB does not exist" —
+                saying "not found" here would send the floor hunting for a data bug. */}
+            {upcMode && /^\d{11,14}$/.test(upcSearch.trim()) ? (
+              <>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No unit is linked to AWB {upcSearch.trim()}</span>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)', maxWidth: 420, textAlign: 'center' }}>
+                  AWBs are captured at PACK from 9 Sep 2026 onwards. A box packed before that has no AWB recorded, so this is expected rather than a missing unit.
+                </span>
+              </>
+            ) : (
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No dispatch scans found</span>
+            )}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['Time','UPC','Activity','Line','Product','Operator','Loop','Status'].map(h => (
+                  {/* AWB only in search mode — it answers "which AWB is this unit on?", which is
+                      the other half of the AWB search (Varnit, #bugs 1789020905.624409). The
+                      date-filtered dispatch view keeps its original 8 columns. */}
+                  {(upcMode ? ['Time','UPC','AWB','Activity','Line','Product','Operator','Loop','Status']
+                            : ['Time','UPC','Activity','Line','Product','Operator','Loop','Status']).map(h => (
                     <th key={h} style={thStyle}><span className="eyebrow">{h}</span></th>
                   ))}
                 </tr>
@@ -280,6 +297,15 @@ export default function ScanFeedPage() {
                         </span>
                       </td>
                       <td style={tdBase}><span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{s.upc || '—'}</span></td>
+                      {upcMode && (
+                        // order_link is null on every box packed before the 2026-09-09 gate fix —
+                        // by construction, not a miss — so the placeholder reads "not captured".
+                        <td style={tdBase}>
+                          {s.order_link?.awb
+                            ? <span className="num" style={{ fontSize: 11.5, color: 'var(--t1)' }}>{s.order_link.awb}</span>
+                            : <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t4)' }} title="AWB is captured at PACK from 9 Sep 2026 onwards; earlier boxes have none">not captured</span>}
+                        </td>
+                      )}
                       <td style={tdBase}><ActivityBadge activity={s.activity} /></td>
                       <td style={tdBase}>
                         {s.line ? <LineChip id={s.line} /> : <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)' }}>—</span>}
