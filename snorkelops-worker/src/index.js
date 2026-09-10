@@ -3433,6 +3433,21 @@ export default {
               change_summary: (d.change_summary||`Amendment to Rev ${newRev}`) + (priceEdits.length ? ` · prices: ${priceSummary}` : ''),
               snapshot: JSON.stringify({ header: po, lines: linesR.data||[] }),
             });
+            // delivery_address_id needs the same checks changePODeliveryAddress runs — this is
+            // the OTHER door onto the same column, and a generic field copy with no validation
+            // would leave it narrower there than here. Only runs when the field is actually sent;
+            // the Amend modal never sends it, so the normal amend path is unaffected.
+            if (d.delivery_address_id !== undefined && d.delivery_address_id !== null && d.delivery_address_id !== '') {
+              if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
+                return err('delivery_address_id must be an id', 422);
+              }
+              const amendAddrId = parseInt(d.delivery_address_id, 10);
+              if (!Number.isFinite(amendAddrId)) return err('delivery_address_id must be an id', 422);
+              const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrId}&limit=1`);
+              const amendAddr = amendAddrR.data?.[0] || null;
+              if (!amendAddr) return err('Delivery address not found', 404);
+              if (!amendAddr.active) return err(`${amendAddr.label} is deactivated — pick an active address`, 400);
+            }
             const updates = { revision: newRev, updated_at: new Date().toISOString() };
             ['vendor_name','vendor_code','currency','payment_terms','incoterms','expected_delivery','lead_time_days',
               'port_of_loading','freight_forwarder','forwarder_code','expected_ready_date','shipping_date',

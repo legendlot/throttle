@@ -6,6 +6,7 @@ import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
+import { STATUS_TABS, isINR, filterByTab, valueRowsForTab, otherStatusRows } from '@/lib/paymentList.js';
 
 export const STATUS_TONE = {
   submitted: 'gray', pending_approval: 'yellow', approved: 'blue', held: 'orange',
@@ -17,17 +18,6 @@ export const STATUS_LABEL = {
   held: 'On hold with Finance',
   paid: 'Paid', rejected: 'Rejected', cancelled: 'Cancelled',
 };
-
-// Tabs group the worker's statuses the way the requester thinks about them.
-export const STATUS_TABS = [
-  { key: 'all',       label: 'All',       statuses: null },
-  { key: 'submitted', label: 'Submitted', statuses: ['submitted', 'pending_approval'] },
-  { key: 'approved',  label: 'Approved',  statuses: ['approved', 'held'] },
-  { key: 'paid',      label: 'Paid',      statuses: ['paid'] },
-  { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled', 'rejected'] },
-];
-// Closed = nobody owes this any more. Excluded from the headline Value.
-const CLOSED = new Set(['cancelled', 'rejected']);
 
 export function money(v, cur = 'INR') {
   const n = Number(v);
@@ -69,16 +59,18 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   // Status tabs (My Requests only — Approvals and Finance are status-pinned by the worker).
   // Client-side over the loaded rows, so the truncation banner must not claim they narrow the read.
   const tabs = scope === 'mine' ? STATUS_TABS : null;
-  const visible = tabs && tab !== 'all' ? rows.filter(r => STATUS_TABS.find(t => t.key === tab).statuses.includes(r.status)) : rows;
+  const visible = tabs ? filterByTab(rows, tab) : rows;
   // A cancelled or rejected request is not money anyone still owes — it must never sit in the
   // headline Value (Siddhanth, #bugs 1788853477: a cancelled ₹2,61,000 kept inflating the total).
   // On the All tab the Value is the ACTIVE value; on a specific tab it is that tab's value, so the
   // Cancelled tab still shows what was cancelled for tracking.
-  const valueRows = tab === 'all' ? visible.filter(r => !CLOSED.has(r.status)) : visible;
+  const valueRows = valueRowsForTab(rows, tabs ? tab : 'all');
   // Never add rupees to dollars: the headline is INR-only, and any other currency is counted, not summed.
-  const isINR = r => (r.currency || 'INR') === 'INR';
   const total = valueRows.filter(isINR).reduce((a, r) => a + (Number(r.amount_to_pay) || 0), 0);
   const foreign = valueRows.filter(r => !isINR(r)).length;
+  // An 8th status (outside every tab's list) must still show up somewhere, or it can hide
+  // indefinitely behind a tab count that never mentions it (2026-09-10).
+  const other = tabs ? otherStatusRows(rows).length : 0;
 
   function toggle(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -145,6 +137,18 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
               </button>
             );
           })}
+          {/* A status outside every tab's list (e.g. an 8th value added to the DB check
+              constraint) would otherwise be visible on All only — this chip is the tripwire.
+              Not clickable: there is no tab-filter for "unknown" to switch to. */}
+          {other > 0 && (
+            <span style={{
+              padding: '6px 12px', borderRadius: 999, fontSize: 13,
+              border: '1px solid var(--warn-br, #fdba74)', background: 'var(--warn-bg, #fff7ed)',
+              color: 'var(--warn-fg, #9a3412)', fontWeight: 500,
+            }}>
+              Other <span style={{ opacity: 0.7 }}>{other}</span>
+            </span>
+          )}
         </div>
       )}
 
