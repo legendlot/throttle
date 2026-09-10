@@ -176,13 +176,26 @@ function clockLabel(d) {
 
 function ChasingList({ session, router }) {
   const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!session) return;
-    ignitionopsGet('getPostReminderDue', { days: 10 }, session).then(setData).catch(() => setData(null));
+    setFailed(false);
+    ignitionopsGet('getPostReminderDue', { days: 10 }, session)
+      .then(d => { setData(d); setFailed(false); })
+      // S369: a failure and "nothing to chase" MUST NOT look the same. Both used to
+      // `setData(null)` and the whole panel returned null, so a broken read rendered as an
+      // empty, reassuring screen. That matters more since the worker now THROWS on a failed
+      // engagement_history chunk instead of quietly aging deals from a missing anchor.
+      .catch(() => { setData(null); setFailed(true); });
   }, [session]);
   const returned = data?.returned || [];
   const stuck = data?.stuck || [];
+  if (failed) return (
+    <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', fontFamily: 'var(--font-mono)', fontSize: 12, color: '#FF6B00' }}>
+      Chasing list unavailable — could not load post reminders. Nobody has been checked; reload before assuming there is nothing to chase.
+    </div>
+  );
   if (!data || (!data.count && !returned.length && !stuck.length)) return null;
   return (
     <>
