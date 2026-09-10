@@ -34,15 +34,20 @@ const PO_CATEGORIES = [
   { key: 'other',         Icon: Pencil,      title: 'Custom / Other', sub: 'Any',                desc: 'Free-form lines, factory ad-hoc',             order_type: '',           source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
 ];
 
+// ⚠️ Labels must describe what the chip ACTUALLY selects — see the groupCats map in
+// loadBomChecklist. Widened 2026-09-10: 'car' now also takes Drone + Train (it is really
+// "the main unit", not only cars), 'para' also takes Sticker, 'consumables' also takes
+// Battery/RC Battery + Fastener, 'accessories' also takes Charger Cable. If you change
+// groupCats, change the label in the same edit.
 const BOM_GROUPS = [
   { key: 'full',        label: '🚗 Full Product' },
-  { key: 'car',         label: '🔩 Car Parts' },
+  { key: 'car',         label: '🔩 Main Unit' },
   { key: 'remote',      label: '📡 Remote Only' },
   { key: 'accessories', label: '🧰 Accessories' },
   { key: 'metal',       label: '⚙ Metal Parts' },
   { key: 'packaging',   label: '📦 Packaging' },
-  { key: 'para',        label: '📄 Para' },
-  { key: 'consumables', label: '🔧 Consumables' },
+  { key: 'para',        label: '📄 Para & Stickers' },
+  { key: 'consumables', label: '🔧 Consumables & Fasteners' },
 ];
 
 // ⚠️ 'Charge' (S322) marks a NON-RECEIVABLE line — freight / transportation / die / tool /
