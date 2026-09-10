@@ -70,6 +70,13 @@ function widgetJs(botId, workerBase) {
     var h = previewBarHeight();
     btn.style.bottom = (BASE_BTN_BOTTOM + h) + 'px';
     panel.style.bottom = (BASE_PANEL_BOTTOM + h) + 'px';
+    // ⚠️ The height cap has to move with the offset or the panel is pushed off the TOP.
+    // Its own style is height:min(520px, 100vh - 120px), sized for bottom:84. Raising the
+    // bottom by h without raising the subtrahend overflows once 84+h+height > vh — with a
+    // 68px bar that is any viewport under ~672px, and the part clipped is the dark header
+    // strip carrying the ✕ close button. Caught by the S368 hostile review, not by the smoke,
+    // which ran at 964px. h=0 restores the original string exactly.
+    panel.style.height = 'min(520px, calc(100vh - ' + (120 + h) + 'px))';
   }
   applyPreviewOffset();
   // The bar is injected by Shopify AFTER us, and can then be hidden or restored, so one
