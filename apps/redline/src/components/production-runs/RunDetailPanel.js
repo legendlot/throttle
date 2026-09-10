@@ -5,9 +5,42 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { hasPermission } from '@throttle/auth';
 import { ReceiptPanel } from './ReceiptPanel.js';
 
-// Picklist category/type ordering — must match issue-queue/page.js (PICK_CAT_ORDER / PICK_TYPE_ORDER)
-const PICK_CAT_ORDER  = ['Car', 'Remote', 'Accessories', 'Packaging', 'Para', 'Batteries', 'License'];
-const PICK_TYPE_ORDER = ['Electronic', 'Metal', 'Plastic', 'Cardboard', 'Paper', 'Fabric', 'Chemical', 'Rubber'];
+// Picklist category/type ordering — MUST STAY IDENTICAL to garage issue-queue/page.js.
+// These two copies drifted from the data together and were re-derived together on 2026-09-10;
+// if you edit one, edit the other in the same commit.
+//
+// ⚠️ ORDER IS LOAD-BEARING TWICE OVER. It is the pick order, AND findIndex + `includes` means
+// the FIRST substring match wins — so a more specific string must come BEFORE the one it
+// contains: 'Primary Packaging' before 'Packaging', 'RC Battery' before 'Battery'. Reversed,
+// the specific category silently collapses into the general one.
+//
+// Re-derived 2026-09-10 against store.bom_register where is_active (2,303 rows / 15 categories).
+// Before: 'Batteries' and 'License' matched NOTHING, and nine live categories were absent, so
+// 506 rows (22%) fell to the catch-all key 90 and sorted last in one undifferentiated clump —
+// Sticker 200 · Fastener 127 · Drone 60 · Train 28 · Battery 26 · Charger Cable 23 · SKD 20 ·
+// RC Battery 11 · Metal 11. Worst case was a drone or train run, where the MAIN UNIT sorted
+// below packaging. Nothing was ever dropped or hidden: this is a sort key, not a filter.
+// The original five keep their relative order (Car → Remote → Accessories → Packaging → Para)
+// so the floor sees no reshuffle of what already worked; the rest slot in around them.
+const PICK_CAT_ORDER  = [
+  'Car', 'Drone', 'Train',            // the main unit, whichever product line
+  'Remote',
+  'Metal', 'Fastener', 'SKD',         // sub-assembly hardware
+  'RC Battery', 'Battery', 'Charger Cable',
+  'Accessories',
+  'Primary Packaging', 'Packaging',   // specific before general — see the warning above
+  'Para', 'Sticker',                  // printed goods last
+];
+// Exact match (===), so no substring precedence to worry about here. 'Cardboard', 'Fabric' and
+// 'Chemical' matched nothing and are dropped; the live values that were missing are added.
+// A blank part_type stays unmatched on purpose — no type means no type ordering.
+const PICK_TYPE_ORDER = [
+  'Electronic', 'Electronics', 'Electrical', 'Battery',
+  'Metal', 'Hardware',
+  'Plastic', 'Plastic + Metal', 'Plastic + Rubber', 'Rubber', 'Foam', 'Velcro',
+  'Paper', 'Sticker', 'Para',
+  'Component', 'Purchased', 'Accessories', 'Packaging',
+];
 function pickSortKey(p) {
   const cat  = (p.category || '').trim();
   const type = (p.part_type || '').trim();
