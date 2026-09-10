@@ -103,7 +103,13 @@ function formatDateTime(raw) {
 
 function pickSortKey(p, materialCache) {
   const cat  = (p.category || '').trim();
-  const type = ((materialCache[p.part_code] || {}).part_type || '').trim();
+  // Prefer the part_type on the pick row (store.bom_register, what the worker returns and
+  // what Redline sorts on) and fall back to the material cache (store.material_master) for
+  // the WO paths, whose lines are built here and carry no part_type. 268 of 2,074 active BOM
+  // part codes disagree between the two tables — reading the cache first sorted those into
+  // the catch-all while Redline gave them a real position, so the same run printed in two
+  // different orders.
+  const type = ((p.part_type || (materialCache[p.part_code] || {}).part_type) || '').trim();
   const catI  = PICK_CAT_ORDER.findIndex((c) => cat.toLowerCase().includes(c.toLowerCase()));
   const typeI = PICK_TYPE_ORDER.findIndex((t) => t.toLowerCase() === type.toLowerCase());
   return (catI < 0 ? 90 : catI) * 1000 + (typeI < 0 ? 90 : typeI);
@@ -813,6 +819,8 @@ export default function IssueQueuePage() {
     let lastCat = null;
     let lastType = null;
     rows.forEach((p) => {
+      // 'Other' here is the same bucket pickSortKey keys as 90 (no category match) — one
+      // group under two names, heading vs sort key.
       const cat  = (p.category || 'Other').trim();
       const type = ((materials[p.part_code] || {}).part_type || '—').trim();
       if (cat !== lastCat) {
@@ -1608,6 +1616,8 @@ function RunPickListTable({ lines, fbu, run, materialCache, pickedMap }) {
     const out = [];
     let lastCat = null, lastType = null, current = null;
     sorted.forEach((p) => {
+      // 'Other' here is the same bucket pickSortKey keys as 90 (no category match) — one
+      // group under two names, heading vs sort key.
       const cat = (p.category || 'Other').trim();
       const type = ((materialCache[p.part_code] || {}).part_type || '—').trim();
       if (cat !== lastCat) {

@@ -3171,6 +3171,8 @@ export default {
               const newPoAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
               if (!Number.isFinite(newPoAddrId)) return err('delivery_address_id must be an id', 422);
               const newPoAddrR = await query('company_addresses', `?id=eq.${newPoAddrId}&limit=1`);
+              // A failed lookup is not a missing address — see amendPO.
+              if (!newPoAddrR.ok) return err('Address lookup failed', 502);
               const newPoAddr = newPoAddrR.data?.[0] || null;
               if (!newPoAddr) return err('Delivery address not found', 404);
               if (!newPoAddr.active) return err(`${newPoAddr.label} is deactivated — pick an active address`, 400);
@@ -3441,17 +3443,31 @@ export default {
             // no po_revisions row. That path never bumps purchase_orders.revision, and
             // po_revisions has no unique key, so an orphan snapshot collides with the next
             // successful amend and Revision History shows one revision twice.
-            // '' means CLEAR (write null), not "not sent" — same call as postPO.
+            // A strict null or a strict '' means CLEAR (write null); NOTHING else does. postPO
+            // trims before that test, which is right there — the <select>'s empty option posts
+            // '' and creating a PO with no address is normal, so anything blank-ish is a
+            // no-address create. Here it is a DESTRUCTIVE overwrite of a stored address, so
+            // '   ', [] and [null] (all '' after String()+trim) must be refused, not obeyed:
+            // no caller means "wipe the delivery address" by sending whitespace.
             const amendAddressSent = d.delivery_address_id !== undefined;
+            const amendAddressClear = d.delivery_address_id === null || d.delivery_address_id === '';
             let amendDeliveryAddressId = null;
-            if (amendAddressSent && d.delivery_address_id !== null
-                && String(d.delivery_address_id).trim() !== '') {
+            if (amendAddressSent && !amendAddressClear) {
+              // Only a string or a number can be an id. Arrays and objects are rejected on TYPE,
+              // because String([2]) === '2' passes the regex below and would resolve to a real
+              // address the caller never named.
+              if (typeof d.delivery_address_id !== 'string' && typeof d.delivery_address_id !== 'number') {
+                return err('delivery_address_id must be an id', 422);
+              }
               if (!/^\d+$/.test(String(d.delivery_address_id).trim())) {
                 return err('delivery_address_id must be an id', 422);
               }
               const amendAddrId = parseInt(String(d.delivery_address_id).trim(), 10);
               if (!Number.isFinite(amendAddrId)) return err('delivery_address_id must be an id', 422);
               const amendAddrR = await query('company_addresses', `?id=eq.${amendAddrId}&limit=1`);
+              // A failed lookup is not a missing address — blaming the transport failure on the
+              // id sends the caller off to fix a row that is fine.
+              if (!amendAddrR.ok) return err('Address lookup failed', 502);
               const amendAddr = amendAddrR.data?.[0] || null;
               if (!amendAddr) return err('Delivery address not found', 404);
               // Mirrors changePODeliveryAddress's S360 #11 exemption: re-sending the PO's OWN
@@ -3466,8 +3482,25 @@ export default {
               // The PARSED number is what gets written, never the raw payload value.
               amendDeliveryAddressId = amendAddrId;
             }
-            const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
+            // The full-line-replace guards run HERE, with the other pre-insert guards, not down
+            // at the replace itself: a rejected amend must leave no po_revisions row and must not
+            // bump the revision or commit the header. Below the snapshot they returned 409/422
+            // AFTER writing all three.
+            if (Array.isArray(d.lines) && d.lines.length > 0) {
+              // GUARD (2026-07-20): the replace path DELETEs every line and re-inserts from the
+              // client payload — it renumbers line_no and rewrites qty_received. On a PO with
+              // goods already booked against it that silently destroys the receiving
+              // reconciliation. No UI sends `lines` today (the Amend modal is header-only); to
+              // APPEND a line use the additive `addPOLines` action instead.
+              const received = (linesR.data||[]).some(l => (parseFloat(l.qty_received)||0) > 0);
+              if (received) {
+                return err('This PO already has received quantities — a full line replace would rewrite that history. Use Add Line to append instead.', 409);
+              }
+              const dupMouldA = duplicateMould(d.lines);
+              if (dupMouldA) return err('Mould ' + dupMouldA + ' is on more than one line — one PO line per mould (a second line doubles every expected receiving quantity).', 422);
+            }
+            const newRev = po.revision+1;
             // Resolve the price edits against the stored rows BEFORE the snapshot — a price
             // naming a line on another PO must not bump this one's revision (same rule as the
             // guards above). A price equal to the stored one is dropped, not logged as a change.
@@ -3506,18 +3539,8 @@ export default {
             const amendUpd = await update('purchase_orders', updates, `po_number=eq.${encodeURIComponent(d.po_number)}`);
             if (!amendUpd.ok) return err('PO amendment failed: '+JSON.stringify(amendUpd.data), 500);
             if (Array.isArray(d.lines)&&d.lines.length>0) {
-              // GUARD (2026-07-20): this path DELETEs every line and re-inserts from the client
-              // payload — it renumbers line_no and rewrites qty_received. On a PO with goods
-              // already booked against it that silently destroys the receiving reconciliation.
-              // No UI sends `lines` today (the Amend modal is header-only); to APPEND a line use
-              // the additive `addPOLines` action instead. Refuse the full replace once anything
-              // has been received.
-              const received = (linesR.data||[]).some(l => (parseFloat(l.qty_received)||0) > 0);
-              if (received) {
-                return err('This PO already has received quantities — a full line replace would rewrite that history. Use Add Line to append instead.', 409);
-              }
-              const dupMouldA = duplicateMould(d.lines);
-              if (dupMouldA) return err('Mould ' + dupMouldA + ' is on more than one line — one PO line per mould (a second line doubles every expected receiving quantity).', 422);
+              // Both guards on this path (received quantities, duplicate mould) ran above, before
+              // the snapshot — see the block ahead of `newRev`.
               await sb(`/rest/v1/po_lines?po_number=eq.${encodeURIComponent(d.po_number)}`, { method: 'DELETE' });
               const partHsnMasterA = await partHsnMasterAll();
               const prevPartHsn = new Map((linesR.data || []).filter(l => l.part_code).map(l => [l.part_code, normHsn(l.hsn_code)]));
@@ -3612,6 +3635,8 @@ export default {
             // A PO must never point at a deactivated address — the print letterhead and the
             // "where to ship" answer both read this row straight out.
             const addrR = await query('company_addresses', `?id=eq.${newAddrId}&limit=1`);
+            // A failed lookup is not a missing address — see amendPO.
+            if (!addrR.ok) return err('Address lookup failed', 502);
             const newAddr = addrR.data?.[0] || null;
             if (!newAddr) return err('Delivery address not found', 404);
             // S360 hostile review #11: the no-op check runs BEFORE the active check on purpose.
