@@ -171,17 +171,24 @@ export default function ScanFeedPage() {
   const baseRows = upcMode ? upcScans : scans;
   const trimmed  = upcSearch.trim().toUpperCase();
 
+  // Scoped to dispatch activities but BEFORE the user's chips. Kept separate so the empty
+  // state can tell "this AWB has no dispatch scans yet" apart from "your chips hid them" —
+  // DISPATCH_ACTS is an always-on scope the user cannot clear, the chips are not.
+  const dispatchScoped = useMemo(
+    () => (upcMode ? (baseRows || []).filter(r => DISPATCH_ACTS.includes(r.activity)) : (baseRows || [])),
+    [baseRows, upcMode],
+  );
+
   const displayRows = useMemo(() => {
-    let rows = baseRows || [];
+    let rows = dispatchScoped;
     // In UPC mode the server returns the unit's full history — scope to dispatch
     // activities so the feed stays dispatch-only, and honour the voided/activity chips.
     if (upcMode) {
-      rows = rows.filter(r => DISPATCH_ACTS.includes(r.activity));
       if (!showVoided) rows = rows.filter(r => !r.voided);
       if (activityFilter) rows = rows.filter(r => r.activity === activityFilter);
     }
     return rows;
-  }, [baseRows, upcMode, showVoided, activityFilter]);
+  }, [dispatchScoped, upcMode, showVoided, activityFilter]);
 
   const dateInput = { ...inputStyle, width: 'auto', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 12.5, colorScheme: 'dark' };
   const searchInput = { ...inputStyle, width: 220, padding: '7px 11px', fontSize: 13 };
@@ -255,17 +262,35 @@ export default function ScanFeedPage() {
         ) : displayRows.length === 0 ? (
           <div style={{ padding: '36px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--t3)' }}>
             <Icon name="scan" size={20} />
-            {/* An 11–14 digit all-numeric search is an AWB (a UPC is LOT-<8 digits>, so they
-                cannot collide). AWBs are captured at PACK only from 2026-09-09, so "no match" is
-                overwhelmingly "this box predates the capture", NOT "this AWB does not exist" —
-                saying "not found" here would send the floor hunting for a data bug. */}
-            {upcMode && /^\d{11,14}$/.test(upcSearch.trim()) ? (
+            {/* A 10–18 digit all-numeric search is an AWB — that window is the SCANNER's own
+                `looksLikeAwb()` (02_scanner/index.html:4281, /^[0-9]{10,18}$/), the only thing
+                that can write an awb. A UPC is LOT-<8 digits>, so they cannot collide.
+                ⚠️ This said 11–14 for four hours, measured off existing rows instead of the
+                producing gate, and a real 15-digit Xpressbees AWB fell straight through to the
+                generic "not found" — the very thing this copy exists to prevent.
+                AWBs are captured at PACK only from 2026-09-09, so a genuine no-match is
+                overwhelmingly "this box predates the capture", NOT "this AWB does not exist". */}
+            {upcMode && /^\d{10,18}$/.test(upcSearch.trim()) && baseRows.length === 0 ? (
               <>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No unit is linked to AWB {upcSearch.trim()}</span>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)', maxWidth: 420, textAlign: 'center' }}>
                   AWBs are captured at PACK from 9 Sep 2026 onwards. A box packed before that has no AWB recorded, so this is expected rather than a missing unit.
                 </span>
               </>
+            ) : upcMode && dispatchScoped.length > 0 ? (
+              /* ⛔ The server DID find units and they DO have dispatch scans — the user's chips
+                 hid them. Saying "no unit is linked to this AWB" here would be a flatly false
+                 claim produced by a chip they forgot was on: an AWB whose units have no DOUT
+                 scan yet reproduces it on the first try with the Dispatched chip active. */
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, maxWidth: 420, textAlign: 'center' }}>
+                {dispatchScoped.length} dispatch scan{dispatchScoped.length === 1 ? '' : 's'} found, but the activity / voided filters above hide them all — clear the filters to see them.
+              </span>
+            ) : upcMode && baseRows.length > 0 ? (
+              /* Units found, but none has reached a dispatch station yet. Not a miss, and not
+                 something a filter change will reveal — this screen is dispatch-only by design. */
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, maxWidth: 440, textAlign: 'center' }}>
+                Found {new Set(baseRows.map(r => r.upc).filter(Boolean)).size} unit(s), but none has a dispatch scan yet — they are still in production. This screen shows dispatch activity only.
+              </span>
             ) : (
               <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No dispatch scans found</span>
             )}
