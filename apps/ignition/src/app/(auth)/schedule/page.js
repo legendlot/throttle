@@ -191,14 +191,21 @@ function ChasingList({ session, router }) {
   }, [session]);
   const returned = data?.returned || [];
   const stuck = data?.stuck || [];
-  if (failed) return (
+  const degraded = Number(data?.anchor_degraded || 0) > 0;
+  const notice = failed
+    ? 'Chasing list unavailable — could not load post reminders. Nobody has been checked; reload before assuming there is nothing to chase.'
+    : degraded ? 'Some deals could not be dated and are missing from the list below — treat it as incomplete.'
+    : null;
+  const Notice = () => (
     <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', fontFamily: 'var(--font-mono)', fontSize: 12, color: '#FF6B00' }}>
-      Chasing list unavailable — could not load post reminders. Nobody has been checked; reload before assuming there is nothing to chase.
+      {notice}
     </div>
   );
-  if (!data || (!data.count && !returned.length && !stuck.length)) return null;
+  if (failed) return <Notice />;
+  if (!data || (!data.count && !returned.length && !stuck.length)) return degraded ? <Notice /> : null;
   return (
     <>
+    {notice && <Notice />}
     {data.count > 0 && (
     <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
       <button onClick={() => setOpen(o => !o)}

@@ -3171,7 +3171,7 @@ const CHASE_SCAN_MAX = 500;
 const ANCHOR_CHUNK = 100;   // ids per engagement_history `in.(…)` read — see the anchor block below
 
 async function getPostReminderDue(url, auth, env) {
-  const days = intParam(url, 'days', 10, { min: 1 });
+  const days = intParam(url, 'days', 10, { min: 1, max: 365 });   // max: ?days=1e9 made new Date() throw RangeError (S369 review)
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
   // posted, and nobody has already written the deal off.
@@ -3202,18 +3202,35 @@ async function getPostReminderDue(url, auth, env) {
   // for all 139 of them. One batched read — never a query per row.
   const needAnchor = rows.filter(e => !e.delivered_date && !e.shipping_date).map(e => e.id);
   const entered = new Map();
+  let anchorDegraded = 0;   // chunks that failed — reported to the caller, never swallowed
   if (needAnchor.length) {
     // Chunked, in parallel. 500 UUIDs joined is a ~19 KB query string; an over-long URL comes
     // back as an HTML error page, and a string iterates as characters — so every deal read as
     // "no anchor" and silently dropped off the list (S368 hostile review). 100 ids ≈ 3.7 KB.
-    // A failed or non-array chunk now THROWS (→ 500) instead of passing as an empty read.
+    //
+    // ⚠️ S369 hostile review: this DEGRADES per chunk, it does NOT throw. Throwing was the first
+    // fix and it was worse than the bug — the handler 500s, and the Schedule page renders the
+    // whole panel as nothing, taking the `stuck` and `returned` lists down with it even though
+    // NEITHER uses this map. Measured 2026-09-10: only 24 of the 77 chasing rows anchor on
+    // history; 53 anchor on the courier's own `delivered_at`. So a failed chunk costs at most
+    // its share of those 24 — losing all 96 rows to be "safe" was the wrong trade.
+    // `count=exact` + the 2000 cap are checked per chunk so a truncated read is LOUD.
     const reads = chunk(needAnchor, ANCHOR_CHUNK).map(ids => sb(
       `/rest/v1/engagement_history?engagement_id=in.(${ids.join(',')})`
       + '&stage_to=in.(shipped,delivered)&select=engagement_id,created_at&order=created_at.desc&limit=2000',
-      env,
-    ));
+      env, { headers: { Prefer: 'count=exact' } },
+    ).catch(e => ({ ok: false, status: 0, data: null, error: e })));
     for (const hr of await Promise.all(reads)) {
-      if (!hr.ok || !Array.isArray(hr.data)) throw new Error(`engagement_history anchor read failed (${hr.status})`);
+      if (!hr.ok || !Array.isArray(hr.data)) {
+        anchorDegraded++;
+        console.error(`[getPostReminderDue] anchor chunk failed (${hr.status}) — list is INCOMPLETE`);
+        continue;
+      }
+      const total = rangeTotal(hr.range);
+      if (total != null && total > hr.data.length) {
+        anchorDegraded++;
+        console.error(`[getPostReminderDue] anchor chunk truncated: ${total} rows > ${hr.data.length} returned`);
+      }
       // Keep the LATEST transition per deal: a deal that went shipped → delivered should age from
       // the delivery, and one bounced back and re-shipped should age from the re-ship, not the first.
       for (const h of hr.data) if (!entered.has(h.engagement_id)) entered.set(h.engagement_id, h.created_at);
@@ -3343,6 +3360,10 @@ async function getPostReminderDue(url, auth, env) {
     unreachable: due.filter(d => !d.email).length,
     returned,
     stuck,
+    // S369: >0 means some deals could not be aged and are MISSING from `due`. The page must say
+    // so — an incomplete chasing list that looks complete is the failure this whole path exists
+    // to prevent. `stuck`/`returned` are unaffected: neither uses the anchor map.
+    anchor_degraded: anchorDegraded,
     armed: false,
   });
 }
