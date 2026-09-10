@@ -65,6 +65,26 @@ function rangeTotal(range) {
   return m ? Number(m[1]) : null;
 }
 
+// Integer query param, NaN-proof. `?limit=abc` used to reach PostgREST as `&limit=NaN` — Number()
+// gives NaN and Math.min/Math.max both propagate it (S368 hostile review; nine sites shared the
+// shape, not the one the finding named). Missing, empty, non-numeric or below `min` → the default;
+// above `max` → clamped. `limit=0` therefore still means "default", as it always has.
+export function intParam(url, name, dflt, { min = 0, max = Infinity } = {}) {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === '') return dflt;
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < min) return dflt;
+  return Math.min(n, max);
+}
+
+// Split an array into runs of `size` (last one shorter). For batching PostgREST `in.(…)` filters
+// whose joined ids would otherwise build a URL too long to serve.
+export function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 async function sbStore(path, env, opts = {}) {
   const res = await fetch(`${env.SUPABASE_URL}${path}`, {
     ...opts,
@@ -500,8 +520,8 @@ const INFLUENCER_SORTS = {
 };
 
 async function getInfluencers(url, auth, env) {
-  const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const limit = intParam(url, 'limit', 50, { min: 1, max: 200 });
+  const offset = intParam(url, 'offset', 0);
   const order = INFLUENCER_SORTS[url.searchParams.get('sort')] || INFLUENCER_SORTS.recent;
 
   const filters = influencerScopeFilters(url);
@@ -680,8 +700,8 @@ async function getEngagements(url, auth, env) {
   const dateFrom = url.searchParams.get('date_from');
   const dateTo = url.searchParams.get('date_to');
   const search = (url.searchParams.get('search') || '').trim();
-  const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const limit = intParam(url, 'limit', 50, { min: 1, max: 200 });
+  const offset = intParam(url, 'offset', 0);
 
   const stages = url.searchParams.get('stages');   // multi-stage filter (Reann #11)
   const filters = [];
@@ -1002,8 +1022,8 @@ async function getEngagementVideos(url, auth, env) {
 async function getRoster(url, auth, env) {
   // Derived: influencers who have at least one engagement past 'shipped'.
   const rating = url.searchParams.get('rating');
-  const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const limit = intParam(url, 'limit', 100, { min: 1, max: 500 });
+  const offset = intParam(url, 'offset', 0);
 
   const filters = [];
   if (rating) filters.push(`quality_rating=eq.${encodeURIComponent(rating)}`);
@@ -1024,8 +1044,8 @@ async function getDiscountCodes(url, auth, env) {
   const utilized = url.searchParams.get('utilized');
   const pool = url.searchParams.get('pool');
   const engagementId = url.searchParams.get('engagement_id');
-  const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const limit = intParam(url, 'limit', 100, { min: 1, max: 500 });
+  const offset = intParam(url, 'offset', 0);
 
   const filters = [];
   if (utilized != null) filters.push(`utilized=eq.${utilized === 'true'}`);
@@ -3148,9 +3168,10 @@ async function getDealBriefPreview(url, auth, env) {
 // separate "(3) Delhivery status → follow-up reminder" request — they are the same nudge with
 // two triggers, and building them separately would let both fire at one creator.
 const CHASE_SCAN_MAX = 500;
+const ANCHOR_CHUNK = 100;   // ids per engagement_history `in.(…)` read — see the anchor block below
 
 async function getPostReminderDue(url, auth, env) {
-  const days = Math.max(Number(url.searchParams.get('days') || 10), 1);
+  const days = intParam(url, 'days', 10, { min: 1 });
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
   // posted, and nobody has already written the deal off.
@@ -3182,14 +3203,21 @@ async function getPostReminderDue(url, auth, env) {
   const needAnchor = rows.filter(e => !e.delivered_date && !e.shipping_date).map(e => e.id);
   const entered = new Map();
   if (needAnchor.length) {
-    const hr = await sb(
-      `/rest/v1/engagement_history?engagement_id=in.(${needAnchor.join(',')})`
+    // Chunked, in parallel. 500 UUIDs joined is a ~19 KB query string; an over-long URL comes
+    // back as an HTML error page, and a string iterates as characters — so every deal read as
+    // "no anchor" and silently dropped off the list (S368 hostile review). 100 ids ≈ 3.7 KB.
+    // A failed or non-array chunk now THROWS (→ 500) instead of passing as an empty read.
+    const reads = chunk(needAnchor, ANCHOR_CHUNK).map(ids => sb(
+      `/rest/v1/engagement_history?engagement_id=in.(${ids.join(',')})`
       + '&stage_to=in.(shipped,delivered)&select=engagement_id,created_at&order=created_at.desc&limit=2000',
       env,
-    );
-    // Keep the LATEST transition per deal: a deal that went shipped → delivered should age from
-    // the delivery, and one bounced back and re-shipped should age from the re-ship, not the first.
-    for (const h of (hr.data || [])) if (!entered.has(h.engagement_id)) entered.set(h.engagement_id, h.created_at);
+    ));
+    for (const hr of await Promise.all(reads)) {
+      if (!hr.ok || !Array.isArray(hr.data)) throw new Error(`engagement_history anchor read failed (${hr.status})`);
+      // Keep the LATEST transition per deal: a deal that went shipped → delivered should age from
+      // the delivery, and one bounced back and re-shipped should age from the re-ship, not the first.
+      for (const h of hr.data) if (!entered.has(h.engagement_id)) entered.set(h.engagement_id, h.created_at);
+    }
   }
 
   // ⚠️ …and because both those columns are empty, EVERY row above fell through to
