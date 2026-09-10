@@ -389,6 +389,13 @@ export default function PODetailPage() {
   const canSend         = status === 'Approved' && !!perms?.po_create;
   const canAmend        = !isSoft && ['Draft', 'Accepted', 'Approved', 'Sent'].includes(status) && !!perms?.po_create;
   const canCancel       = !['Closed', 'Cancelled'].includes(status) && !!perms?.po_create;
+  // The delivery address is NOT a commercial term, so it must not inherit canAmend's status
+  // list (2026-09-10, Prarthi #bugs "Allow this revision for all POs"). changePODeliveryAddress
+  // in snorkelops refuses only Soft / Cancelled / Closed, so canAmend was hiding the button on
+  // 27 live POs at 'Confirmed & Payment Done' — and on 'Partially Received' / 'Pending Approval'
+  // — that the worker would have accepted. This mirrors that handler's guards exactly; the
+  // China po_china check stays worker-side, same as canAmend.
+  const canChangeAddr   = !isSoft && !['Closed', 'Cancelled'].includes(status) && !!perms?.po_create;
   // The escape hatch (2026-09-03, Afshaan). A Closed PO used to be a dead end —
   // Siddu needed IN-CMP-0295 cancelled to raise a replacement and had to ask for a
   // DB edit. The original guard is NOT loosened: Closed still blocks `canCancel`,
@@ -486,7 +493,7 @@ export default function PODetailPage() {
                     : 'Not set'}
                 </div>
               </div>
-              {canAmend && <Btn onClick={openChangeAddress} disabled={actionLoading}><Pencil size={12} /> Change</Btn>}
+              {canChangeAddr && <Btn onClick={openChangeAddress} disabled={actionLoading}><Pencil size={12} /> Change</Btn>}
             </div>
           )}
         </Panel>
