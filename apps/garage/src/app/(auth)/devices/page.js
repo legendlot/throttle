@@ -130,7 +130,17 @@ export default function DevicesPage({ embedded = false }) {
   // ⚠️ And do NOT close over `session` either — workerFetch does not self-heal a stale token,
   // so the token is read inside each callback via getValidSession().
   const { userId, role } = useAuth();
-  const toast = useToast();
+  // ⛔ `useToast()` RETURNS `{ showToast }` — THERE IS NO `.error` / `.success` / `.info`
+  // (packages/ui/Toast.js). Every `toast?.error?.(…)` on this page silently rendered NOTHING,
+  // including "Could not load the fleet" and "Could not mint a code" — 13 call sites, dead since
+  // the page shipped, and the S371 fold copied the idiom into the gate-phone panel, which is the
+  // one someone uses at 07:55 with a queue waiting. The optional-chaining is what hid it.
+  const { showToast } = useToast();
+  const toast = {
+    error:   (m) => showToast(m, 'error'),
+    success: (m) => showToast(m, 'success'),
+    info:    (m) => showToast(m, 'info'),
+  };
 
   const [devices, setDevices] = useState([]);
   const [hw, setHw]           = useState([]);
@@ -398,8 +408,7 @@ export default function DevicesPage({ embedded = false }) {
       {/* ── The gate phone (folded in from Users & Roles, S371) ─────────────
           Afshaan, 2026-09-10: "fold it into Phones, one place only." It is the only
           pairing surface in Garage now. */}
-      <AttendanceDevice showToast={(m, t) =>
-        (t === 'error' ? toast?.error?.(m) : t === 'info' ? toast?.info?.(m) : toast?.success?.(m))} />
+      <AttendanceDevice showToast={showToast} />
 
       {/* ── Search ──────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: BORDER,

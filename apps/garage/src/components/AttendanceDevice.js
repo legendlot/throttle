@@ -63,13 +63,24 @@ export default function AttendanceDevice({ showToast }) {
   const current  = devices.find(d => d.is_attendance_device) || null;
   const enrolled = devices.filter(d => d.device_pubkey).length;
 
+  // Act on an explicit device_code — used by mint/reset, which must always target the gate
+  // phone regardless of what is selected in the dropdown.
+  async function runOn(deviceCode, action, label) {
+    if (!deviceCode) { showToast('No attendance device is set yet', 'error'); return; }
+    return doRun(deviceCode, action, label);
+  }
+
   async function run(action, label) {
     if (!sel) { showToast('Pick a device first', 'error'); return; }
+    return doRun(sel, action, label);
+  }
+
+  async function doRun(deviceCode, action, label) {
     if (!reason.trim()) { showToast('A reason is required — it is logged', 'error'); return; }
     setBusy(action);
     try {
       const s = await getValidSession();
-      const res = await workerFetch(action, { data: { device_code: sel, reason: reason.trim() } }, s);
+      const res = await workerFetch(action, { data: { device_code: deviceCode, reason: reason.trim() } }, s);
       const d = res?.data || {};
       // Mint actions return a one-time code; it is the only time it is shown.
       if (d.code) setCode({ code: d.code, device_code: d.device_code, expires_at: d.expires_at });
@@ -117,7 +128,10 @@ export default function AttendanceDevice({ showToast }) {
               the floor start pairing ~50 phones for no reason. 76 is the register size, not a
               target. */}
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-            {enrolled === 1 ? 'gate phone enrolled' : `${enrolled} phones hold a key`}
+            {/* Keyed on the GATE phone, not on "exactly one key exists" — those coincide today
+                and would diverge the moment any other device held a key. */}
+            {current?.device_pubkey ? 'gate phone enrolled' : 'gate phone NOT enrolled'}
+            {enrolled > 1 ? ` · ${enrolled} phones hold a key` : ''}
             {' · '}{devices.length} phones in the register
           </span>
         </div>
@@ -143,15 +157,20 @@ export default function AttendanceDevice({ showToast }) {
             </select>
             <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (logged)"
               style={{ ...inputStyle, minWidth: 220, flex: 1 }} />
-            <button type="button" disabled={!!busy} onClick={() => run('createDeviceEnrolment', 'Enrolment code minted')}
+            {/* ⛔ MINT AND RESET ACT ON THE GATE PHONE, NOT ON THE DROPDOWN (S371 second review,
+                finding 9). The dropdown exists for "Make attendance device" — choosing which
+                handset the gate is. Wiring mint to it re-opened the exact hole this session
+                closed on the Devices grid: minting a key for a station phone, which nothing
+                will ever check. Disabled until an attendance device exists. */}
+            <button type="button" disabled={!!busy || !current} onClick={() => runOn(current?.device_code, 'createDeviceEnrolment', 'Enrolment code minted')}
               style={{ ...inputStyle, cursor: 'pointer', color: 'var(--t1)' }}>
-              {busy === 'createDeviceEnrolment' ? '…' : 'Mint enrolment code'}
+              {busy === 'createDeviceEnrolment' ? '…' : (current ? `Mint code for ${current.device_code}` : 'No attendance device set')}
             </button>
             <button type="button" disabled={!!busy} onClick={() => run('setAttendanceDevice', 'Attendance device set')}
               style={{ ...inputStyle, cursor: 'pointer', color: 'var(--yellow)', borderColor: 'rgba(214,168,42,.45)' }}>
               {busy === 'setAttendanceDevice' ? '…' : 'Make attendance device'}
             </button>
-            <button type="button" disabled={!!busy} onClick={() => run('resetDeviceEnrolment', 'Enrolment reset')}
+            <button type="button" disabled={!!busy || !current} onClick={() => runOn(current?.device_code, 'resetDeviceEnrolment', 'Enrolment reset')}
               title="Clears the device's key and mints a fresh code — use when a phone is lost, wiped or replaced"
               style={{ ...inputStyle, cursor: 'pointer', color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>
               {busy === 'resetDeviceEnrolment' ? '…' : 'Reset enrolment'}
