@@ -2382,6 +2382,22 @@ export default {
           }
 
           case 'getPOs': {
+            // RULE-011 — this handler ran with NO canX() at all until 2026-09-10 (S370): the only
+            // check in its path was the switch-level `if (!role)`, so the PO workspace read was
+            // gated on HAVING ANY ROLE rather than on procurement_view. Found while building
+            // getPOLinesBulk beside it, which does gate.
+            // ⚠️ The China/Soft strip further down is NOT this gate — it decides which COLUMNS a
+            // permitted caller sees, not whether this caller may read POs at all.
+            // Verified safe before adding, because 20 of 37 users do NOT hold procurement_view
+            // (requester 12, sales_manager 5, sales_rep 3) and a careless guard would lock them
+            // out: BOTH callers already gate on the same key client-side (procurement/pos/page.js
+            // :201 and procurement/page.js:101), so those users cannot reach either screen today.
+            // Garage also calls an action named getPOs, but against LOTOPSPROXY — a different
+            // worker with its own handler (apps build with NEXT_PUBLIC_LOTOPS_URL) — so the floor's
+            // receiving screen is untouched by this.
+            // RULE-011's own test passes: 6 roles hold procurement_view, including admin,
+            // procurement_manager, finance_manager, store and jarvis_ro (Jarvis keeps its read).
+            if (!canView(P)) return err('No permission', 403);
             const status = url.searchParams.get('status')     || '';
             const source = url.searchParams.get('source')     || '';
             const type   = url.searchParams.get('order_type') || '';
