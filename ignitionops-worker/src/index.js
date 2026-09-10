@@ -597,6 +597,79 @@ const SEARCH_SCAN_MAX = 2000;
 // something unique before paging).
 const LIST_ORDER = 'created_at.desc,id.desc';
 
+// ── Shipment status (read-only, from the Uniware side) ───────────────────────────────────────
+// `shipping_order_id` is hand-typed, so the join key has to be normalised the SAME way the RPC
+// normalises its side: strip everything non-alphanumeric, uppercase. Keep this in lockstep with
+// `public.ignition_shipment_status`.
+const shipKey = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+/**
+ * Courier status for a batch of typed order ids, keyed by normalised key.
+ *
+ * ONE call for the whole page — never one per row (CORE). The RPC lives in `public`, not
+ * `ignition`, so the profile is overridden the same way `matchProductsFromText` does it.
+ * A failure returns `{}` on purpose: shipment status is decoration on a deal read, and a deal
+ * must still open when Uniware or the RPC is down.
+ */
+async function fetchShipmentStatus(orderIds, env) {
+  const keys = [...new Set((orderIds || []).map(shipKey).filter(Boolean))];
+  if (!keys.length) return {};
+  const r = await sb('/rest/v1/rpc/ignition_shipment_status', env, {
+    method: 'POST',
+    body: JSON.stringify({ p_order_ids: keys }),
+    headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' },
+  }).catch(e => ({ ok: false, data: String(e) }));
+  if (!r.ok) {
+    console.error(`[fetchShipmentStatus] ${r.status}: ${JSON.stringify(r.data)}`);
+    return {};
+  }
+  const by = {};
+  for (const row of (r.data || [])) if (row && row.order_key) by[row.order_key] = row;
+  return by;
+}
+
+/**
+ * The `shipment` block for one engagement, or null when there is nothing to show.
+ *
+ * An id that does not come back is NOT an error. Measured on live data (2026-09-09): 38 deals
+ * have "porter" typed into the field and 12 "DTDC" — those are real hand-delivery / other-courier
+ * records, not typos. A key with a DIGIT in it is a genuine order reference whose Uniware feed
+ * has not landed yet (40 of 44 such deals were created inside 7 days); a letters-only key is the
+ * courier's NAME typed in place of a reference, and there is nothing to track.
+ */
+function shipmentFor(shippingOrderId, statusByKey) {
+  const raw = String(shippingOrderId ?? '').trim();
+  if (!raw) return null;
+  const key = shipKey(raw);
+  if (!key) return null;
+  const s = statusByKey[key];
+  if (s) {
+    return {
+      state: 'tracked',
+      courier: s.courier || null,
+      shipping_provider: s.shipping_provider || null,
+      tracking_number: s.tracking_number || null,
+      tracking_link: s.tracking_link || null,
+      lifecycle: s.lifecycle || 'unknown',
+      dispatched_at: s.dispatched_at || null,
+      delivered_at: s.delivered_at || null,
+    };
+  }
+  return { state: /\d/.test(key) ? 'pending_sync' : 'other_courier' };
+}
+
+// Attach `shipment` to every row that has a typed order id, in ONE batched lookup for the list.
+async function withShipments(rows, env) {
+  const list = rows || [];
+  const statusByKey = await fetchShipmentStatus(list.map(r => r?.shipping_order_id), env);
+  for (const row of list) {
+    if (!row) continue;
+    const shipment = shipmentFor(row.shipping_order_id, statusByKey);
+    if (shipment) row.shipment = shipment;
+  }
+  return list;
+}
+
 async function getEngagements(url, auth, env) {
   const type = url.searchParams.get('type');
   const stage = url.searchParams.get('stage');
@@ -661,8 +734,10 @@ async function getEngagements(url, auth, env) {
     const merged = [...byId.values()]
       .sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || ''))
         || String(y.id || '').localeCompare(String(x.id || '')));
+    // Shipment status for the PAGE only — the merged set can be the whole table on a one-letter
+    // search, and only the slice is ever rendered.
     return ok({
-      engagements: merged.slice(offset, offset + limit),
+      engagements: await withShipments(merged.slice(offset, offset + limit), env),
       offset, limit, total: merged.length,
     });
   }
@@ -675,7 +750,7 @@ async function getEngagements(url, auth, env) {
     { prefer: 'return=representation,count=exact' },
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({ engagements: r.data || [], offset, limit, total: rangeTotal(r.range) });
+  return ok({ engagements: await withShipments(r.data || [], env), offset, limit, total: rangeTotal(r.range) });
 }
 
 // Filters joined for direct concatenation with the next query param — '' or 'a=1&b=2&'.
@@ -699,7 +774,7 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar, pr, epr, ubr, vr] = await Promise.all([
+  const [hr, nr, ar, pr, epr, ubr, vr, ship] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
@@ -707,7 +782,12 @@ async function getEngagement(url, auth, env) {
     sb(`/rest/v1/engagement_products?engagement_id=eq.${eng.id}&select=*&order=sort_order.asc`, env),
     sb(`/rest/v1/ugc_briefs?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=50`, env),
     sb(`/rest/v1/engagement_videos?engagement_id=eq.${eng.id}&select=*&order=seq.asc`, env),
+    // Courier status rides along in the same fan-out rather than costing an extra round trip.
+    fetchShipmentStatus([eng.shipping_order_id], env),
   ]);
+
+  const shipment = shipmentFor(eng.shipping_order_id, ship || {});
+  if (shipment) eng.shipment = shipment;
 
   const payments = pr.data || [];
   const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);

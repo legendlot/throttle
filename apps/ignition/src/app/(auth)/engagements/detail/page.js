@@ -248,6 +248,7 @@ export default function EngagementDetailPage() {
           <KV label="Tracking" value={e.tracking_id || '—'} />
           <KV label="Shipping date" value={e.shipping_date || '—'} />
           <KV label="Delivered" value={e.delivered_date || '—'} />
+          <ShipmentRows shipment={e.shipment} orderId={e.shipping_order_id} />
           {e.cs_ticket_no && <KV label="Pitstop ticket" value={<span style={{ color: 'var(--state-error-fg)' }}>{e.cs_ticket_no}</span>} />}
         </Card>
 
@@ -1548,6 +1549,92 @@ function InfluencerCard({ inf }) {
       <KV label="Type" value={inf.influencer_type ? titleish(inf.influencer_type) : '—'} />
       <KV label="Followers" value={inf.follower_count ? Number(inf.follower_count).toLocaleString('en-IN') : '—'} />
     </Card>
+  );
+}
+
+// ── Shipment status (read-only, derived) ─────────────────────────────────────────────────────
+// Courier truth from Uniware, shown ALONGSIDE the hand-entered shipping/delivered dates — it
+// never overwrites them. The worker attaches `engagement.shipment`; no `shipment` key means the
+// deal has no order id typed and nothing is rendered.
+const LIFECYCLE_LABELS = {
+  pending: 'Pending', manifested: 'Manifested', in_transit: 'In transit',
+  out_for_delivery: 'Out for delivery', delivered: 'Delivered',
+  rto: 'RTO', cancelled: 'Cancelled', unknown: 'Unknown',
+};
+// Same shape as STAGE_PALETTE. ⚠️ RTO deliberately wears the error red and cancelled a neutral
+// grey — neither may read like the success green of `delivered`: an RTO is a parcel that came
+// BACK, and a glance that mistakes it for a delivery is the exact failure this block exists to stop.
+const LIFECYCLE_PALETTE = {
+  pending:          { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
+  manifested:       { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
+  in_transit:       { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
+  out_for_delivery: { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
+  delivered:        { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' },
+  rto:              { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
+  cancelled:        { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
+  unknown:          { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
+};
+
+// The typed courier name, cased for reading. Only an all-lowercase value is touched
+// ("porter" → "Porter"); "DTDC" is an acronym and title-casing it to "Dtdc" is damage
+// (same reasoning as titleish(), which would do exactly that).
+function courierText(raw) {
+  const s = String(raw || '').trim();
+  return s && s === s.toLowerCase() ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// Courier stamps are IST, always — pinned rather than left to the viewer's machine clock
+// (same form as the `Approved` stamp above). A parcel time read in the wrong zone is a
+// wrong answer that looks right.
+const istStamp = ts => new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+function LifecycleBadge({ lifecycle }) {
+  const p = LIFECYCLE_PALETTE[lifecycle] || LIFECYCLE_PALETTE.unknown;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '2px 8px', fontSize: 11,
+      fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
+      textTransform: 'uppercase', color: p.fg, background: p.bg,
+      border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap',
+    }}>
+      {LIFECYCLE_LABELS[lifecycle] || lifecycle || 'Unknown'}
+    </span>
+  );
+}
+
+function ShipmentRows({ shipment, orderId }) {
+  if (!shipment) return null;
+
+  // Neither of these is an error: an id we have not seen yet is usually days old, and a courier
+  // NAME typed into the order field is a real hand-delivery record. Muted, never red.
+  if (shipment.state === 'pending_sync') {
+    return <KV label="Courier" value={<span style={{ color: 'var(--text-3)' }}>Awaiting courier sync</span>} />;
+  }
+  if (shipment.state === 'other_courier') {
+    return (
+      <KV label="Courier" value={
+        <span style={{ color: 'var(--text-3)' }}>Sent via {courierText(orderId)} — no tracking</span>
+      } />
+    );
+  }
+
+  const name = [shipment.courier, shipment.shipping_provider].filter(Boolean).join(' · ');
+  return (
+    <>
+      <KV label="Courier" value={
+        <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <LifecycleBadge lifecycle={shipment.lifecycle} />
+          {name && <span>{name}</span>}
+        </span>
+      } />
+      {shipment.tracking_number && (
+        <KV label="AWB" value={shipment.tracking_link
+          ? <a href={shipment.tracking_link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--state-info-fg)' }}>{shipment.tracking_number}</a>
+          : shipment.tracking_number} />
+      )}
+      {shipment.dispatched_at && <KV label="Dispatched" value={istStamp(shipment.dispatched_at)} />}
+      {shipment.delivered_at && <KV label="Delivered (courier)" value={istStamp(shipment.delivered_at)} />}
+    </>
   );
 }
 
