@@ -33,6 +33,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch, getValidSession } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Smartphone, RefreshCw, Search, Lock, Unlock, KeyRound, ShieldAlert } from 'lucide-react';
+import AttendanceDevice from '@/components/AttendanceDevice';
 
 const STATUSES = ['unknown', 'known', 'blocked'];
 
@@ -393,6 +394,12 @@ export default function DevicesPage({ embedded = false }) {
           {blockEnforcing ? 'Break glass — lift all blocks' : 'Re-enable blocking'}
         </button>
       </div>
+
+      {/* ── The gate phone (folded in from Users & Roles, S371) ─────────────
+          Afshaan, 2026-09-10: "fold it into Phones, one place only." It is the only
+          pairing surface in Garage now. */}
+      <AttendanceDevice showToast={(m, t) =>
+        (t === 'error' ? toast?.error?.(m) : t === 'info' ? toast?.info?.(m) : toast?.success?.(m))} />
 
       {/* ── Search ──────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: BORDER,
