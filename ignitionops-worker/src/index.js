@@ -601,7 +601,7 @@ const LIST_ORDER = 'created_at.desc,id.desc';
 // `shipping_order_id` is hand-typed, so the join key has to be normalised the SAME way the RPC
 // normalises its side: strip everything non-alphanumeric, uppercase. Keep this in lockstep with
 // `public.ignition_shipment_status`.
-const shipKey = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+export const shipKey = s => String(s ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 /**
  * Courier status for a batch of typed order ids, keyed by normalised key.
@@ -618,11 +618,16 @@ async function fetchShipmentStatus(orderIds, env) {
     method: 'POST',
     body: JSON.stringify({ p_order_ids: keys }),
     headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' },
-  }).catch(e => ({ ok: false, data: String(e) }));
+    // A thrown fetch has no HTTP status, and `${undefined}` in the log line below hid which
+    // failure it was. Sentinel it so a network fault reads as one.
+  }).catch(e => ({ ok: false, status: 'network_error', data: String(e) }));
   if (!r.ok) {
     console.error(`[fetchShipmentStatus] ${r.status}: ${JSON.stringify(r.data)}`);
     return {};
   }
+  // `order_key` is the CALLER'S normalised key, not the matched shipment's — v2 of the RPC keys a
+  // leading-LOT-token prefix match (`#LOT43838 Complete` → `LOT43838`) under the key we sent, so an
+  // exact lookup below finds a prefix match too. Do not re-key this off `shopify_order_name`.
   const by = {};
   for (const row of (r.data || [])) if (row && row.order_key) by[row.order_key] = row;
   return by;
@@ -637,7 +642,7 @@ async function fetchShipmentStatus(orderIds, env) {
  * has not landed yet (40 of 44 such deals were created inside 7 days); a letters-only key is the
  * courier's NAME typed in place of a reference, and there is nothing to track.
  */
-function shipmentFor(shippingOrderId, statusByKey) {
+export function shipmentFor(shippingOrderId, statusByKey) {
   const raw = String(shippingOrderId ?? '').trim();
   if (!raw) return null;
   const key = shipKey(raw);
@@ -646,6 +651,9 @@ function shipmentFor(shippingOrderId, statusByKey) {
   if (s) {
     return {
       state: 'tracked',
+      // A prefix match is a GUESS off the leading LOT token — same `tracked` state, but never
+      // silently identical to an exact one, so the deal page can say which it is.
+      match: s.match_kind === 'prefix' ? 'prefix' : 'exact',
       courier: s.courier || null,
       shipping_provider: s.shipping_provider || null,
       tracking_number: s.tracking_number || null,
@@ -658,17 +666,11 @@ function shipmentFor(shippingOrderId, statusByKey) {
   return { state: /\d/.test(key) ? 'pending_sync' : 'other_courier' };
 }
 
-// Attach `shipment` to every row that has a typed order id, in ONE batched lookup for the list.
-async function withShipments(rows, env) {
-  const list = rows || [];
-  const statusByKey = await fetchShipmentStatus(list.map(r => r?.shipping_order_id), env);
-  for (const row of list) {
-    if (!row) continue;
-    const shipment = shipmentFor(row.shipping_order_id, statusByKey);
-    if (shipment) row.shipment = shipment;
-  }
-  return list;
-}
+// ⛔ The list used to attach `shipment` to every row via a batched `withShipments()`. NOTHING
+// rendered it — the only reader is `ShipmentRows` on the deal DETAIL page — so every list load
+// paid an extra RPC of up to 200 keys for a field no component read. Removed 2026-09-10. Courier
+// status is fetched by `getEngagement` (detail) and `getPostReminderDue` (the chasing list); if a
+// list column ever needs it, re-add it knowingly, not by reflex.
 
 async function getEngagements(url, auth, env) {
   const type = url.searchParams.get('type');
@@ -734,10 +736,8 @@ async function getEngagements(url, auth, env) {
     const merged = [...byId.values()]
       .sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || ''))
         || String(y.id || '').localeCompare(String(x.id || '')));
-    // Shipment status for the PAGE only — the merged set can be the whole table on a one-letter
-    // search, and only the slice is ever rendered.
     return ok({
-      engagements: await withShipments(merged.slice(offset, offset + limit), env),
+      engagements: merged.slice(offset, offset + limit),
       offset, limit, total: merged.length,
     });
   }
@@ -750,7 +750,7 @@ async function getEngagements(url, auth, env) {
     { prefer: 'return=representation,count=exact' },
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({ engagements: await withShipments(r.data || [], env), offset, limit, total: rangeTotal(r.range) });
+  return ok({ engagements: r.data || [], offset, limit, total: rangeTotal(r.range) });
 }
 
 // Filters joined for direct concatenation with the next query param — '' or 'a=1&b=2&'.
@@ -3194,10 +3194,11 @@ async function getPostReminderDue(url, auth, env) {
 
   // ⚠️ …and because both those columns are empty, EVERY row above fell through to
   // `engagement_history`, which records when somebody CLICKED the stage button — not when the
-  // parcel arrived. Measured 2026-09-10 over the 266 deals in this scope that match an
-  // `ecom_shipments` row: only 78 parcels are actually `delivered`. 68 in_transit + 5 pending +
-  // 2 out_for_delivery creators do not have the product yet, and 4 rto parcels came BACK. So the
-  // list as it stood nagged 79 people who had nothing to post about.
+  // parcel arrived. Measured 2026-09-10: of the 213 deals in this scope, 157 match an
+  // `ecom_shipments` row, and 107 of those cleared the 10-day gate and were actually ON the
+  // list. 32 of THOSE 107 had no product to post about — the parcel was still in flight or had
+  // come back. (An earlier note said "79 of 266": that counted every matched in-flight/returned
+  // deal in scope, gate or no gate, which is not the list anyone was shown.)
   // The courier is the only real delivery clock we have — one batched RPC for the whole scan.
   const statusByKey = await fetchShipmentStatus(rows.map(e => e.shipping_order_id), env);
   // In flight = the goods are not with the creator, so there is nothing to chase yet.
@@ -3210,13 +3211,48 @@ async function getPostReminderDue(url, auth, env) {
   // on 50 of 358 populated deals) come back unmatched — those keep today's behaviour exactly,
   // because we have no delivery data for them and an unknown parcel is not evidence of anything.
   const returned = [];
+  // In flight for WEEKS is not "in transit" — it is stuck, and it is the same silent exclusion
+  // `returned` was made additive to avoid. Measured 2026-09-10: 28 in-flight deals are excluded,
+  // 25 of them were on the old list; 16 have been in flight >14 days, 2 >30, the oldest since
+  // 2026-07-22 (50 days). Under 14 days stays excluded on purpose — that parcel is just moving.
+  const stuck = [];
+  const STUCK_DAYS = 14;
+  let warnedNoReturnAnchor = false;
+  // Everything a row of any of the three lists carries; only the clock fields differ.
+  const baseRow = (e, ship, lifecycle) => ({
+    engagement_no: e.engagement_no, stage: e.stage,
+    influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code,
+    email: e.influencer?.email || null,
+    has_tracking_link: !!e.utm_link,
+    lifecycle,
+    delivered_at: ship?.delivered_at || null,
+    courier: ship?.courier || null,
+    tracking_number: ship?.tracking_number || null,
+  });
   const due = rows
     .map(e => {
       if (e.influencer?.do_not_ship) return null;
       const key = shipKey(e.shipping_order_id);
       const ship = key ? statusByKey[key] : null;
       const lifecycle = ship?.lifecycle || null;
-      if (lifecycle && IN_FLIGHT.has(lifecycle)) return null;
+      // The clock everything falls back to when the courier has none of its own.
+      const typedAnchor = e.delivered_date || e.shipping_date || entered.get(e.id) || null;
+      const typedSource = e.delivered_date ? 'delivered_date' : e.shipping_date ? 'shipping_date' : 'history';
+      if (lifecycle && IN_FLIGHT.has(lifecycle)) {
+        const flightAt = ship.dispatched_at || ship.lifecycle_changed_at || typedAnchor;
+        if (!flightAt) return null;
+        const flightDays = Math.floor((Date.now() - new Date(flightAt).getTime()) / 86400000);
+        if (flightDays > STUCK_DAYS) {
+          const courierClock = !!(ship.dispatched_at || ship.lifecycle_changed_at);
+          stuck.push({
+            ...baseRow(e, ship, lifecycle),
+            trigger: courierClock ? 'in flight since dispatch (courier)' : `in flight since ${typedSource}`,
+            anchor_source: courierClock ? 'courier' : typedSource,
+            days_since: flightDays,
+          });
+        }
+        return null;
+      }
 
       const courierDelivered = lifecycle === 'delivered' ? (ship.delivered_at || null) : null;
       // A parcel that came back is dated from WHEN IT CAME BACK, not from a stage click — that is
@@ -3224,33 +3260,43 @@ async function getPostReminderDue(url, auth, env) {
       // courier's own transition clock (migration 0036; NULL on pre-fix rows, hence the fallbacks).
       const cameBack = !!(lifecycle && CAME_BACK.has(lifecycle));
       const returnedAt = cameBack ? (ship.lifecycle_changed_at || null) : null;
-      const anchorRaw = returnedAt || courierDelivered || e.delivered_date || e.shipping_date || entered.get(e.id) || null;
-      if (!anchorRaw) return null;
+      const anchorRaw = returnedAt || courierDelivered || typedAnchor;
+      // ⚠️ `lifecycle_changed_at` is NULL on 2,623 of 3,097 rto/cancelled rows (85%, measured
+      // 2026-09-10) — today's 4 all have it, which is the only reason this is invisible. A
+      // returned parcel with no clock at all still has to be SEEN, so it goes out dateless
+      // rather than vanishing from both lists, which is the failure this whole block exists
+      // to prevent. `due` rows still need an anchor: they are gated on age.
+      if (!anchorRaw) {
+        if (!cameBack) return null;
+        if (!warnedNoReturnAnchor) {
+          console.warn('[getPostReminderDue] returned parcel(s) with no resolvable date — listed with days_since:null');
+          warnedNoReturnAnchor = true;
+        }
+        returned.push({
+          ...baseRow(e, ship, lifecycle),
+          trigger: 'returned to us (courier, no date)',
+          anchor_source: 'unknown',
+          days_since: null,
+        });
+        return null;
+      }
       const anchorDay = String(anchorRaw).slice(0, 10);
       // ⛔ The age gate is a CHASING rule — "have they had it long enough to have posted?" — and it
-      // must NOT apply to a returned parcel. Measured 2026-09-10: of the 4 RTOs in scope, 2 were
-      // 6 and 9 days old, so an age-gated `returned` list would have HIDDEN the two freshest —
+      // must NOT apply to a returned parcel. Measured 2026-09-10: of the 4 RTOs in scope, the two
+      // freshest were 5 and 9 days old, so an age-gated `returned` list would have HIDDEN both —
       // exactly the ones still worth acting on. A returned parcel is urgent when it is new.
       if (!cameBack && anchorDay > cutoff) return null;
       const row = {
-        engagement_no: e.engagement_no, stage: e.stage,
-        influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code,
-        email: e.influencer?.email || null,
+        ...baseRow(e, ship, lifecycle),
         trigger: returnedAt ? 'returned to us (courier)'
           : courierDelivered ? 'delivered (courier)'
             : e.delivered_date ? 'delivered'
               : e.shipping_date ? 'shipped'
                 : `reached ${e.stage} (no delivery date recorded)`,
-        anchor_source: (returnedAt || courierDelivered) ? 'courier'
-          : e.delivered_date ? 'delivered_date'
-            : e.shipping_date ? 'shipping_date'
-              : 'history',
+        // 'courier' ONLY when a courier clock was actually used — a returned row that fell back
+        // to a stage click must not render as "returned Nd ago", because that date is not one.
+        anchor_source: (returnedAt || courierDelivered) ? 'courier' : typedSource,
         days_since: Math.floor((Date.now() - new Date(anchorRaw).getTime()) / 86400000),
-        has_tracking_link: !!e.utm_link,
-        lifecycle,
-        delivered_at: ship?.delivered_at || null,
-        courier: ship?.courier || null,
-        tracking_number: ship?.tracking_number || null,
       };
       // ⚠️ Do NOT just drop these. They pass every chasing gate today, so dropping them would
       // make 4 real deals vanish off the page with no explanation — worse than leaving them on.
@@ -3260,11 +3306,15 @@ async function getPostReminderDue(url, auth, env) {
     })
     .filter(Boolean)
     .sort((a, b) => b.days_since - a.days_since);
-  returned.sort((a, b) => b.days_since - a.days_since);
+  // Dateless returns sort last rather than NaN-shuffling the list.
+  const byAge = (a, b) => (b.days_since ?? -1) - (a.days_since ?? -1);
+  returned.sort(byAge);
+  stuck.sort(byAge);
   return ok({
     days, due, count: due.length,
     unreachable: due.filter(d => !d.email).length,
     returned,
+    stuck,
     armed: false,
   });
 }

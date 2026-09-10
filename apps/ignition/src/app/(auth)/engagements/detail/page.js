@@ -1578,6 +1578,9 @@ const LIFECYCLE_PALETTE = {
 // The typed courier name, cased for reading. Only an all-lowercase value is touched
 // ("porter" → "Porter"); "DTDC" is an acronym and title-casing it to "Dtdc" is damage
 // (same reasoning as titleish(), which would do exactly that).
+// ⚠️ courierText / courierLabel / trackingUrlFor are COPIED into
+// `ignitionops-worker/test/shipment.test.mjs` (this file is JSX and node:test cannot import it).
+// Change one, change the other.
 function courierText(raw) {
   const s = String(raw || '').trim();
   return s && s === s.toLowerCase() ? s.charAt(0).toUpperCase() + s.slice(1) : s;
@@ -1601,7 +1604,13 @@ function courierLabel(courier, provider) {
   if (!pn || pn === cn) return courierText(c);
   // "DELHIVERY_SURFACE" under courier "delhivery" -> "Delhivery · Surface"
   if (pn.startsWith(cn)) {
-    const extra = p.slice(c.length).replace(/^[^A-Za-z0-9]+/, '');
+    // ⚠️ Walk the RAW provider until `cn.length` ALPHANUMERICS are consumed. Slicing it by the raw
+    // courier's length instead compared a normalised prefix against raw offsets:
+    // courierLabel('D.T.D.C.', 'DTDC Express') rendered "D.T.D.C. · Ress". `courier='other'` with
+    // a real provider name exists on 3,029 fleet rows, so this path is reached.
+    let seen = 0, i = 0;
+    while (i < p.length && seen < cn.length) { if (/[A-Za-z0-9]/.test(p[i])) seen++; i++; }
+    const extra = p.slice(i).replace(/^[^A-Za-z0-9]+/, '');
     return extra ? `${courierText(c)} · ${courierText(extra.toLowerCase())}` : courierText(c);
   }
   return `${courierText(c)} · ${courierText(p)}`;
@@ -1617,9 +1626,16 @@ function courierLabel(courier, provider) {
 // ⛔ Only Delhivery. `self` has no carrier to link to, and Shiprocket's URL pattern was NOT
 // verified — guessing a vendor URL and shipping it to the team is how a dead link gets trusted.
 function trackingUrlFor(shipment) {
-  if (shipment.tracking_link) return shipment.tracking_link;
+  // A stored link goes straight into an href, so it is validated first — anything that is not
+  // http(s) (a `javascript:` value, say) falls through to the derived URL rather than shipping a
+  // click-to-run link onto the deal page.
+  const link = String(shipment.tracking_link || '').trim();
+  if (/^https?:\/\//i.test(link)) return link;
   const awb = String(shipment.tracking_number || '').trim();
-  const carrier = `${shipment.courier || ''} ${shipment.shipping_provider || ''}`.toLowerCase();
+  // ⛔ `courier` ALONE decides the carrier. Concatenating `shipping_provider` matched
+  // {courier:'shiprocket', shipping_provider:'Delhivery Surface'} and emitted a Delhivery URL for
+  // a Shiprocket parcel — a page that loads and says "not found", which is worse than no link.
+  const carrier = String(shipment.courier || '').toLowerCase();
   if (!awb || !carrier.includes('delhivery')) return null;
   return `https://www.delhivery.com/track/package/${encodeURIComponent(awb)}`;
 }
@@ -1661,6 +1677,11 @@ function ShipmentRows({ shipment, orderId }) {
         <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <LifecycleBadge lifecycle={shipment.lifecycle} />
           {name && <span>{name}</span>}
+          {/* A prefix match came off the leading LOT token of a typed id like "#LOT43838 Complete".
+              It is right often enough to show, and a guess often enough to say so. */}
+          {shipment.match === 'prefix' && (
+            <span style={{ color: 'var(--text-3)', fontSize: 11 }}>matched by order prefix</span>
+          )}
         </span>
       } />
       {shipment.tracking_number && (() => {

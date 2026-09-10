@@ -182,7 +182,8 @@ function ChasingList({ session, router }) {
     ignitionopsGet('getPostReminderDue', { days: 10 }, session).then(setData).catch(() => setData(null));
   }, [session]);
   const returned = data?.returned || [];
-  if (!data || (!data.count && !returned.length)) return null;
+  const stuck = data?.stuck || [];
+  if (!data || (!data.count && !returned.length && !stuck.length)) return null;
   return (
     <>
     {data.count > 0 && (
@@ -214,6 +215,32 @@ function ChasingList({ session, router }) {
     </div>
     )}
 
+    {/* Stuck in flight. Additive for the same reason `returned` is: these are excluded from the
+        chasing list (rightly — the creator has nothing yet), and excluding them SILENTLY is how a
+        parcel sat in transit for 50 days with nobody looking. Amber, not red: it is not lost yet. */}
+    {stuck.length > 0 && (
+      <div style={{ marginBottom: 12, border: '1px solid var(--state-warning)', borderRadius: 'var(--radius-md)', background: 'var(--state-warning-bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
+          <span style={{ color: 'var(--state-warning-fg)', fontWeight: 700 }}>{stuck.length}</span>
+          <span>parcel{stuck.length === 1 ? '' : 's'} still in flight after 14+ days — chase the courier, not the creator</span>
+        </div>
+        <div style={{ borderTop: '1px solid var(--state-warning)' }}>
+          {stuck.map(d => (
+            <div key={d.engagement_no}
+              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-warning)', fontSize: 12, cursor: 'pointer' }}>
+              <span style={{ color: 'var(--state-warning-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
+              <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
+              <span style={{ color: 'var(--state-warning-fg)' }}>{d.lifecycle === 'out_for_delivery' ? 'out for delivery' : String(d.lifecycle || '').replace('_', ' ')}</span>
+              <span style={{ color: 'var(--text-3)' }}>{d.days_since}d</span>
+              {d.courier && <span style={{ color: 'var(--text-3)' }}>{d.courier}</span>}
+              <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{d.stage}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
     {returned.length > 0 && (
       <div style={{ marginBottom: 12, border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)', background: 'var(--state-error-bg)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
@@ -228,7 +255,10 @@ function ChasingList({ session, router }) {
               <span style={{ color: 'var(--state-error-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
               <span style={{ color: 'var(--state-error-fg)' }}>{d.lifecycle === 'cancelled' ? 'cancelled' : 'returned to origin'}</span>
-              {Number.isFinite(d.days_since) && (
+              {/* Only a COURIER return date may be printed as "Nd ago". `lifecycle_changed_at`
+                  is NULL on 85% of rto/cancelled rows, and those fall back to a stage click —
+                  printing that as the return date is a wrong number that reads right. */}
+              {d.anchor_source === 'courier' && Number.isFinite(d.days_since) && (
                 <span style={{ color: 'var(--text-3)' }}>{d.days_since}d ago</span>
               )}
               {d.courier && <span style={{ color: 'var(--text-3)' }}>{d.courier}</span>}
