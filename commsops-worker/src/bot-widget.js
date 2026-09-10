@@ -37,6 +37,56 @@ function widgetJs(botId, workerBase) {
       '<button type="submit" style="border:none;border-radius:8px;background:#F2CD1A;font-weight:700;padding:0 14px;cursor:pointer;">Send</button></form>';
   document.body.appendChild(btn);
   document.body.appendChild(panel);
+
+  // ── Shopify theme-preview bar collision (S368, 2026-09-10) ───────────────────
+  // Staff test this widget through ?preview_theme_id= links, and Shopify injects a
+  // preview bar there: #PBarNextFrameWrapper, position:fixed, ~68px tall at bottom:0.
+  // The launcher lives at bottom:18px and is 54px tall, so it sits at 18-72px from the
+  // bottom — inside that strip. The bar then WINS THE HIT TEST despite our
+  // z-index:2147483000 (elementsFromPoint at the launcher centre returns the bar's
+  // iframe first), so the launcher renders but cannot be clicked and the bot cannot be
+  // tested at all. "Hide bar" does not help. Customers never see this — there is no
+  // preview bar outside a preview link — so this lifts the launcher ONLY when the bar
+  // is actually present, and is inert otherwise.
+  // Measured, not hardcoded: Shopify has changed this bar's height before.
+  var BASE_BTN_BOTTOM = 18, BASE_PANEL_BOTTOM = 84;
+  function previewBarHeight() {
+    try {
+      var w = document.getElementById('PBarNextFrameWrapper');
+      if (!w) return 0;
+      var s = window.getComputedStyle(w);
+      if (s.display === 'none' || s.visibility === 'hidden') return 0;
+      // The iframe INSIDE the wrapper is 100dvh and overflows it; only the wrapper's own
+      // box takes clicks, so the wrapper is the height that matters.
+      var h = w.getBoundingClientRect().height;
+      return h > 0 && h < 300 ? h : 0;   // sanity-bound: never shove the launcher off-screen
+    } catch (e) { return 0; }
+  }
+  function applyPreviewOffset() {
+    var h = previewBarHeight();
+    btn.style.bottom = (BASE_BTN_BOTTOM + h) + 'px';
+    panel.style.bottom = (BASE_PANEL_BOTTOM + h) + 'px';
+  }
+  applyPreviewOffset();
+  // The bar is injected by Shopify AFTER us, and can then be hidden or restored, so one
+  // check is not enough. Two watchers, each covering what the other cannot:
+  //   - body childList catches the bar being injected (or removed) entirely;
+  //   - a ResizeObserver on the wrapper itself catches it collapsing/expanding in place,
+  //     which is invisible to a body-level observer.
+  var barWatched = null;
+  function watchBar() {
+    var w = document.getElementById('PBarNextFrameWrapper');
+    if (!w || w === barWatched) return;
+    barWatched = w;
+    try { new ResizeObserver(applyPreviewOffset).observe(w); } catch (e) { /* older browser */ }
+  }
+  function recheck() { watchBar(); applyPreviewOffset(); }
+  try { new MutationObserver(recheck).observe(document.body, { childList: true }); }
+  catch (e) { /* no MutationObserver: the retries below still cover the common case */ }
+  setTimeout(recheck, 1000);
+  setTimeout(recheck, 3000);
+  window.addEventListener('resize', applyPreviewOffset);
+  recheck();
   var msgs = panel.querySelector('#lotchat-msgs');
   var form = panel.querySelector('#lotchat-form');
   var inp = panel.querySelector('#lotchat-inp');
