@@ -74,7 +74,7 @@ const btnCss = {
 };
 
 // ── The pairing code panel ──────────────────────────────────────────────────
-// This is the flow the floor uses OVER THE PHONE — someone reads the six digits out loud from
+// This is the flow the floor uses OVER THE PHONE — someone reads the eight digits out loud from
 // across the room. Hence the size and the live countdown: a code that has silently expired
 // while it sits on screen is the failure this is built to prevent.
 function PairCode({ pair, onDone }) {
@@ -98,10 +98,17 @@ function PairCode({ pair, onDone }) {
         <strong style={{ fontSize: 13 }}>Pairing code for {pair.device_code}</strong>
         <button onClick={onDone} style={{ ...btnCss, marginLeft: 'auto' }}>Done</button>
       </div>
-      <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800,
-                    fontSize: 'clamp(44px, 14vw, 84px)', letterSpacing: '.14em', lineHeight: 1.1,
+      {/* ⚠️ SIZED FOR 8 DIGITS, not 6 (S371 widened the code). At the old
+          clamp(44px,14vw,84px) an 8-digit code overflowed the panel on a phone-width screen,
+          and this panel is read off a screen by someone standing at another phone.
+          Grouped 4+4 because it is READ ALOUD — the scanner input strips non-digits, so the
+          space costs the person typing it nothing. */}
+      <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, display: 'flex',
+                    gap: '0.38em', flexWrap: 'wrap',
+                    fontSize: 'clamp(34px, 10vw, 64px)', letterSpacing: '.1em', lineHeight: 1.1,
                     color: dead ? '#DE2A2A' : '#F2CD1A' }}>
-        {pair.code}
+        <span>{String(pair.code).slice(0, 4)}</span>
+        <span>{String(pair.code).slice(4)}</span>
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.55, opacity: .85 }}>
         {dead
@@ -432,6 +439,18 @@ export default function DevicesPage() {
                   placeholder="Line" style={{ ...inputCss, flex: 1, minWidth: 70 }} />
               </div>
 
+              {/* ⛔ THE COPY HERE IS LOAD-BEARING AND WAS WRONG ON DAY ONE (S369 → S369d).
+                  It used to promise "no daily supervisor setup". That ritual has not run
+                  since 2026-06-06 and the boot path that performed it is dead code, so the
+                  toggle reported success and changed NOTHING on the floor.
+                  What the lock ACTUALLY means now: the handset cannot be re-pointed at
+                  another station from the phone (worker `getDeviceAssignment` →
+                  scanner `reconcileLockedStation`).
+                  ⚠️ AND IT ONLY BINDS ON THE APK. The lock is keyed on the HANDSET
+                  (X-LOT-HW / ANDROID_ID) because the phone's device_code is DERIVED from
+                  whichever station the operator picked — a device_code lock is not a lock.
+                  A phone on the website sends no hardware id and CANNOT be locked. Same
+                  accepted limit as the hardware block. Do not soften this back. */}
               <button onClick={() => saveDevice(d.device_code, { station_locked: !d.station_locked })}
                 disabled={busy}
                 style={{ ...btnCss, display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
@@ -441,10 +460,16 @@ export default function DevicesPage() {
                 <span style={{ fontWeight: 800 }}>{d.station_locked ? 'LOCKED' : 'Not locked'}</span>
                 <span style={{ fontWeight: 500, fontSize: 11, opacity: .8 }}>
                   {d.station_locked
-                    ? '— pinned to this station, no daily supervisor setup'
-                    : '— a supervisor must set this phone up each morning'}
+                    ? '— this phone cannot be pointed at another station from the phone'
+                    : '— anyone can point this phone at any station'}
                 </span>
               </button>
+              <div style={{ fontSize: 11, opacity: .7, marginTop: -4, lineHeight: 1.4 }}>
+                {h
+                  ? 'Binds on this handset: it is running the LOT Scanner app.'
+                  : 'Only binds on a phone running the LOT Scanner app — this one has never ' +
+                    'reported app hardware. A phone using the scanner WEBSITE cannot be locked.'}
+              </div>
 
               {/* scanning status — the hardware row, if this phone runs the app */}
               {h ? (
@@ -477,7 +502,7 @@ export default function DevicesPage() {
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 'auto' }}>
                 <button onClick={() => mintPair(d.device_code)} disabled={busy}
-                  title="Mints a 6-digit code to type into the Scanner app on that phone"
+                  title="Mints an 8-digit code to type into the Scanner app on that phone. Single use, expires in 15 minutes."
                   style={{ ...btnCss, color: '#F2CD1A', borderColor: 'rgba(242,205,26,.45)' }}>
                   {busy ? '…' : d.has_key ? 'Re-pair this phone' : 'Pair this phone'}
                 </button>
