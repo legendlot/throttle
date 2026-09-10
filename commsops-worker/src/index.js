@@ -6,6 +6,7 @@ const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
 const { PURPOSES } = require('./purposes.js');   // S327 — one purpose vocabulary, see purposes.js
+const { intParam } = require('./params.js');     // S370 — NaN-proof query-param parse, see params.js
 const { handleResendWebhook, handleUnsubscribe, handleTrustsignalSms, handleTrustsignalRcs } = require('./webhooks.js');
 const TSC = require('./trustsignal-client.js');
 const SMSTPL = require('./sms-templates.js');
@@ -715,8 +716,8 @@ async function handleGet(url, auth, env) {
       return data !== undefined ? ok(data) : err('db_error', 500);
     }
     case 'getCampaignsOverview': {   // broadcast analytics list (BiteSpeed parity, Phase 1)
-      const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
-      const off = Number(url.searchParams.get('offset') || 0);
+      const lim = intParam(url, 'limit', 200, { min: 1, max: 500 });
+      const off = intParam(url, 'offset', 0);
       // ONE set-based RPC for every campaign — never per-campaign getCampaignStats in a loop.
       const data = await dashCached(`co:${lim}:${off}`, async () => {
         const r = await A.sbComms('/rest/v1/rpc/campaign_stats_list', env,
@@ -727,8 +728,8 @@ async function handleGet(url, auth, env) {
     }
 
     case 'getJourneysOverview': {    // journey analytics list — the campaigns-overview twin (S230)
-      const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
-      const off = Number(url.searchParams.get('offset') || 0);
+      const lim = intParam(url, 'limit', 200, { min: 1, max: 500 });
+      const off = intParam(url, 'offset', 0);
       // ONE set-based RPC for every journey — never per-journey funnel calls in a loop.
       const data = await dashCached(`jo:${lim}:${off}`, async () => {
         const r = await A.sbComms('/rest/v1/rpc/journey_stats_list', env,
@@ -3099,7 +3100,7 @@ export default {
 
       if (url.pathname === '/web/poll' && request.method === 'GET') {
         const sid = url.searchParams.get('session_id') || '';
-        const after = Number(url.searchParams.get('after') || 0);
+        const after = intParam(url, 'after', 0);
         const session = await BW.loadSession(env, sid);
         if (!session) return withCors(err('no_session', 404));
         const r = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(sid)}&step_type=eq.agent_reply&id=gt.${after}&select=id,result&order=id.asc&limit=50`, env);

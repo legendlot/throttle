@@ -23,6 +23,8 @@
  * Spec:  systems/podium.md ; docs/superpowers/specs/2026-06-02-podium-design.md
  */
 
+import { intParam } from './params.mjs';   // S370 — NaN-proof query-param parse, see params.mjs
+
 // ── CORS ────────────────────────────────────────────────────────────────────
 
 const CORS = {
@@ -402,8 +404,8 @@ async function getEmployees(url, auth, env) {
   const status = url.searchParams.get('status');
   const department = url.searchParams.get('department_id');
   const search = (url.searchParams.get('search') || '').trim();
-  const limit = Math.min(Number(url.searchParams.get('limit') || 500), 2000);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const limit = intParam(url, 'limit', 500, { min: 1, max: 2000 });
+  const offset = intParam(url, 'offset', 0);
 
   const filters = [];
   if (status && status !== 'all') filters.push(`status=eq.${encodeURIComponent(status)}`);
@@ -2437,8 +2439,8 @@ async function getRazorpayxPayrollScan(url, auth, env) {
   if (!razorpayxConfigured(env)) return err('razorpayx_not_configured', 400);
   const month = url.searchParams.get('month');
   if (!/^\d{4}-\d{2}$/.test(month || '')) return err('month required (YYYY-MM)', 400);
-  const start = Math.max(1, Number(url.searchParams.get('start') || 1));
-  const span = Math.min(Math.max(1, Number(url.searchParams.get('span') || 40)), 45);
+  const start = intParam(url, 'start', 1, { min: 1 });
+  const span = intParam(url, 'span', 40, { min: 1, max: 45 });
   await logCompAccess(auth, 'getRazorpayxPayrollScan', null, `${month} ids ${start}..${start + span - 1}`, env);
 
   const er = await sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,razorpayx_employee_id&order=full_name.asc`, env);
@@ -2668,7 +2670,7 @@ async function removeCompAccess(body, auth, env) {
 
 async function getCompAccessLog(url, auth, env) {
   const gate = requireSuperAdmin(auth); if (gate) return gate;
-  const limit = Math.min(Number(url.searchParams.get('limit') || 200), 1000);
+  const limit = intParam(url, 'limit', 200, { min: 1, max: 1000 });
   const r = await sb(`/rest/v1/comp_access_log?select=*&order=at.desc&limit=${limit}`, env);
   if (!r.ok) return err('db_error', 500);
   return ok({ log: r.data || [] });
