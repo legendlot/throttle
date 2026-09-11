@@ -12,6 +12,7 @@ import { ArrowLeft, Play, Pause, Check, Plus, Send } from 'lucide-react';
 import { Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fromDefinition, toDefinition, duplicateNode, appendSelected, clearSelected, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import BotDrawer from '@/components/journey-canvas/BotDrawer.js';
+import { splitLinks } from '@/lib/linkify.js';
 
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
@@ -25,23 +26,13 @@ function botNodes(bot) {
   return { nodes: nodes.map((n) => (n.id === TRIGGER_ID ? { ...n, data: { ...n.data, botMode: true } } : n)), edges };
 }
 
-// Bot text with bare http(s) URLs rendered as links — same rule as the web widget's linkify
-// (commsops bot-widget.js, S372: Pruthvi's "links in the flow bots are not clickable").
-// React escapes the text parts; only an http(s) match ever becomes an href.
-const URL_RE = /https?:\/\/[^\s<>"']+/g;
+// Bot text with bare http(s) URLs rendered as links (S372). The rule lives in @/lib/linkify.js
+// (tested, and kept in step with the storefront widget); React escapes every text part.
 function Linkified({ text }) {
-  const s = String(text ?? '');
-  const out = [];
-  let last = 0;
-  for (const m of s.matchAll(URL_RE)) {
-    const url = m[0].replace(/[.,;:!?)\]]+$/, '');
-    if (m.index > last) out.push(s.slice(last, m.index));
-    out.push(<a key={m.index} href={url} target="_blank" rel="noopener noreferrer"
-      style={{ textDecoration: 'underline', wordBreak: 'break-all', color: 'inherit' }}>{url}</a>);
-    last = m.index + url.length;
-  }
-  if (last < s.length) out.push(s.slice(last));
-  return out;
+  return splitLinks(text).map((p, i) => (p.url
+    ? <a key={i} href={p.url} target="_blank" rel="noopener noreferrer"
+        style={{ textDecoration: 'underline', wordBreak: 'break-all', color: 'inherit' }}>{p.url}</a>
+    : p.text));
 }
 
 // ── Test panel — runs the CURRENT DRAFT through testBotTurn (worker-side engine, zero

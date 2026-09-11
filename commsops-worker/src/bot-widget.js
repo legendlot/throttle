@@ -103,15 +103,31 @@ function widgetJs(botId, workerBase) {
   var inp = panel.querySelector('#lotchat-inp');
 
   // Bare http(s) URLs in a message become clickable links (S372 — Pruthvi: "links added within
-  // the flow bots are not clickable"). Built from text nodes + <a> elements, NEVER innerHTML, so
-  // message text can never inject markup; only an http(s) match ever becomes an href. Trailing
-  // sentence punctuation is left outside the link. (Backslashes doubled: this is a template string.)
+  // the flow bots are not clickable"). SAME RULE as apps/relay/src/lib/linkify.js (tested there and
+  // in test/bot-widget-linkify.test.js) — keep the two in step. Built from text nodes + <a>
+  // elements, NEVER innerHTML; only an http(s) match ever becomes an href. ASCII-only URL body, so
+  // an emoji or unicode punctuation after a URL never rides into it; trailing punctuation trimmed in
+  // ONE backward pass (a trim regex was quadratic on long punctuation runs — S372 review), keeping a
+  // a ')' that closes a '(' inside the URL. (Backslashes doubled, no backticks: this is a template string.)
+  var LINK_TRAIL = '.,;:!?]*_~';
+  function trimUrl(u) {
+    var opens = 0, closes = 0, i, end = u.length, c;
+    for (i = 0; i < u.length; i++) { c = u.charAt(i); if (c === '(') opens++; else if (c === ')') closes++; }
+    while (end > 0) {
+      c = u.charAt(end - 1);
+      if (c === ')') { if (closes > opens) { closes--; end--; continue; } break; }
+      if (LINK_TRAIL.indexOf(c) >= 0) { end--; continue; }
+      break;
+    }
+    return u.slice(0, end);
+  }
   function linkify(el, text) {
-    var s = String(text == null ? '' : text), re = /https?:\\/\\/[^\\s<>"']+/g, last = 0, m;
+    var s = String(text == null ? '' : text), re = /https?:\\/\\/[^\\s<>"'\\u0080-\\uFFFF]+/gi, last = 0, m, url, a;
     while ((m = re.exec(s))) {
-      var url = m[0].replace(/[.,;:!?)\\]]+$/, '');
+      url = trimUrl(m[0]);
+      if (!/^https?:\\/\\/[^\\/]/i.test(url)) continue;   // nothing after the scheme: leave it as text
       if (m.index > last) el.appendChild(document.createTextNode(s.slice(last, m.index)));
-      var a = document.createElement('a');
+      a = document.createElement('a');
       a.href = url; a.textContent = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.style.cssText = 'color:inherit;text-decoration:underline;word-break:break-all;';
       el.appendChild(a);
