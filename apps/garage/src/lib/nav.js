@@ -54,7 +54,7 @@ export const GARAGE_NAV_PRIMARY = [
       { id: 'bag-stickers',      label: 'Bag Stickers',      route: '/bag-stickers',      icon: Tags,          desc: 'Print bag labels', gate: (p) => hasPermission(p, 'bag_sticker') },
       { id: 'cycle-counts',      label: 'Cycle Counts',      route: '/cycle-counts',      icon: ClipboardCheck, desc: 'Scheduled count sheets', gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_admin') },
       { id: 'stock-adjustments', label: 'Stock Adjustments', route: '/stock-adjustments', icon: ArrowUpDown,   desc: 'Approve count variances', gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_approve_l1') || hasPermission(p, 'cycle_count_approve_l2') },
-      { id: 'damage-ledger',     label: 'Damage Ledger',     route: '/damage-ledger',     icon: AlertTriangle, desc: 'Damaged-stock log', gate: (p) => hasPermission(p, 'stock') || hasPermission(p, 'damage_manage') },
+      { id: 'damage-ledger',     label: 'Damage Ledger',     route: '/damage-ledger',     icon: AlertTriangle, desc: 'Damaged-stock log', gate: (p) => hasPermission(p, 'stock') || hasPermission(p, 'damage_manage') || hasPermission(p, 'damage_ledger') },
     ],
   },
   {

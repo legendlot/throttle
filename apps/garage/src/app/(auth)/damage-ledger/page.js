@@ -70,7 +70,8 @@ function fmtTs(ts) {
 export default function DamageLedgerPage() {
   const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
-  const canEdit = hasPermission(perms, 'damage_manage');
+  // damage_ledger = ledger-only; damage_manage also carries floor management (worker canManageDamage).
+  const canEdit = hasPermission(perms, 'damage_manage') || hasPermission(perms, 'damage_ledger');
 
   const [tab,      setTab]      = useState('pending');
   const [rows,     setRows]     = useState([]);
@@ -452,7 +453,7 @@ export default function DamageLedgerPage() {
         <div style={panelBodyStyle}>
           {!canEdit && (
             <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(242,205,26,.08)', border: '1px solid rgba(242,205,26,.2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
-              View-only — `damage_manage` permission required to record or action ledger rows.
+              View-only — `damage_ledger` (or `damage_manage`) permission required to record or action ledger rows.
             </div>
           )}
 

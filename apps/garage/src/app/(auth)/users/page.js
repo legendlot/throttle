@@ -36,7 +36,8 @@ const PERM_DEFS = [
     { key: 'company_address_manage',    label: 'Manage Company Addresses', type: 'bool' },
   ] },
   { group: 'Damage / Cycle Counts', items: [
-    { key: 'damage_manage',          label: 'Manage Damage Ledger', type: 'bool' },
+    { key: 'damage_ledger',          label: 'Damage Ledger (record + action only)', type: 'bool' },
+    { key: 'damage_manage',          label: 'Manage Damage Ledger + floor management', type: 'bool' },
     { key: 'cycle_count_record',     label: 'Record Cycle Counts',  type: 'bool' },
     { key: 'cycle_count_approve_l1', label: 'Approve Variance — L1', type: 'bool' },
     { key: 'cycle_count_approve_l2', label: 'Approve Variance — L2', type: 'bool' },
