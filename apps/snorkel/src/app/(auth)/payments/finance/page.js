@@ -46,7 +46,7 @@ export default function FinanceQueuePage() {
   // TAXABLE value, invoice_total ÷ (1 + GST%) (decisions.md, 2026-09-11).
   const [gstRates, setGstRates] = useState({});
   const gstFor = r => gstRates[r.id]
-    ?? String(defaultGstRate({ poGstRate: r.po_gst_rate, payeeGstin: r.payee?.gstin }));
+    ?? String(defaultGstRate({ poGstRate: r.po_gst_rate, vendorGstRate: r.vendor_gst_rate, payeeGstin: r.payee?.gstin }));
   const [onlyUrgent, setOnlyUrgent] = useState(false);
   // ⚠️ getFinanceQueue admits execute OR super_admin, but markPaymentPaid requires EXECUTE alone
   // (snorkelops:3932). So a super admin could open this queue and click a Mark-paid button that

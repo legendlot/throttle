@@ -39,8 +39,9 @@ looking for them.</p>
   the person who raised the request never sees or enters it; they only upload the invoice and its
   details. TDS is computed on the invoice&rsquo;s <strong>taxable value</strong> (the amount before
   GST), not the invoice total: typing a rate opens a <strong>GST %</strong> picker (0, 5, 12, 18 or
-  28) next to it, pre-filled from the linked PO&rsquo;s GST rate, or 18% if the payee has a GSTIN on
-  file, or 0% otherwise &mdash; change it if the invoice says something different. Taxable value =
+  28) next to it, pre-filled from the linked PO&rsquo;s GST rate, else the rate the vendor&rsquo;s POs
+  are always raised at, else 18% if the payee has a GSTIN on file, else 0% &mdash; change it if the
+  invoice says something different. Taxable value =
   invoice total &divide; (1 + GST%); TDS = taxable value &times; the TDS rate. The preview under the
   fields shows the taxable value, the TDS amount and the net payable as you type. A TDS rate cannot
   be entered without a GST rate &mdash; Snorkel refuses the payment until one is picked. The

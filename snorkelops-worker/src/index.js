@@ -2071,7 +2071,8 @@ export default {
             const req = r.data[0];
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (req.requested_by_user_id !== userId && !privileged) return err('Not found', 404);
-            const [docs, banks, tdsCands, poGst] = await Promise.all([
+            const vendorCode = req.payee?.linked_vendor_code || null;
+            const [docs, banks, tdsCands, poGst, vGst] = await Promise.all([
               query('payment_request_documents', `?request_id=eq.${encodeURIComponent(id)}&order=uploaded_at.asc&select=*`),
               query('payment_payee_banks', `?payee_id=eq.${req.payee_id}&is_active=is.true&select=*`),
               // Candidates for prior_tds: same payee, already carrying a deduction. The matcher
@@ -2081,6 +2082,11 @@ export default {
               // The linked PO's GST rate → pre-fills the Mark-paid GST picker (poGstRateByPo).
               req.linked_po_number
                 ? query('po_lines', `?po_number=eq.${encodeURIComponent(req.linked_po_number)}&select=po_number,gst_percent`)
+                : { ok: true, data: [] },
+              // The payee's vendor's usual GST rate (view: every INR PO line at one rate) — the
+              // picker's second pre-fill step, for requests with no linked PO (S376).
+              vendorCode
+                ? query('v_vendor_po_gst_rate', `?vendor_code=eq.${encodeURIComponent(vendorCode)}&select=vendor_code,gst_rate`)
                 : { ok: true, data: [] },
             ]);
             // Running total already requested against this (payee, invoice_no) — drives the
@@ -2098,6 +2104,7 @@ export default {
             // null when there is no PO, no rate, mixed rates, or the read failed — the picker then
             // falls back to the payee's GSTIN (payee(*) above carries it). A default, never a gate.
             req.po_gst_rate = (poGst.ok ? poGstRateByPo(poGst.data) : {})[req.linked_po_number] ?? null;
+            req.vendor_gst_rate = vGst.ok && vGst.data[0] ? tdsNum(vGst.data[0].gst_rate) : null;
             return ok({
               request: req,
               documents: docs.ok ? docs.data : [],
@@ -2119,7 +2126,7 @@ export default {
             // its count — an urgent held row sorts to the TOP of a shared query and displaces a
             // payable one at the limit (hostile review S350).
             // `gstin` rides along for the Mark-paid GST picker's pre-fill (defaultGstRate).
-            const sel = 'select=*,payee:payment_payees(id,payee_code,name,payee_type,gstin)';
+            const sel = 'select=*,payee:payment_payees(id,payee_code,name,payee_type,gstin,linked_vendor_code)';
             const [r, h] = await Promise.all([
               query('payment_requests',
                 `?status=eq.approved&${sel}&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
@@ -2140,8 +2147,9 @@ export default {
             const payeeIds = [...new Set(rows.map(x => x.payee_id).filter(Boolean))];
             const reqIds   = rows.map(x => x.id);
             const poNums   = [...new Set(rows.map(x => x.linked_po_number).filter(Boolean))];
+            const vCodes   = [...new Set(rows.map(x => x.payee?.linked_vendor_code).filter(Boolean))];
             // batched, never a lookup per row
-            const [bk, dz, tc, pl] = await Promise.all([
+            const [bk, dz, tc, pl, vg] = await Promise.all([
               payeeIds.length
                 ? query('payment_payee_banks',
                     `?payee_id=in.(${payeeIds.join(',')})&is_active=is.true&select=*`)
@@ -2159,13 +2167,21 @@ export default {
                 ? query('po_lines', `?po_number=in.(${encodeURIComponent(
                     poNums.map(n => `"${String(n).replace(/"/g, '""')}"`).join(','))})&select=po_number,gst_percent`)
                 : { ok: true, data: [] },
+              // The payees' vendors' usual GST rates for the whole queue in one read (S376).
+              vCodes.length
+                ? query('v_vendor_po_gst_rate', `?vendor_code=in.(${encodeURIComponent(
+                    vCodes.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))})&select=vendor_code,gst_rate`)
+                : { ok: true, data: [] },
             ]);
             const tdsCands = tc.ok ? (tc.data || []) : [];
-            // A failed po_lines read degrades to null (the GSTIN fallback) — never a blocker.
+            // A failed po_lines / vendor-rate read degrades to null (the next fallback) — never a blocker.
             const poGstRates = pl.ok ? poGstRateByPo(pl.data) : {};
+            const vendorGstRates = {};
+            if (vg.ok) for (const v of vg.data || []) vendorGstRates[v.vendor_code] = tdsNum(v.gst_rate);
             for (const x of rows) {
               x.prior_tds = priorTdsFor(x, tdsCands);
               x.po_gst_rate = poGstRates[x.linked_po_number] ?? null;
+              x.vendor_gst_rate = vendorGstRates[x.payee?.linked_vendor_code] ?? null;
             }
             const banks = {};
             if (bk.ok) for (const b of bk.data) {

@@ -132,7 +132,7 @@ export default function PaymentRequestDetail() {
   // GSTIN → 0% (defaultGstRate). Read at render AND at submit, so the two can never disagree.
   const gstPick = (req, p = pay) => p.tds_gst_rate !== ''
     ? p.tds_gst_rate
-    : String(defaultGstRate({ poGstRate: req?.po_gst_rate, payeeGstin: req?.payee?.gstin }));
+    : String(defaultGstRate({ poGstRate: req?.po_gst_rate, vendorGstRate: req?.vendor_gst_rate, payeeGstin: req?.payee?.gstin }));
 
   async function confirmPaid() {
     const gst = gstPick(d?.request);

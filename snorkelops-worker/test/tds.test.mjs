@@ -187,6 +187,13 @@ test('defaultGstRate: the linked PO rate wins, then 18 with a payee GSTIN, else 
   for (const payeeGstin of [null, undefined, '', '   '])
     assert.equal(defaultGstRate({ poGstRate: null, payeeGstin }), 0);
   assert.equal(defaultGstRate(), 0);
+  // S376: the vendor's usual PO rate sits between the linked PO and the GSTIN rule.
+  assert.equal(defaultGstRate({ poGstRate: null, vendorGstRate: 18, payeeGstin: null }), 18);   // the VITBOJ case
+  assert.equal(defaultGstRate({ poGstRate: null, vendorGstRate: '5.00', payeeGstin: '27AABCU9603R1ZM' }), 5);
+  assert.equal(defaultGstRate({ poGstRate: 12, vendorGstRate: 18, payeeGstin: null }), 12);     // PO still wins
+  assert.equal(defaultGstRate({ poGstRate: null, vendorGstRate: 0, payeeGstin: '27AABCU9603R1ZM' }), 0);  // 0 is a rate
+  assert.equal(defaultGstRate({ poGstRate: null, vendorGstRate: 3, payeeGstin: '27AABCU9603R1ZM' }), 18); // not an option
+  assert.equal(defaultGstRate({ poGstRate: null, vendorGstRate: [18], payeeGstin: null }), 0);  // non-scalar ignored
   // Every default is a picker option, so it always passes computeTds.
   for (const g of [5, 18, 0]) assert.ok(GST_RATES.includes(g));
 });

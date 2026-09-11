@@ -86,13 +86,24 @@ export function computeTds({ invoiceTotal, rate, gstRate }) {
 }
 
 // The GST% the Mark-as-Paid picker starts on (decisions.md, 2026-09-11): the linked PO's rate →
-// else 18 if the payee has a GSTIN → else 0. `poGstRate` is the worker's `po_gst_rate` — the ONE
-// distinct po_lines.gst_percent on the linked PO, or null when there is no PO, no rate, or the PO
-// mixes rates. A PO rate outside GST_RATES is not a picker option, so it falls through too.
+// else the payee's VENDOR's usual PO rate → else 18 if the payee has a GSTIN → else 0.
+// `poGstRate` is the worker's `po_gst_rate` — the ONE distinct po_lines.gst_percent on the linked
+// PO, or null when there is no PO, no rate, or the PO mixes rates. `vendorGstRate` is the worker's
+// `vendor_gst_rate` (view store.v_vendor_po_gst_rate — every INR PO line of that vendor at one
+// rate, else null). The vendor step exists because GSTINs are simply not recorded for most vendors
+// (27 of 41 requests' payees had none, 18 of them vendors billing GST at one rate — S376), so the
+// GSTIN test alone started registered vendors at 0% and reproduced the over-deduction.
+// A rate outside GST_RATES is not a picker option, so it falls through too.
 // A default only: Finance can change it, and computeTds validates whatever is finally picked.
-export function defaultGstRate({ poGstRate, payeeGstin } = {}) {
-  const po = (typeof poGstRate === 'string' || typeof poGstRate === 'number') ? num(poGstRate) : null;
-  if (po !== null && GST_RATES.includes(po)) return po;
+export function defaultGstRate({ poGstRate, vendorGstRate, payeeGstin } = {}) {
+  const pick = v => {
+    const n = (typeof v === 'string' || typeof v === 'number') ? num(v) : null;
+    return n !== null && GST_RATES.includes(n) ? n : null;
+  };
+  const po = pick(poGstRate);
+  if (po !== null) return po;
+  const vendor = pick(vendorGstRate);
+  if (vendor !== null) return vendor;
   return typeof payeeGstin === 'string' && payeeGstin.trim() !== '' ? 18 : 0;
 }
 
