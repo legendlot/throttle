@@ -78,6 +78,9 @@ export default function DamageLedgerPage() {
   const [search,   setSearch]   = useState('');
   const [source,   setSource]   = useState('');
   const [selected, setSelected] = useState(() => new Set());
+  // Server-side part filter (S372 review, finding 5): the ledger loads the newest 500 rows, so a
+  // client-side search for one part missed older entries for 42% of parts. ENTRIES sets this.
+  const [partFilter, setPartFilter] = useState('');
 
   // Modals
   const [repairOpen,  setRepairOpen]  = useState(false);
@@ -146,13 +149,14 @@ export default function DamageLedgerPage() {
       const filter = { limit: 500 };
       if (tab !== 'all') filter.status = tab;
       if (source) filter.source = source;
+      if (partFilter) { filter.part_code = partFilter; filter.limit = 2000; }
       const r = await workerFetch('getDamageLedger', { data: filter }, session);
       setRows(r?.ok ? (r.data || []) : []);
     } finally {
       setLoading(false);
     }
   }
-  useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, session]);
+  useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, partFilter, session]);
 
   async function loadSummary() {
     if (!session) return;
@@ -520,7 +524,7 @@ export default function DamageLedgerPage() {
                             <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{p.total}</td>
                             <td style={{ ...tableTdStyle, textAlign: 'right' }}>
                               <div style={{ display: 'inline-flex', gap: 4 }}>
-                                <button onClick={() => { setSearch(p.part_code); setView('ledger'); setTab('all'); }} style={btnSecondary}>ENTRIES</button>
+                                <button onClick={() => { setSearch(''); setPartFilter(p.part_code); setView('ledger'); setTab('all'); }} style={btnSecondary}>ENTRIES</button>
                                 {canEdit && p.pending > 0 && (
                                   <button onClick={() => openDamageOut(p.part_code)} style={btnSecondary}>DAMAGE OUT</button>
                                 )}
@@ -580,6 +584,12 @@ export default function DamageLedgerPage() {
                 {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </div>
+            {partFilter && (
+              <button onClick={() => setPartFilter('')} title="Clear part filter"
+                style={{ ...btnSecondary, color: 'var(--yellow)', borderColor: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
+                PART: {partFilter} ×
+              </button>
+            )}
             <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
               {stats.total} row{stats.total === 1 ? '' : 's'} · {stats.qty} qty
             </div>

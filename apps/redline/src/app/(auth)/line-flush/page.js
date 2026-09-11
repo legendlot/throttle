@@ -197,14 +197,21 @@ export default function LineFlushPage() {
   // and a typed `d1-pb-08` flowed unchanged into flush_lines → stock_ledger (Return to Stock
   // created junk lowercase rows holding 150 pcs) → damage_ledger (Scrap). Every part-code field
   // is a Combobox (PATTERN-160); this was one of the last plain boxes.
-  const partOpts = useMemo(() => Object.values(materialCache)
-    .filter((m) => m?.part_code)
+  // The selected run's own pick-list codes count as known too: a run can legitimately carry a
+  // part that is no longer ACTIVE in the master (getMaterials = material_current only), e.g. an
+  // inactive HW-* screw still on Blitz's BOM. Refusing those would block a real flush (S372 review).
+  const knownCodes = useMemo(() => {
+    const m = new Map(Object.values(materialCache).filter((x) => x?.part_code).map((x) => [x.part_code, x]));
+    (runPickList || []).forEach((p) => { if (p?.part_code && !m.has(p.part_code)) m.set(p.part_code, { part_code: p.part_code, part_name: p.part_name, product: '' }); });
+    return m;
+  }, [materialCache, runPickList]);
+  const partOpts = useMemo(() => [...knownCodes.values()]
     .map((m) => ({
       value: m.part_code,
       label: `${m.part_code}${m.part_name ? ' — ' + m.part_name : ''}${m.product ? ' (' + m.product + ')' : ''}`,
-    })), [materialCache]);
+    })), [knownCodes]);
   function pickPart(id, code) {
-    const m = code ? materialCache[code] : null;
+    const m = code ? (materialCache[code] || knownCodes.get(code)) : null;
     setPartCards((cards) => cards.map((c) => c.id === id
       ? { ...c, partCode: code || '', partName: m?.part_name || '', category: m?.part_category || '' }
       : c));
@@ -247,8 +254,10 @@ export default function LineFlushPage() {
       return;
     }
     // A run's pick list can carry a code the part list doesn't know; refuse rather than write it.
+    // Only cards that will actually be written (a qty > 0) are checked.
     const unknown = Object.keys(materialCache).length
-      ? partCards.filter((c) => c.partCode && !materialCache[c.partCode]).map((c) => c.partCode)
+      ? partCards.filter((c) => c.partCode && !knownCodes.has(c.partCode)
+          && c.splits.some((sp) => (parseFloat(sp.qty) || 0) > 0)).map((c) => c.partCode)
       : [];
     if (unknown.length) {
       showToast(`Not in the part list: ${unknown.join(', ')} — pick the part again`, 'error');
