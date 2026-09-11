@@ -13,6 +13,12 @@ const HUMAN_ACTIVE_MS = 12 * 3600 * 1000;   // csops's own human_active window
 const IDLE_EXPIRE_MS = 6 * 3600 * 1000;
 const stripBotId = (id) => String(id || '').replace(/^bot:[^:]+:/, '');
 const wireId = (stepId, handle) => `${BOT_ID_PREFIX}${stepId}:${handle}`;
+// The inverse of wireId, keeping the step: the engine treats a tap on a chip from a step other
+// than the current one as typed text. A non-bot id (template quick-reply) has no step.
+const parseBotId = (id) => {
+  const m = /^bot:([^:]+):(.*)$/.exec(String(id || ''));
+  return m ? { buttonId: m[2], stepId: m[1] } : { buttonId: String(id || ''), stepId: null };
+};
 
 // ── default deps (real I/O) ──
 let supportCache = { at: 0, id: null };
@@ -149,8 +155,9 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
     const st = (fresh && fresh.id === session.id ? fresh.status : session.status);
     return { handled: true, duplicate: true, session_id: session.id, session_status: st, replies: [], handoff: st === 'handed_off' };
   }
+  const tap = m.button_id ? parseBotId(m.button_id) : null;
   const input = opened ? { kind: 'open', text }
-    : m.button_id ? { kind: 'button', buttonId: stripBotId(m.button_id), text }
+    : tap ? { kind: 'button', buttonId: tap.buttonId, ...(tap.stepId ? { stepId: tap.stepId } : {}), text }
     : { kind: 'text', text };
   const t = await T.executeTurn(env, session, def, input, { loadActiveShared: d.loadActiveShared, loadDefinition: d.loadDefinition, ...(d.lookupOrderStatus ? { lookupOrderStatus: d.lookupOrderStatus } : {}) });
   const out = t.out;
@@ -168,4 +175,4 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
     replies: out.replies.map((r) => ({ text: r.text, buttons: r.buttons || null, style: r.style || null })), handoff: t.handoff || out.state.status === 'handed_off' };
 }
 
-module.exports = { maybeHandleInbound, stripBotId, wireId, BOT_ID_PREFIX, HUMAN_ACTIVE_MS, IDLE_EXPIRE_MS, toSendOpts };
+module.exports = { maybeHandleInbound, stripBotId, parseBotId, wireId, BOT_ID_PREFIX, HUMAN_ACTIVE_MS, IDLE_EXPIRE_MS, toSendOpts };

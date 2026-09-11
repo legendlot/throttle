@@ -107,6 +107,21 @@ const ING = { ok: true, profile_id: 'prof1' };
   r = await W.maybeHandleInbound({}, M({ text: 'I want an agent', provider_message_id: 'wamid.4' }), ING, deps);
   assert.equal(r.handoff, true); assert.equal(r.session_status, 'handed_off');
   assert.equal(W.stripBotId('bot:menu:b_faq'), 'b_faq'); assert.equal(W.stripBotId('confirm_yes'), 'confirm_yes');
+  // parseBotId keeps the step the chip was rendered on; a non-bot id (template quick-reply) has none
+  assert.deepEqual(W.parseBotId('bot:menu:b_faq'), { buttonId: 'b_faq', stepId: 'menu' });
+  assert.deepEqual(W.parseBotId('confirm_yes'), { buttonId: 'confirm_yes', stepId: null });
+  assert.equal(W.parseBotId(W.wireId('m2', 'b_opt1')).stepId, 'm2');
+
+  // Stale chip: a tap on a chip rendered by ANOTHER step is the customer typing its label. The
+  // session sits at 'menu'; the chip came from step 'old' with a colliding id -> a miss, not 'Answer'.
+  ({ deps } = mk({
+    findLatestSession: async () => null,
+    createSession: async (env, row) => ({ session: { id: 'S1', status: 'active', current_step: 'menu', context: {} }, adopted: true }),
+  }));
+  r = await W.maybeHandleInbound({}, M({ type: 'interactive', text: 'Old option', button_id: 'bot:old:b_faq', provider_message_id: 'wamid.24' }), ING, deps);
+  assert.ok(!r.replies.some((x) => x.text === 'Answer'), JSON.stringify(r.replies));
+  assert.equal(r.replies[r.replies.length - 1].text, 'Hi');   // the current menu is re-shown
+  assert.equal(r.session_status, 'active');
 
   // Fix round 1 finding 2: createSession lost the unique-index race and adopted the winner —
   // the caller must NOT treat this as an `open` and re-greet from def.entry, clobbering the

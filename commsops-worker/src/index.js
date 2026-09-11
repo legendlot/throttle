@@ -3086,7 +3086,8 @@ export default {
         if (!(await BW.floodCheck(env, session.id))) return withCors(err('too_many_messages', 429));
         const def = await T.sessionDefinition(env, session);   // the sub-flow's definition when the session is inside one
         if (!def) return withCors(err('bot_unavailable', 503));
-        const input = b.buttonId ? { kind: 'button', buttonId: b.buttonId, text } : { kind: 'text', text };
+        // stepId = the step that rendered the chip; a tap from an older step is read as typed text (bot-engine.js).
+        const input = b.buttonId ? { kind: 'button', buttonId: b.buttonId, ...(b.stepId ? { stepId: String(b.stepId) } : {}), text } : { kind: 'text', text };
         const out = await BW.runTurn(env, session, def, input, text);
         return withCors(ok({ replies: out.replies, status: out.state.status }));
       }

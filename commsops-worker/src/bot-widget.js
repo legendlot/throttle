@@ -114,7 +114,7 @@ function widgetJs(botId, workerBase) {
     return b;
   }
 
-  function renderButtons(buttons, style) {
+  function renderButtons(buttons, style, stepId) {
     var wrap = document.createElement('div');
     // 'list' style (S355) — a vertical stack of full-width rows, description under the label
     // in smaller text, for a menu of options rather than a short chip row.
@@ -132,7 +132,7 @@ function widgetJs(botId, workerBase) {
         el.textContent = bt.label;
         el.style.cssText = 'border:1.5px solid #111;background:#fff;color:#111;border-radius:16px;padding:6px 12px;font-size:13px;cursor:pointer;';   // explicit color: the storefront theme is white-on-dark and the chips inherited it (S312 smoke)
       }
-      el.onclick = function () { if (!busy) { disableChips(); send({ buttonId: bt.id, text: bt.label }); } };
+      el.onclick = function () { if (!busy) { disableChips(); send({ buttonId: bt.id, stepId: stepId || null, text: bt.label }); } };
       wrap.appendChild(el);
     });
     wrap.setAttribute('data-lotchat-chips', '1');
@@ -145,7 +145,9 @@ function widgetJs(botId, workerBase) {
   function showReplies(replies) {
     (replies || []).forEach(function (r) {
       bubble(r.text, 'bot');
-      if (r.buttons && r.buttons.length) renderButtons(r.buttons, r.style);
+      // step_id rides along with a tap: a chip from an OLD menu is then read as its typed label
+      // (bot-engine.js), not matched by id against whatever menu is current now.
+      if (r.buttons && r.buttons.length) renderButtons(r.buttons, r.style, r.step_id);
     });
   }
 

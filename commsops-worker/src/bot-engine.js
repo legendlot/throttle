@@ -119,6 +119,15 @@ function advance(def, prev, input) {
     return walk(def, state, kw && def.steps[kw] ? kw : def.entry, replies, effects);
   }
 
+  // A STALE chip — tapped on an old menu, not the current step — is handled exactly as if the
+  // customer had TYPED its label. Button ids are only unique per menu (`b_opt1` sits on several
+  // menus of a live bot), so matching an old menu's id against the current menu fired whatever
+  // option happened to share it. `stepId` is the step that rendered the chip (bot-wa.js wireId,
+  // the widget's reply.step_id); absent = a caller that predates it, which keeps the id match.
+  if (input.kind === 'button' && input.stepId && String(input.stepId) !== String(state.current_step)) {
+    input = { kind: 'text', text: input.text };
+  }
+
   const step = def.steps[state.current_step];
   if (!step) return walk(def, state, def.entry, replies, effects);
 
@@ -210,8 +219,8 @@ function validateBotDef(def, opts = {}) {
   const errs = [];
   if (!def || !def.entry || !def.steps || !def.steps[def.entry]) return [{ code: 'no_entry', stepId: def && def.entry }];
   for (const [id, step] of Object.entries(def.steps)) {
-    // wire ids are `bot:<step_id>:<handle>` (bot-wa.js wireId) and stripBotId only strips the
-    // first two `:`-delimited segments, so a step id containing `:` under-strips on the way back.
+    // wire ids are `bot:<step_id>:<handle>` (bot-wa.js wireId) and stripBotId/parseBotId only split
+    // off the first two `:`-delimited segments, so a step id containing `:` under-strips on the way back.
     if (String(id).includes(':')) errs.push({ code: 'step_id_invalid', stepId: id });
     const handles = step.type === 'menu'
       ? [...(step.buttons || []).map((b) => b.id), 'fallback']

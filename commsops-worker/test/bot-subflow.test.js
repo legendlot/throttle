@@ -69,6 +69,22 @@ assert.ok(r.state.frame, 'frame must still be set — a handoff is not a subflow
 r = E.advance(SUB, { current_step: 'a_ship', status: 'active', context: {}, frame: null }, { kind: 'resume', from: 'a_ship' });
 assert.equal(r.state.status, 'ended');
 
+// Stale-chip rule inside a sub-flow: inside the frame, current_step is the SHARED flow's step id
+// and the chip carries that same id (the reply's step_id -> wireId), so a live tap is not stale.
+{
+  const inSub = () => ({ current_step: 'list', status: 'active', context: {}, frame: { bot_id: FAQ_ID, version: 1, return_step: 'faq' } });
+  const live = E.advance(SUB, inSub(), { kind: 'button', buttonId: 'b_ship', stepId: 'list', text: 'Shipping' });
+  assert.deepEqual(live.replies.map((x) => x.text), ['3-5 days.']);
+  assert.deepEqual(live.effects, [{ type: 'subflow_return', return_step: 'faq' }]);
+  // an old PARENT chip whose id collides with a sub-flow option (ids are only unique per menu) is
+  // typed "FAQs" -> a miss at the sub menu, NOT the sub-flow's b_ship
+  const old = E.advance(SUB, inSub(), { kind: 'button', buttonId: 'b_ship', stepId: 'menu', text: 'FAQs' });
+  assert.equal(old.state.current_step, 'list'); assert.equal(old.state.context.menu_misses, 1);
+  // back in the parent, an old sub-flow chip with a colliding id is stale too -> no subflow_enter
+  const back = E.advance(PARENT, Object.assign(fresh(), { current_step: 'menu' }), { kind: 'button', buttonId: 'b_faq', stepId: 'list', text: 'Shipping' });
+  assert.equal(back.state.current_step, 'menu'); assert.equal(back.state.context.menu_misses, 1); assert.equal(back.effects.length, 0);
+}
+
 // ── lint ──
 const okErrs = E.validateBotDef(PARENT, { channel: 'whatsapp', sharedIds: new Set([FAQ_ID]) });
 assert.deepEqual(okErrs, []);

@@ -144,4 +144,44 @@ assert.deepEqual(lr.replies.map(x => x.text), ['A', 'B']);
   assert.equal(y.state.current_step, 'ident');
 }
 
+// ── Stale chip: a tap from a step OTHER than the current one is read as its typed label ──
+// Live bots reuse button ids across menus (`b_opt1` on 5 menus), so an old chip's id matched
+// against the current menu used to fire whatever option shared it.
+{
+  const SDEF = { entry: 'M1', steps: {
+    M1: { type: 'menu', text: 'Topics', buttons: [{ id: 'b_opt1', label: 'Shipping' }, { id: 'b_opt3', label: 'Returns' }],
+          outcomes: { b_opt1: 'M2', b_opt3: 'M2', fallback: 'h' } },
+    M2: { type: 'menu', text: 'Which?', buttons: [{ id: 'b_opt1', label: 'Warranty' }, { id: 'b_opt2', label: 'Returns' }],
+          outcomes: { b_opt1: 'warranty', b_opt2: 'returns', fallback: 'h' } },
+    warranty: { type: 'end', text: 'W', outcomes: {} },
+    returns:  { type: 'end', text: 'R', outcomes: {} },
+    h: { type: 'handoff', outcomes: {} },
+  } };
+  const atM2 = () => ({ current_step: 'M2', status: 'active', context: {} });
+  // colliding id from M1 at M2 -> typed "Shipping" -> a miss, NOT M2's b_opt1 (Warranty)
+  let s = E.advance(SDEF, atM2(), { kind: 'button', buttonId: 'b_opt1', stepId: 'M1', text: 'Shipping' });
+  assert.equal(s.state.current_step, 'M2');
+  assert.equal(s.state.context.menu_misses, 1);
+  assert.ok(!s.replies.some((x) => x.text === 'W'));
+  assert.deepEqual(s.replies[1].buttons.map((b) => b.id), ['b_opt1', 'b_opt2']);   // menu re-shown
+  // stale chip whose LABEL is a current option -> typed semantics take that option (id b_opt3 is not on M2)
+  s = E.advance(SDEF, atM2(), { kind: 'button', buttonId: 'b_opt3', stepId: 'M1', text: 'Returns' });
+  assert.deepEqual(s.replies.map((x) => x.text), ['R']);
+  // current-step tap -> unchanged id match
+  s = E.advance(SDEF, atM2(), { kind: 'button', buttonId: 'b_opt1', stepId: 'M2', text: 'Warranty' });
+  assert.deepEqual(s.replies.map((x) => x.text), ['W']);
+  // no stepId (old cached widget / in-flight message) -> today's id match, whatever the label says
+  s = E.advance(SDEF, atM2(), { kind: 'button', buttonId: 'b_opt1', text: 'Shipping' });
+  assert.deepEqual(s.replies.map((x) => x.text), ['W']);
+  // a stale tap at a COLLECT is its label as text: same validation as a typed reply
+  const c = E.advance(DEF, { current_step: 'collect_order', status: 'active', context: {} }, { kind: 'button', buttonId: 'b_track', stepId: 'menu1', text: 'Track my order' });
+  assert.equal(c.state.current_step, 'collect_order'); assert.equal(c.state.context.collect_misses, 1);
+  // a stale tap at an ACTION step restates, exactly as typed text does
+  const a = E.advance(DEF, { current_step: 'status1', status: 'active', context: {} }, { kind: 'button', buttonId: 'b_track', stepId: 'menu1', text: 'Track my order' });
+  assert.equal(a.state.current_step, 'status1'); assert.equal(a.effects.length, 0);
+  // terminal: a handed-off bot stays silent for a stale tap too
+  const t = E.advance(DEF, { current_step: 'handoff1', status: 'handed_off', context: {} }, { kind: 'button', buttonId: 'b_agent', stepId: 'menu1', text: 'Agent' });
+  assert.equal(t.replies.length, 0); assert.equal(t.state.status, 'handed_off');
+}
+
 console.log('bot-engine tests OK');
