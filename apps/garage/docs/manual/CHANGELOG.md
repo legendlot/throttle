@@ -6,6 +6,22 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.28.0 - 2026-09-11
+
+- **Damage / Scrap Ledger**: documents that search now looks across the whole ledger
+  (server-side), not just the rows loaded, that the list pages 500 rows at a time behind a
+  **LOAD 500 MORE** button, and that the row/qty counter shows a **+** while more rows exist.
+- **Users & Roles**: documents the new **Damage Ledger (record + action only)** permission
+  (`damage_ledger`), which grants only the Damage Ledger screen (record and action entries),
+  and relabels the existing **Manage Damage Ledger + floor management** permission to make
+  clear it also unlocks floor management (operators, shifts, box library, run requests) and
+  Redline attendance, not just the ledger. Store Associates hold the narrower permission.
+- **Scanner &rarr; Returns Intake**: documents scanning a re-stickered legacy return (a spare
+  production UPC sticker), the requirement to check the sticker against the physical unit, the
+  ONE STICKER = ONE ITEM rule (car and remote stickers scanned and logged separately, paired
+  again at QC Pass), and that an unrecognised code (neither a known unit nor a printed sticker)
+  is now refused with a message instead of logged without a product.
+
 ## 1.27.0 - 2026-09-11
 
 - **Damage / Scrap Ledger**: documents the multi-line Record Damage form (one DMG number per

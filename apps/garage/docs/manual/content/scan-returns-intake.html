@@ -24,3 +24,16 @@
   <div class="c-title">&#9432; Capture only, no decisions at the scanner</div>
   <p>You do not choose a disposition while scanning. The scanner just records that the unit arrived and binds it to the shipment. Re-scanning the same unit is harmless. All the triage choices happen back in Garage, so the floor stays fast and the decisions stay auditable.</p>
 </div>
+
+<h2 class="sec">Re-stickered legacy returns (SPARE production stickers)</h2>
+<p>Some legacy returns get a spare, pre-printed production UPC sticker stuck on them on the floor instead of going through the usual EAN/legacy-QR relabel in Garage. Scanning that sticker logs the unit straight away: the scanner shows the product the sticker was <strong>printed</strong> for, not what is read off the box. <strong>Check the sticker against the physical unit before you scan on</strong>, a sticker printed for the wrong product is the one mistake the system cannot catch on its own.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; ONE STICKER = ONE ITEM</div>
+  <p>Stick and scan the car&rsquo;s sticker and the remote&rsquo;s sticker <strong>separately</strong>. Each is logged as its own item; they are not paired at intake. They are paired again at QC Pass, after repair.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Legacy returns with no sticker still go the old way</div>
+  <p>If a legacy return has not been re-stickered, scan the box EAN or the legacy QR as before, and relabel it in Garage. A code that the scanner cannot resolve, neither a known unit nor a sticker we printed, is now <strong>refused</strong> with a message rather than logged with the product missing. Check the code, or use the EAN/relabel path instead.</p>
+</div>

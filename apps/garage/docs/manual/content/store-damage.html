@@ -10,6 +10,9 @@
 <h2 class="sec">The lifecycle</h2>
 <p>Each row carries a status, shown as a tab and a badge: <strong>Pending</strong> (yellow), <strong>Sent to Repair</strong> (blue), <strong>Returned to Vendor</strong> (orange), <strong>Scrapped</strong> (red), <strong>Restocked</strong> (green), <strong>Cancelled</strong> (grey).</p>
 
+<h2 class="sec">Search and paging</h2>
+<p>Search looks across the <strong>whole ledger</strong>, not just the rows on screen, so it finds an old entry even if it was recorded months ago. The list itself loads <strong>500 rows at a time</strong>; a <strong>LOAD 500 MORE</strong> button appears at the bottom whenever there are more rows to fetch. While more rows exist, the row and qty counter above the list shows a <strong>+</strong> (e.g. &ldquo;500+ rows&rdquo;) so it is clear the total is not yet the whole count.</p>
+
 <h2 class="sec">Working the ledger</h2>
 <ul>
   <li><strong>+ Record Damage takes many lines at once,</strong> the same way GRN Entry does. Each line has its own <strong>Part Code</strong> (pick it from the list, the same part search as GRN, and the part name and product fill in on their own; you can still edit them), <strong>Part Name</strong>, <strong>Product</strong> and whole-number <strong>Qty</strong>, plus an optional per-line <strong>Reason</strong> that overrides the entry's reason just for that line. <strong>+ Add Line</strong> adds another row; the &times; removes one. <strong>Source</strong>, the entry <strong>Reason</strong> (shown on the manifest) and internal <strong>Notes</strong> are shared by the whole entry. A wholly blank line is ignored, but a part-filled line still missing a code, name or qty stops the whole entry from saving until it is fixed. Each line becomes its own DMG number on save.</li>

@@ -14,6 +14,13 @@
 <h2 class="sec">Roles &amp; Permissions tab</h2>
 <p>Lists each role and how many users hold it. Editing a role opens the <strong>permission matrix</strong>: grouped toggles covering core tabs, production, line flush, procurement (including the separate China-PO rights), damage and cycle counts, deviations, direct issuance, customer repairs, dispatch, scan corrections, reports, users and Pitstop. Most permissions are simple on/off; a few core tabs offer none / view / write.</p>
 
+<h2 class="sec">Two damage permissions, not one</h2>
+<p>The matrix carries two separate damage toggles, and it matters which one a role gets:</p>
+<ul>
+  <li><strong>Damage Ledger (record + action only)</strong> unlocks the Damage Ledger screen and nothing else: recording damage, and actioning entries (send to repair, scrap, return to vendor, restock, cancel). This is the one to give a floor role that only needs the ledger. <span class="role sto">Store</span> Associates hold it by default.</li>
+  <li><strong>Manage Damage Ledger + floor management</strong> does everything the ledger permission does, <strong>plus</strong> it unlocks floor management (operators, shifts, box library, run requests) and Redline attendance. Give this one only to a manager, not a floor associate, since it reaches well beyond the ledger.</li>
+</ul>
+
 <div class="callout danger">
   <div class="c-title">&#9940; Roles decide everything</div>
   <p>A person&rsquo;s role is what unlocks (or hides) every screen and button across Garage, so a small change here has wide effect. System roles cannot be deleted; deleting a custom role leaves its holders without access until they are reassigned. Viewing needs user-view access; creating, editing and role changes need user-manage access.</p>
