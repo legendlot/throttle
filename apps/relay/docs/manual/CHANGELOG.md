@@ -1,5 +1,12 @@
 # Relay Operations Manual — Changelog
 
+## 1.8.1 — 2026-09-11
+- **Bot Builder corrections** (hostile review): Publish ships the last SAVED draft (new "Save draft,
+  then Publish" callout); Shared flows run their current live version on entry, so a shared-flow
+  publish or pause reaches chats already under way; Publish also un-pauses; WhatsApp pause can leave
+  a thread out of Pitstop *Awaiting*; keywords on the opening message are WhatsApp-only;
+  `dangling_target` is usually an unwired outcome; a duplicated Menu gets new option ids.
+
 ## 1.8.0 — 2026-09-11
 - **New chapter: Bot Builder** (`26-bot-builder.html`, Send part, right after Journeys). Covers the
   bot list and its 7-day stats, building the flow (Chat start, Duplicate step, Delete step, Expand),

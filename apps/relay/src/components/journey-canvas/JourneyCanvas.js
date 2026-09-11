@@ -243,7 +243,10 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
       ...(t === 'condition' ? { check: { ...NEW_STEP.condition.check } } : {}),
       ...(t === 'wait_response' ? { awaited: [...NEW_STEP.wait_response.awaited] } : {}),
       ...(t === 'interactive_send' ? { buttons: NEW_STEP.interactive_send.buttons.map((b) => ({ ...b })) } : {}),
-      ...(t === 'menu' ? { buttons: BOT_NEW_STEP.menu.buttons.map((b) => ({ ...b })) } : {}),
+      // Unique option id per new menu (S372): a shared palette default (`b_opt1` on every
+      // menu) let a stale tap on one menu's chip fire another menu's option — see
+      // duplicateNode() in graph.js for the mechanism.
+      ...(t === 'menu' ? { buttons: BOT_NEW_STEP.menu.buttons.map((b) => ({ ...b, id: `${b.id}_${Date.now().toString(36).slice(-4)}${(seq++).toString(36)}` })) } : {}),
     } },
   }]);
 

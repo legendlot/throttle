@@ -126,7 +126,28 @@ console.log('graph J1 ok');
   assert.deepEqual(after.filter((n) => n.selected).map((n) => n.id), [a.id]);
   assert.equal(src.selected, true, 'appendSelected must not mutate the input nodes');
   assert.deepEqual(a.position, { x: 148, y: 248 });
-  assert.deepEqual(a.data.config, src.data.config);
+  // same settings, but FRESH option ids — a stale tap on the source's chip must never
+  // fire the copy's option (S372 hostile review)
+  assert.deepEqual({ ...a.data.config, buttons: null }, { ...src.data.config, buttons: null });
+  assert.deepEqual(a.data.config.buttons.map((x) => x.label), ['Track my order', 'FAQs']);
+  const srcIds = src.data.config.buttons.map((x) => x.id);
+  const allIds = [...srcIds, ...a.data.config.buttons.map((x) => x.id), ...b.data.config.buttons.map((x) => x.id)];
+  assert.equal(new Set(allIds).size, 6, 'option ids unique across source + two copies: ' + allIds);
+  assert.ok(a.data.config.buttons.every((x) => /^[a-z0-9_]+$/i.test(x.id)), 'wire-safe ids');
+  // a copy of a copy does not grow the id without bound
+  const aa = duplicateNode(a);
+  assert.ok(aa.data.config.buttons[0].id.length <= a.data.config.buttons[0].id.length + 1, aa.data.config.buttons[0].id);
+  // journey interactive-send button ids are the author's own and are kept verbatim
+  const wa = duplicateNode({ id: 'interactive_send_x1', data: { config: { type: 'send', interactive: true, buttons: [{ id: 'make_payment', label: 'Pay' }] } } });
+  assert.equal(wa.data.config.buttons[0].id, 'make_payment');
+  // missing data/config/position do not throw
+  assert.deepEqual(duplicateNode({ id: 'wait_q1' }).data.config, {});
+  assert.deepEqual(duplicateNode({ id: 'wait_q1' }).position, { x: 48, y: 48 });
+  // clearSelected: same array back when nothing is selected
+  const { clearSelected } = require('./graph.js');
+  const es = [{ id: 'e1' }, { id: 'e2' }];
+  assert.equal(clearSelected(es), es);
+  assert.deepEqual(clearSelected([{ id: 'e1', selected: true }]).map((e) => e.selected), [false]);
   // deep: editing the copy's buttons must not reach the source
   a.data.config.buttons[0].label = 'changed';
   a.data.config.buttons.push({ id: 'b_opt3', label: 'x' });
@@ -140,6 +161,6 @@ console.log('graph J1 ok');
   assert.equal(duplicateNode(null), null);
   // the copy is unwired, so its handles surface in lint rather than compiling silently
   const lint = localLint([src, a], [], 'bot');
-  assert.ok(lint.some((m) => m.startsWith(`${a.id}: outcome "b_opt1"`)), JSON.stringify(lint));
+  assert.ok(lint.some((m) => m.startsWith(`${a.id}: outcome "${a.data.config.buttons[0].id}"`)), JSON.stringify(lint));
 }
 console.log('graph duplicateNode ok');

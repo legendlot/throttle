@@ -144,26 +144,47 @@ function duplicateNode(src) {
   // and the prefix came from the palette key, which type alone cannot reconstruct —
   // set_attr and order_modify both carry type 'action'.
   const prefix = String(src.id).replace(/_[a-z0-9]+$/i, '') || 'step';
+  const stamp = `${Date.now().toString(36)}${(dupSeq++).toString(36)}`;
+  // Deep clone: several step configs carry arrays/objects (buttons, awaited, check)
+  // and a shallow copy would leave the twin sharing them, so editing one would
+  // silently edit the other. Config is JSON-only by construction.
+  const config = JSON.parse(JSON.stringify(src.data?.config || {}));
+  // ⛔ A bot menu's option ids must NOT be copied verbatim (S372 hostile review). The
+  // engine matches a tap against the CURRENT step's options by id, and old chips stay
+  // tappable (the web widget only disables them on a chip tap, not a typed reply; the
+  // WhatsApp wire id `bot:<step>:<id>` has its step stripped). So once the customer has
+  // moved on to the copy, a tap on the SOURCE's stale "Track my order" chip would fire
+  // the copy's same-id option — relabelled, it could be "Returns". Fresh ids make that
+  // stale tap a miss (menu re-shows). Safe to re-mint: the copy has no edges yet.
+  // Journey interactive-send buttons are left alone — those ids are the author's own.
+  if (config.type === 'menu' && Array.isArray(config.buttons)) {
+    config.buttons = config.buttons.map((b, i) => (b && typeof b === 'object'
+      ? { ...b, id: `${String(b.id || 'b').replace(/_d[a-z0-9]+$/i, '')}_d${stamp}${i.toString(36)}` }
+      : b));
+  }
   return {
     ...src,
-    id: `${prefix}_${Date.now().toString(36)}${(dupSeq++).toString(36)}`,
+    id: `${prefix}_${stamp}`,
     selected: true,
     position: { x: (src.position?.x || 0) + 48, y: (src.position?.y || 0) + 48 },
-    // Deep clone: several step configs carry arrays/objects (buttons, awaited, check)
-    // and a shallow copy would leave the twin sharing them, so editing one would
-    // silently edit the other. Config is JSON-only by construction. Menu button ids are
-    // copied verbatim on purpose — handles are per-node, and the bot engine matches a
-    // tapped button against the CURRENT step's buttons only (commsops bot-engine.js, menu step).
-    data: { ...src.data, config: JSON.parse(JSON.stringify(src.data?.config || {})) },
+    data: { ...src.data, config },
   };
+}
+
+// Clear React Flow's own `selected` flag across a node or edge list (same array back
+// when nothing was selected, so a no-op does not re-render).
+function clearSelected(list) {
+  return list.some((x) => x.selected) ? list.map((x) => (x.selected ? { ...x, selected: false } : x)) : list;
 }
 
 // Append a node as THE selection. React Flow keeps its own `selected` flag per node,
 // separate from the host's selected id — leaving the source flagged meant the SOURCE
 // stayed highlighted while the drawer edited the identical-looking copy (smoke,
 // 2026-09-11), so an author could change the twin believing it was the original.
+// Hosts must ALSO run clearSelected() over their edges: a still-selected connection
+// would be deleted along with the copy by the next Backspace.
 function appendSelected(nodes, node) {
-  return [...nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), node];
+  return [...clearSelected(nodes), node];
 }
 
 // Cheap client-side lint (spec §3 canvas UX) — compile() on the worker stays the
@@ -215,4 +236,4 @@ function localLint(nodes, edges, mode = 'journey') {
   return out;
 }
 
-module.exports = { fromDefinition, toDefinition, localLint, duplicateNode, appendSelected, HANDLES, handlesFor, TRIGGER_ID };
+module.exports = { fromDefinition, toDefinition, localLint, duplicateNode, appendSelected, clearSelected, HANDLES, handlesFor, TRIGGER_ID };

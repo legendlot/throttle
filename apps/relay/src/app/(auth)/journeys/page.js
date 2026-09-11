@@ -12,7 +12,7 @@ import { fmtDateTime, inr } from '@/components/format.js';
 // Same picker + hour presets the campaign form uses — the exclusion rules are the same rules.
 import { ExcludePicker, CONTACTED_WINDOWS } from '@/components/exclusions.js';
 import { getCampaignsShared } from '@/lib/campaignsShared.js';
-import { fromDefinition, toDefinition, duplicateNode, appendSelected, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import { fromDefinition, toDefinition, duplicateNode, appendSelected, clearSelected, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
@@ -403,6 +403,7 @@ export default function JourneysPage() {
     const node = duplicateNode(nodes.find((n) => n.id === selected));
     if (!node) return;
     setNodesRaw((ns) => appendSelected(ns, node));
+    setEdges(clearSelected);
     setSelected(node.id);
   }
 
