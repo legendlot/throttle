@@ -107,3 +107,34 @@ assert.deepEqual(G3.HANDLES.wait_response, ['responded', 'timeout']);
   assert.ok(lint.some((m) => /waterfall|frequency|consecutive/i.test(m)), 'responded-edge waterfall: ' + JSON.stringify(lint));
 }
 console.log('graph J1 ok');
+
+// --- duplicateNode: unwired deep copy, shared by the journey + bot builders ---
+{
+  const { duplicateNode } = require('./graph.js');
+  const src = { id: 'menu_abc12', type: 'step', selected: true, position: { x: 100, y: 200 },
+    data: { config: { type: 'menu', style: 'list', text: 'Pick one',
+      buttons: [{ id: 'b_opt1', label: 'Track my order' }, { id: 'b_opt2', label: 'FAQs' }] } } };
+  const a = duplicateNode(src);
+  const b = duplicateNode(src);
+  assert.notEqual(a.id, src.id);
+  assert.notEqual(a.id, b.id, 'two copies in the same millisecond must not share an id');
+  assert.ok(a.id.startsWith('menu_'), 'keeps the source palette prefix: ' + a.id);
+  assert.equal(a.selected, false);
+  assert.deepEqual(a.position, { x: 148, y: 248 });
+  assert.deepEqual(a.data.config, src.data.config);
+  // deep: editing the copy's buttons must not reach the source
+  a.data.config.buttons[0].label = 'changed';
+  a.data.config.buttons.push({ id: 'b_opt3', label: 'x' });
+  assert.equal(src.data.config.buttons[0].label, 'Track my order');
+  assert.equal(src.data.config.buttons.length, 2);
+  // an action node keeps its kind-derived prefix (type alone is 'action')
+  assert.ok(duplicateNode({ id: 'order_status_k9z', data: { config: { type: 'action', kind: 'order_status' } } })
+    .id.startsWith('order_status_'));
+  // the entry anchor is never duplicable
+  assert.equal(duplicateNode({ id: TRIGGER_ID, data: {} }), null);
+  assert.equal(duplicateNode(null), null);
+  // the copy is unwired, so its handles surface in lint rather than compiling silently
+  const lint = localLint([src, a], [], 'bot');
+  assert.ok(lint.some((m) => m.startsWith(`${a.id}: outcome "b_opt1"`)), JSON.stringify(lint));
+}
+console.log('graph duplicateNode ok');

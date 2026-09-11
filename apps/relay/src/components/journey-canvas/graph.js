@@ -123,6 +123,39 @@ function toDefinition(nodes, edges) {
   return { entry: entryEdge.target, steps, ...(trigger_layout ? { trigger_layout } : {}) };
 }
 
+// Monotonic suffix for duplicated node ids. Date.now() alone collides when a node is
+// duplicated twice inside the same millisecond, and a duplicate id silently overwrites
+// the first twin in toDefinition()'s `steps` map.
+let dupSeq = 0;
+
+// Copy of a step node with its config, DELIBERATELY unconnected (Pruthvi, #bugs
+// 2026-07-15 for journeys; 2026-09-11 for bots — shared here so both builders behave
+// the same). Copying the outcome edges too would silently give the source's next step
+// a second inbound edge — the author wants a second variant to wire up, not a parallel
+// branch they did not draw. toDefinition() derives `outcomes` purely from the edge
+// list, so an unwired copy compiles as a terminal step and localLint flags its handles.
+// Returns null for the trigger / chat-start anchor, which is never duplicable.
+function duplicateNode(src) {
+  if (!src || src.id === TRIGGER_ID) return null;
+  // Reuse the SOURCE's id prefix rather than deriving one from config.type: node ids
+  // are opaque keys (toDefinition writes them verbatim; only __trigger is special),
+  // and the prefix came from the palette key, which type alone cannot reconstruct —
+  // set_attr and order_modify both carry type 'action'.
+  const prefix = String(src.id).replace(/_[a-z0-9]+$/i, '') || 'step';
+  return {
+    ...src,
+    id: `${prefix}_${Date.now().toString(36)}${(dupSeq++).toString(36)}`,
+    selected: false,
+    position: { x: (src.position?.x || 0) + 48, y: (src.position?.y || 0) + 48 },
+    // Deep clone: several step configs carry arrays/objects (buttons, awaited, check)
+    // and a shallow copy would leave the twin sharing them, so editing one would
+    // silently edit the other. Config is JSON-only by construction. Menu button ids are
+    // copied verbatim on purpose — handles are per-node, and the bot engine matches a
+    // tapped button against the CURRENT step's buttons only (commsops bot-engine.js, menu step).
+    data: { ...src.data, config: JSON.parse(JSON.stringify(src.data?.config || {})) },
+  };
+}
+
 // Cheap client-side lint (spec §3 canvas UX) — compile() on the worker stays the
 // authority; this catches the obvious while the author drags things around.
 // mode 'bot' (S312): the terminal requirement is a handoff/end node, not an exit,
@@ -172,4 +205,4 @@ function localLint(nodes, edges, mode = 'journey') {
   return out;
 }
 
-module.exports = { fromDefinition, toDefinition, localLint, HANDLES, handlesFor, TRIGGER_ID };
+module.exports = { fromDefinition, toDefinition, localLint, duplicateNode, HANDLES, handlesFor, TRIGGER_ID };

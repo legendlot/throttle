@@ -10,7 +10,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Play, Pause, Check, Plus, Send } from 'lucide-react';
 import { Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import { fromDefinition, toDefinition, duplicateNode, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import BotDrawer from '@/components/journey-canvas/BotDrawer.js';
 
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -251,6 +251,14 @@ export default function BotBuilder() {
     setEdges((es) => es.filter((e) => e.source !== selected && e.target !== selected));
     setSelected(null);
   };
+  // Pruthvi, #bugs 2026-09-11: the journey builder had Replicate, bots did not. Same
+  // helper, so a copy is unwired and deep-cloned identically in both builders.
+  const duplicateSelected = () => {
+    const node = duplicateNode(selectedNode);
+    if (!node) return;
+    setNodes((ns) => [...ns, node]);
+    setSelected(node.id);
+  };
 
   // S362 — canvas expand. Above the early return below, so hook order never depends on `loading`.
   const [canvasExpanded, setCanvasExpanded] = useState(false);
@@ -303,7 +311,8 @@ export default function BotBuilder() {
             canActivate={canActivate} session={session} showToast={showToast} />
         : selectedNode
           ? <BotDrawer nodeId={selectedNode.id} config={selectedNode.data?.config}
-              onChange={updateSelectedConfig} onDelete={deleteSelected} readOnly={busy || !canBuild}
+              onChange={updateSelectedConfig} onDelete={deleteSelected} onDuplicate={duplicateSelected}
+              readOnly={busy || !canBuild}
               sharedBots={sharedBots} />
           : <TestPanel botId={bot?.id} definition={currentDefinitionSafe(nodes, edges, bot)} session={session} />}
     </Panel>

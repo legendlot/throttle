@@ -12,19 +12,13 @@ import { fmtDateTime, inr } from '@/components/format.js';
 // Same picker + hour presets the campaign form uses — the exclusion rules are the same rules.
 import { ExcludePicker, CONTACTED_WINDOWS } from '@/components/exclusions.js';
 import { getCampaignsShared } from '@/lib/campaignsShared.js';
-import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import { fromDefinition, toDefinition, duplicateNode, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import { buildTrigger, triggerToForm, triggerSummary } from '@/lib/journeyTrigger.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { loadEventDefs, eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
 import BotBuilder from '@/components/bot-builder/BotBuilder.js';
-
-// Monotonic suffix for replicated node ids. Date.now() alone collides when a node is
-// duplicated twice inside the same millisecond, and a duplicate id silently overwrites
-// the first twin in toDefinition()'s `steps` map — same reason JourneyCanvas carries
-// its own `seq` for addStep().
-let dupSeq = 0;
 
 // React Flow touches window — client-only.
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -403,33 +397,13 @@ export default function JourneysPage() {
     setEdges((es) => es.filter((e) => e.source !== selected && e.target !== selected));
     setSelected(null);
   }
-  // Duplicate the selected step with its config, DELIBERATELY unconnected (Pruthvi,
-  // #bugs 2026-07-15). Copying the outcome edges too would silently fan the source's
-  // next step a second inbound edge — the author wants a second variant to wire up,
-  // not a parallel branch they did not draw. toDefinition() derives `outcomes` purely
-  // from the edge list, so a node with no edges compiles as a terminal step and the
-  // existing lint flags it if they forget to wire it.
+  // Duplicate the selected step, unwired — duplicateNode() (graph.js) holds the why;
+  // the bot builder calls the same helper.
   function replicateSelected() {
-    const src = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID);
-    if (!src) return;
-    // Reuse the SOURCE's id prefix rather than deriving one from config.type: node ids
-    // are opaque keys (toDefinition writes them verbatim; only __trigger is special),
-    // and the prefix came from the palette key, which type alone cannot reconstruct —
-    // set_attr and order_modify both carry type 'action'.
-    const prefix = String(src.id).replace(/_[a-z0-9]+$/i, '') || 'step';
-    const id = `${prefix}_${Date.now().toString(36)}${(dupSeq++).toString(36)}`;
-    const node = {
-      ...src,
-      id,
-      selected: false,
-      position: { x: (src.position?.x || 0) + 48, y: (src.position?.y || 0) + 48 },
-      // Deep clone: several step configs carry arrays/objects (buttons, awaited,
-      // check) and a shallow copy would leave the twin sharing them, so editing one
-      // would silently edit the other. Config is JSON-only by construction.
-      data: { ...src.data, config: JSON.parse(JSON.stringify(src.data?.config || {})) },
-    };
+    const node = duplicateNode(nodes.find((n) => n.id === selected));
+    if (!node) return;
     setNodesRaw((ns) => [...ns, node]);
-    setSelected(id);
+    setSelected(node.id);
   }
 
   async function save() {

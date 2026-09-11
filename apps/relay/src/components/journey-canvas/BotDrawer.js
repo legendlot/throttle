@@ -3,7 +3,7 @@
 // pure controlled component — receives the node's config, calls onChange(partial) /
 // onDelete(). Kept separate from NodeDrawer on purpose: the journey forms are dense
 // (templates, senders, purposes) and none of it applies to a bot step.
-import { Trash2 } from 'lucide-react';
+import { Trash2, Copy } from 'lucide-react';
 
 function Field({ label, children }) {
   return <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">{label}</div>{children}</div>;
@@ -15,7 +15,7 @@ function buttonId(label, i) {
   return `b_${slug || 'opt'}_${i}`;
 }
 
-export default function BotDrawer({ nodeId, config, onChange, onDelete, readOnly, sharedBots = [] }) {
+export default function BotDrawer({ nodeId, config, onChange, onDelete, onDuplicate, readOnly, sharedBots = [] }) {
   if (!config) return null;
   const c = config;
   // Same contract as NodeDrawer:113 — onChange receives the FULL next config (the page
@@ -153,10 +153,19 @@ export default function BotDrawer({ nodeId, config, onChange, onDelete, readOnly
       )}
 
       {!readOnly && (
-        <button className="btn" type="button" onClick={onDelete}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--red, #DE2A2A)' }}>
-          <Trash2 size={13} /> Delete step
-        </button>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {onDuplicate && (
+            <button className="btn" type="button" onClick={onDuplicate}
+              title="Copy this step with its settings. The copy is not connected to anything."
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <Copy size={13} /> Duplicate step
+            </button>
+          )}
+          <button className="btn" type="button" onClick={onDelete}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--red, #DE2A2A)' }}>
+            <Trash2 size={13} /> Delete step
+          </button>
+        </div>
       )}
     </div>
   );
