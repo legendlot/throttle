@@ -30,7 +30,7 @@ const PICK_CAT_ORDER  = [
   'RC Battery', 'Battery', 'Charger Cable',
   'Accessories',
   'Primary Packaging', 'Packaging',   // specific before general — see the warning above
-  'Para', 'Sticker',                  // printed goods last
+  'Para', 'Sticker', 'UPC Sticker',   // printed goods last ('UPC Sticker' = the LOT-UPC label, S372)
 ];
 // Exact match (===), so no substring precedence to worry about here. 'Cardboard', 'Fabric' and
 // 'Chemical' matched nothing and are dropped; the live values that were missing are added.
