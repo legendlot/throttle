@@ -40,10 +40,16 @@ export const TONES = {
   gray:   { bg: 'rgba(255,255,255,.05)',fg: '#9aa0a6', bd: 'rgba(255,255,255,.10)', solid: '#71767c' },
 };
 
+// Every PO status, in lifecycle order — PO_STATUSES (the PO list's filter) is DERIVED from these
+// keys, so a status added here reaches the badge and the filter together. `Accepted` (Draft →
+// Accepted → Approved, written by the worker's accept step) was missing from both until
+// 2026-09-11 while holding 53% of all POs: the filter could not select it and its badge fell
+// through to gray. Its tone matches PODetailClient's PO_STATUS_TONES.
 export const PO_TONES = {
-  Soft: 'orange', Draft: 'gray', 'Pending Approval': 'yellow', Approved: 'blue', Sent: 'yellow',
+  Soft: 'orange', Draft: 'gray', 'Pending Approval': 'yellow', Accepted: 'yellow', Approved: 'blue', Sent: 'yellow',
   'Confirmed & Payment Done': 'green', 'Partially Received': 'yellow', Closed: 'green', Cancelled: 'red',
 };
+export const PO_STATUSES = Object.keys(PO_TONES);
 
 export function sourceTone(s) { return s === 'China' ? 'blue' : s === 'India' ? 'green' : 'gray'; }
 export function countryTone(c) { return c === 'China' ? 'blue' : c === 'India' ? 'green' : 'gray'; }

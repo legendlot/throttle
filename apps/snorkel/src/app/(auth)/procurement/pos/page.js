@@ -3,15 +3,29 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowRight, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone } from '@/components/format.js';
+import { fmtDateShort, money, inrCompact, PO_TONES, PO_STATUSES, sourceTone } from '@/components/format.js';
 import { csvCell } from '@/lib/sales.js';
 import { buildPoLinesCsv } from '@/lib/poExport.js';
-import { todayStr } from '@throttle/domain';
+import { todayStr, istDateStr, istRangePresets } from '@throttle/domain';
 
-const PO_STATUSES = ['Soft', 'Draft', 'Pending Approval', 'Approved', 'Sent', 'Confirmed & Payment Done', 'Partially Received', 'Closed', 'Cancelled'];
+// Date filter (Joseph, #bugs 1789108860.383049). ⚠️ Defaults to ALL TIME, an exception to the
+// standing "range pickers default to Today" rule because this page is a worklist — an open PO
+// raised last month must not vanish on load. Flagged to Afshaan; if he wants Today, change this
+// one constant to 'today'.
+const DEFAULT_DATE_PRESET = 'all';
+// The shared IST presets, minus 90D (not asked for here), plus All time.
+const DATE_PRESET_KEYS = ['today', '7d', '30d', 'mtd', 'lm', 'fy'];
+function datePresets() {
+  const shared = istRangePresets().filter((p) => DATE_PRESET_KEYS.includes(p.key));
+  return [...shared, { key: 'all', label: 'All time', from: '', to: '' }];
+}
+// The PO's own date: `raised_date` (a Postgres DATE, so already a calendar day — no timezone
+// maths). created_at, read on the IST clock, only covers a row that somehow lacks it (0 of 480
+// on 2026-09-11). Compared as YYYY-MM-DD strings against the IST preset bounds.
+const poDate = (p) => p.raised_date || istDateStr(p.created_at);
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_TYPES = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
 const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
@@ -27,6 +41,14 @@ export default function POListPage() {
   const [pendingInward, setPendingInward] = useState(0);
   const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
   const [search, setSearch] = useState('');
+  // Vendor + date are CLIENT filters over the loaded rows (getPOs has no params for them), and
+  // apply through `filteredRows` — so the table, KPI tiles and both exports all follow them.
+  const [vendor, setVendor] = useState('');
+  const presets = useMemo(datePresets, []);
+  const [range, setRange] = useState(() => {
+    const p = presets.find((x) => x.key === DEFAULT_DATE_PRESET);
+    return { preset: p.key, from: p.from, to: p.to };
+  });
   const [loading, setLoading] = useState(true);
   const [exportingLines, setExportingLines] = useState(false);
 
@@ -58,25 +80,52 @@ export default function POListPage() {
   useEffect(() => { load(); }, [load]);
 
   const filteredRows = useMemo(() => {
-    if (!search.trim()) return rows;
     const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
+    const { from, to } = range;
     return rows.filter((r) => {
+      if (vendor && r.vendor_name !== vendor) return false;
+      if (from || to) {
+        const d = poDate(r);
+        if (!d || (from && d < from) || (to && d > to)) return false;
+      }
+      if (!tokens.length) return true;
       const fields = [r.po_number, r.vendor_name, r.vendor_code, r.order_type, r.source, r.raised_by_name, r.raised_by, r.status]
         .map((v) => (v || '').toString().toLowerCase());
       return tokens.every((t) => fields.some((f) => f.includes(t)));
     });
-  }, [rows, search]);
+  }, [rows, search, vendor, range]);
 
+  // Status options = every known status (PO_TONES, one source with the badge) plus any live value
+  // it does not know yet — so a new status can never again be unfilterable, as Accepted was.
+  const statusOptions = useMemo(() => {
+    const extra = [...new Set(rows.map((r) => r.status).filter((s) => s && !PO_STATUSES.includes(s)))];
+    return [...PO_STATUSES, ...extra];
+  }, [rows]);
+
+  // Vendors present in the loaded rows. po_summary carries no vendor_code today, so the hint is
+  // usually empty; it shows whenever a row does carry one. The selected vendor is kept as an
+  // option even when a server filter drops its rows, so the box never blanks while still filtering.
+  const vendorOptions = useMemo(() => {
+    const byName = new Map();
+    for (const r of rows) if (r.vendor_name && !byName.get(r.vendor_name)) byName.set(r.vendor_name, r.vendor_code || '');
+    if (vendor && !byName.has(vendor)) byName.set(vendor, '');
+    return [...byName].sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, code]) => ({ value: name, label: name, hint: code || undefined }));
+  }, [rows, vendor]);
+
+  // Follows every filter (S374): built from `filteredRows`, not `rows`, so the tiles describe
+  // the same set the table shows and the exports write. `To Inward` is a separate read
+  // (getPendingInward) that links to Receiving — it does not follow these filters.
   const kpi = useMemo(() => {
-    const open = rows.filter((p) => ['Draft', 'Approved', 'Sent', 'Pending Approval'].includes(p.status));
+    const open = filteredRows.filter((p) => ['Draft', 'Approved', 'Sent', 'Pending Approval'].includes(p.status));
     const openVal = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     const chinaVal = open.filter((p) => p.source === 'China').reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     return {
       openVal,
-      openCount: rows.filter((p) => ['Draft', 'Approved', 'Sent'].includes(p.status)).length,
+      openCount: filteredRows.filter((p) => ['Draft', 'Approved', 'Sent'].includes(p.status)).length,
       chinaShare: openVal ? Math.round((chinaVal / openVal) * 100) : 0,
     };
-  }, [rows]);
+  }, [filteredRows]);
 
   // Export exactly what is on screen — same rows, same filters, same order (Priya,
   // #bugs 2026-08-28). Mirrors the Sales Orders export rather than inventing a second
@@ -106,8 +155,10 @@ export default function POListPage() {
       if (!ok) return;
     }
     const canChina = !!perms?.po_china;
+    // `Raised` added with the date filter (S374) so a month's download carries the date it was
+    // filtered on — the same column the table now shows.
     const cols = ['PO Number', 'Revision', 'Type', 'Source', 'Vendor', 'Vendor Code', 'Lines',
-      'Currency', 'Value', 'Value (INR approx)', 'Expected', 'Raised by', 'Status'];
+      'Currency', 'Value', 'Value (INR approx)', 'Raised', 'Expected', 'Raised by', 'Status'];
     const lines = [cols.join(',')];
     for (const p of filteredRows) {
       const restricted = p.source === 'China' && !canChina;
@@ -117,7 +168,7 @@ export default function POListPage() {
         restricted ? '' : (p.currency || ''),
         restricted ? 'Restricted' : (p.po_value ?? ''),
         restricted ? '' : Math.round(toInr(p.po_value, p.currency)),
-        p.expected_delivery || '', p.raised_by_name || p.raised_by || '', p.status,
+        poDate(p), p.expected_delivery || '', p.raised_by_name || p.raised_by || '', p.status,
       ].map(csvCell).join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -205,7 +256,7 @@ export default function POListPage() {
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
-  const filtered = search.trim() || filters.status || filters.source || filters.order_type;
+  const filtered = search.trim() || filters.status || filters.source || filters.order_type || vendor || range.from || range.to;
 
   return (
     <div className="pg">
@@ -248,8 +299,12 @@ export default function POListPage() {
             <input className="sel" data-search-primary type="text" placeholder="Search PO / vendor · /" value={search} onChange={(e) => setSearch(e.target.value)} style={{ fontFamily: 'var(--font-mono)', minWidth: 180 }} />
             <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))} className="sel">
               <option value="">All statuses</option>
-              {PO_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+            {/* portal: .panel is overflow:hidden, which would clip an absolute dropdown. */}
+            <Combobox value={vendor} options={vendorOptions} onChange={(v) => setVendor(v || '')}
+              placeholder="All vendors" emptyLabel="No matching vendor" portal
+              style={{ width: 200 }} inputStyle={{ fontFamily: 'var(--font-mono)' }} />
             <select value={filters.source} onChange={(e) => setFilters((f) => ({ ...f, source: e.target.value }))} className="sel">
               <option value="">All sources</option>
               {PO_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -260,6 +315,20 @@ export default function POListPage() {
             </select>
           </div>
         }>
+        <div className="filters" style={{ margin: '12px 16px 0' }}>
+          <div className="seg" style={{ marginBottom: 0 }}>
+            {presets.map((p) => (
+              <button key={p.key} className={`seg-btn ${range.preset === p.key ? 'on' : ''}`}
+                onClick={() => setRange({ preset: p.key, from: p.from, to: p.to })}>{p.label}</button>
+            ))}
+          </div>
+          <span className="dim" style={{ fontSize: 12 }}>Raised</span>
+          <input className="sel" type="date" value={range.from} max={range.to || undefined}
+            onChange={(e) => setRange((r) => ({ preset: '', from: e.target.value, to: r.to }))} />
+          <span className="dim">→</span>
+          <input className="sel" type="date" value={range.to} min={range.from || undefined}
+            onChange={(e) => setRange((r) => ({ preset: '', from: r.from, to: e.target.value }))} />
+        </div>
         {pendingInward > 0 && (
           <div className="info-bar" style={{ margin: '12px 16px 0', background: 'var(--accent-soft)', borderColor: 'var(--accent-bd)' }}>
             <span style={{ color: 'var(--accent)' }}>
@@ -274,7 +343,7 @@ export default function POListPage() {
             <table className="dt">
               <thead><tr>
                 <th>PO Number</th><th>Type</th><th>Source</th><th>Vendor</th>
-                <th className="num">Lines</th><th className="num">Value</th><th>Expected</th><th>Raised by</th><th>Status</th><th></th>
+                <th className="num">Lines</th><th className="num">Value</th><th>Raised</th><th>Expected</th><th>Raised by</th><th>Status</th><th></th>
               </tr></thead>
               <tbody>
                 {filteredRows.map((p) => (
@@ -285,6 +354,7 @@ export default function POListPage() {
                     <td>{p.vendor_name || '—'}</td>
                     <td className="num mono">{p.line_count ?? p.lines ?? 0}</td>
                     <td className="num mono">{p.source === 'China' && !perms?.po_china ? <span className="dim">Restricted</span> : money(p.currency, p.po_value)}</td>
+                    <td className="mono">{fmtDateShort(poDate(p))}</td>
                     <td className="mono">{fmtDateShort(p.expected_delivery)}</td>
                     <td>{p.raised_by_name || p.raised_by || '—'}</td>
                     <td><Badge label={p.status || '—'} tone={PO_TONES[p.status] || 'gray'} /></td>

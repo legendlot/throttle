@@ -43,6 +43,44 @@ export function todayStr() {
   return dateStr(new Date());
 }
 
+// ── IST calendar dates + quick-range presets ────────────────────────────────────────
+// Lifted from Odo's `rangePresets()` (apps/odo/src/lib/api.js) for Snorkel's PO list
+// (Joseph, #bugs 1789108860.383049) — same keys, labels and maths, so Odo's copy can become a
+// re-export of this one without a visible change. Computed on the IST clock, NOT the
+// browser's: a +5.5h-shifted Date read through getUTC* IS the IST wall clock, whatever zone
+// the machine is in. Every value is a `YYYY-MM-DD` calendar date, inclusive at both ends, so
+// it compares directly (as a string) against a Postgres `date` column.
+const IST_MS = 5.5 * 3600 * 1000;
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** A moment (Date | ISO string | ms) as its IST calendar date `YYYY-MM-DD`. '' if unparseable. */
+export function istDateStr(input = new Date()) {
+  const t = input instanceof Date ? input.getTime() : new Date(input).getTime();
+  if (isNaN(t)) return '';
+  const s = new Date(t + IST_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())}`;
+}
+
+/** Quick ranges → [{ key, label, from, to }] (IST, inclusive). FY = Indian fiscal year (Apr 1). */
+export function istRangePresets(now = new Date()) {
+  const to = istDateStr(now);
+  const s = new Date(now.getTime() + IST_MS);
+  const y = s.getUTCFullYear(), m = s.getUTCMonth();                 // 0-indexed month
+  const daysAgo = (n) => istDateStr(new Date(now.getTime() - n * 86400000));
+  // Last calendar month, 1st → last day (day 0 of the next month = last day).
+  const lmY = m === 0 ? y - 1 : y, lmM = m === 0 ? 11 : m - 1;
+  const lmLast = new Date(Date.UTC(lmY, lmM + 1, 0)).getUTCDate();
+  return [
+    { key: 'today', label: 'Today',   from: to, to },
+    { key: '7d',    label: '7D',      from: daysAgo(6),  to },
+    { key: '30d',   label: '30D',     from: daysAgo(29), to },
+    { key: '90d',   label: '90D',     from: daysAgo(89), to },
+    { key: 'mtd',   label: 'MTD',     from: `${y}-${pad2(m + 1)}-01`, to },
+    { key: 'lm',    label: 'Last mo', from: `${lmY}-${pad2(lmM + 1)}-01`, to: `${lmY}-${pad2(lmM + 1)}-${pad2(lmLast)}` },
+    { key: 'fy',    label: 'FY',      from: `${m >= 3 ? y : y - 1}-04-01`, to },
+  ];
+}
+
 export function todayISO() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
