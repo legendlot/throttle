@@ -119,7 +119,12 @@ console.log('graph J1 ok');
   assert.notEqual(a.id, src.id);
   assert.notEqual(a.id, b.id, 'two copies in the same millisecond must not share an id');
   assert.ok(a.id.startsWith('menu_'), 'keeps the source palette prefix: ' + a.id);
-  assert.equal(a.selected, false);
+  assert.equal(a.selected, true, 'the copy is the new selection');
+  // ...and appending it clears the source's highlight, so exactly one node reads as selected
+  const { appendSelected } = require('./graph.js');
+  const after = appendSelected([src, { id: 'other', selected: false }], a);
+  assert.deepEqual(after.filter((n) => n.selected).map((n) => n.id), [a.id]);
+  assert.equal(src.selected, true, 'appendSelected must not mutate the input nodes');
   assert.deepEqual(a.position, { x: 148, y: 248 });
   assert.deepEqual(a.data.config, src.data.config);
   // deep: editing the copy's buttons must not reach the source

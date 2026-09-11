@@ -135,6 +135,8 @@ let dupSeq = 0;
 // branch they did not draw. toDefinition() derives `outcomes` purely from the edge
 // list, so an unwired copy compiles as a terminal step and localLint flags its handles.
 // Returns null for the trigger / chat-start anchor, which is never duplicable.
+// The copy comes back selected: the host opens its drawer on the COPY, so the canvas
+// highlight must move with it — see appendSelected().
 function duplicateNode(src) {
   if (!src || src.id === TRIGGER_ID) return null;
   // Reuse the SOURCE's id prefix rather than deriving one from config.type: node ids
@@ -145,7 +147,7 @@ function duplicateNode(src) {
   return {
     ...src,
     id: `${prefix}_${Date.now().toString(36)}${(dupSeq++).toString(36)}`,
-    selected: false,
+    selected: true,
     position: { x: (src.position?.x || 0) + 48, y: (src.position?.y || 0) + 48 },
     // Deep clone: several step configs carry arrays/objects (buttons, awaited, check)
     // and a shallow copy would leave the twin sharing them, so editing one would
@@ -154,6 +156,14 @@ function duplicateNode(src) {
     // tapped button against the CURRENT step's buttons only (commsops bot-engine.js, menu step).
     data: { ...src.data, config: JSON.parse(JSON.stringify(src.data?.config || {})) },
   };
+}
+
+// Append a node as THE selection. React Flow keeps its own `selected` flag per node,
+// separate from the host's selected id — leaving the source flagged meant the SOURCE
+// stayed highlighted while the drawer edited the identical-looking copy (smoke,
+// 2026-09-11), so an author could change the twin believing it was the original.
+function appendSelected(nodes, node) {
+  return [...nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), node];
 }
 
 // Cheap client-side lint (spec §3 canvas UX) — compile() on the worker stays the
@@ -205,4 +215,4 @@ function localLint(nodes, edges, mode = 'journey') {
   return out;
 }
 
-module.exports = { fromDefinition, toDefinition, localLint, duplicateNode, HANDLES, handlesFor, TRIGGER_ID };
+module.exports = { fromDefinition, toDefinition, localLint, duplicateNode, appendSelected, HANDLES, handlesFor, TRIGGER_ID };

@@ -10,7 +10,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Play, Pause, Check, Plus, Send } from 'lucide-react';
 import { Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fromDefinition, toDefinition, duplicateNode, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import { fromDefinition, toDefinition, duplicateNode, appendSelected, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import BotDrawer from '@/components/journey-canvas/BotDrawer.js';
 
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
@@ -256,7 +256,7 @@ export default function BotBuilder() {
   const duplicateSelected = () => {
     const node = duplicateNode(selectedNode);
     if (!node) return;
-    setNodes((ns) => [...ns, node]);
+    setNodes((ns) => appendSelected(ns, node));
     setSelected(node.id);
   };
 
