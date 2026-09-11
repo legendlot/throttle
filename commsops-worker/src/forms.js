@@ -11,7 +11,6 @@
 const SHOP = require('./shopify.js');
 const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
-const { recordConsent } = require('./consent.js');
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -223,102 +222,44 @@ async function handleFormSubmit(env, request) {
   const needsConfirm = form.requires_confirmation === true;
   const confirmToken = needsConfirm ? crypto.randomUUID().replace(/-/g, '') : null;
 
-  // ⚠️ REPEAT-SUBMIT SHORT-CIRCUIT (S342). The `on_conflict` insert below correctly refuses a
-  // duplicate SUBMISSION — but the consent loop runs BEFORE it and unconditionally, so N submits
-  // produced 1 submission row and N identical `opted_in` consent rows. Measured live on the first
-  // real end-to-end test (2026-09-03): two submits of the same email+product left one submission
-  // and TWO `website_form:back-in-stock` consent rows.
-  // The customer's consent STATE was never wrong (`latestConsent` reads the newest, and both rows
-  // say opted_in) — but `consent` is an append-only evidence ledger, so duplicates inflate any
-  // count of "who opted in via this form" and muddy the audit trail. Same class as the S331
-  // within-request fix (`channels: Array(500).fill('email')` → a Set); this is the across-request
-  // half that fix could not see.
-  // ⚠️ A read-then-act check is deliberately NOT presented as a guarantee: two simultaneous FIRST
-  // submits can still both pass it, which is exactly today's behaviour — strictly no worse, never
-  // better than the UNIQUE index, which remains the real control. The transactional fix is
-  // capture-spine residual (e).
-  // ⛔ THE SHORT-CIRCUIT IS CHANNEL-AWARE, AND THAT IS NOT A REFINEMENT — IT IS THE WHOLE
-  // CORRECTNESS OF IT (S342 hostile review, finding 1). `dedupeKey()` is
-  // `[slug, email||phone, ...dedupe_keys]` — **channels are NOT in it**. So a customer who
-  // submitted with email only, then comes back on the SAME product and ticks "Also tell me on
-  // WhatsApp", produces the SAME key. A key-only short-circuit returned early, skipped the
-  // consent loop, and left the profile holding a phone identifier (attached above this block)
-  // with NO whatsapp consent — `runGate` would then refuse the alert while the widget said
-  // "You're on the list". Silently unreachable on a channel they explicitly asked for.
-  // So: skip ONLY when the stored row already covers every channel being asked for now.
-  // Otherwise fall through and record consent for the NEW channels only — never re-writing the
-  // ones already on file, which is what the dedupe exists to prevent.
-  let consentChannels = v.channels;
-  let alreadyOnFile = null;
-  if (key) {
-    const dupe = await A.sbComms(
-      `/rest/v1/form_submissions?form_id=eq.${A.enc(form.id)}&dedupe_key=eq.${A.enc(key)}`
-      + `&select=id,channels&limit=1`, env);
-    // Fail OPEN on an unreadable check: this is a de-duplication nicety, not a security control,
-    // and refusing a genuine first submission because a SELECT failed would lose a real signup.
-    if (dupe.ok && Array.isArray(dupe.data) && dupe.data[0]) {
-      alreadyOnFile = dupe.data[0];
-      const had = new Set(Array.isArray(alreadyOnFile.channels) ? alreadyOnFile.channels : []);
-      const added = v.channels.filter((c) => !had.has(c));
-      if (!added.length) return { ok: true, deduped: true };
-      consentChannels = added;
-      // Widen the stored record to the union, so the row reflects what the customer actually
-      // asked for. Without this the submission says `['email']` forever while a whatsapp
-      // consent row exists — two sources of truth disagreeing about the same request.
-      A.checkWrite('form_channels_widen_failed', await A.sbComms(
-        `/rest/v1/form_submissions?id=eq.${A.enc(alreadyOnFile.id)}`, env, {
-          method: 'PATCH', body: JSON.stringify({ channels: [...had, ...added] }),
-        }), { submission_id: alreadyOnFile.id, added });
-    }
-  }
-
-  // Consent NOW only when this is a single requested alert. An ongoing marketing enrolment
-  // writes nothing until the person confirms — an unconfirmed submission must never become
-  // a sendable audience.
-  if (!needsConfirm) {
-    const evidence = {
-      form: v.slug, source_url: v.source_url, consent_copy_version: form.consent_copy_version,
-      turnstile_ok: true, ua: request.headers.get('user-agent') || null,
-      at: new Date().toISOString(),
-    };
-    for (const channel of consentChannels) {
-      // `service`, not `marketing`: gate.js §S274 'service' — bypasses consent + frequency cap, RESPECTS
-      // quiet hours and suppression. Exactly the semantics a requested alert wants.
-      await recordConsent(env, {
-        profile_id: profileId, channel, purpose: 'service', state: 'opted_in',
-        source: `website_form:${v.slug}`, evidence,
-      });
-    }
-  }
-
-  // ⚠️ `on_conflict` IS REQUIRED, not decoration. Without it PostgREST infers the PRIMARY KEY,
-  // which is a fresh uuid on every insert — so no conflict is ever detected, ignore-duplicates
-  // never fires, and the unique index raises a raw 23505 instead of a silent no-op.
-  const sr = await A.sbComms(key ? '/rest/v1/form_submissions?on_conflict=form_id,dedupe_key'
-                                 : '/rest/v1/form_submissions', env, {
+  // ⭐ ONE TRANSACTION: the submission row and its consent rows land together or not at all
+  // (comms.form_capture, migration 0073 — S377, capture-spine residual (e)). They used to be
+  // separate calls, consent first, so a failed insert left a consent claim with no submission
+  // (its DPDP evidence) and two simultaneous FIRST submits could both write consent.
+  // The function keeps every rule the JS used to enforce — read its header before changing them:
+  //   • REPEAT SUBMIT (S342): an exact repeat is `deduped` and writes nothing (`consent` is an
+  //     append-only evidence ledger; N submits used to leave N identical opted_in rows).
+  //   • ⛔ CHANNEL-AWARE (S342 hostile review): channels are NOT in dedupeKey(), so a repeat that
+  //     ADDS "also tell me on WhatsApp" widens the stored channels and records consent for the
+  //     NEW channel only — a key-only short-circuit left the phone with no whatsapp consent.
+  //   • Consent NOW only for a single requested alert, as `service` (gate.js §S274: bypasses
+  //     consent + frequency cap, RESPECTS quiet hours and suppression). An ongoing marketing
+  //     enrolment (`requires_confirmation`) writes none until /f/confirm — p_consent_purpose NULL.
+  //   • `channels` persists the channels the customer CHOSE (0060) — presence is not choice.
+  const evidence = {
+    form: v.slug, source_url: v.source_url, consent_copy_version: form.consent_copy_version,
+    turnstile_ok: true, ua: request.headers.get('user-agent') || null,
+    at: new Date().toISOString(),
+  };
+  const sr = await A.sbComms('/rest/v1/rpc/form_capture', env, {
     method: 'POST',
-    headers: key ? { Prefer: 'resolution=ignore-duplicates' } : {},
     body: JSON.stringify({
-      form_id: form.id, profile_id: profileId, payload: v.payload, dedupe_key: key,
-      // ⚠️ The channels the customer actually CHOSE (migration 0060). Not derivable later:
-      // field presence is not choice, and handleFormConfirm used to guess from presence and
-      // opt people into a channel they had declined. Persist the choice, read the choice.
-      channels: v.channels,
-      source_url: v.source_url, ip_hash: await hashIp(ip, env), turnstile_ok: true,
-      confirm_token: confirmToken,
+      p_form_id: form.id, p_profile_id: profileId, p_payload: v.payload, p_dedupe_key: key,
+      p_channels: v.channels, p_source_url: v.source_url, p_ip_hash: await hashIp(ip, env),
+      p_confirm_token: confirmToken,
+      p_consent_purpose: needsConfirm ? null : 'service',
+      p_consent_source: `website_form:${v.slug}`, p_evidence: evidence,
     }),
   });
-  // ⚠️ NOT fire-and-forget. On the back-in-stock path the consent row is already written, and
-  // the submission row is where that consent's DPDP evidence lives — a discarded failure here
-  // leaves a consent claim with no evidence and tells the customer it worked. On the confirmed
-  // path the confirm_token is lost, so the link in their email can never resolve. Either way
-  // the caller must hear about it.
-  if (!sr || sr.ok !== true) {
+  // Rolled back as a whole, so the customer can simply submit again. Detail goes to the log
+  // only — this endpoint is unauthenticated and PostgREST errors echo the failing row.
+  if (!sr || sr.ok !== true || !sr.data) {
     console.log('form_submission_insert_failed', JSON.stringify({
       form: v.slug, status: sr?.status ?? null, detail: sr?.data ?? null,
     }));
     return { ok: false, error: 'capture_failed', status: 502 };
   }
+  if (sr.data.deduped) return { ok: true, deduped: true };
 
   return { ok: true, submitted: true, slug: v.slug, channels: v.channels };
 }
@@ -333,92 +274,24 @@ async function handleFormConfirm(env, token) {
   const tok = String(token || '').trim();
   if (!tok) return { ok: false, error: 'invalid_token', status: 400 };
 
-  const sr = await A.sbComms(
-    `/rest/v1/form_submissions?confirm_token=eq.${A.enc(tok)}` +
-    `&select=*,forms(slug,consent_copy_version)&limit=1`, env);
-  const sub = sr.ok ? sr.data?.[0] : null;
-  if (!sub) return { ok: false, error: 'invalid_token', status: 404 };
-
-  // Idempotent: a second click is a no-op, not a second consent row.
-  if (sub.confirmed_at) return { ok: true, confirmed: true, already: true };
-
-  const now = new Date().toISOString();
-
-  // ⚠️ THE CHECK ABOVE IS NOT WHAT MAKES THIS IDEMPOTENT — THE WRITE BELOW IS (S342).
-  // A read-then-check cannot serialise anything: two concurrent confirms (a double-click, a
-  // mail client prefetching the link, a retry after a timeout) both read `confirmed_at` as
-  // NULL, both fall past that early return, and both write a full set of consent rows.
-  // So CLAIM THE ROW FIRST with a conditional update and let Postgres arbitrate. The loser
-  // matches zero rows and answers exactly as a later click does.
-  const claim = await A.sbComms(
-    `/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}&confirmed_at=is.null`, env, {
-      method: 'PATCH', body: JSON.stringify({ confirmed_at: now }),
-    });
-  // Fail closed: an unwritable submission row must not go on to record consent it cannot
-  // evidence. The customer can click again — the link is still valid, since nothing was set.
-  if (!claim.ok) return { ok: false, error: 'confirm_failed', status: 502 };
-  // `Prefer: return=representation` is the sbProfile default, so an empty array means the
-  // `is.null` condition matched nothing: another request confirmed between our read and our
-  // write, and it owns the consent rows.
-  if (!Array.isArray(claim.data) || claim.data.length === 0)
-    return { ok: true, confirmed: true, already: true };
-
-  // ⚠️ CLAIMING FIRST INTRODUCES A FAILURE THE OLD ORDER DID NOT HAVE, AND IT MUST BE UNDONE
-  // EXPLICITLY — this block is the undo. (Found by the S342 hostile review, which correctly
-  // rejected an earlier comment here claiming the reordering was simply "the better half of
-  // the trade". It is not, unless the rollback below exists.)
-  //   old order: crash between the consent writes and the PATCH → `confirmed_at` stays NULL,
-  //              so the customer's next click re-runs the whole thing. Self-healing, at the
-  //              cost of a duplicate opt-in row.
-  //   new order: crash between the claim and the consent writes → `confirmed_at` is SET with
-  //              no consent recorded, the next click short-circuits on `already`, and the
-  //              customer is told "You are subscribed" while nothing evidences it. Consent is
-  //              lost silently and permanently — strictly worse than a duplicate row.
-  // So: on ANY consent-write failure, release the claim. The link stays clickable and the
-  // customer can complete the enrolment. Only a transaction removes the window entirely —
-  // that is capture-spine residual (e), which subsumes this whole block when it lands.
-  const evidence = {
-    form: sub.forms?.slug || null, source_url: sub.source_url || null,
-    consent_copy_version: sub.forms?.consent_copy_version ?? null,
-    submitted_at: sub.submitted_at || null, confirmed_at: now, turnstile_ok: true,
-  };
-  // ⚠️ The channels the customer CHOSE, as persisted at capture (migration 0060). Deriving
-  // them from field PRESENCE fabricates consent: someone who typed both an email and a phone
-  // but ticked only `email` got a whatsapp/marketing/opted_in row they never asked for. One
-  // row per channel actually chosen, never a blanket row.
-  const stored = Array.isArray(sub.channels)
-    ? sub.channels.filter((c) => ['email', 'whatsapp'].includes(c)) : [];
-  // This fallback exists ONLY for submission rows written BEFORE migration 0060 added the
-  // column (they have channels = NULL and there is nothing else to read). Every row written
-  // after it takes the branch above. Do not extend this path.
-  const channels = stored.length
-    ? [...new Set(stored)]
-    : [sub.payload?.email && 'email', sub.payload?.phone && 'whatsapp'].filter(Boolean);
-  // ⚠️ The result is CHECKED, not discarded. `recordConsent` returns `{ok:false}` on any 4xx/5xx
-  // rather than throwing, so a bare `await` here would report "You are subscribed" on a write
-  // that never landed — below this file's own bar, which already logs the lesser
-  // `form_identifier_attach_failed` on the submit path.
-  let consentOk = true;
-  for (const channel of channels) {
-    const cr = A.checkWrite('form_consent_write_failed', await recordConsent(env, {
-      profile_id: sub.profile_id, channel, purpose: 'marketing', state: 'opted_in',
-      source: `website_form:${sub.forms?.slug || 'unknown'}`, evidence, captured_at: now,
-    }), { submission_id: sub.id, form: sub.forms?.slug || null, channel });
-    if (!cr || cr.ok !== true) consentOk = false;
-  }
-
-  if (!consentOk) {
-    // Release the claim (see the note above). Conditioned on `confirmed_at=eq.<our timestamp>`
-    // so this can only ever unclaim OUR OWN stamp — never a later, successful confirm that
-    // raced in behind us.
-    A.checkWrite('form_confirm_rollback_failed', await A.sbComms(
-      `/rest/v1/form_submissions?id=eq.${A.enc(sub.id)}&confirmed_at=eq.${A.enc(now)}`, env, {
-        method: 'PATCH', body: JSON.stringify({ confirmed_at: null }),
-      }), { submission_id: sub.id });
+  // ⭐ ONE TRANSACTION (comms.form_confirm, migration 0073 — S377). It locks the submission row
+  // (FOR UPDATE), stamps confirmed_at and writes the consent rows together, which retires both
+  // holes the old claim-then-write-then-rollback sequence had: (i) a partial consent failure
+  // re-wrote the rows that HAD landed on the retry, and (ii) a failed rollback left confirmed_at
+  // set with no consent, so the next click answered "You are subscribed" with nothing behind it.
+  // A concurrent confirm (double-click, mail-client prefetch) waits on the lock and answers
+  // `already`. Rules kept in the function: consent is `marketing` (an ongoing enrolment), one row
+  // per channel the customer CHOSE (0060) — the field-presence fallback is for pre-0060 rows only.
+  const r = await A.sbComms('/rest/v1/rpc/form_confirm', env, {
+    method: 'POST', body: JSON.stringify({ p_token: tok }),
+  });
+  // Rolled back as a whole: nothing was stamped, so the link stays valid and a click retries.
+  if (!r || r.ok !== true || !r.data) {
+    console.log('form_confirm_failed', JSON.stringify({ status: r?.status ?? null, detail: r?.data ?? null }));
     return { ok: false, error: 'confirm_failed', status: 502 };
   }
-
-  // (no PATCH here any more — the conditional claim above already stamped `confirmed_at`)
+  if (r.data.error === 'invalid_token') return { ok: false, error: 'invalid_token', status: 404 };
+  if (r.data.already) return { ok: true, confirmed: true, already: true };
   return { ok: true, confirmed: true };
 }
 

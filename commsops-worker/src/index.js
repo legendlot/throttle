@@ -3162,7 +3162,8 @@ export default {
         const r = await FORMS.handleFormConfirm(env, url.searchParams.get('t'));
         // ⚠️ A TRANSIENT FAILURE IS NOT AN INVALID LINK, and telling the customer it is
         // guarantees they never click again (S342). `confirm_failed` means the DB write did
-        // not land and the claim was rolled back — the link is still good and clicking again
+        // not land — comms.form_confirm rolled back as a whole (0073, S377), nothing was
+        // stamped — so the link is still good and clicking again
         // is exactly the right action, so the copy must say so.
         const retryable = !r.ok && r.error === 'confirm_failed';
         const msg = r.ok ? 'You are subscribed. Thank you!'
