@@ -201,28 +201,41 @@ export default function BotBuilder() {
     catch { showToast('Connect Chat start to a first step before saving', 'error'); return null; }
   }
 
-  async function save() {
-    if (!name.trim()) { showToast('Name required', 'error'); return; }
+  // Returns the saved bot, or null when nothing was saved (validation toast already shown).
+  async function save({ quiet = false } = {}) {
+    if (!name.trim()) { showToast('Name required', 'error'); return null; }
     const definition = currentDefinition();
-    if (!definition) return;
+    if (!definition) return null;
     setBusy(true);
     try {
       const r = await workerFetch('saveBot', { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {}, channel: bot.channel || 'web' }, session);
       const saved = r?.data?.bot || r?.bot;
-      if (!saved) { showToast(`Save failed: ${r?.error || 'unknown'}`, 'error'); return; }
+      if (!saved) { showToast(`Save failed: ${r?.error || 'unknown'}`, 'error'); return null; }
       // The wire definition drops incomplete keyword rows (filtered above); a half-typed
       // row must survive locally so Save draft never erases what the author is mid-typing.
       setBot((b) => ({ ...b, ...saved, draft_definition: { ...saved.draft_definition, keywords: b.draft_definition?.keywords || saved.draft_definition?.keywords || [] } }));
-      showToast('Draft saved');
+      if (!quiet) showToast('Draft saved');
       load();
+      return saved;
     } finally { setBusy(false); }
   }
 
+  // Publish freezes the SAVED draft server-side (bots.js publishBot reads draft_definition),
+  // so publishing straight from an edited canvas used to ship the PREVIOUS save — unlinted,
+  // and not what the author had just tested (S372). A builder's Publish now saves the canvas
+  // first. Someone who can activate but not build has a read-only canvas, so there is nothing
+  // unsaved to lose and the saved draft is exactly what they see.
   async function publish() {
-    if (!bot?.id) { showToast('Save the draft first', 'error'); return; }
+    let id = bot?.id;
+    if (canBuild) {
+      const saved = await save({ quiet: true });
+      if (!saved) return;
+      id = saved.id;
+    }
+    if (!id) { showToast('Save the draft first', 'error'); return; }
     setBusy(true); setPublishErrors(null);
     try {
-      const r = await workerFetch('publishBot', { id: bot.id }, session);
+      const r = await workerFetch('publishBot', { id }, session);
       const d = r?.data || r;
       if (d?.bot) { setBot((b) => ({ ...b, ...d.bot })); showToast(`Published v${d.version} — live`); load(); }
       else if (d?.errors || r?.errors) setPublishErrors(d?.errors || r?.errors);
@@ -328,7 +341,7 @@ export default function BotBuilder() {
         {bot?.active_version && <span className="dim" style={{ fontSize: 12 }}>live: v{bot.active_version}</span>}
         <span style={{ flex: 1 }} />
         <Btn onClick={() => setSettings((s) => !s)}>Settings</Btn>
-        {canBuild && <Btn onClick={save} disabled={busy}>Save draft</Btn>}
+        {canBuild && <Btn onClick={() => save()} disabled={busy}>Save draft</Btn>}
         {canActivate && bot?.id && <Btn kind="primary" onClick={publish} disabled={busy}><Check size={14} /> Publish</Btn>}
         {canActivate && bot?.status === 'active' && <Btn onClick={() => setStatus('paused')} disabled={busy}><Pause size={14} /> Pause</Btn>}
         {canActivate && bot?.status === 'paused' && <Btn onClick={() => setStatus('active')} disabled={busy}><Play size={14} /> Resume</Btn>}

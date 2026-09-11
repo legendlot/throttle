@@ -1,5 +1,8 @@
 # Relay Operations Manual — Changelog
 
+## 1.8.2 — 2026-09-11
+- **Bot Builder:** Publish now saves the canvas first (S372) — the 1.8.1 "Save draft, then Publish" warning is replaced by a note.
+
 ## 1.8.1 — 2026-09-11
 - **Bot Builder corrections** (hostile review): Publish ships the last SAVED draft (new "Save draft,
   then Publish" callout); Shared flows run their current live version on entry, so a shared-flow
