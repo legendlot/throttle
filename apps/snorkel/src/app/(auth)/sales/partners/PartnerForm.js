@@ -18,6 +18,14 @@ const EMPTY = {
   default_credit_days: 45, is_active: true, notes: '',
 };
 
+// Mirrors the worker's partnerGstinGate (snorkelops-worker/src/index.js) — the worker is the
+// authority; this only stops the round-trip. A create needs a GSTIN or the "Not GST-registered"
+// tick (which leaves GSTIN blank and records "GST: not registered" in notes — never a sentinel
+// in the GSTIN field, it prints on the tax invoice). An edit is gated only when it clears an
+// existing GSTIN or changes it to a malformed one; legacy blank rows still save.
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const UNREG_RE = /gst: not registered/i;
+
 // Shared create/edit form. `initial` may be a loaded partner row; `channels` from getSalesChannels.
 export default function PartnerForm({ initial, channels, saving, onSubmit, onCancel }) {
   // Null-safe init: a loaded partner row stores blanks as NULL — spreading it raw
@@ -35,12 +43,22 @@ export default function PartnerForm({ initial, channels, saving, onSubmit, onCan
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
   const grid = { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 };
 
+  const initialGstin = String(initial?.gstin || '').trim().toUpperCase();
+  const [unreg, setUnreg] = useState(() => !!initial && !initialGstin && UNREG_RE.test(initial?.notes || ''));
+  const gstin = String(f.gstin || '').trim().toUpperCase();
+  const gstinRequired = !initial || !!initialGstin;
+  const gstinError = unreg ? null
+    : gstin ? (gstin !== initialGstin && !GSTIN_RE.test(gstin) ? 'Not a valid GSTIN — 15 characters, e.g. 29ABCDE1234F1Z5' : null)
+    : gstinRequired ? (initial ? 'This partner has a GSTIN — to clear it, tick "Not GST-registered"' : 'GSTIN required — or tick "Not GST-registered"')
+    : null;
+
   function submit() {
     onSubmit({
       name: f.name.trim(),
       channel_key: f.channel_key || null,
       partner_type: f.partner_type.trim() || null,
-      gstin: f.gstin.trim() || null,
+      gstin: unreg ? null : (gstin || null),
+      unregistered: unreg,
       state: f.state || null,
       city: f.city.trim() || null,
       pincode: f.pincode.trim() || null,
@@ -69,7 +87,14 @@ export default function PartnerForm({ initial, channels, saving, onSubmit, onCan
               </select>
             </Field>
             <Field label="Partner type"><input style={{ ...inputStyle, width: '100%' }} value={f.partner_type} onChange={e => set('partner_type', e.target.value)} placeholder="distributor / retailer / chain" /></Field>
-            <Field label="GSTIN"><input style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} value={f.gstin} onChange={e => set('gstin', e.target.value.toUpperCase())} placeholder="29ABCDE1234F1Z5" /></Field>
+            <Field label={gstinRequired ? 'GSTIN *' : 'GSTIN'}>
+              <input style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)', opacity: unreg ? 0.5 : 1 }} value={unreg ? '' : f.gstin} disabled={unreg} onChange={e => set('gstin', e.target.value.toUpperCase())} placeholder={unreg ? 'Not GST-registered' : '29ABCDE1234F1Z5'} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={unreg} onChange={e => { setUnreg(e.target.checked); if (e.target.checked) set('gstin', ''); }} />
+                Not GST-registered
+              </label>
+              {gstinError && <div style={{ fontSize: 11, color: '#ff7070', marginTop: 4 }}>{gstinError}</div>}
+            </Field>
             <Field label="State (place of supply)">
               <select style={{ ...selectStyle, width: '100%' }} value={f.state} onChange={e => set('state', e.target.value)}>
                 <option value="">— select —</option>
@@ -104,7 +129,7 @@ export default function PartnerForm({ initial, channels, saving, onSubmit, onCan
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button style={btnPrimary} onClick={submit} disabled={saving || !f.name.trim()}>{saving ? 'Saving…' : 'Save Partner'}</button>
+        <button style={btnPrimary} onClick={submit} disabled={saving || !f.name.trim() || !!gstinError}>{saving ? 'Saving…' : 'Save Partner'}</button>
         <button style={btnSecondary} onClick={onCancel} disabled={saving}>Cancel</button>
       </div>
     </div>

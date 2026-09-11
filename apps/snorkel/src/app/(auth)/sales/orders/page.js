@@ -9,6 +9,7 @@ import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
 import { todayStr } from '@throttle/domain';
+import { buildSoLinesCsv } from '@/lib/soExport.js';
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -19,6 +20,7 @@ export default function SalesOrdersPage() {
   const [filters, setFilters] = useState({ status: '', channel_key: '', fulfilment: '', overdue: false });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [exportingLines, setExportingLines] = useState(false);
 
   const canManage = !!perms?.sales_order_manage;
 
@@ -66,8 +68,11 @@ export default function SalesOrdersPage() {
   };
 
   function exportCsv() {
+    // `Partner PO Ref` added with the line export (Prarthi, #bugs 2026-09-11). ⚠️ APPENDED as the
+    // LAST column: these files are read by position, so every column that existed before keeps
+    // its index. A new column here always goes on the end.
     const cols = ['Order', 'Date', 'Partner', 'Channel', 'Status', 'Fulfilment', 'Invoice', 'Grand Total',
-      'Fulfilled Value', 'Shortfall', 'Received', 'Balance', 'Due', 'Overdue', 'Payment'];
+      'Fulfilled Value', 'Shortfall', 'Received', 'Balance', 'Due', 'Overdue', 'Payment', 'Partner PO Ref'];
     const lines = [cols.join(',')];
     for (const o of filtered) lines.push([o.order_no, o.order_date, o.partner_name, o.channel_key,
       orderStatusLabel(o.status), fulfilmentMeta(o.fulfilment_status).label, o.invoice_no, o.grand_total,
@@ -75,11 +80,43 @@ export default function SalesOrdersPage() {
       // it must not carry them in the export either (S344 hostile review).
       o.status === 'cancelled' ? '' : o.fulfilled_value,
       o.status === 'cancelled' ? '' : o.shortfall_value,
-      o.amount_received, o.balance, o.due_date, o.overdue ? 'Yes' : 'No', o.payment_status].map(csvCell).join(','));
+      o.amount_received, o.balance, o.due_date, o.overdue ? 'Yes' : 'No', o.payment_status,
+      o.partner_po_ref].map(csvCell).join(','));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = `lot-sales-orders-${todayStr()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Second, SEPARATE export: one row per ORDER LINE (Prarthi, #bugs 2026-09-11) — the SO twin of
+  // the PO list's "Export + lines". The lines are a second read (getSalesOrderLinesBulk, same
+  // sales_view gate and same server filters as getSalesOrders); the rows are `filtered`, so the
+  // search / fulfilment / overdue filters are honoured exactly like the header export.
+  async function exportCsvWithLines() {
+    if (!session) return;
+    let payload;
+    setExportingLines(true);
+    try {
+      const params = {};
+      if (filters.status) params.status = filters.status;
+      if (filters.channel_key) params.channel_key = filters.channel_key;
+      payload = await garageFetch('getSalesOrderLinesBulk', params, session);
+    } catch (e) {
+      showToast(e.message || 'Failed to load order lines', 'error');
+      return;
+    } finally {
+      setExportingLines(false);
+    }
+    const csv = buildSoLinesCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {},
+                                  partnerByOrder: payload?.partnerByOrder || {} });
+    // Header-only file = nothing to export. (Not a `split('\n')` row count — a quoted newline
+    // inside a description would inflate it.)
+    if (!csv.includes('\n')) { showToast('No order lines to export for these filters', 'error'); return; }
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `lot-sales-order-lines-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -90,6 +127,7 @@ export default function SalesOrdersPage() {
       <PageHead title="Sales Orders" sub="Offline channel orders (GT / MT). Capture, dispatch handoff, collections."
         actions={<>
           <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
+          <Btn onClick={exportCsvWithLines} disabled={!filtered.length || exportingLines}><Download size={14} /> {exportingLines ? 'Loading lines…' : 'Export + lines'}</Btn>
           {canManage && <Btn kind="primary" onClick={() => router.push('/sales/orders/new')}><Plus size={14} /> New order</Btn>}
         </>} />
 

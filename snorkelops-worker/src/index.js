@@ -113,6 +113,33 @@ function stripChinaPOLine(line) {
   return rest;
 }
 
+// ⚠️⚠️ PO LINES GATE — worker copy of gatePoLines from apps/snorkel/src/lib/poExport.js. ⚠️⚠️
+// The China/Soft gate `getPOLinesBulk` ENFORCES (the lib copy only states it). The worker is a
+// zero-import single file and cannot import out of apps/, so this is a deliberate second copy —
+// test/po-lines-gate-parity.test.mjs lifts THIS block and asserts it agrees with the lib's
+// gatePoLines on a grid. Change the two together.
+// Split in two because the handler needs the allowed set on its own (vendorByPo) before the
+// lines are read. The allowed set: a Soft PO for a caller without po_china is dropped ENTIRELY —
+// no header, no lines — and a China PO survives but is marked (value `true`) for the strip.
+function poLinesAllowed(headers, canChina) {
+  const allowed = new Map();
+  for (const row of headers || []) {
+    if (row.status === 'Soft' && !canChina) continue;
+    allowed.set(row.po_number, row.source === 'China' && !canChina);
+  }
+  return allowed;
+}
+function gatePoLinesByPo(allowed, lines) {
+  const linesByPo = {};
+  for (const line of lines || []) {
+    if (!allowed.has(line.po_number)) continue;      // not visible, or not on this page
+    const strip = allowed.get(line.po_number);
+    (linesByPo[line.po_number] ||= []).push(strip ? stripChinaPOLine(line) : line);
+  }
+  return linesByPo;
+}
+// ── end PO LINES GATE
+
 // Resolve a user's SNORKEL permissions: snorkel_user_roles(user) → role_key →
 // snorkel_roles.permissions. Returns {} when the user has no Snorkel role (they can
 // still file requests — request creation needs no permission key).
@@ -1112,14 +1139,36 @@ function resolveFulfilment(f) {
   }
   return { der: { fulfilment_status: 'not_submitted', shipped_units: 0, requested_units: 0 }, anchor: null };
 }
-// Reconcile reject→cancel: snorkelops is the only writer of sales_orders.status.
-async function reconcileRejections(list) {
-  for (const { o, reason } of (list || [])) {
+// Reconcile reject→cancel: snorkelops is the only writer of sales_orders.status, but the REJECT
+// itself is written by lotopsproxy (Depot `rejectFulfilment`, 01_worker), so the cancel can't sit
+// on the reject write. ⚠️ It used to run inside four READ handlers (getSalesOrders / getSalesOrder
+// / getSalesCollections / getSalesPartyBalances): any sales_view user opening a page cancelled a
+// confirmed — even invoiced — order, with no actor and no activity row. Now one explicit sweep,
+// run from createSalesOrder (the sales write that runs on the most days; snorkelops has no cron
+// trigger), logging one SO_AUTO_CANCELLED row per order. Cheap: rejected requests are few
+// (8 all-time on 2026-09-11) and it only touches the ones whose order isn't cancelled yet.
+async function reconcileRejections() {
+  const rq = await queryPublic('dispatch_fulfilment_requests',
+    '?status=eq.rejected&sales_order_id=not.is.null&select=sales_order_id,request_no,reject_reason');
+  if (!rq.ok || !rq.data?.length) return [];
+  const byOrder = {}; rq.data.forEach(r => { byOrder[r.sales_order_id] = r; });
+  const oR = await query('sales_orders',
+    `?id=in.(${Object.keys(byOrder).map(encodeURIComponent).join(',')})&status=neq.cancelled&select=id,order_no,status,invoice_generated`);
+  const done = [];
+  for (const o of (oR.ok ? oR.data : [])) {
+    const fr = byOrder[o.id];
     const now = new Date().toISOString();
-    await update('sales_orders',
-      { status: 'cancelled', cancelled_at: now, cancel_reason: 'Fulfilment rejected: ' + (reason || ''), updated_at: now },
-      `id=eq.${encodeURIComponent(o.id)}`);
+    const r = await update('sales_orders',
+      { status: 'cancelled', cancelled_at: now, cancel_reason: 'Fulfilment rejected: ' + (fr.reject_reason || ''), updated_at: now },
+      `id=eq.${encodeURIComponent(o.id)}&status=neq.cancelled`);
+    if (!r.ok) { console.error('reconcileRejections: cancel failed', o.order_no, r.data); continue; }
+    await logActivity('system', 'system', 'SO_AUTO_CANCELLED', 'ORDER', o.order_no,
+      `${o.order_no} cancelled — fulfilment request ${fr.request_no} rejected`,
+      { reason: 'fulfilment request rejected', reject_reason: fr.reject_reason || null, request_no: fr.request_no,
+        prior_status: o.status, invoice_generated: !!o.invoice_generated });
+    done.push(o.order_no);
   }
+  return done;
 }
 // Writable partner columns (code/id/audit excluded). Used by create + update.
 const SALES_PARTNER_FIELDS = ['name','channel_key','partner_type','gstin','state','city','pincode',
@@ -1129,6 +1178,39 @@ function normSalesPartner(field, v) {
   if (field === 'is_active') return v !== false;
   if (v === '' || v === undefined) return null;
   return v;
+}
+// GSTIN gate on partner create/edit. Nothing gated creation, so the blank-GSTIN gap refilled
+// with every new partner (drained by hand 3× in 8 days). A create needs a GSTIN of the standard
+// shape OR an explicit `unregistered: true`. ⛔ The tick leaves `gstin` NULL and writes the marker
+// into `notes` — never a sentinel into `gstin`: the invoice / confirmation / credit-note prints
+// render it on a live GST document (decisions §S335). The gap check excludes
+// `notes ilike '%GST: not registered%'`, so the marker keeps that exact phrase.
+// An EDIT is gated only when it clears an existing GSTIN or changes it to a malformed one —
+// legacy rows that are already blank (or carry a legacy odd value, unchanged) still save.
+// Returns { error } or the { gstin?, notes? } to write (absent key = leave the column alone).
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const GST_UNREGISTERED_MARKER = 'GST: not registered';
+function normGstin(v) { return String(v ?? '').trim().toUpperCase(); }
+function partnerGstinGate(d, existing, stamp) {
+  const unregistered = d.unregistered === true;
+  const touched = d.gstin !== undefined;
+  const g = touched ? normGstin(d.gstin) : '';
+  const oldG = existing ? normGstin(existing.gstin) : '';
+  if (unregistered && g) return { error: 'Enter a GSTIN or tick "Not GST-registered" — not both' };
+  if (g) {
+    if (g !== oldG && !GSTIN_RE.test(g))
+      return { error: `GSTIN "${g}" is not a valid GSTIN — 15 characters, e.g. 29ABCDE1234F1Z5` };
+    return { gstin: g };
+  }
+  if (unregistered) {
+    const base = d.notes !== undefined ? d.notes : (existing?.notes ?? null);
+    const has = String(base || '').toLowerCase().includes(GST_UNREGISTERED_MARKER.toLowerCase());
+    const mark = `${GST_UNREGISTERED_MARKER} — ${stamp || 'ticked in Snorkel'}. Blank GSTIN is correct; do not re-flag as a gap.`;
+    return { gstin: null, notes: has ? (base || null) : (String(base || '').trim() ? `${String(base).trim()} | ${mark}` : mark) };
+  }
+  if (!existing) return { error: 'GSTIN required — or tick "Not GST-registered"' };
+  if (touched && oldG) return { error: 'This partner has a GSTIN — to clear it, tick "Not GST-registered"' };
+  return touched ? { gstin: null } : {};
 }
 // Recompute an order's amount_received + payment_status from its receipts.
 async function recomputeSalesPayment(orderId) {
@@ -1196,7 +1278,10 @@ function normAsset(field, v) {
   return v;
 }
 
-function todayISO() { return new Date().toISOString().split('T')[0]; }
+// TODAY IN IST (S376). Every caller is a business date — PO raised/placed date, SO order date,
+// receipt / CN date, the overdue check, the GST-unregistered stamp — and LOT runs on IST. The UTC
+// date this used to return put anything done between 00:00 and 05:30 IST on the PREVIOUS day.
+function todayISO() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0]; }
 function ok(data, status = 200) {
   return new Response(JSON.stringify({ ok: true, data }),
     { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -2824,8 +2909,9 @@ export default {
           // surface and not the next.
           // The pure statement of the same decision lives in apps/snorkel/src/lib/poExport.js
           // (`gatePoLines`, covered by snorkelops-worker/test/po-export.test.mjs); this worker
-          // is a zero-import single file with no bundler, so it cannot import it — the copy
-          // below is deliberate and must move with it.
+          // is a zero-import single file with no bundler, so it cannot import it — its copy is
+          // `poLinesAllowed` + `gatePoLinesByPo` (`PO LINES GATE` near the top of this file), held
+          // to the lib by snorkelops-worker/test/po-lines-gate-parity.test.mjs.
           case 'getPOLinesBulk': {
             if (!canView(P)) return err('No permission', 403);
             const status = url.searchParams.get('status')     || '';
@@ -2840,17 +2926,15 @@ export default {
             const headR = await query('po_summary', filter, { prefer: 'count=exact' });
             if (!headR.ok) return err(headR.data);
             const canChina = canViewChina(P);
-            // The allowed set. A Soft PO for a caller without po_china is dropped ENTIRELY —
-            // no header, no lines — and a China PO survives but is marked for the strip.
-            const allowed = new Map();
-            for (const row of headR.data || []) {
-              if (row.status === 'Soft' && !canChina) continue;
-              allowed.set(row.po_number, row.source === 'China' && !canChina);
-            }
+            // The allowed set — see `PO LINES GATE` near the top of this file.
+            const allowed = poLinesAllowed(headR.data, canChina);
             // Vendor code comes from purchase_orders, NOT from the client's rows: `po_summary`
-            // is a view with 23 columns and vendor_code is not one of them (verified against
+            // had no vendor_code column when this shipped (23 columns, verified against
             // information_schema 2026-09-10), so the CSV's Vendor Code cell was blank on every
-            // row of every export. Same filter/order/limit as the header read above, so this
+            // row of every export. The view gained vendor_code + raised_by_user_id on 2026-09-11
+            // (the header export reads it from getPOs' rows since), which makes this second read
+            // redundant but not wrong — it stays until someone retires it on purpose.
+            // Same filter/order/limit as the header read above, so this
             // covers exactly the same page of POs — and only allowed POs enter the map, so a
             // Soft PO hidden from this caller leaks nothing.
             const vendR = await query('purchase_orders', `${filter}&select=po_number,vendor_code`);
@@ -2873,12 +2957,7 @@ export default {
             // for Part lines. Enrichment only ADDS product to a blank field, so it cannot
             // reintroduce a money field the China strip below removes (the strip runs after).
             const enriched = await withPartProducts(linesR.data || []);
-            const linesByPo = {};
-            for (const line of enriched) {
-              if (!allowed.has(line.po_number)) continue;      // not visible, or not on this page
-              const strip = allowed.get(line.po_number);
-              (linesByPo[line.po_number] ||= []).push(strip ? stripChinaPOLine(line) : line);
-            }
+            const linesByPo = gatePoLinesByPo(allowed, enriched);
             // ⚠️ `total`/`truncated` are measured against the RAW po_lines read — every line in
             // the table, not just the filtered POs' — because po_lines carries no status/source
             // to filter on. So a filtered export can be warned as partial when it is in fact
@@ -3232,19 +3311,62 @@ export default {
             const orders = r.data || [];
             const ful = await loadFulfilment(orders);
             const vals = await salesOrderFulfilmentValues(orders, ful);
-            const toCancel = [];
+            // Read-only: reject→cancel lives in reconcileRejections(), run from createSalesOrder.
             const rows = orders.map(o => {
               const f = ful[o.id];
               const { der, anchor } = resolveFulfilment(f);
-              if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
-                toCancel.push({ o, reason: f.request.reject_reason });
               const dec = decorateSalesOrder(o, anchor);
               return { ...dec, ...der, ...(vals[o.id] || {}),
                        partner_name: o.sales_partners?.name || null,
                        partner_state: o.sales_partners?.state || null, sales_partners: undefined };
             });
-            await reconcileRejections(toCancel);
             return ok(rows);
+          }
+
+          // Line-level feed for the Sales Orders list's "Export + lines" button (Prarthi, #bugs
+          // 2026-09-11) — the SO twin of getPOLinesBulk. The header rows come from the client's
+          // getSalesOrders list (so its text search / fulfilment / overdue filters are honoured,
+          // exactly like the header Export); this returns only what that list does not carry:
+          // the lines, and the partner code + GSTIN (getSalesOrders embeds name/state only).
+          // ⚠️ Deliberately does NOT call reconcileRejections() — a read handler must not write,
+          // and this one has no fulfilment read to derive a rejection from anyway.
+          // Row shaping lives in apps/snorkel/src/lib/soExport.js (buildSoLinesCsv), tested by
+          // snorkelops-worker/test/so-lines-export.test.mjs.
+          case 'getSalesOrderLinesBulk': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            // Same server-side filters as getSalesOrders, so the order set we return lines for
+            // is the set the client list was built from.
+            let params = '?select=id,sales_partners(partner_code,gstin)&order=id.asc';
+            const st  = url.searchParams.get('status');
+            const ch  = url.searchParams.get('channel_key');
+            const pid = url.searchParams.get('partner_id');
+            if (st)  params += `&status=eq.${encodeURIComponent(st)}`;
+            if (ch)  params += `&channel_key=eq.${encodeURIComponent(ch)}`;
+            if (pid) params += `&partner_id=eq.${encodeURIComponent(pid)}`;
+            // Both reads PAGED (order ends in the unique id) rather than capped like
+            // getPOLinesBulk: 2,724 sales_order_lines on 2026-09-11, 927 of them on orders from
+            // the last 30 days — a single read would hit PostgREST's silent 5,000 clamp within
+            // ~3 months. pageAll returns null on any failed page; a short line file totals to a
+            // plausible wrong number, so withhold it rather than ship it.
+            // ⛔ Whole-table line read filtered in JS, not `order_id=in.(...)`: 578 order UUIDs
+            // would build a ~20 KB URL (same reasoning as salesOrderFulfilmentValues).
+            const [heads, allLines] = await Promise.all([
+              pageAll(query, 'sales_orders', params),
+              pageAll(query, 'sales_order_lines',
+                '?select=id,order_id,product,model,color,sku,hsn_code,description,qty,rate,discount_pct,gst_pct,taxable_value,gst_amount,line_total,sort_order&order=order_id.asc,sort_order.asc,id.asc'),
+            ]);
+            if (!heads || !allLines) return err('Could not read every sales order line — export withheld rather than partial', 502);
+            const partnerByOrder = {};
+            for (const h of heads) {
+              const sp = h.sales_partners || {};
+              partnerByOrder[h.id] = { partner_code: sp.partner_code || null, gstin: sp.gstin || null };
+            }
+            const linesByOrder = {};
+            for (const l of allLines) {
+              if (!partnerByOrder[l.order_id]) continue;       // not in the filtered order set
+              (linesByOrder[l.order_id] ||= []).push(l);
+            }
+            return ok({ linesByOrder, partnerByOrder });
           }
 
           case 'getSalesOrder': {
@@ -3262,8 +3384,6 @@ export default {
             ]);
             const f = (await loadFulfilment([o]))[o.id];
             const { der, anchor } = resolveFulfilment(f);
-            if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
-              await reconcileRejections([{ o, reason: f.request.reject_reason }]);
             const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, anchor);
             const lines = await withLineFulfilment(linesR.ok ? linesR.data : [], f);
             return ok({ ...dec, ...der, partner, request: f?.request || null,
@@ -3278,13 +3398,10 @@ export default {
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
             const ful = await loadFulfilment(orders);
-            const toCancel = [];
             const rows = orders
               .map(o => {
                 const f = ful[o.id];
                 const { der, anchor } = resolveFulfilment(f);
-                if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
-                  toCancel.push({ o, reason: f.request.reject_reason });
                 return { ...decorateSalesOrder(o, anchor), ...der,
                          partner_name: o.sales_partners?.name || null, sales_partners: undefined };
               })
@@ -3293,7 +3410,6 @@ export default {
                 if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
                 return String(a.due_date || '9999').localeCompare(String(b.due_date || '9999'));
               });
-            await reconcileRejections(toCancel);
             return ok(rows);
           }
 
@@ -3307,18 +3423,14 @@ export default {
               '?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name,partner_code,channel_key,partner_type)&order=id.asc');
             if (!orders) return err('Could not read every sales order — balances withheld rather than understated', 502);
             const ful = await loadFulfilment(orders);
-            const toCancel = [];
             const rows = orders.map(o => {
               const f = ful[o.id];
-              const { der, anchor } = resolveFulfilment(f);
-              if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
-                toCancel.push({ o, reason: f.request.reject_reason });
+              const { anchor } = resolveFulfilment(f);
               const sp = o.sales_partners || {};
               return { ...decorateSalesOrder(o, anchor), partner_name: sp.name || null,
                        partner_code: sp.partner_code || null, partner_channel_key: sp.channel_key || null,
                        partner_type: sp.partner_type || null, sales_partners: undefined };
             });
-            await reconcileRejections(toCancel);
             return ok(aggregatePartyBalances(rows));
           }
 
@@ -5359,9 +5471,13 @@ export default {
             if (!canSalesPartner(P)) return err('No permission', 403);
             const d = body.data || {};
             if (!d.name) return err('name required');
+            // Gate BEFORE nextSeq4 so a refused create doesn't burn an SP- number.
+            const gst = partnerGstinGate(d, null, `ticked by ${authResult?.fullName || postRole} on ${todayISO()}`);
+            if (gst.error) return err(gst.error, 422);
             const partner_code = await nextSeq4('sales_partner', 'SP-');
             const row = { partner_code, created_by: userId };
             SALES_PARTNER_FIELDS.forEach(f => { if (d[f] !== undefined) row[f] = normSalesPartner(f, d[f]); });
+            Object.assign(row, gst);
             const r = await insert('sales_partners', row, false);
             if (!r.ok) return err('Partner insert failed: ' + JSON.stringify(r.data));
             const created = Array.isArray(r.data) ? r.data[0] : r.data;
@@ -5374,6 +5490,13 @@ export default {
             if (!d.id) return err('id required');
             const updates = { updated_at: new Date().toISOString() };
             SALES_PARTNER_FIELDS.forEach(f => { if (d[f] !== undefined) updates[f] = normSalesPartner(f, d[f]); });
+            if (d.gstin !== undefined || d.unregistered === true) {
+              const cur = await query('sales_partners', `?id=eq.${encodeURIComponent(d.id)}&select=gstin,notes&limit=1`);
+              if (!cur.ok || !cur.data?.[0]) return err('Partner not found', 404);
+              const gst = partnerGstinGate(d, cur.data[0], `ticked by ${authResult?.fullName || postRole} on ${todayISO()}`);
+              if (gst.error) return err(gst.error, 422);
+              Object.assign(updates, gst);
+            }
             const r = await update('sales_partners', updates, `id=eq.${encodeURIComponent(d.id)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
             return ok({ updated: d.id });
@@ -5448,6 +5571,8 @@ export default {
             const li = await insert('sales_order_lines', lineRows, false);
             if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
             const hsnSynced = await syncHsnToMaster(hsnPlan, authResult?.fullName || postRole, postRole, order_no);
+            // Reject→cancel sweep (see reconcileRejections). Best-effort: never fails the create.
+            try { await reconcileRejections(); } catch (e) { console.error('reconcileRejections failed:', e); }
             return ok({ id: order.id, order_no, hsn_synced: hsnSynced, hsn_realigned: hsnPlan.realign,
                         hsn_blocked: hsnPlan.blocked, hsn_gaps: hsnGaps(lines, hsnMaster) });
           }

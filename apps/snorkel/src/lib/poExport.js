@@ -6,9 +6,11 @@
 // getPOs already gated server-side. A LINE-level export cannot borrow that — the lines are a
 // second read — so the SAME gate is re-applied here, and again in snorkelops-worker's
 // `getPOLinesBulk`. `gatePoLines` below is the single written statement of that policy; the
-// worker holds an inline copy of it because the worker is a zero-import single file (no bundler,
-// no module graph — it cannot import out of apps/). If the two ever diverge, this one is the
-// spec and the test is on this one.
+// worker holds its own copy (`poLinesAllowed` + `gatePoLinesByPo`, under `PO LINES GATE` in
+// snorkelops-worker/src/index.js) because the worker is a zero-import single file (no bundler,
+// no module graph — it cannot import out of apps/). This one is the spec (po-export.test.mjs);
+// snorkelops-worker/test/po-lines-gate-parity.test.mjs lifts the worker copy — the one that
+// actually ENFORCES — and fails if the two diverge. Change them together.
 // Relative, NOT the `@/lib/...` alias the components use: node --test resolves this file
 // directly off disk with no bundler, and the alias is a webpack/tsconfig thing that only exists
 // inside Next. Same shared quoter either way.
@@ -54,9 +56,10 @@ export const PO_LINES_COLUMNS = [
 // payload contribute no row — this is a line-level file, and the header export is what covers
 // "which POs exist". The truncation marker in the filename is what says a PO could be missing.
 // ⚠️ `vendorByPo` (po_number → vendor_code) comes from the worker, NOT from `filteredRows`:
-// those are `store.po_summary` rows and that view has NO vendor_code column (23 columns,
-// verified against information_schema 2026-09-10), so reading `p.vendor_code` here shipped an
-// empty cell on every row of every export. Absent from the map = blank, never `undefined`.
+// those are `store.po_summary` rows and that view had NO vendor_code column when this shipped
+// (23 columns, verified against information_schema 2026-09-10), so reading `p.vendor_code` here
+// shipped an empty cell on every row of every export. The view gained vendor_code on 2026-09-11;
+// the map is kept as the source here all the same. Absent from the map = blank, never `undefined`.
 export function buildPoLinesCsv({ filteredRows, linesByPo, vendorByPo, canChina }) {
   const rows = [PO_LINES_COLUMNS.join(',')];
   for (const p of filteredRows || []) {

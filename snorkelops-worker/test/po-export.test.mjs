@@ -7,8 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gatePoLines, buildPoLinesCsv, PO_LINES_COLUMNS } from '../../apps/snorkel/src/lib/poExport.js';
 
-// ⚠️ These are `store.po_summary` rows, and that view has NO vendor_code column (23 columns,
-// verified against information_schema 2026-09-10). The fixtures used to hand-write one, which is
+// ⚠️ These are `store.po_summary` rows, and that view had NO vendor_code column (23 columns,
+// verified against information_schema 2026-09-10; it gained one 2026-09-11, but the line export
+// still reads vendorByPo, so the fixtures still leave it off). The fixtures used to hand-write one, which is
 // why the suite stayed green while every real export shipped a blank Vendor Code cell. The code
 // now comes from the worker's separate purchase_orders read, as `vendorByPo` below.
 const headers = [

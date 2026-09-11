@@ -212,8 +212,9 @@ export default function POListPage() {
       setExportingLines(false);
     }
     const linesByPo = payload?.linesByPo || {};
-    // po_summary carries no vendor_code (23 columns, not among them), so the Vendor Code column
-    // can only come from the worker's purchase_orders read — never from `filteredRows`.
+    // po_summary carried no vendor_code when this shipped (it gained one 2026-09-11 — the header
+    // export above reads `p.vendor_code` from it), but the line file still takes the Vendor Code
+    // column from the worker's purchase_orders read, as `vendorByPo`.
     const vendorByPo = payload?.vendorByPo || {};
     // ⚠️ TWO ways this file can be short and only one of them is the S334 one: the PO list may
     // have been cut at PO_PAGE_LIMIT, or the LINE read may have been cut at its own cap. Either
