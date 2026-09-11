@@ -142,22 +142,55 @@ export default function DamageLedgerPage() {
       product: m.product || '',
     })), [materials]);
 
+  // Paging + server-side search (S375): Pending alone held 1,563 rows against a 500-row load, so
+  // the tab and the search box silently missed everything older. Search is sent to the worker
+  // (debounced); the client filter below still narrows instantly while typing.
+  const PAGE = 500;
+  const [qSearch,     setQSearch]     = useState('');
+  const [hasMore,     setHasMore]     = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setQSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  function ledgerFilter(offset) {
+    const filter = { limit: partFilter ? 2000 : PAGE, offset };
+    if (tab !== 'all') filter.status = tab;
+    if (source) filter.source = source;
+    if (partFilter) filter.part_code = partFilter;
+    if (qSearch) filter.search = qSearch;
+    return filter;
+  }
   async function loadLedger() {
     if (!session) return;
     setLoading(true);
     setSelected(new Set());
     try {
-      const filter = { limit: 500 };
-      if (tab !== 'all') filter.status = tab;
-      if (source) filter.source = source;
-      if (partFilter) { filter.part_code = partFilter; filter.limit = 2000; }
+      const filter = ledgerFilter(0);
       const r = await workerFetch('getDamageLedger', { data: filter }, session);
-      setRows(r?.ok ? (r.data || []) : []);
+      const data = r?.ok ? (r.data || []) : [];
+      setRows(data);
+      setHasMore(data.length === filter.limit);
     } finally {
       setLoading(false);
     }
   }
-  useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, partFilter, session]);
+  async function loadMore() {
+    if (!session || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const filter = ledgerFilter(rows.length);
+      const r = await workerFetch('getDamageLedger', { data: filter }, session);
+      const data = r?.ok ? (r.data || []) : [];
+      // A row recorded since the first page shifts the offset by one — skip ids already shown.
+      setRows(prev => { const seen = new Set(prev.map(x => x.id)); return [...prev, ...data.filter(x => !seen.has(x.id))]; });
+      setHasMore(data.length === filter.limit);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+  useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, partFilter, qSearch, session]);
 
   async function loadSummary() {
     if (!session) return;
@@ -592,7 +625,7 @@ export default function DamageLedgerPage() {
               </button>
             )}
             <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-              {stats.total} row{stats.total === 1 ? '' : 's'} · {stats.qty} qty
+              {stats.total}{hasMore ? '+' : ''} row{stats.total === 1 ? '' : 's'} · {stats.qty}{hasMore ? '+' : ''} qty
             </div>
           </div>
 
@@ -689,6 +722,13 @@ export default function DamageLedgerPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!loading && hasMore && (
+            <div style={{ textAlign: 'center', marginTop: 10 }}>
+              <button onClick={loadMore} disabled={loadingMore} style={btnSecondary}>
+                {loadingMore ? 'LOADING…' : `LOAD ${partFilter ? 2000 : PAGE} MORE`}
+              </button>
             </div>
           )}
           </>
