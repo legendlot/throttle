@@ -448,7 +448,8 @@ export default function LineFlushPage() {
           addEmptyCard={addEmptyCard}
           removeCard={removeCard}
           updateCard={updateCard}
-          lookupPart={lookupPart}
+          partOpts={partOpts}
+          pickPart={pickPart}
           addSplit={addSplit}
           removeSplit={removeSplit}
           updateSplit={updateSplit}
@@ -470,7 +471,7 @@ function NewFlushForm(props) {
     flushNotes, setFlushNotes,
     runs, selectedRun, setSelectedRun, runInfo,
     runPickList, partCards,
-    loadPartsFromRun, addEmptyCard, removeCard, updateCard, lookupPart,
+    loadPartsFromRun, addEmptyCard, removeCard, updateCard, partOpts, pickPart,
     addSplit, removeSplit, updateSplit,
     submitFlush, submitting, onCancel,
   } = props;
