@@ -7,6 +7,7 @@ import { Spinner, useToast, Modal } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { money } from '../PaymentList.js';
+import PriorTdsWarning from '../PriorTdsWarning.js';
 import { computeTds, netPayable } from '@/lib/tds.js';
 
 const todayISO = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
@@ -152,6 +153,8 @@ export default function FinanceQueuePage() {
         showToast('It had already moved — refreshing', 'error');
       } else {
         showToast(`${r.request_no} marked paid`, 'success');
+        // Prior TDS on the same invoice — paid anyway (warning only), but say it out loud.
+        if (res.warning) showToast(res.warning, 'error');
       }
       setRefs(p => { const n = { ...p }; delete n[r.id]; return n; });
       setTdsRates(p => { const n = { ...p }; delete n[r.id]; return n; });
@@ -330,6 +333,8 @@ export default function FinanceQueuePage() {
                     <Btn disabled={busy === r.id}
                       onClick={() => { setHoldFor(r); setHoldNote(''); }}>Hold</Btn>
                   )}
+                  {/* Shown before a rate is typed, so finance sees the earlier deduction first. */}
+                  <PriorTdsWarning prior={r.prior_tds} currency={r.currency} style={{ flexBasis: '100%' }} />
                   {/* Nothing renders with a blank rate — a request without TDS must look exactly
                       as it did before this field existed. */}
                   {rate !== '' && (

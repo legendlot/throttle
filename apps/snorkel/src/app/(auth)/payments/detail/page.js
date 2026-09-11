@@ -7,6 +7,7 @@ import { Spinner, useToast, Modal } from '@throttle/ui';
 import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { STATUS_TONE, STATUS_LABEL, money } from '../PaymentList.js';
+import PriorTdsWarning from '../PriorTdsWarning.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
 import { computeTds, netPayable, hasTds } from '@/lib/tds.js';
 
@@ -130,7 +131,7 @@ export default function PaymentRequestDetail() {
     setBusy(true);
     try {
       const s = await getValidSession();
-      await workerFetch('markPaymentPaid', { data: {
+      const raw = await workerFetch('markPaymentPaid', { data: {
         ids: [Number(id)], payment_ref: pay.payment_ref || null,
         payment_mode: pay.payment_mode || null,
         paid_amount: pay.paid_amount === '' ? null : Number(pay.paid_amount),
@@ -142,6 +143,9 @@ export default function PaymentRequestDetail() {
       for (const item of proof) await uploadPaymentDoc(item, 'payment_proof', s);
       setPayOpen(false); setProof([]);
       showToast('Marked paid', 'success');
+      // Prior TDS on the same invoice — paid anyway (warning only), but say it out loud.
+      const res = raw?.data || raw;   // `{ ok, data }` wrapper — read the payload
+      if (res?.warning) showToast(res.warning, 'error');
       await load();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
@@ -386,6 +390,7 @@ export default function PaymentRequestDetail() {
                 means not applicable: nothing is stored and the payment behaves as it always has.
                 Typing a rate re-defaults Amount paid to the net; finance can still adjust it. */}
             <label style={{ fontSize: 12, color: 'var(--t2)' }}>TDS rate % (optional)</label>
+            <PriorTdsWarning prior={r.prior_tds} currency={r.currency} style={{ margin: '4px 0 6px' }} />
             <input type="number" inputMode="decimal" min={0} max={100} step="0.01"
               value={pay.tds_rate}
               onChange={e => {

@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.1] - 2026-09-11
+### Added
+- Finance Queue: the prior-TDS warning — when the same invoice already had TDS deducted on another payment request, an amber note under the TDS field lists it, and marking paid with a rate again shows a warning (never blocks).
+
 ## [1.19.0] - 2026-09-11
 ### Added
 - Collections: a warning that Collections lists only invoices with money owed and is not a party balance, and a new Party Balances section — one row per partner with billed, credit notes, received and a signed balance (credit shown as Cr ₹…), All/Owing/In credit filter, search, sort and an Export for Tally reconciliation.

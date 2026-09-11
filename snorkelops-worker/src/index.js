@@ -1332,6 +1332,53 @@ function computeTds({ invoiceTotal, rate }) {
   return { tdsAmount: Math.round((total * r / 100 + Number.EPSILON) * 100) / 100, error: null };
 }
 
+// ── Prior TDS on the same invoice (S374) ────────────────────────────────────────────────────
+// computeTds applies the rate to invoice_total, and a tranche-2 request on the same invoice is a
+// NEW request — so a rate entered on each tranche deducts the full-invoice TDS twice and the
+// vendor is paid short (PAY-0010 shape). Which base is right is OPEN with Finance (Mahesh), so
+// this is a WARNING ONLY: nothing here changes the amount or blocks the payment.
+// "Same invoice" = same payee AND the normalised invoice_no matches when both sides carry one;
+// when either side has none, same payee + same linked PO + same invoice_total. invoice_no is typed
+// loosely (PAY-0027 holds a comma list), hence uppercase + strip every non-alphanumeric.
+// Tested by snorkelops-worker/test/prior-tds.test.mjs, which lifts these straight out of this file.
+function normInvoiceNo(v) {
+  return String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function sameInvoice(a, b) {
+  if (!a || !b || a.payee_id == null || b.payee_id == null) return false;
+  if (String(a.payee_id) !== String(b.payee_id)) return false;
+  const ia = normInvoiceNo(a.invoice_no), ib = normInvoiceNo(b.invoice_no);
+  if (ia && ib) return ia === ib;
+  const pa = String(a.linked_po_number ?? '').trim(), pb = String(b.linked_po_number ?? '').trim();
+  if (!pa || pa !== pb) return false;
+  const ta = tdsNum(a.invoice_total), tb = tdsNum(b.invoice_total);
+  return ta !== null && tb !== null && Math.abs(ta - tb) < 0.005;
+}
+// OTHER requests on req's invoice that already carry a deduction. Never req itself; a rejected or
+// cancelled request never paid anything, so it never counts.
+function priorTdsFor(req, candidates) {
+  return (candidates || [])
+    .filter(c => c && String(c.id) !== String(req?.id)
+      && !['rejected', 'cancelled'].includes(c.status)
+      && ((tdsNum(c.tds_amount) ?? 0) > 0 || (tdsNum(c.tds_rate) ?? 0) > 0)
+      && sameInvoice(req, c))
+    .map(c => ({ request_no: c.request_no, status: c.status, tds_rate: c.tds_rate,
+                 tds_amount: c.tds_amount, paid_at: c.paid_at ?? null }));
+}
+// Columns the matcher and prior_tds need — one select for every read that feeds it.
+const PRIOR_TDS_SELECT = 'select=id,request_no,status,payee_id,invoice_no,linked_po_number,invoice_total,currency,tds_rate,tds_amount,paid_at';
+function priorTdsWarning(prior, currency = 'INR') {
+  if (!prior?.length) return null;
+  const cur = (currency || 'INR') === 'INR' ? '₹' : `${currency} `;
+  const each = prior.map(p => {
+    const amt = tdsNum(p.tds_amount);
+    const rate = tdsNum(p.tds_rate);
+    return `${amt === null ? 'an amount not recorded' : cur + amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+      + ` on ${p.request_no}${rate === null ? '' : ` (${rate}%)`}`;
+  }).join(', ');
+  return `TDS already deducted on this invoice: ${each} — this deducts it again on the full invoice value.`;
+}
+
 // ⚠️⚠️ REQUESTER NOTE — VERBATIM PORT of parseRequesterNote from apps/snorkel/src/lib/requesterNote.js. ⚠️⚠️
 // The "Note for Finance" on a payment request (Siddu, #bugs 1789042876.535959) — usually the
 // payee's bank details. PLAIN TEXT on purpose (Afshaan, 2026-09-11): never masked, never routed
@@ -1960,9 +2007,13 @@ export default {
             const req = r.data[0];
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (req.requested_by_user_id !== userId && !privileged) return err('Not found', 404);
-            const [docs, banks] = await Promise.all([
+            const [docs, banks, tdsCands] = await Promise.all([
               query('payment_request_documents', `?request_id=eq.${encodeURIComponent(id)}&order=uploaded_at.asc&select=*`),
               query('payment_payee_banks', `?payee_id=eq.${req.payee_id}&is_active=is.true&select=*`),
+              // Candidates for prior_tds: same payee, already carrying a deduction. The matcher
+              // (priorTdsFor) decides "same invoice" in JS — invoice_no is too loosely typed for eq.
+              query('payment_requests',
+                `?payee_id=eq.${req.payee_id}&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`),
             ]);
             // Running total already requested against this (payee, invoice_no) — drives the
             // part-payment balance line and the duplicate warning.
@@ -1973,6 +2024,9 @@ export default {
                 `&status=neq.rejected&id=neq.${encodeURIComponent(id)}&select=request_no,status,amount_to_pay,requested_at,requested_by_name`);
               if (rel.ok) related = rel.data;
             }
+            // Rides on the request so the Mark-paid modal reads it off the same object the finance
+            // queue cards do. A failed candidate read degrades to [] — a warning, never a blocker.
+            req.prior_tds = priorTdsFor(req, tdsCands.ok ? tdsCands.data : []);
             return ok({
               request: req,
               documents: docs.ok ? docs.data : [],
@@ -2014,14 +2068,21 @@ export default {
             const payeeIds = [...new Set(rows.map(x => x.payee_id).filter(Boolean))];
             const reqIds   = rows.map(x => x.id);
             // batched, never a lookup per row
-            const [bk, dz] = await Promise.all([
+            const [bk, dz, tc] = await Promise.all([
               payeeIds.length
                 ? query('payment_payee_banks',
                     `?payee_id=in.(${payeeIds.join(',')})&is_active=is.true&select=*`)
                 : { ok: true, data: [] },
               query('payment_request_documents',
                 `?request_id=in.(${reqIds.join(',')})&select=id,request_id,doc_kind,file_name`),
+              // prior_tds candidates for the WHOLE queue in one read, matched per row in JS below.
+              payeeIds.length
+                ? query('payment_requests',
+                    `?payee_id=in.(${payeeIds.join(',')})&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`)
+                : { ok: true, data: [] },
             ]);
+            const tdsCands = tc.ok ? (tc.data || []) : [];
+            for (const x of rows) x.prior_tds = priorTdsFor(x, tdsCands);
             const banks = {};
             if (bk.ok) for (const b of bk.data) {
               // default first, so the UI can take banks[payee][0] safely
@@ -4758,10 +4819,11 @@ export default {
             // ⛔ One id only when a rate is sent: this PATCH is a single batched write, but
             // tds_amount is per-invoice, so one rate across several rows would write one row's
             // deduction onto all of them. Both UI callers send a single id.
+            let tdsWarning = null;
             if (d.tds_rate !== undefined && d.tds_rate !== null && d.tds_rate !== '') {
               if (ids.length !== 1) return err('TDS applies to one payment at a time — mark these paid individually');
               const inv = await query('payment_requests',
-                `?id=eq.${encodeURIComponent(ids[0])}&select=invoice_total&limit=1`);
+                `?id=eq.${encodeURIComponent(ids[0])}&${PRIOR_TDS_SELECT}&limit=1`);
               if (!inv.ok || !inv.data[0]) return err('Not found', 404);
               const { tdsAmount, error: tdsError } = computeTds({
                 invoiceTotal: inv.data[0].invoice_total, rate: d.tds_rate,
@@ -4769,6 +4831,14 @@ export default {
               if (tdsError) return err(tdsError);
               patch.tds_rate   = Number(d.tds_rate);
               patch.tds_amount = tdsAmount;
+              // Prior TDS on the same invoice → WARN, never block (the base is open with Finance;
+              // see priorTdsFor). Same `warning` field amendPO returns; the UI toasts it.
+              if (Number(d.tds_rate) > 0) {
+                const cand = await query('payment_requests',
+                  `?payee_id=eq.${inv.data[0].payee_id}&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`);
+                tdsWarning = priorTdsWarning(priorTdsFor(inv.data[0], cand.ok ? cand.data : []),
+                                             inv.data[0].currency);
+              }
             }
             if (d.payment_ref)   patch.payment_ref   = d.payment_ref;
             if (d.payment_mode)  patch.payment_mode  = d.payment_mode;
@@ -4796,7 +4866,8 @@ export default {
             })));
             await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_PAID', 'Payment',
               ids.join(','), `${moved.length} payment(s) marked paid`, { ref: d.payment_ref || null });
-            return ok({ paid: moved.length, requested: ids.length });
+            // Only warn about a deduction that actually landed — a row that had already moved wrote nothing.
+            return ok({ paid: moved.length, requested: ids.length, warning: moved.length ? tdsWarning : null });
           }
 
           case 'cancelPaymentRequest': {
