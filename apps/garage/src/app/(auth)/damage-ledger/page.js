@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch, garageFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState, Combobox, buildDamageManifestHtml, printWindow } from '@throttle/ui';
@@ -162,26 +162,37 @@ export default function DamageLedgerPage() {
     if (qSearch) filter.search = qSearch;
     return filter;
   }
-  async function loadLedger() {
+  // Every ledger fetch takes a sequence number; a response that comes back after a newer fetch
+  // started (a LOAD MORE in flight when the search changes) is discarded instead of being appended
+  // onto the wrong result (S375 hostile review).
+  const reqSeq  = useRef(0);
+  const lastKey = useRef('');
+  async function loadLedger({ keepSelection = false } = {}) {
     if (!session) return;
+    const seq = ++reqSeq.current;
     setLoading(true);
-    setSelected(new Set());
+    if (!keepSelection) setSelected(new Set());
     try {
       const filter = ledgerFilter(0);
       const r = await workerFetch('getDamageLedger', { data: filter }, session);
+      if (seq !== reqSeq.current) return;
       const data = r?.ok ? (r.data || []) : [];
       setRows(data);
       setHasMore(data.length === filter.limit);
+      // A search refinement keeps the ticks on rows that are still in the result.
+      if (keepSelection) { const ids = new Set(data.map(x => x.id)); setSelected(prev => new Set([...prev].filter(id => ids.has(id)))); }
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }
   async function loadMore() {
     if (!session || loadingMore) return;
+    const seq = reqSeq.current;
     setLoadingMore(true);
     try {
       const filter = ledgerFilter(rows.length);
       const r = await workerFetch('getDamageLedger', { data: filter }, session);
+      if (seq !== reqSeq.current) return;   // the filter changed while this page was in flight
       const data = r?.ok ? (r.data || []) : [];
       // A row recorded since the first page shifts the offset by one — skip ids already shown.
       setRows(prev => { const seen = new Set(prev.map(x => x.id)); return [...prev, ...data.filter(x => !seen.has(x.id))]; });
@@ -190,7 +201,16 @@ export default function DamageLedgerPage() {
       setLoadingMore(false);
     }
   }
-  useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, partFilter, qSearch, session]);
+  // Only the ledger view reloads the ledger (the Part Summary search shares the same box), and a
+  // change of search alone keeps the bulk selection; a tab / source / part change clears it.
+  useEffect(() => {
+    if (view !== 'ledger') return;
+    const key = `${tab}|${source}|${partFilter}`;
+    const keep = lastKey.current === key;
+    lastKey.current = key;
+    loadLedger({ keepSelection: keep });
+    /* eslint-disable-next-line */
+  }, [tab, source, partFilter, qSearch, session, view]);
 
   async function loadSummary() {
     if (!session) return;
