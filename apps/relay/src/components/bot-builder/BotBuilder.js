@@ -25,6 +25,25 @@ function botNodes(bot) {
   return { nodes: nodes.map((n) => (n.id === TRIGGER_ID ? { ...n, data: { ...n.data, botMode: true } } : n)), edges };
 }
 
+// Bot text with bare http(s) URLs rendered as links — same rule as the web widget's linkify
+// (commsops bot-widget.js, S372: Pruthvi's "links in the flow bots are not clickable").
+// React escapes the text parts; only an http(s) match ever becomes an href.
+const URL_RE = /https?:\/\/[^\s<>"']+/g;
+function Linkified({ text }) {
+  const s = String(text ?? '');
+  const out = [];
+  let last = 0;
+  for (const m of s.matchAll(URL_RE)) {
+    const url = m[0].replace(/[.,;:!?)\]]+$/, '');
+    if (m.index > last) out.push(s.slice(last, m.index));
+    out.push(<a key={m.index} href={url} target="_blank" rel="noopener noreferrer"
+      style={{ textDecoration: 'underline', wordBreak: 'break-all', color: 'inherit' }}>{url}</a>);
+    last = m.index + url.length;
+  }
+  if (last < s.length) out.push(s.slice(last));
+  return out;
+}
+
 // ── Test panel — runs the CURRENT DRAFT through testBotTurn (worker-side engine, zero
 //    side effects, no rows written). This is how a flow is validated without the widget.
 function TestPanel({ botId, definition, session }) {
@@ -115,8 +134,8 @@ function TestPanel({ botId, definition, session }) {
                 <span style={{ display: 'inline-block', padding: '5px 9px', borderRadius: 8, fontSize: 13, maxWidth: '85%',
                   background: m.who === 'you' ? 'var(--accent, #F2CD1A)' : m.who === 'sys' ? 'transparent' : 'var(--surface-2, #f2f2f2)',
                   color: m.who === 'sys' ? 'var(--text-3, #888)' : 'inherit',
-                  fontStyle: m.who === 'sys' ? 'italic' : 'normal' }}>
-                  {m.text}
+                  fontStyle: m.who === 'sys' ? 'italic' : 'normal', whiteSpace: 'pre-wrap' }}>
+                  <Linkified text={m.text} />
                   {m.buttons && (
                     <span style={{ display: 'block', marginTop: 5 }}>
                       {/* a WhatsApp LIST renders one row per line, not a row of chips */}

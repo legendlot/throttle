@@ -102,6 +102,24 @@ function widgetJs(botId, workerBase) {
   var form = panel.querySelector('#lotchat-form');
   var inp = panel.querySelector('#lotchat-inp');
 
+  // Bare http(s) URLs in a message become clickable links (S372 — Pruthvi: "links added within
+  // the flow bots are not clickable"). Built from text nodes + <a> elements, NEVER innerHTML, so
+  // message text can never inject markup; only an http(s) match ever becomes an href. Trailing
+  // sentence punctuation is left outside the link. (Backslashes doubled: this is a template string.)
+  function linkify(el, text) {
+    var s = String(text == null ? '' : text), re = /https?:\\/\\/[^\\s<>"']+/g, last = 0, m;
+    while ((m = re.exec(s))) {
+      var url = m[0].replace(/[.,;:!?)\\]]+$/, '');
+      if (m.index > last) el.appendChild(document.createTextNode(s.slice(last, m.index)));
+      var a = document.createElement('a');
+      a.href = url; a.textContent = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.style.cssText = 'color:inherit;text-decoration:underline;word-break:break-all;';
+      el.appendChild(a);
+      last = m.index + url.length; re.lastIndex = last;
+    }
+    if (last < s.length) el.appendChild(document.createTextNode(s.slice(last)));
+  }
+
   function bubble(text, who, agentName) {
     var d = document.createElement('div');
     d.style.cssText = 'margin-bottom:8px;display:flex;justify-content:' + (who === 'you' ? 'flex-end' : 'flex-start') + ';';
@@ -109,7 +127,7 @@ function widgetJs(botId, workerBase) {
     b.style.cssText = 'max-width:85%;padding:8px 11px;border-radius:10px;font-size:14px;white-space:pre-wrap;word-break:break-word;' +
       (who === 'you' ? 'background:#F2CD1A;color:#111;' : 'background:#fff;border:1px solid #e2e2e2;color:#222;');
     if (agentName) { var n = document.createElement('div'); n.style.cssText = 'font-size:11px;font-weight:700;margin-bottom:2px;color:#666;'; n.textContent = agentName; b.appendChild(n); }
-    var t = document.createElement('div'); t.textContent = text; b.appendChild(t);
+    var t = document.createElement('div'); linkify(t, text); b.appendChild(t);
     d.appendChild(b); msgs.appendChild(d); msgs.scrollTop = msgs.scrollHeight;
     return b;
   }
