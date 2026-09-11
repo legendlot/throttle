@@ -435,8 +435,13 @@ function computeSalesLine(l) {
 // Write-back is per product FAMILY, not per variant: 1,140 invoiced lines show exactly
 // ONE distinct HSN per product, so updating a single variant would leave its siblings
 // stale and silently wrong on the next order.
+//
+// isPlausibleHsn: 4, 6 or 8 digits — the only lengths the GST schedule defines (heading /
+// sub-heading / tariff item; SAC is 6). NEVER 5 or 7 (S376): `\d{4,8}` let the 7-digit truncation
+// `4411140` through syncHsnToMaster on IN-CMP-0494 and onto two part masters. (No comment line
+// between these two consts — test/plan-hsn-sync.test.mjs lifts them up to the next `// `.)
 const normHsn = v => String(v ?? '').replace(/\s+/g, '').trim();
-const isPlausibleHsn = v => /^\d{4,8}$/.test(normHsn(v));
+const isPlausibleHsn = v => /^(?:\d{4}|\d{6}|\d{8})$/.test(normHsn(v));
 
 // ── HSN → GST%: EXACT match first, then LONGEST PREFIX (S344, 2026-09-04) ──────────
 // Parts carry a full 8-digit HSN while store.hsn_gst_rates holds mostly 4-digit

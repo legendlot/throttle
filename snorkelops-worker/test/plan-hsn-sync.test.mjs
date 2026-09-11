@@ -101,3 +101,11 @@ test('parts: divergent rate — line gst_percent 12 vs master 18 moves to 18 on 
   const r = planHsnSync([{ part_code: 'HW-SC-23-8', hsn_code: '7318', gst_percent: 12 }], partMaster, prev(['HW-SC-23-8', '7318']), false, partOpts);
   assert.equal(r.lines[0].hsn_code, '73181500'); assert.equal(r.lines[0].gst_percent, 18); assert.equal(r.lines[0].gst_pct, undefined);
 });
+
+// S376: a GST HSN is 4, 6 or 8 digits — never 5 or 7. `4411140` (a 7-digit truncation) passed the old
+// \d{4,8} check and was pushed onto two part masters from IN-CMP-0494.
+test('isPlausibleHsn accepts only 4/6/8-digit codes', () => {
+  const plausible = new Function(lift('const normHsn = ', '\n// ') + '\nreturn isPlausibleHsn;')();
+  for (const ok of ['4411', '441114', '44111400', ' 4411 14 00 ']) assert.equal(plausible(ok), true, ok);
+  for (const bad of ['4411140', '44111', '441', '441114000', '4411-14', '', null, 'URP']) assert.equal(plausible(bad), false, String(bad));
+});
