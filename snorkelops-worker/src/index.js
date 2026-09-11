@@ -788,6 +788,47 @@ function decorateSalesOrder(o, anchor) {
   return { ...o, dispatch_date: a.dispatch_date, delivery_date: a.delivery_date, due_date, net_due, balance, overdue };
 }
 
+// Party balances (Prarthi's Tally recon, 2026-09-11): one row per partner over the SAME order
+// population and the SAME per-order `balance` as getSalesCollections — minus its `> 0.005`
+// filter. Collections drops every overpaid / fully-credited invoice, so a partner-level sum of
+// that export OVERSTATES what the partner owes (₹13.18L of a ₹20.1L "mismatch" across 53 sellers
+// was exactly this). `balance` here is SIGNED: negative = the partner is in credit with us.
+// `open_balance` / `open_count` are the Collections-visible subset, so they tie to that list to
+// the paisa. Pure (no I/O) — snorkelops-worker/test/party-balances.test.mjs lifts it by source.
+// ⚠️ Summed in integer PAISE: 460 float additions of 2-dp rupee values drift off the paisa.
+// Input rows are decorateSalesOrder() output with partner_* fields flattened on by the handler.
+function aggregatePartyBalances(orders) {
+  const paise = v => Math.round((Number(v) || 0) * 100);
+  const by = new Map();
+  for (const o of orders || []) {
+    const key = o.partner_id || '';
+    let a = by.get(key);
+    if (!a) {
+      a = { partner_id: o.partner_id || null, partner_code: o.partner_code || null,
+            partner_name: o.partner_name || null, channel_key: o.partner_channel_key || o.channel_key || null,
+            partner_type: o.partner_type || null, orders: 0, billed: 0, credits: 0, received: 0,
+            balance: 0, open_balance: 0, open_count: 0, oldest_due: null, last_order_date: null };
+      by.set(key, a);
+    }
+    a.orders++;
+    a.billed   += paise(o.grand_total);
+    a.credits  += paise(o.credit_total);
+    a.received += paise(o.amount_received);
+    a.balance  += paise(o.balance);
+    // Same predicate as getSalesCollections' filter, verbatim — that is what makes the tie exact.
+    if (o.balance > 0.005) {
+      a.open_balance += paise(o.balance);
+      a.open_count++;
+      if (o.due_date && (!a.oldest_due || o.due_date < a.oldest_due)) a.oldest_due = o.due_date;
+    }
+    if (o.order_date && (!a.last_order_date || o.order_date > a.last_order_date)) a.last_order_date = o.order_date;
+  }
+  return [...by.values()]
+    .map(a => ({ ...a, billed: a.billed / 100, credits: a.credits / 100, received: a.received / 100,
+                 balance: a.balance / 100, open_balance: a.open_balance / 100 }))
+    .sort((x, y) => (y.balance - x.balance) || String(x.partner_name || '').localeCompare(String(y.partner_name || '')));
+}
+
 // ── Fulfilment (request → shipments) — derived, read-only (RULE-SNORKEL-004 #4 extended) ──
 // Latest-shipped child anchors the order's due-date + list dispatch/delivery display.
 function fulfilmentAnchor(shipments) {
@@ -3093,6 +3134,31 @@ export default {
               });
             await reconcileRejections(toCancel);
             return ok(rows);
+          }
+
+          // One row per partner, signed balance (negative = partner in credit). Population and
+          // per-order balance are getSalesCollections' exactly — see aggregatePartyBalances.
+          case 'getSalesPartyBalances': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            // Paged (order ends in the unique id): a partner balance built from a silently
+            // clamped read would be a wrong number that looks right. 460 orders on 2026-09-11.
+            const orders = await pageAll(query, 'sales_orders',
+              '?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name,partner_code,channel_key,partner_type)&order=id.asc');
+            if (!orders) return err('Could not read every sales order — balances withheld rather than understated', 502);
+            const ful = await loadFulfilment(orders);
+            const toCancel = [];
+            const rows = orders.map(o => {
+              const f = ful[o.id];
+              const { der, anchor } = resolveFulfilment(f);
+              if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
+                toCancel.push({ o, reason: f.request.reject_reason });
+              const sp = o.sales_partners || {};
+              return { ...decorateSalesOrder(o, anchor), partner_name: sp.name || null,
+                       partner_code: sp.partner_code || null, partner_channel_key: sp.channel_key || null,
+                       partner_type: sp.partner_type || null, sales_partners: undefined };
+            });
+            await reconcileRejections(toCancel);
+            return ok(aggregatePartyBalances(rows));
           }
 
           case 'getSalesInvoiceData': {

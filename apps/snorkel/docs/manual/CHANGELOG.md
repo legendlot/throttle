@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.0] - 2026-09-11
+### Added
+- Collections: a warning that Collections lists only invoices with money owed and is not a party balance, and a new Party Balances section — one row per partner with billed, credit notes, received and a signed balance (credit shown as Cr ₹…), All/Owing/In credit filter, search, sort and an Export for Tally reconciliation.
+
 ## [1.18.1] - 2026-09-11
 ### Changed
 - Procurement overview + Purchase Orders list: "Open POs" / "Open value" now count every in-flight status, including Accepted (previously left out, though it holds over half of all POs). One definition is shared by every Open tile and list.

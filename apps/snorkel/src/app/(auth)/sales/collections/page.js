@@ -84,8 +84,15 @@ export default function CollectionsPage() {
 
   return (
     <div className="pg">
-      <PageHead title="Collections" sub="Outstanding balances on offline orders, oldest first."
-        actions={<Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>} />
+      {/* ⚠️ This list is per-INVOICE and only invoices with money owed — an overpaid or fully
+          credited invoice is not here, so summing it by partner overstates what they owe.
+          Party Balances nets them (Tally recon, 2026-09-11). */}
+      <PageHead title="Collections"
+        sub="Outstanding balances on offline orders, oldest first. Lists only invoices with money owed — for what a partner owes net of credits and overpayments, use Party balances."
+        actions={<>
+          <Btn onClick={() => router.push('/sales/party-balances')}>Party balances →</Btn>
+          <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
+        </>} />
 
       <div className="kpi-row kpi-3">
         <Kpi label="Outstanding" value={totalOutstanding} sub={`${rows.length} open invoices`} tone="yellow" format={(v) => inrCompact(v)} />
