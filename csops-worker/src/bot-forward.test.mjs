@@ -68,6 +68,9 @@ test('declinedTurnPatch: a turn the bot did not take drops a live rail; a handle
   // handled turns (incl. the duplicate claim) leave the rail to botThreadPatch
   assert.deepEqual(declinedTurnPatch({ handled: true, session_status: 'active' }, on), {});
   assert.deepEqual(declinedTurnPatch({ handled: true, duplicate: true, session_status: 'active' }, on), {});
+  // a message the bot never takes (reaction/location/contacts/unsupported) is not a decline
+  for (const t of ['reaction', 'location', 'contacts', 'unsupported']) assert.deepEqual(declinedTurnPatch(undefined, on, t), {}, t);
+  for (const t of ['text', 'button', 'interactive', 'image', undefined]) assert.deepEqual(declinedTurnPatch(undefined, on, t), { bot_active: false }, String(t));
   // end to end with the reader: paused bot, customer wrote 1 min ago -> rail no longer hides the thread
   const now = Date.parse('2026-09-11T12:00:00.000Z');
   const t = { bot_active: true, last_inbound_at: new Date(now - 60e3).toISOString() };

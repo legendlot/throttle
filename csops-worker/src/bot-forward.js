@@ -59,6 +59,13 @@ export function botThreadPatch({ session_status, handoff, thread, now }) {
 // Event-driven on purpose (§S355d: the column is not swept). Merged into the inbound's own PATCH.
 // ⚠️ First delivery only — never the pmid-dedup branch: a redelivery whose bot run hit a transient
 // error would otherwise drop the rail the FIRST delivery's handled turn legitimately set.
-export function declinedTurnPatch(bot, thread) {
+// ⚠️ Only a message the bot COULD have taken (S372 hostile review). The bot never takes a
+// reaction/location/contacts/unsupported message (bot-wa.js condition 7) even mid-session, so a
+// customer's 👍 on a bot line is not a decline — clearing on it let auto-assign pull an agent in
+// (and the assignment trigger pinned the rail false) while the session was still live.
+// Mirrors bot-wa.js's `kindOk` list; keep the two in step.
+export const BOT_TAKEABLE_TYPES = ['text', 'interactive', 'button', 'image', 'video', 'audio', 'document', 'sticker'];
+export function declinedTurnPatch(bot, thread, type) {
+  if (!BOT_TAKEABLE_TYPES.includes(type || 'text')) return {};
   return !bot?.handled && thread?.bot_active ? { bot_active: false } : {};
 }

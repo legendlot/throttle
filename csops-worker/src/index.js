@@ -7027,7 +7027,7 @@ async function relayWaIngestInbound(m, env) {
   const patch = { last_message_at: ts, last_inbound_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
   if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
   // A turn the bot declined (paused, handoff, opt-out, …) drops a stale rail in this same PATCH.
-  Object.assign(patch, declinedTurnPatch(m?.bot, thread));
+  Object.assign(patch, declinedTurnPatch(m?.bot, thread, m?.type));
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
   // S355 — a bot-handled turn: write the bot's lines (tagged relay_bot), drive the bot_active rail,
