@@ -75,19 +75,22 @@ export function isLocked(row = {}, now = Date.now()) {
 //   DealTermsCard  → deal_type, payment_terms, payment_amount, affiliate_pct, commission_amount,
 //                    campaign_id, ad_rights, ad_rights_amount, ad_rights_duration
 //   CostsCard      → return_cost (S373: its ad_spend input was retired — ad money now lives on the
-//                    Ads card, which is NOT locked. `ad_spend` STAYS locked below because the UGC
-//                    card still writes it; since S373 neither it nor ad_rights_amount is a term
-//                    of the generated total_cost.)
-//   PostLiveCard   → post_date
+//                    Ads card, which is NOT locked.)
+//   PostLiveCard   → post_date (also reachable through the Performance card: the deal's post_date
+//                    mirrors the lowest-seq take's, so setEngagementVideo / deleteEngagementVideo
+//                    refuse a take change that would move it — see videoLockRefusal in index.js)
 //   ComplianceCard → compliance_caption_link, compliance_coupon_verbal, compliance_car_motion
 // ProductsCard saves through setEngagementProducts and ComplianceCard's gifted flag through
 // markGiftedNoPost — both refused whole when locked, so neither needs a field here.
 // NOT locked, deliberately: sessions / orders / conversions_value (Performance → DealTotals), and
-// every logistics, POC, UTM, UGC hook/ad/fee field — those cards stay open.
+// every logistics, POC, UTM, UGC hook/ad/fee field — those cards stay open. That includes
+// `ad_spend` (S373 hostile review): it left the generated total_cost and no locked card edits it,
+// but the UGC Ad-performance card sends it on every save — locking it 409'd that open card on
+// every Complete UGC deal.
 export const LOCKED_FIELDS = [
   'deal_type', 'payment_terms', 'payment_amount', 'affiliate_pct', 'commission_amount',
   'campaign_id', 'ad_rights', 'ad_rights_amount', 'ad_rights_duration',
-  'return_cost', 'ad_spend',
+  'return_cost',
   'post_date',
   'compliance_caption_link', 'compliance_coupon_verbal', 'compliance_car_motion',
 ];

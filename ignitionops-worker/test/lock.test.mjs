@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as W from '../src/completeness.js';
 // The app's copy — the worker and the app share no package, so the rule is duplicated by hand and
 // THIS import is what keeps the two honest (S373 COMPLETE-deal lock).
@@ -111,6 +112,24 @@ test('classifier: every locked card payload is refused on a locked deal, naming 
   }
 });
 
+// The UGC Ad-performance card's payload, read from the page's own AD_FIELDS — a hand-typed fixture
+// here was how the S373 lock shipped 409ing that card: the fixture left out ad_spend, the card
+// sends it on every save. Page files cannot export extra names, so the list is parsed from source.
+const UGC_DETAIL = readFileSync(new URL('../../apps/ignition/src/app/(auth)/ugc/detail/page.js', import.meta.url), 'utf8');
+const UGC_AD_FIELDS = (() => {
+  const m = UGC_DETAIL.match(/const AD_FIELDS = \[([\s\S]*?)\n\];/);
+  assert.ok(m, 'AD_FIELDS not found in ugc/detail/page.js');
+  return [...m[1].matchAll(/\[\s*'([a-z_]+)'/g)].map(x => x[1]);
+})();
+
+test('UGC Ad-performance card: its exact payload is allowed on a locked deal', () => {
+  assert.ok(UGC_AD_FIELDS.includes('ad_spend') && UGC_AD_FIELDS.includes('conversions_value'),
+    `parsed ${UGC_AD_FIELDS.join(',')}`);
+  const patch = Object.fromEntries(UGC_AD_FIELDS.map(k => [k, k === 'meta_ad_id' ? '123456789' : 1]));
+  assert.deepEqual(W.lockedFieldsIn(patch), []);
+  assert.equal(refused(live(), patch), false);
+});
+
 test('classifier: open fields pass on a locked deal (Performance totals, logistics, POC, UGC)', () => {
   for (const patch of [
     { sessions: 3, orders: 1, conversions_value: 999 },        // DealTotals
@@ -118,6 +137,7 @@ test('classifier: open fields pass on a locked deal (Performance totals, logisti
     { poc_user_id: 'u', poc_name: 'n' },
     { hook_version: 'A', hook_script: 's', meta_ad_id: '1', ctr: 1, purchases: 2 },
     { expected_post_date: '2026-09-20', video_link: 'https://v', utm_link: 'https://u' },
+    { ad_spend: 10 },                                           // left total_cost; no locked card edits it
   ]) {
     assert.deepEqual(W.lockedFieldsIn(patch), [], JSON.stringify(patch));
     assert.equal(refused(live(), patch), false);
@@ -125,9 +145,9 @@ test('classifier: open fields pass on a locked deal (Performance totals, logisti
 });
 
 test('classifier: a mixed patch is refused whole (never stripped) and names only the locked fields', () => {
-  const patch = { sessions: 3, ad_spend: 10, post_date: '2026-09-01' };
+  const patch = { sessions: 3, return_cost: 10, post_date: '2026-09-01' };
   assert.equal(refused(live(), patch), true);
-  assert.deepEqual(W.lockedFieldsIn(patch), ['ad_spend', 'post_date']);
+  assert.deepEqual(W.lockedFieldsIn(patch), ['return_cost', 'post_date']);
 });
 
 test('classifier: inside an unlock window a locked field is allowed; once expired it is refused again', () => {

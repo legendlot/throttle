@@ -969,13 +969,40 @@ function videoDbErr(res) {
   return err(`db_error: ${JSON.stringify(res.data)}`, 400);
 }
 
+// ── COMPLETE-deal lock through the Performance card (S373 hostile review) ────────────────────
+// `post_date` is a LOCKED_FIELDS column, and recomputeVideoRollup MIRRORS the lowest-seq take's
+// post_date onto the deal — so editing that take's date, or removing the lowest take, moved a
+// locked deal's post_date with no lock check at all. The guard simulates the take set the write
+// would leave, rolls it up, and refuses only when the deal's post_date would change. Every other
+// take edit (the metrics, a later take's date, link, gaps) stays open on a Complete deal.
+/** The deal's takes as they will be after upserting `upsert` (merged over its seq) or removing `removeSeq`. */
+export function takesAfter(takes, { upsert = null, removeSeq = null } = {}) {
+  const out = (takes || [])
+    .filter(t => removeSeq == null || Number(t.seq) !== Number(removeSeq))
+    .map(t => (upsert && Number(t.seq) === Number(upsert.seq) ? { ...t, ...upsert } : t));
+  if (upsert && !out.some(t => Number(t.seq) === Number(upsert.seq))) out.push({ ...upsert });
+  return out;
+}
+const isoDay = (d) => (d ? String(d).slice(0, 10) : null);
+/** The refusal message when `takesNext` would move a LOCKED deal's post_date; null to proceed. */
+export function videoLockRefusal(deal, takesNext, now = Date.now()) {
+  if (!deal || !isLocked(deal, now)) return null;
+  if (isoDay(rollupVideos(takesNext).post_date) === isoDay(deal.post_date)) return null;
+  return `${LOCKED_MESSAGE} (locked: post_date — the deal's post date is its first video's)`;
+}
+// The deal row the guard needs. undefined = the read failed (fail CLOSED), null = no such deal.
+async function loadVideoLockRow(env, eid) {
+  const r = await sb(`/rest/v1/engagements?id=eq.${eid}&select=id,post_date,${LOCK_SELECT}&limit=1`, env);
+  return r.ok ? (r.data?.[0] || null) : undefined;
+}
+
 // Upsert ONE video take (seq 1..6) and roll the deal up. seq omitted = the lowest free seq
 // (deletions leave holes; a deal may hold at most 6 rows at a time, not 6 ever).
 async function setEngagementVideo(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   const eid = encodeURIComponent(body.engagement_id);
-  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,seq,views,paid_views&order=seq.asc`, env);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,seq,post_date,views,paid_views&order=seq.asc`, env);
   // A failed read is NOT "no takes": treating it as empty hands seq 1 to a second take and the
   // upsert then overwrites the primary. Refuse instead.
   if (!existing.ok) return err('could not read existing takes', 502);
@@ -1008,13 +1035,23 @@ async function setEngagementVideo(body, auth, env) {
     return err('follower_count_at_post is required once any performance metric is entered', 400);
   }
   // Paid views are a slice of views (S373). Checked against the take AS IT WILL BE — a patch that
-  // names only one of the two is compared with the stored other.
+  // names only one of the two is compared with the stored other. Refused only when THIS save
+  // changes paid or views (S373 hostile review): an over-value already stored (Meta's figure
+  // arriving ahead of a typed total) must not block an unrelated save — the card sends every field.
   const prev = (existing.data || []).find(v => Number(v.seq) === seq) || {};
   const effViews = 'views' in row ? row.views : vnum(prev.views);
   const effPaid = 'paid_views' in row ? row.paid_views : vnum(prev.paid_views);
-  if (effViews != null && effPaid != null && effPaid > effViews) {
+  const splitChanged = ('views' in row && row.views !== vnum(prev.views))
+    || ('paid_views' in row && row.paid_views !== vnum(prev.paid_views));
+  if (splitChanged && effViews != null && effPaid != null && effPaid > effViews) {
     return err(`paid views (${effPaid.toLocaleString('en-IN')}) cannot exceed views (${effViews.toLocaleString('en-IN')})`, 400);
   }
+  // COMPLETE-deal lock — before any write.
+  const lockRow = await loadVideoLockRow(env, eid);
+  if (lockRow === undefined) return err('db_error', 500);
+  if (lockRow === null) return err('no such deal', 404);
+  const lockRefusal = videoLockRefusal(lockRow, takesAfter(existing.data || [], { upsert: row }));
+  if (lockRefusal) return err(lockRefusal, 409);
   row.updated_at = nowIso();
   if (!taken.has(seq)) row.created_by = auth.userId || null;
 
@@ -1038,8 +1075,14 @@ async function deleteEngagementVideo(body, auth, env) {
   // Refused outright, not "only while other takes exist": deleting the last take left the deal
   // with no primary row, so the next mirror/rollup had nothing to read.
   if (seq === 1) return err('#1 is the primary take and cannot be removed', 400);
-  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=seq`, env);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=seq,post_date`, env);
   if (!existing.ok) return err('could not read existing takes', 502);
+  // COMPLETE-deal lock: removing the lowest take hands the deal the next take's post_date.
+  const lockRow = await loadVideoLockRow(env, eid);
+  if (lockRow === undefined) return err('db_error', 500);
+  if (lockRow === null) return err('no such deal', 404);
+  const lockRefusal = videoLockRefusal(lockRow, takesAfter(existing.data || [], { removeSeq: seq }));
+  if (lockRefusal) return err(lockRefusal, 409);
   const del = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&seq=eq.${seq}`, env, {
     method: 'DELETE', prefer: 'return=minimal',
   });
@@ -1630,9 +1673,10 @@ async function saveEngagementAd(body, auth, env) {
     });
   }
   if (!r.ok) return r.data?.code === '23503' ? err('no such deal', 404) : err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  // A synced ad that changed take (or lost its Meta id) moves paid views between takes.
+  // A synced ad that changed take (or lost its Meta id) moves paid views between takes — the take
+  // it LEFT is re-derived too (to null if nothing synced remains on it).
   if (cur && cur.meta_synced_at && (metaChanged || ('video_id' in row && row.video_id !== (cur.video_id || null)))) {
-    try { await applyAdPaidViews(env, engagementId); }
+    try { await applyAdPaidViews(env, engagementId, [cur.video_id]); }
     catch (e) { return ok({ ad: r.data?.[0] || null, warning: `saved, but paid views were not re-derived: ${String(e?.message || e)}` }); }
   }
   return ok({ ad: r.data?.[0] || null });
@@ -1678,7 +1722,7 @@ async function decideEngagementAd(body, auth, env) {
 async function deleteEngagementAd(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.id) return err('id required', 400);
-  const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(body.id)}&select=id,engagement_id,meta_synced_at&limit=1`, env);
+  const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(body.id)}&select=id,engagement_id,video_id,meta_synced_at&limit=1`, env);
   if (!r.ok) return err('db_error', 500);
   const ad = r.data?.[0];
   if (!ad) return err('no such ad', 404);
@@ -1686,7 +1730,7 @@ async function deleteEngagementAd(body, auth, env) {
   const d = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(ad.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!d.ok) return err(`db_error: ${JSON.stringify(d.data)}`, 400);
   if (ad.meta_synced_at) {
-    try { await applyAdPaidViews(env, ad.engagement_id); }
+    try { await applyAdPaidViews(env, ad.engagement_id, [ad.video_id]); }
     catch (e) { return ok({ deleted: ad.id, warning: `deleted, but paid views were not re-derived: ${String(e?.message || e)}` }); }
   }
   return ok({ deleted: ad.id });
@@ -1701,6 +1745,19 @@ function adAmount(v) {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
 }
 
+// An ad payment's screenshot must be one createPaymentProofUploadUrl minted for THIS deal
+// (`ad-payments/<deal>/…`). The path is later handed to a storage DELETE (replace / delete), so an
+// unchecked one could remove any object in the shared bucket — a deal payment's proof included.
+// `.` / `..` / empty segments are refused too: fetch() resolves dot-segments, so a prefix-only
+// check passes `ad-payments/<deal>/../../x`.
+export function adProofPathOk(path, engagementId) {
+  const p = typeof path === 'string' ? path : '';
+  const prefix = `ad-payments/${safeSeg(engagementId)}/`;
+  if (!engagementId || !p.startsWith(prefix) || p.length === prefix.length) return false;
+  return !p.split('/').some(s => s === '' || s === '.' || s === '..');
+}
+const AD_PROOF_PATH_MSG = 'the screenshot must be uploaded for this deal (proof_path is not an ad-payments/<deal>/ path)';
+
 async function adOnDeal(env, engagementId, adId) {
   const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(adId)}&engagement_id=eq.${encodeURIComponent(engagementId)}&select=id&limit=1`, env);
   if (!r.ok) return undefined;
@@ -1710,6 +1767,7 @@ async function adOnDeal(env, engagementId, adId) {
 async function addAdPayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
+  if (body.proof_path && !adProofPathOk(body.proof_path, body.engagement_id)) return err(AD_PROOF_PATH_MSG, 400);
   const amount = adAmount(body.amount);
   if (amount == null) return err('valid amount required', 400);
   const status = body.status == null ? 'pending' : String(body.status);
@@ -1766,7 +1824,10 @@ async function updateAdPayment(body, auth, env) {
     }
     patch.ad_id = body.ad_id || null;
   }
-  if (body.proof_path) Object.assign(patch, { proof_path: body.proof_path, proof_name: body.proof_name || null, proof_mime: body.proof_mime || null });
+  if (body.proof_path) {
+    if (!adProofPathOk(body.proof_path, cur.engagement_id)) return err(AD_PROOF_PATH_MSG, 400);
+    Object.assign(patch, { proof_path: body.proof_path, proof_name: body.proof_name || null, proof_mime: body.proof_mime || null });
+  }
   const status = 'status' in body ? String(body.status) : cur.status;
   if (!AD_PAYMENT_STATUSES.includes(status)) return err(`status must be one of ${AD_PAYMENT_STATUSES.join(', ')}`, 400);
   patch.status = status;
@@ -1781,8 +1842,9 @@ async function updateAdPayment(body, auth, env) {
   patch.updated_at = nowIso();
   const r = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(cur.id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  // A replaced screenshot leaves nothing behind in the bucket.
-  if (patch.proof_path && cur.proof_path && cur.proof_path !== patch.proof_path) {
+  // A replaced screenshot leaves nothing behind in the bucket. Only ever an object under this deal's
+  // ad-payments/ prefix — a stored path that is not one is left alone rather than deleted.
+  if (patch.proof_path && cur.proof_path && cur.proof_path !== patch.proof_path && adProofPathOk(cur.proof_path, cur.engagement_id)) {
     const seg = String(cur.proof_path).split('/').map(encodeURIComponent).join('/');
     await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
   }
@@ -1792,11 +1854,11 @@ async function updateAdPayment(body, auth, env) {
 async function deleteAdPayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.id) return err('id required', 400);
-  const pr = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}&select=proof_path&limit=1`, env);
+  const pr = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}&select=engagement_id,proof_path&limit=1`, env);
   const proofPath = pr.data?.[0]?.proof_path;
   const r = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  if (proofPath) {
+  if (proofPath && adProofPathOk(proofPath, pr.data[0].engagement_id)) {   // same prefix rule as the writes
     const seg = String(proofPath).split('/').map(encodeURIComponent).join('/');
     await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
   }
@@ -2422,7 +2484,7 @@ async function createEngagement(body, auth, env) {
 
 // Replace the full product-line set for a deal, then roll up (#4).
 // CPM auto-calc (theme ④ B13): cost-per-1000-views off the GENERATED total_cost
-// (payment+commission+ad_spend+goodies+shipping+return+ad_rights). Worker-owned, not manual.
+// (payment+commission+goodies+shipping+return — S373: ad_spend and ad_rights left it). Worker-owned, not manual.
 // S373: per 1000 ORGANIC views (views − paid) — views an ad bought are not the collab's reach.
 async function recomputeCpm(env, engagementId) {
   const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,paid_views,total_cost&limit=1`, env);
@@ -2436,8 +2498,9 @@ async function recomputeCpm(env, engagementId) {
 
 // ── COMPLETE-deal lock (S373) — the server guard; the deal page hiding its Edit buttons is cosmetic ──
 // Sites that consult it: updateEngagement + advanceStage (field-level: refused only when the patch
-// names a LOCKED_FIELDS column), setEngagementProducts + markGiftedNoPost (whole action refused).
-// Rule and field list: src/completeness.js.
+// names a LOCKED_FIELDS column), setEngagementProducts + markGiftedNoPost (whole action refused),
+// setEngagementVideo + deleteEngagementVideo (refused only when the take change would move the
+// mirrored post_date — videoLockRefusal). Rule and field list: src/completeness.js.
 async function loadLockRow(env, engagementId) {
   const r = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(engagementId)}&select=id,${LOCK_SELECT}&limit=1`, env);
   return r.ok ? (r.data?.[0] || null) : undefined;   // undefined = the read failed, null = no such deal
@@ -4578,17 +4641,44 @@ export function paidViewsByTake(ads) {
   return out;
 }
 
-// Re-derive paid_views on every take of a deal that has at least one synced ad, then roll up.
-// A take with no synced ad keeps whatever was typed. ≤ 6 takes per deal, so ≤ 6 PATCHes.
-async function applyAdPaidViews(env, engagementId) {
+/**
+ * The paid_views to WRITE per take after a Meta sync or an ad change (S373 hostile review). Covers
+ * every take with a synced ad now AND every take in `priorVideoIds` — one that had a synced ad
+ * before this change (the ad moved off it, was deleted, or had its Meta id changed). Value = Σ
+ * meta_views of the take's synced ads, capped at the take's views when views is known (a paid
+ * figure above the total would block that take's next save); NULL when the take no longer has any
+ * synced ad — its old value was Meta's, not typed, so it must not linger. Takes not on the deal
+ * are skipped. A take that never had a synced ad is absent: a typed value stands.
+ */
+export function paidViewsWrites(ads, takes, priorVideoIds = []) {
+  const byTake = paidViewsByTake(ads);
+  const onDeal = new Map((takes || []).map(t => [t.id, t]));
+  const out = {};
+  for (const vid of new Set([...Object.keys(byTake), ...(priorVideoIds || []).filter(Boolean)])) {
+    const t = onDeal.get(vid);
+    if (!t) continue;
+    if (!Object.hasOwn(byTake, vid)) { out[vid] = null; continue; }
+    const cap = vnum(t.views);
+    out[vid] = cap == null ? byTake[vid] : Math.min(byTake[vid], cap);
+  }
+  return out;
+}
+
+// Re-derive paid_views (paidViewsWrites) on the deal's takes, then roll up. `priorVideoIds` = the
+// take(s) a synced ad was on before the change that got us here. ≤ 6 takes per deal, so ≤ 6 PATCHes.
+async function applyAdPaidViews(env, engagementId, priorVideoIds = []) {
   const eid = encodeURIComponent(engagementId);
-  const r = await sb(`/rest/v1/engagement_ads?engagement_id=eq.${eid}&select=video_id,meta_views,meta_synced_at`, env);
+  const [r, vr] = await Promise.all([
+    sb(`/rest/v1/engagement_ads?engagement_id=eq.${eid}&select=video_id,meta_views,meta_synced_at`, env),
+    sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,views`, env),
+  ]);
   if (!r.ok) throw new Error(`ads_read_failed: ${JSON.stringify(r.data)}`);
-  const byTake = paidViewsByTake(r.data || []);
-  const ids = Object.keys(byTake);
+  if (!vr.ok) throw new Error(`takes_read_failed: ${JSON.stringify(vr.data)}`);
+  const writes = paidViewsWrites(r.data || [], vr.data || [], priorVideoIds);
+  const ids = Object.keys(writes);
   if (!ids.length) return false;
   const res = await Promise.all(ids.map(vid => sb(`/rest/v1/engagement_videos?id=eq.${encodeURIComponent(vid)}&engagement_id=eq.${eid}`, env, {
-    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ paid_views: byTake[vid], updated_at: nowIso() }),
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ paid_views: writes[vid], updated_at: nowIso() }),
   })));
   const bad = res.find(x => !x.ok);
   if (bad) throw new Error(`paid_views_write_failed: ${JSON.stringify(bad.data)}`);

@@ -335,6 +335,7 @@ export default function EngagementDetailPage() {
         <PerformanceCard
           e={e}
           videos={data.videos || []}
+          ads={data.ads || []}
           canEdit={!!perms?.ignition_manage && e.stage === 'live'}
           session={session}
           onSaved={reload}
@@ -692,9 +693,9 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
   const [ret, setRet] = useState('');
 
   // S373: the "Ad spend" input is retired — ad money (payments to the creator for ad rights, and
-  // Meta spend) lives on the Ads card and is NOT influencer budget. The column stays: the UGC Meta
-  // pull still writes it, and while it is still a term of the generated total_cost a non-zero
-  // value is shown read-only below so TOTAL still adds up on screen.
+  // Meta spend) lives on the Ads card and is NOT influencer budget. The column stays (the UGC Meta
+  // pull still writes it) but it is no longer a term of the generated total_cost, so it is not
+  // shown here: a row above TOTAL would read as part of it.
   function startEdit() {
     setRet(e.return_cost ?? '');
     setEditing(true);
@@ -737,7 +738,6 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
       ) : (
         <>
           <KV label="Return" value={`₹${Number(e.return_cost || 0).toLocaleString()}`} />
-          {Number(e.ad_spend) > 0 && <KV label="Ad spend (Meta)" value={`₹${Number(e.ad_spend).toLocaleString()}`} />}
           <KV label="CPM (organic)" value={cpm != null
             ? <span style={{ color: Number(cpm) > 100 ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: Number(cpm) > 100 ? 700 : 400 }}>
                 ₹{Number(cpm).toFixed(2)}{Number(cpm) > 100 ? ' ⚠ high' : ''}
@@ -1052,7 +1052,7 @@ const organicLabel = (row) => {
 };
 const MAX_VIDEOS = 6;   // engagement_videos.seq CHECK (1..6) — the 7th insert 23514s; refuse here first
 
-function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapReasons }) {
+function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, platform, gapReasons }) {
   const { showToast: toast } = useToast();
   const takes = [...(videos || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
   const [tab, setTab] = useState(takes[0]?.seq ?? 1);          // seq of the take being viewed
@@ -1077,8 +1077,15 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
   // ignitionops-worker (VIDEO_METRICS_NEEDING_BASE).
   const anyMetricEntered = shown.some(([k]) => !REQUIRED_METRICS.includes(k) && !VIEW_SPLIT_FIELDS.has(k) && form[k] !== '' && form[k] != null);
   const missingRequired = editing && current && anyMetricEntered ? missingRequiredMetrics(form, platform) : [];
-  // Paid views are a slice of views — the worker refuses paid > views; say so before Save.
-  const paidOverViews = editing && form.paid_views !== '' && form.paid_views != null && form.views !== '' && form.views != null
+  // A take with a SYNCED ad has Meta-owned paid views: the next sync re-derives them, so a typed
+  // figure would be silently overwritten. Shown read-only ("from Meta") and not sent on save.
+  const paidFromMeta = !!current && (ads || []).some(a => a.video_id === current.id && a.meta_synced_at);
+  // Paid views are a slice of views — the worker refuses paid > views; say so before Save. Only
+  // when this edit CHANGES one of the two (same rule as the worker): an over-value already stored
+  // must not block saving an unrelated field.
+  const sameNum = (a, b) => ((a === '' || a == null) ? (b === '' || b == null) : (b !== '' && b != null && Number(a) === Number(b)));
+  const splitChanged = !!current && (!sameNum(form.views, current.views) || (!paidFromMeta && !sameNum(form.paid_views, current.paid_views)));
+  const paidOverViews = editing && splitChanged && form.paid_views !== '' && form.paid_views != null && form.views !== '' && form.views != null
     && Number(form.paid_views) > Number(form.views);
   const requiredLabels = missingRequired
     .map(k => (VIDEO_METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
@@ -1104,7 +1111,10 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
         video_link: form.video_link === '' ? null : form.video_link,
         post_date: form.post_date === '' ? null : form.post_date,
       };
-      for (const [k] of shown) patch[k] = form[k] === '' ? null : Number(form[k]);
+      for (const [k] of shown) {
+        if (k === 'paid_views' && paidFromMeta) continue;   // Meta-owned — the worker keeps the stored figure
+        patch[k] = form[k] === '' ? null : Number(form[k]);
+      }
       // Only keep a reason where the value is actually blank — a reason sitting behind a real
       // number is stale the moment someone fills it in, and would keep reading as "unknown".
       const cleaned = {};
@@ -1183,7 +1193,9 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
               ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
               : Number(raw).toLocaleString();
             if (k === 'paid_views') return [
-              <KV key={k} label={label} value={val} />,
+              <KV key={k} label={label} value={paidFromMeta
+                ? <span>{val} <span style={{ color: 'var(--text-3)', fontSize: 11 }}>from Meta</span></span>
+                : val} />,
               <KV key="organic" label="Organic views" value={organicLabel(current)} />,
             ];
             return <KV key={k} label={label} value={val} />;
@@ -1215,7 +1227,9 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
                   you to another screen to clear it would be a dead end. Focus it when it is blank. */}
               <input type="number" min="0" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
                 autoFocus={blankRequired}
-                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+                readOnly={k === 'paid_views' && paidFromMeta}
+                title={k === 'paid_views' && paidFromMeta ? 'Synced from Meta for the ad on this video — refreshed on every sync' : undefined}
+                style={{ flex: 1, background: 'var(--surface-2)', color: (k === 'paid_views' && paidFromMeta) ? 'var(--text-3)' : 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
               {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown.
                   A REQUIRED metric gets none: it is not backfillable, so a reason would just record
                   that the number is lost. Capture it now or the deal has no ratios, ever. */}
@@ -1228,7 +1242,8 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
               )}
               {k === 'paid_views' && (
                 <span style={{ width: 150, fontSize: 11, color: paidOverViews ? 'var(--state-error-fg)' : 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                  {paidOverViews ? 'more than views' : `organic ${organicViews(form.views, form.paid_views)?.toLocaleString() ?? '—'}`}
+                  {paidOverViews ? 'more than views'
+                    : `${paidFromMeta ? 'from Meta · ' : ''}organic ${organicViews(form.views, form.paid_views)?.toLocaleString() ?? '—'}`}
                 </span>
               )}
             </div>
