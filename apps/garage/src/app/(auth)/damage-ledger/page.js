@@ -53,6 +53,14 @@ function StatusBadge({ status }) {
   );
 }
 
+const BLANK_LINE = () => ({ part_code: '', part_name: '', product: '', qty: '', reason: '' });
+const BLANK_OUT_LINE = () => ({ part_code: '', qty: '' });
+const OUT_ACTIONS = [
+  { id: 'repair', label: 'Send to repair',   dest: 'Repair destination', color: '#7b93ff', confirm: '#3b82f6' },
+  { id: 'rtv',    label: 'Return to vendor', dest: 'Vendor',             color: '#fbbf24', confirm: '#f59e0b' },
+  { id: 'scrap',  label: 'Scrap',            dest: null,                 color: '#ff7070', confirm: 'red'     },
+];
+
 function fmtTs(ts) {
   if (!ts) return '—';
   try { return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }); }
@@ -84,8 +92,20 @@ export default function DamageLedgerPage() {
   const [repairForm, setRepairForm] = useState({ destination: '', notes: '' });
   const [scrapForm,  setScrapForm]  = useState({ notes: '' });
   const [rtvForm,    setRtvForm]    = useState({ destination: '', notes: '' });
-  const [recordForm, setRecordForm] = useState({ part_code: '', part_name: '', product: '', qty: '', source: 'manual', reason: '', notes: '' });
+  // Record Damage takes MANY lines per entry, like GRN entry (Piyush, #bugs 1788774006, S372).
+  // Source / reason / notes are shared by the entry; a line's own reason overrides it.
+  const [recordLines,  setRecordLines]  = useState(() => [BLANK_LINE()]);
+  const [recordShared, setRecordShared] = useState({ source: 'manual', reason: '', notes: '' });
   const [acting,     setActing]     = useState(false);
+
+  // Part-level summary + damage-out by quantity (Piyush, S372). The summary is the source of
+  // the damage-out picker too, since only parts with pending qty can go out.
+  const [view,        setView]        = useState('ledger');   // 'ledger' | 'summary'
+  const [summary,     setSummary]     = useState([]);
+  const [sumLoading,  setSumLoading]  = useState(false);
+  const [outOpen,     setOutOpen]     = useState(false);
+  const [outForm,     setOutForm]     = useState({ action_type: 'repair', destination: '', notes: '' });
+  const [outLines,    setOutLines]    = useState(() => [BLANK_OUT_LINE()]);
 
   // Reprint manifest by batch_no
   const [reprintBatch, setReprintBatch] = useState('');
@@ -133,6 +153,48 @@ export default function DamageLedgerPage() {
     }
   }
   useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, session]);
+
+  async function loadSummary() {
+    if (!session) return;
+    setSumLoading(true);
+    try {
+      const r = await workerFetch('getDamageSummary', { data: {} }, session);
+      setSummary(r?.ok ? (r.data || []) : []);
+    } finally {
+      setSumLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (view === 'summary' || outOpen) loadSummary();
+    /* eslint-disable-next-line */
+  }, [view, outOpen, session]);
+
+  const filteredSummary = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return summary;
+    const tokens = q.split(/\s+/).filter(Boolean);
+    return summary.filter(p => tokens.every(t =>
+      (p.part_code || '').toLowerCase().includes(t) ||
+      (p.part_name || '').toLowerCase().includes(t) ||
+      (p.product   || '').toLowerCase().includes(t)
+    ));
+  }, [summary, search]);
+
+  const pendingByPart = useMemo(() => {
+    const m = {};
+    summary.forEach(p => { if (p.pending > 0) m[p.part_code] = p; });
+    return m;
+  }, [summary]);
+  const outPartOpts = useMemo(() => Object.values(pendingByPart).map(p => ({
+    value: p.part_code,
+    label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''} · ${p.pending} pending`,
+  })), [pendingByPart]);
+
+  function openDamageOut(partCode) {
+    setOutForm({ action_type: 'repair', destination: '', notes: '' });
+    setOutLines([partCode ? { part_code: partCode, qty: '' } : BLANK_OUT_LINE()]);
+    setOutOpen(true);
+  }
 
   // Multi-token AND-of-OR across the standard Stock-Ledger field set plus
   // damage-specific identifiers (ledger_no, batch numbers, reason).
@@ -242,29 +304,80 @@ export default function DamageLedgerPage() {
     } finally { setActing(false); }
   }
 
+  function setLine(i, patch) {
+    setRecordLines(prev => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  }
+  function resetRecord() {
+    setRecordLines([BLANK_LINE()]);
+    setRecordShared({ source: 'manual', reason: '', notes: '' });
+  }
+
   async function submitRecord() {
-    const f = recordForm;
-    if (!f.part_code.trim() || !f.part_name.trim() || !(parseInt(f.qty) > 0)) {
-      toast('Part code, name and qty required', 'error'); return;
-    }
+    // Wholly blank lines are ignored (the form always offers an empty one to type into).
+    const lines = recordLines.filter(l => l.part_code.trim() || l.part_name.trim() || String(l.qty).trim());
+    if (!lines.length) { toast('Add at least one part line', 'error'); return; }
+    const bad = lines.findIndex(l => !l.part_code.trim() || !l.part_name.trim() || !(Number(l.qty) > 0) || !Number.isInteger(Number(l.qty)));
+    if (bad >= 0) { toast(`Line ${bad + 1}: part code, name and a whole-number qty are required`, 'error'); return; }
     setActing(true);
     try {
       const r = await workerFetch('recordDamage', {
         data: {
-          part_code: f.part_code.trim(), part_name: f.part_name.trim(),
-          product:   f.product.trim() || null,
-          qty:       parseInt(f.qty),
-          source:    f.source || 'manual',
-          reason:    f.reason.trim() || null,
-          notes:     f.notes.trim() || null,
+          lines: lines.map(l => ({
+            part_code: l.part_code.trim(), part_name: l.part_name.trim(),
+            product:   l.product.trim() || null,
+            qty:       Number(l.qty),
+            reason:    l.reason.trim() || null,
+          })),
+          source:     recordShared.source || 'manual',
+          reason:     recordShared.reason.trim() || null,
+          notes:      recordShared.notes.trim() || null,
           entry_type: 'damage',
         },
       }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Record failed', 'error'); return; }
-      toast(`Recorded · ${r.data.ledger_no}`, 'success');
+      const nos = r.data?.ledger_nos || [];
+      toast(nos.length > 1 ? `Recorded ${nos.length} lines · ${nos[0]} – ${nos[nos.length - 1]}` : `Recorded · ${nos[0] || ''}`, 'success');
       setRecordOpen(false);
-      setRecordForm({ part_code: '', part_name: '', product: '', qty: '', source: 'manual', reason: '', notes: '' });
+      resetRecord();
       await loadLedger();
+      if (view === 'summary') loadSummary();
+    } finally { setActing(false); }
+  }
+
+  async function submitDamageOut() {
+    const act = OUT_ACTIONS.find(a => a.id === outForm.action_type) || OUT_ACTIONS[0];
+    const lines = outLines.filter(l => l.part_code || String(l.qty).trim());
+    if (!lines.length) { toast('Add at least one part', 'error'); return; }
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      const q = Number(l.qty);
+      if (!l.part_code || !(q > 0) || !Number.isInteger(q)) { toast(`Line ${i + 1}: pick a part and enter a whole-number qty`, 'error'); return; }
+    }
+    // Same part on two lines is allowed (the server sums them) — check the SUM against pending.
+    const want = {};
+    lines.forEach(l => { want[l.part_code] = (want[l.part_code] || 0) + Number(l.qty); });
+    for (const [code, q] of Object.entries(want)) {
+      const avail = pendingByPart[code]?.pending || 0;
+      if (q > avail) { toast(`${code}: only ${avail} pending, asked for ${q}`, 'error'); return; }
+    }
+    if (act.dest && !outForm.destination.trim()) { toast(`${act.dest} required`, 'error'); return; }
+    setActing(true);
+    try {
+      const r = await workerFetch('damageOutByQty', {
+        data: {
+          action_type: act.id,
+          destination: outForm.destination.trim() || null,
+          notes:       outForm.notes.trim() || null,
+          lines:       lines.map(l => ({ part_code: l.part_code, qty: Number(l.qty) })),
+        },
+      }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Damage out failed', 'error'); return; }
+      const splits = r.data?.splits || [];
+      toast(`${act.label} · ${r.data.batch_no} · ${r.data.total_qty} qty over ${r.data.item_count} entr${r.data.item_count === 1 ? 'y' : 'ies'}`
+        + (splits.length ? ` · ${splits.map(s => `${s.remainder_qty} left pending as ${s.remainder_ledger_no}`).join(', ')}` : ''), 'success');
+      setOutOpen(false);
+      await Promise.all([loadLedger(), loadSummary()]);
+      printBatch(r.data.batch_no);
     } finally { setActing(false); }
   }
 
@@ -325,7 +438,10 @@ export default function DamageLedgerPage() {
             />
             <button onClick={() => reprintBatch.trim() && printBatch(reprintBatch.trim())} style={btnSecondary} disabled={!reprintBatch.trim()}>REPRINT</button>
             {canEdit && (
-              <button onClick={() => setRecordOpen(true)} style={btnSecondary}>+ RECORD DAMAGE</button>
+              <>
+                <button onClick={() => openDamageOut('')} style={btnSecondary}>DAMAGE OUT BY QTY</button>
+                <button onClick={() => setRecordOpen(true)} style={btnSecondary}>+ RECORD DAMAGE</button>
+              </>
             )}
           </div>
         </div>
@@ -336,6 +452,90 @@ export default function DamageLedgerPage() {
             </div>
           )}
 
+          {/* View switch: the row-by-row ledger, or one line per part */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 12 }}>
+            {[{ id: 'ledger', label: 'Ledger' }, { id: 'summary', label: 'Part Summary' }].map((v, i) => {
+              const active = view === v.id;
+              return (
+                <button key={v.id} onClick={() => setView(v.id)} style={{
+                  background: active ? 'var(--surface2)' : 'transparent',
+                  border: '1px solid var(--border)', borderLeftWidth: i ? 0 : 1,
+                  borderRadius: i ? '0 3px 3px 0' : '3px 0 0 3px',
+                  color: active ? 'var(--t1)' : 'var(--t3)', padding: '6px 14px', fontSize: 11,
+                  cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.05em',
+                  textTransform: 'uppercase', fontWeight: active ? 700 : 400,
+                }}>{v.label}</button>
+              );
+            })}
+          </div>
+
+          {view === 'summary' ? (
+            <>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <label style={labelStyle}>Search</label>
+                  <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder="Part code, name or product…" style={{ ...inputStyle, width: '100%' }} />
+                </div>
+                <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                  {filteredSummary.length} part{filteredSummary.length === 1 ? '' : 's'} · {filteredSummary.reduce((s, p) => s + p.pending, 0)} pending qty
+                </div>
+              </div>
+              {sumLoading ? <Spinner /> : filteredSummary.length === 0 ? (
+                <EmptyState title="No parts" message="No damage-ledger parts match." />
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={tableThStyle}>Part</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Pending</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Sent to Repair</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Returned to Vendor</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Scrapped</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Restocked</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Total</th>
+                        <th style={{ ...tableThStyle, textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSummary.map(p => {
+                        const num = (v, color) => (
+                          <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: v ? color : 'var(--t3)' }}>{v || '—'}</td>
+                        );
+                        return (
+                          <tr key={p.part_code}>
+                            <td style={tableTdStyle}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t1)' }}>{p.part_code}</div>
+                              <div style={{ fontSize: 10, color: 'var(--t3)' }}>{p.part_name}{p.product ? ` · ${p.product}` : ''}</div>
+                            </td>
+                            <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 700, color: p.pending ? '#f2cd1a' : 'var(--t3)' }}>
+                              {p.pending || '—'}
+                              {p.pending_rows > 1 && <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--t3)' }}>{p.pending_rows} entries</div>}
+                            </td>
+                            {num(p.sent_to_repair, '#7b93ff')}
+                            {num(p.returned_to_vendor, '#fbbf24')}
+                            {num(p.scrapped, '#ff7070')}
+                            {num(p.repaired_and_restocked, '#4ade80')}
+                            <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{p.total}</td>
+                            <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                              <div style={{ display: 'inline-flex', gap: 4 }}>
+                                <button onClick={() => { setSearch(p.part_code); setView('ledger'); setTab('all'); }} style={btnSecondary}>ENTRIES</button>
+                                {canEdit && p.pending > 0 && (
+                                  <button onClick={() => openDamageOut(p.part_code)} style={btnSecondary}>DAMAGE OUT</button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : (
+          <>
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
             {STATUS_TABS.map(t => {
@@ -480,6 +680,8 @@ export default function DamageLedgerPage() {
               </table>
             </div>
           )}
+          </>
+          )}
         </div>
       </div>
 
@@ -580,71 +782,203 @@ export default function DamageLedgerPage() {
         open={recordOpen}
         onClose={() => setRecordOpen(false)}
         title="Record damage"
-        size="md"
-        confirmLabel={acting ? 'SAVING…' : 'RECORD'}
+        size="lg"
+        confirmLabel={acting ? 'SAVING…' : `RECORD${recordLines.length > 1 ? ` ${recordLines.length} LINES` : ''}`}
         onConfirm={submitRecord}
         loading={acting}
       >
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <div>
-            <label style={labelStyle}>Part Code <span style={{ color: '#ff7070' }}>*</span></label>
-            <Combobox
-              value={recordForm.part_code}
-              options={partOpts}
-              portal
-              onChange={(v, opt) => setRecordForm({
-                ...recordForm,
-                part_code: v || '',
-                // Picking a code fills name + product from the part master; clearing keeps
-                // whatever was typed so nothing is lost mid-form.
-                part_name: opt ? (opt.part_name || '') : recordForm.part_name,
-                product:   opt ? (opt.product   || '') : recordForm.product,
-              })}
-              placeholder={matLoading ? 'Loading parts…' : (materials.length ? 'Type part code or name…' : 'Part list did not load — refresh the page')}
-              loading={matLoading}
-            />
-          </div>
-          <div>
-            <label style={labelStyle}>Part Name <span style={{ color: '#ff7070' }}>*</span></label>
-            <input type="text" value={recordForm.part_name}
-              onChange={e => setRecordForm({ ...recordForm, part_name: e.target.value })}
-              style={{ ...inputStyle, width: '100%' }} />
-          </div>
-          <div>
-            <label style={labelStyle}>Product (optional)</label>
-            <input type="text" value={recordForm.product}
-              onChange={e => setRecordForm({ ...recordForm, product: e.target.value })}
-              style={{ ...inputStyle, width: '100%' }} />
-          </div>
-          <div>
-            <label style={labelStyle}>Qty <span style={{ color: '#ff7070' }}>*</span></label>
-            <input type="number" min={1} value={recordForm.qty}
-              onChange={e => setRecordForm({ ...recordForm, qty: e.target.value })}
-              style={{ ...inputStyle, width: '100%' }} />
-          </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ ...tableThStyle, width: 24 }}>#</th>
+                <th style={{ ...tableThStyle, minWidth: 220 }}>Part Code *</th>
+                <th style={{ ...tableThStyle, minWidth: 160 }}>Part Name *</th>
+                <th style={{ ...tableThStyle, minWidth: 100 }}>Product</th>
+                <th style={{ ...tableThStyle, width: 80 }}>Qty *</th>
+                <th style={{ ...tableThStyle, minWidth: 140 }}>Reason (this line)</th>
+                <th style={{ ...tableThStyle, width: 30 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {recordLines.map((l, i) => (
+                <tr key={i}>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{i + 1}</td>
+                  <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                    <Combobox
+                      value={l.part_code}
+                      options={partOpts}
+                      portal
+                      onChange={(v, opt) => setLine(i, {
+                        part_code: v || '',
+                        // Picking a code fills name + product from the part master; clearing keeps
+                        // whatever was typed so nothing is lost mid-form.
+                        part_name: opt ? (opt.part_name || '') : l.part_name,
+                        product:   opt ? (opt.product   || '') : l.product,
+                      })}
+                      placeholder={matLoading ? 'Loading parts…' : (materials.length ? 'Type part code or name…' : 'Part list did not load — refresh the page')}
+                      loading={matLoading}
+                    />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" value={l.part_name} onChange={e => setLine(i, { part_name: e.target.value })}
+                      style={{ ...inputStyle, width: '100%' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" value={l.product} onChange={e => setLine(i, { product: e.target.value })}
+                      style={{ ...inputStyle, width: '100%' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min={1} step={1} value={l.qty} onChange={e => setLine(i, { qty: e.target.value })}
+                      style={{ ...inputStyle, width: '100%' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" value={l.reason} onChange={e => setLine(i, { reason: e.target.value })}
+                      placeholder="uses entry reason if blank" style={{ ...inputStyle, width: '100%' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    {recordLines.length > 1 && (
+                      <button onClick={() => setRecordLines(prev => prev.filter((_, j) => j !== i))}
+                        title="Remove line" style={{ ...btnSecondary, padding: '4px 8px', color: '#ff7070' }}>×</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button onClick={() => setRecordLines(prev => [...prev, BLANK_LINE()])} style={{ ...btnSecondary, marginTop: 8 }}>+ ADD LINE</button>
+        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+          {recordLines.filter(l => Number(l.qty) > 0).length} line{recordLines.filter(l => Number(l.qty) > 0).length === 1 ? '' : 's'} ·{' '}
+          {recordLines.reduce((s, l) => s + (Number(l.qty) > 0 ? Number(l.qty) : 0), 0)} qty
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginTop: 12 }}>
           <div>
             <label style={labelStyle}>Source</label>
-            <select value={recordForm.source}
-              onChange={e => setRecordForm({ ...recordForm, source: e.target.value })}
+            <select value={recordShared.source}
+              onChange={e => setRecordShared({ ...recordShared, source: e.target.value })}
               style={{ ...inputStyle, width: '100%' }}>
               {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </div>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <label style={labelStyle}>Reason (visible on manifest)</label>
-          <input type="text" value={recordForm.reason}
-            onChange={e => setRecordForm({ ...recordForm, reason: e.target.value })}
-            placeholder="e.g. cracked on impact, found broken on floor…"
-            style={{ ...inputStyle, width: '100%' }} />
+          <div>
+            <label style={labelStyle}>Reason (visible on manifest)</label>
+            <input type="text" value={recordShared.reason}
+              onChange={e => setRecordShared({ ...recordShared, reason: e.target.value })}
+              placeholder="e.g. cracked on impact, found broken on floor…"
+              style={{ ...inputStyle, width: '100%' }} />
+          </div>
         </div>
         <div style={{ marginTop: 10 }}>
           <label style={labelStyle}>Notes (internal)</label>
-          <textarea rows={2} value={recordForm.notes}
-            onChange={e => setRecordForm({ ...recordForm, notes: e.target.value })}
+          <textarea rows={2} value={recordShared.notes}
+            onChange={e => setRecordShared({ ...recordShared, notes: e.target.value })}
             style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
         </div>
       </Modal>
+
+      {/* Damage out by quantity */}
+      {(() => {
+        const act = OUT_ACTIONS.find(a => a.id === outForm.action_type) || OUT_ACTIONS[0];
+        const outTotal = outLines.reduce((s, l) => s + (Number(l.qty) > 0 ? Number(l.qty) : 0), 0);
+        return (
+          <Modal
+            open={outOpen}
+            onClose={() => setOutOpen(false)}
+            title="Damage out by quantity"
+            titleColor={act.color}
+            size="lg"
+            confirmLabel={acting ? 'PROCESSING…' : `${act.label.toUpperCase()} & PRINT MANIFEST`}
+            confirmColor={act.confirm}
+            loading={acting}
+            onConfirm={submitDamageOut}
+          >
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--t2)' }}>
+              Enter how many of each part go out. The oldest pending entries are used first; if the
+              last one is only partly used, the rest stays pending under a new DMG number.
+            </p>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {OUT_ACTIONS.map(a => {
+                const active = outForm.action_type === a.id;
+                return (
+                  <button key={a.id} onClick={() => setOutForm({ ...outForm, action_type: a.id })} style={{
+                    ...btnSecondary, color: active ? a.color : 'var(--t2)',
+                    borderColor: active ? a.color : 'var(--border)', fontWeight: active ? 700 : 400,
+                  }}>{a.label.toUpperCase()}</button>
+                );
+              })}
+            </div>
+            {sumLoading && !summary.length ? <Spinner /> : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...tableThStyle, minWidth: 260 }}>Part</th>
+                    <th style={{ ...tableThStyle, textAlign: 'right', width: 90 }}>Pending</th>
+                    <th style={{ ...tableThStyle, width: 110 }}>Qty out</th>
+                    <th style={{ ...tableThStyle, width: 30 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {outLines.map((l, i) => {
+                    const avail = pendingByPart[l.part_code]?.pending;
+                    const over  = l.part_code && Number(l.qty) > (avail || 0);
+                    return (
+                      <tr key={i}>
+                        <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                          <Combobox
+                            value={l.part_code}
+                            options={outPartOpts}
+                            portal
+                            onChange={v => setOutLines(prev => prev.map((x, j) => (j === i ? { ...x, part_code: v || '' } : x)))}
+                            placeholder={outPartOpts.length ? 'Part with pending damage…' : 'No pending damage'}
+                          />
+                        </td>
+                        <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{avail ?? '—'}</td>
+                        <td style={tableTdStyle}>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <input type="number" min={1} step={1} value={l.qty}
+                              onChange={e => setOutLines(prev => prev.map((x, j) => (j === i ? { ...x, qty: e.target.value } : x)))}
+                              style={{ ...inputStyle, width: '100%', borderColor: over ? '#ff7070' : 'var(--border)' }} />
+                            {avail > 0 && (
+                              <button title="All pending" onClick={() => setOutLines(prev => prev.map((x, j) => (j === i ? { ...x, qty: String(avail) } : x)))}
+                                style={{ ...btnSecondary, padding: '4px 6px', fontSize: 9 }}>ALL</button>
+                            )}
+                          </div>
+                        </td>
+                        <td style={tableTdStyle}>
+                          {outLines.length > 1 && (
+                            <button onClick={() => setOutLines(prev => prev.filter((_, j) => j !== i))}
+                              title="Remove line" style={{ ...btnSecondary, padding: '4px 8px', color: '#ff7070' }}>×</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+              <button onClick={() => setOutLines(prev => [...prev, BLANK_OUT_LINE()])} style={btnSecondary}>+ ADD PART</button>
+              <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{outTotal} qty out</span>
+            </div>
+            {act.dest && (
+              <div style={{ marginTop: 12 }}>
+                <label style={labelStyle}>{act.dest} <span style={{ color: '#ff7070' }}>*</span></label>
+                <input type="text" value={outForm.destination}
+                  onChange={e => setOutForm({ ...outForm, destination: e.target.value })}
+                  placeholder={act.id === 'rtv' ? 'Vendor name or code' : 'e.g. In-house paint touch-up · Vendor XYZ'}
+                  style={{ ...inputStyle, width: '100%' }} />
+              </div>
+            )}
+            <div style={{ marginTop: 10 }}>
+              <label style={labelStyle}>Notes (optional)</label>
+              <textarea rows={2} value={outForm.notes}
+                onChange={e => setOutForm({ ...outForm, notes: e.target.value })}
+                style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+            </div>
+          </Modal>
+        );
+      })()}
 
       {/* History drawer */}
       {historyTarget && (
