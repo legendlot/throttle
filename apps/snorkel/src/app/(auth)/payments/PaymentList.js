@@ -238,7 +238,10 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
                             "0%", which would read as a deduction nobody made. */}
                         {hasTds(r) && (
                           <div style={{ fontSize: 10, color: 'var(--t2)' }}>
-                            less {Number(r.tds_rate)}% TDS · net{' '}
+                            less {Number(r.tds_rate)}% TDS
+                            {/* The taxable base, where the row has one (paid from 2026-09-11). */}
+                            {r.tds_base != null ? ` on ${money(r.tds_base, r.currency)} ex-${Number(r.tds_gst_rate)}% GST` : ''}
+                            {' '}· net{' '}
                             {money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount: r.tds_amount }), r.currency)}
                           </div>
                         )}

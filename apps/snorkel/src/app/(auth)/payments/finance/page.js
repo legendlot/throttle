@@ -8,7 +8,7 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js
 import { fmtDateShort } from '@/components/format.js';
 import { money } from '../PaymentList.js';
 import PriorTdsWarning from '../PriorTdsWarning.js';
-import { computeTds, netPayable } from '@/lib/tds.js';
+import { computeTds, netPayable, defaultGstRate, GST_RATES } from '@/lib/tds.js';
 
 const todayISO = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -42,6 +42,11 @@ export default function FinanceQueuePage() {
   // TDS rate per row, as typed (a string). Empty = not applicable — NOT zero, so it must stay
   // out of the payload entirely rather than going down as 0.
   const [tdsRates, setTdsRates] = useState({});
+  // The invoice's GST% per row, as picked. Unset = the pre-fill (gstFor) — TDS is computed on the
+  // TAXABLE value, invoice_total ÷ (1 + GST%) (decisions.md, 2026-09-11).
+  const [gstRates, setGstRates] = useState({});
+  const gstFor = r => gstRates[r.id]
+    ?? String(defaultGstRate({ poGstRate: r.po_gst_rate, payeeGstin: r.payee?.gstin }));
   const [onlyUrgent, setOnlyUrgent] = useState(false);
   // ⚠️ getFinanceQueue admits execute OR super_admin, but markPaymentPaid requires EXECUTE alone
   // (snorkelops:3932). So a super admin could open this queue and click a Mark-paid button that
@@ -133,8 +138,9 @@ export default function FinanceQueuePage() {
 
   async function pay(r) {
     const rate = (tdsRates[r.id] ?? '').trim();
+    const gst = gstFor(r);
     // Refuse here what the worker would refuse anyway, so finance sees WHY before the round-trip.
-    const { tdsAmount, error } = computeTds({ invoiceTotal: r.invoice_total, rate });
+    const { tdsAmount, error } = computeTds({ invoiceTotal: r.invoice_total, rate, gstRate: gst });
     if (error) return showToast(error, 'error');
     setBusy(r.id);
     try {
@@ -143,8 +149,9 @@ export default function FinanceQueuePage() {
         ids: [r.id], payment_ref: (refs[r.id] || '').trim() || null,
         // The net is what actually leaves the bank. With no TDS this is amount_to_pay, unchanged.
         paid_amount: netPayable({ amountToPay: r.amount_to_pay, tdsAmount }),
-        // Rate only — the worker derives the amount from invoice_total and never trusts ours.
-        ...(rate === '' ? {} : { tds_rate: Number(rate) }),
+        // Rates only — the worker derives the base and amount from invoice_total and never
+        // trusts ours. No TDS rate → neither is sent, and all four TDS columns stay NULL.
+        ...(rate === '' ? {} : { tds_rate: Number(rate), tds_gst_rate: Number(gst) }),
       } }, s);
       // snorkelops wraps replies as `{ ok, data }` — read the payload. Off the wrapper, `paid` was
       // undefined and EVERY successful payment toasted "It had already moved" (hostile review S345).
@@ -158,6 +165,7 @@ export default function FinanceQueuePage() {
       }
       setRefs(p => { const n = { ...p }; delete n[r.id]; return n; });
       setTdsRates(p => { const n = { ...p }; delete n[r.id]; return n; });
+      setGstRates(p => { const n = { ...p }; delete n[r.id]; return n; });
       await load();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
@@ -228,7 +236,8 @@ export default function FinanceQueuePage() {
         // Live as the rate is typed — finance sees the deduction and the net BEFORE committing,
         // which is the only version of "avoid TDS-related errors" that holds.
         const rate = (tdsRates[r.id] ?? '').trim();
-        const tdsPreview = computeTds({ invoiceTotal: r.invoice_total, rate });
+        const gst = gstFor(r);
+        const tdsPreview = computeTds({ invoiceTotal: r.invoice_total, rate, gstRate: gst });
         const net = netPayable({ amountToPay: r.amount_to_pay, tdsAmount: tdsPreview.tdsAmount });
         return (
           <Panel key={r.id} title={`${r.request_no} · ${r.payee?.name || 'Unknown payee'}`}>
@@ -326,6 +335,15 @@ export default function FinanceQueuePage() {
                     placeholder="TDS %"
                     value={tdsRates[r.id] ?? ''}
                     onChange={e => setTdsRates(p => ({ ...p, [r.id]: e.target.value }))} />
+                  {/* The invoice's GST% — only once a TDS rate is typed, since it only sets the
+                      TDS base. Pre-filled from the linked PO, else 18% with a payee GSTIN, else 0%. */}
+                  {rate !== '' && (
+                    <select style={{ ...inp, width: 120 }} aria-label="Invoice GST %"
+                      value={gst}
+                      onChange={e => setGstRates(p => ({ ...p, [r.id]: e.target.value }))}>
+                      {GST_RATES.map(g => <option key={g} value={String(g)}>GST {g}%</option>)}
+                    </select>
+                  )}
                   <Btn kind="primary" disabled={busy === r.id || !!tdsPreview.error} onClick={() => pay(r)}>
                     {busy === r.id ? 'Saving…' : 'Mark paid'}
                   </Btn>
@@ -342,7 +360,8 @@ export default function FinanceQueuePage() {
                                   color: tdsPreview.error ? 'var(--red-fg)' : 'var(--t2)' }}>
                       {tdsPreview.error
                         ? tdsPreview.error
-                        : <>TDS {rate}% on {money(r.invoice_total, r.currency)} ={' '}
+                        : <>Taxable {money(tdsPreview.tdsBase, r.currency)} ({money(r.invoice_total, r.currency)}
+                           {' '}less {gst}% GST) · TDS {rate}% ={' '}
                            {money(tdsPreview.tdsAmount, r.currency)} · net{' '}
                            <b>{money(net, r.currency)}</b></>}
                     </div>

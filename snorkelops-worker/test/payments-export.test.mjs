@@ -14,6 +14,7 @@ function row(over = {}) {
     request_no: 'PAY-0021', payee: { name: 'Ashirwad Polymers' },
     invoice_no: 'INV-99', invoice_date: '2026-09-01', invoice_total: '98345.00',
     currency: 'INR', amount_to_pay: '98345.00', tds_rate: null, tds_amount: null,
+    tds_gst_rate: null, tds_base: null,
     paid_amount: '98345.00', paid_at: '2026-09-08T06:24:19.538+00:00',
     payment_ref: 'HSBCN25184661539', payment_mode: 'neft',
     category: { label: 'Raw material' }, category_key: 'raw_material',
@@ -63,6 +64,8 @@ test('a NULL tds_rate exports BLANK TDS cells, not 0', () => {
   const c = cells(buildPaymentsExportCsv([row()]).split('\n')[1]);
   assert.equal(c[col('TDS %')], '');
   assert.equal(c[col('TDS Amount')], '');
+  assert.equal(c[col('GST % (TDS)')], '');
+  assert.equal(c[col('Taxable value (TDS base)')], '');
   assert.notEqual(c[col('TDS %')], '0');
   // …and the net is untouched by the absent TDS.
   assert.equal(c[col('Net Paid')], '98345');
@@ -81,6 +84,37 @@ test('a row WITH TDS exports rate and amount, and Net Paid is the net', () => {
   const zero = cells(buildPaymentsExportCsv([row({ tds_rate: '0.00', tds_amount: '0.00' })]).split('\n')[1]);
   assert.equal(zero[col('TDS %')], '0');
   assert.equal(zero[col('TDS Amount')], '0');
+});
+
+// S376: the TDS base is the TAXABLE value (decisions.md 2026-09-11) and the export carries the two
+// audit columns. The header/row alignment is asserted POSITIONALLY here, not just via col(): a
+// header that gained a column the row didn't (or vice versa) shifted every cell after it once.
+test('GST % (TDS) and Taxable value (TDS base) export beside the TDS columns, aligned to the header', () => {
+  const at = PAYMENTS_EXPORT_COLUMNS.indexOf('Amount to Pay');
+  assert.deepEqual(PAYMENTS_EXPORT_COLUMNS.slice(at, at + 6), [
+    'Amount to Pay', 'GST % (TDS)', 'Taxable value (TDS base)', 'TDS %', 'TDS Amount', 'Net Paid',
+  ]);
+  // 118000 incl. 18% GST → taxable 100000, 2% TDS = 2000 (as PostgREST returns them: strings).
+  const c = cells(buildPaymentsExportCsv([row({
+    invoice_total: '118000.00', amount_to_pay: '118000.00', paid_amount: '116000.00',
+    tds_rate: '2', tds_gst_rate: '18', tds_base: '100000.00', tds_amount: '2000.00',
+  })]).split('\n')[1]);
+  assert.equal(c.length, PAYMENTS_EXPORT_COLUMNS.length);
+  assert.deepEqual(c.slice(at, at + 6), ['118000.00', '18', '100000', '2', '2000', '116000']);
+  assert.equal(c[col('Payment Date')], '2026-09-08');      // the column after them did not shift
+  assert.equal(c[col('Paid By')], 'Priya');
+  // A row paid BEFORE the base was stored: rate present, base/GST NULL → blank, never a guess.
+  const legacy = cells(buildPaymentsExportCsv([row({ tds_rate: '0.00', tds_amount: '0.00' })]).split('\n')[1]);
+  assert.equal(legacy.length, PAYMENTS_EXPORT_COLUMNS.length);
+  assert.equal(legacy[col('GST % (TDS)')], '');
+  assert.equal(legacy[col('Taxable value (TDS base)')], '');
+  assert.equal(legacy[col('TDS %')], '0');
+  // 0% GST is a real pick and renders 0, not blank.
+  const zeroGst = cells(buildPaymentsExportCsv([row({
+    tds_rate: '10', tds_gst_rate: '0', tds_base: '98345.00', tds_amount: '9834.50',
+  })]).split('\n')[1]);
+  assert.equal(zeroGst[col('GST % (TDS)')], '0');
+  assert.equal(zeroGst[col('Taxable value (TDS base)')], '98345');
 });
 
 test('Net Paid derives from amount_to_pay less TDS when paid_amount was never recorded', () => {

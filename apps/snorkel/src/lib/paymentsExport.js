@@ -16,7 +16,8 @@ import { netPayable, round2, hasTds } from './tds.js';
 // shape of the file.
 export const PAYMENTS_EXPORT_COLUMNS = [
   'Request No', 'Payee / Vendor', 'Invoice No', 'Invoice Date', 'Invoice Total', 'Currency',
-  'Amount to Pay', 'TDS %', 'TDS Amount', 'Net Paid', 'Payment Date', 'UTR / Ref',
+  'Amount to Pay', 'GST % (TDS)', 'Taxable value (TDS base)', 'TDS %', 'TDS Amount', 'Net Paid',
+  'Payment Date', 'UTR / Ref',
   'Payment Mode', 'Category', 'Linked PO', 'Purpose', 'Requested By', 'Approved By', 'Paid By',
 ];
 
@@ -55,6 +56,9 @@ export function netPaidOf(r) {
 // deduction of zero that WAS applied, which is a different (and wrong) statement from "no TDS
 // here". `hasTds` is the same gate the list and detail screens use — a 0% rate IS applicable and
 // must render as 0.
+// GST % (TDS) and Taxable value (TDS base) are the audit trail for the TDS figure (base = invoice
+// total ex-GST, decisions.md 2026-09-11): blank with no TDS, and blank on a row paid before those
+// columns existed (it has a rate but no stored base) — never back-filled with a guess.
 export function buildPaymentsExportCsv(rows) {
   const out = [PAYMENTS_EXPORT_COLUMNS.join(',')];
   for (const r of rows || []) {
@@ -69,6 +73,8 @@ export function buildPaymentsExportCsv(rows) {
       r.invoice_total ?? '',
       r.currency || 'INR',
       r.amount_to_pay ?? '',
+      tds && r.tds_gst_rate != null && r.tds_gst_rate !== '' ? Number(r.tds_gst_rate) : '',
+      tds ? (round2(r.tds_base) ?? '') : '',
       tds ? Number(r.tds_rate) : '',
       tds ? (round2(r.tds_amount) ?? '') : '',
       netPaidOf(r) ?? '',

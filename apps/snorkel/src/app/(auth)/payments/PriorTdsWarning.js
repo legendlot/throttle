@@ -4,9 +4,9 @@ import { money } from './PaymentList.js';
 
 // Amber note beside the TDS rate input on BOTH Mark-paid surfaces (finance queue card + the
 // detail page's modal). `prior` is the worker's `prior_tds` — OTHER requests on the same invoice
-// that already carry a deduction (snorkelops priorTdsFor). TDS is computed on the full
-// invoice_total, so a rate on a second tranche deducts it again (PAY-0010 shape). Warning only:
-// the correct base is open with Finance, so nothing here blocks or changes the amount.
+// that already carry a deduction (snorkelops priorTdsFor). TDS is computed on the WHOLE invoice's
+// taxable value (invoice_total ex-GST, decisions.md 2026-09-11), so a rate on a second tranche
+// deducts it again (PAY-0010 shape). Warning only: nothing here blocks or changes the amount.
 // Renders nothing when there is no prior deduction — the common case must look as before.
 export default function PriorTdsWarning({ prior, currency, style }) {
   if (!prior?.length) return null;
@@ -24,7 +24,7 @@ export default function PriorTdsWarning({ prior, currency, style }) {
           {p.paid_at ? ` · paid ${fmtDateShort(p.paid_at)}` : ''}
         </div>
       ))}
-      Entering a rate here deducts TDS again on the full invoice value.
+      Entering a rate here deducts TDS again on the full invoice&apos;s taxable value.
     </div>
   );
 }

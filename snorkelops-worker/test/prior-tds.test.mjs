@@ -1,7 +1,7 @@
 // The prior-TDS matcher (normInvoiceNo / sameInvoice / priorTdsFor / priorTdsWarning) is pure and
 // lives only in the single-file worker (no named exports), so — like party-balances.test.mjs — the
 // test lifts its source text straight out of index.js. tdsNum comes along because the matcher uses it.
-// Warning only: the correct TDS base on a part-payment is open with Finance; see the worker comment.
+// Warning only: see the worker comment (the base is the whole invoice's taxable value since S376).
 // Run: node --test snorkelops-worker/test/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -134,7 +134,7 @@ test('the markPaymentPaid warning names each prior deduction; null when there is
   assert.equal(priorTdsWarning(undefined), null);
   assert.equal(
     priorTdsWarning(priorTdsFor(req(11), [paidWithTds(10)])),
-    'TDS already deducted on this invoice: ₹2,596 on PAY-0010 (2%) — this deducts it again on the full invoice value.');
+    "TDS already deducted on this invoice: ₹2,596 on PAY-0010 (2%) — this deducts it again on the full invoice's taxable value.");
   assert.match(priorTdsWarning([{ request_no: 'PAY-0010', tds_rate: '2', tds_amount: '2596' }], 'USD'),
     /USD 2,596 on PAY-0010 \(2%\)/);
 });

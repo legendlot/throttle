@@ -1292,51 +1292,81 @@ function computePoTax(lines, currency, vendorGstin = null, companyGstin = PO_DEF
 }
 
 // ⚠️⚠️ TDS — VERBATIM PORT of computeTds from apps/snorkel/src/lib/tds.js. ⚠️⚠️
-// Finance sees a number on screen before it clicks Mark paid; the worker stores the number it
-// derives ITSELF from invoice_total, and the two must agree to the paisa — so change these two
-// together. The spec both sides satisfy is snorkelops-worker/test/tds.test.mjs, which imports
-// the app-side copy. The worker is a zero-import single file and cannot import out of apps/.
-// The amount is NEVER taken from the client: a hand-entered rupee figure is the exact error
-// class this field was asked for (Priya, 2026-09-09) — see reference/decisions.md.
+// Finance sees a number on screen before it clicks Mark paid; the worker stores the numbers it
+// derives ITSELF from invoice_total and the picked GST rate, and the two must agree to the paisa —
+// so change these two together. The spec both sides satisfy is snorkelops-worker/test/tds.test.mjs
+// (app-side copy); test/tds-parity.test.mjs lifts THIS block and asserts it matches the lib on a
+// grid. The worker is a zero-import single file and cannot import out of apps/.
+// The amount and base are NEVER taken from the client: a hand-entered rupee figure is the exact
+// error class this field was asked for (Priya, 2026-09-09) — see reference/decisions.md.
+// BASE = the TAXABLE value, ex-GST (Mahesh, 2026-09-11; decisions.md "Payment-request TDS base =
+// the TAXABLE value"): taxable = invoice_total ÷ (1 + GST%/100), TDS = taxable × rate / 100, the
+// amount computed off the ROUNDED base so it reproduces from the stored tds_base/tds_rate.
+const TDS_GST_RATES = [0, 5, 12, 18, 28];
+function tdsAbsent(v) {
+  // ⚠️ WHITESPACE COUNTS AS ABSENT: `Number('  ') === 0`, so a space-only rate used to write a
+  // REAL "0% TDS applied" — the same Number('')===0 false-positive this workspace has been bitten
+  // by before. Not reachable from the UI (the client trims) but reachable by any direct POST.
+  // Trim only for the ABSENT test; the raw value still flows on, so '  5  ' keeps working.
+  return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+}
+function tdsRound2(n) {
+  // + Number.EPSILON so 1.005 does not round down; the columns are numeric(…,2)-shaped money.
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
 function tdsNum(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-function computeTds({ invoiceTotal, rate }) {
+function computeTds({ invoiceTotal, rate, gstRate }) {
   // Absent = not applicable. Checked FIRST, because `null` is typeof 'object' and would be
   // caught by the type guard below.
-  // ⚠️ WHITESPACE COUNTS AS ABSENT: `Number('  ') === 0`, so a space-only rate used to write a
-  // REAL "0% TDS applied" — the same Number('')===0 false-positive this workspace has been bitten
-  // by before. Not reachable from the UI (the client trims) but reachable by any direct POST.
-  // Trim only for the ABSENT test; the raw value still flows on, so '  5  ' keeps working.
-  if (rate === null || rate === undefined ||
-      (typeof rate === 'string' && rate.trim() === '')) {
-    return { tdsAmount: null, error: null };
-  }
+  if (tdsAbsent(rate)) return { tdsAmount: null, tdsBase: null, error: null };
+  const fail = error => ({ tdsAmount: null, tdsBase: null, error });
   // S370: reject on TYPE before coercing — same guard shape, and the same defect class, as
   // parseDeliveryAddressId below (fixed the same day). Number() coerces: `[]`→0, `true`→1,
   // `[5]`→5, `false`→0, so a non-scalar payload used to write a FALSE "0% TDS applied". A 0
   // here is NOT harmless — hasTds() calls it real and the Tally-bound export writes it.
-  if (typeof rate !== 'string' && typeof rate !== 'number') {
-    return { tdsAmount: null, error: 'TDS rate must be a number' };
-  }
+  if (typeof rate !== 'string' && typeof rate !== 'number') return fail('TDS rate must be a number');
   const r = tdsNum(rate);
   // Unparseable ('12x') is an error, never a silent "no TDS".
-  if (r === null) return { tdsAmount: null, error: 'TDS rate must be a number' };
-  if (r < 0 || r > 100) return { tdsAmount: null, error: 'TDS rate must be between 0 and 100' };
+  if (r === null) return fail('TDS rate must be a number');
+  if (r < 0 || r > 100) return fail('TDS rate must be between 0 and 100');
+  // A rate is present, so the GST rate is REQUIRED, with the same absent/type guards. Never
+  // default it to 0 here: ÷1 would deduct on the GST-inclusive total — the error being closed.
+  if (tdsAbsent(gstRate)) return fail("Pick the invoice's GST rate");
+  if (typeof gstRate !== 'string' && typeof gstRate !== 'number')
+    return fail('GST rate must be one of 0, 5, 12, 18, 28');
+  const g = tdsNum(gstRate);
+  if (g === null || !TDS_GST_RATES.includes(g)) return fail('GST rate must be one of 0, 5, 12, 18, 28');
   const total = tdsNum(invoiceTotal);
-  if (total === null) return { tdsAmount: null, error: 'TDS needs an invoice total to compute on' };
-  if (total < 0) return { tdsAmount: null, error: 'Invoice total cannot be negative' };
-  // + Number.EPSILON so 1.005 does not round down; the column is numeric(…,2)-shaped money.
-  return { tdsAmount: Math.round((total * r / 100 + Number.EPSILON) * 100) / 100, error: null };
+  if (total === null) return fail('TDS needs an invoice total to compute on');
+  if (total < 0) return fail('Invoice total cannot be negative');
+  const tdsBase = tdsRound2(total / (1 + g / 100));
+  return { tdsAmount: tdsRound2(tdsBase * r / 100), tdsBase, error: null };
+}
+// The linked PO's GST rate, for the Mark-as-Paid picker's pre-fill (the app's defaultGstRate
+// decides from it). One entry per po_number: the single DISTINCT po_lines.gst_percent, or null
+// when the PO has no rate or MIXES rates (one picker can't express a mixed invoice — decisions.md
+// "Known gap"). '18' and '18.00' are the same rate. Fed by ONE batched po_lines read per handler.
+function poGstRateByPo(lines) {
+  const seen = {};
+  for (const l of lines || []) {
+    if (!l || !l.po_number) continue;
+    (seen[l.po_number] ||= new Set()).add(tdsNum(l.gst_percent));
+  }
+  const out = {};
+  for (const [po, rates] of Object.entries(seen)) out[po] = rates.size === 1 ? [...rates][0] : null;
+  return out;
 }
 
 // ── Prior TDS on the same invoice (S374) ────────────────────────────────────────────────────
-// computeTds applies the rate to invoice_total, and a tranche-2 request on the same invoice is a
-// NEW request — so a rate entered on each tranche deducts the full-invoice TDS twice and the
-// vendor is paid short (PAY-0010 shape). Which base is right is OPEN with Finance (Mahesh), so
-// this is a WARNING ONLY: nothing here changes the amount or blocks the payment.
+// computeTds applies the rate to the WHOLE invoice's taxable value (invoice_total ex-GST — the
+// base Finance settled 2026-09-11), and a tranche-2 request on the same invoice is a NEW request —
+// so a rate entered on each tranche deducts the full-invoice TDS twice and the vendor is paid
+// short (PAY-0010 shape). This is a WARNING ONLY: nothing here changes the amount or blocks the
+// payment — Finance may have a reason, and it adjusts in Tally.
 // "Same invoice" = same payee AND the two invoice_no token SETS share a member; otherwise (either
 // side has none, or both have tokens that don't intersect) same payee + same linked PO + same
 // invoice_total. invoice_no is typed loosely — PAY-0027 holds the comma list
@@ -1382,7 +1412,7 @@ function priorTdsWarning(prior, currency = 'INR') {
     return `${amt === null ? 'an amount not recorded' : cur + amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
       + ` on ${p.request_no}${rate === null ? '' : ` (${rate}%)`}`;
   }).join(', ');
-  return `TDS already deducted on this invoice: ${each} — this deducts it again on the full invoice value.`;
+  return `TDS already deducted on this invoice: ${each} — this deducts it again on the full invoice's taxable value.`;
 }
 
 // ⚠️⚠️ REQUESTER NOTE — VERBATIM PORT of parseRequesterNote from apps/snorkel/src/lib/requesterNote.js. ⚠️⚠️
@@ -2015,13 +2045,17 @@ export default {
             const req = r.data[0];
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (req.requested_by_user_id !== userId && !privileged) return err('Not found', 404);
-            const [docs, banks, tdsCands] = await Promise.all([
+            const [docs, banks, tdsCands, poGst] = await Promise.all([
               query('payment_request_documents', `?request_id=eq.${encodeURIComponent(id)}&order=uploaded_at.asc&select=*`),
               query('payment_payee_banks', `?payee_id=eq.${req.payee_id}&is_active=is.true&select=*`),
               // Candidates for prior_tds: same payee, already carrying a deduction. The matcher
               // (priorTdsFor) decides "same invoice" in JS — invoice_no is too loosely typed for eq.
               query('payment_requests',
                 `?payee_id=eq.${req.payee_id}&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`),
+              // The linked PO's GST rate → pre-fills the Mark-paid GST picker (poGstRateByPo).
+              req.linked_po_number
+                ? query('po_lines', `?po_number=eq.${encodeURIComponent(req.linked_po_number)}&select=po_number,gst_percent`)
+                : { ok: true, data: [] },
             ]);
             // Running total already requested against this (payee, invoice_no) — drives the
             // part-payment balance line and the duplicate warning.
@@ -2035,6 +2069,9 @@ export default {
             // Rides on the request so the Mark-paid modal reads it off the same object the finance
             // queue cards do. A failed candidate read degrades to [] — a warning, never a blocker.
             req.prior_tds = priorTdsFor(req, tdsCands.ok ? tdsCands.data : []);
+            // null when there is no PO, no rate, mixed rates, or the read failed — the picker then
+            // falls back to the payee's GSTIN (payee(*) above carries it). A default, never a gate.
+            req.po_gst_rate = (poGst.ok ? poGstRateByPo(poGst.data) : {})[req.linked_po_number] ?? null;
             return ok({
               request: req,
               documents: docs.ok ? docs.data : [],
@@ -2055,7 +2092,8 @@ export default {
             // TWO reads, not one: held rows must never spend the ready-to-pay page budget or skew
             // its count — an urgent held row sorts to the TOP of a shared query and displaces a
             // payable one at the limit (hostile review S350).
-            const sel = 'select=*,payee:payment_payees(id,payee_code,name,payee_type)';
+            // `gstin` rides along for the Mark-paid GST picker's pre-fill (defaultGstRate).
+            const sel = 'select=*,payee:payment_payees(id,payee_code,name,payee_type,gstin)';
             const [r, h] = await Promise.all([
               query('payment_requests',
                 `?status=eq.approved&${sel}&order=is_urgent.desc,needed_by.asc,requested_at.asc&limit=${FIN_PAGE_LIMIT}`,
@@ -2075,8 +2113,9 @@ export default {
 
             const payeeIds = [...new Set(rows.map(x => x.payee_id).filter(Boolean))];
             const reqIds   = rows.map(x => x.id);
+            const poNums   = [...new Set(rows.map(x => x.linked_po_number).filter(Boolean))];
             // batched, never a lookup per row
-            const [bk, dz, tc] = await Promise.all([
+            const [bk, dz, tc, pl] = await Promise.all([
               payeeIds.length
                 ? query('payment_payee_banks',
                     `?payee_id=in.(${payeeIds.join(',')})&is_active=is.true&select=*`)
@@ -2088,9 +2127,20 @@ export default {
                 ? query('payment_requests',
                     `?payee_id=in.(${payeeIds.join(',')})&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`)
                 : { ok: true, data: [] },
+              // The linked POs' GST rates for the whole queue in one read (≤ FIN_PAGE_LIMIT POs),
+              // resolved per PO by poGstRateByPo. Quoted like markPaymentPaid's PO mirror write.
+              poNums.length
+                ? query('po_lines', `?po_number=in.(${encodeURIComponent(
+                    poNums.map(n => `"${String(n).replace(/"/g, '""')}"`).join(','))})&select=po_number,gst_percent`)
+                : { ok: true, data: [] },
             ]);
             const tdsCands = tc.ok ? (tc.data || []) : [];
-            for (const x of rows) x.prior_tds = priorTdsFor(x, tdsCands);
+            // A failed po_lines read degrades to null (the GSTIN fallback) — never a blocker.
+            const poGstRates = pl.ok ? poGstRateByPo(pl.data) : {};
+            for (const x of rows) {
+              x.prior_tds = priorTdsFor(x, tdsCands);
+              x.po_gst_rate = poGstRates[x.linked_po_number] ?? null;
+            }
             const banks = {};
             if (bk.ok) for (const b of bk.data) {
               // default first, so the UI can take banks[payee][0] safely
@@ -4820,10 +4870,11 @@ export default {
               paid_at: now, updated_at: now,
             };
 
-            // TDS (optional). Finance sends a RATE; the AMOUNT is derived here from the row's own
-            // invoice_total and never read off the payload — a client-sent rupee figure is the
-            // error class the field exists to close. NULL rate = not applicable: the request is
-            // paid exactly as it was before this field existed, with both columns left NULL.
+            // TDS (optional). Finance sends a RATE and the invoice's GST RATE; the BASE (taxable
+            // value) and the AMOUNT are derived here from the row's own invoice_total and never
+            // read off the payload — a client-sent rupee figure is the error class the field
+            // exists to close. NULL rate = not applicable: the request is paid exactly as it was
+            // before this field existed, with all four TDS columns left NULL.
             // ⛔ One id only when a rate is sent: this PATCH is a single batched write, but
             // tds_amount is per-invoice, so one rate across several rows would write one row's
             // deduction onto all of them. Both UI callers send a single id.
@@ -4833,14 +4884,16 @@ export default {
               const inv = await query('payment_requests',
                 `?id=eq.${encodeURIComponent(ids[0])}&${PRIOR_TDS_SELECT}&limit=1`);
               if (!inv.ok || !inv.data[0]) return err('Not found', 404);
-              const { tdsAmount, error: tdsError } = computeTds({
-                invoiceTotal: inv.data[0].invoice_total, rate: d.tds_rate,
+              const { tdsAmount, tdsBase, error: tdsError } = computeTds({
+                invoiceTotal: inv.data[0].invoice_total, rate: d.tds_rate, gstRate: d.tds_gst_rate,
               });
               if (tdsError) return err(tdsError);
-              patch.tds_rate   = Number(d.tds_rate);
-              patch.tds_amount = tdsAmount;
-              // Prior TDS on the same invoice → WARN, never block (the base is open with Finance;
-              // see priorTdsFor). Same `warning` field amendPO returns; the UI toasts it.
+              patch.tds_rate     = Number(d.tds_rate);
+              patch.tds_gst_rate = Number(d.tds_gst_rate);   // validated against TDS_GST_RATES above
+              patch.tds_base     = tdsBase;                  // derived, never from the payload
+              patch.tds_amount   = tdsAmount;
+              // Prior TDS on the same invoice → WARN, never block (see priorTdsFor). Same
+              // `warning` field amendPO returns; the UI toasts it.
               if (Number(d.tds_rate) > 0) {
                 const cand = await query('payment_requests',
                   `?payee_id=eq.${inv.data[0].payee_id}&or=(tds_rate.gt.0,tds_amount.gt.0)&${PRIOR_TDS_SELECT}`);

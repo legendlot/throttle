@@ -9,7 +9,7 @@ import { fmtDateShort } from '@/components/format.js';
 import { STATUS_TONE, STATUS_LABEL, money } from '../PaymentList.js';
 import PriorTdsWarning from '../PriorTdsWarning.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
-import { computeTds, netPayable, hasTds } from '@/lib/tds.js';
+import { computeTds, netPayable, hasTds, defaultGstRate, GST_RATES } from '@/lib/tds.js';
 
 export default function PaymentRequestDetail() {
   const sp = useSearchParams();
@@ -26,7 +26,9 @@ export default function PaymentRequestDetail() {
   const [holdNote, setHoldNote] = useState('');
   const [payOpen, setPayOpen] = useState(false);
   // tds_rate is the % as typed. '' = TDS not applicable — it is NOT 0, and nothing is sent.
-  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '', tds_rate: '' });
+  // tds_gst_rate is the invoice's GST% as picked; '' = not touched yet, so the pre-fill (gstPick)
+  // applies. It only sets the TDS base: taxable = invoice_total ÷ (1 + GST%) (decisions.md, 2026-09-11).
+  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '', tds_rate: '', tds_gst_rate: '' });
   const [proof, setProof] = useState([]);
   const [invOpen, setInvOpen] = useState(false);
   const [inv, setInv] = useState([]);
@@ -124,9 +126,16 @@ export default function PaymentRequestDetail() {
     }
   }
 
+  // The GST% the picker shows: Finance's pick, else the linked PO's rate → 18% with a payee
+  // GSTIN → 0% (defaultGstRate). Read at render AND at submit, so the two can never disagree.
+  const gstPick = (req, p = pay) => p.tds_gst_rate !== ''
+    ? p.tds_gst_rate
+    : String(defaultGstRate({ poGstRate: req?.po_gst_rate, payeeGstin: req?.payee?.gstin }));
+
   async function confirmPaid() {
+    const gst = gstPick(d?.request);
     // Refuse here what the worker would refuse anyway, so finance sees WHY without a round-trip.
-    const tdsCheck = computeTds({ invoiceTotal: d?.request?.invoice_total, rate: pay.tds_rate.trim() });
+    const tdsCheck = computeTds({ invoiceTotal: d?.request?.invoice_total, rate: pay.tds_rate.trim(), gstRate: gst });
     if (tdsCheck.error) return showToast(tdsCheck.error, 'error');
     setBusy(true);
     try {
@@ -135,9 +144,9 @@ export default function PaymentRequestDetail() {
         ids: [Number(id)], payment_ref: pay.payment_ref || null,
         payment_mode: pay.payment_mode || null,
         paid_amount: pay.paid_amount === '' ? null : Number(pay.paid_amount),
-        // Rate only — the worker derives tds_amount from invoice_total and never trusts a
-        // client-sent figure. Omitted entirely when blank, which leaves both columns NULL.
-        ...(pay.tds_rate.trim() === '' ? {} : { tds_rate: Number(pay.tds_rate) }),
+        // Rates only — the worker derives tds_base and tds_amount from invoice_total and never
+        // trusts a client-sent figure. Omitted entirely when blank, which leaves all four NULL.
+        ...(pay.tds_rate.trim() === '' ? {} : { tds_rate: Number(pay.tds_rate), tds_gst_rate: Number(gst) }),
       } }, s);
       // proof attaches to the request, which is what removes the "is it done?" round-trip
       for (const item of proof) await uploadPaymentDoc(item, 'payment_proof', s);
@@ -206,7 +215,11 @@ export default function PaymentRequestDetail() {
                     or "₹0", which would read as a deduction that was never made. */}
                 {hasTds(r) && (
                   <>
-                    <Row k="TDS" v={`${Number(r.tds_rate)}% on ${money(r.invoice_total, r.currency)} = ${money(r.tds_amount, r.currency)}`} />
+                    {/* tds_base/tds_gst_rate exist from 2026-09-11 (taxable-value base). A row
+                        paid before that has neither and was computed on invoice_total. */}
+                    <Row k="TDS" v={r.tds_base != null
+                      ? `${Number(r.tds_rate)}% on taxable ${money(r.tds_base, r.currency)} (${money(r.invoice_total, r.currency)} less ${Number(r.tds_gst_rate)}% GST) = ${money(r.tds_amount, r.currency)}`
+                      : `${Number(r.tds_rate)}% on ${money(r.invoice_total, r.currency)} = ${money(r.tds_amount, r.currency)}`} />
                     <Row k="Net released" v={money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount: r.tds_amount }), r.currency)} />
                   </>
                 )}
@@ -394,21 +407,42 @@ export default function PaymentRequestDetail() {
             <input type="number" inputMode="decimal" min={0} max={100} step="0.01"
               value={pay.tds_rate}
               onChange={e => {
-                const rate = e.target.value;
-                const { tdsAmount } = computeTds({ invoiceTotal: r.invoice_total, rate: rate.trim() });
+                const next = { ...pay, tds_rate: e.target.value };
+                const { tdsAmount } = computeTds({ invoiceTotal: r.invoice_total,
+                  rate: next.tds_rate.trim(), gstRate: gstPick(r, next) });
                 const net = netPayable({ amountToPay: r.amount_to_pay, tdsAmount });
-                setPay(p => ({ ...p, tds_rate: rate,
+                setPay(p => ({ ...p, tds_rate: next.tds_rate,
                                paid_amount: net == null ? p.paid_amount : String(net) }));
               }}
               style={{ width: '100%', padding: 10, fontSize: 16, borderRadius: 8, marginBottom: 4,
                        border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }} />
             {pay.tds_rate.trim() !== '' && (() => {
-              const { tdsAmount, error } = computeTds({ invoiceTotal: r.invoice_total, rate: pay.tds_rate.trim() });
+              const gst = gstPick(r);
+              const { tdsAmount, tdsBase, error } = computeTds({ invoiceTotal: r.invoice_total,
+                rate: pay.tds_rate.trim(), gstRate: gst });
               return (
-                <div style={{ fontSize: 12, marginBottom: 12,
-                              color: error ? 'var(--red-fg)' : 'var(--t2)' }}>
-                  {error || `TDS ${money(tdsAmount, r.currency)} on ${money(r.invoice_total, r.currency)} · net ${money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount }), r.currency)}`}
-                </div>
+                <>
+                  {/* The invoice's GST% — sets the TDS base only. Pre-filled from the linked PO,
+                      else 18% with a payee GSTIN, else 0%. Changing it re-defaults Amount paid. */}
+                  <label style={{ fontSize: 12, color: 'var(--t2)' }}>Invoice GST %</label>
+                  <select value={gst}
+                    onChange={e => {
+                      const next = { ...pay, tds_gst_rate: e.target.value };
+                      const { tdsAmount: amt } = computeTds({ invoiceTotal: r.invoice_total,
+                        rate: next.tds_rate.trim(), gstRate: next.tds_gst_rate });
+                      const net = netPayable({ amountToPay: r.amount_to_pay, tdsAmount: amt });
+                      setPay(p => ({ ...p, tds_gst_rate: next.tds_gst_rate,
+                                     paid_amount: net == null ? p.paid_amount : String(net) }));
+                    }}
+                    style={{ width: '100%', padding: 10, fontSize: 16, borderRadius: 8, marginBottom: 4,
+                             border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }}>
+                    {GST_RATES.map(g => <option key={g} value={String(g)}>{g}%</option>)}
+                  </select>
+                  <div style={{ fontSize: 12, marginBottom: 12,
+                                color: error ? 'var(--red-fg)' : 'var(--t2)' }}>
+                    {error || `Taxable ${money(tdsBase, r.currency)} (${money(r.invoice_total, r.currency)} less ${gst}% GST) · TDS ${money(tdsAmount, r.currency)} · net ${money(netPayable({ amountToPay: r.amount_to_pay, tdsAmount }), r.currency)}`}
+                  </div>
+                </>
               );
             })()}
             <label style={{ fontSize: 12, color: 'var(--t2)' }}>Amount paid</label>
