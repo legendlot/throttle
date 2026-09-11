@@ -6,6 +6,11 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## 1.16.1 - 2026-09-11
+
+- **Line Flush:** parts are now picked from the part list (type a code or name) instead of typed
+  free-hand, so only real part codes can be flushed.
+
 ## 1.16.0 - 2026-09-07
 
 - **New Run / Request** (Fresh) documents the new **Export** quantity column alongside Ecom and
