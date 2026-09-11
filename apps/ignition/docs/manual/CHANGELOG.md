@@ -3,6 +3,23 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.14.0] - 2026-09-11
+### Added
+- Engagement detail: documented the COMPLETE-deal lock (Deal Terms, Costs, Post-live,
+  Products and Compliance go read-only once a deal is Complete; Performance, payments,
+  notes, stage, POC, logistics, codes and Ads stay open), the Unlock for edit / Lock again
+  controls (24h window, approval-rights only, logged), and the 11 Sep 2026 backfill that
+  marked Followers gained "Internal gap" on every historic Live deal.
+- Engagement detail: added an Ads card section (approval, gated 10 days after the take
+  posts IST; run status, which needs approval to hand-set Running; Meta refresh; ad
+  payments to the creator with required paid screenshots) and noted ad money (ad payments
+  and Meta spend) is outside the influencer budget and no longer includes a Costs card
+  "Ad spend" field.
+### Changed
+- Performance card: Views now splits into Paid views (typed, or filled by a synced Meta
+  ad) and a derived Organic views line; CPM and the performance ratios now compute off
+  organic views, not the platform total.
+
 ## [1.13.0] - 2026-09-10
 ### Changed
 - Engagements list + engagement detail: documented that a declared gap reason (Internal

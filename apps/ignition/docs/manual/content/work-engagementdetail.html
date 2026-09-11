@@ -8,7 +8,7 @@
 </div>
 
 <h2 class="sec">The layout</h2>
-<p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, a <strong>Complete</strong> or <strong>Incomplete</strong> pill once the deal is Live, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A metric with a reason recorded on the per-video <strong>Performance</strong> card counts toward Complete even without a number entered. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, <strong>Influencer</strong>, <strong>Payments</strong>, Costs (with the rolled-up <strong>total</strong> in orange), Logistics, Post-live and Performance (one tab per video, deal totals, ROAS), followed by Notes and a History log.</p>
+<p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, a <strong>Complete</strong> or <strong>Incomplete</strong> pill once the deal is Live, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A metric with a reason recorded on the per-video <strong>Performance</strong> card counts toward Complete even without a number entered. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, <strong>Influencer</strong>, <strong>Payments</strong>, Costs (with the rolled-up <strong>total</strong> in orange), <strong>Ads</strong>, Logistics, Post-live and Performance (one tab per video, deal totals, ROAS), followed by Notes and a History log.</p>
 
 <h2 class="sec">Complete is a derived flag, not a stage</h2>
 <p><strong>Live is still the final stage</strong> &mdash; nothing about a deal moves when it becomes Complete. Complete is worked out, not clicked: a deal reads Complete once it is at stage <strong>Live</strong> and four things have all been answered &mdash; <strong>Views</strong> (greater than zero), <strong>Likes</strong>, <strong>Followers gained</strong>, and <strong>Cost</strong> (a total cost greater than zero). A number is one way to answer; a recorded reason is the other. If you note on the Performance card why a metric will never exist &mdash; Internal gap, Gated data or System timing &mdash; that metric counts as answered and the deal can be Complete without it. <strong>Cost is the exception:</strong> a reason never completes Cost, because an uncosted deal is a different problem from a number the platform will not show us. The pill sits next to the stage and deal-type badges in the header: a green <strong>Complete</strong> pill when all four are answered, or a muted <strong>Incomplete &middot; missing: &hellip;</strong> pill naming exactly which are still blank with no reason given. Nothing shows before the deal reaches Live &mdash; an unposted deal has no numbers to be missing yet.</p>
@@ -19,9 +19,18 @@
   <p>Reann originally asked for a Complete stage. It was built as a derived flag instead so the stage vocabulary does not grow, and so nothing has to be clicked to mark a deal done &mdash; entering the numbers <em>is</em> marking it done.</p>
 </div>
 
-<div class="callout warn">
-  <div class="c-title">&#9888; Every live deal currently reads Incomplete</div>
-  <p><strong>Followers gained</strong> has never been entered on any deal, so until that number starts being filled in, every Live deal will show Incomplete regardless of how many of the other three numbers are in.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; Historic Live deals were backfilled on 11 Sep 2026</div>
+  <p>Followers gained had never been entered on any deal, so every Live deal read Incomplete. On 11 Sep 2026 every already-live deal had Followers gained marked with the reason <strong>Internal gap</strong>, which answers the question without a number and lets those deals read Complete. New deals still need a real number or a declared reason as they go live.</p>
+</div>
+
+<h2 class="sec">Complete locks the deal terms</h2>
+<p>Since 11 Sep 2026, a deal that reads <strong>Complete</strong> also <strong>locks</strong>: <strong>Deal Terms</strong>, <strong>Costs</strong>, <strong>Post-live</strong>, <strong>Products</strong> and <strong>Compliance</strong> go read-only, each showing a small locked note in place of its Edit button. Everything else on the page stays open &mdash; <strong>Performance</strong>, payments, notes, stage, POC, logistics, codes and the Ads card can still be changed on a Complete deal. A lock banner appears in the header: <strong>&ldquo;This deal is complete and locked. Metrics stay editable.&rdquo;</strong></p>
+<p>There are two ways back to editable. The first is on you: clear a metric or its declared gap reason in Performance, which makes the deal Incomplete again and the lock falls away on its own. The second needs approval rights (the same people who can Approve a deal): press <strong>Unlock for edit</strong> in the header banner, optionally with a reason. That opens a 24-hour window, shown as an <strong>&ldquo;Unlocked&rdquo;</strong> banner naming who unlocked it and until when, and every unlock is logged. <strong>Lock again</strong> in that banner ends the window early. If nobody presses Lock again, the window simply expires on its own after 24 hours.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Who can Unlock</div>
+  <p>Marketers without approval rights see <em>&ldquo;Unlocking is with Reann&rdquo;</em> in place of the button, the same pattern as Approve. Ask whoever holds approval rights to unlock the deal if a locked field genuinely needs fixing.</p>
 </div>
 
 <div class="callout warn">
@@ -36,16 +45,21 @@
 <p>The <strong>Payments</strong> card shows what has been paid against this deal and what is still owed, and every payment carries its <strong>screenshot</strong>: click it to open the proof. <strong>+ Record</strong> logs a new payment with the creator and deal already filled in. The separate Payments page is still there for spend across all deals.</p>
 
 <h2 class="sec">The Performance card: one tab per video</h2>
-<p>Since 4 Sep 2026 a deal can carry more than one video (Reann asked for 2 to 3 takes under one deal, so a second posting no longer has to pretend to be a separate deal). The card shows a row of tabs, <strong>Video #1</strong>, <strong>Video #2</strong> and so on, one per take that has been added. <strong>Edit</strong> opens the take currently selected and its own metrics: link, posted date, views, organic views, paid views, likes, comments, shares, reposts, saves, followers gained, followers at post date, and (where the deal drives traffic) impressions. A blank metric can carry a &ldquo;why blank?&rdquo; reason instead of a number, for the ones that genuinely were not tracked. Save writes that one take only, nothing else on the deal.</p>
+<p>Since 4 Sep 2026 a deal can carry more than one video (Reann asked for 2 to 3 takes under one deal, so a second posting no longer has to pretend to be a separate deal). The card shows a row of tabs, <strong>Video #1</strong>, <strong>Video #2</strong> and so on, one per take that has been added. <strong>Edit</strong> opens the take currently selected and its own metrics: link, posted date, views, paid views, likes, comments, shares, reposts, saves, followers gained, followers at post date, and (where the deal drives traffic) impressions. A blank metric can carry a &ldquo;why blank?&rdquo; reason instead of a number, for the ones that genuinely were not tracked. Save writes that one take only, nothing else on the deal.</p>
 <p><strong>+ Add video</strong> sits at the end of the tab row and adds another take, up to a limit of <strong>six videos per deal</strong>; the button disappears once a deal reaches six. <strong>Video #1</strong> is the primary take: its link, posted date and followers-at-post-date are the deal&rsquo;s own, the same numbers the Post-live card shows, and it cannot be removed while any other take exists. Every other tab, while editing, shows a <strong>Remove video #N</strong> button that deletes that take; its numbers leave the deal&rsquo;s totals immediately.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Since 11 Sep 2026: Views split into Paid and Organic</div>
+  <p><strong>Views</strong> is the platform total for that take. <strong>Paid views</strong> is the slice an ad bought &mdash; type it, or leave it, and once an ad on that take is synced from Meta it fills in on its own. Underneath, the card shows <strong>Organic views</strong>: views minus paid, worked out for you, not a field you type into. Paid views can never be more than Views; Save is blocked until that is fixed. A take with no ad on it simply leaves Paid views blank, which reads as fully organic. <strong>CPM and every performance ratio use organic views, not the platform total</strong> &mdash; so a heavily-boosted video does not make its CPM look artificially cheap.</p>
+</div>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Followers at post date is required once any number is on the take</div>
-  <p>A take with only a link and a posted date can be saved with nothing else filled in. But the moment any number is entered on that take &mdash; views, likes, comments, shares, reposts, saves, impressions, followers gained, organic views or paid views &mdash; <strong>Followers at post date</strong> stops accepting a &ldquo;why blank?&rdquo; reason and Save stays disabled until it too has a number. It cannot be recovered later, so it has to be captured while you have it, or that take loses it for good. This applies per take, not once per deal.</p>
+  <p>A take with only a link and a posted date can be saved with nothing else filled in. But the moment any number is entered on that take &mdash; views, likes, comments, shares, reposts, saves, impressions, followers gained or paid views &mdash; <strong>Followers at post date</strong> stops accepting a &ldquo;why blank?&rdquo; reason and Save stays disabled until it too has a number. It cannot be recovered later, so it has to be captured while you have it, or that take loses it for good. This applies per take, not once per deal.</p>
 </div>
 
 <h2 class="sec">Deal totals: the rollup below the tabs</h2>
-<p><strong>Deal totals</strong> sits under the tabs and shows the deal&rsquo;s own numbers: views, likes, comments, shares, reposts, saves, followers gained and impressions are now the <strong>sum of every video take</strong>, and are no longer typed directly here. <strong>Edit totals</strong> only opens Sessions, Orders and Conversions &#8377;, which stay deal-level exactly as before and are not attached to any one video. <strong>Actual ROAS</strong>, the engagement ratios, and CPM are all recomputed from these totals.</p>
+<p><strong>Deal totals</strong> sits under the tabs and shows the deal&rsquo;s own numbers: views, likes, comments, shares, reposts, saves, followers gained and impressions are now the <strong>sum of every video take</strong>, and are no longer typed directly here. <strong>Edit totals</strong> only opens Sessions, Orders and Conversions &#8377;, which stay deal-level exactly as before and are not attached to any one video. <strong>Actual ROAS</strong>, the engagement ratios, and CPM are all recomputed from these totals, and since 11 Sep 2026 they are computed on <strong>organic views</strong> (views minus paid views), not the platform total.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; Video #1&rsquo;s posted date IS the deal&rsquo;s</div>
@@ -80,6 +94,27 @@
 <div class="callout warn">
   <div class="c-title">&#9888; A stale link now warns you, on its own</div>
   <p>If the tracking link was minted and the deal&rsquo;s product changed afterward, a banner appears right under the link showing where it currently points and where the deal now points. Ignition still cannot repoint it: every target change is recorded against a named person, so fixing it is done in <strong>Relay &rarr; Links</strong>, not here. The banner links straight there.</p>
+</div>
+
+<h2 class="sec">The Ads card: boosting a video as a paid ad</h2>
+<p>Since 11 Sep 2026 the <strong>Ads</strong> card, below Costs, tracks running a deal&rsquo;s video as a paid Meta ad &mdash; separate from the organic post itself. Each row is one ad and boosts <strong>one take</strong> of the deal&rsquo;s video (pick it from the <strong>Take</strong> dropdown), plus <strong>Platform</strong> (Instagram, Facebook, or both), <strong>start</strong> and <strong>end</strong> dates, an optional <strong>Meta ad id</strong> and a note. <strong>+ Add ad</strong> starts a new one; <strong>Edit</strong> and <strong>Delete</strong> manage an existing one.</p>
+<p>Two separate things are tracked on every ad, and they do not always agree:</p>
+<ul>
+  <li><strong>Approval</strong> &mdash; Legend of Toys&rsquo;s go-ahead to run it. Only people with approval rights (the same rights that approve a deal) see <strong>Approve</strong>, <strong>Reject</strong> and <strong>Back to pending</strong>. <strong>Approve stays greyed out, with the date shown, until 10 days after that take posted</strong> (in IST) &mdash; there is nothing to click early, and the card tells you exactly which date it opens.</li>
+  <li><strong>Run status</strong> &mdash; what the ad is actually doing: <strong>Not started</strong>, <strong>Running</strong> or <strong>Ended</strong>. You cannot hand-set an ad to <strong>Running</strong> until it is approved; the option is disabled and marked &ldquo;(needs approval)&rdquo; until then. Meta&rsquo;s own reporting can still show an ad running that was never approved here &mdash; that shows as a red <strong>&ldquo;running without approval&rdquo;</strong> flag on the row, a warning to go sort out, not something Ignition blocks.</li>
+</ul>
+<p><strong>Refresh from Meta</strong> (once any ad on the deal has a Meta ad id) pulls status, spend, views and impressions from Meta for every ad on the deal and shows when each last synced; a sync older than 36 hours is flagged as stale, meaning the daily automatic sync has stopped reaching it.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Ad money is outside the influencer budget</div>
+  <p>What is paid here, and any Meta spend, is <strong>never</strong> part of this deal&rsquo;s total cost, its CPM, the monthly budget or the Payments page. The Ads card totals its own spend separately at the top of the card. The <strong>Costs</strong> card no longer has an Ad spend field to enter &mdash; that input was retired on 11 Sep 2026; ad money now lives only here.</p>
+</div>
+
+<p><strong>Ad payments</strong>, underneath the ads list, is money paid to the <strong>creator</strong> for ad rights or usage &mdash; a different thing from Meta spend, which is what Legend of Toys pays Meta to run the ad. <strong>+ Record</strong> logs a payment: amount, <strong>Pending</strong> or <strong>Paid</strong>, optionally linked to one ad, with a note. Marking one <strong>Paid</strong> requires a <strong>screenshot</strong> of the payment, the same rule as the deal&rsquo;s own Payments card; click <strong>screenshot</strong> on any row to view it. <strong>Back to pending</strong> and <strong>delete</strong> are also available.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The Ads card is never locked</div>
+  <p>Unlike Deal Terms, Costs, Post-live, Products and Compliance, the Ads card and its payments stay editable even on a Complete, locked deal &mdash; ads typically run after the video is already up and the deal has completed.</p>
 </div>
 
 <h2 class="sec">The deal brief</h2>

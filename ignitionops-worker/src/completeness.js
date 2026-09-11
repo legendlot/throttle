@@ -75,8 +75,9 @@ export function isLocked(row = {}, now = Date.now()) {
 //   DealTermsCard  → deal_type, payment_terms, payment_amount, affiliate_pct, commission_amount,
 //                    campaign_id, ad_rights, ad_rights_amount, ad_rights_duration
 //   CostsCard      → return_cost (S373: its ad_spend input was retired — ad money now lives on the
-//                    Ads card, which is NOT locked. `ad_spend` STAYS locked below: it is still a
-//                    term of the generated total_cost and the UGC card still writes it.)
+//                    Ads card, which is NOT locked. `ad_spend` STAYS locked below because the UGC
+//                    card still writes it; since S373 neither it nor ad_rights_amount is a term
+//                    of the generated total_cost.)
 //   PostLiveCard   → post_date
 //   ComplianceCard → compliance_caption_link, compliance_coupon_verbal, compliance_car_motion
 // ProductsCard saves through setEngagementProducts and ComplianceCard's gifted flag through

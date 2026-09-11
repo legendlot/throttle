@@ -139,6 +139,9 @@ export default function AdsCard({ engagement, videos, ads, adPayments, canManage
       <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
         <strong style={{ color: 'var(--text-2)' }}>Ad total {inr(payPending + payPaid + metaSpend)}</strong>
         {' '}= ad payments {inr(payPending + payPaid)} + Meta spend {inr(metaSpend)} — outside the influencer budget, not in this deal&apos;s total cost.
+        {Number(engagement?.ad_rights_amount) > 0 && (
+          <> Agreed ad-rights fee (Deal Terms) {inr(Number(engagement.ad_rights_amount))} — paid {inr(payPaid)} so far.</>
+        )}
       </div>
 
       {syncMsg && (

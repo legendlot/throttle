@@ -656,7 +656,7 @@ function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved }) {
           } />
           {e.ad_rights && (
             <>
-              <KV label="Ad rights ₹" value={e.ad_rights_amount != null ? `₹${Number(e.ad_rights_amount).toLocaleString('en-IN')}` : '—'} />
+              <KV label="Ad rights ₹ (outside budget)" value={e.ad_rights_amount != null ? `₹${Number(e.ad_rights_amount).toLocaleString('en-IN')}` : '—'} />
               <KV label="Ad duration" value={e.ad_rights_duration || '—'} />
             </>
           )}

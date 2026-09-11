@@ -2235,8 +2235,9 @@ const ENGAGEMENT_FIELDS = [
   'engagement_type','campaign_id','product_code','product_variant',
   'deal_type','payment_terms','payment_amount','affiliate_pct','commission_amount',
   'ad_spend','goodies_cost','shipping_cost','return_cost',
-  // Ad rights (Reann #4, 2026-08-27). `ad_rights_amount` is a term of the GENERATED total_cost,
-  // so saving one recomputes CPM through the same path every other cost field uses.
+  // Ad rights (Reann #4, 2026-08-27). ⚠️ S373 (Afshaan 2026-09-11): `ad_rights_amount` and
+  // `ad_spend` LEFT the generated total_cost — ad money is never influencer budget. The agreed fee
+  // is shown on the Ads card beside the ad payments made against it, not in the deal's cost.
   'ad_rights','ad_rights_amount','ad_rights_duration',
   // cpm is worker-computed (recomputeCpm), not a manual field (theme ④ B13).
   'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
