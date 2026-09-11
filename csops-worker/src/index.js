@@ -25,7 +25,7 @@ import {
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { partitionBySupport } from './ticket-thread.js';
-import { botOutboundRows, botThreadPatch, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
+import { botOutboundRows, botThreadPatch, declinedTurnPatch, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
 import { isUniqueViolation, adoptNumberlessThread } from './thread-adopt.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
@@ -7026,6 +7026,8 @@ async function relayWaIngestInbound(m, env) {
 
   const patch = { last_message_at: ts, last_inbound_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
   if (thread.thread_state && thread.thread_state !== 'open') clearClosedFields(patch);
+  // A turn the bot declined (paused, handoff, opt-out, …) drops a stale rail in this same PATCH.
+  Object.assign(patch, declinedTurnPatch(m?.bot, thread));
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
   // S355 — a bot-handled turn: write the bot's lines (tagged relay_bot), drive the bot_active rail,

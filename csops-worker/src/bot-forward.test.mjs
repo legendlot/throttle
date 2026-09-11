@@ -1,7 +1,7 @@
 // S355 — bot transcript rows + thread rail (spec §5.3, §5.5). Real imports.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { botOutboundRows, botThreadPatch, flattenReply, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
+import { botOutboundRows, botThreadPatch, declinedTurnPatch, flattenReply, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
 
 test('bot rows carry the relay_bot marker, no user, uniform keys, options flattened, ticket_id', () => {
   const rows = botOutboundRows({ threadId: 'T', wabaPhoneNumberId: 'PN', ticketId: 'TK1', now: '2026-09-07T10:00:00.000Z',
@@ -52,4 +52,25 @@ test('thread patch: ended on an ASSIGNED thread drops the rail only, leaving it 
   assert.deepEqual(botThreadPatch({ session_status: 'ended', handoff: false, thread: { thread_state: 'open', assigned_agent_id: 'AGENT1' }, now }), { bot_active: false });
   const un = botThreadPatch({ session_status: 'ended', handoff: false, thread: { thread_state: 'open', assigned_agent_id: null }, now });
   assert.equal(un.thread_state, 'closed'); assert.equal(un.closed_reason, 'bot_resolved');
+});
+
+// A paused/declining bot must not keep hiding the thread: every new customer line refreshes
+// last_inbound_at, so a TRUE rail left behind would keep railLive true indefinitely.
+test('declinedTurnPatch: a turn the bot did not take drops a live rail; a handled turn never does', () => {
+  const on = { bot_active: true }, off = { bot_active: false };
+  // no m.bot at all = every decline reason (paused, pilot, opt-out, human active, handoff, …) and a bot-side error
+  assert.deepEqual(declinedTurnPatch(undefined, on), { bot_active: false });
+  assert.deepEqual(declinedTurnPatch(null, on), { bot_active: false });
+  assert.deepEqual(declinedTurnPatch({ handled: false }, on), { bot_active: false });
+  // rail already off: nothing to write
+  assert.deepEqual(declinedTurnPatch(undefined, off), {});
+  assert.deepEqual(declinedTurnPatch(undefined, null), {});
+  // handled turns (incl. the duplicate claim) leave the rail to botThreadPatch
+  assert.deepEqual(declinedTurnPatch({ handled: true, session_status: 'active' }, on), {});
+  assert.deepEqual(declinedTurnPatch({ handled: true, duplicate: true, session_status: 'active' }, on), {});
+  // end to end with the reader: paused bot, customer wrote 1 min ago -> rail no longer hides the thread
+  const now = Date.parse('2026-09-11T12:00:00.000Z');
+  const t = { bot_active: true, last_inbound_at: new Date(now - 60e3).toISOString() };
+  assert.equal(railLive(t, now), true);
+  assert.equal(railLive({ ...t, ...declinedTurnPatch(undefined, t) }, now), false);
 });

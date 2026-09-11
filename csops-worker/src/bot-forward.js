@@ -24,7 +24,8 @@ export function botOutboundRows({ threadId, wabaPhoneNumberId, replies, now, tic
   });
 }
 // The rail has NO expiry writer: `bot_active` only flips back on the customer's NEXT inbound
-// (bot-wa.js's 6h idle expire), on a human outbound, or on a manual agent action. An abandoned
+// (bot-wa.js's 6h idle expire, or any turn the bot declines — declinedTurnPatch), on a human
+// outbound, or on a manual agent action. An abandoned
 // session therefore holds the thread out of Awaiting/unread/auto-assign FOREVER — and a web
 // session has no inbound-driven expiry at all. So every READER treats the rail as live only
 // while the customer was here inside the same 6h window the session itself uses.
@@ -49,4 +50,15 @@ export function botThreadPatch({ session_status, handoff, thread, now }) {
     return { bot_active: false, thread_state: 'closed', closed_at: now, closed_reason: 'bot_resolved', closed_by_user_id: null, snoozed_until: null };
   }
   return { bot_active: true };
+}
+// A WhatsApp inbound the bot did NOT take (no `m.bot.handled`): bot paused/none active, not in
+// pilot, opt-out keyword, human active, enrolled, unsupported kind, sticky handoff, or a bot-side
+// error — bot-wa.js fails every one of those CLOSED, "forward exactly as today". Nobody automated
+// is answering this message, so the rail must drop: left TRUE, every new line refreshes
+// last_inbound_at and railLive hides a customer writing to a paused bot from agents indefinitely.
+// Event-driven on purpose (§S355d: the column is not swept). Merged into the inbound's own PATCH.
+// ⚠️ First delivery only — never the pmid-dedup branch: a redelivery whose bot run hit a transient
+// error would otherwise drop the rail the FIRST delivery's handled turn legitimately set.
+export function declinedTurnPatch(bot, thread) {
+  return !bot?.handled && thread?.bot_active ? { bot_active: false } : {};
 }
