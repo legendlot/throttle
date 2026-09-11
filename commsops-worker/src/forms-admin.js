@@ -43,7 +43,7 @@ function chunk(arr, n = IN_CHUNK) {
 // A PostgREST `in.(…)` list. Values are double-quoted so a SKU or email carrying a comma or a
 // paren cannot split the list, and percent-encoded so a `+` in an email is not read as a space.
 function inList(values) {
-  return `(${values.map((v) => `"${A.enc(String(v).replace(/"/g, ''))}"`).join(',')})`;
+  return `(${values.map((v) => `"${A.enc(String(v).replace(/["\\]/g, ''))}"`).join(',')})`;
 }
 
 // The IST calendar day (YYYY-MM-DD) of an instant. Days are IST everywhere in LOT; a UTC day
@@ -134,7 +134,7 @@ function summarise(rows, { now = Date.now(), total = null, skuToCode = {} } = {}
     no_sku: noSku,
     rows_considered: list.length,
     // True when the aggregates above saw only the newest SUMMARY_CAP rows of a bigger form.
-    sampled: total != null && Number.isFinite(n) && n > list.length,
+    sampled: (total != null && Number.isFinite(n) && n > list.length) || list.length >= SUMMARY_CAP,
   };
 }
 
@@ -186,7 +186,7 @@ async function formCounts(env, form, now) {
     last_7_days: d7,
     last_30_days: d30,
     distinct_contacts: contacts,
-    distinct_contacts_sampled: rows != null && total != null && total > rows.length,
+    distinct_contacts_sampled: rows != null && ((total != null && total > rows.length) || rows.length >= SUMMARY_CAP),
     last_submitted_at: (latest.ok && latest.data?.[0]?.submitted_at) || null,
     alerted: form.slug === BIS_SLUG ? alerted : null,
   };

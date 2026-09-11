@@ -52,6 +52,8 @@ test('alertStatus: waiting / queued / retrying / stuck / alerted', () => {
 
 test('inList: quoted and encoded, so a + or comma cannot corrupt the filter', () => {
   assert.equal(F.inList(['a+b@x.com', 'c,d']), '("a%2Bb%40x.com","c%2Cd")');
+  // a trailing backslash cannot escape the closing quote (S372 review)
+  assert.equal(F.inList(['sku\\']), '("sku")');
 });
 
 test('chunk: splits at the size and keeps every value', () => {
@@ -78,6 +80,8 @@ test('summarise: distinct contacts, per-day (IST), channels, top products, sampl
   assert.equal(s.sampled, false);
   assert.equal(F.summarise(rows, { now: NOW, total: 9000 }).sampled, true);
   assert.equal(F.summarise(rows, { now: NOW, total: null }).sampled, false);
+  // total unreadable but the capped read came back full → still flagged as sampled (S372 review)
+  assert.equal(F.summarise(Array.from({ length: F.SUMMARY_CAP }, () => rows[0]), { now: NOW, total: null }).sampled, true);
 });
 
 test('pickContact: what the customer typed wins; profile identifiers are the fallback', () => {

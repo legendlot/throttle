@@ -54,7 +54,7 @@ function TestPanel({ botId, definition, session }) {
         setState(out.state);
         const lines = [
           ...(curInput.kind === 'open' || curInput.kind === 'resume' ? [] : [{ who: 'you', text: curInput.text || curInput.buttonId }]),
-          ...(out.replies || []).map((rp) => ({ who: 'bot', text: rp.text, buttons: rp.buttons, style: rp.style })),
+          ...(out.replies || []).map((rp) => ({ who: 'bot', text: rp.text, buttons: rp.buttons, style: rp.style, step_id: rp.step_id })),
           ...(out.effects || []).filter((e) => e.type === 'handoff').map(() => ({ who: 'sys', text: '→ would hand off to an agent here' })),
           ...(out.effects || []).filter((e) => e.type === 'order_lookup').map((e) => ({ who: 'sys', text: `→ would look up ${e.orderNumber} (verified against ${e.identity?.phone || e.identity?.email || 'nothing — no identity collected!'})` })),
         ];
@@ -123,7 +123,7 @@ function TestPanel({ botId, definition, session }) {
                       {m.buttons.map((b) => (
                         <button key={b.id} className="btn" type="button"
                           style={{ marginRight: 5, marginBottom: 3, fontSize: 12, ...(m.style === 'list' ? { display: 'block', width: '100%', textAlign: 'left' } : null) }}
-                          disabled={busy || state.status !== 'active'} onClick={() => turn({ kind: 'button', buttonId: b.id, text: b.label })}>
+                          disabled={busy || state.status !== 'active'} onClick={() => turn({ kind: 'button', buttonId: b.id, text: b.label, ...(m.step_id ? { stepId: m.step_id } : {}) })}>
                           {b.label}
                         </button>
                       ))}

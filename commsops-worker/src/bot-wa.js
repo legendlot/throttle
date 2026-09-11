@@ -106,6 +106,7 @@ async function maybeHandleInbound(env, m, ingestRes, depsIn) {
   if (lo.found && lo.last_outbound_at && Date.now() - new Date(lo.last_outbound_at).getTime() < HUMAN_ACTIVE_MS) return null;
   if (!ingestRes?.profile_id) return null;   // unreadable ingest -> silent, not fail-open into condition 6
   if (await d.hasActiveEnrolment(env, ingestRes?.profile_id)) return null;                     // 6
+  // ⚠️ Mirrored in csops-worker/src/bot-forward.js BOT_TAKEABLE_TYPES (a declined turn of these kinds clears the rail) — keep in step.
   const kindOk = ['text', 'interactive', 'button', 'image', 'video', 'audio', 'document', 'sticker'].includes(m.type || 'text');
   if (!kindOk) return null;                                                                    // 7
   const text = String(m.text || '').slice(0, 500);

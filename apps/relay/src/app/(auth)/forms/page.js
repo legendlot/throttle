@@ -78,6 +78,8 @@ export default function FormsPage() {
                 <th style={{ ...th, width: 80 }}>Total</th>
                 <th style={{ ...th, width: 80 }}>7 days</th>
                 <th style={{ ...th, width: 80 }}>30 days</th>
+                <th style={{ ...th, width: 80 }}>Contacts</th>
+                <th style={{ ...th, width: 80 }}>Alerted</th>
                 <th style={{ ...th, width: 130 }}>Last sign-up</th>
                 <th style={{ ...th, width: 90 }} />
               </tr>
@@ -106,7 +108,9 @@ export default function FormsPage() {
                               sign-up; the customer is messaged when the product flips back in stock
                               <b> and</b> the back-in-stock journey is active.</p>
                             <p>While the journey is draft, no alert is sent and none is used up — each
-                              sign-up waits and is still eligible once the journey is switched on.</p>
+                              sign-up waits. Once the journey is switched on, a waiting sign-up is alerted
+                              only if its product is <b>still</b> in stock; if it sold out again meanwhile,
+                              it waits for the next restock.</p>
                           </InfoDot>
                         </div>
                       )}
@@ -115,6 +119,9 @@ export default function FormsPage() {
                     <td style={{ ...td, fontWeight: 600 }}>{num(c.total)}</td>
                     <td style={td}>{num(c.last_7_days)}</td>
                     <td style={td}>{num(c.last_30_days)}</td>
+                    <td style={td} title={c.distinct_contacts_sampled ? 'Counted over the newest 5,000 sign-ups' : undefined}>
+                      {num(c.distinct_contacts)}{c.distinct_contacts_sampled ? '*' : ''}</td>
+                    <td style={td}>{f.slug === 'back-in-stock' ? num(c.alerted) : '—'}</td>
                     <td style={{ padding: '8px', color: 'var(--t3)' }}><Stamp value={c.last_submitted_at} /></td>
                     <td style={{ padding: '8px', textAlign: 'right' }}>
                       <Btn onClick={open}>Open <ChevronRight size={14} /></Btn>

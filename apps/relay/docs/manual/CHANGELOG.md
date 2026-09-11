@@ -1,5 +1,8 @@
 # Relay Operations Manual — Changelog
 
+## 1.9.1 — 2026-09-11
+- **Forms:** activating the back-in-stock journey alerts a waiting sign-up only if its product is still in stock (migration 0072); the list page shows Contacts + Alerted.
+
 ## 1.9.0 — 2026-09-11
 - **New chapter: Forms** (`33-forms.html`, Audience part, right after Contacts). Covers the
   `/f/*` capture forms and the back-in-stock widget on sold-out PDPs, the Forms list and what
