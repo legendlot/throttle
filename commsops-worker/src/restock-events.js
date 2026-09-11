@@ -153,4 +153,6 @@ async function emitRestockEvents(env, ingest) {
   return { claimed, emitted: done.length, failed };
 }
 
-module.exports = { emitRestockEvents, RESTOCK_SINCE };
+// MAX_ATTEMPTS is exported so forms-admin.js labels a row "stuck" at the SAME threshold this
+// file stops retrying it at — a copied constant would drift.
+module.exports = { emitRestockEvents, RESTOCK_SINCE, MAX_ATTEMPTS };

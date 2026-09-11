@@ -39,6 +39,7 @@ const FWIDGET = require('./form-widget.js');
 const SHIPEV = require('./shipment-events.js');
 const RTOEV = require('./rto-stages.js');   // RTO stages 2+3, scan-code-driven (not lifecycle)
 const RESTOCKEV = require('./restock-events.js'); // SP3 back-in-stock alerts (S362)
+const FADMIN = require('./forms-admin.js');  // Relay /forms — form list + sign-ups reads
 const LINKS = require('./links.js');        // Phase-B /r/<code> first-party redirect
 const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (webhook only pushes on change)
 const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
@@ -368,6 +369,24 @@ async function handleGet(url, auth, env) {
       ]);
       return ok({ profile: p.data?.[0] || null, identifiers: ids.data || [],
                   consent: cons.data || [], events: evs.data || [] });
+    }
+
+    // ── Forms (2026-09-11) — who is signing up on the /f/* capture forms ─────────────────
+    // Same gate as the Contacts reads above (relay_view — getProfiles/getProfile rely on the
+    // blanket check in fetch()); restated here so these PII reads stay gated if that ever moves.
+    case 'listForms': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const r = await FADMIN.listForms(env);
+      return r.error ? err(r.error, r.status) : ok(r);
+    }
+    case 'getFormSubmissions': {
+      if (!A.canView(auth.permissions)) return err('forbidden', 403);
+      const r = await FADMIN.getFormSubmissions(env, {
+        formId: (url.searchParams.get('form_id') || '').trim(),
+        limit: intParam(url, 'limit', 100, { min: 1, max: 500 }),
+        offset: intParam(url, 'offset', 0),
+      });
+      return r.error ? err(r.error, r.status) : ok(r);
     }
 
     case 'getTemplates': {             // M5 (+usage S252)

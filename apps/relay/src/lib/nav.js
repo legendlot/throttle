@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Send, GitBranch, Filter, Contact, Mail, BarChart3,
   Shield, Users, SlidersHorizontal, AtSign, Cable, Activity, Images, Link2, FlaskConical,
-  BookOpen, ShieldOff,
+  BookOpen, ShieldOff, ClipboardList,
 } from 'lucide-react';
 
 // COMMAND IA (handoff §4): a standalone Overview + task-based groups.
@@ -29,6 +29,9 @@ export const NAV_GROUPS = [
       { id: 'activity', label: 'Activity', route: '/activity', icon: Activity, requires: 'relay_view' },
       { id: 'segments', label: 'Segments', route: '/segments', icon: Filter,  requires: 'relay_view' },
       { id: 'contacts', label: 'Contacts', route: '/contacts', icon: Contact, requires: 'relay_view' },
+      // Beside Contacts: it is who signed up on the storefront /f/* forms, with their addresses —
+      // the same relay_view PII class the worker gates listForms/getFormSubmissions on.
+      { id: 'forms',    label: 'Forms',    route: '/forms',    icon: ClipboardList, requires: 'relay_view' },
     ],
   },
   {
