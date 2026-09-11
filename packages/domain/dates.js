@@ -53,8 +53,12 @@ export function todayStr() {
 const IST_MS = 5.5 * 3600 * 1000;
 const pad2 = (n) => String(n).padStart(2, '0');
 
-/** A moment (Date | ISO string | ms) as its IST calendar date `YYYY-MM-DD`. '' if unparseable. */
-export function istDateStr(input = new Date()) {
+/** A moment (Date | ISO string | ms) as its IST calendar date `YYYY-MM-DD`. '' if missing or
+ *  unparseable. No default on purpose: a missing value (undefined/null/'') is '' — never "today"
+ *  (a default param did that for undefined) and never 1970-01-01 (new Date(null) is epoch 0).
+ *  For today, pass `new Date()` explicitly. */
+export function istDateStr(input) {
+  if (input == null || input === '') return '';
   const t = input instanceof Date ? input.getTime() : new Date(input).getTime();
   if (isNaN(t)) return '';
   const s = new Date(t + IST_MS);

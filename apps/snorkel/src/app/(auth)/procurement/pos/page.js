@@ -24,7 +24,8 @@ function datePresets() {
 }
 // The PO's own date: `raised_date` (a Postgres DATE, so already a calendar day — no timezone
 // maths). created_at, read on the IST clock, only covers a row that somehow lacks it (0 of 480
-// on 2026-09-11). Compared as YYYY-MM-DD strings against the IST preset bounds.
+// on 2026-09-11). Compared as YYYY-MM-DD strings against the IST preset bounds. A row with
+// neither is '' (istDateStr never turns a missing date into today), so it shows under All time only.
 const poDate = (p) => p.raised_date || istDateStr(p.created_at);
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_TYPES = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
@@ -156,9 +157,11 @@ export default function POListPage() {
     }
     const canChina = !!perms?.po_china;
     // `Raised` added with the date filter (S374) so a month's download carries the date it was
-    // filtered on — the same column the table now shows.
+    // filtered on — the same column the table now shows. ⚠️ It is APPENDED as the LAST column,
+    // not placed where the table shows it: finance reads this file by position, so every column
+    // that existed before keeps its index. A new column here always goes on the end.
     const cols = ['PO Number', 'Revision', 'Type', 'Source', 'Vendor', 'Vendor Code', 'Lines',
-      'Currency', 'Value', 'Value (INR approx)', 'Raised', 'Expected', 'Raised by', 'Status'];
+      'Currency', 'Value', 'Value (INR approx)', 'Expected', 'Raised by', 'Status', 'Raised'];
     const lines = [cols.join(',')];
     for (const p of filteredRows) {
       const restricted = p.source === 'China' && !canChina;
@@ -168,7 +171,7 @@ export default function POListPage() {
         restricted ? '' : (p.currency || ''),
         restricted ? 'Restricted' : (p.po_value ?? ''),
         restricted ? '' : Math.round(toInr(p.po_value, p.currency)),
-        poDate(p), p.expected_delivery || '', p.raised_by_name || p.raised_by || '', p.status,
+        p.expected_delivery || '', p.raised_by_name || p.raised_by || '', p.status, poDate(p),
       ].map(csvCell).join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });

@@ -11,6 +11,11 @@ import { NAV_GROUPS, filterNavByPerms } from '../../../lib/nav.js';
 
 const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
 const toInr = (v, cur) => (Number(v) || 0) * (FX[cur] || 1);
+// The PO flow is Draft → Accepted → Approved (acceptPO sets Accepted; finalApprovePO only moves an
+// Accepted PO to Approved). So Accepted is what "awaiting sign-off" means today — Pending Approval
+// is kept for any legacy row — and stock is already received against Accepted POs, so it arrives.
+const TO_APPROVE_STATUSES = ['Pending Approval', 'Accepted'];
+const ARRIVING_STATUSES = ['Accepted', 'Approved', 'Sent', 'Confirmed & Payment Done'];
 
 export default function ProcurementOverviewPage() {
   const { session, perms } = useAuth();
@@ -48,10 +53,10 @@ export default function ProcurementOverviewPage() {
   const kpis = useMemo(() => {
     const pendingRR = rrRows.length;
     const openPO = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status)).length;
-    const pendingApproval = poRows.filter((p) => p.status === 'Pending Approval').length;
+    const pendingApproval = poRows.filter((p) => TO_APPROVE_STATUSES.includes(p.status)).length;
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() + 14);
     const arriving = poRows.filter((p) => {
-      if (!['Approved', 'Sent', 'Confirmed & Payment Done'].includes(p.status)) return false;
+      if (!ARRIVING_STATUSES.includes(p.status)) return false;
       if (!p.expected_delivery) return false;
       const d = new Date(p.expected_delivery);
       return !isNaN(d) && d <= cutoff && d >= new Date();
@@ -68,7 +73,7 @@ export default function ProcurementOverviewPage() {
   const pipeline = useMemo(() => {
     const c = (s) => poRows.filter((p) => s.includes(p.status)).length;
     return [
-      { stage: 'To Approve', count: c(['Pending Approval']), tone: 'orange' },
+      { stage: 'To Approve', count: c(TO_APPROVE_STATUSES), tone: 'orange' },
       { stage: 'Approved', count: c(['Approved']), tone: 'blue' },
       { stage: 'Sent', count: c(['Sent']), tone: 'yellow' },
       { stage: 'Confirmed', count: c(['Confirmed & Payment Done']), tone: 'green' },

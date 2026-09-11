@@ -13,10 +13,12 @@
   <tbody>
     <tr><td><strong>Pending Requests</strong></td><td>Reorder requests from the floor that nobody has actioned yet.</td></tr>
     <tr><td><strong>Open POs</strong></td><td>Purchase orders still in flight &mdash; every status except Closed, Cancelled and Soft (so Draft, Pending Approval, Accepted, Approved, Sent, Confirmed &amp; Payment Done and Partially Received all count).</td></tr>
-    <tr><td><strong>Pending Approval</strong></td><td>POs waiting on a sign-off.</td></tr>
-    <tr><td><strong>Arriving Soon</strong></td><td>POs whose expected arrival falls in the next 14 days.</td></tr>
+    <tr><td><strong>To Approve</strong></td><td>POs waiting on final sign-off &mdash; <strong>Accepted</strong> POs (accepted by the procurement manager, not yet given final approval), plus any still marked Pending Approval.</td></tr>
+    <tr><td><strong>Arriving &middot; 14d</strong></td><td>POs whose expected arrival falls in the next 14 days, counting Accepted, Approved, Sent and Confirmed &amp; Payment Done POs &mdash; Accepted included, because stock is already received against Accepted POs.</td></tr>
   </tbody>
 </table>
+
+<p>The <strong>PO Pipeline</strong> panel on the right counts POs by stage: <strong>To Approve</strong> (Accepted and Pending Approval &mdash; the same count as the card), <strong>Approved</strong>, <strong>Sent</strong>, <strong>Confirmed</strong> (Confirmed &amp; Payment Done) and <strong>Receiving</strong> (Partially Received).</p>
 
 <h2 class="sec">The two lists</h2>
 <p><strong>Pending Reorder Requests</strong> shows the top short-stock items waiting to be bought, each with a <strong>Convert &rarr;</strong> button that starts a PO pre-linked to that request. <strong>Open Purchase Orders</strong> shows the most recent POs still in flight; click any row to open it. Both lists have a <strong>View All</strong> link to their full screen.</p>

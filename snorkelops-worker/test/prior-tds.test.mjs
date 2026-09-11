@@ -14,9 +14,9 @@ const lift = (start, end) => { const i = src.indexOf(start); assert.ok(i >= 0, `
 const code = [
   lift('function tdsNum(', '\nfunction computeTds('),
   lift('function normInvoiceNo(', '\n// ⚠️⚠️ REQUESTER NOTE'),
-  'return { normInvoiceNo, sameInvoice, priorTdsFor, priorTdsWarning, PRIOR_TDS_SELECT };',
+  'return { invoiceTokens, sameInvoice, priorTdsFor, priorTdsWarning, PRIOR_TDS_SELECT };',
 ].join('\n');
-const { normInvoiceNo, sameInvoice, priorTdsFor, priorTdsWarning, PRIOR_TDS_SELECT } = new Function(code)();
+const { invoiceTokens, sameInvoice, priorTdsFor, priorTdsWarning, PRIOR_TDS_SELECT } = new Function(code)();
 
 // PostgREST hands ids and numerics back as strings — the fixtures do too, in places.
 const req = (id, extra = {}) => ({
@@ -86,14 +86,47 @@ test('only requests that actually carry a deduction count — NULL and 0% are no
   assert.equal(priorTdsFor(t2, [paidWithTds(14, { tds_rate: null })]).length, 1);
 });
 
-test('comma-list invoice_no normalises consistently (the PAY-0027 shape)', () => {
+test('comma-list invoice_no is a SET of invoices (the PAY-0027 shape)', () => {
   const list = 'IN-CMP-0457,IN-CMP-0448,IN-CMP-0430,IN-CMP-0399';
-  assert.equal(normInvoiceNo(list), 'INCMP0457INCMP0448INCMP0430INCMP0399');
-  assert.equal(normInvoiceNo('in-cmp-0457, in-cmp-0448, in-cmp-0430, in-cmp-0399'), normInvoiceNo(list));
+  assert.deepEqual([...invoiceTokens(list)], ['INCMP0457', 'INCMP0448', 'INCMP0430', 'INCMP0399']);
+  assert.deepEqual([...invoiceTokens('in-cmp-0457; in-cmp-0448 ,, ')], ['INCMP0457', 'INCMP0448']);
   assert.equal(sameInvoice(req(11, { invoice_no: 'in-cmp-0457, in-cmp-0448, in-cmp-0430, in-cmp-0399' }),
                            paidWithTds(10, { invoice_no: list })), true);
-  // ⚠️ Known limit, by the brief's definition: a list does NOT match one of its own members.
-  assert.equal(sameInvoice(req(11, { invoice_no: 'IN-CMP-0457' }), paidWithTds(10, { invoice_no: list })), false);
+  // a list matches one of its own members, either way round
+  assert.equal(sameInvoice(req(11, { invoice_no: 'IN-CMP-0457' }), paidWithTds(10, { invoice_no: list })), true);
+  assert.equal(sameInvoice(req(11, { invoice_no: list }), paidWithTds(10, { invoice_no: 'in-cmp-0399' })), true);
+  // overlapping lists match
+  assert.equal(sameInvoice(req(11, { invoice_no: 'IN-CMP-0500;IN-CMP-0430' }), paidWithTds(10, { invoice_no: list })), true);
+});
+
+test('the live PAY-0036 shape — "IN-CMP-0448 , " vs the PAY-0027 4-item list, payee 139 → match', () => {
+  const pay27 = paidWithTds(27, { payee_id: 139, invoice_no: 'IN-CMP-0457,IN-CMP-0448,IN-CMP-0430,IN-CMP-0399' });
+  const pay36 = req(36, { payee_id: '139', invoice_no: 'IN-CMP-0448 , ' });
+  assert.equal(sameInvoice(pay36, pay27), true);
+  assert.deepEqual(priorTdsFor(pay36, [pay27]).map(p => p.request_no), ['PAY-0027']);
+});
+
+test('"/" is part of an invoice number, never a separator', () => {
+  assert.deepEqual([...invoiceTokens('CT/PI/2026/0143')], ['CTPI20260143']);
+  assert.equal(sameInvoice(req(11, { invoice_no: 'CT/PI/2026/0143' }), paidWithTds(10, { invoice_no: 'ct-pi-2026-0143' })), true);
+  // "CT/PI/2026/0143" must NOT match an unrelated invoice that merely shares a '/'-segment
+  assert.equal(sameInvoice(req(11, { invoice_no: 'CT/PI/2026/0143' }), paidWithTds(10, { invoice_no: 'CT/PI/2026/0144' })), false);
+});
+
+test('disjoint lists → no match (unless the PO + total fallback holds); different payee → never', () => {
+  const a = 'IN-CMP-0457,IN-CMP-0448', b = 'IN-CMP-0500;IN-CMP-0501';
+  assert.equal(sameInvoice(req(11, { invoice_no: a }), paidWithTds(10, { invoice_no: b })), false);
+  // both sides carry tokens that don't intersect → still falls through to the PO + total fallback
+  const po = 'PO-2026-0042';
+  assert.equal(sameInvoice(req(11, { invoice_no: a, linked_po_number: po }),
+                           paidWithTds(10, { invoice_no: b, linked_po_number: po })), true);
+  assert.equal(sameInvoice(req(11, { invoice_no: a, linked_po_number: po }),
+                           paidWithTds(10, { invoice_no: b, linked_po_number: po, invoice_total: '64900' })), false);
+  assert.equal(sameInvoice(req(11, { invoice_no: a, linked_po_number: po }),
+                           paidWithTds(10, { invoice_no: b, linked_po_number: '' })), false);
+  // different payee: even an intersecting list, even the PO + total fallback → no
+  assert.equal(sameInvoice(req(11, { invoice_no: a, linked_po_number: po }),
+                           paidWithTds(10, { payee_id: 8, invoice_no: 'IN-CMP-0448', linked_po_number: po })), false);
 });
 
 test('the markPaymentPaid warning names each prior deduction; null when there is none', () => {

@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.2] - 2026-09-11
+### Changed
+- Procurement Overview: the "To Approve" card and pipeline stage now count Accepted POs (the step before final approval), and "Arriving · 14d" counts Accepted POs too; the chapter names both cards as they appear on screen and describes the pipeline strip.
+- Purchase Orders list: the header Export's "Raised" column is now the last column of the file (after Status), so the columns before it keep their old positions; noted that Export + lines carries no Raised column.
+
+### Fixed
+- Collections: the September 2026 figure is 18 partners (23 invoices), not 13.
+
 ## [1.19.1] - 2026-09-11
 ### Added
 - Finance Queue: the prior-TDS warning — when the same invoice already had TDS deducted on another payment request, an amber note under the TDS field lists it, and marking paid with a rate again shows a warning (never blocks).

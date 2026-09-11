@@ -1337,18 +1337,24 @@ function computeTds({ invoiceTotal, rate }) {
 // NEW request — so a rate entered on each tranche deducts the full-invoice TDS twice and the
 // vendor is paid short (PAY-0010 shape). Which base is right is OPEN with Finance (Mahesh), so
 // this is a WARNING ONLY: nothing here changes the amount or blocks the payment.
-// "Same invoice" = same payee AND the normalised invoice_no matches when both sides carry one;
-// when either side has none, same payee + same linked PO + same invoice_total. invoice_no is typed
-// loosely (PAY-0027 holds a comma list), hence uppercase + strip every non-alphanumeric.
+// "Same invoice" = same payee AND the two invoice_no token SETS share a member; otherwise (either
+// side has none, or both have tokens that don't intersect) same payee + same linked PO + same
+// invoice_total. invoice_no is typed loosely — PAY-0027 holds the comma list
+// "IN-CMP-0457,IN-CMP-0448,…" and PAY-0036 the single member "IN-CMP-0448 , " — so it is split on
+// ',' and ';' ONLY ('/' lives inside real numbers: "CT/PI/2026/0143"), and each token is
+// uppercased with every non-alphanumeric stripped; tokens that normalise to '' are dropped.
 // Tested by snorkelops-worker/test/prior-tds.test.mjs, which lifts these straight out of this file.
 function normInvoiceNo(v) {
   return String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
+function invoiceTokens(v) {
+  return new Set(String(v ?? '').split(/[,;]/).map(normInvoiceNo).filter(Boolean));
+}
 function sameInvoice(a, b) {
   if (!a || !b || a.payee_id == null || b.payee_id == null) return false;
   if (String(a.payee_id) !== String(b.payee_id)) return false;
-  const ia = normInvoiceNo(a.invoice_no), ib = normInvoiceNo(b.invoice_no);
-  if (ia && ib) return ia === ib;
+  const ib = invoiceTokens(b.invoice_no);
+  for (const t of invoiceTokens(a.invoice_no)) if (ib.has(t)) return true;
   const pa = String(a.linked_po_number ?? '').trim(), pb = String(b.linked_po_number ?? '').trim();
   if (!pa || pa !== pb) return false;
   const ta = tdsNum(a.invoice_total), tb = tdsNum(b.invoice_total);
@@ -1383,7 +1389,9 @@ function priorTdsWarning(prior, currency = 'INR') {
 // The "Note for Finance" on a payment request (Siddu, #bugs 1789042876.535959) — usually the
 // payee's bank details. PLAIN TEXT on purpose (Afshaan, 2026-09-11): never masked, never routed
 // through payment_payee_banks / maskBank(). Change the two copies together; the spec both sides
-// satisfy is snorkelops-worker/test/requester-note.test.mjs, which imports the app-side copy.
+// satisfy is snorkelops-worker/test/requester-note.test.mjs, which runs every case against the
+// app-side module AND this copy (lifted by source, from `const REQUESTER_NOTE_MAX` to the
+// delivery_address_id banner below — keep that banner where it is).
 const REQUESTER_NOTE_MAX = 2000;
 function parseRequesterNote(raw) {
   if (raw === undefined || raw === null) return { note: null, error: null };
