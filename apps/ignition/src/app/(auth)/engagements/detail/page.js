@@ -10,7 +10,7 @@ import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
-import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings, metricsCompleteness } from '../../../../lib/metrics.js';
+import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings, metricsCompleteness, isLocked, unlockActive } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 import { titleish } from '../../../../lib/productLabel.js';
 import { NewPaymentModal } from '../../../../components/NewPaymentModal.js';
@@ -29,6 +29,7 @@ export default function EngagementDetailPage() {
   const [note, setNote] = useState('');
   const [delOpen, setDelOpen] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   const canManage = !!perms?.ignition_manage;
   const canApprove = !!perms?.ignition_approve;   // S313 — final approval, admin tier only
 
@@ -78,6 +79,28 @@ export default function EngagementDetailPage() {
     finally { setApproving(false); }
   }
 
+  // COMPLETE-deal lock (S373). Same gate as Approve (`ignition_approve`); the worker re-checks it.
+  async function doUnlock() {
+    const reason = window.prompt('Unlock this deal for 24 hours. Why? (optional)', '');
+    if (reason === null) return;   // Cancel
+    setUnlocking(true);
+    try {
+      await ignitionopsPost('unlockEngagement', { engagement_id: data.engagement.id, reason: reason.trim() || undefined }, session);
+      toast('Unlocked for 24 hours', 'success');
+      reload();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setUnlocking(false); }
+  }
+  async function doRelock() {
+    setUnlocking(true);
+    try {
+      await ignitionopsPost('relockEngagement', { engagement_id: data.engagement.id }, session);
+      toast('Locked again', 'success');
+      reload();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setUnlocking(false); }
+  }
+
   async function addNote() {
     if (!note.trim()) return;
     await ignitionopsPost('addNote', { engagement_id: data.engagement.id, body: note }, session);
@@ -96,6 +119,11 @@ export default function EngagementDetailPage() {
   // Afshaan 2026-09-04 — derived from the SAME `e` the page already holds, so a PerformanceCard
   // save (onSaved={reload} → setData) flips the pill without a page reload.
   const completeness = metricsCompleteness(e);
+  // COMPLETE-deal lock (S373). The worker's `locked` (its clock, its copy of the rule) wins; the
+  // local derivation is only the fallback for a response that predates the field. Either way it is
+  // cosmetic — updateEngagement / setEngagementProducts / markGiftedNoPost refuse on the server.
+  const locked = typeof data.locked === 'boolean' ? data.locked : isLocked(e);
+  const unlockedWindow = completeness.complete && !locked && unlockActive(e);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1200 }}>
@@ -185,6 +213,39 @@ export default function EngagementDetailPage() {
             Approved {new Date(e.approved_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
           </div>
         )}
+        {/* COMPLETE-deal lock (S373). Terms freeze once the deal is Complete; metrics stay open so
+            clearing one (which un-Completes the deal) is the other way back in. */}
+        {locked && (
+          <div style={{ marginTop: 12, padding: 12, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 240, fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+              🔒 <strong>This deal is complete and locked.</strong> Metrics stay editable.
+            </div>
+            {canApprove ? (
+              <button onClick={doUnlock} disabled={unlocking}
+                style={{ padding: '6px 14px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: unlocking ? 'not-allowed' : 'pointer', opacity: unlocking ? 0.6 : 1 }}>
+                {unlocking ? 'Unlocking…' : 'Unlock for edit'}
+              </button>
+            ) : (
+              <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                Unlocking is with Reann
+              </span>
+            )}
+          </div>
+        )}
+        {unlockedWindow && (
+          <div style={{ marginTop: 12, padding: 12, background: 'var(--state-warning-bg)', border: '1px solid var(--state-warning-fg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 240, fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+              <strong>Unlocked</strong>{data.unlocked_by_name ? <> by {data.unlocked_by_name}</> : null} until{' '}
+              {new Date(e.unlocked_until).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST.
+            </div>
+            {canApprove && (
+              <button onClick={doRelock} disabled={unlocking}
+                style={{ padding: '6px 14px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: unlocking ? 'not-allowed' : 'pointer', opacity: unlocking ? 0.6 : 1 }}>
+                {unlocking ? 'Locking…' : 'Lock again'}
+              </button>
+            )}
+          </div>
+        )}
       </Card>
 
       {dataWarnings.length > 0 && (
@@ -200,13 +261,14 @@ export default function EngagementDetailPage() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-        <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} session={session} onSaved={reload} />
+        <DealTermsCard e={e} paidTotal={data.paid_total} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
         <ProductsCard
           products={data.products || []}
           directedTo={e.directed_to}
           engagementId={e.id}
           canEdit={canManage}
+          locked={locked}
           session={session}
           onSaved={reload}
         />
@@ -241,7 +303,7 @@ export default function EngagementDetailPage() {
           <KV label="Assigned to" value={e.poc_name || '—'} />
         </Card>
 
-        <CostsCard e={e} canEdit={canManage} session={session} onSaved={reload} />
+        <CostsCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
         <Card title="Logistics">
           <KV label="Shipping order" value={e.shipping_order_id || '—'} />
@@ -252,7 +314,7 @@ export default function EngagementDetailPage() {
           {e.cs_ticket_no && <KV label="Pitstop ticket" value={<span style={{ color: 'var(--state-error-fg)' }}>{e.cs_ticket_no}</span>} />}
         </Card>
 
-        <PostLiveCard e={e} canEdit={canManage} session={session} onSaved={reload} />
+        <PostLiveCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
 
         <PerformanceCard
           e={e}
@@ -264,7 +326,7 @@ export default function EngagementDetailPage() {
           gapReasons={catalogs?.metric_gap_reasons}
         />
 
-        <ComplianceCard e={e} canManage={canManage} session={session} onSaved={reload} />
+        <ComplianceCard e={e} canManage={canManage} locked={locked} session={session} onSaved={reload} />
       </div>
 
       <CodesCard engagementId={e.id} canManage={canManage} session={session} />
@@ -349,7 +411,7 @@ export default function EngagementDetailPage() {
 
 // Multi-product lines (#4) with inline edit → setEngagementProducts (replace-set,
 // rolls cost up on the worker). Legacy single-product deals show a synthesized line.
-function ProductsCard({ products, directedTo, engagementId, canEdit, session, onSaved }) {
+function ProductsCard({ products, directedTo, engagementId, canEdit, locked, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [lines, setLines] = useState([]);
@@ -388,11 +450,12 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
     <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Products</h2>
-        {canEdit && !editing && (
+        {canEdit && !locked && !editing && (
           <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
         )}
       </div>
-      {editing ? (
+      {locked && <LockedNote />}
+      {editing && !locked ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -446,7 +509,7 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
 // Campaign could always be set at deal CREATION, and removed/added from the campaign
 // side at /campaigns/detail — but never from the deal itself, which is where Reann
 // works. 295 of 335 deals carried no campaign when this shipped (measured 2026-08-25).
-function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
+function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -519,16 +582,17 @@ function DealTermsCard({ e, paidTotal, canEdit, session, onSaved }) {
     <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Deal Terms</h2>
-        {canEdit && !editing && (
+        {canEdit && !locked && !editing && (
           <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
         )}
       </div>
 
       {/* Engagement type stays read-only: video vs UGC drives a different pipeline
           (ugc_briefs, the /ugc board), so flipping it here would strand a deal. */}
+      {locked && <LockedNote />}
       <KV label="Type" value={e.engagement_type === 'ugc' ? 'UGC' : 'Video'} />
 
-      {editing ? (
+      {editing && !locked ? (
         <>
           <SelectEdit label="Deal type" value={f.deal_type} onChange={v => setF(x => ({ ...x, deal_type: v }))}
             options={DEAL_TYPE_VALUES.map(v => ({ value: v, label: DEAL_TYPE_LABELS[v] }))} />
@@ -605,7 +669,7 @@ function SelectEdit({ label, value, onChange, options }) {
   );
 }
 
-function CostsCard({ e, canEdit, session, onSaved }) {
+function CostsCard({ e, canEdit, locked, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -638,13 +702,14 @@ function CostsCard({ e, canEdit, session, onSaved }) {
     <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Costs</h2>
-        {canEdit && !editing && (
+        {canEdit && !locked && !editing && (
           <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
         )}
       </div>
+      {locked && <LockedNote />}
       <KV label="Goodies" value={`₹${Number(e.goodies_cost || 0).toLocaleString()}`} />
       <KV label="Shipping" value={`₹${Number(e.shipping_cost || 0).toLocaleString()}`} />
-      {editing ? (
+      {editing && !locked ? (
         <>
           <CostEdit label="Return ₹" value={ret} onChange={setRet} />
           <CostEdit label="Ad spend ₹" value={ad} onChange={setAd} />
@@ -874,11 +939,14 @@ function TrackingLinkRow({ e, canEdit, session, onSaved }) {
 // post_date was never captured can be back-dated; getMonthlyTargets attributes a
 // video's views to its post_date month, so setting it makes those views count
 // toward the target (Reann #bugs 2026-07-16). Video link / UTM stay read-only here.
-function PostLiveCard({ e, canEdit, session, onSaved }) {
+function PostLiveCard({ e, canEdit, locked, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [postDate, setPostDate] = useState('');
+  // Locked (S373): the whole card is read-only, the tracking-link mint included.
+  const editable = canEdit && !locked;
+  const isEditing = editing && !locked;
 
   function startEdit() {
     setPostDate((e.post_date || '').slice(0, 10));
@@ -902,12 +970,13 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
     <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Post-live</h2>
-        {canEdit && !editing && (
+        {editable && !editing && (
           <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
         )}
       </div>
+      {locked && <LockedNote />}
       <KV label="Expected post" value={e.expected_post_date || '—'} />
-      {editing ? (
+      {isEditing ? (
         <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center' }}>
           <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Actual post</span>
           <input type="date" value={postDate} onChange={ev => setPostDate(ev.target.value)}
@@ -917,8 +986,8 @@ function PostLiveCard({ e, canEdit, session, onSaved }) {
         <KV label="Actual post" value={e.post_date || '—'} />
       )}
       <KV label="Video link" value={e.video_link ? <a href={e.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{e.video_link.slice(0, 40)}…</a> : '—'} />
-      <TrackingLinkRow e={e} canEdit={canEdit} session={session} onSaved={onSaved} />
-      {editing && (
+      <TrackingLinkRow e={e} canEdit={editable} session={session} onSaved={onSaved} />
+      {isEditing && (
         <>
           <div style={{ fontSize: 10, color: 'var(--text-3)', margin: '8px 0 2px', lineHeight: 1.4 }}>
             Setting the posting date counts this video's views toward that month's target.
@@ -1365,10 +1434,12 @@ function CodesCard({ engagementId, canManage, session }) {
 }
 
 // Post-live compliance checklist (B12) + gifted-but-never-posted flag (B14).
-function ComplianceCard({ e, canManage, session, onSaved }) {
+function ComplianceCard({ e, canManage, locked, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
   const postLive = e.stage === 'live';
+  // Locked (S373): checklist AND the gifted flag freeze — the worker refuses both.
+  const editable = canManage && !locked;
   const checks = [
     ['compliance_caption_link', 'Link in caption'],
     ['compliance_coupon_verbal', 'Coupon mentioned verbally'],
@@ -1389,12 +1460,13 @@ function ComplianceCard({ e, canManage, session, onSaved }) {
   const allTrue = checks.every(([k]) => e[k] === true);
   return (
     <Card title="Compliance & flags">
+      {locked && <LockedNote />}
       {postLive ? (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
             {checks.map(([k, label]) => (
-              <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: canManage ? 'pointer' : 'default' }}>
-                <input type="checkbox" disabled={!canManage || busy} checked={e[k] === true} onChange={ev => toggle(k, ev.target.checked)} />
+              <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: editable ? 'pointer' : 'default' }}>
+                <input type="checkbox" disabled={!editable || busy} checked={e[k] === true} onChange={ev => toggle(k, ev.target.checked)} />
                 <span style={{ color: 'var(--text-2)' }}>{label}</span>
               </label>
             ))}
@@ -1411,10 +1483,10 @@ function ComplianceCard({ e, canManage, session, onSaved }) {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={badPill}>Gifted · never posted</span>
             <span style={{ fontSize: 12, color: 'var(--text-3)' }}>creator set do-not-ship</span>
-            {canManage && <button onClick={() => flagGifted(false)} disabled={busy} style={miniBtn}>Clear</button>}
+            {editable && <button onClick={() => flagGifted(false)} disabled={busy} style={miniBtn}>Clear</button>}
           </div>
         ) : (
-          canManage && <button onClick={() => flagGifted(true)} disabled={busy} style={miniBtn}>Flag &ldquo;gifted, never posted&rdquo;</button>
+          editable && <button onClick={() => flagGifted(true)} disabled={busy} style={miniBtn}>Flag &ldquo;gifted, never posted&rdquo;</button>
         )}
       </div>
     </Card>
@@ -1702,6 +1774,15 @@ function ShipmentRows({ shipment, orderId }) {
       {shipment.dispatched_at && <KV label="Dispatched" value={istStamp(shipment.dispatched_at)} />}
       {shipment.delivered_at && <KV label="Delivered (courier)" value={istStamp(shipment.delivered_at)} />}
     </>
+  );
+}
+
+// One line, one wording, on every card the COMPLETE-deal lock freezes (S373).
+function LockedNote() {
+  return (
+    <div style={{ marginBottom: 10, fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+      🔒 Locked — deal is complete
+    </div>
   );
 }
 

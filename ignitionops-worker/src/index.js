@@ -13,6 +13,8 @@
  *        05_Throttle/apps/ignition/DESIGN.md
  */
 
+import { isLocked, unlockActive, metricsCompleteness, lockedFieldsIn, LOCK_SELECT, LOCKED_MESSAGE } from './completeness.js';
+
 // ── CORS ────────────────────────────────────────────────────────────────────
 
 const CORS = {
@@ -817,6 +819,14 @@ async function getEngagement(url, auth, env) {
   const shipment = shipmentFor(eng.shipping_order_id, ship || {});
   if (shipment) eng.shipment = shipment;
 
+  // COMPLETE-deal lock (S373). Computed here with the worker's clock so the page and the guard in
+  // updateEngagement agree; the unlocker's name is only fetched while a window is actually open.
+  let unlocked_by_name = null;
+  if (eng.unlocked_by && unlockActive(eng)) {
+    const ur = await sbStore(`/rest/v1/users_profile?id=eq.${eng.unlocked_by}&select=full_name&limit=1`, env);
+    unlocked_by_name = (ur.ok && ur.data?.[0]?.full_name) || null;
+  }
+
   const payments = pr.data || [];
   const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
@@ -846,6 +856,8 @@ async function getEngagement(url, auth, env) {
     payments,
     paid_total: Math.round(paid_total),
     allowed_next: allowedTransitions(eng.stage, eng.engagement_type === 'ugc'),
+    locked: isLocked(eng),
+    unlocked_by_name,
   });
 }
 
@@ -2046,10 +2058,29 @@ async function recomputeCpm(env, engagementId) {
   });
 }
 
+// ── COMPLETE-deal lock (S373) — the server guard; the deal page hiding its Edit buttons is cosmetic ──
+// Sites that consult it: updateEngagement + advanceStage (field-level: refused only when the patch
+// names a LOCKED_FIELDS column), setEngagementProducts + markGiftedNoPost (whole action refused).
+// Rule and field list: src/completeness.js.
+async function loadLockRow(env, engagementId) {
+  const r = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(engagementId)}&select=id,${LOCK_SELECT}&limit=1`, env);
+  return r.ok ? (r.data?.[0] || null) : undefined;   // undefined = the read failed, null = no such deal
+}
+// Returns the refusal Response, or null to proceed. Fails CLOSED on a failed read: an unreadable
+// row must not wave a locked field through.
+async function refuseIfLocked(env, engagementId, fields) {
+  const row = await loadLockRow(env, engagementId);
+  if (row === undefined) return err('db_error', 500);
+  if (row === null) return err('not_found', 404);
+  if (!isLocked(row)) return null;
+  return err(fields && fields.length ? `${LOCKED_MESSAGE} (locked: ${fields.join(', ')})` : LOCKED_MESSAGE, 409);
+}
+
 async function setEngagementProducts(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   if (!Array.isArray(body.products)) return err('products[] required', 400);
+  const locked = await refuseIfLocked(env, body.engagement_id); if (locked) return locked;
   await sb(`/rest/v1/engagement_products?engagement_id=eq.${body.engagement_id}`, env, {
     method: 'DELETE', prefer: 'return=minimal',
   });
@@ -2085,6 +2116,13 @@ async function updateEngagement(body, auth, env) {
   const patch = pickPatch(body, ENGAGEMENT_FIELDS);
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
+  // Refuse, never strip: a patch that names a locked field is rejected WHOLE and the error names
+  // the fields. Silently dropping them would read as "saved" while nothing changed. A patch with
+  // no locked field (Performance totals, logistics, POC…) skips the read entirely.
+  const touched = lockedFieldsIn(patch);
+  if (touched.length) {
+    const locked = await refuseIfLocked(env, body.engagement_id, touched); if (locked) return locked;
+  }
 
   const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
     method: 'PATCH',
@@ -2102,8 +2140,9 @@ async function markGiftedNoPost(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   const val = body.value !== false;   // default true
-  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id,${LOCK_SELECT}&limit=1`, env);
   if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  if (isLocked(er.data[0])) return err(LOCKED_MESSAGE, 409);   // COMPLETE-deal lock (S373)
   await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
     body: JSON.stringify({ gifted_no_post: val, gifted_no_post_at: val ? nowIso() : null, updated_at: nowIso() }),
@@ -2186,6 +2225,49 @@ async function approveEngagement(body, auth, env) {
   return ok({ approved_at: at, approved_by: auth.userId, stage: autoStage || from, auto_advanced: !!autoStage });
 }
 
+// ── COMPLETE-deal lock (S373) — "Unlock for edit" / "Lock again" ─────────────────────────────
+// Same gate as approveEngagement: whoever signs a deal off is who may reopen its terms. An unlock
+// is an event with an actor and a reason, so it goes to engagement_history like approval does, and
+// `unlocked_until` / `unlocked_by` are NOT in ENGAGEMENT_FIELDS — no ordinary patch can open a window.
+const UNLOCK_WINDOW_MS = 24 * 3600 * 1000;
+
+async function unlockEngagement(body, auth, env) {
+  const gate = requirePerm('ignition_approve', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const row = await loadLockRow(env, body.engagement_id);
+  if (row === undefined) return err('db_error', 500);
+  if (row === null) return err('not_found', 404);
+  // Nothing to unlock on a deal that is not Complete — refusing says so instead of stamping a
+  // window that would silently start mattering the moment the deal became Complete.
+  if (!metricsCompleteness(row).complete) return err('deal is not complete — nothing to unlock', 409);
+  const until = new Date(Date.now() + UNLOCK_WINDOW_MS).toISOString();
+  const r = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ unlocked_until: until, unlocked_by: auth.userId }),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await writeHistory(env, body.engagement_id, 'unlock', row.stage, row.stage,
+    (body.reason && String(body.reason).trim()) || null, auth.userId);
+  return ok({ unlocked_until: until, unlocked_by: auth.userId });
+}
+
+async function relockEngagement(body, auth, env) {
+  const gate = requirePerm('ignition_approve', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const row = await loadLockRow(env, body.engagement_id);
+  if (row === undefined) return err('db_error', 500);
+  if (row === null) return err('not_found', 404);
+  // Idempotent: re-locking a deal with no open window is a no-op, not an error or a history row.
+  if (!unlockActive(row)) return ok({ already_locked: true });
+  const r = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ unlocked_until: null, unlocked_by: null }),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await writeHistory(env, body.engagement_id, 'relock', row.stage, row.stage, null, auth.userId);
+  return ok({ unlocked_until: null });
+}
+
 async function advanceStage(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
@@ -2195,6 +2277,15 @@ async function advanceStage(body, auth, env) {
     `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date,approved_at&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
+  // COMPLETE-deal lock (S373): the stage move itself stays open, but this action also accepts
+  // incidental ENGAGEMENT_FIELDS (see `extra` below), which would otherwise be a second door to
+  // the fields updateEngagement guards. Checked HERE, before the rating write further down, so a
+  // refusal leaves nothing half-done. The AdvanceModal only sends post_date on a move TO live, and
+  // a locked deal is already live, so no ordinary stage move trips this.
+  const lockTouched = lockedFieldsIn(pickPatch(body, ENGAGEMENT_FIELDS));
+  if (lockTouched.length) {
+    const locked = await refuseIfLocked(env, body.engagement_id, lockTouched); if (locked) return locked;
+  }
   const from = cur.data[0].stage;
   const isUgc = cur.data[0].engagement_type === 'ugc';
   const allowed = allowedTransitions(from, isUgc);
@@ -4450,6 +4541,8 @@ const POST_ACTIONS = {
   generateUgcBrief,
   refreshUgcMetrics,
   approveEngagement,
+  unlockEngagement,
+  relockEngagement,
   advanceStage,
   closeEngagement,
   setRating,

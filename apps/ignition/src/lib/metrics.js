@@ -236,3 +236,18 @@ export function metricsCompleteness(e = {}) {
   }
   return { live, complete: live && missing.length === 0, missing, viaGaps };
 }
+
+// COMPLETE-deal lock (S373, Afshaan 2026-09-11). A Complete deal's terms go read-only on the deal
+// page — DealTerms, Costs, Post-live, Products, Compliance — until a metric is cleared (it stops
+// being Complete) or someone with `ignition_approve` opens a 24h window (`unlocked_until`).
+// ⚠️ The worker holds a hand-kept MIRROR of this and of metricsCompleteness in
+// ignitionops-worker/src/completeness.js — it is the real guard; this only drives the UI.
+// ignitionops-worker/test/lock.test.mjs imports both and asserts they agree. Change both.
+export function unlockActive(e = {}, now = Date.now()) {
+  const t = e.unlocked_until ? Date.parse(e.unlocked_until) : NaN;
+  return Number.isFinite(t) && t > now;
+}
+
+export function isLocked(e = {}, now = Date.now()) {
+  return metricsCompleteness(e).complete && !unlockActive(e, now);
+}
