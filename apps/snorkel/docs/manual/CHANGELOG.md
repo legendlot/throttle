@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.18.1] - 2026-09-11
+### Changed
+- Procurement overview + Purchase Orders list: "Open POs" / "Open value" now count every in-flight status, including Accepted (previously left out, though it holds over half of all POs). One definition is shared by every Open tile and list.
+
 ## [1.18.0] - 2026-09-11
 ### Added
 - Purchase Orders list: documented the searchable vendor picker and the Raised-date filter (presets Today / 7D / 30D / MTD / Last mo / FY / All time plus custom from/to, defaulting to All time), the new "Raised" column (on screen and both exports, before Expected), that the status filter now covers every status including Accepted, and that the KPI tiles and both exports follow every filter (except the fixed To Inward tile); added a callout on cross-checking a month's POs against a vendor via Export + lines.

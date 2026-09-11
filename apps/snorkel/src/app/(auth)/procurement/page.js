@@ -6,7 +6,7 @@ import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowRight, RefreshCw, Plus } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, Pipeline, EmptyState } from '@/components/ui.js';
-import { fmtDateShort, money, inrCompact, PO_TONES, sourceTone, urgencyTone } from '@/components/format.js';
+import { fmtDateShort, money, inrCompact, PO_TONES, OPEN_PO_STATUSES, sourceTone, urgencyTone } from '@/components/format.js';
 import { NAV_GROUPS, filterNavByPerms } from '../../../lib/nav.js';
 
 const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
@@ -47,7 +47,7 @@ export default function ProcurementOverviewPage() {
 
   const kpis = useMemo(() => {
     const pendingRR = rrRows.length;
-    const openPO = poRows.filter((p) => ['Draft', 'Approved', 'Sent'].includes(p.status)).length;
+    const openPO = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status)).length;
     const pendingApproval = poRows.filter((p) => p.status === 'Pending Approval').length;
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() + 14);
     const arriving = poRows.filter((p) => {
@@ -61,7 +61,7 @@ export default function ProcurementOverviewPage() {
 
   const topRR = useMemo(() => rrRows.slice(0, 6), [rrRows]);
   const openPOList = useMemo(
-    () => poRows.filter((p) => ['Approved', 'Sent', 'Pending Approval'].includes(p.status)).slice(0, 6),
+    () => poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status)).slice(0, 6),
     [poRows]
   );
 
@@ -77,7 +77,7 @@ export default function ProcurementOverviewPage() {
   }, [poRows]);
 
   const spend = useMemo(() => {
-    const open = poRows.filter((p) => ['Draft', 'Approved', 'Sent', 'Pending Approval', 'Confirmed & Payment Done'].includes(p.status));
+    const open = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status));
     const total = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     const china = open.filter((p) => p.source === 'China').reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     return { total, chinaPct: total ? Math.round((china / total) * 100) : 0 };

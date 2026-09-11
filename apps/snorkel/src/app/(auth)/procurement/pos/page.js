@@ -6,7 +6,7 @@ import { garageFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowRight, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fmtDateShort, money, inrCompact, PO_TONES, PO_STATUSES, sourceTone } from '@/components/format.js';
+import { fmtDateShort, money, inrCompact, PO_TONES, PO_STATUSES, OPEN_PO_STATUSES, sourceTone } from '@/components/format.js';
 import { csvCell } from '@/lib/sales.js';
 import { buildPoLinesCsv } from '@/lib/poExport.js';
 import { todayStr, istDateStr, istRangePresets } from '@throttle/domain';
@@ -117,12 +117,12 @@ export default function POListPage() {
   // the same set the table shows and the exports write. `To Inward` is a separate read
   // (getPendingInward) that links to Receiving — it does not follow these filters.
   const kpi = useMemo(() => {
-    const open = filteredRows.filter((p) => ['Draft', 'Approved', 'Sent', 'Pending Approval'].includes(p.status));
+    const open = filteredRows.filter((p) => OPEN_PO_STATUSES.includes(p.status));
     const openVal = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     const chinaVal = open.filter((p) => p.source === 'China').reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     return {
       openVal,
-      openCount: filteredRows.filter((p) => ['Draft', 'Approved', 'Sent'].includes(p.status)).length,
+      openCount: open.length,
       chinaShare: openVal ? Math.round((chinaVal / openVal) * 100) : 0,
     };
   }, [filteredRows]);

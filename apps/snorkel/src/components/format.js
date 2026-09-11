@@ -50,6 +50,11 @@ export const PO_TONES = {
   'Confirmed & Payment Done': 'green', 'Partially Received': 'yellow', Closed: 'green', Cancelled: 'red',
 };
 export const PO_STATUSES = Object.keys(PO_TONES);
+// "Open" = still in flight: every status except Soft, Closed and Cancelled. ONE list for every
+// Open KPI/value/list — four hand-kept copies disagreed with each other and all four left out
+// `Accepted`, 255 of 480 POs that stock is still received against (Afshaan, 2026-09-11, S374).
+export const OPEN_PO_STATUSES = ['Draft', 'Pending Approval', 'Accepted', 'Approved', 'Sent',
+  'Confirmed & Payment Done', 'Partially Received'];
 
 export function sourceTone(s) { return s === 'China' ? 'blue' : s === 'India' ? 'green' : 'gray'; }
 export function countryTone(c) { return c === 'China' ? 'blue' : c === 'India' ? 'green' : 'gray'; }
