@@ -1,5 +1,13 @@
 # Relay Operations Manual — Changelog
 
+## 1.8.0 — 2026-09-11
+- **New chapter: Bot Builder** (`26-bot-builder.html`, Send part, right after Journeys). Covers the
+  bot list and its 7-day stats, building the flow (Chat start, Duplicate step, Delete step, Expand),
+  every step type (Message, Menu, Ask for input, Order status, Hand to agent, End chat, Shared
+  flow), the WhatsApp button/list limits and that the canvas lint is advisory while Publish enforces
+  them per channel, Settings (channel, keywords, WhatsApp rollout), the side-effect-free Test panel,
+  the publish-error table, and Pause/Resume.
+
 ## 1.3.1 — 2026-08-26
 - **Journeys**: new "Saving: what gets checked" section. Relay validates the whole graph on every
   save and refuses one that could not run; the section names the four checks an author actually

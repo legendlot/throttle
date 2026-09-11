@@ -2,8 +2,8 @@
   "title": "Relay",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to every screen in Relay, the system that talks to customers.",
-  "version": "1.7.2",
-  "date": "2026-09-02",
+  "version": "1.8.0",
+  "date": "2026-09-11",
   "app_url": "relay.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#F2CD1A",
@@ -172,6 +172,17 @@
           "title": "Journeys",
           "route": "/journeys",
           "file": "24-journeys.html",
+          "roles": [
+            "view",
+            "auth",
+            "mgr"
+          ]
+        },
+        {
+          "id": "bot-builder",
+          "title": "Bot Builder",
+          "route": "/journeys",
+          "file": "26-bot-builder.html",
           "roles": [
             "view",
             "auth",

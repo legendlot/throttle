@@ -1,0 +1,66 @@
+<p class="lead">A bot is a scripted conversation on the website chat widget (and optionally WhatsApp): menus, order status, agent handoff. It uses the same canvas as journeys, on a <strong>Journeys | Bots</strong> toggle. Bots have no trigger, no exit rules, no versions screen and no funnel &mdash; just a definition, a status, and a test.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Journeys screen, <strong>Bots</strong> toggle.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action screen. A published, active bot answers customers on its own.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role auth">Author</span> builds and saves drafts, <span class="role mgr">Manager</span> also publishes, pauses/resumes and sets WhatsApp rollout.</div></div>
+  <div class="g-cell"><div class="g-lbl">Channels</div><div class="g-val">Web widget, WhatsApp (support number), or Shared flow (used by other bots).</div></div>
+</div>
+
+<h2 class="sec">The bot list</h2>
+<p>Each row is a bot: name, status (draft / active / paused), channel, live version, and its last 7 days &mdash; chats, handled, handoffs to agents, and conversions (a session whose customer placed an order within 24 hours of the chat starting). <strong>Open</strong> loads it onto the canvas; <strong>New bot</strong> starts a blank web-widget draft.</p>
+
+<h2 class="sec">Building the flow</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Add a step</div><div class="a-val"><p>Buttons above the canvas add: <strong>Message</strong>, <strong>Menu</strong>, <strong>Ask for input</strong>, <strong>Order status</strong>, <strong>Hand to agent</strong>, <strong>End chat</strong>, <strong>Shared flow</strong>. Drag from a node&rsquo;s right-edge dot to another node to wire an outcome.</p></div></div>
+  <div class="a-row"><div class="a-key">Chat start</div><div class="a-val"><p>The fixed anchor node (the same node journeys use for their trigger, relabelled). It fires when the customer opens the widget; wire its one outcome to your first step.</p></div></div>
+  <div class="a-row"><div class="a-key">Duplicate step</div><div class="a-val"><p>Select a node, then <strong>Duplicate step</strong> in the panel below. You get a copy with the same settings, offset slightly. <strong>The copy is not wired to anything</strong> &mdash; connect it yourself. The copy becomes the selected node, so the panel opens on the new one, not the original.</p></div></div>
+  <div class="a-row"><div class="a-key">Delete step</div><div class="a-val"><p><strong>Delete step</strong> in the same panel, or select the node and press Backspace or Delete. Removes the connections into and out of it too.</p></div></div>
+  <div class="a-row"><div class="a-key">Expand</div><div class="a-val"><p>The Expand button (top-right of the canvas) fills the screen, docking the Step / Settings / Test panel beside it. Esc exits.</p></div></div>
+</div>
+<p>Only one connection is kept per outcome: dragging a new wire from a dot that is already wired replaces the old one, it does not add a second.</p>
+
+<h2 class="sec">Step types</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Message</div><div class="a-val"><p>Sends text, one outcome (<code>next</code>).</p></div></div>
+  <div class="a-row"><div class="a-key">Menu</div><div class="a-val"><p>Shown as <strong>Buttons</strong> or a <strong>List</strong>. One outcome per option, plus <strong>Not understood</strong> (the <code>fallback</code> branch, taken after two misses in a row &mdash; wire it, usually to Hand to agent). Matches either a tapped button or a typed reply that matches an option&rsquo;s label or number; anything else re-shows the menu until the miss cap.</p></div></div>
+  <div class="a-row"><div class="a-key">Ask for input</div><div class="a-val"><p>Collects <strong>Phone or email</strong> (identity) or an <strong>Order number</strong>. An invalid answer re-asks once; a second invalid answer takes <strong>Not understood</strong> (the <code>fallback</code> branch &mdash; publish refuses it unwired). Typing a keyword configured in Settings jumps straight to that keyword&rsquo;s step instead of counting as a miss.</p></div></div>
+  <div class="a-row"><div class="a-key">Order status</div><div class="a-val"><p>Needs a <strong>Phone or email</strong> ask and an <strong>Order number</strong> ask earlier in the flow. Looks the order up and verifies it: the order&rsquo;s own phone/email must match what the customer already gave. <strong>Order found</strong> and <strong>Not found / no match</strong> are the two outcomes &mdash; a mismatch and a genuinely missing order both take <strong>Not found / no match</strong>, on purpose, so the bot never confirms which order numbers exist. After 5 failed lookups the bot says the step&rsquo;s configured text and hands off.</p></div></div>
+  <div class="a-row"><div class="a-key">Hand to agent</div><div class="a-val"><p>Terminal. Ends the bot&rsquo;s part of the conversation and lands it in the <strong>Pitstop</strong> inbox as a thread; the bot never speaks again in that conversation. The order-lookup cap hands off the same way &mdash; a customer the bot cannot help reaches a person, never silence.</p></div></div>
+  <div class="a-row"><div class="a-key">End chat</div><div class="a-val"><p>Terminal. Optional goodbye text, then the session ends.</p></div></div>
+  <div class="a-row"><div class="a-key">Shared flow</div><div class="a-val"><p>Jumps into another bot built with channel <strong>Shared flow</strong>. Only a shared flow that is <em>published</em> (has a live version) can be picked. When the shared flow ends, the customer continues on this step&rsquo;s <code>next</code>.</p></div></div>
+</div>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out &mdash; WhatsApp limits</div><p>Buttons: max 3 options, 20 characters each. List: max 10 rows, 24-character titles. The canvas only warns about these (it does not know the bot&rsquo;s channel yet); <strong>Publish enforces them for real</strong>, per channel &mdash; including inside a Shared flow, since it can be called from a WhatsApp bot too.</p></div>
+
+<h2 class="sec">Settings</h2>
+<p>Channel (fixed after the first publish, since sessions and the inbox key on it), keywords (opening message, or an invalid answer, jumping straight to a step), and for a WhatsApp bot, rollout: <strong>Pilot</strong> (only the numbers listed) or <strong>Public</strong> (every customer on the number). Rollout needs the activate permission, and going Public is Afshaan&rsquo;s call.</p>
+
+<h2 class="sec">Test panel</h2>
+<p>Runs the current draft (unsaved edits included) against a simulated customer. It is side-effect-free: nothing is written, no order is looked up and nobody is handed off &mdash; those steps show as <em>&rarr; would look up&hellip;</em> and <em>&rarr; would hand off to an agent here</em>. Entering a Shared-flow step in the test always follows that flow&rsquo;s <strong>draft</strong>, not its published version &mdash; the live bot always runs the published one, so a draft-only difference in a shared flow will not show up here.</p>
+
+<div class="callout"><div class="c-title">Note</div><p>The Test panel only appears when nothing else is selected. Click empty canvas to get back to it after configuring a step.</p></div>
+
+<h2 class="sec">Saving and publishing</h2>
+<p>Every outcome on every step must be wired before you can publish &mdash; an unwired menu button or an unwired fallback is a customer reaching a dead end. <strong>Save draft</strong> is available to anyone who can build; <strong>Publish</strong> (freezes a version; every new conversation gets it at once) needs the activate permission.</p>
+<table class="tbl">
+  <thead><tr><th>Code</th><th>What it means</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">no_entry</td><td>Chat start is not connected to a first step.</td><td>Wire Chat start to your first step.</td></tr>
+    <tr><td class="mono">button_unwired</td><td>A menu option has no outcome wired.</td><td>Connect that option to a step.</td></tr>
+    <tr><td class="mono">fallback_unwired</td><td>A menu or Ask for input step has no <strong>Not understood</strong> / <strong>Fallback</strong> branch wired.</td><td>Wire it, usually to Hand to agent.</td></tr>
+    <tr><td class="mono">dangling_target</td><td>An outcome points at a step that no longer exists.</td><td>Rewire it or delete the dangling edge.</td></tr>
+    <tr><td class="mono">menu_no_buttons</td><td>A Menu step has no options at all.</td><td>Add at least one option.</td></tr>
+    <tr><td class="mono">subflow_target_invalid</td><td>A Shared flow step points at a bot that is not a published, active shared flow.</td><td>Pick a currently-published shared flow, or publish the one you meant.</td></tr>
+    <tr><td class="mono">shared_contains_subflow</td><td>A Shared flow bot itself contains a Shared flow step.</td><td>Shared flows cannot nest &mdash; build those steps in directly.</td></tr>
+    <tr><td class="mono">keyword_empty / keyword_target_missing</td><td>A Settings keyword has no words, or points at a step that no longer exists.</td><td>Fill in the words or re-pick the step in Settings.</td></tr>
+    <tr><td class="mono">wa_too_many_buttons / wa_button_label_long</td><td>A WhatsApp-facing menu (this bot&rsquo;s channel, or a shared flow called from one) exceeds 3 buttons or 20 characters.</td><td>Trim the options or switch to a List.</td></tr>
+    <tr><td class="mono">wa_too_many_rows / wa_row_title_long / wa_row_description_long</td><td>A WhatsApp-facing list exceeds 10 rows, or a title/description is too long.</td><td>Trim rows or shorten the text.</td></tr>
+    <tr><td class="mono">wa_text_long / text_exhausted_long</td><td>A message body (or the Order status exhausted-attempts text) is over WhatsApp&rsquo;s length limit.</td><td>Shorten the text.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Pause and resume</h2>
+<p>Pause keeps the published version but stops new conversations. On the <strong>web widget</strong>, a new visitor sees <em>Chat is unavailable right now &mdash; please email support@legendoftoys.com</em>; a chat already open carries on to its end. On <strong>WhatsApp</strong> the bot goes quiet at once, even mid-chat, and messages reach the Pitstop inbox as normal. Resume brings it back on the same version.</p>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>Save draft</strong> never touches what customers see. <strong>Publish</strong> does, at once, for every conversation that starts after it &mdash; a conversation already in progress finishes on the version it started with. Run the change through the Test panel before you publish.</p></div>
