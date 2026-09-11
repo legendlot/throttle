@@ -3,6 +3,11 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.19.3] - 2026-09-11
+### Changed
+- Finance Queue / Mark-as-Paid: TDS is now computed on the invoice's taxable value (ex-GST), not the invoice total — corrected the "worked out from the invoice total automatically" wording and the instalment-warning callout; added the GST % picker (0/5/12/18/28, pre-filled from the linked PO or the payee's GSTIN) and the mixed-GST-rate guidance; noted a paid request shows the taxable value and GST % it was calculated on.
+- Export paid payments: added the "GST % (TDS)" and "Taxable value (TDS base)" columns to the column list, both blank with no TDS or on pre-change payments.
+
 ## [1.19.2] - 2026-09-11
 ### Changed
 - Procurement Overview: the "To Approve" card and pipeline stage now count Accepted POs (the step before final approval), and "Arriving · 14d" counts Accepted POs too; the chapter names both cards as they appear on screen and describes the pipeline strip.

@@ -23,8 +23,10 @@ looking for them.</p>
 <h3>Paying</h3>
 <ol class="steps">
   <li>Make the payment in your bank.</li>
-  <li>If tax was deducted at source, enter the <strong>TDS rate (%)</strong> on the card. The
-      deduction and the resulting net are calculated and shown live as you type.</li>
+  <li>If tax was deducted at source, enter the <strong>TDS rate (%)</strong> on the card. A
+      <strong>GST %</strong> picker (0 &middot; 5 &middot; 12 &middot; 18 &middot; 28) appears
+      beside it &mdash; check it matches the invoice and change it if not. The taxable value,
+      the deduction and the resulting net are calculated and shown live as you type.</li>
   <li>Put the UTR or reference in the box on the card.</li>
   <li>Tap <strong>Mark paid</strong>.</li>
 </ol>
@@ -35,17 +37,26 @@ looking for them.</p>
   <div class="c-title">&#9432; TDS is entered by Finance, not the requester</div>
   <p>The <strong>TDS rate (%)</strong> field lives on this card, at the point of marking paid &mdash;
   the person who raised the request never sees or enters it; they only upload the invoice and its
-  details. Enter the rate that applies to the invoice and the deduction is worked out from the
-  invoice total automatically. The <strong>amount released is net of TDS</strong>, and the
-  <strong>Amount Paid</strong> field defaults to that net figure, so what you record as paid already
-  has the deduction taken out.</p>
+  details. TDS is computed on the invoice&rsquo;s <strong>taxable value</strong> (the amount before
+  GST), not the invoice total: typing a rate opens a <strong>GST %</strong> picker (0, 5, 12, 18 or
+  28) next to it, pre-filled from the linked PO&rsquo;s GST rate, or 18% if the payee has a GSTIN on
+  file, or 0% otherwise &mdash; change it if the invoice says something different. Taxable value =
+  invoice total &divide; (1 + GST%); TDS = taxable value &times; the TDS rate. The preview under the
+  fields shows the taxable value, the TDS amount and the net payable as you type. A TDS rate cannot
+  be entered without a GST rate &mdash; Snorkel refuses the payment until one is picked. The
+  <strong>amount released is net of TDS</strong>, and the <strong>Amount Paid</strong> field defaults
+  to that net figure, so what you record as paid already has the deduction taken out. Once paid, the
+  request shows the taxable value it was calculated on alongside the GST % used, so the figure can be
+  checked later.</p>
   <p>Leaving the rate blank means TDS does not apply to this payment &mdash; it is not the same as
   entering 0. A payment with no TDS looks exactly as it always did: full amount, no deduction shown.</p>
+  <p>If one invoice mixes GST rates across its lines, pick whichever rate dominates the invoice, or
+  pay without TDS here and adjust the deduction in Tally instead.</p>
 </div>
 
 <div class="callout warn">
   <div class="c-title">&#9888; An invoice paid in instalments &mdash; check before entering TDS again</div>
-  <p>The rate is applied to the <strong>full invoice total</strong>, not to the instalment being paid. If the same invoice
+  <p>The rate is applied to the <strong>full invoice&rsquo;s taxable value</strong>, not to the instalment being paid. If the same invoice
   (same payee and invoice number, or the same PO and invoice total) already had TDS deducted on an earlier payment request,
   an amber note appears under the TDS field listing that deduction &mdash; request number, amount, rate and date. Entering a
   rate again deducts the full-invoice TDS a second time and the vendor is paid short, so leave it blank unless Finance has
@@ -76,12 +87,13 @@ looking for them.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; Only the people who actually pay see the UTR box</div>
-  <p>The UTR field, the <strong>TDS rate (%)</strong> field and <strong>Mark paid</strong> button only
-  appear editable for whoever is authorised to make the payment. Everyone else who can open this queue
-  &mdash; managers and super admins included &mdash; sees &ldquo;View only &mdash; payments are marked by
-  finance.&rdquo; instead, with the rest of the card (bank details, invoice, amount, and any TDS already
-  recorded) still visible read-only. Being in the Finance role is not by itself enough to pay; that
-  is granted to specific people so the button is never offered to someone it would just reject.</p>
+  <p>The UTR field, the <strong>TDS rate (%)</strong> field, the <strong>GST %</strong> picker and
+  <strong>Mark paid</strong> button only appear editable for whoever is authorised to make the
+  payment. Everyone else who can open this queue &mdash; managers and super admins included &mdash;
+  sees &ldquo;View only &mdash; payments are marked by finance.&rdquo; instead, with the rest of the
+  card (bank details, invoice, amount, and any TDS already recorded) still visible read-only. Being
+  in the Finance role is not by itself enough to pay; that is granted to specific people so the
+  button is never offered to someone it would just reject.</p>
 </div>
 
 <div class="callout">
