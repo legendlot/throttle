@@ -14,12 +14,34 @@ import { netPayable, round2, hasTds } from './tds.js';
 // is paid; an unpaid row cannot be booked in Tally and would invite a double entry when it later
 // pays. The server-side filter (`getPaidPaymentsExport`) is the real gate — this list is the
 // shape of the file.
+//
+// ⚠️ 'Open in Snorkel' is deliberately an APP DEEP LINK (`/payments/detail?id=`), never a
+// storage URL — Priya asked for a link to the uploaded invoice (#bugs 2026-09-07), but the
+// files sit in private storage behind the worker's `openDoc`; a raw/signed storage URL baked
+// into a CSV would expire or leak. The detail page already shows and opens the documents for
+// anyone allowed to see the request, so the link there is both stable and access-controlled.
+// No "Invoice docs" count column: `getPaidPaymentsExport`'s select does not embed
+// `payment_request_documents`, so the rows this file receives never carry that data — adding
+// the count would mean a worker change, which is out of scope here.
 export const PAYMENTS_EXPORT_COLUMNS = [
   'Request No', 'Payee / Vendor', 'Invoice No', 'Invoice Date', 'Invoice Total', 'Currency',
   'Amount to Pay', 'GST % (TDS)', 'Taxable value (TDS base)', 'TDS %', 'TDS Amount', 'Net Paid',
   'Payment Date', 'UTR / Ref',
   'Payment Mode', 'Category', 'Linked PO', 'Purpose', 'Requested By', 'Approved By', 'Paid By',
+  'Open in Snorkel',
 ];
+
+// Appended at the end (not inserted alongside the columns above) so Finance's existing
+// column-position mapping of this export never shifts. `window` only exists in the browser;
+// the literal fallback is what node:test — and any non-browser caller — deterministically gets.
+const SNORKEL_SITE_URL =
+  typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'https://snorkel.legendoftoys.com';
+
+export function paymentDetailUrl(id) {
+  return `${SNORKEL_SITE_URL}/payments/detail?id=${encodeURIComponent(id ?? '')}`;
+}
 
 // `paid_at` is a timestamptz and arrives as UTC ('2026-09-08T06:24:19.538+00:00'), but Tally is
 // keyed on the IST calendar date — a payment made at 23:00 IST is a 06-something-UTC row for the
@@ -89,6 +111,7 @@ export function buildPaymentsExportCsv(rows) {
       r.requested_by_name || '',
       r.approved_by_name || '',
       r.paid_by_name || '',
+      paymentDetailUrl(r.id),
     ].map(csvCell).join(','));
   }
   return out.join('\n');

@@ -5,13 +5,13 @@
 // Run: node --test snorkelops-worker/test/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPaymentsExportCsv, PAYMENTS_EXPORT_COLUMNS, istDateOf, netPaidOf }
+import { buildPaymentsExportCsv, PAYMENTS_EXPORT_COLUMNS, istDateOf, netPaidOf, paymentDetailUrl }
   from '../../apps/snorkel/src/lib/paymentsExport.js';
 
 // A live-shaped row: PostgREST returns numerics as STRINGS and embeds the payee as an object.
 function row(over = {}) {
   return {
-    request_no: 'PAY-0021', payee: { name: 'Ashirwad Polymers' },
+    id: 'req-1', request_no: 'PAY-0021', payee: { name: 'Ashirwad Polymers' },
     invoice_no: 'INV-99', invoice_date: '2026-09-01', invoice_total: '98345.00',
     currency: 'INR', amount_to_pay: '98345.00', tds_rate: null, tds_amount: null,
     tds_gst_rate: null, tds_base: null,
@@ -164,6 +164,22 @@ test('the payment date is the IST calendar date, not the UTC one', () => {
   assert.equal(istDateOf('2026-09-08T06:24:19.538+00:00'), '2026-09-08');
   assert.equal(istDateOf(null), '');
   assert.equal(istDateOf('not a date'), '');
+});
+
+// Priya (#bugs 2026-09-07): uploaded invoices don't appear in the export — can it carry a
+// direct link? Decision (lane): an APP DEEP LINK to the request's detail page, never a storage
+// URL (private storage behind `openDoc`; a raw/signed URL in a CSV would expire or leak). The
+// column is APPENDED at the end so Finance's existing column-position mapping never shifts.
+test("'Open in Snorkel' is the last column, a deep link to the request's detail page, and does not shift earlier columns", () => {
+  assert.equal(PAYMENTS_EXPORT_COLUMNS[PAYMENTS_EXPORT_COLUMNS.length - 1], 'Open in Snorkel');
+  assert.equal(paymentDetailUrl('req-1'), 'https://snorkel.legendoftoys.com/payments/detail?id=req-1');
+  const c = cells(buildPaymentsExportCsv([row({ id: 'req-42' })]).split('\n')[1]);
+  assert.equal(c.length, PAYMENTS_EXPORT_COLUMNS.length);
+  assert.equal(c[col('Open in Snorkel')], 'https://snorkel.legendoftoys.com/payments/detail?id=req-42');
+  // Earlier columns are untouched by the append.
+  assert.equal(c[col('Request No')], 'PAY-0021');
+  assert.equal(c[col('Paid By')], 'Priya');
+  assert.equal(c[col('UTR / Ref')], 'HSBCN25184661539');
 });
 
 test('an empty range produces a header-only file, never a throw', () => {
