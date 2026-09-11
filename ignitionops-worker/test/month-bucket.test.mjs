@@ -35,5 +35,17 @@ test('a take with no post_date or zero views contributes no row', () => {
 test('the fallback row is marked seq null and uses the deal date', () => {
   const { rows } = bucketVideoViewsByMonth(deals, videos);
   const b = rows.find(r => r.engagement_id === 'B');
-  assert.deepEqual(b, { engagement_id: 'B', seq: null, post_date: '2026-09-10', month: '2026-09', views: 400 });
+  assert.deepEqual(b, { engagement_id: 'B', seq: null, post_date: '2026-09-10', month: '2026-09', views: 400, paid_views: 0 });
+});
+
+// S373 — views in every monthly figure are ORGANIC (views − paid); paid rides alongside.
+test('paid views come off the month\'s views and are reported next to them', () => {
+  const { byMonth, paidByMonth, rows } = bucketVideoViewsByMonth(
+    [{ id: 'P', post_date: '2026-09-05', views: 900 }],
+    [{ engagement_id: 'P', seq: 1, post_date: '2026-09-05', views: 900, paid_views: 300 },
+     { engagement_id: 'P', seq: 2, post_date: '2026-10-01', views: 50, paid_views: 80 }]);   // paid > views (Meta ran ahead)
+  assert.equal(byMonth['2026-09'], 600);
+  assert.equal(paidByMonth['2026-09'], 300);
+  assert.equal(byMonth['2026-10'], 0, 'organic never goes below 0');
+  assert.equal(rows.length, 2, 'an all-paid take is still a row (keyed on total views)');
 });

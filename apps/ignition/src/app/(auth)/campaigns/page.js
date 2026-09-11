@@ -149,10 +149,11 @@ function SpendVsBudget({ rows }) {
     a.spend += Number(c.rollup?.spend) || 0;
     a.videos += Number(c.rollup?.linked_count) || 0;
     a.posted += Number(c.rollup?.posted_count) || 0;
-    a.views += Number(c.rollup?.views) || 0;
+    a.views += Number(c.rollup?.views) || 0;          // organic (views − paid, S373)
+    a.paid += Number(c.rollup?.paid_views) || 0;
     a.orders += Number(c.rollup?.orders) || 0;
     return a;
-  }, { budget: 0, spend: 0, videos: 0, posted: 0, views: 0, orders: 0 });
+  }, { budget: 0, spend: 0, videos: 0, posted: 0, views: 0, paid: 0, orders: 0 });
 
   return (
     <section style={{ marginTop: 24 }}>
@@ -165,7 +166,7 @@ function SpendVsBudget({ rows }) {
           <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
             <th style={th}>Campaign</th><th style={thR}>Budget</th><th style={thR}>Spend</th>
             <th style={thR}>Δ</th><th style={thR}>Videos</th><th style={thR}>Posted</th>
-            <th style={thR}>Views</th><th style={thR}>Orders</th>
+            <th style={thR}>Organic views</th><th style={thR}>Orders</th>
           </tr></thead>
           <tbody>
             {rows.map(c => {
@@ -183,7 +184,10 @@ function SpendVsBudget({ rows }) {
                   </td>
                   <td style={tdR}>{c.rollup?.linked_count ?? 0}</td>
                   <td style={tdR}>{c.rollup?.posted_count ?? 0}</td>
-                  <td style={tdR}>{Number(c.rollup?.views || 0).toLocaleString('en-IN')}</td>
+                  <td style={tdR}>
+                    {Number(c.rollup?.views || 0).toLocaleString('en-IN')}
+                    {Number(c.rollup?.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>+ {Number(c.rollup.paid_views).toLocaleString('en-IN')} paid</div>}
+                  </td>
                   <td style={tdR}>{Number(c.rollup?.orders || 0).toLocaleString('en-IN')}</td>
                 </tr>
               );
@@ -197,7 +201,10 @@ function SpendVsBudget({ rows }) {
               </td>
               <td style={tdR}>{totals.videos}</td>
               <td style={tdR}>{totals.posted}</td>
-              <td style={tdR}>{totals.views.toLocaleString('en-IN')}</td>
+              <td style={tdR}>
+                {totals.views.toLocaleString('en-IN')}
+                {totals.paid > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>+ {totals.paid.toLocaleString('en-IN')} paid</div>}
+              </td>
               <td style={tdR}>{totals.orders.toLocaleString('en-IN')}</td>
             </tr>
           </tbody>

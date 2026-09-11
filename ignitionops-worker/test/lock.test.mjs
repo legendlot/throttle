@@ -98,7 +98,7 @@ const refused = (row, patch, now = NOW) => W.lockedFieldsIn(patch).length > 0 &&
 const CARD_PAYLOADS = {
   DealTermsCard: { deal_type: 'paid', payment_terms: null, payment_amount: 5000, affiliate_pct: null,
     commission_amount: null, campaign_id: null, ad_rights: null, ad_rights_amount: null, ad_rights_duration: null },
-  CostsCard: { return_cost: 0, ad_spend: 100 },
+  CostsCard: { return_cost: 0 },   // S373: the card's ad_spend input was retired (ads have their own card)
   PostLiveCard: { post_date: '2026-09-01' },
   ComplianceCard: { compliance_car_motion: true },
 };

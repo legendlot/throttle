@@ -10,10 +10,11 @@ import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
 import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
-import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings, metricsCompleteness, isLocked, unlockActive } from '../../../../lib/metrics.js';
+import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, liveDataWarnings, metricsCompleteness, isLocked, unlockActive, organicViews } from '../../../../lib/metrics.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../lib/dealTypes.js';
 import { titleish } from '../../../../lib/productLabel.js';
 import { NewPaymentModal } from '../../../../components/NewPaymentModal.js';
+import AdsCard from '../../../../components/AdsCard.js';
 
 export default function EngagementDetailPage() {
   const sp = useSearchParams();
@@ -62,6 +63,8 @@ export default function EngagementDetailPage() {
     } catch (e) {
       if (/has_payments_cannot_delete/.test(e.message)) {
         toast('Has payments — cancel/close it instead of deleting.', 'error');
+      } else if (/has_ad_payments_cannot_delete/.test(e.message)) {
+        toast('Has ad payments — cancel/close it instead of deleting.', 'error');
       } else {
         toast(e.message, 'error');
       }
@@ -304,6 +307,19 @@ export default function EngagementDetailPage() {
         </Card>
 
         <CostsCard e={e} canEdit={canManage} locked={locked} session={session} onSaved={reload} />
+
+        {/* Ads (S373) — spans the row. Deliberately NOT given `locked`: ads and ad payments stay
+            editable on a Complete deal, because ads run after the video posts. */}
+        <AdsCard
+          engagement={e}
+          videos={data.videos || []}
+          ads={data.ads === undefined ? [] : data.ads}
+          adPayments={data.ad_payments === undefined ? [] : data.ad_payments}
+          canManage={canManage}
+          canApprove={canApprove}
+          session={session}
+          onSaved={reload}
+        />
 
         <Card title="Logistics">
           <KV label="Shipping order" value={e.shipping_order_id || '—'} />
@@ -674,11 +690,13 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ret, setRet] = useState('');
-  const [ad, setAd] = useState('');
 
+  // S373: the "Ad spend" input is retired — ad money (payments to the creator for ad rights, and
+  // Meta spend) lives on the Ads card and is NOT influencer budget. The column stays: the UGC Meta
+  // pull still writes it, and while it is still a term of the generated total_cost a non-zero
+  // value is shown read-only below so TOTAL still adds up on screen.
   function startEdit() {
     setRet(e.return_cost ?? '');
-    setAd(e.ad_spend ?? '');
     setEditing(true);
   }
   async function save() {
@@ -688,7 +706,6 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
       await ignitionopsPost('updateEngagement', {
         engagement_id: e.id,
         return_cost: numOrNull(ret),
-        ad_spend: numOrNull(ad),
       }, session);
       toast('Costs updated', 'success');
       setEditing(false);
@@ -712,7 +729,6 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
       {editing && !locked ? (
         <>
           <CostEdit label="Return ₹" value={ret} onChange={setRet} />
-          <CostEdit label="Ad spend ₹" value={ad} onChange={setAd} />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
             <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
@@ -721,8 +737,8 @@ function CostsCard({ e, canEdit, locked, session, onSaved }) {
       ) : (
         <>
           <KV label="Return" value={`₹${Number(e.return_cost || 0).toLocaleString()}`} />
-          <KV label="Ad spend" value={`₹${Number(e.ad_spend || 0).toLocaleString()}`} />
-          <KV label="CPM" value={cpm != null
+          {Number(e.ad_spend) > 0 && <KV label="Ad spend (Meta)" value={`₹${Number(e.ad_spend).toLocaleString()}`} />}
+          <KV label="CPM (organic)" value={cpm != null
             ? <span style={{ color: Number(cpm) > 100 ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: Number(cpm) > 100 ? 700 : 400 }}>
                 ₹{Number(cpm).toFixed(2)}{Number(cpm) > 100 ? ' ⚠ high' : ''}
               </span>
@@ -1011,17 +1027,29 @@ function PostLiveCard({ e, canEdit, locked, session, onSaved }) {
 // Per-VIDEO metrics are written with setEngagementVideo against one take; the matching column on
 // `engagements` is a worker-owned ROLLUP of the takes and is no longer in ENGAGEMENT_FIELDS, so a
 // PATCH of it here would be silently reverted by the next rollup.
+// S373 (paid vs organic): `views` is the platform TOTAL; `paid_views` is the part an ad bought
+// (typed here, or filled by the Meta sync when a synced ad sits on the take). ORGANIC = views −
+// paid is DERIVED and shown under it — the stored `organic_views` column is no longer an input,
+// because a typed organic next to a derived one would be two answers to one question.
 const VIDEO_METRIC_FIELDS = [
-  ['views', 'Views'], ['organic_views', 'Organic views'], ['paid_views', 'Paid views'],
+  ['views', 'Views'], ['paid_views', 'Paid views'],
   ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
   ['reposts', 'Reposts'], ['saves', 'Saves'], ['followers_gained', 'Followers gained'],
   ['follower_count_at_post', 'Followers at post date'], ['impressions', 'Impressions'],
 ];
 // …and the deal-level ones that are NOT per-video (still written with updateEngagement).
 const DEAL_METRIC_FIELDS = [['sessions', 'Sessions'], ['orders', 'Orders'], ['conversions_value', 'Conversions ₹']];
-// organic_views / paid_views exist ONLY on engagement_videos — `engagements` has no such column
-// (checked in information_schema, S351), so they are per-take detail and never a deal total.
-const VIDEO_ONLY_FIELDS = new Set(['organic_views', 'paid_views']);
+// Per-take-only fields (no deal-level column). Empty since S373: `engagements.paid_views` is now
+// a worker rollup like views. Kept so a future per-take-only field has somewhere to go.
+const VIDEO_ONLY_FIELDS = new Set([]);
+// Split of the views figure, not a ratio over followers — never demands followers-at-post and never
+// takes a "why blank?" reason (blank paid views = no ad). Mirrors the worker's VIEW_SPLIT_FIELDS.
+const VIEW_SPLIT_FIELDS = new Set(['paid_views']);
+// "Organic views" line under Paid views, wherever a take or the deal totals are shown.
+const organicLabel = (row) => {
+  const o = organicViews(row.views, row.paid_views);
+  return o == null ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span> : o.toLocaleString();
+};
 const MAX_VIDEOS = 6;   // engagement_videos.seq CHECK (1..6) — the 7th insert 23514s; refuse here first
 
 function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapReasons }) {
@@ -1047,8 +1075,11 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
   // and a post date (the normal state the day it goes live) has no ratios to protect, and blocking
   // it made the video unfileable until its numbers existed. Same rule as the server hard stop in
   // ignitionops-worker (VIDEO_METRICS_NEEDING_BASE).
-  const anyMetricEntered = shown.some(([k]) => !REQUIRED_METRICS.includes(k) && form[k] !== '' && form[k] != null);
+  const anyMetricEntered = shown.some(([k]) => !REQUIRED_METRICS.includes(k) && !VIEW_SPLIT_FIELDS.has(k) && form[k] !== '' && form[k] != null);
   const missingRequired = editing && current && anyMetricEntered ? missingRequiredMetrics(form, platform) : [];
+  // Paid views are a slice of views — the worker refuses paid > views; say so before Save.
+  const paidOverViews = editing && form.paid_views !== '' && form.paid_views != null && form.views !== '' && form.views != null
+    && Number(form.paid_views) > Number(form.views);
   const requiredLabels = missingRequired
     .map(k => (VIDEO_METRIC_FIELDS.find(([mk]) => mk === k) || [k, k])[1]);
 
@@ -1065,6 +1096,7 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
       toast(`${requiredLabels.join(', ')} is required before performance can be saved`, 'error');
       return;
     }
+    if (paidOverViews) { toast('Paid views cannot be more than views', 'error'); return; }
     setBusy(true);
     try {
       const patch = {
@@ -1150,6 +1182,10 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
             const val = (raw == null || raw === '')
               ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
               : Number(raw).toLocaleString();
+            if (k === 'paid_views') return [
+              <KV key={k} label={label} value={val} />,
+              <KV key="organic" label="Organic views" value={organicLabel(current)} />,
+            ];
             return <KV key={k} label={label} value={val} />;
           })}
         </>
@@ -1183,12 +1219,17 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
               {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown.
                   A REQUIRED metric gets none: it is not backfillable, so a reason would just record
                   that the number is lost. Capture it now or the deal has no ratios, ever. */}
-              {!required && (form[k] === '' || form[k] == null) && (
+              {!required && !VIEW_SPLIT_FIELDS.has(k) && (form[k] === '' || form[k] == null) && (
                 <select value={gaps[k] || ''} onChange={ev => setGaps(g => ({ ...g, [k]: ev.target.value }))}
                   style={{ width: 150, background: 'var(--surface-2)', color: gaps[k] ? 'var(--text-1)' : 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                   <option value="">why blank?</option>
                   {(gapReasons || []).map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
+              )}
+              {k === 'paid_views' && (
+                <span style={{ width: 150, fontSize: 11, color: paidOverViews ? 'var(--state-error-fg)' : 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                  {paidOverViews ? 'more than views' : `organic ${organicViews(form.views, form.paid_views)?.toLocaleString() ?? '—'}`}
+                </span>
               )}
             </div>
           );
@@ -1206,9 +1247,9 @@ function PerformanceCard({ e, videos, canEdit, session, onSaved, platform, gapRe
                 style={{ marginRight: 'auto', padding: '6px 12px', background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Remove video #{current.seq}</button>
             )}
             <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={saveTake} disabled={busy || missingRequired.length > 0}
-              title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : undefined}
-              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
+            <button onClick={saveTake} disabled={busy || missingRequired.length > 0 || paidOverViews}
+              title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : paidOverViews ? 'Paid views cannot be more than views' : undefined}
+              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0 || paidOverViews) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0 || paidOverViews) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
           </div>
         </div>
       )}
@@ -1267,7 +1308,9 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
       </div>
 
       {/* Summed across the takes by the worker — typed on a video tab, never here. */}
-      {rolled.map(([k, label]) => <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], false)} />)}
+      {rolled.map(([k, label]) => k === 'paid_views'
+        ? [<KV key={k} label={label} value={value(e[k], null, false)} />, <KV key="organic" label="Organic views" value={organicLabel(e)} />]
+        : <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], false)} />)}
 
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>

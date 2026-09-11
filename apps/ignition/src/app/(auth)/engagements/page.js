@@ -9,7 +9,7 @@ import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
-import { metricsCompleteness } from '../../../lib/metrics.js';
+import { metricsCompleteness, organicViews } from '../../../lib/metrics.js';
 
 // S369 — a deal can be Complete because a metric was EXPLAINED (a recorded metric_gaps reason)
 // rather than captured. The tick used to promise "all metrics captured" either way, which claims
@@ -285,7 +285,7 @@ export default function EngagementsPage() {
   // on the main dashboard, to view the total number of videos displayed and the total cost
   // when the filters are selected").
   const summary = useMemo(() => {
-    let cost = 0, views = 0, costOfViewed = 0, viewedDeals = 0, cancelled = 0;
+    let cost = 0, views = 0, paid = 0, costOfViewed = 0, viewedDeals = 0, cancelled = 0;
     for (const r of visible) {
       // Reann, 2026-08-27: a CANCELLED deal was called off before anything was spent, so its
       // money never happened and must not reach any total. DROPPED still counts — goods went
@@ -293,8 +293,11 @@ export default function EngagementsPage() {
       // ignitionops; the two must agree or this tile and the Reports page quote different spend.
       if (SPEND_EXCLUDED_STAGES.has(r.stage)) { cancelled += 1; continue; }
       cost += Number(r.total_cost || 0);
-      const v = Number(r.views || 0);
+      // ORGANIC views (S373): views − paid. What an ad bought is not the collab's reach, so it stays
+      // out of the tile and the blended CPM — same rule as the worker's CPM and every report.
+      const v = organicViews(r.views, r.paid_views) ?? 0;
       views += v;
+      paid += Number(r.paid_views || 0);
       // Blended CPM counts only deals that actually have views. Folding in the cost of deals
       // that have not posted yet would inflate the cost-per-thousand of the ones that have.
       if (v > 0) { costOfViewed += Number(r.total_cost || 0); viewedDeals += 1; }
@@ -305,6 +308,7 @@ export default function EngagementsPage() {
       deals: visible.length,
       cost,
       views,
+      paid,
       cpm: views > 0 ? (costOfViewed / views) * 1000 : null,
       viewedDeals,
       cancelled,
@@ -460,7 +464,8 @@ export default function EngagementsPage() {
             // up to the deals — a total that quietly omits rows is how mistrust starts.
             hint={summary.cancelled ? `${summary.cancelled} cancelled deal${summary.cancelled === 1 ? '' : 's'} excluded` : undefined}
           />
-          <Tile label="Views" value={summary.views.toLocaleString('en-IN')} />
+          <Tile label="Organic views" value={summary.views.toLocaleString('en-IN')}
+            hint={summary.paid ? `+ ${summary.paid.toLocaleString('en-IN')} paid (ads)` : undefined} />
           <Tile
             label="Blended CPM"
             value={summary.cpm == null ? '—' : `₹${summary.cpm.toFixed(0)}`}
@@ -558,7 +563,10 @@ export default function EngagementsPage() {
                       {r.expected_post_date || '—'}
                     </td>
                     <td style={td}>{r.post_date || '—'}</td>
-                    <td style={tdNum}>{r.views ? Number(r.views).toLocaleString('en-IN') : '—'}</td>
+                    <td style={tdNum}>
+                      {r.views ? Number(r.views).toLocaleString('en-IN') : '—'}
+                      {Number(r.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{Number(r.paid_views).toLocaleString('en-IN')} paid</div>}
+                    </td>
                     <td style={tdNum}>{r.cpm ? `₹${Number(r.cpm).toFixed(0)}` : '—'}</td>
                     <td style={tdNum}>₹{Number(r.total_cost || 0).toLocaleString('en-IN')}</td>
                   </tr>

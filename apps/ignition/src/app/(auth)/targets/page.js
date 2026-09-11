@@ -125,7 +125,7 @@ export default function TargetsPage() {
           <table style={tableStyle}>
             <thead>
               <tr>
-                {['', 'Month', 'Target views', 'Actual views', 'Views %', 'Budget', 'Spent', 'Spend %', 'Note'].map((h, i) => (
+                {['', 'Month', 'Target views', 'Organic views', 'Views %', 'Budget', 'Spent', 'Spend %', 'Note'].map((h, i) => (
                   <th key={h || 'exp'} style={{ ...thr, width: i === 0 ? 28 : undefined, textAlign: i === 0 || i === 1 || i === 8 ? 'left' : (i === 4 || i === 7 ? 'left' : 'right') }}>{h}</th>
                 ))}
               </tr>
@@ -174,7 +174,10 @@ export default function TargetsPage() {
                     </td>
                     <td onClick={() => canManage && editRow(r)} style={{ ...tdl, fontWeight: 600, cursor: canManage ? 'pointer' : 'default', color: r.month === curMonth() ? ORANGE : 'var(--text-1)' }}>{monthLabel(r.month)}{r.month === curMonth() ? ' ·' : ''}</td>
                     <td style={tdr}>{num(r.target_views)}</td>
-                    <td style={tdr}>{num(r.actual_views)}</td>
+                    <td style={tdr}>
+                      {num(r.actual_views)}
+                      {Number(r.actual_paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>+ {num(r.actual_paid_views)} paid</div>}
+                    </td>
                     <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.views_pct} kind="views" /></td>
                     <td style={{ ...tdr, color: ORANGE }}>{inr(r.budget_amount)}</td>
                     <td style={tdr}>{inr(r.actual_spend)}</td>
@@ -246,14 +249,17 @@ function MonthBreakdown({ month, data }) {
         )}
       />
       {!isUnalloc && <Section
-        title={`Views — ${(t.views || 0).toLocaleString()} across ${t.view_lines || 0}`}
+        title={`Organic views — ${(t.views || 0).toLocaleString()} across ${t.view_lines || 0}${t.paid_views ? ` (+ ${t.paid_views.toLocaleString()} paid, not counted)` : ''}`}
         empty="No posts with views this month." rows={data.views || []}
-        cols={['Influencer', 'Posted', 'Views']}
+        cols={['Influencer', 'Posted', 'Organic views']}
         render={r => (
           <tr key={`v-${r.engagement_id}-${r.seq ?? 1}`}>
             <td style={cell}>{who(r)}{r.seq != null && r.seq > 1 ? <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 6 }}>#{r.seq}</span> : null}{r.platform && <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 9 }}>{r.platform}</span>}</td>
             <td style={{ ...cell, textAlign: 'right' }}>{r.take_post_date || r.post_date || '—'}</td>
-            <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>{Number(r.views).toLocaleString()}</td>
+            <td style={{ ...cell, textAlign: 'right', color: 'var(--text-1)' }}>
+              {Number(r.views).toLocaleString()}
+              {Number(r.paid_views) > 0 && <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 9 }}>+{Number(r.paid_views).toLocaleString()} paid</span>}
+            </td>
           </tr>
         )}
       />}

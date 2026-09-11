@@ -42,6 +42,19 @@ const num = (v) => {
 };
 const pct = (n, d) => (n == null || !d ? null : Math.round((n / d) * 10000) / 100);
 
+// Paid vs organic views (S373, Reann #bugs 2026-09-04). `views` is the platform's TOTAL and
+// includes what an ad bought; collab performance — every views-based ratio and CPM below, and the
+// worker's CPM / monthly / campaign / report views — is judged on ORGANIC = views − paid.
+// null views → null (not measured); never below 0 (a Meta-synced paid figure can run ahead of a
+// typed total). Completeness and the live-data warning deliberately keep reading TOTAL views: a
+// take that has views has been measured, however they were earned.
+// ⚠️ Mirrors `organicViews` in ignitionops-worker/src/index.js — change both.
+export function organicViews(views, paid) {
+  const v = num(views);
+  if (v == null) return null;
+  return Math.max(0, v - (num(paid) ?? 0));
+}
+
 // The raw metrics Reann lists, in her order. `key` matches both the DB column and metric_gaps.
 export const RAW_METRICS = [
   { key: 'views',            label: 'Views' },
@@ -78,13 +91,15 @@ export function deriveMetrics(e = {}, platform) {
     .map(d => ({ ...d, value: pct(num(e[d.from]), base), unit: '%' }));
 
   // Views-to-followers is a multiplier, not a percentage — 2.3x reads better than 230%.
-  const views = num(e.views);
+  // ORGANIC views (S373): a boosted post's bought views are not the creator's reach.
+  const views = organicViews(e.views, e.paid_views);
   ratios.push({
-    key: 'views_to_followers', label: 'Views / followers', from: 'views', unit: 'x',
+    key: 'views_to_followers', label: 'Organic views / followers', from: 'views', unit: 'x',
     value: (views == null || !base) ? null : Math.round((views / base) * 100) / 100,
   });
 
-  // Business metrics are absolute, never normalised to followers.
+  // Business metrics are absolute, never normalised to followers. CPM and revenue per view divide
+  // by the same ORGANIC `views` — matching the worker's recomputeCpm (engagements.cpm).
   const cost = num(e.total_cost);
   const revenue = num(e.conversions_value);
   const business = [

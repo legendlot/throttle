@@ -75,7 +75,9 @@ export default function CampaignDetailPage() {
         <KpiCard label="Linked deals" value={r.linked_count ?? 0} />
         <KpiCard label="Posted" value={r.posted_count ?? 0} accent="#FF6B00" />
         <KpiCard label="Total spend" value={inr(r.spend)} />
-        <KpiCard label="Views" value={num(r.views).toLocaleString()} />
+        {/* Organic = views − paid (S373); the campaign rollup already returns it that way. */}
+        <KpiCard label="Organic views" value={num(r.views).toLocaleString()} />
+        {num(r.paid_views) > 0 && <KpiCard label="Paid views (ads)" value={num(r.paid_views).toLocaleString()} />}
         <KpiCard label="Orders" value={num(r.orders).toLocaleString()} />
       </div>
 
@@ -94,7 +96,7 @@ export default function CampaignDetailPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
             <th style={th}>Engagement #</th><th style={th}>Type</th><th style={th}>Product</th>
-            <th style={th}>Stage</th><th style={th}>Spend</th><th style={th}>Views</th><th style={th}>Orders</th>
+            <th style={th}>Stage</th><th style={th}>Spend</th><th style={th}>Organic views</th><th style={th}>Orders</th>
             {canManage && <th style={th}></th>}
           </tr></thead>
           <tbody>
@@ -106,7 +108,10 @@ export default function CampaignDetailPage() {
                 <td style={td}>{productLabel(e.product_code, e.product_variant) || '—'}</td>
                 <td style={td}>{e.stage}</td>
                 <td style={td}>{inr(e.total_cost != null ? e.total_cost : e.payment_amount)}</td>
-                <td style={td}>{num(e.views).toLocaleString()}</td>
+                <td style={td}>
+                  {Math.max(0, num(e.views) - num(e.paid_views)).toLocaleString()}
+                  {num(e.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>+ {num(e.paid_views).toLocaleString()} paid</div>}
+                </td>
                 <td style={td}>{num(e.orders).toLocaleString()}</td>
                 {canManage && <td style={td}><button onClick={() => detach(e.id)} title="Detach" style={iconBtn}><X size={14} /></button></td>}
               </tr>

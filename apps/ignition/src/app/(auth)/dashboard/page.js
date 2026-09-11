@@ -57,7 +57,9 @@ export default function DashboardPage() {
         <KpiCard label="Live (done)" value={kpis.live} accent="#4ade80" />
         <KpiCard label="Ghosted" value={kpis.ghosted} accent="#ff7070" />
         <KpiCard label={`Overdue posts (>${OVERDUE_DAYS}d)`} value={kpis.overdue ?? 0} accent={kpis.overdue > 0 ? '#ff7070' : undefined} />
-        <KpiCard label="Total views" value={(kpis.engagement_totals?.views ?? 0).toLocaleString()} />
+        {/* Organic = views − paid (S373) — getKpis returns it that way; paid (ads) alongside. */}
+        <KpiCard label="Organic views" value={(kpis.engagement_totals?.views ?? 0).toLocaleString()} />
+        {(kpis.engagement_totals?.paid_views ?? 0) > 0 && <KpiCard label="Paid views (ads)" value={kpis.engagement_totals.paid_views.toLocaleString()} />}
         <KpiCard label="Total likes" value={(kpis.engagement_totals?.likes ?? 0).toLocaleString()} />
         <KpiCard label="Total shares" value={(kpis.engagement_totals?.shares ?? 0).toLocaleString()} />
       </div>
@@ -67,7 +69,7 @@ export default function DashboardPage() {
           <div style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>UGC summary</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
             <KpiCard label="UGC deals" value={(kpis.ugc_summary.deals ?? 0).toLocaleString()} />
-            <KpiCard label="UGC views" value={(kpis.ugc_summary.views ?? 0).toLocaleString()} />
+            <KpiCard label="UGC organic views" value={(kpis.ugc_summary.views ?? 0).toLocaleString()} />
             <KpiCard label="UGC likes" value={(kpis.ugc_summary.likes ?? 0).toLocaleString()} />
             <KpiCard label="Budget consumed" value={`₹${Number(kpis.ugc_summary.budget_consumed ?? 0).toLocaleString('en-IN')}`} accent="#FF6B00" />
             <KpiCard label="Orders" value={(kpis.ugc_summary.orders ?? 0).toLocaleString()} />
@@ -83,7 +85,7 @@ export default function DashboardPage() {
         </div>
         {monthRow && (monthRow.target_views != null || monthRow.budget_amount != null) ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-            <MonthProgress label="Views" actual={monthRow.actual_views} target={monthRow.target_views} pct={monthRow.views_pct} kind="views" />
+            <MonthProgress label="Organic views" actual={monthRow.actual_views} target={monthRow.target_views} pct={monthRow.views_pct} kind="views" />
             <MonthProgress label="Spend" actual={monthRow.actual_spend} target={monthRow.budget_amount} pct={monthRow.spend_pct} kind="spend" money />
           </div>
         ) : (

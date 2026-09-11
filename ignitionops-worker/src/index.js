@@ -804,7 +804,7 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar, pr, epr, ubr, vr, ship] = await Promise.all([
+  const [hr, nr, ar, pr, epr, ubr, vr, ship, adr, apr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
@@ -814,6 +814,9 @@ async function getEngagement(url, auth, env) {
     sb(`/rest/v1/engagement_videos?engagement_id=eq.${eng.id}&select=*&order=seq.asc`, env),
     // Courier status rides along in the same fan-out rather than costing an extra round trip.
     fetchShipmentStatus([eng.shipping_order_id], env),
+    // Ads on this deal (S373) — folded in here rather than a second fetch from the card.
+    sb(`/rest/v1/engagement_ads?engagement_id=eq.${eng.id}&select=*&order=created_at.asc`, env),
+    sb(`/rest/v1/ad_payments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
   ]);
 
   const shipment = shipmentFor(eng.shipping_order_id, ship || {});
@@ -858,6 +861,11 @@ async function getEngagement(url, auth, env) {
     allowed_next: allowedTransitions(eng.stage, eng.engagement_type === 'ugc'),
     locked: isLocked(eng),
     unlocked_by_name,
+    // Ads (S373) — NOT under the COMPLETE-deal lock: ads run after the video posts. `approve_gate`
+    // is computed with the worker's clock so the card greys Approve on the same rule the server
+    // enforces in decideEngagementAd. A failed read is said, not rendered as "no ads".
+    ads: adr.ok ? (adr.data || []).map(a => ({ ...a, approve_gate: adApprovalGate(adTake(a, vr.data || [])) })) : null,
+    ad_payments: apr.ok ? (apr.data || []) : null,
   });
 }
 
@@ -903,7 +911,25 @@ export function rollupVideos(videos) {
     if (reasons.length === nulls.length) gaps[k] = reasons[0];
   }
   out.metric_gaps = gaps;
+  // Paid views (S373 ads) — same SUM rule as the metrics above, but deliberately OUTSIDE
+  // VIDEO_SUM_METRICS: it is not a completeness metric, so it never takes a metric_gaps reason.
+  let paid = null;
+  for (const r of rows) { const n = vnum(r.paid_views); if (n != null) paid = (paid ?? 0) + n; }
+  out.paid_views = paid;
   return out;
+}
+
+// ── Paid vs organic views (S373, Reann #bugs 2026-09-04) ─────────────────────────────────────
+// `views` on a take / deal is the TOTAL the platform shows, and it includes views bought by an ad.
+// Collab performance (CPM, ratios, monthly / campaign / report views) is judged on ORGANIC =
+// views − paid. Completeness keeps reading total views — a take that has views is measured,
+// however they were earned. null views → null (not measured); never below 0 (a paid figure
+// synced from Meta can briefly run ahead of a typed total). Mirrors `organicViews` in
+// apps/ignition/src/lib/metrics.js.
+export function organicViews(views, paid) {
+  const v = vnum(views);
+  if (v == null) return null;
+  return Math.max(0, v - (vnum(paid) ?? 0));
 }
 
 const VIDEO_FIELDS = ['video_link','post_date','views','organic_views','paid_views','likes','comments','shares',
@@ -912,9 +938,12 @@ const VIDEO_NUMERIC = ['views','organic_views','paid_views','likes','comments','
   'impressions','followers_gained','follower_count_at_post'];
 const VIDEO_MAX_SEQ = 6;   // engagement_videos.seq CHECK (seq BETWEEN 1 AND 6) — refuse BEFORE the insert
 // Every metric whose presence makes `follower_count_at_post` mandatory (the Reann #7 hard stop) —
-// i.e. all of VIDEO_NUMERIC except the base itself. Mirrors the client gate in
+// VIDEO_NUMERIC minus the base itself and minus paid/organic views (S373): those split the views
+// figure, they are not ratios over followers, and a paid figure typed (or synced from Meta) on a
+// take with no follower base must not be refused. Mirrors the client gate in
 // apps/ignition/src/app/(auth)/engagements/detail/page.js (PerformanceCard).
-const VIDEO_METRICS_NEEDING_BASE = VIDEO_NUMERIC.filter(k => k !== 'follower_count_at_post');
+const VIEW_SPLIT_FIELDS = ['paid_views', 'organic_views'];
+export const VIDEO_METRICS_NEEDING_BASE = VIDEO_NUMERIC.filter(k => k !== 'follower_count_at_post' && !VIEW_SPLIT_FIELDS.includes(k));
 
 // Re-derive the deal's metric columns from its video rows and write them. The ONLY writer of
 // deal-level views/likes/… since S351. Then CPM, exactly as updateEngagement always did.
@@ -946,7 +975,7 @@ async function setEngagementVideo(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   const eid = encodeURIComponent(body.engagement_id);
-  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,seq&order=seq.asc`, env);
+  const existing = await sb(`/rest/v1/engagement_videos?engagement_id=eq.${eid}&select=id,seq,views,paid_views&order=seq.asc`, env);
   // A failed read is NOT "no takes": treating it as empty hands seq 1 to a second take and the
   // upsert then overwrites the primary. Refuse instead.
   if (!existing.ok) return err('could not read existing takes', 502);
@@ -977,6 +1006,14 @@ async function setEngagementVideo(body, auth, env) {
   // post date saves freely (that is how a video is filed before its numbers exist).
   if (VIDEO_METRICS_NEEDING_BASE.some(k => row[k] != null) && !(vnum(row.follower_count_at_post) > 0)) {
     return err('follower_count_at_post is required once any performance metric is entered', 400);
+  }
+  // Paid views are a slice of views (S373). Checked against the take AS IT WILL BE — a patch that
+  // names only one of the two is compared with the stored other.
+  const prev = (existing.data || []).find(v => Number(v.seq) === seq) || {};
+  const effViews = 'views' in row ? row.views : vnum(prev.views);
+  const effPaid = 'paid_views' in row ? row.paid_views : vnum(prev.paid_views);
+  if (effViews != null && effPaid != null && effPaid > effViews) {
+    return err(`paid views (${effPaid.toLocaleString('en-IN')}) cannot exceed views (${effViews.toLocaleString('en-IN')})`, 400);
   }
   row.updated_at = nowIso();
   if (!taken.has(seq)) row.created_by = auth.userId || null;
@@ -1112,13 +1149,15 @@ function campaignRollup(c) {
     budget,
     budget_remaining: budget != null ? budget - spend : null,
     budget_pct: budget ? Math.round(spend / budget * 100) : null,
-    views: counted.reduce((s, e) => s + num(e.views), 0),
+    // Organic (views − paid, S373) — collab performance; paid alongside.
+    views: counted.reduce((s, e) => s + (organicViews(e.views, e.paid_views) ?? 0), 0),
+    paid_views: counted.reduce((s, e) => s + num(e.paid_views), 0),
     orders: counted.reduce((s, e) => s + num(e.orders), 0),
   };
 }
 
 const CAMPAIGN_ENG_SELECT =
-  'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,total_cost,views,orders,post_date,expected_post_date,video_link)';
+  'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,total_cost,views,paid_views,orders,post_date,expected_post_date,video_link)';
 
 async function getCampaigns(url, auth, env) {
   const status = url.searchParams.get('status');
@@ -1284,19 +1323,21 @@ async function getKpis(url, auth, env) {
   // All-time engagement totals + UGC summary (Reann dashboard tiles). One scan,
   // summed in JS (PostgREST has no SUM here) — ~2k small rows, within the budget.
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
-  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
-  let engagement_totals = { views: 0, likes: 0, shares: 0 };
-  const ugc_summary = { deals: 0, views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
+  // S373: ad money is never influencer budget — `ad_spend` left every spendOf fallback (see the
+  // "Ads on a deal" block). Views are ORGANIC (views − paid); paid rides alongside.
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.commission_amount));
+  let engagement_totals = { views: 0, paid_views: 0, likes: 0, shares: 0 };
+  const ugc_summary = { deals: 0, views: 0, paid_views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
   const aggR = await sb(
-    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=engagement_type,views,likes,shares,orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`,
+    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=engagement_type,views,paid_views,likes,shares,orders,conversions_value,total_cost,payment_amount,commission_amount&limit=5000`,
     env,
   );
   if (aggR.ok) {
     for (const e of (aggR.data || [])) {
-      const v = num(e.views), l = num(e.likes), s = num(e.shares);
-      engagement_totals.views += v; engagement_totals.likes += l; engagement_totals.shares += s;
+      const v = organicViews(e.views, e.paid_views) ?? 0, pv = num(e.paid_views), l = num(e.likes), s = num(e.shares);
+      engagement_totals.views += v; engagement_totals.paid_views += pv; engagement_totals.likes += l; engagement_totals.shares += s;
       if (e.engagement_type === 'ugc') {
-        ugc_summary.deals += 1; ugc_summary.views += v; ugc_summary.likes += l;
+        ugc_summary.deals += 1; ugc_summary.views += v; ugc_summary.paid_views += pv; ugc_summary.likes += l;
         ugc_summary.budget_consumed += spendOf(e); ugc_summary.orders += num(e.orders);
         ugc_summary.conversions_value += num(e.conversions_value);
       }
@@ -1426,7 +1467,10 @@ async function createPaymentProofUploadUrl(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
   if (!body.file_name) return err('file_name required', 400);
-  const path = `${safeSeg(body.engagement_id)}/${Date.now()}_${safeSeg(body.file_name)}`;
+  // Ad payments (S373) share the bucket but live under their own prefix, so an ad-rights screenshot
+  // can never be mistaken for (or cleaned up as) a deal payment's.
+  const prefix = body.for === 'ad_payment' ? 'ad-payments/' : '';
+  const path = `${prefix}${safeSeg(body.engagement_id)}/${Date.now()}_${safeSeg(body.file_name)}`;
   const sr = await storageFetch(`/object/upload/sign/${PAYMENT_PROOF_BUCKET}/${path}`, env, { method: 'POST' });
   if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
   const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
@@ -1439,6 +1483,332 @@ async function getPaymentProofUrl(url, auth, env) {
   const id = url.searchParams.get('id');
   if (!id) return err('id required', 400);
   const pr = await sb(`/rest/v1/payments?id=eq.${id}&select=proof_path,proof_name,proof_mime&limit=1`, env);
+  const p = pr.data?.[0];
+  if (!p || !p.proof_path) return err('no_proof', 404);
+  const seg = String(p.proof_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${PAYMENT_PROOF_BUCKET}/${seg}`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: p.proof_name, mime_type: p.proof_mime });
+}
+
+// ── Ads on a deal (S373, Reann #bugs 2026-09-04 items 1·2·3·4·6) ─────────────────────────────
+// An ad boosts one TAKE of the deal's video. Two separate axes on purpose:
+//   approval_status — LOT's workflow (pending → approved | rejected), set only by ignition_approve,
+//                     and never `approved` before the take has been up for AD_APPROVE_AFTER_DAYS.
+//   run_status      — what the ad is actually doing. Set by hand (running needs approval) or by the
+//                     Meta sync, which reports reality and MAY show an unapproved ad running — the
+//                     card flags that in red rather than the sync pretending otherwise.
+// Money: `ad_payments` is what LOT pays the CREATOR for ad rights / usage and `meta_spend` is what
+// Meta charged. NEITHER is influencer budget: they are not in total_cost, spendOf, the monthly
+// targets or the payments page, and must never be added there. Deliberately NOT under the
+// COMPLETE-deal lock — ads run after the video posts, which is exactly when a deal completes.
+// Every value sent to a CHECK column below comes from these lists (the live CHECKs, 2026-09-11).
+const AD_PLATFORMS = ['instagram', 'facebook', 'both'];
+const AD_DECISIONS = ['pending', 'approved', 'rejected'];
+const AD_RUN_STATUSES = ['not_started', 'running', 'ended'];
+const AD_PAYMENT_STATUSES = ['pending', 'paid'];
+const AD_APPROVE_AFTER_DAYS = 10;
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// Today's date in IST as YYYY-MM-DD — the approval gate counts IST calendar days, not UTC ones.
+export function istToday(now = Date.now()) {
+  return new Date(now + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+const isRealIsoDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d))
+  && new Date(d).toISOString().slice(0, 10) === d;
+const addDaysIso = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const shortDate = (d) => `${Number(d.slice(8, 10))} ${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]}`;
+
+/** The take an ad sits on, out of the deal's video rows (null when unlinked or the take is gone). */
+export function adTake(ad, videos) {
+  return (ad && ad.video_id && (videos || []).find(v => v.id === ad.video_id)) || null;
+}
+
+/**
+ * May this ad be APPROVED now? Only once its take has a post_date and today (IST) is at least
+ * post_date + AD_APPROVE_AFTER_DAYS. Rejecting / setting back to pending is never gated.
+ * @returns { ok, earliest (YYYY-MM-DD|null), message (null when ok) }
+ */
+export function adApprovalGate(take, now = Date.now()) {
+  if (!take) return { ok: false, earliest: null, message: 'link the ad to a take of the video first' };
+  const pd = String(take.post_date || '').slice(0, 10);
+  if (!isRealIsoDate(pd)) {
+    return { ok: false, earliest: null, message: `take #${take.seq ?? '?'} has no post date yet — approval opens ${AD_APPROVE_AFTER_DAYS} days after it posts` };
+  }
+  const earliest = addDaysIso(pd, AD_APPROVE_AFTER_DAYS);
+  if (istToday(now) >= earliest) return { ok: true, earliest, message: null };
+  return { ok: false, earliest, message: `can approve from ${shortDate(earliest)} — ${AD_APPROVE_AFTER_DAYS} days after the video posted on ${shortDate(pd)}` };
+}
+
+/** Is a hand-set run_status allowed? `running` only on an approved ad (unless it already is — the
+ *  Meta sync may have put it there, and re-saving the form must not trip on it). */
+export function manualRunStatusRefusal(next, cur = {}) {
+  if (next !== 'running') return null;
+  if ((cur.approval_status || 'pending') === 'approved') return null;
+  if (cur.run_status === 'running') return null;
+  return 'an ad can only be marked running once it is approved';
+}
+
+async function readTake(env, engagementId, videoId) {
+  const r = await sb(`/rest/v1/engagement_videos?id=eq.${encodeURIComponent(videoId)}&engagement_id=eq.${encodeURIComponent(engagementId)}&select=id,seq,post_date&limit=1`, env);
+  if (!r.ok) return undefined;                 // read failed
+  return r.data?.[0] || null;                  // null = not a take of this deal
+}
+
+// Create (no id) or update (id) one ad. Same gate as editing a deal; not lock-guarded (see above).
+async function saveEngagementAd(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  let cur = null;
+  if (body.id) {
+    const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(body.id)}&select=*&limit=1`, env);
+    if (!r.ok) return err('db_error', 500);
+    cur = r.data?.[0];
+    if (!cur) return err('no such ad', 404);
+  } else if (!body.engagement_id) {
+    return err('engagement_id required', 400);
+  }
+  const engagementId = cur ? cur.engagement_id : body.engagement_id;
+
+  const row = {};
+  if ('platform' in body) {
+    if (!AD_PLATFORMS.includes(body.platform)) return err(`platform must be one of ${AD_PLATFORMS.join(', ')}`, 400);
+    row.platform = body.platform;
+  }
+  if ('run_status' in body) {
+    if (!AD_RUN_STATUSES.includes(body.run_status)) return err(`run status must be one of ${AD_RUN_STATUSES.join(', ')}`, 400);
+    const refusal = manualRunStatusRefusal(body.run_status, cur || {});
+    if (refusal) return err(refusal, 409);
+    row.run_status = body.run_status;
+  }
+  for (const k of ['start_date', 'end_date']) if (k in body) {
+    const d = body[k] == null ? '' : String(body[k]).trim();
+    if (d && !isRealIsoDate(d)) return err(`${k.replace('_', ' ')} must be a real YYYY-MM-DD date`, 400);
+    row[k] = d || null;
+  }
+  const start = 'start_date' in row ? row.start_date : cur?.start_date;
+  const end = 'end_date' in row ? row.end_date : cur?.end_date;
+  if (start && end && end < start) return err('end date is before the start date', 400);
+  if ('meta_ad_id' in body) {
+    // Meta ad ids are numeric strings. Checked so a pasted URL or name fails HERE, in words, rather
+    // than as a daily sync failure nobody reads.
+    const m = body.meta_ad_id == null ? '' : String(body.meta_ad_id).trim();
+    if (m && !/^\d{6,25}$/.test(m)) return err('Meta ad id is the long number from Ads Manager (digits only)', 400);
+    row.meta_ad_id = m || null;
+  }
+  if ('note' in body) row.note = (body.note != null && String(body.note).trim()) || null;
+  if ('video_id' in body) row.video_id = body.video_id || null;
+
+  const videoId = 'video_id' in row ? row.video_id : (cur?.video_id || null);
+  let take = null;
+  if (videoId) {
+    take = await readTake(env, engagementId, videoId);
+    if (take === undefined) return err('db_error', 500);
+    if (take === null) return err('that take is not on this deal', 400);
+  }
+  // Moving an APPROVED ad to another take (or off every take) re-runs the gate on the new take —
+  // otherwise approval earned on take #1 would silently carry over to a take posted yesterday.
+  if (cur && cur.approval_status === 'approved' && 'video_id' in row && row.video_id !== (cur.video_id || null)) {
+    const g = adApprovalGate(take);
+    if (!g.ok) return err(`this ad is approved and the new take fails the approval rule (${g.message}) — set it back to pending first`, 409);
+  }
+  // A different Meta ad means the synced figures belong to the old one.
+  const metaChanged = cur && 'meta_ad_id' in row && row.meta_ad_id !== (cur.meta_ad_id || null);
+  if (metaChanged) Object.assign(row, { meta_status: null, meta_spend: null, meta_views: null, meta_impressions: null, meta_synced_at: null });
+
+  row.updated_at = nowIso();
+  let r;
+  if (cur) {
+    if (Object.keys(row).length === 1) return err('no_patch', 400);
+    r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(cur.id)}`, env, { method: 'PATCH', body: JSON.stringify(row) });
+  } else {
+    r = await sb(`/rest/v1/engagement_ads`, env, {
+      method: 'POST', body: JSON.stringify([{ ...row, engagement_id: engagementId, created_by: auth.userId || null }]),
+    });
+  }
+  if (!r.ok) return r.data?.code === '23503' ? err('no such deal', 404) : err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // A synced ad that changed take (or lost its Meta id) moves paid views between takes.
+  if (cur && cur.meta_synced_at && (metaChanged || ('video_id' in row && row.video_id !== (cur.video_id || null)))) {
+    try { await applyAdPaidViews(env, engagementId); }
+    catch (e) { return ok({ ad: r.data?.[0] || null, warning: `saved, but paid views were not re-derived: ${String(e?.message || e)}` }); }
+  }
+  return ok({ ad: r.data?.[0] || null });
+}
+
+// Approve / reject / back to pending. ignition_approve only (same gate as deal approval).
+async function decideEngagementAd(body, auth, env) {
+  const gate = requirePerm('ignition_approve', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const decision = String(body.decision || '');
+  if (!AD_DECISIONS.includes(decision)) return err(`decision must be one of ${AD_DECISIONS.join(', ')}`, 400);
+  const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(body.id)}&select=id,engagement_id,video_id,platform,approval_status&limit=1`, env);
+  if (!r.ok) return err('db_error', 500);
+  const ad = r.data?.[0];
+  if (!ad) return err('no such ad', 404);
+  let take = null;
+  if (ad.video_id) {
+    take = await readTake(env, ad.engagement_id, ad.video_id);
+    if (take === undefined) return err('db_error', 500);
+  }
+  if (decision === 'approved') {
+    const g = adApprovalGate(take);
+    if (!g.ok) return err(g.message, 409);
+  }
+  const at = nowIso();
+  const note = (body.note != null && String(body.note).trim()) || null;
+  const patch = {
+    approval_status: decision,
+    // Back to pending = undecided again; the history row below keeps who did it and when.
+    decided_at: decision === 'pending' ? null : at,
+    decided_by: decision === 'pending' ? null : (auth.userId || null),
+    decision_note: note,
+    updated_at: at,
+  };
+  const u = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(ad.id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!u.ok) return err(`db_error: ${JSON.stringify(u.data)}`, 400);
+  // engagement_history.action has no CHECK; stage columns stay null — this is not a stage move.
+  const what = `Ad (${ad.platform}${take ? `, take #${take.seq}` : ''}): ${ad.approval_status} → ${decision}${note ? ` — ${note}` : ''}`;
+  await writeHistory(env, ad.engagement_id, 'ad_decision', null, null, what, auth.userId);
+  return ok({ ad: u.data?.[0] || null });
+}
+
+async function deleteEngagementAd(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(body.id)}&select=id,engagement_id,meta_synced_at&limit=1`, env);
+  if (!r.ok) return err('db_error', 500);
+  const ad = r.data?.[0];
+  if (!ad) return err('no such ad', 404);
+  // ad_payments.ad_id is ON DELETE SET NULL — a payment for this ad survives, unlinked.
+  const d = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(ad.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!d.ok) return err(`db_error: ${JSON.stringify(d.data)}`, 400);
+  if (ad.meta_synced_at) {
+    try { await applyAdPaidViews(env, ad.engagement_id); }
+    catch (e) { return ok({ deleted: ad.id, warning: `deleted, but paid views were not re-derived: ${String(e?.message || e)}` }); }
+  }
+  return ok({ deleted: ad.id });
+}
+
+// ── Ad payments — money to the creator for ad rights / usage. NOT ignition.payments (see above). ──
+// A payment can be recorded as PENDING before it is paid; the screenshot is required once it is
+// PAID (the Reann #12 rule for deal payments, applied at the moment money actually moves).
+function adAmount(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+}
+
+async function adOnDeal(env, engagementId, adId) {
+  const r = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(adId)}&engagement_id=eq.${encodeURIComponent(engagementId)}&select=id&limit=1`, env);
+  if (!r.ok) return undefined;
+  return !!r.data?.[0];
+}
+
+async function addAdPayment(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const amount = adAmount(body.amount);
+  if (amount == null) return err('valid amount required', 400);
+  const status = body.status == null ? 'pending' : String(body.status);
+  if (!AD_PAYMENT_STATUSES.includes(status)) return err(`status must be one of ${AD_PAYMENT_STATUSES.join(', ')}`, 400);
+  let paidOn = null;
+  if (status === 'paid') {
+    if (!body.proof_path) return err('payment_proof_required', 400);
+    paidOn = body.paid_on ? String(body.paid_on).trim() : istToday();
+    if (!isRealIsoDate(paidOn)) return err('paid on must be a real YYYY-MM-DD date', 400);
+  }
+  if (body.ad_id) {
+    const on = await adOnDeal(env, body.engagement_id, body.ad_id);
+    if (on === undefined) return err('db_error', 500);
+    if (!on) return err('that ad is not on this deal', 400);
+  }
+  const er = await sb(`/rest/v1/engagements?id=eq.${encodeURIComponent(body.engagement_id)}&select=influencer_id&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('engagement_not_found', 404);
+  const row = {
+    engagement_id: body.engagement_id,
+    ad_id: body.ad_id || null,
+    influencer_id: er.data[0].influencer_id,
+    amount, status, paid_on: paidOn,
+    note: (body.note != null && String(body.note).trim()) || null,
+    proof_path: body.proof_path || null,
+    proof_name: body.proof_name || null,
+    proof_mime: body.proof_mime || null,
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/ad_payments`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+// Mark paid (with paid_on + screenshot), back to pending, or correct amount / note / ad link.
+async function updateAdPayment(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const cr = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}&select=*&limit=1`, env);
+  if (!cr.ok) return err('db_error', 500);
+  const cur = cr.data?.[0];
+  if (!cur) return err('no such ad payment', 404);
+  const patch = {};
+  if ('amount' in body) {
+    const a = adAmount(body.amount);
+    if (a == null) return err('valid amount required', 400);
+    patch.amount = a;
+  }
+  if ('note' in body) patch.note = (body.note != null && String(body.note).trim()) || null;
+  if ('ad_id' in body) {
+    if (body.ad_id) {
+      const on = await adOnDeal(env, cur.engagement_id, body.ad_id);
+      if (on === undefined) return err('db_error', 500);
+      if (!on) return err('that ad is not on this deal', 400);
+    }
+    patch.ad_id = body.ad_id || null;
+  }
+  if (body.proof_path) Object.assign(patch, { proof_path: body.proof_path, proof_name: body.proof_name || null, proof_mime: body.proof_mime || null });
+  const status = 'status' in body ? String(body.status) : cur.status;
+  if (!AD_PAYMENT_STATUSES.includes(status)) return err(`status must be one of ${AD_PAYMENT_STATUSES.join(', ')}`, 400);
+  patch.status = status;
+  if (status === 'paid') {
+    if (!(patch.proof_path || cur.proof_path)) return err('payment_proof_required', 400);
+    const pd = body.paid_on ? String(body.paid_on).trim() : (cur.paid_on || istToday());
+    if (!isRealIsoDate(pd)) return err('paid on must be a real YYYY-MM-DD date', 400);
+    patch.paid_on = pd;
+  } else {
+    patch.paid_on = null;
+  }
+  patch.updated_at = nowIso();
+  const r = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(cur.id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  // A replaced screenshot leaves nothing behind in the bucket.
+  if (patch.proof_path && cur.proof_path && cur.proof_path !== patch.proof_path) {
+    const seg = String(cur.proof_path).split('/').map(encodeURIComponent).join('/');
+    await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
+  }
+  return ok(r.data?.[0]);
+}
+
+async function deleteAdPayment(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const pr = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}&select=proof_path&limit=1`, env);
+  const proofPath = pr.data?.[0]?.proof_path;
+  const r = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(body.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (proofPath) {
+    const seg = String(proofPath).split('/').map(encodeURIComponent).join('/');
+    await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
+  }
+  return ok({ deleted: body.id });
+}
+
+// Signed GET URL for an ad payment's screenshot (short-lived) — getPaymentProofUrl's twin.
+async function getAdPaymentProofUrl(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const pr = await sb(`/rest/v1/ad_payments?id=eq.${encodeURIComponent(id)}&select=proof_path,proof_name,proof_mime&limit=1`, env);
   const p = pr.data?.[0];
   if (!p || !p.proof_path) return err('no_proof', 404);
   const seg = String(p.proof_path).split('/').map(encodeURIComponent).join('/');
@@ -1573,7 +1943,7 @@ async function getReports(url, auth, env) {
   filters.push(EXCLUDE_NON_SPEND);
 
   const r = await sb(
-    `/rest/v1/engagements?${filters.join('&')}&select=id,engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
+    `/rest/v1/engagements?${filters.join('&')}&select=id,engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,commission_amount,views,paid_views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
@@ -1581,20 +1951,21 @@ async function getReports(url, auth, env) {
   // Slice 4, same rule as both monthly handlers: a month's views are its TAKES' views, not the
   // whole deal's parked on one post_date. Only by_month moves — spend/orders/product/tier totals
   // stay deal-level, as they are deal-level facts.
-  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
-  const viewsByMonth = bucketVideoViewsByMonth(rows, vr.ok ? vr.data || [] : []).byMonth;
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views,paid_views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const { byMonth: viewsByMonth, paidByMonth } = bucketVideoViewsByMonth(rows, vr.ok ? vr.data || [] : []);
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
-  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+  // S373: no ad_spend in the fallback (ad money is not influencer spend); `views` below is ORGANIC.
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.commission_amount));
   const roasOf = e => (e.actual_roas != null ? num(e.actual_roas) : (e.roas_on_ad_spend != null ? num(e.roas_on_ad_spend) : null));
 
   // Spend / orders / views by month (post_date if posted, else created_at).
   const byMonthMap = {};
   const byProductMap = {};
-  let totalSpend = 0, totalOrders = 0, totalViews = 0, totalConv = 0;
+  let totalSpend = 0, totalOrders = 0, totalViews = 0, totalPaid = 0, totalConv = 0;
   let totLikes = 0, totShares = 0;
   let cpmSum = 0, cpmN = 0, roasSum = 0, roasN = 0;
   const byTierMap = {};
-  const ugcAgg = { deals: 0, views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
+  const ugcAgg = { deals: 0, views: 0, paid_views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
 
   const ROAS_BUCKETS = [{ k: '<1', lo: -Infinity, hi: 1 }, { k: '1–2', lo: 1, hi: 2 }, { k: '2–3', lo: 2, hi: 3 }, { k: '3–5', lo: 3, hi: 5 }, { k: '5+', lo: 5, hi: Infinity }];
   const CPM_BUCKETS = [{ k: '<50', lo: -Infinity, hi: 50 }, { k: '50–100', lo: 50, hi: 100 }, { k: '100–200', lo: 100, hi: 200 }, { k: '200–500', lo: 200, hi: 500 }, { k: '500+', lo: 500, hi: Infinity }];
@@ -1604,26 +1975,27 @@ async function getReports(url, auth, env) {
 
   for (const e of rows) {
     const spend = spendOf(e);
-    const orders = num(e.orders), views = num(e.views), conv = num(e.conversions_value);
+    const orders = num(e.orders), views = organicViews(e.views, e.paid_views) ?? 0, conv = num(e.conversions_value);
+    const paid = num(e.paid_views);
     const likes = num(e.likes), shares = num(e.shares);
-    totalSpend += spend; totalOrders += orders; totalViews += views; totalConv += conv;
+    totalSpend += spend; totalOrders += orders; totalViews += views; totalPaid += paid; totalConv += conv;
     totLikes += likes; totShares += shares;
 
     // By influencer tier (Reann analytics): delivered views/likes/shares + distinct active influencers.
     const tier = (e.influencer && e.influencer.influencer_type) || 'untyped';
-    const t = byTierMap[tier] || (byTierMap[tier] = { tier, deals: 0, views: 0, likes: 0, shares: 0, spend: 0, orders: 0, conversions_value: 0, influencer_ids: new Set() });
-    t.deals += 1; t.views += views; t.likes += likes; t.shares += shares; t.spend += spend; t.orders += orders; t.conversions_value += conv;
+    const t = byTierMap[tier] || (byTierMap[tier] = { tier, deals: 0, views: 0, paid_views: 0, likes: 0, shares: 0, spend: 0, orders: 0, conversions_value: 0, influencer_ids: new Set() });
+    t.deals += 1; t.views += views; t.paid_views += paid; t.likes += likes; t.shares += shares; t.spend += spend; t.orders += orders; t.conversions_value += conv;
     if (e.influencer && e.influencer.influencer_code) t.influencer_ids.add(e.influencer.influencer_code);
 
     // UGC rollup
     if (e.engagement_type === 'ugc') {
-      ugcAgg.deals += 1; ugcAgg.views += views; ugcAgg.likes += likes;
+      ugcAgg.deals += 1; ugcAgg.views += views; ugcAgg.paid_views += paid; ugcAgg.likes += likes;
       ugcAgg.budget_consumed += spend; ugcAgg.orders += orders; ugcAgg.conversions_value += conv;
     }
 
     const month = (e.post_date || e.created_at || '').slice(0, 7);
     if (month) {
-      const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
+      const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, paid_views: 0, deals: 0 });
       m.spend += spend; m.orders += orders; m.deals += 1;   // views: per take, filled in below
     }
     // ⚠️ Keyed CASE-INSENSITIVELY (2026-08-27). `product_code` holds free text — 44 distinct
@@ -1635,8 +2007,8 @@ async function getReports(url, auth, env) {
     const prodRaw = String(e.product_code || '').trim().replace(/\s+/g, ' ') || '—';
     const prodKey = prodRaw.toLowerCase();
     const p = byProductMap[prodKey]
-      || (byProductMap[prodKey] = { name: productDisplay(prodRaw), deals: 0, spend: 0, orders: 0, views: 0 });
-    p.deals += 1; p.spend += spend; p.orders += orders; p.views += views;
+      || (byProductMap[prodKey] = { name: productDisplay(prodRaw), deals: 0, spend: 0, orders: 0, views: 0, paid_views: 0 });
+    p.deals += 1; p.spend += spend; p.orders += orders; p.views += views; p.paid_views += paid;
 
     if (e.cpm != null) { const c = num(e.cpm); cpmSum += c; cpmN++; cpmDist[bucketOf(CPM_BUCKETS, c)]++; }
     const roas = roasOf(e);
@@ -1645,9 +2017,10 @@ async function getReports(url, auth, env) {
 
   // Views per month come from the takes, keyed on each take's own post_date. A month that only
   // exists because of created_at (nothing posted yet) therefore reads 0 views — which is the truth.
-  for (const month of Object.keys(viewsByMonth)) {
-    const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
-    m.views = viewsByMonth[month];
+  for (const month of new Set([...Object.keys(viewsByMonth), ...Object.keys(paidByMonth)])) {
+    const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, paid_views: 0, deals: 0 });
+    m.views = viewsByMonth[month] || 0;
+    m.paid_views = paidByMonth[month] || 0;
   }
   const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month))
     .map(m => ({ ...m, spend: Math.round(m.spend) }));
@@ -1656,13 +2029,13 @@ async function getReports(url, auth, env) {
 
   const by_tier = Object.values(byTierMap)
     .map(t => ({
-      tier: t.tier, deals: t.deals, views: t.views, likes: t.likes, shares: t.shares,
+      tier: t.tier, deals: t.deals, views: t.views, paid_views: t.paid_views, likes: t.likes, shares: t.shares,
       spend: Math.round(t.spend), orders: t.orders, conversions_value: Math.round(t.conversions_value),
       influencer_count: t.influencer_ids.size,
       avg_views_per_influencer: t.influencer_ids.size ? Math.round(t.views / t.influencer_ids.size) : 0,
     }))
     .sort((a, b) => b.views - a.views);
-  const engagement_totals = { views: totalViews, likes: totLikes, shares: totShares };
+  const engagement_totals = { views: totalViews, paid_views: totalPaid, likes: totLikes, shares: totShares };
   const ugc = { ...ugcAgg, budget_consumed: Math.round(ugcAgg.budget_consumed), conversions_value: Math.round(ugcAgg.conversions_value) };
 
   const topPerformers = rows
@@ -1685,7 +2058,8 @@ async function getReports(url, auth, env) {
       deals: rows.length,
       spend: Math.round(totalSpend),
       orders: totalOrders,
-      views: totalViews,
+      views: totalViews,            // organic (S373)
+      paid_views: totalPaid,
       conversions_value: Math.round(totalConv),
       avg_cpm: cpmN ? Math.round((cpmSum / cpmN) * 100) / 100 : null,
       avg_roas: roasN ? Math.round((roasSum / roasN) * 100) / 100 : null,
@@ -2047,11 +2421,12 @@ async function createEngagement(body, auth, env) {
 
 // Replace the full product-line set for a deal, then roll up (#4).
 // CPM auto-calc (theme ④ B13): cost-per-1000-views off the GENERATED total_cost
-// (payment+commission+ad_spend+goodies+shipping+return). Worker-owned, not manual.
+// (payment+commission+ad_spend+goodies+shipping+return+ad_rights). Worker-owned, not manual.
+// S373: per 1000 ORGANIC views (views − paid) — views an ad bought are not the collab's reach.
 async function recomputeCpm(env, engagementId) {
-  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,total_cost&limit=1`, env);
+  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,paid_views,total_cost&limit=1`, env);
   const e = r.data?.[0]; if (!e) return;
-  const views = Number(e.views) || 0;
+  const views = organicViews(e.views, e.paid_views) || 0;
   const cpm = views > 0 ? Math.round((Number(e.total_cost || 0) / views) * 1000 * 100) / 100 : null;
   await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
     method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cpm }),
@@ -2100,6 +2475,11 @@ async function deleteEngagement(body, auth, env) {
   if (!er.ok || !er.data?.[0]) return err('not_found', 404);
   const pr = await sb(`/rest/v1/payments?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
   if (pr.ok && pr.data?.[0]) return err('has_payments_cannot_delete', 409);
+  // S373: ad payments are money records too, and ad_payments.engagement_id is ON DELETE CASCADE —
+  // deleting the deal would take them (and their screenshots' rows) with it, silently.
+  const apr = await sb(`/rest/v1/ad_payments?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
+  if (!apr.ok) return err('db_error', 500);
+  if (apr.data?.[0]) return err('has_ad_payments_cannot_delete', 409);
   // Detach discount codes (one-way utilized stays), then remove children + the deal.
   await sb(`/rest/v1/discount_codes?engagement_id=eq.${body.engagement_id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ engagement_id: null }) }).catch(() => {});
   for (const child of ['engagement_products', 'engagement_attachments', 'engagement_notes', 'engagement_history']) {
@@ -3788,6 +4168,9 @@ async function assignEngagementToCampaign(body, auth, env) {
 // 2 on 3 Oct overstated September and nothing errored. Both monthly handlers call THIS function
 // for views so the drill-down sums to the tile by construction (their own comments demand it).
 // Spend and conversions are deal-level and keep the deal post_date rule — only views move.
+// S373: `views` here is ORGANIC (views − paid) and `paid_views` rides alongside, so a month's
+// views target is met by the collab's own reach, not by what an ad bought. A take is still keyed
+// on its TOTAL views (> 0) so an entirely-paid take shows up as a row with 0 organic, not vanish.
 export function bucketVideoViewsByMonth(engagements, videos) {
   const n = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
   const byDeal = new Map();
@@ -3795,19 +4178,21 @@ export function bucketVideoViewsByMonth(engagements, videos) {
     if (!byDeal.has(v.engagement_id)) byDeal.set(v.engagement_id, []);
     byDeal.get(v.engagement_id).push(v);
   }
-  const rows = [], byMonth = {};
-  const push = (engagement_id, seq, post_date, views) => {
+  const rows = [], byMonth = {}, paidByMonth = {};
+  const push = (engagement_id, seq, post_date, views, paid) => {
     const month = String(post_date || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month) || n(views) <= 0) return;
-    rows.push({ engagement_id, seq, post_date, month, views: n(views) });
-    byMonth[month] = (byMonth[month] || 0) + n(views);
+    const organic = organicViews(views, paid) ?? 0;
+    rows.push({ engagement_id, seq, post_date, month, views: organic, paid_views: n(paid) });
+    byMonth[month] = (byMonth[month] || 0) + organic;
+    paidByMonth[month] = (paidByMonth[month] || 0) + n(paid);
   };
   for (const e of (engagements || [])) {
     const takes = byDeal.get(e.id);
-    if (takes && takes.length) for (const t of takes) push(e.id, Number(t.seq), t.post_date, t.views);
-    else push(e.id, null, e.post_date, e.views);
+    if (takes && takes.length) for (const t of takes) push(e.id, Number(t.seq), t.post_date, t.views, t.paid_views);
+    else push(e.id, null, e.post_date, e.views, e.paid_views);
   }
-  return { byMonth, rows };
+  return { byMonth, paidByMonth, rows };
 }
 
 async function getMonthlyBreakdown(url, auth, env) {
@@ -3818,16 +4203,17 @@ async function getMonthlyBreakdown(url, auth, env) {
   const isUnalloc = month === 'unallocated';
   if (!isUnalloc && !/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM or "unallocated"', 400);
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  // S373: no ad_spend in the fallback — ad money is never influencer budget.
   const spendOf = e => (e.total_cost != null ? num(e.total_cost)
-    : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+    : num(e.payment_amount) + num(e.commission_amount));
 
-  const sel = 'id,engagement_no,post_date,created_at,views,orders,conversions_value,campaign_tag,'
-    + 'total_cost,payment_amount,ad_spend,commission_amount,engagement_type,stage,'
+  const sel = 'id,engagement_no,post_date,created_at,views,paid_views,orders,conversions_value,campaign_tag,'
+    + 'total_cost,payment_amount,commission_amount,engagement_type,stage,'
     + 'influencer:influencers(id,influencer_code,channel_name,person_name,channel_link,channel_platform)';
   // Must match getMonthlyTargets' exclusion or the drill-down stops summing to the tile above it.
   const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${encodeURIComponent(sel)}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views,paid_views&order=engagement_id.asc,seq.asc&limit=5000`, env);
   const takeRows = bucketVideoViewsByMonth(r.data || [], vr.ok ? vr.data || [] : []).rows.filter(t => t.month === month);
   const dealById = new Map((r.data || []).map(e => [e.id, e]));
 
@@ -3873,7 +4259,7 @@ async function getMonthlyBreakdown(url, auth, env) {
       campaign_tag: e.campaign_tag || null, influencer_id: who.id || null, influencer_code: who.influencer_code || null,
       influencer_name: who.channel_name || who.person_name || null, channel_link: who.channel_link || null,
       platform: who.channel_platform || null, post_date: e.post_date || null,
-      seq: t.seq, take_post_date: t.post_date, views: t.views,
+      seq: t.seq, take_post_date: t.post_date, views: t.views, paid_views: t.paid_views,   // views = organic (S373)
     });
   }
   const sum = (a, k) => a.reduce((t, x) => t + num(x[k]), 0);
@@ -3885,7 +4271,7 @@ async function getMonthlyBreakdown(url, auth, env) {
     spend, views, conversions,
     totals: {
       spend: sum(spend, 'amount'), spend_lines: spend.length,
-      views: sum(views, 'views'), view_lines: views.length,
+      views: sum(views, 'views'), paid_views: sum(views, 'paid_views'), view_lines: views.length,
       orders: sum(conversions, 'orders'),
       order_value: Math.round(sum(conversions, 'order_value')),
       conversion_lines: conversions.length,
@@ -3898,12 +4284,13 @@ async function getMonthlyBreakdown(url, auth, env) {
 // omits half the spend is worse than one that shows an "Untagged" row you can act on.
 async function getCampaignSummary(url, auth, env) {
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  // S373: no ad_spend in the fallback; views are ORGANIC and CPM is over them.
   const spendOf = e => (e.total_cost != null ? num(e.total_cost)
-    : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+    : num(e.payment_amount) + num(e.commission_amount));
   const from = String(url.searchParams.get('from') || '').trim();
   const to   = String(url.searchParams.get('to') || '').trim();
   const sel = 'id,campaign_tag,post_date,created_at,views,likes,comments,shares,saves,reposts,'
-    + 'orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount,'
+    + 'paid_views,orders,conversions_value,total_cost,payment_amount,commission_amount,'
     + 'follower_count_at_post,stage,influencer_id';
   const r = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=${sel}&limit=5000`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
@@ -3911,13 +4298,14 @@ async function getCampaignSummary(url, auth, env) {
   // covers take 2 but not take 1 counts take 2's views only — the deal-level figure sat entirely
   // on the deal's post_date and put both (or neither) in the window. Everything else here is a
   // deal-level fact and keeps the deal's date.
-  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
-  const takeViews = {};
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views,paid_views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const takeViews = {}, takePaid = {};
   for (const t of bucketVideoViewsByMonth(r.data || [], vr.ok ? vr.data || [] : []).rows) {
     const d = String(t.post_date || '').slice(0, 10);
     if (from && d && d < from) continue;
     if (to && d && d > to) continue;
     takeViews[t.engagement_id] = (takeViews[t.engagement_id] || 0) + num(t.views);
+    takePaid[t.engagement_id] = (takePaid[t.engagement_id] || 0) + num(t.paid_views);
   }
 
   const g = {};
@@ -3928,13 +4316,14 @@ async function getCampaignSummary(url, auth, env) {
     const key = e.campaign_tag || '';
     const b = g[key] || (g[key] = {
       campaign_tag: e.campaign_tag || null, deals: 0, live_deals: 0, influencers: new Set(),
-      views: 0, likes: 0, comments: 0, shares: 0, saves: 0, reposts: 0,
+      views: 0, paid_views: 0, likes: 0, comments: 0, shares: 0, saves: 0, reposts: 0,
       orders: 0, order_value: 0, spend: 0, reach_at_post: 0,
     });
     b.deals++; if (e.stage === 'live') b.live_deals++;
     if (e.influencer_id) b.influencers.add(e.influencer_id);
     for (const k of ['likes','comments','shares','saves','reposts','orders']) b[k] += num(e[k]);
     b.views += takeViews[e.id] || 0;
+    b.paid_views += takePaid[e.id] || 0;
     b.order_value += num(e.conversions_value);
     b.spend += spendOf(e);
     b.reach_at_post += num(e.follower_count_at_post);
@@ -3960,16 +4349,18 @@ async function getMonthlyTargets(url, auth, env) {
   const targets = tr.data || [];
 
   const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
-  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
-  const er = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=id,post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
+  // S373: no ad_spend in the fallback (ad money is never influencer budget); actual_views is ORGANIC.
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.commission_amount));
+  const er = await sb(`/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=id,post_date,created_at,views,paid_views,total_cost,payment_amount,commission_amount&limit=5000`, env);
   // Slice 4: views come from the takes. One fetch, paged at db-max-rows (5,000; 411 rows today,
   // 6 per deal at most → ~2,500 at 411 deals). Order by a unique pair so paging cannot skip.
-  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views&order=engagement_id.asc,seq.asc&limit=5000`, env);
+  const vr = await sb(`/rest/v1/engagement_videos?select=engagement_id,seq,post_date,views,paid_views&order=engagement_id.asc,seq.asc&limit=5000`, env);
   const actMap = {};
   let unallocSpend = 0, unallocDeals = 0;
-  const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_spend: 0 }));
-  const { byMonth: viewsByMonth } = bucketVideoViewsByMonth(er.ok ? er.data || [] : [], vr.ok ? vr.data || [] : []);
+  const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_paid_views: 0, actual_spend: 0 }));
+  const { byMonth: viewsByMonth, paidByMonth } = bucketVideoViewsByMonth(er.ok ? er.data || [] : [], vr.ok ? vr.data || [] : []);
   for (const [m, v] of Object.entries(viewsByMonth)) bucket(m).actual_views += v;
+  for (const [m, v] of Object.entries(paidByMonth)) bucket(m).actual_paid_views += v;
   if (er.ok) {
     for (const e of (er.data || [])) {
       // ⭐ UNALLOCATED SPEND (Reann #1, S273 — the column deferred in S214 is now built).
@@ -3993,12 +4384,12 @@ async function getMonthlyTargets(url, auth, env) {
   const months = new Set([...targets.map(t => t.month), ...Object.keys(actMap)]);
   const rows = [...months].sort().reverse().slice(0, 24).map(month => {
     const t = targets.find(x => x.month === month) || {};
-    const a = actMap[month] || { actual_views: 0, actual_spend: 0 };
+    const a = actMap[month] || { actual_views: 0, actual_paid_views: 0, actual_spend: 0 };
     const target_views = t.target_views != null ? Number(t.target_views) : null;
     const budget_amount = t.budget_amount != null ? Number(t.budget_amount) : null;
     return {
       month, target_views, budget_amount, note: t.note || null,
-      actual_views: a.actual_views, actual_spend: Math.round(a.actual_spend),
+      actual_views: a.actual_views, actual_paid_views: a.actual_paid_views, actual_spend: Math.round(a.actual_spend),
       views_pct: target_views ? Math.round(a.actual_views / target_views * 100) : null,
       spend_pct: budget_amount ? Math.round(a.actual_spend / budget_amount * 100) : null,
     };
@@ -4122,6 +4513,132 @@ async function refreshUgcMetrics(body, auth, env) {
   if (!m) return err('meta_fetch_failed', 502);
   await applyMetaMetrics(env, e.id, m);
   return ok({ metrics: m, meta_synced_at: nowIso() });
+}
+
+// ── Ads on a deal: Meta fills every engagement_ads row that carries a meta_ad_id (S373) ──────────
+// Per ad, never an account sweep (same rule as the UGC pull above). Two reads per ad: the ad
+// (effective_status + its ad set's start/end) and its lifetime insights. Unlike metaAdInsights,
+// failures come back as WORDS so the card can say what went wrong instead of going quiet.
+//
+// Views = the sum of `video_play_actions`. Chosen over `actions[video_view]` (3-second views)
+// because Instagram's own "views" — the number typed into the take — counts plays, not 3-second
+// holds, so plays is the figure that can honestly be subtracted from it to leave organic.
+const META_AD_ENDED_STATUSES = new Set(['PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'ARCHIVED', 'DELETED']);
+
+async function metaGet(env, path) {
+  const res = await fetch(`https://graph.facebook.com/${META_API_VER}/${path}${path.includes('?') ? '&' : '?'}access_token=${env.META_SYSTEM_USER_TOKEN}`).catch(() => null);
+  if (!res) return { error: 'could not reach Meta' };
+  const j = await res.json().catch(() => null);
+  if (!res.ok || !j || j.error) return { error: (j && j.error && j.error.message) || `Meta HTTP ${res.status}` };
+  return { data: j };
+}
+
+// IST calendar date of a Meta timestamp ("2026-09-12T10:00:00+0530" / "…-0700").
+function istDateOf(ts) {
+  const t = Date.parse(String(ts || '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isFinite(t) ? istToday(t) : null;
+}
+
+/**
+ * The engagement_ads patch for one Meta read. Pure, so the status mapping is testable.
+ * run_status: past the ad set's end → ended; ACTIVE → running; paused/archived/deleted → ended;
+ * anything else (IN_PROCESS, PENDING_REVIEW, WITH_ISSUES, DISAPPROVED…) leaves it unchanged.
+ * start/end dates fill only when empty — a typed date is never overwritten.
+ */
+export function metaAdPatch(cur = {}, status = {}, insights = {}, now = Date.now()) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const views = (insights.video_play_actions || []).reduce((s, a) => s + n(a && a.value), 0);
+  const patch = {
+    meta_status: status.effective_status || null,
+    meta_spend: Math.round(n(insights.spend) * 100) / 100,
+    meta_impressions: Math.round(n(insights.impressions)),
+    meta_views: Math.round(views),
+    meta_synced_at: new Date(now).toISOString(),
+  };
+  const S = String(status.effective_status || '').toUpperCase();
+  const endMs = status.end_time ? Date.parse(String(status.end_time).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')) : NaN;
+  if (Number.isFinite(endMs) && endMs < now) patch.run_status = 'ended';
+  else if (S === 'ACTIVE') patch.run_status = 'running';
+  else if (META_AD_ENDED_STATUSES.has(S)) patch.run_status = 'ended';
+  if (!cur.start_date && status.start_time) patch.start_date = istDateOf(status.start_time);
+  if (!cur.end_date && status.end_time) patch.end_date = istDateOf(status.end_time);
+  if (patch.start_date === null) delete patch.start_date;
+  if (patch.end_date === null) delete patch.end_date;
+  return patch;
+}
+
+/** take (video_id) → Σ meta_views of its SYNCED ads. A take with no synced ad is absent. */
+export function paidViewsByTake(ads) {
+  const out = {};
+  for (const a of (ads || [])) {
+    if (!a || !a.video_id || !a.meta_synced_at) continue;
+    out[a.video_id] = (out[a.video_id] || 0) + (Number(a.meta_views) || 0);
+  }
+  return out;
+}
+
+// Re-derive paid_views on every take of a deal that has at least one synced ad, then roll up.
+// A take with no synced ad keeps whatever was typed. ≤ 6 takes per deal, so ≤ 6 PATCHes.
+async function applyAdPaidViews(env, engagementId) {
+  const eid = encodeURIComponent(engagementId);
+  const r = await sb(`/rest/v1/engagement_ads?engagement_id=eq.${eid}&select=video_id,meta_views,meta_synced_at`, env);
+  if (!r.ok) throw new Error(`ads_read_failed: ${JSON.stringify(r.data)}`);
+  const byTake = paidViewsByTake(r.data || []);
+  const ids = Object.keys(byTake);
+  if (!ids.length) return false;
+  const res = await Promise.all(ids.map(vid => sb(`/rest/v1/engagement_videos?id=eq.${encodeURIComponent(vid)}&engagement_id=eq.${eid}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ paid_views: byTake[vid], updated_at: nowIso() }),
+  })));
+  const bad = res.find(x => !x.ok);
+  if (bad) throw new Error(`paid_views_write_failed: ${JSON.stringify(bad.data)}`);
+  await recomputeVideoRollup(env, engagementId);
+  return true;
+}
+
+// Sync a list of ads. Returns per-ad failures in words; never throws for one bad ad.
+async function syncAdsFromMeta(env, ads) {
+  let updated = 0;
+  const failed = [];
+  const touched = new Set();
+  for (const a of ads) {
+    const id = String(a.meta_ad_id || '').trim();
+    if (!id) continue;
+    const st = await metaGet(env, `${encodeURIComponent(id)}?fields=effective_status,adset%7Bstart_time,end_time%7D`);
+    if (st.error) { failed.push({ id: a.id, meta_ad_id: id, error: st.error }); continue; }
+    const ins = await metaGet(env, `${encodeURIComponent(id)}/insights?fields=spend,impressions,video_play_actions&date_preset=maximum`);
+    if (ins.error) { failed.push({ id: a.id, meta_ad_id: id, error: ins.error }); continue; }
+    const s = st.data || {};
+    const patch = metaAdPatch(a, { effective_status: s.effective_status, start_time: s.adset?.start_time, end_time: s.adset?.end_time },
+      (ins.data && ins.data.data && ins.data.data[0]) || {});
+    patch.updated_at = nowIso();
+    const w = await sb(`/rest/v1/engagement_ads?id=eq.${encodeURIComponent(a.id)}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(patch) });
+    if (!w.ok) { failed.push({ id: a.id, meta_ad_id: id, error: `db: ${JSON.stringify(w.data)}` }); continue; }
+    updated++;
+    touched.add(a.engagement_id);
+  }
+  for (const eid of touched) {
+    try { await applyAdPaidViews(env, eid); }
+    catch (e) { failed.push({ engagement_id: eid, error: `paid views not re-derived: ${String(e?.message || e)}` }); }
+  }
+  return { scanned: ads.length, updated, failed };
+}
+
+// Daily cron (same 07:50 IST slot as the UGC pull): oldest-synced first, capped like it.
+async function syncAllEngagementAds(env) {
+  if (!env.META_SYSTEM_USER_TOKEN) return { skipped: 'meta_not_configured' };
+  const r = await sb(`/rest/v1/engagement_ads?meta_ad_id=not.is.null&select=id,engagement_id,meta_ad_id,start_date,end_date&order=meta_synced_at.asc.nullsfirst&limit=${META_MAX_ADS_PER_RUN}`, env);
+  if (!r.ok) return { error: `ads_read_failed: ${JSON.stringify(r.data)}` };
+  return syncAdsFromMeta(env, r.data || []);
+}
+
+// "Refresh from Meta" on the deal page's Ads card.
+async function syncEngagementAds(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  if (!env.META_SYSTEM_USER_TOKEN) return err('Meta is not connected on the server (META_SYSTEM_USER_TOKEN is not set) — nothing was refreshed', 503);
+  const r = await sb(`/rest/v1/engagement_ads?engagement_id=eq.${encodeURIComponent(body.engagement_id)}&meta_ad_id=not.is.null&select=id,engagement_id,meta_ad_id,start_date,end_date&limit=${META_MAX_ADS_PER_RUN}`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok(await syncAdsFromMeta(env, r.data || []));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -4508,6 +5025,7 @@ const GET_ACTIONS = {
   getCatalogs,
   getLocations,
   getPaymentProofUrl,
+  getAdPaymentProofUrl,
   getCampaignBriefUrl,
   getInfluencerMetrics,
   getMe,
@@ -4565,6 +5083,13 @@ const POST_ACTIONS = {
   addPayment,
   deletePayment,
   createPaymentProofUploadUrl,
+  saveEngagementAd,
+  decideEngagementAd,
+  deleteEngagementAd,
+  addAdPayment,
+  updateAdPayment,
+  deleteAdPayment,
+  syncEngagementAds,
   createCampaignBriefUploadUrl,
   addMetricSnapshot,
   deleteMetricSnapshot,
@@ -4677,6 +5202,12 @@ export default {
       ctx.waitUntil(syncUgcMetaMetrics(env).then(
         r => console.log('[ugc-meta] cron', JSON.stringify(r)),
         e => console.error('[ugc-meta] cron error', e),
+      ));
+      // Ads on deals (S373) — same slot, same token, its own cap. Failures are logged by ad in
+      // words; the card shows each ad's last-synced time, so a stalled sync is visible there too.
+      ctx.waitUntil(syncAllEngagementAds(env).then(
+        r => (r && r.failed && r.failed.length ? console.error : console.log)('[deal-ads-meta] cron', JSON.stringify(r)),
+        e => console.error('[deal-ads-meta] cron error', e),
       ));
       return;
     }
