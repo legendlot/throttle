@@ -4,11 +4,11 @@
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Finding and tracking purchase orders.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; open a PO to act.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role appr">Approver</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Filters</div><div class="g-val">Status, source, type, plus search.</div></div>
+  <div class="g-cell"><div class="g-lbl">Filters</div><div class="g-val">Status, source, type, vendor, a Raised-date range, plus search.</div></div>
 </div>
 
 <h2 class="sec">Reading the table</h2>
-<p>Each row shows the PO number, its revision number, type, source country, vendor, line count, value, expected arrival, who raised it, and its current status. Click any row to open the PO; the <strong>View</strong> button on the right does the same. The status badge tells you where the PO is in its life:</p>
+<p>Each row shows the PO number, its revision number, type, source country, vendor, line count, value, the date it was <strong>Raised</strong>, its expected arrival, who raised it, and its current status. Click any row to open the PO; the <strong>View</strong> button on the right does the same. The status badge tells you where the PO is in its life:</p>
 <table class="tbl">
   <thead><tr><th>Status</th><th>What it means</th></tr></thead>
   <tbody>
@@ -23,10 +23,17 @@
 </table>
 
 <h2 class="sec">Filtering and finding</h2>
-<p>Use the search box to match a PO number, vendor, code, source, type or who raised it (type more than one word to narrow). The three dropdowns filter by status, source country and order type. The header shows how many rows match. <strong>New PO</strong> (top right, for procurement) starts a fresh purchase order.</p>
+<p>Use the search box to match a PO number, vendor, code, source, type or who raised it (type more than one word to narrow). The dropdowns filter by status, source country and order type; the status list now includes every status a PO can carry, including <strong>Accepted</strong>. The searchable <strong>vendor</strong> picker narrows to one vendor at a time. The header shows how many rows match. <strong>New PO</strong> (top right, for procurement) starts a fresh purchase order.</p>
+<p>Below the filter row is a <strong>Raised</strong> date filter, over the PO&rsquo;s own raised date: presets <strong>Today &middot; 7D &middot; 30D &middot; MTD &middot; Last mo &middot; FY &middot; All time</strong>, plus custom <strong>from</strong> and <strong>to</strong> dates. It opens on <strong>All time</strong> (deliberately, so an open PO raised last month is never hidden on load), so pick a preset or a custom range to narrow it.</p>
+<div class="callout">
+  <strong>Cross-checking a month&rsquo;s POs against a vendor?</strong> Pick the vendor in the vendor
+  picker, choose <strong>MTD</strong> or <strong>Last mo</strong> in the Raised filter, then use
+  <strong>Export + lines</strong> &mdash; it carries <strong>Qty Received</strong> per line, so you can
+  reconcile what was ordered against what has actually come in without opening each PO.
+</div>
 
 <h2 class="sec">Downloading the list</h2>
-<p>Two export buttons sit top right, beside New PO. Both work on <em>exactly what is on screen</em> &mdash; whatever the search box and the status, source and type filters are currently showing, in the same order &mdash; so clear the filters first if you want every PO.</p>
+<p>The four KPI tiles above the table (Open value, Open POs, To Inward, China share) and both export buttons all follow every filter above &mdash; search, status, source, type, vendor and the Raised date range &mdash; except <strong>To Inward</strong>, which is a fixed count of everything awaiting receiving and does not change with the filters. Two export buttons sit top right, beside New PO. Both work on <em>exactly what is on screen</em> &mdash; whatever the search box and the status, source, type, vendor and Raised-date filters are currently showing, in the same order &mdash; so clear the filters first if you want every PO.</p>
 <table class="tbl">
   <thead><tr><th>Button</th><th>One row per</th><th>Use it for</th></tr></thead>
   <tbody>
@@ -34,7 +41,7 @@
     <tr><td><strong>Export + lines</strong></td><td>Line item</td><td>Working the detail of what was ordered in a spreadsheet: every line of every matching PO, each carrying its PO&rsquo;s header context.</td></tr>
   </tbody>
 </table>
-<p><strong>Export</strong> gives you the headers you see on screen, plus the vendor code, the currency, an approximate rupee value for foreign-currency POs, and the revision number &mdash; the fields a spreadsheet is usually built to sort and total by.</p>
+<p><strong>Export</strong> gives you the headers you see on screen, plus the vendor code, the currency, an approximate rupee value for foreign-currency POs, the revision number, and the <strong>Raised</strong> date &mdash; the fields a spreadsheet is usually built to sort and total by.</p>
 <p><strong>Export + lines</strong> repeats that header context on every row, then adds the line detail: Line No, Part Code, Description, Product, Variant, Colour, Qty Ordered, Qty Received, Unit, Unit Price, Total Value, HSN and GST %. It is what Procurement uses to work line-level detail (quantities, receiving, HSN/GST) in a spreadsheet rather than opening each PO in turn.</p>
 <div class="callout"><p>China POs follow the same rule here as everywhere else, on <strong>both</strong> buttons: if you are not cleared to see China values, those rows arrive marked <strong>Restricted</strong> rather than carrying a number, and if you have no China PO access at all, Soft POs do not appear in the file. A restricted user&rsquo;s file cannot contain what their screen does not &mdash; the download can never contain more than your screen does.</p></div>
 <p>If your filters match more POs than the screen has actually loaded, either button asks you to confirm before downloading, and marks the filename <strong>PARTIAL</strong> so you know at a glance it is not the full match.</p>

@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.18.0] - 2026-09-11
+### Added
+- Purchase Orders list: documented the searchable vendor picker and the Raised-date filter (presets Today / 7D / 30D / MTD / Last mo / FY / All time plus custom from/to, defaulting to All time), the new "Raised" column (on screen and both exports, before Expected), that the status filter now covers every status including Accepted, and that the KPI tiles and both exports follow every filter (except the fixed To Inward tile); added a callout on cross-checking a month's POs against a vendor via Export + lines.
+- Raising a Payment Request: documented the new optional "Note for Finance" field (free text, up to 2,000 characters, typically bank details/account name/UPI, visible to Finance and approvers).
+- Finance Queue: documented the requester's Note for Finance shown under the bank block, and that the no-bank-account warning points to it when present.
+
 ## [1.17.4] - 2026-09-10
 ### Added
 - Purchase Orders list: documented the new "Export + lines" button (one row per line item, carrying PO header context plus Line No, Part Code, Description, Product, Variant, Colour, Qty Ordered, Qty Received, Unit, Unit Price, Total Value, HSN, GST %), alongside the existing PO-per-row Export; noted the China/restricted-access rule and the PARTIAL-filename confirmation cover both buttons.
