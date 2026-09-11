@@ -1,5 +1,15 @@
 # Relay Operations Manual — Changelog
 
+## 1.9.0 — 2026-09-11
+- **New chapter: Forms** (`33-forms.html`, Audience part, right after Contacts). Covers the
+  `/f/*` capture forms and the back-in-stock widget on sold-out PDPs, the Forms list and what
+  Active means (accepting sign-ups, not a sending switch), one form's sign-ups screen (tiles,
+  the 30-day per-day chart, top products, the table, search and paging), the 5,000-row sampling
+  note, and the back-in-stock alert statuses (Waiting/Queued/Retrying/Stuck/Alerted) tied to the
+  five-attempt retry cap. Callout: sign-ups record even while the journey is draft, and no
+  customer is emailed until it is activated; each sign-up is alerted at most once. Notes there is
+  no CSV export yet.
+
 ## 1.8.2 — 2026-09-11
 - **Bot Builder:** Publish now saves the canvas first (S372) — the 1.8.1 "Save draft, then Publish" warning is replaced by a note.
 

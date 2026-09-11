@@ -2,7 +2,7 @@
   "title": "Relay",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to every screen in Relay, the system that talks to customers.",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "date": "2026-09-11",
   "app_url": "relay.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -234,6 +234,18 @@
           "title": "Contacts",
           "route": "/contacts",
           "file": "32-contacts.html",
+          "roles": [
+            "view",
+            "auth",
+            "mgr",
+            "adm"
+          ]
+        },
+        {
+          "id": "forms",
+          "title": "Forms",
+          "route": "/forms",
+          "file": "33-forms.html",
           "roles": [
             "view",
             "auth",

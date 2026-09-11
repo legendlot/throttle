@@ -1,0 +1,45 @@
+<p class="lead">The storefront capture forms Relay knows about &mdash; who is signing up, and for the back-in-stock form, whether they have been alerted yet.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing who is signing up on a <code>/f/*</code> form, without SQL.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read only. Nothing on this screen sends anything or changes a journey.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val">Every Relay viewer &mdash; contact details are visible here at <span class="role view">Viewer</span>, same as Contacts.</div></div>
+  <div class="g-cell"><div class="g-lbl">Search by</div><div class="g-val">Name, email, phone or SKU, on the sign-ups page &mdash; filters the current page only.</div></div>
+</div>
+
+<h2 class="sec">What a form is</h2>
+<p>A form is one of the storefront capture widgets at <code>/f/*</code>. The <strong>back-in-stock</strong> form is embedded on sold-out product pages via <code>data-lot-form=&quot;back-in-stock&quot;</code>; a customer who wants to know when a sold-out variant returns submits it there. A form appears on this screen as soon as it exists in <code>comms.forms</code> &mdash; there is nothing to configure to make it show up.</p>
+
+<h2 class="sec">The Forms list</h2>
+<p>One row per form: its name and slug, <strong>Kind</strong>, then <strong>Total</strong>, <strong>7 days</strong> and <strong>30 days</strong> sign-up counts, and the timestamp of the last sign-up. <strong>Open</strong> goes to that form&rsquo;s sign-ups.</p>
+<div class="callout"><div class="c-title">Note &mdash; what Active means</div><p><strong>Active</strong> means the form is accepting sign-ups. It is <strong>not</strong> a sending switch: whether anyone is ever messaged is decided separately, by the journey that listens for the form&rsquo;s event. A form can be active for months with its journey still in draft, collecting sign-ups that nobody has been told about yet.</p></div>
+<p>A dash (&mdash;) in any count column means the count could not be read, not that it is zero.</p>
+
+<h2 class="sec">One form&rsquo;s sign-ups</h2>
+<p>Opening a form shows its tiles, a 30-day chart, and the sign-up table.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Tiles</div><div class="a-val"><p>Total sign-ups, distinct contacts, last 7 days, WhatsApp opt-ins, and for the back-in-stock form, Alerted.</p></div></div>
+  <div class="a-row"><div class="a-key">Sign-ups per day</div><div class="a-val"><p>A 30-day bar chart by IST calendar day. Hover a bar for that day&rsquo;s count.</p></div></div>
+  <div class="a-row"><div class="a-key">Top products</div><div class="a-val"><p>Back-in-stock only. Ranked by sign-ups per Shopify variant SKU, with the LOT product code shown where <code>sales.sku_map</code> knows it. A handful of early test sign-ups stored no SKU and are counted separately as &ldquo;No SKU&rdquo;.</p></div></div>
+  <div class="a-row"><div class="a-key">Table</div><div class="a-val"><p>Signed up (IST), Name, Email, Phone, Product (back-in-stock only), Channels, and Alert (back-in-stock only). Name, email and phone are what the customer typed on the form itself, falling back to their contact profile&rsquo;s newest identifiers when the form left one blank.</p></div></div>
+  <div class="a-row"><div class="a-key">Search &amp; paging</div><div class="a-val"><p>Search matches name, email, phone or SKU on the current page only &mdash; it does not requery the server. 100 rows per page; <strong>Newer</strong> / <strong>Older</strong> move a page at a time. The tiles and charts always cover the whole form, not just the visible page.</p></div></div>
+</div>
+
+<div class="callout warn"><div class="c-title">&#9888; Beyond 5,000 sign-ups</div><p>Total, 7-day and alerted counts are always exact. Distinct contacts, the per-day chart, opt-in counts and top products are computed over the newest 5,000 sign-ups; past that size the page adds a note that those figures are sampled, not the whole population.</p></div>
+
+<h2 class="sec">Back-in-stock alerting</h2>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Sign-ups are recorded even while the back-in-stock journey is <strong>DRAFT</strong>. No customer is emailed until the journey <strong>&ldquo;Back in stock &mdash; requested alert&rdquo;</strong> is activated. Each sign-up can be alerted at most once, ever &mdash; the ledger enforces one alert per submission, so a product going out of stock and back three times still sends one email, not three.</p></div>
+<p>The <strong>Alert</strong> column reads the same ledger the sending job writes to:</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">Waiting</td><td>Not back in stock since this sign-up, or the journey is not active yet. The normal state for most rows.</td></tr>
+    <tr><td class="mono">Queued</td><td>Back in stock &mdash; the alert is about to fire.</td></tr>
+    <tr><td class="mono">Retrying</td><td>The alert failed at least once and will be tried again.</td></tr>
+    <tr><td class="mono">Stuck</td><td>The alert failed five times in a row and is no longer retried automatically. Hover the badge for the last error.</td></tr>
+    <tr><td class="mono">Alerted</td><td>The back-in-stock event fired for this sign-up.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Who can see it, and what is missing</h2>
+<p>Every Relay viewer can open Forms and read a sign-up&rsquo;s email and phone &mdash; this screen is gated the same way Contacts is, not more tightly, because it is the same class of customer data. There is no CSV export yet; if you need the list outside Relay, that is a request to raise, not a workaround to build.</p>
