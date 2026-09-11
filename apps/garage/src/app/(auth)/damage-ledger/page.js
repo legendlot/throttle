@@ -792,11 +792,13 @@ export default function DamageLedgerPage() {
             <thead>
               <tr>
                 <th style={{ ...tableThStyle, width: 24 }}>#</th>
-                <th style={{ ...tableThStyle, minWidth: 220 }}>Part Code *</th>
-                <th style={{ ...tableThStyle, minWidth: 160 }}>Part Name *</th>
-                <th style={{ ...tableThStyle, minWidth: 100 }}>Product</th>
-                <th style={{ ...tableThStyle, width: 80 }}>Qty *</th>
-                <th style={{ ...tableThStyle, minWidth: 140 }}>Reason (this line)</th>
+                {/* Min widths sum to ~660px so the table fits the lg modal (~700px inner) without
+                    a scrollbar squeezing Qty — measured 749 vs 698 on the first cut. */}
+                <th style={{ ...tableThStyle, minWidth: 200 }}>Part Code *</th>
+                <th style={{ ...tableThStyle, minWidth: 130 }}>Part Name *</th>
+                <th style={{ ...tableThStyle, minWidth: 80 }}>Product</th>
+                <th style={{ ...tableThStyle, minWidth: 72 }}>Qty *</th>
+                <th style={{ ...tableThStyle, minWidth: 110 }}>Reason (this line)</th>
                 <th style={{ ...tableThStyle, width: 30 }} />
               </tr>
             </thead>

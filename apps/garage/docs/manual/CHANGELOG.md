@@ -6,6 +6,13 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.27.0 - 2026-09-11
+
+- **Damage / Scrap Ledger**: documents the multi-line Record Damage form (one DMG number per
+  line, per-line reason override), the new Ledger / Part Summary view switch, and Damage Out by
+  Quantity (oldest-first, with the split-entry behaviour when the last entry used is only
+  partly consumed).
+
 ## 1.24.0 - 2026-09-07
 
 - **Issue Queue**: documents the new Export channel split. A run's variant split now shows
