@@ -1465,6 +1465,9 @@ async function addPayment(body, auth, env) {
   if (!(amount >= 0)) return err('valid amount required', 400);
   // Payment screenshot is mandatory (Reann #12).
   if (!body.proof_path) return err('payment_proof_required', 400);
+  // S373 hostile review: the path is later DELETED from the bucket by deletePayment, so it must be
+  // this deal's upload — not another payment's screenshot, not an ad-payments/ object.
+  if (!paymentProofPathOk(body.proof_path, body.engagement_id)) return err('the screenshot must be uploaded for this deal (proof_path is not a <deal>/ path)', 400);
   const kind = PAYMENT_KINDS.includes(body.kind) ? body.kind : 'advance';
 
   const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
@@ -1491,11 +1494,12 @@ async function deletePayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.id) return err('id required', 400);
   // Clean up the proof object too, if any.
-  const pr = await sb(`/rest/v1/payments?id=eq.${body.id}&select=proof_path&limit=1`, env);
+  const pr = await sb(`/rest/v1/payments?id=eq.${body.id}&select=proof_path,engagement_id&limit=1`, env);
   const proofPath = pr.data?.[0]?.proof_path;
   const r = await sb(`/rest/v1/payments?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
-  if (proofPath) {
+  // Only ever remove an object that is this deal's own upload (all 31 live rows are, measured 2026-09-11).
+  if (proofPath && paymentProofPathOk(proofPath, pr.data?.[0]?.engagement_id)) {
     const seg = String(proofPath).split('/').map(encodeURIComponent).join('/');
     await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
   }
@@ -1505,6 +1509,15 @@ async function deletePayment(body, auth, env) {
 // Reann #4 — payment proof: mint a signed upload URL into the private bucket. The
 // client PUTs the file (uploadToSignedUrl), then sends proof_path to addPayment.
 function safeSeg(s) { return encodeURIComponent(String(s || '').replace(/[^\w.\-]+/g, '_')); }
+
+// A deal payment's proof lives at `<deal>/<ts>_<name>` (createPaymentProofUploadUrl). Same rule as
+// adProofPathOk: exact prefix, something after it, and no empty / dot segments (fetch resolves `..`).
+export function paymentProofPathOk(path, engagementId) {
+  const p = typeof path === 'string' ? path : '';
+  const prefix = `${safeSeg(engagementId)}/`;
+  if (!engagementId || !p.startsWith(prefix) || p.length === prefix.length) return false;
+  return !p.split('/').some(s => s === '' || s === '.' || s === '..');
+}
 
 async function createPaymentProofUploadUrl(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
