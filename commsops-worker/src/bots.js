@@ -46,17 +46,35 @@ async function setBotMode(env, id, body, userId) {
   return { ok: true, bot: u.data[0] };
 }
 
-async function saveBot(env, { id, name, draft_definition, config, channel }, userId) {
+// Same instant, whatever the string form — PostgREST echoes `+00:00`, a JS client may send `Z`.
+function sameInstant(a, b) {
+  const x = Date.parse(a), y = Date.parse(b);
+  return Number.isFinite(x) && x === y;
+}
+
+// Saves are compare-and-swap on updated_at (S377). Last-write-wins let a stale tab's Publish —
+// which saves the canvas first — silently overwrite a colleague's newer draft (S372 hostile
+// review). The builder echoes the updated_at it loaded; a mismatch is refused as `stale_draft`
+// unless the author confirmed the overwrite (`force`). The PATCH also filters on the updated_at
+// we just read, so a save landing between our read and our write is caught too. A request with
+// no expected_updated_at (a cached pre-fix bundle) keeps the old last-write-wins behaviour.
+async function saveBot(env, { id, name, draft_definition, config, channel, expected_updated_at, force }, userId) {
   const existing = id ? await getBot(env, id) : null;
   if (id && !existing?.ok) return existing;
+  const guarded = !!(id && expected_updated_at && !force);
+  if (guarded && !sameInstant(existing.bot.updated_at, expected_updated_at)) {
+    return { ok: false, error: 'stale_draft', current_updated_at: existing.bot.updated_at };
+  }
   const prevCfg = existing?.ok ? (existing.bot.config || {}) : {};
   const body = { name, draft_definition: draft_definition || {}, config: sanitizeBuilderConfig(config, prevCfg), updated_at: new Date().toISOString() };
   const ch = ['web', 'whatsapp', 'shared'].includes(channel) ? channel : null;
   if (ch && (!existing?.ok || !existing.bot.active_version)) body.channel = ch;   // channel is fixed at first publish
+  const cas = guarded ? `&updated_at=eq.${A.enc(existing.bot.updated_at)}` : '';
   const r = id
-    ? await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}`, env, { method: 'PATCH', body: JSON.stringify(body) })
+    ? await A.sbComms(`/rest/v1/bots?id=eq.${A.enc(id)}${cas}`, env, { method: 'PATCH', body: JSON.stringify(body) })
     : await A.sbComms('/rest/v1/bots', env, { method: 'POST', body: JSON.stringify({ ...body, channel: ch || 'web', created_by: userId || null }) });
   const bot = r.ok && (Array.isArray(r.data) ? r.data[0] : r.data);
+  if (!bot && guarded && r.ok) return { ok: false, error: 'stale_draft' };   // the CAS matched no row
   return bot ? { ok: true, bot } : { ok: false, error: 'save_failed', detail: r.data };
 }
 

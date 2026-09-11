@@ -10,6 +10,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { ArrowLeft, Play, Pause, Check, Plus, Send } from 'lucide-react';
 import { Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { useConfirm } from '@/components/confirm.js';
 import { fromDefinition, toDefinition, duplicateNode, appendSelected, clearSelected, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import BotDrawer from '@/components/journey-canvas/BotDrawer.js';
 import { splitLinks } from '@/lib/linkify.js';
@@ -158,6 +159,7 @@ function TestPanel({ botId, definition, session }) {
 export default function BotBuilder() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const canBuild = !perms || perms.campaign_build;
   const canActivate = !perms || perms.send_activate;
 
@@ -212,13 +214,35 @@ export default function BotBuilder() {
   }
 
   // Returns the saved bot, or null when nothing was saved (validation toast already shown).
+  // Saves are compare-and-swap (S377): we echo the updated_at we loaded, and the worker
+  // refuses with 409 `stale_draft` if someone saved (or paused / published) since. The author
+  // then chooses — overwrite theirs, or keep these edits on screen and reload to compare.
   async function save({ quiet = false } = {}) {
     if (!name.trim()) { showToast('Name required', 'error'); return null; }
     const definition = currentDefinition();
     if (!definition) return null;
+    const payload = { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {}, channel: bot.channel || 'web', expected_updated_at: bot.updated_at || undefined };
     setBusy(true);
     try {
-      const r = await workerFetch('saveBot', { id: bot.id || undefined, name: name.trim(), draft_definition: definition, config: bot.config || {}, channel: bot.channel || 'web' }, session);
+      let r;
+      try {
+        r = await workerFetch('saveBot', payload, session);
+      } catch (e) {
+        if (e?.status !== 409) { showToast(`Save failed: ${e?.message || 'unknown'}`, 'error'); return null; }
+        setBusy(false);
+        const overwrite = await confirm({
+          tone: 'warn',
+          title: 'Someone else saved this bot after you opened it',
+          lede: <>Saving now replaces <b>their</b> version with yours. Their edits are not merged.</>,
+          points: ['Pausing, resuming or publishing it also counts as a change.',
+            'Cancel keeps your edits on screen and saves nothing — reload the bot to see their version.'],
+          confirmLabel: 'Overwrite with my version',
+        });
+        if (!overwrite) return null;
+        setBusy(true);
+        try { r = await workerFetch('saveBot', { ...payload, force: true }, session); }
+        catch (e2) { showToast(`Save failed: ${e2?.message || 'unknown'}`, 'error'); return null; }
+      }
       const saved = r?.data?.bot || r?.bot;
       if (!saved) { showToast(`Save failed: ${r?.error || 'unknown'}`, 'error'); return null; }
       // The wire definition drops incomplete keyword rows (filtered above); a half-typed
@@ -397,7 +421,9 @@ function BotSettings({ bot, setBot, sharedBots, canActivate, session, showToast 
   async function saveMode() {
     const r = await workerFetch('setBotMode', { id: bot.id, mode, pilot_numbers: nums.split(/[,\s]+/).filter(Boolean) }, session);
     const d = r?.data?.bot || r?.bot;
-    if (d) { setBot((b) => ({ ...b, config: d.config })); showToast(mode === 'public' ? 'PUBLIC — every customer on the number will get the bot' : 'Pilot mode saved'); }
+    // Carry updated_at too: saves are compare-and-swap on it, so dropping it here would make
+    // the author's own next Save look like someone else's change.
+    if (d) { setBot((b) => ({ ...b, config: d.config, updated_at: d.updated_at })); showToast(mode === 'public' ? 'PUBLIC — every customer on the number will get the bot' : 'Pilot mode saved'); }
     else showToast(`Failed: ${r?.error || 'unknown'}`, 'error');
   }
   return (

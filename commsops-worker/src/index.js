@@ -1093,6 +1093,7 @@ async function handlePost(body, auth, env) {
     case 'saveBot': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       const r = await BOTS.saveBot(env, body, auth.userId);
+      if (r.error === 'stale_draft') return err(r.error, 409, { current_updated_at: r.current_updated_at || null });
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'publishBot': {
