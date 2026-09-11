@@ -147,6 +147,7 @@ export default function FinanceQueuePage() {
       const s = await getValidSession();
       const raw = await workerFetch('markPaymentPaid', { data: {
         ids: [r.id], payment_ref: (refs[r.id] || '').trim() || null,
+        payment_mode: 'bank_transfer',
         // The net is what actually leaves the bank. With no TDS this is amount_to_pay, unchanged.
         paid_amount: netPayable({ amountToPay: r.amount_to_pay, tdsAmount }),
         // Rates only — the worker derives the base and amount from invoice_total and never

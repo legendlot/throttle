@@ -1415,6 +1415,32 @@ function priorTdsWarning(prior, currency = 'INR') {
   return `TDS already deducted on this invoice: ${each} — this deducts it again on the full invoice's taxable value.`;
 }
 
+// ── UTR / paid amount (S374) ────────────────────────────────────────────────────────────────
+// PAY-0009 was marked paid with no UTR — Finance needs to edit `payment_ref` after the fact, and
+// the same field needs a real validator on the way IN too (updatePaymentRef below reuses it).
+// Whitespace collapsed so a pasted UTR with a line-break or double space still matches a bank
+// statement search. 64 chars is generous headroom over any real UTR/RRN/cheque number.
+function parseUtr(v) {
+  if (typeof v !== 'string') return { value: null, error: 'UTR must be text' };
+  const value = v.trim().replace(/\s+/g, ' ');
+  if (!value) return { value: null, error: 'UTR is required' };
+  if (value.length > 64) return { value: null, error: 'UTR is too long (max 64 characters)' };
+  return { value, error: null };
+}
+// ⛔ `Number('') === 0` used to let an absent paid_amount silently write a ₹0 payment — the same
+// absent-vs-zero defect class as tdsAbsent above. Absent (null/undefined/blank string) means "use
+// the default", not "pay zero"; the caller decides what NOT to write when value is null.
+function parsePaidAmount(v) {
+  if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) {
+    return { value: null, error: null };
+  }
+  if (typeof v !== 'string' && typeof v !== 'number') return { value: null, error: 'Paid amount must be a number' };
+  const n = Number(v);
+  if (!Number.isFinite(n)) return { value: null, error: 'Paid amount must be a number' };
+  if (n < 0) return { value: null, error: 'Paid amount cannot be negative' };
+  return { value: n, error: null };
+}
+
 // ⚠️⚠️ REQUESTER NOTE — VERBATIM PORT of parseRequesterNote from apps/snorkel/src/lib/requesterNote.js. ⚠️⚠️
 // The "Note for Finance" on a payment request (Siddu, #bugs 1789042876.535959) — usually the
 // payee's bank details. PLAIN TEXT on purpose (Afshaan, 2026-09-11): never masked, never routed
@@ -4902,9 +4928,14 @@ export default {
               }
             }
             if (d.payment_ref)   patch.payment_ref   = d.payment_ref;
-            if (d.payment_mode)  patch.payment_mode  = d.payment_mode;
+            // Payment mode is always bank transfer today; the field stays free-form on the row
+            // for whenever that stops being true, but a request with nothing sent still gets the
+            // real value instead of NULL.
+            patch.payment_mode  = d.payment_mode || 'bank_transfer';
             if (d.payment_note)  patch.payment_note  = d.payment_note;
-            if (d.paid_amount != null) patch.paid_amount = Number(d.paid_amount);
+            const { value: paidAmount, error: paidAmountError } = parsePaidAmount(d.paid_amount);
+            if (paidAmountError) return err(paidAmountError);
+            if (paidAmount !== null) patch.paid_amount = paidAmount;
             if (d.payee_bank_id) patch.payee_bank_id = d.payee_bank_id;
             const r = await update('payment_requests', patch,
               `id=in.(${ids.map(encodeURIComponent).join(',')})&status=eq.approved`);
@@ -4929,6 +4960,31 @@ export default {
               ids.join(','), `${moved.length} payment(s) marked paid`, { ref: d.payment_ref || null });
             // Only warn about a deduction that actually landed — a row that had already moved wrote nothing.
             return ok({ paid: moved.length, requested: ids.length, warning: moved.length ? tdsWarning : null });
+          }
+
+          // Editing the UTR on an already-paid request (Mahesh, S374 — PAY-0009 was paid with no
+          // UTR). Deliberately scoped to `status='paid'`: an unpaid request has no UTR to edit,
+          // it sets one via markPaymentPaid.
+          case 'updatePaymentRef': {
+            if (!canPayExecute(P)) return err('No permission to edit the UTR', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const { value: payment_ref, error: utrError } = parseUtr(d.payment_ref);
+            if (utrError) return err(utrError);
+            const ex = await query('payment_requests',
+              `?id=eq.${encodeURIComponent(d.id)}&select=request_no,status,payment_ref&limit=1`);
+            if (!ex.ok || !ex.data[0]) return err('Not found', 404);
+            if (ex.data[0].status !== 'paid') return err("Only a paid request's UTR can be edited");
+            const now = new Date().toISOString();
+            const r = await update('payment_requests', { payment_ref, updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}&status=eq.paid`);
+            if (!r.ok) return err('UTR update failed: ' + JSON.stringify(r.data));
+            if (!(Array.isArray(r.data) && r.data.length)) return err("Only a paid request's UTR can be edited");
+            const oldRef = ex.data[0].payment_ref;
+            await logActivity(authResult?.fullName || postRole, postRole, 'PAYMENT_REF_UPDATED', 'Payment',
+              String(d.id), `${ex.data[0].request_no} UTR ${oldRef || '(none)'} → ${payment_ref}`,
+              { from: oldRef || null, to: payment_ref });
+            return ok({ updated: true, payment_ref });
           }
 
           case 'cancelPaymentRequest': {

@@ -28,8 +28,10 @@ export default function PaymentRequestDetail() {
   // tds_rate is the % as typed. '' = TDS not applicable — it is NOT 0, and nothing is sent.
   // tds_gst_rate is the invoice's GST% as picked; '' = not touched yet, so the pre-fill (gstPick)
   // applies. It only sets the TDS base: taxable = invoice_total ÷ (1 + GST%) (decisions.md, 2026-09-11).
-  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'neft', paid_amount: '', tds_rate: '', tds_gst_rate: '' });
+  const [pay, setPay] = useState({ payment_ref: '', payment_mode: 'bank_transfer', paid_amount: '', tds_rate: '', tds_gst_rate: '' });
   const [proof, setProof] = useState([]);
+  const [utrEditOpen, setUtrEditOpen] = useState(false);
+  const [utrEdit, setUtrEdit] = useState('');
   const [invOpen, setInvOpen] = useState(false);
   const [inv, setInv] = useState([]);
   const [can, setCan] = useState({});
@@ -210,7 +212,27 @@ export default function PaymentRequestDetail() {
             {r.status === 'paid' && (
               <>
                 <Row k="Paid" v={`${r.paid_by_name || '—'} · ${fmtDateShort(r.paid_at)}`} />
-                <Row k="Reference / UTR" v={r.payment_ref} />
+                {utrEditOpen ? (
+                  <Row k="Reference / UTR" v={
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input value={utrEdit} onChange={e => setUtrEdit(e.target.value)} autoFocus
+                        style={{ flex: 1, padding: 6, fontSize: 14, borderRadius: 6,
+                                 border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }} />
+                      <Btn kind="primary" disabled={busy} onClick={async () => {
+                        await act('updatePaymentRef', { id: Number(id), payment_ref: utrEdit }, 'UTR updated');
+                        setUtrEditOpen(false);
+                      }}>Save</Btn>
+                      <Btn disabled={busy} onClick={() => setUtrEditOpen(false)}>Cancel</Btn>
+                    </div>} />
+                ) : (
+                  <Row k="Reference / UTR" v={
+                    <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      {r.payment_ref || '—'}
+                      {can.execute && (
+                        <Btn onClick={() => { setUtrEdit(r.payment_ref || ''); setUtrEditOpen(true); }}>Edit UTR</Btn>
+                      )}
+                    </span>} />
+                )}
                 {/* Only when TDS actually applies. A NULL rate renders NOTHING — never "0%"
                     or "₹0", which would read as a deduction that was never made. */}
                 {hasTds(r) && (
@@ -396,8 +418,8 @@ export default function PaymentRequestDetail() {
             <select value={pay.payment_mode} onChange={e => setPay(p => ({ ...p, payment_mode: e.target.value }))}
               style={{ width: '100%', padding: 10, fontSize: 16, borderRadius: 8, marginBottom: 12,
                        border: '1px solid var(--bd)', background: 'var(--surface)', color: 'var(--t1)' }}>
-              {['neft','rtgs','imps','upi','card','auto_debit','cash','other'].map(m =>
-                <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              {['bank_transfer','neft','rtgs','imps','upi','card','auto_debit','cash','other'].map(m =>
+                <option key={m} value={m}>{m === 'bank_transfer' ? 'Bank transfer' : m.toUpperCase()}</option>)}
             </select>
             {/* TDS rate only — the amount is derived, never typed (Priya, 2026-09-09). Blank
                 means not applicable: nothing is stored and the payment behaves as it always has.
