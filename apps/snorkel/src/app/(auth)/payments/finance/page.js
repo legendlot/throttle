@@ -337,7 +337,7 @@ export default function FinanceQueuePage() {
                     value={tdsRates[r.id] ?? ''}
                     onChange={e => setTdsRates(p => ({ ...p, [r.id]: e.target.value }))} />
                   {/* The invoice's GST% — only once a TDS rate is typed, since it only sets the
-                      TDS base. Pre-filled from the linked PO, else 18% with a payee GSTIN, else 0%. */}
+                      TDS base. Pre-filled from the linked PO, else the vendor's usual PO rate, else 18% with a payee GSTIN, else 0%. */}
                   {rate !== '' && (
                     <select style={{ ...inp, width: 120 }} aria-label="Invoice GST %"
                       value={gst}

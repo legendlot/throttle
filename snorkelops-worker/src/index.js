@@ -867,7 +867,7 @@ function fulfilmentAnchor(shipments) {
   const shipped = (shipments || []).filter(s => s.status === 'shipped');
   if (!shipped.length) return { dispatch_date: null, delivery_date: null, anchor_date: null };
   const keyed = shipped.map(s => {
-    const disp = s.shipped_at ? String(s.shipped_at).slice(0, 10) : null;
+    const disp = istDateOf(s.shipped_at);
     return { disp, deliv: s.delivery_date || null, k: s.delivery_date || disp || '0000-00-00' };
   }).sort((x, y) => String(x.k).localeCompare(String(y.k)));
   const last = keyed[keyed.length - 1];
@@ -1136,7 +1136,7 @@ function resolveFulfilment(f) {
   if (f?.request) return { der: deriveFulfilment(f.request, f.shipments), anchor: fulfilmentAnchor(f.shipments) };
   if (f?.legacyShipment) {
     const sh = f.legacyShipment;
-    const disp = sh.shipped_at ? String(sh.shipped_at).slice(0, 10) : null;
+    const disp = istDateOf(sh.shipped_at);
     return {
       der: { fulfilment_status: fulfilmentFromShipment(sh), shipped_units: 0, requested_units: 0 },
       anchor: { dispatch_date: disp, delivery_date: sh.delivery_date || null, anchor_date: sh.delivery_date || disp || null },
@@ -1167,6 +1167,9 @@ async function reconcileRejections() {
       { status: 'cancelled', cancelled_at: now, cancel_reason: 'Fulfilment rejected: ' + (fr.reject_reason || ''), updated_at: now },
       `id=eq.${encodeURIComponent(o.id)}&status=neq.cancelled`);
     if (!r.ok) { console.error('reconcileRejections: cancel failed', o.order_no, r.data); continue; }
+    // 0 rows = a concurrent sweep (another createSalesOrder / generateInvoice) cancelled it first —
+    // log once, not per racer (S376 review).
+    if (!Array.isArray(r.data) || !r.data.length) continue;
     await logActivity('system', 'system', 'SO_AUTO_CANCELLED', 'ORDER', o.order_no,
       `${o.order_no} cancelled — fulfilment request ${fr.request_no} rejected`,
       { reason: 'fulfilment request rejected', reject_reason: fr.reject_reason || null, request_no: fr.request_no,
@@ -1196,16 +1199,29 @@ function normSalesPartner(field, v) {
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const GST_UNREGISTERED_MARKER = 'GST: not registered';
 function normGstin(v) { return String(v ?? '').trim().toUpperCase(); }
+// The marker is one ' | '-joined segment of notes; drop every segment that carries it (S376 review:
+// unticking "Not GST-registered" used to leave the marker, so the gap check kept excluding a partner
+// the user had just un-marked).
+function stripGstUnregMarker(notes) {
+  const kept = String(notes || '').split(' | ')
+    .filter(s => !s.toLowerCase().includes(GST_UNREGISTERED_MARKER.toLowerCase()));
+  return kept.join(' | ').trim() || null;
+}
 function partnerGstinGate(d, existing, stamp) {
   const unregistered = d.unregistered === true;
   const touched = d.gstin !== undefined;
   const g = touched ? normGstin(d.gstin) : '';
   const oldG = existing ? normGstin(existing.gstin) : '';
   if (unregistered && g) return { error: 'Enter a GSTIN or tick "Not GST-registered" — not both' };
+  // An explicit UNtick (PartnerForm restores the tick from the marker, so false here is the user's
+  // choice) — or any real GSTIN — contradicts the marker: remove it from whatever notes will be saved.
+  const baseNotes = d.notes !== undefined ? d.notes : (existing?.notes ?? null);
+  const markerPresent = String(baseNotes || '').toLowerCase().includes(GST_UNREGISTERED_MARKER.toLowerCase());
+  const unmark = markerPresent && (d.unregistered === false || !!g) ? { notes: stripGstUnregMarker(baseNotes) } : {};
   if (g) {
     if (g !== oldG && !GSTIN_RE.test(g))
       return { error: `GSTIN "${g}" is not a valid GSTIN — 15 characters, e.g. 29ABCDE1234F1Z5` };
-    return { gstin: g };
+    return { gstin: g, ...unmark };
   }
   if (unregistered) {
     const base = d.notes !== undefined ? d.notes : (existing?.notes ?? null);
@@ -1215,7 +1231,7 @@ function partnerGstinGate(d, existing, stamp) {
   }
   if (!existing) return { error: 'GSTIN required — or tick "Not GST-registered"' };
   if (touched && oldG) return { error: 'This partner has a GSTIN — to clear it, tick "Not GST-registered"' };
-  return touched ? { gstin: null } : {};
+  return touched ? { gstin: null, ...unmark } : { ...unmark };
 }
 // Recompute an order's amount_received + payment_status from its receipts.
 async function recomputeSalesPayment(orderId) {
@@ -1286,6 +1302,16 @@ function normAsset(field, v) {
 // TODAY IN IST (S376). Every caller is a business date — PO raised/placed date, SO order date,
 // receipt / CN date, the overdue check, the GST-unregistered stamp — and LOT runs on IST. The UTC
 // date this used to return put anything done between 00:00 and 05:30 IST on the PREVIOUS day.
+// The IST calendar date of a timestamptz (S376 review): shipped_at is UTC, so slice(0,10) put a
+// dispatch between 00:00 and 05:30 IST on the previous day — and the overdue check now compares it
+// with an IST today. A bare 'YYYY-MM-DD' or an unparseable value passes through as its first 10 chars.
+function istDateOf(ts) {
+  if (!ts) return null;
+  const str = String(ts);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const ms = Date.parse(str);
+  return Number.isFinite(ms) ? new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(0, 10) : str.slice(0, 10);
+}
 function todayISO() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0]; }
 function ok(data, status = 200) {
   return new Response(JSON.stringify({ ok: true, data }),
@@ -5038,7 +5064,10 @@ export default {
             // tds_amount is per-invoice, so one rate across several rows would write one row's
             // deduction onto all of them. Both UI callers send a single id.
             let tdsWarning = null;
-            if (d.tds_rate !== undefined && d.tds_rate !== null && d.tds_rate !== '') {
+            // Same ABSENT test computeTds uses (S376 review): `!== ''` let a whitespace rate in, and
+            // computeTds then returned "not applicable" while this block still wrote tds_rate=0 plus an
+            // unvalidated tds_gst_rate. Absent here = the whole TDS block is skipped.
+            if (!tdsAbsent(d.tds_rate)) {
               if (ids.length !== 1) return err('TDS applies to one payment at a time — mark these paid individually');
               const inv = await query('payment_requests',
                 `?id=eq.${encodeURIComponent(ids[0])}&${PRIOR_TDS_SELECT}&limit=1`);
@@ -5060,7 +5089,13 @@ export default {
                                              inv.data[0].currency);
               }
             }
-            if (d.payment_ref)   patch.payment_ref   = d.payment_ref;
+            // The UTR goes through the same validator as updatePaymentRef (S376 review — the rule was on
+            // the edit path only). Blank = not provided (paying without a UTR is still allowed).
+            if (!tdsAbsent(d.payment_ref)) {
+              const { value: utr, error: utrError } = parseUtr(d.payment_ref);
+              if (utrError) return err(utrError);
+              patch.payment_ref = utr;
+            }
             // Payment mode is always bank transfer today; the field stays free-form on the row
             // for whenever that stops being true, but a request with nothing sent still gets the
             // real value instead of NULL.
@@ -5495,7 +5530,7 @@ export default {
             if (!d.id) return err('id required');
             const updates = { updated_at: new Date().toISOString() };
             SALES_PARTNER_FIELDS.forEach(f => { if (d[f] !== undefined) updates[f] = normSalesPartner(f, d[f]); });
-            if (d.gstin !== undefined || d.unregistered === true) {
+            if (d.gstin !== undefined || typeof d.unregistered === 'boolean') {
               const cur = await query('sales_partners', `?id=eq.${encodeURIComponent(d.id)}&select=gstin,notes&limit=1`);
               if (!cur.ok || !cur.data?.[0]) return err('Partner not found', 404);
               const gst = partnerGstinGate(d, cur.data[0], `ticked by ${authResult?.fullName || postRole} on ${todayISO()}`);
@@ -5867,6 +5902,13 @@ export default {
             const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(d.id)}&select=hsn_code`);
             const missing = (linesR.ok ? linesR.data : []).filter(l => !l.hsn_code || !String(l.hsn_code).trim());
             if (missing.length) return err(`HSN code required on every line before invoicing (${missing.length} missing)`, 422);
+            // A rejected fulfilment request cancels its order (S376 review): the sweep no longer runs on
+            // page loads, so run it here — before the status check — or a rejected order could burn a
+            // permanent GST invoice number in the gap before the next createSalesOrder.
+            try { await reconcileRejections(); } catch (e) { console.error('reconcileRejections failed:', e); }
+            const fresh = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=status&limit=1`);
+            if (fresh.ok && fresh.data[0] && fresh.data[0].status !== 'confirmed')
+              return err('This order was cancelled — its fulfilment request was rejected', 422);
             const date = todayISO();
             const invoice_no = await nextInvoiceNo(date);
             const r = await update('sales_orders',

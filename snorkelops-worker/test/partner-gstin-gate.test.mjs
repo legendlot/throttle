@@ -98,3 +98,20 @@ test('edit: changing to a malformed GSTIN → refused; a legacy odd value re-sav
 test('edit: changing to a valid GSTIN is normalised', () => {
   assert.deepEqual(gate({ gstin: '29aaxfd3493p1z8' }, blank, STAMP), { gstin: '29AAXFD3493P1Z8' });
 });
+
+// S376 review: unticking "Not GST-registered" (or entering a real GSTIN) removes the marker from notes,
+// so the gap check stops excluding a partner the user just un-marked. Other note segments survive.
+test('edit: explicit untick strips the marker, keeps other notes', () => {
+  const marked = { gstin: null, notes: `Retail | ${GST_UNREGISTERED_MARKER} — ticked by X on 2026-09-11. Blank GSTIN is correct; do not re-flag as a gap.` };
+  assert.deepEqual(gate({ gstin: null, unregistered: false }, marked, STAMP), { gstin: null, notes: 'Retail' });
+  assert.deepEqual(gate({ gstin: '29aaxfd3493p1z8', unregistered: false }, marked, STAMP), { gstin: '29AAXFD3493P1Z8', notes: 'Retail' });
+  const only = { gstin: null, notes: `${GST_UNREGISTERED_MARKER} — x` };
+  assert.deepEqual(gate({ unregistered: false }, only, STAMP), { notes: null });
+});
+test('edit: untick on a partner with no marker changes no notes', () => {
+  assert.deepEqual(gate({ gstin: null, unregistered: false }, { gstin: null, notes: 'Retail' }, STAMP), { gstin: null });
+});
+test('edit: tick still kept on a marked partner (form restores it) leaves notes alone', () => {
+  const marked = { gstin: null, notes: `${GST_UNREGISTERED_MARKER} — x` };
+  assert.deepEqual(gate({ gstin: null, unregistered: true }, marked, STAMP), { gstin: null, notes: marked.notes });
+});

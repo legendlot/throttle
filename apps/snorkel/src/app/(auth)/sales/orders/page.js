@@ -118,6 +118,12 @@ export default function SalesOrdersPage() {
     const a = document.createElement('a');
     a.href = url; a.download = `lot-sales-order-lines-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
+    // The list on screen and the line read are two moments (S376 review): an order cancelled or
+    // re-filtered in between comes back with no lines and a blank partner code — say so, never
+    // silently ship a file that is short.
+    const byOrder = payload?.partnerByOrder || {};
+    const stale = filtered.filter(o => !byOrder[o.id]).length;
+    if (stale) showToast(`${stale} order${stale === 1 ? '' : 's'} changed since this list loaded and came out without lines — refresh and export again`, 'error');
   }
 
   const filtersActive = search.trim() || filters.fulfilment || filters.overdue;

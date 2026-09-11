@@ -128,8 +128,8 @@ export default function PaymentRequestDetail() {
     }
   }
 
-  // The GST% the picker shows: Finance's pick, else the linked PO's rate → 18% with a payee
-  // GSTIN → 0% (defaultGstRate). Read at render AND at submit, so the two can never disagree.
+  // The GST% the picker shows: Finance's pick, else the linked PO's rate → the vendor's usual PO
+  // rate → 18% with a payee GSTIN → 0% (defaultGstRate). Read at render AND at submit, so the two can never disagree.
   const gstPick = (req, p = pay) => p.tds_gst_rate !== ''
     ? p.tds_gst_rate
     : String(defaultGstRate({ poGstRate: req?.po_gst_rate, vendorGstRate: req?.vendor_gst_rate, payeeGstin: req?.payee?.gstin }));
@@ -445,7 +445,7 @@ export default function PaymentRequestDetail() {
               return (
                 <>
                   {/* The invoice's GST% — sets the TDS base only. Pre-filled from the linked PO,
-                      else 18% with a payee GSTIN, else 0%. Changing it re-defaults Amount paid. */}
+                      else the vendor's usual PO rate, else 18% with a payee GSTIN, else 0%. Changing it re-defaults Amount paid. */}
                   <label style={{ fontSize: 12, color: 'var(--t2)' }}>Invoice GST %</label>
                   <select value={gst}
                     onChange={e => {
