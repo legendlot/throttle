@@ -44,6 +44,7 @@
 <h2 class="sec">Saving and publishing</h2>
 <p>Every outcome on every step must be wired before you can publish &mdash; an unwired menu button or an unwired fallback is a customer reaching a dead end. <strong>Save draft</strong> is available to anyone who can build; <strong>Publish</strong> (freezes a version; every new conversation gets it at once) needs the activate permission.</p>
 <div class="callout"><div class="c-title">Note</div><p><strong>Publish saves the canvas first</strong>, then checks and publishes it &mdash; what you see (and just tested) is what goes live. If the save fails, nothing is published.</p></div>
+<div class="callout warn"><div class="c-title">&#9888; Two people on one bot</div><p>If someone else saved this bot (or paused, resumed or published it) after you opened it, <strong>Save draft</strong> and <strong>Publish</strong> stop and tell you so instead of silently replacing their work. You can <strong>Cancel</strong> &mdash; your edits stay on screen, nothing is saved, and you reload the bot to see theirs &mdash; or type <strong>OVERWRITE</strong> to replace their version with yours. An unpublished draft has no history, so an overwrite cannot be undone. If a colleague saves in the moment between your save and your publish, nothing is published: reload and review first. A tab left open from before this check existed is asked to reload.</p></div>
 <table class="tbl">
   <thead><tr><th>Code</th><th>What it means</th><th>Fix</th></tr></thead>
   <tbody>
