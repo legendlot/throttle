@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { RotateCw } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Modal, Spinner, useToast } from '@throttle/ui';
+import { Modal, Spinner, useToast, Combobox } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useRefreshState } from '../layout.js';
 import {
@@ -193,17 +193,21 @@ export default function LineFlushPage() {
   function updateCard(id, field, value) {
     setPartCards((cards) => cards.map((c) => c.id === id ? { ...c, [field]: value } : c));
   }
-  function lookupPart(id, partCode) {
-    const code = (partCode || '').trim();
-    if (!code) return;
-    const m = materialCache[code];
-    if (m) {
-      setPartCards((cards) => cards.map((c) => c.id === id
-        ? { ...c, partCode: code, partName: m.part_name || c.partName, category: m.part_category || c.category }
-        : c));
-    } else {
-      setPartCards((cards) => cards.map((c) => c.id === id ? { ...c, partCode: code } : c));
-    }
+  // Part code is PICK-ONLY from the active part list (S372, 2026-09-11). It was a free-text box,
+  // and a typed `d1-pb-08` flowed unchanged into flush_lines → stock_ledger (Return to Stock
+  // created junk lowercase rows holding 150 pcs) → damage_ledger (Scrap). Every part-code field
+  // is a Combobox (PATTERN-160); this was one of the last plain boxes.
+  const partOpts = useMemo(() => Object.values(materialCache)
+    .filter((m) => m?.part_code)
+    .map((m) => ({
+      value: m.part_code,
+      label: `${m.part_code}${m.part_name ? ' — ' + m.part_name : ''}${m.product ? ' (' + m.product + ')' : ''}`,
+    })), [materialCache]);
+  function pickPart(id, code) {
+    const m = code ? materialCache[code] : null;
+    setPartCards((cards) => cards.map((c) => c.id === id
+      ? { ...c, partCode: code || '', partName: m?.part_name || '', category: m?.part_category || '' }
+      : c));
   }
   function addSplit(cardId) {
     setPartCards((cards) => cards.map((c) => c.id === cardId
@@ -240,6 +244,14 @@ export default function LineFlushPage() {
     const isRun = flushType === 'run';
     if (isRun && !selectedRun) {
       showToast('Select a production run', 'error');
+      return;
+    }
+    // A run's pick list can carry a code the part list doesn't know; refuse rather than write it.
+    const unknown = Object.keys(materialCache).length
+      ? partCards.filter((c) => c.partCode && !materialCache[c.partCode]).map((c) => c.partCode)
+      : [];
+    if (unknown.length) {
+      showToast(`Not in the part list: ${unknown.join(', ')} — pick the part again`, 'error');
       return;
     }
     const lines = [];
@@ -567,15 +579,17 @@ function NewFlushForm(props) {
             <div key={card.id} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: 12, marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 9, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', flex: 1, minWidth: 240 }}>
-                  <input
-                    type="text"
-                    value={card.partCode}
-                    onChange={(e) => updateCard(card.id, 'partCode', e.target.value)}
-                    onBlur={(e) => lookupPart(card.id, e.target.value)}
-                    placeholder="Part code"
-                    style={{ ...numInp, color: 'var(--yellow)', width: 140, background: 'var(--bg-2)' }}
-                    disabled={submitting}
-                  />
+                  <div style={{ width: 260 }}>
+                    <Combobox
+                      value={card.partCode}
+                      options={partOpts}
+                      portal
+                      onChange={(v) => pickPart(card.id, v)}
+                      placeholder={partOpts.length ? 'Part code or name…' : 'Loading parts…'}
+                      loading={!partOpts.length}
+                      disabled={submitting}
+                    />
+                  </div>
                   <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t2)' }}>{card.partName || '—'}</span>
                   {card.category && (
                     <span className="eyebrow">· {card.category}</span>
