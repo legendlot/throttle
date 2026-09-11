@@ -284,9 +284,23 @@ export default function FinanceQueuePage() {
                   <div style={{ color: 'var(--red-fg)' }}>
                     No bank account on file for {r.payee?.name}. Add one under Payees before paying —
                     do not chase it in chat.
+                    {r.requester_note ? ' The requester left a note for Finance below.' : ''}
                   </div>
                 )}
               </div>
+
+              {/* The requester's note (usually the payee's bank details, sourced by procurement) —
+                  plain text on the request, deliberately unmasked (Afshaan, 2026-09-11). Right under
+                  the bank block so the person paying reads both. Nothing renders without one. */}
+              {r.requester_note && (
+                <div style={{ padding: 12, borderRadius: 8, border: '1px solid var(--bd)',
+                              background: 'var(--surface)', fontSize: 13 }}>
+                  <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 4 }}>
+                    Note for Finance · from {r.requested_by_name || 'the requester'}
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.requester_note}</div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 {docs.filter(x => x.doc_kind !== 'payment_proof').map(doc => (

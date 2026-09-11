@@ -243,6 +243,17 @@ export default function PaymentRequestDetail() {
           </div>
         </Panel>
 
+        {/* The requester's note, usually the payee's bank details — plain text on the request,
+            deliberately NOT masked and NOT gated on bank_view (Afshaan, 2026-09-11). Sits next to
+            the bank block so whoever pays reads both. Nothing renders when there is no note. */}
+        {r.requester_note && (
+          <Panel title="Note for Finance">
+            <div style={{ padding: 16, fontSize: 14, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {r.requester_note}
+            </div>
+          </Panel>
+        )}
+
         {can.bank_view && d.banks?.length > 0 && (
           <Panel title="Bank details">
             <div style={{ padding: 16, fontSize: 14 }}>

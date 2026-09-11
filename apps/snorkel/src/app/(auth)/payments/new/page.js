@@ -6,6 +6,7 @@ import { getValidSession, garageFetch, workerFetch, supabase } from '@throttle/d
 import { Spinner, useToast, Combobox, Modal } from '@throttle/ui';
 import { PageHead, Panel, Btn, Badge } from '@/components/ui.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
+import { parseRequesterNote, REQUESTER_NOTE_MAX } from '@/lib/requesterNote.js';
 
 const CURRENCIES = ['INR', 'USD', 'CNY', 'EUR', 'GBP', 'AED'];
 const todayISO = () => {
@@ -30,7 +31,7 @@ export default function NewPaymentRequestPage() {
     request_type: 'payment', category_key: '', payee_id: '', purpose: '',
     invoice_no: '', invoice_date: '', invoice_total: '', amount_to_pay: '',
     currency: 'INR', needed_by: todayISO(), is_urgent: false, urgency_reason: '',
-    linked_po_number: '',
+    linked_po_number: '', requester_note: '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
@@ -85,6 +86,9 @@ export default function NewPaymentRequestPage() {
     const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'application/pdf']);
     const bad = files.find(x => !ALLOWED.has(String(x.file?.type || '')));
     if (bad) return showToast(`${bad.file.name}: only PNG, JPEG, WEBP, HEIC or PDF can be attached`, 'error');
+    // Same rule the worker applies (lib/requesterNote.js) — refuse here so the requester sees why.
+    const noteCheck = parseRequesterNote(f.requester_note);
+    if (noteCheck.error) return showToast(noteCheck.error, 'error');
 
     setSaving(true);
     try {
@@ -94,6 +98,7 @@ export default function NewPaymentRequestPage() {
         invoice_total: f.invoice_total === '' ? null : Number(f.invoice_total),
         amount_to_pay: f.amount_to_pay === '' ? null : Number(f.amount_to_pay),
         payee_id: Number(f.payee_id),
+        requester_note: noteCheck.note,   // trimmed, or null when blank
       } }, s);
       // ⚠️ snorkelops wraps every reply as `{ ok, data }` and workerFetch returns that wrapper —
       // every other Snorkel page reads `res.data`. This page read `res.id` / `res.request_no` off
@@ -313,6 +318,23 @@ export default function NewPaymentRequestPage() {
                      onChange={e => set('urgency_reason', e.target.value)} />
             </div>
           )}
+
+          {/* Plain text on the REQUEST, not a payee bank record — deliberately unmasked (Afshaan,
+              2026-09-11). No maxLength: the browser would silently cut a pasted note mid-account-
+              number, so the cap is shown and refused on submit instead. */}
+          <div style={row}>
+            <label style={L}>Note for Finance</label>
+            <textarea style={{ ...I, fontFamily: 'inherit', resize: 'vertical' }} rows={4}
+                      value={f.requester_note}
+                      placeholder="Bank details, account name, UPI, or anything Finance needs to pay this"
+                      onChange={e => set('requester_note', e.target.value)} />
+            {f.requester_note.trim().length > REQUESTER_NOTE_MAX * 0.9 && (
+              <div style={{ fontSize: 12, marginTop: 4,
+                            color: f.requester_note.trim().length > REQUESTER_NOTE_MAX ? 'var(--red-fg)' : 'var(--t2)' }}>
+                {f.requester_note.trim().length} / {REQUESTER_NOTE_MAX} characters
+              </div>
+            )}
+          </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
             <Btn kind="primary" onClick={submit} disabled={saving}>

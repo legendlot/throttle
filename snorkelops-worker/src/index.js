@@ -1291,6 +1291,25 @@ function computeTds({ invoiceTotal, rate }) {
   return { tdsAmount: Math.round((total * r / 100 + Number.EPSILON) * 100) / 100, error: null };
 }
 
+// ⚠️⚠️ REQUESTER NOTE — VERBATIM PORT of parseRequesterNote from apps/snorkel/src/lib/requesterNote.js. ⚠️⚠️
+// The "Note for Finance" on a payment request (Siddu, #bugs 1789042876.535959) — usually the
+// payee's bank details. PLAIN TEXT on purpose (Afshaan, 2026-09-11): never masked, never routed
+// through payment_payee_banks / maskBank(). Change the two copies together; the spec both sides
+// satisfy is snorkelops-worker/test/requester-note.test.mjs, which imports the app-side copy.
+const REQUESTER_NOTE_MAX = 2000;
+function parseRequesterNote(raw) {
+  if (raw === undefined || raw === null) return { note: null, error: null };
+  // Reject on TYPE before coercing — String([1,2]) is '1,2' and String({}) is '[object Object]'.
+  if (typeof raw !== 'string') return { note: null, error: 'Note for Finance must be text' };
+  const note = raw.trim();
+  if (note === '') return { note: null, error: null };
+  if (note.length > REQUESTER_NOTE_MAX) {
+    return { note: null,
+      error: `Note for Finance is ${note.length} characters — keep it to ${REQUESTER_NOTE_MAX}` };
+  }
+  return { note, error: null };
+}
+
 // ⚠️⚠️ delivery_address_id — VERBATIM PORT of apps/snorkel/src/lib/deliveryAddress.js. ⚠️⚠️
 // THREE doors write purchase_orders.delivery_address_id (postPO, amendPO,
 // changePODeliveryAddress) and each used to carry its own copy of these checks — which is how
@@ -4406,6 +4425,9 @@ export default {
 
             const amount = type === 'payment' ? Number(d.amount_to_pay || 0) : Number(d.invoice_total || 0);
             if (type === 'payment' && !(amount > 0)) return err('amount_to_pay must be greater than zero');
+            // Validated BEFORE anything is read or minted — a refused note must not burn a PAY-NNNN.
+            const { note: requesterNote, error: noteError } = parseRequesterNote(d.requester_note);
+            if (noteError) return err(noteError, 400);
 
             // PO gate — category-driven (Piyush's escalation, closed by construction rather than
             // by reminder). Only categories flagged po_required demand one.
@@ -4492,6 +4514,10 @@ export default {
               needed_by: d.needed_by || null,
               is_urgent: !!d.is_urgent, urgency_reason: d.urgency_reason || null,
               linked_po_number: d.linked_po_number || null,
+              // Only sent when there is one: a request with no note writes exactly the row it
+              // always did, so this handler cannot 400 on a missing column if the worker lands
+              // before migration snorkel_payment_request_note_v1 does.
+              ...(requesterNote ? { requester_note: requesterNote } : {}),
               status: needsApproval ? 'pending_approval' : (type === 'payment' ? 'approved' : 'submitted'),
               threshold_at_submit: threshold,
               // never stamp a real approver on something nobody looked at
