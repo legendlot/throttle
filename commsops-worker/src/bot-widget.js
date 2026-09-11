@@ -157,7 +157,7 @@ function widgetJs(botId, workerBase) {
     (history || []).forEach(function (h) {
       // No separate agent bubble class in this widget — both render 'bot'-styled.
       bubble(h.text, 'bot', h.who === 'agent' ? (h.agent_name || 'LOT Support') : null);
-      if (h.who === 'bot' && h.buttons && h.buttons.length) renderButtons(h.buttons, h.style);
+      if (h.who === 'bot' && h.buttons && h.buttons.length) renderButtons(h.buttons, h.style, h.step_id);
       if (h.who === 'agent' && h.id) lastAgentId = Math.max(lastAgentId, h.id);
     });
     disableChips();   // historical chips are not live — the composer still works

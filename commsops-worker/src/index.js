@@ -3079,7 +3079,7 @@ export default {
         if (b.resume) {
           const s = await BW.loadSession(env, String(b.resume)).catch(() => null);
           if (s && String(s.bot_id).toLowerCase() === String(b.botId || '').toLowerCase() && BW.isResumable(s)) {
-            const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,result&order=id.desc&limit=20`, env)
+            const h = await A.sbComms(`/rest/v1/bot_session_steps?session_id=eq.${A.enc(s.id)}&step_type=in.(bot_message,agent_reply)&select=id,step_type,step_id,result&order=id.desc&limit=20`, env)
               .catch(() => ({ ok: false }));
             return withCors(ok({ session_id: s.id, status: s.status, replies: [], history: BW.resumeHistory((h.ok && Array.isArray(h.data) ? h.data : []).reverse()) }));
           }

@@ -3,13 +3,13 @@ const assert = require('assert');
 const BW = require('../src/bot-web.js');
 const rows = [
   { id: 1, step_type: 'open', result: null },
-  { id: 2, step_type: 'bot_message', result: { text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons' } },
+  { id: 2, step_type: 'bot_message', step_id: 'menu_1', result: { text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons' } },
   { id: 3, step_type: 'customer_message', result: { text: '9876543210' } },
   { id: 4, step_type: 'agent_reply', result: { text: 'Hello from Sunitha', agent_name: 'Sunitha' } },
 ];
 assert.deepEqual(BW.resumeHistory(rows), [
-  { id: 2, who: 'bot', text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons', agent_name: null },
-  { id: 4, who: 'agent', text: 'Hello from Sunitha', buttons: null, style: null, agent_name: 'Sunitha' },
+  { id: 2, who: 'bot', text: 'Hi', buttons: [{ id: 'a', label: 'A' }], style: 'buttons', agent_name: null, step_id: 'menu_1' },
+  { id: 4, who: 'agent', text: 'Hello from Sunitha', buttons: null, style: null, agent_name: 'Sunitha', step_id: null },
 ]);
 assert.equal(BW.isResumable({ channel: 'web', status: 'active', last_activity_at: new Date().toISOString() }), true);
 assert.equal(BW.isResumable({ channel: 'web', status: 'active', last_activity_at: new Date(Date.now() - 7 * 3600e3).toISOString() }), false);
