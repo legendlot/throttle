@@ -3,6 +3,12 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.20.0] - 2026-09-11
+### Added
+- Sales Orders: **Export + lines** (one row per line item) and a Partner PO Ref column on the order export.
+- Sales Partners: a new partner needs a GSTIN or the **Not GST-registered** tick; never type a placeholder (URP/NA).
+- Payments export: final **Open in Snorkel** column linking to each request's page and its invoices.
+
 ## [1.19.4] - 2026-09-11
 ### Changed
 - Finance Queue / Mark-as-Paid: the GST % picker's pre-fill gains a step — linked PO rate, then the rate the payee's vendor's POs are always raised at, then 18% with a GSTIN, else 0%.
