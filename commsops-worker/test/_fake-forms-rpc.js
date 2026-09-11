@@ -110,6 +110,12 @@ function createFakeFormsDb({ forms = [] } = {}) {
     if (!m) return undefined;
     const fn = m[1];
     const args = opts.body ? JSON.parse(opts.body) : {};
+    // PostgREST resolves a function by its EXACT argument-name set, and none of 0073's params has
+    // a DEFAULT — a key that went `undefined` (dropped by JSON.stringify) is a PGRST202 and every
+    // signup 502s. Fail the test the way production would (S377 hostile review, finding 4).
+    const want = SIGNATURE[fn].slice().sort().join(',');
+    const got = Object.keys(args).sort().join(',');
+    if (got !== want) throw new Error(`rpc/${fn} body keys [${got}] != 0073 signature [${want}]`);
     db.calls.push({ fn, args });
     const pre = failures.findIndex((f) => f.fn === fn && f.stage === 'call');
     if (pre !== -1) { failures.splice(pre, 1); return { ok: false, status: 503, data: { message: 'upstream timeout' } }; }
@@ -131,5 +137,12 @@ function createFakeFormsDb({ forms = [] } = {}) {
   db.callsTo = (fn) => db.calls.filter((c) => c.fn === fn);
   return db;
 }
+
+// Parameter names of the live functions, from migration 0073 — keep in step with it.
+const SIGNATURE = {
+  form_capture: ['p_form_id', 'p_profile_id', 'p_payload', 'p_dedupe_key', 'p_channels', 'p_source_url',
+    'p_ip_hash', 'p_confirm_token', 'p_consent_purpose', 'p_consent_source', 'p_evidence'],
+  form_confirm: ['p_token'],
+};
 
 module.exports = { createFakeFormsDb };

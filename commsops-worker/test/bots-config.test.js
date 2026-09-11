@@ -57,11 +57,20 @@ assert.deepEqual(B.normalizeMode({ mode: 'weird' }), null);
     r = await save({ expected_updated_at: '2026-09-11T13:00:00.000Z', force: true });
     assert.equal(r.ok, true);
     assert.ok(!calls.find((c) => c.method === 'PATCH').path.includes('updated_at=eq.'));
-    // no expected_updated_at (cached pre-fix bundle) → old last-write-wins, unguarded
+    // no expected_updated_at (a tab on the pre-fix bundle) → REFUSED, nothing written (hostile review)
     calls.length = 0;
     r = await save({});
+    assert.equal(r.error, 'reload_required');
+    assert.equal(calls.filter((c) => c.method === 'PATCH').length, 0);
+    // …but a confirmed force with no expected is still the author's explicit choice
+    calls.length = 0;
+    r = await save({ force: true });
     assert.equal(r.ok, true);
-    assert.ok(!calls.find((c) => c.method === 'PATCH').path.includes('updated_at=eq.'));
+    // publish pinned to the saved draft: a colleague's save in between → refused, nothing frozen
+    calls.length = 0;
+    r = await B.publishBot({}, 'b1', 'u', '2026-09-11T13:00:00.000Z');
+    assert.equal(r.error, 'stale_draft');
+    assert.equal(calls.filter((c) => c.method !== 'GET').length, 0);
     // a new bot (POST) is never guarded
     calls.length = 0;
     r = await B.saveBot({}, { name: 'n', draft_definition: {}, config: {}, channel: 'web', expected_updated_at: 'x' }, 'u');

@@ -68,7 +68,7 @@ function makeDb(row = {}) {
     assert.equal(db.consent.length, 0, 'loser must not write a second set of consent rows');
   });
 
-  await t('two concurrent confirms produce exactly ONE set of consent rows', async () => {
+  await t('two back-to-back confirms produce exactly ONE set of consent rows (sequential in the fake — true concurrency is the 0073 FOR UPDATE lock, untested here)', async () => {
     const { db } = makeDb({ channels: ['email', 'whatsapp'], payload: { email: 'a@b.com', phone: '+917709991011' } });
     const [r1, r2] = await Promise.all([handleFormConfirm({}, 'tok'), handleFormConfirm({}, 'tok')]);
     assert.equal(db.consent.length, 2, `expected one row per chosen channel (2), got ${db.consent.length}`);

@@ -9,7 +9,10 @@
 --        so the retry wrote them again.
 --   (ii) confirm: if that rollback PATCH itself failed, confirmed_at stayed set with no consent —
 --        the next click answered "You are subscribed" with zero consent rows.
--- One transaction per request removes all of it: every write lands or none does.
+-- One transaction per call removes all of it: the SUBMISSION row and its CONSENT rows land
+-- together or not at all. ⚠️ Not the whole request: the `form_submitted` ingest event, the
+-- resolved profile and the secondary identifier are written by forms.js BEFORE this call and
+-- outside it, so a rolled-back capture can still leave that event behind (S377 hostile review).
 -- Callers: forms.js handleFormSubmit -> rpc/form_capture, handleFormConfirm -> rpc/form_confirm.
 
 create or replace function comms.form_capture(

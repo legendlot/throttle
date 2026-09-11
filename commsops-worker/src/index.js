@@ -1093,12 +1093,13 @@ async function handlePost(body, auth, env) {
     case 'saveBot': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       const r = await BOTS.saveBot(env, body, auth.userId);
-      if (r.error === 'stale_draft') return err(r.error, 409, { current_updated_at: r.current_updated_at || null });
+      if (r.error === 'stale_draft' || r.error === 'reload_required') return err(r.error, 409, { current_updated_at: r.current_updated_at || null });
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'publishBot': {
       if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
-      const r = await BOTS.publishBot(env, body.id, auth.userId);
+      const r = await BOTS.publishBot(env, body.id, auth.userId, body.expected_updated_at);
+      if (r.error === 'stale_draft') return err(r.error, 409, { current_updated_at: r.current_updated_at || null });
       return r.ok ? ok(r) : err(r.error, r.error === 'invalid_definition' ? 422 : 400, r.errors ? { errors: r.errors } : undefined);
     }
     case 'pauseBot': case 'resumeBot': {

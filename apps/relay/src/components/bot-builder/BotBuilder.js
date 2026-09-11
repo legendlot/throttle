@@ -230,12 +230,15 @@ export default function BotBuilder() {
       } catch (e) {
         if (e?.status !== 409) { showToast(`Save failed: ${e?.message || 'unknown'}`, 'error'); return null; }
         setBusy(false);
+        // requireTyped: an unpublished draft has no history (bot_versions is written only on
+        // publish), so the overwrite is unrecoverable — a reflexive Enter must not do it.
         const overwrite = await confirm({
-          tone: 'warn',
+          tone: 'danger',
           title: 'Someone else saved this bot after you opened it',
-          lede: <>Saving now replaces <b>their</b> version with yours. Their edits are not merged.</>,
+          lede: <>Saving now replaces <b>their</b> version with yours. Their edits are not merged and cannot be recovered.</>,
           points: ['Pausing, resuming or publishing it also counts as a change.',
             'Cancel keeps your edits on screen and saves nothing — reload the bot to see their version.'],
+          requireTyped: 'OVERWRITE',
           confirmLabel: 'Overwrite with my version',
         });
         if (!overwrite) return null;
@@ -259,21 +262,29 @@ export default function BotBuilder() {
   // and not what the author had just tested (S372). A builder's Publish now saves the canvas
   // first. Someone who can activate but not build has a read-only canvas, so there is nothing
   // unsaved to lose and the saved draft is exactly what they see.
+  // expected_updated_at pins the publish to the draft we just saved (or, for an activator, the
+  // one on screen) — a colleague's save in between is refused, not frozen as ours (S377).
+  // ⚠️ workerFetch THROWS on any non-2xx, so refusals arrive in the catch: the 422 lint errors
+  // used to be read off the resolved value, which never happens — the banner never showed.
   async function publish() {
     let id = bot?.id;
+    let expected = bot?.updated_at;
     if (canBuild) {
       const saved = await save({ quiet: true });
       if (!saved) return;
-      id = saved.id;
+      id = saved.id; expected = saved.updated_at;
     }
     if (!id) { showToast('Save the draft first', 'error'); return; }
     setBusy(true); setPublishErrors(null);
     try {
-      const r = await workerFetch('publishBot', { id }, session);
+      const r = await workerFetch('publishBot', { id, expected_updated_at: expected || undefined }, session);
       const d = r?.data || r;
       if (d?.bot) { setBot((b) => ({ ...b, ...d.bot })); showToast(`Published v${d.version} — live`); load(); }
-      else if (d?.errors || r?.errors) setPublishErrors(d?.errors || r?.errors);
       else showToast(`Publish failed: ${r?.error || d?.error || 'unknown'}`, 'error');
+    } catch (e) {
+      if (e?.detail?.errors) setPublishErrors(e.detail.errors);
+      else if (e?.status === 409) showToast('Someone saved this bot just now — nothing was published. Reload it and review their changes first.', 'error');
+      else showToast(`Publish failed: ${e?.message || 'unknown'}`, 'error');
     } finally { setBusy(false); }
   }
 
@@ -283,7 +294,8 @@ export default function BotBuilder() {
       const r = await workerFetch(next === 'paused' ? 'pauseBot' : 'resumeBot', { id: bot.id }, session);
       const d = r?.data?.bot || r?.bot;
       if (d) { setBot((b) => ({ ...b, ...d })); showToast(next === 'paused' ? 'Paused — the widget shows the away message' : 'Active'); load(); }
-    } finally { setBusy(false); }
+    } catch (e) { showToast(`Failed: ${e?.message || 'unknown'}`, 'error'); }
+    finally { setBusy(false); }
   }
 
   // Only a PUBLISHED, ACTIVE shared flow can be jumped into — an unpublished one has no
@@ -419,7 +431,9 @@ function BotSettings({ bot, setBot, sharedBots, canActivate, session, showToast 
   // Rollout is a SEPARATE action (activate tier) — saveBot strips mode/pilot_numbers
   // from config on purpose, so a build-only user can never widen the audience.
   async function saveMode() {
-    const r = await workerFetch('setBotMode', { id: bot.id, mode, pilot_numbers: nums.split(/[,\s]+/).filter(Boolean) }, session);
+    let r;
+    try { r = await workerFetch('setBotMode', { id: bot.id, mode, pilot_numbers: nums.split(/[,\s]+/).filter(Boolean) }, session); }
+    catch (e) { showToast(`Failed: ${e?.message || 'unknown'}`, 'error'); return; }
     const d = r?.data?.bot || r?.bot;
     // Carry updated_at too: saves are compare-and-swap on it, so dropping it here would make
     // the author's own next Save look like someone else's change.

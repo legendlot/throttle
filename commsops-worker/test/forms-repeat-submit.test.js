@@ -88,7 +88,7 @@ const submitBoth = () => handleFormSubmit(ENV,
   // ⭐ 0073 (e), the half the old read-then-act check could never close: two simultaneous FIRST
   // submits both read "nothing on file" and both wrote consent. The unique index + row lock now
   // serialise them: one inserts, the other is a repeat.
-  await t('two concurrent FIRST submits write ONE submission and ONE consent row', async () => {
+  await t('two back-to-back FIRST submits write ONE submission and ONE consent row (sequential in the fake — true concurrency is Postgres ON CONFLICT + FOR UPDATE, 0073, untested here)', async () => {
     const d = db({ existing: false });
     const [r1, r2] = await Promise.all([submit(), submit()]);
     assert.equal(d.submissions.length, 1);

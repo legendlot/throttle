@@ -56,11 +56,14 @@ function sameInstant(a, b) {
 // which saves the canvas first — silently overwrite a colleague's newer draft (S372 hostile
 // review). The builder echoes the updated_at it loaded; a mismatch is refused as `stale_draft`
 // unless the author confirmed the overwrite (`force`). The PATCH also filters on the updated_at
-// we just read, so a save landing between our read and our write is caught too. A request with
-// no expected_updated_at (a cached pre-fix bundle) keeps the old last-write-wins behaviour.
+// we just read, so a save landing between our read and our write is caught too.
+// ⚠️ An update with NO expected_updated_at is REFUSED (`reload_required`), not waved through:
+// that is a tab still running the pre-S377 bundle — exactly the stale tab this guards against
+// (S377 hostile review). Only a new bot (no id) or a confirmed `force` skips the check.
 async function saveBot(env, { id, name, draft_definition, config, channel, expected_updated_at, force }, userId) {
   const existing = id ? await getBot(env, id) : null;
   if (id && !existing?.ok) return existing;
+  if (id && !expected_updated_at && !force) return { ok: false, error: 'reload_required' };
   const guarded = !!(id && expected_updated_at && !force);
   if (guarded && !sameInstant(existing.bot.updated_at, expected_updated_at)) {
     return { ok: false, error: 'stale_draft', current_updated_at: existing.bot.updated_at };
@@ -78,9 +81,16 @@ async function saveBot(env, { id, name, draft_definition, config, channel, expec
   return bot ? { ok: true, bot } : { ok: false, error: 'save_failed', detail: r.data };
 }
 
-async function publishBot(env, id, userId) {
+// `expected_updated_at` (S377 hostile review): Publish freezes whatever draft is CURRENT, so a
+// colleague's save landing between the author's save and this call would ship as the author's
+// version — a draft they never saw or tested. The builder passes the updated_at its own save
+// returned; a mismatch is refused before anything is frozen.
+async function publishBot(env, id, userId, expected_updated_at) {
   const cur = await getBot(env, id);
   if (!cur.ok) return cur;
+  if (expected_updated_at && !sameInstant(cur.bot.updated_at, expected_updated_at)) {
+    return { ok: false, error: 'stale_draft', current_updated_at: cur.bot.updated_at };
+  }
   const sh = await A.sbComms('/rest/v1/bots?channel=eq.shared&status=eq.active&active_version=not.is.null&select=id', env);
   if (!sh.ok) return { ok: false, error: 'shared_lookup_failed' };
   const sharedIds = new Set(sh.data.map((b) => b.id));
