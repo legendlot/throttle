@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.20.1] - 2026-09-11
+### Changed
+- Sales Partners: unticking "Not GST-registered" (or entering a real GSTIN) removes the not-registered note.
+
 ## [1.20.0] - 2026-09-11
 ### Added
 - Sales Orders: **Export + lines** (one row per line item) and a Partner PO Ref column on the order export.
