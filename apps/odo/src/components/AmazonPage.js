@@ -319,7 +319,10 @@ export default function AmazonPage() {
             <Kpi hue={HUE.gross} lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
             <Kpi hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
             <Kpi hue={HUE.gross} lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
-            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)} sub="gross / order · excl. cancelled + replacements" now={seg.aov} prev={segP.aov} />
+            {/* Both bases, like Total Sales (Akshay, #bugs 1786525117.211259, 2026-09-11). */}
+            <Kpi hue={HUE.derived} lbl="AOV" val={inr(seg.aov)}
+                 sub={`incl-GST · ${inr(seg.aovExGst)} ex-GST · excl. cancelled + replacements`}
+                 now={seg.aov} prev={segP.aov} />
             <Kpi hue={HUE.cancel} lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · orders, not units`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
             <Kpi hue={HUE.returns} lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
             {/* Units-primary to match RTV (Akshay, #bugs 2026-08-26 1787741218) — both tiles now

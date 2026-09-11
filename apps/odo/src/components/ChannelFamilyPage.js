@@ -175,7 +175,7 @@ export default function ChannelFamilyPage({ familyKey }) {
                 <Kpi dense hue={HUE.primary} lbl="Total Sales" val={inr(segA.grossAll)} sub="gross revenue" now={segA.grossAll} prev={segP.grossAll} />
                 <Kpi dense hue={HUE.gross} lbl="Net Sales" val={inr(segA.netCancel)} sub="excl. cancellations" now={segA.netCancel} prev={segP.netCancel} />
                 <Kpi dense hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(segA.netExGst)} sub="after disc · returns · GST" now={segA.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={segA.settledPct} />} />
-                <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(segA.aov)} sub="gross / order · excl. replacements" now={segA.aov} prev={segP.aov} />
+                <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(segA.aov)} sub={`incl-GST · ${inr(segA.aovExGst)} ex-GST · excl. replacements`} now={segA.aov} prev={segP.aov} />
                 <Kpi dense hue={HUE.cancel} lbl="Cancellations" val={`${fmtInt(segA.cancelledOrders)} · ${segA.cancelRate.toFixed(1)}%`} sub={inr(segA.cancelledValue)} now={segA.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
                 <Kpi dense hue={HUE.returns} lbl="Returns" val={`${fmtInt(segA.returnsCount)} · ${inr(segA.returnsValue)}`} sub="refund value" now={segA.returnsValue} prev={segP.returnsValue} tone="neutral" />
                 <Kpi dense hue={HUE.neutral} lbl="Total Discounts" val={inr(segA.discount)} sub="discount given" now={segA.discount} prev={segP.discount} tone="neutral" />

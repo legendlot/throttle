@@ -13,7 +13,7 @@
   <tbody>
     <tr><td>Total Orders</td><td><strong>Orders.</strong> Non-cancelled, with free replacements removed.</td></tr>
     <tr><td>Units</td><td><strong>Units.</strong> The quantity across the lines on those orders.</td></tr>
-    <tr><td>AOV</td><td><strong>Gross &divide; orders.</strong> Not net, and not per unit.</td></tr>
+    <tr><td>AOV</td><td><strong>Gross &divide; orders.</strong> Not net, and not per unit. Shown including GST, with the ex-GST figure on the line beneath.</td></tr>
     <tr><td>Cancelled</td><td><strong>Orders.</strong> See the warning below.</td></tr>
     <tr><td>Returns</td><td>Return events, with their own value.</td></tr>
   </tbody>
@@ -29,3 +29,7 @@
 
 <h2 class="sec">Why AOV uses gross rather than net</h2>
 <p>AOV is a basket-size measure: it answers "how much does a typical customer put in the cart?". That question is about the order as placed, before we net off returns that happen weeks later and before tax is stripped. Using net would mix a basket question with a settlement question and make the trend hard to read.</p>
+
+<h2 class="sec">AOV with and without GST</h2>
+<p>The big number on the AOV tile <strong>includes GST</strong>, because that is what the customer paid and what the e-commerce team reconciles against. The line underneath gives the <strong>same basket without GST</strong>: the same orders and the same value, with only the tax taken out. It is the same pattern as the Total Sales tile on the Amazon page.</p>
+<p>The tax is taken out at each product's real rate where the channel tells us the tax on each order, so a 5% L.O.T Build basket is not stripped as if it were 18%. On Amazon, where the exact tax arrives weeks late, it is a flat 18%.</p>

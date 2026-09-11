@@ -79,6 +79,28 @@ test('settledPct dips on a partially captured day (the badge stays a signal)', (
   assert.ok(a.settledPct !== null && a.settledPct < 5, `settledPct should be ~0, got ${a.settledPct}`);
 });
 
+// Ex-GST AOV (Akshay, #bugs 1786525117.211259, 2026-09-11): the SAME basket as `aov`, GST stripped
+// at each row's own rate — so it must equal aov/1.18 on Amazon, and must NOT over-strip a 5% line.
+test('aovExGst: Amazon (flat) is exactly aov / 1.18, discount or not', () => {
+  const a = aggOrders([
+    { channel_id: 'amz', adapter_kind: 'amazon_spapi', gross: 1000, discount: 50, tax_ingest: 0, returns_value: 0, orders: 2 },
+    { channel_id: 'amz', adapter_kind: 'amazon_spapi', gross: 2540, discount: 0, tax_ingest: 0, returns_value: 0, orders: 3, replacement_orders: 1 },
+  ]);
+  near(a.aov, 3540 / 4, 'aov denominator excludes the replacement');
+  near(a.aovExGst, a.aov / (1 + GST_RATE), 'flat strip');
+});
+
+test('aovExGst: a 5% line strips at 5%, not 18%', () => {
+  const a = aggOrders([{ channel_id: 'gt', adapter_kind: 'snorkel_internal', gross: 1050, discount: 0, tax_ingest: 50, returns_value: 0, orders: 1 }]);
+  near(a.aovExGst, 1000, 'exact 5%');
+  assert.ok(a.aovExGst > a.aov / (1 + GST_RATE), 'higher than a flat strip');
+});
+
+test('aovExGst: zero orders and a zero-base row are 0 / flat, never NaN', () => {
+  assert.equal(aggOrders([]).aovExGst, 0);
+  near(aggOrders([{ channel_id: 'web', adapter_kind: 'shopify', gross: 118, discount: 118, tax_ingest: 0, returns_value: 0, orders: 1 }]).aovExGst, 100, 'base 0 → flat on gross');
+});
+
 test('hybridHeadline still composes order-grain + product-grain', () => {
   const h = hybridHeadline(
     [{ channel_id: 'web', adapter_kind: 'shopify', gross: 1180, discount: 0, tax: 180, tax_ingest: 180, returns_value: 0, orders: 1 }],

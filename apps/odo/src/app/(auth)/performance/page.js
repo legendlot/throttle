@@ -104,7 +104,7 @@ export default function PerformancePage() {
             <Kpi dense hue={HUE.primary} lbl="Total Sales" val={inr(a.grossAll)} sub="gross revenue" now={a.grossAll} prev={p.grossAll} />
             <Kpi dense hue={HUE.gross} lbl="Net Sales" val={inr(a.netCancel)} sub="excl. cancellations" now={a.netCancel} prev={p.netCancel} />
             <Kpi dense hue={HUE.units} lbl="Net Revenue (ex-GST)" val={inr(a.netExGst)} sub="after disc · returns · GST" now={a.netExGst} prev={p.netExGst} badge={<SettledBadge pct={a.settledPct} />} />
-            <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(a.aov)} sub="gross / order · excl. replacements" now={a.aov} prev={p.aov} />
+            <Kpi dense hue={HUE.derived} lbl="AOV" val={inr(a.aov)} sub={`incl-GST · ${inr(a.aovExGst)} ex-GST · excl. replacements`} now={a.aov} prev={p.aov} />
             <Kpi dense hue={HUE.cancel} lbl="Cancellations" val={`${fmtInt(a.cancelledOrders)} · ${a.cancelRate.toFixed(1)}%`} sub={inr(a.cancelledValue)} now={a.cancelledOrders} prev={p.cancelledOrders} tone="neutral" />
             <Kpi dense hue={HUE.returns} lbl="Returns" val={`${fmtInt(a.returnsCount)} · ${inr(a.returnsValue)}`} sub="refund value" now={a.returnsValue} prev={p.returnsValue} tone="neutral" />
             <Kpi dense hue={HUE.neutral} lbl="Total Discounts" val={inr(a.discount)} sub="discount given" now={a.discount} prev={p.discount} tone="neutral" />

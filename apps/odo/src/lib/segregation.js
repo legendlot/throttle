@@ -59,10 +59,16 @@ export function rowGst(r) {
 // Single definition shared by /performance and the Channels family pages.
 export function aggOrders(rows) {
   const a = { gross: 0, cancelledValue: 0, discount: 0, tax: 0, orders: 0, cancelledOrders: 0,
-              returnsCount: 0, returnsValue: 0, repl: 0, infl: 0, repair: 0, gstRows: 0 };
+              returnsCount: 0, returnsValue: 0, repl: 0, infl: 0, repair: 0, gstRows: 0, grossExGst: 0 };
   for (const r of (rows || [])) {
-    a.gstRows += rowGst(r);
-    a.gross += Number(r.gross || 0);
+    const g = rowGst(r);
+    a.gstRows += g;
+    // `gross` stripped at THIS row's own GST share (`rowGst` ÷ its post-discount base) — exact where
+    // the channel stages GST at ingest, flat 18% on Amazon — so a 5% line is not over-stripped.
+    // Feeds `aovExGst` only; it is NOT a ladder rung (gross is pre-discount, net is not).
+    const gr = Number(r.gross || 0), base = gr - Number(r.discount || 0);
+    a.grossExGst += gr * (1 - (base > 0 ? g / base : GST_RATE / (1 + GST_RATE)));
+    a.gross += gr;
     a.cancelledValue += Number(r.cancelled_value || 0);
     a.discount += Number(r.discount || 0);
     a.tax += Number(r.tax || 0);
@@ -111,6 +117,9 @@ export function aggOrders(rows) {
   // size. Dividing all-in gross by all-in orders understated Amazon's June AOV as ₹1,532 against
   // Amazon's own ₹1,953, purely because ~22% of Amazon orders cancel and carry ~no value.
   a.aov = a.orders ? a.gross / a.orders : 0;
+  // The same basket ex-GST, shown beside the tax-incl AOV (Akshay, #bugs 1786525117.211259,
+  // 2026-09-11: "keep both values separately"). AOV itself stays tax-incl — decisions §S364d.
+  a.aovExGst = a.orders ? a.grossExGst / a.orders : 0;
   // Cancel rate uses the same replacement-free basis as the count above it, so the two tiles agree.
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
   return a;
