@@ -368,7 +368,13 @@ function ProcessPage() {
                         <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{u.return_unit_id}</td>
                         <td style={tableTdStyle}>{[u.product, u.model, u.color].filter(Boolean).join(' ') || <span style={{ color: 'var(--t3)' }}>—</span>}</td>
                         <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>
-                          {u.car_upc ? u.car_upc : legacy ? <span style={{ color: '#ffaa33' }}>legacy — relabel</span> : <span style={{ color: 'var(--t3)' }}>—</span>}
+                          {/* A loose remote (S375 sticker adoption) has no car_upc but is fully
+                              identified by its own label — show that rather than an em-dash, which
+                              read as "nothing scanned" on the very row the operator just scanned. */}
+                          {u.car_upc ? u.car_upc
+                            : legacy ? <span style={{ color: '#ffaa33' }}>legacy — relabel</span>
+                            : u.remote_upc ? u.remote_upc
+                            : <span style={{ color: 'var(--t3)' }}>—</span>}
                           {u.remote_upc && <span style={{ color: 'var(--t3)' }}> +R</span>}
                           {u.is_switcheroo && <span style={{ color: '#ff7070' }}> · switch</span>}
                         </td>
