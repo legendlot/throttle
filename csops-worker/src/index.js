@@ -25,6 +25,7 @@ import {
 } from './telephony/exotel-poller.js';
 import { igAccessToken, refreshIgToken } from './meta-token.js';
 import { partitionBySupport } from './ticket-thread.js';
+import { intParam } from './params.js';
 import { botOutboundRows, botThreadPatch, declinedTurnPatch, railLive, BOT_RAIL_TTL_MS } from './bot-forward.js';
 import { isUniqueViolation, adoptNumberlessThread } from './thread-adopt.js';
 import { makeCallContext } from './telephony/call-context.js';
@@ -1071,8 +1072,8 @@ async function handlePost(action, body, auth, env, request) {
 async function getTickets(params, auth, env) {
   const tab = params.get('tab') || 'open';
   const search = (params.get('search') || '').trim();
-  const limit = Math.min(parseInt(params.get('limit') || '50'), 200);
-  const offset = parseInt(params.get('offset') || '0');
+  const limit = intParam(params, 'limit', 50, { min: 1, max: 200 });
+  const offset = intParam(params, 'offset', 0);
 
   const filters = [];
 
@@ -4909,8 +4910,8 @@ async function setCsRole(body, auth, env) {
 
 async function getCalls(params, auth, env) {
   const tab = params.get('tab') || 'all';
-  const limit = Math.min(parseInt(params.get('limit') || '50'), 200);
-  const offset = parseInt(params.get('offset') || '0');
+  const limit = intParam(params, 'limit', 50, { min: 1, max: 200 });
+  const offset = intParam(params, 'offset', 0);
   const direction = params.get('direction');
   const status = params.get('status');
   const account = params.get('account');   // slug
