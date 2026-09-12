@@ -91,7 +91,15 @@ function normDisp(d) {
   if (up === 'WKS_REPAIR') return 'CXR';
   return d;
 }
-const isLegacyPending = (u) => !u.car_upc && (u.intake_source === 'scanner' || /legacy/i.test(u.notes || ''));
+// "Awaiting relabel" means the scan resolved NO LOT unit at all — not merely "no car_upc".
+// ⛔ `!car_upc` alone was wrong from the moment S375 shipped sticker adoption (Piyush, #bugs
+// 1789121050): a loose REMOTE adopted from a spare pool sticker legitimately carries
+// `car_upc = NULL` with a real `remote_upc`, and one sticker = one item, so it is never paired
+// to a car here. Such a row is fully labelled and was being shown "legacy — relabel", offered a
+// Relabel button that would mint a SECOND car+remote pair over it, and pushed into the full
+// modal instead of quick disposition. 19 rows, 3 of them live in open shipments (measured
+// 2026-09-12). The mirror of this predicate is the shipment-close guard in worker.js.
+const isLegacyPending = (u) => !u.car_upc && !u.remote_upc && (u.intake_source === 'scanner' || /legacy/i.test(u.notes || ''));
 
 export default function ProcessPageWrapper() {
   return (
