@@ -536,7 +536,13 @@ function DispositionModal({ unit, products, productsLoading, busy, onClose, onSu
           <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={busy} />
         </div>
 
-        {disp && disp !== 'Loss' && unit.remote_upc && (
+        {/* ⛔ `unit.car_upc &&` is load-bearing — this is the TWIN of the `+R` bug fixed above, and
+            the same-session grep missed it 155 lines away. Both lines gated on `remote_upc` alone,
+            but a loose remote (S375 sticker adoption, one sticker = one item) has NO pairing at
+            all — `reference/decisions.md` §spare-sticker. Without this guard both sentences below
+            are false on all 50 live loose-remote rows: one promises a pairing is kept, the other
+            that it will be broken and re-made. */}
+        {disp && disp !== 'Loss' && unit.remote_upc && unit.car_upc && (
           <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 10, fontFamily: 'var(--mono)' }}>
             {disp === 'UDR' ? 'UDR keeps its car↔remote pairing (sealed box).' : 'Car↔remote pairing will be broken (kept as history) and re-made at repair QC PASS.'}
           </div>
