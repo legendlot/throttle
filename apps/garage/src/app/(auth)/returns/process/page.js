@@ -373,9 +373,15 @@ function ProcessPage() {
                               read as "nothing scanned" on the very row the operator just scanned. */}
                           {u.car_upc ? u.car_upc
                             : legacy ? <span style={{ color: '#ffaa33' }}>legacy — relabel</span>
-                            : u.remote_upc ? u.remote_upc
+                            : u.remote_upc ? <span>remote {u.remote_upc}</span>
                             : <span style={{ color: 'var(--t3)' }}>—</span>}
-                          {u.remote_upc && <span style={{ color: 'var(--t3)' }}> +R</span>}
+                          {/* ⛔ `+R` means "a remote is paired to this CAR". On a loose-remote row
+                              the number already IS the remote, so appending it rendered
+                              `LOT-00186988 +R` — byte-identical to a car of that number with a
+                              remote attached, i.e. an operator would read the remote's label as the
+                              car's. Caught by the S379 hostile review; the "remote" prefix above and
+                              this guard are one fix, don't split them. */}
+                          {u.remote_upc && u.car_upc && <span style={{ color: 'var(--t3)' }}> +R</span>}
                           {u.is_switcheroo && <span style={{ color: '#ff7070' }}> · switch</span>}
                         </td>
                         <td style={tableTdStyle}>
