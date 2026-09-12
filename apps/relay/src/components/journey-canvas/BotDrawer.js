@@ -139,10 +139,21 @@ export default function BotDrawer({ nodeId, config, onChange, onDelete, onDuplic
       )}
 
       {c.type === 'handoff' && (
+        <>
+        {/* The engine has ALWAYS read `step.text || HANDOFF_DEFAULT` (bot-engine.js:80) — the
+            message was never hardcoded in the engine, this editor just never exposed the field,
+            so every bot fell through to the default and looked hardcoded to the author.
+            Pruthvi, #bugs 1789201643. Mirrors the `end` step's optional-text field below. */}
+        <Field label="Handoff text (optional)">
+          <textarea className="f-inp" rows={2} value={c.text || ''} disabled={readOnly}
+            onChange={(e) => set({ text: e.target.value })}
+            placeholder="Let me connect you to our support team — a human will reply right here as soon as one is available." />
+        </Field>
         <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>
           Ends the bot&rsquo;s part and places the conversation in the Pitstop inbox. The bot never
-          speaks again in this conversation.
+          speaks again in this conversation. Leave the text empty to use the wording shown above.
         </div>
+        </>
       )}
 
       {c.type === 'end' && (
