@@ -450,9 +450,14 @@ export default function PlannerPage() {
       if (q <= 0) return Promise.resolve({ parts: [] });
       return garageFetch('checkRunBomStock', {
         product: line.product, variant: v.variant || '', colour: v.colour || '', qty: q,
-      }, session).catch(() => ({ parts: [] }));
+      }, session).catch(e => ({ parts: [], error: e?.message || 'Stock check failed' }));
+      // ⚠️ A failed check is an ERROR on the line, never "no shortages" (S383 hostile review).
     });
     Promise.all(calls).then(results => {
+      const error = results.find(r => r?.error)?.error || null;
+      // The worker resolves the BOM by run FORMAT (S383): the product's default unless told
+      // otherwise. Name what it assumed so the planner is never reading a CKD list for an FBU run.
+      const formats = [...new Set(results.map(r => r?.bom_format).filter(Boolean))];
       // Aggregate by part_code: sum required across variants, take min available
       const merged = {};
       for (const res of results) {
@@ -471,7 +476,7 @@ export default function PlannerPage() {
       const short = Object.values(merged)
         .filter(p => p.available < p.required)
         .sort((a, b) => (b.required - b.available) - (a.required - a.available));
-      setStockWarnings(prev => ({ ...prev, [line.id]: { loading: false, short } }));
+      setStockWarnings(prev => ({ ...prev, [line.id]: { loading: false, short, error, formats } }));
     });
   }
 
@@ -1400,10 +1405,23 @@ export default function PlannerPage() {
                             })}
                           </div>
 
+                          {stockWarnings[line.id]?.error && (
+                            <div style={{
+                              marginTop: 6, marginLeft: 16, padding: '5px 9px',
+                              background: 'var(--bad-bg, var(--warn-bg))', border: '1px solid var(--bad-bd, var(--warn-bd))',
+                              borderRadius: 'var(--r-xs)', fontSize: 11, color: 'var(--bad-fg, var(--red))',
+                              display: 'flex', alignItems: 'flex-start', gap: 6,
+                            }}>
+                              <Icon name="alert" size={12} style={{ marginTop: 1 }} />
+                              <span>Stock check failed — {stockWarnings[line.id].error}. Shortages unknown for this line.</span>
+                            </div>
+                          )}
+
                           {stockWarnings[line.id]?.short?.length > 0 && (() => {
                             const shortList = stockWarnings[line.id].short;
                             const head = shortList.slice(0, 3);
                             const moreCount = shortList.length - head.length;
+                            const fmt = (stockWarnings[line.id].formats || []).join('/');
                             return (
                               <div style={{
                                 marginTop: 6, marginLeft: 16,
@@ -1418,7 +1436,7 @@ export default function PlannerPage() {
                                 <Icon name="alert" size={12} style={{ marginTop: 1 }} />
                                 <span>Stock short: {head.map(p =>
                                   `${p.part_name || p.part_code} (need ${p.required}, have ${p.available})`
-                                ).join(' · ')}{moreCount > 0 ? ` · +${moreCount} more` : ''}</span>
+                                ).join(' · ')}{moreCount > 0 ? ` · +${moreCount} more` : ''}{fmt ? ` — checked as ${fmt} kit` : ''}</span>
                               </div>
                             );
                           })()}

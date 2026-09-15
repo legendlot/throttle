@@ -24,12 +24,16 @@ export function CoveragePanel({ product, qty, variant = '', colour = '', session
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [showAll, setShowAll] = useState(false);
+  // Issue format the check assumes (S383). '' = the product's registered default; the worker
+  // resolves the BOM through the pick list's own predicate and reports what it used.
+  const [issueMode, setIssueMode] = useState('');
 
   async function check() {
     if (!product || !qty) return;
     setBusy(true); setErr(null);
     try {
-      const r = await garageFetch('getPartCoverage', { product, qty, variant, colour }, session);
+      const r = await garageFetch('getPartCoverage',
+        { product, qty, variant, colour, ...(issueMode ? { issue_mode: issueMode } : {}) }, session);
       setCov(r); setShowAll(false);
     } catch (e) { setErr(e.message || 'Coverage check failed'); }
     finally { setBusy(false); }
@@ -45,6 +49,13 @@ export function CoveragePanel({ product, qty, variant = '', colour = '', session
     <div style={{ marginBottom: 18, border: '1px solid var(--border)', borderRadius: 10, padding: 14, background: 'var(--surface-2)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <span className="eyebrow" style={{ fontSize: 11, letterSpacing: '.06em', color: 'var(--t4)' }}>Coverage check · {product || '—'}{qty ? ` × ${num(qty)}` : ''}</span>
+        <select value={issueMode} onChange={e => setIssueMode(e.target.value)} title="Issue format the check assumes"
+          style={{ fontSize: 11.5, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-3)', color: 'var(--t1)' }}>
+          <option value="">Product default</option>
+          <option value="components">CKD kit</option>
+          <option value="fbu">FBU (built unit)</option>
+          <option value="skd">SKD</option>
+        </select>
         <button onClick={check} disabled={!canCheck || busy}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 8,
                    border: '1px solid var(--border-2)', background: 'var(--surface-3)', color: 'var(--t1)',
@@ -57,6 +68,11 @@ export function CoveragePanel({ product, qty, variant = '', colour = '', session
 
       {cov && !err && (
         <div style={{ marginTop: 12 }}>
+          {cov.bom_format && (
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 6 }}>
+              Checked as <b style={{ color: 'var(--t1)' }}>{cov.bom_format}</b>{cov.format_source === 'caller' ? ' (your choice)' : cov.format_source === 'default' ? ' (no registered format — CKD assumed)' : ' (product default)'}
+            </div>
+          )}
           {/* Headline */}
           {s.blockers === 0 && s.fully_inbound === 0
             ? <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>✓ All {num(s.total)} tracked parts covered</div>
