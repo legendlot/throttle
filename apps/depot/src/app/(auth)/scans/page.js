@@ -18,6 +18,21 @@ import { useScans } from '../../../hooks/useScans.js';
 import { useRefreshState } from '../layout.js';
 
 // ── Date helpers (IST-anchored, derived from istToday()) ──────
+// Courier-label (AWB) shapes — THE SCANNER'S OWN `looksLikeAwb()` (02_scanner/index.html), the
+// only thing that can write `dispatch_boxes.awb`; mirrored in 01_worker/lib/channel.js. Widened
+// per shape 2026-09-15 (S383, decisions §S383b), never to "any alphanumeric".
+// ⚠️ ONE PREDICATE IN THREE REPOS — keep byte-identical (watchboard [depot]).
+const AWB_SHAPES = [
+  /^[0-9]{10,18}$/,
+  /^SF[0-9]{10,16}[A-Z]{2,4}$/i,
+  /^[A-Z]{2,4}[0-9]{10,12}$/i,
+  /^[0-9]{1,2}[A-Z][0-9]{8,10}$/i,
+  /^[0-9]{4}_[A-Z]{2}\/[0-9]{2}-[0-9]{7}$/i,
+];
+function looksLikeAwb(code) {
+  const c = String(code || '').trim();
+  return AWB_SHAPES.some(re => re.test(c));
+}
 function dFromISO(iso) { return new Date(iso + 'T00:00:00'); }
 function isoOf(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0]; }
 function getMondayISO() {
@@ -262,15 +277,15 @@ export default function ScanFeedPage() {
         ) : displayRows.length === 0 ? (
           <div style={{ padding: '36px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--t3)' }}>
             <Icon name="scan" size={20} />
-            {/* A 10–18 digit all-numeric search is an AWB — that window is the SCANNER's own
-                `looksLikeAwb()` (02_scanner/index.html:4281, /^[0-9]{10,18}$/), the only thing
-                that can write an awb. A UPC is LOT-<8 digits>, so they cannot collide.
+            {/* A search matching one of the AWB shapes is an AWB — `looksLikeAwb()` above is the
+                SCANNER's own predicate, the only thing that can write an awb (widened per shape
+                2026-09-15, S383). A UPC is LOT-<8 digits>, so they cannot collide.
                 ⚠️ This said 11–14 for four hours, measured off existing rows instead of the
                 producing gate, and a real 15-digit Xpressbees AWB fell straight through to the
                 generic "not found" — the very thing this copy exists to prevent.
                 AWBs are captured at PACK only from 2026-09-09, so a genuine no-match is
                 overwhelmingly "this box predates the capture", NOT "this AWB does not exist". */}
-            {upcMode && /^\d{10,18}$/.test(upcSearch.trim()) && baseRows.length === 0 ? (
+            {upcMode && looksLikeAwb(upcSearch) && baseRows.length === 0 ? (
               <>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No unit is linked to AWB {upcSearch.trim()}</span>
                 <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)', maxWidth: 420, textAlign: 'center' }}>
