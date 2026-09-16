@@ -84,8 +84,8 @@ export default function ProcurementOverviewPage() {
   const spend = useMemo(() => {
     const open = poRows.filter((p) => OPEN_PO_STATUSES.includes(p.status));
     const total = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
-    const china = open.filter((p) => p.source === 'China').reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
-    return { total, chinaPct: total ? Math.round((china / total) * 100) : 0 };
+    // No 'sourced China' % here (S385): China PO lines carry no unit_price, so it could only read 0.
+    return { total };
   }, [poRows]);
 
   // This page is the app's DEFAULT LANDING (src/app/page.js hard-redirects here), so a user
@@ -184,7 +184,6 @@ export default function ProcurementOverviewPage() {
           <Panel title="Open PO Value" pad>
             <div className="ov-stat-row" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
               <div><div className="ov-stat-v">{inrCompact(spend.total)}</div><div className="ov-stat-l">≈ INR, all open</div></div>
-              <div><div className="ov-stat-v" style={{ color: 'var(--blue-fg)' }}>{spend.chinaPct}<span>%</span></div><div className="ov-stat-l">sourced China</div></div>
             </div>
           </Panel>
           <Panel title="PO Pipeline" pad>

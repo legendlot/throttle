@@ -114,17 +114,18 @@ export default function POListPage() {
       .map(([name, code]) => ({ value: name, label: name, hint: code || undefined }));
   }, [rows, vendor]);
 
+  // ⛔ No "China share" tile (S385, Afshaan, 2026-09-16): China PO lines carry no unit_price
+  // (2 of 470 priced), so every China PO has po_value 0 and the share could only ever read 0%.
+  // Dropped rather than fixed — China line pricing lives in Manifest, not here.
   // Follows every filter (S374): built from `filteredRows`, not `rows`, so the tiles describe
   // the same set the table shows and the exports write. `To Inward` is a separate read
   // (getPendingInward) that links to Receiving — it does not follow these filters.
   const kpi = useMemo(() => {
     const open = filteredRows.filter((p) => OPEN_PO_STATUSES.includes(p.status));
     const openVal = open.reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
-    const chinaVal = open.filter((p) => p.source === 'China').reduce((s, p) => s + toInr(p.po_value, p.currency), 0);
     return {
       openVal,
       openCount: open.length,
-      chinaShare: openVal ? Math.round((chinaVal / openVal) * 100) : 0,
     };
   }, [filteredRows]);
 
@@ -271,11 +272,10 @@ export default function POListPage() {
           {perms?.po_create && <Btn kind="primary" onClick={() => router.push('/procurement/pos/new')}><Plus size={14} /> New PO</Btn>}
         </>} />
 
-      <div className="kpi-row">
+      <div className="kpi-row kpi-3">
         <Kpi label="Open value" value={kpi.openVal} sub="≈ INR, all open" tone="blue" format={(v) => inrCompact(v)} />
         <Kpi label="Open POs" value={kpi.openCount} sub="not yet closed" tone="yellow" />
         <Kpi label="To Inward" value={pendingInward} sub="confirmed · arriving" tone="green" onClick={() => router.push('/receiving')} />
-        <Kpi label="China share" value={kpi.chinaShare} sub="of open value" tone="blue" format={(v) => Math.round(v) + '%'} />
       </div>
 
       {truncation && (
