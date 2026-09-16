@@ -1,0 +1,37 @@
+<p class="lead">Some parts are <strong>bought</strong> in a bulk unit (a roll of shrink wrap, a packet, a box) but <strong>issued and costed</strong> by the piece. Purchase Units is where a buyer tells Snorkel what that bulk unit is and how many pieces it holds, so the part&rsquo;s per-piece cost can derive itself from the PO instead of being typed in by hand.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Bulk-unit &rarr; per-piece cost conversions.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Manage with permission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> (Raise PO)</div></div>
+  <div class="g-cell"><div class="g-lbl">Feeds</div><div class="g-val">Every part&rsquo;s stored per-piece cost.</div></div>
+</div>
+
+<h2 class="sec">What&rsquo;s on the list</h2>
+<p>The list holds every <strong>active</strong> part that has ever been bought on an India PO in a unit other than <strong>pcs</strong>, so a per-piece cost cannot yet derive for it. For each part you see the part code, name and category, every unit and price it has actually been bought at (with the PO number), its stored weight in grams if it has one, and its current cost.</p>
+
+<h2 class="sec">Setting the conversion</h2>
+<p>Type what the part is <strong>bought as</strong> (Roll, Packet, Box, whatever the vendor calls it) and <strong>how many pieces that one unit holds</strong>, then <strong>Save</strong>. The row shows a live preview of the per-piece cost as you type, worked out from the part&rsquo;s latest PO line. Once saved, that per-piece cost is what the rest of Snorkel reads as the part&rsquo;s unit cost, and it keeps re-deriving itself from PO history from then on: you are not typing a cost, you are telling the system how to work it out.</p>
+
+<div class="callout">
+  <div class="c-title">Worked example</div>
+  <p>Shrink Wrap 14&times;18 is bought as a <strong>Roll</strong> of <strong>2,200</strong> pieces. A PO priced at &#8377;5,040 per roll becomes <strong>&#8377;2.29</strong> per piece, and that is the figure everywhere else in Snorkel treats as this part&rsquo;s cost.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; kg is not set here</div>
+  <p>A part bought by weight (screws, for example) already converts through its <strong>stored weight per piece</strong>, so it never needs an entry on this screen and the Bought as / Pieces per unit fields stay blank for it. If a kg-derived cost looks wrong, the fix is a re-weigh of the part, not a row here.</p>
+</div>
+
+<div class="callout">
+  <div class="c-title">Set both fields, or clear both</div>
+  <p>A unit with no pieces count (or a count with no unit) does nothing, Snorkel asks you to set both or clear both before it will save.</p>
+</div>
+
+<h2 class="sec">Re-derive all costs</h2>
+<p>Use <strong>Re-derive all costs</strong> to re-run the derivation for every part against its full PO history in one pass, useful after a bulk edit or if something looks stale. Snorkel reports how many costs were <strong>applied</strong>, <strong>rejected</strong> or left <strong>unchanged</strong>. It never blanks a cost that already exists, and it refuses to write a value that looks like a bulk price wearing a per-piece label (a shrink-wrap roll priced at &#8377;390 landing as &#8377;390 per piece, say), those show up as rejected rather than silently overwriting a correct cost.</p>
+
+<div class="callout">
+  <div class="c-title">It also runs itself</div>
+  <p>Every time a PO is accepted, the same derivation runs automatically for the parts on that PO, so most costs stay current without a visit to this screen at all. Re-derive all costs is for catching up the rest, or checking nothing has drifted.</p>
+</div>

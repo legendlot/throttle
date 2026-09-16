@@ -64,6 +64,8 @@ export const NAV_GROUPS = [
     id: 'library', label: 'LIBRARY', icon: BookOpen,
     items: [
       { id: 'library-addresses', label: 'Addresses', route: '/library/addresses', icon: Building, requires: 'company_address_manage' },
+      // Roll/kg/Packet → pieces. Buyers set it (po_create), and unit_cost re-derives from it.
+      { id: 'library-purchase-units', label: 'Purchase Units', route: '/library/purchase-units', icon: Scale, requires: 'po_create' },
     ],
   },
   {

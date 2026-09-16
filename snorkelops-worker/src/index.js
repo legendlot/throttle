@@ -796,6 +796,103 @@ function resolveRequestLineTax(lines, master) {
 // syncHsnToMaster(plan, actor, role, poNumber, 'part'). Keyed on part_code — one row, no fan-out.
 const PART_HSN_OPTS = { key: 'part_code', gst: 'gst_percent', prevKey: 'part_code' };
 
+// ── Purchase units → per-piece cost (S385) ────────────────────
+// A part bought by the Roll / kg / Packet has no per-piece price until someone states how
+// many pieces one purchase unit holds. That conversion lives on material_master
+// (`purchase_uom` + `pieces_per_purchase_uom`); **kg is never stored as a conversion** — it
+// converts through `weight_per_unit_grams`, the single source of truth for part weight
+// (RULE-014), so a re-weigh flows through on the next derivation with no second edit.
+// ⚠️⚠️ These three are the worker's copy of the factor rules inside `store.derive_unit_costs`.
+// They drive the PAGE PREVIEW only — the SQL function decides what is actually written to
+// unit_cost. Change the two together, or the preview starts lying about the write.
+// test/purchase-units.test.mjs lifts this block out of the source.
+function normPurchaseUnit(u) { return String(u ?? '').trim().toLowerCase(); }
+
+// Pieces per one line unit, or null when the line is not convertible (→ not a candidate).
+// `part` carries weight_per_unit_grams / purchase_uom / pieces_per_purchase_uom; PostgREST
+// hands every numeric back as a STRING, so each one goes through Number() before the compare
+// (a bare `'0.1' > 0` is true but `'0.1' / 2` would be fine — `1000 / '0.1'` is not obvious
+// enough to leave to coercion).
+function piecesFactor(unit, part) {
+  const u = normPurchaseUnit(unit);
+  if (!u) return null;
+  if (u === 'pcs') return 1;
+  if (u === 'kg') {
+    const grams = Number(part?.weight_per_unit_grams);
+    return grams > 0 ? 1000 / grams : null;   // no weight → not convertible, never a guess
+  }
+  const uom = normPurchaseUnit(part?.purchase_uom);
+  const pieces = Number(part?.pieces_per_purchase_uom);
+  // ⛔ `pcs` and `kg` can never be a STORED conversion — pcs is already the piece and kg goes
+  // through the weight (RULE-014). derive_unit_costs v4 refuses both; so does this copy, or a
+  // stored `kg = 500` would preview a price the function will never write.
+  if (!uom || PURCHASE_UOM_RESERVED.includes(uom)) return null;
+  if (u === uom && Number.isFinite(pieces) && pieces > 0) return pieces;
+  return null;
+}
+const PURCHASE_UOM_RESERVED = ['pcs', 'kg'];
+// numeric(12,4) — anything past this is not a bigger number, it is a typo that the column
+// would reject (or, for Infinity, a JSON `null` that writes a half-set row).
+const MAX_PIECES_PER_UOM = 99999999.9999;
+function validPieces(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= MAX_PIECES_PER_UOM;
+}
+
+// Newest-first ordering over PO lines, matching the function's `po_at DESC NULLS LAST,
+// po_number DESC`. Timestamps go through Date.parse (an unparseable or absent one sorts LAST,
+// never first) and po_number compares byte-wise — `localeCompare` would order PO numbers by
+// the runtime's collation, which is not the database's.
+function byNewestPo(a, b) {
+  const ta = Date.parse(a?.created_at ?? ''), tb = Date.parse(b?.created_at ?? '');
+  const va = Number.isNaN(ta) ? null : ta,   vb = Number.isNaN(tb) ? null : tb;
+  if (va !== vb) {
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    return vb - va;
+  }
+  const pa = String(a?.po_number ?? ''), pb = String(b?.po_number ?? '');
+  return pa === pb ? 0 : (pa < pb ? 1 : -1);
+}
+
+// The line the derivation will actually price from: newest first, the FIRST line that is
+// convertible under this conversion — not simply the newest line. `UNV-PP-CLING-01` has a
+// newer `kg @220` line with no weight (dead end) and an older `roll @240`: stating Roll must
+// preview 240/N. `HW-SC-23-8`'s newest line is `pcs @0.35`, so it previews 0.35, not the
+// kg-through-weight 0.29 of its older line. Callers pass `units` already sorted newest-first.
+function pickConvertibleLine(units, part) {
+  for (const l of units || []) {
+    const factor = piecesFactor(l?.unit, part);
+    if (factor !== null) return { line: l, factor };
+  }
+  return null;
+}
+
+// Per-piece price for the preview. 4 dp, not 2: the honest values here are sub-rupee
+// (₹5,040 / 2,200 = ₹2.2909, a sticker is ₹0.0x) and 2 dp would preview ₹0.00.
+// ⚠️ The WRITTEN value is 2 dp — material_master.unit_cost is numeric(10,2) — so the page
+// labels the preview as such; the 4th decimal here is precision for the eye, not the column.
+function perPiecePreview(unitPrice, factor) {
+  const price = Number(unitPrice);
+  const f = Number(factor);
+  if (!(price > 0) || !(f > 0)) return null;
+  return Math.round((price / f) * 10000) / 10000;
+}
+
+// Reasons store.derive_unit_costs (v4) returns when it REFUSED a value it could compute.
+// `price_spread` is live today (VE-PP-01) and `sub_paisa` is v4's refusal to write 0.00 for a
+// candidate under ₹0.01 — both were being counted as "unchanged" before the S385 review.
+const DERIVE_REJECT_REASONS = ['category_absolute', 'family_outlier', 'mixed_moulds', 'price_spread', 'sub_paisa'];
+// ⚠️ v4 neither logs nor RETURNS a row for a part with no candidate PO line (the old `no_lines`
+// reason is gone), so the row count is the number of parts that HAD a priced line — never the
+// number asked for. A requested part that is absent simply has nothing to price from.
+function summariseDerivation(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const applied  = list.filter(r => r.applied).length;
+  const rejected = list.filter(r => !r.applied && DERIVE_REJECT_REASONS.includes(r.reason)).length;
+  return { applied, rejected, unchanged: list.length - applied - rejected, evaluated: list.length };
+}
+
 // Map shipment.status → sales-facing fulfilment label.
 function fulfilmentFromShipment(sh) {
   if (!sh) return 'not_dispatched';
@@ -2780,6 +2877,72 @@ export default {
             return ok(r.data);
           }
 
+          // ── Purchase units (LIBRARY → Purchase units, S385) ──
+          // Every ACTIVE part with at least one India, non-cancelled PO line priced in a unit
+          // that is not `pcs` — i.e. the parts whose per-piece cost cannot derive until a buyer
+          // states the conversion. Three batch reads, never a per-part await.
+          case 'listPurchaseUnits': {
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const poR = await query('purchase_orders',
+              `?source=eq.India&select=po_number,status,created_at,raised_date&limit=${PO_PAGE_LIMIT}`);
+            if (!poR.ok) return err('Failed to fetch POs: ' + JSON.stringify(poR.data));
+            const poById = new Map();
+            for (const p of poR.data || []) {
+              if (String(p.status || '').toLowerCase() === 'cancelled') continue;
+              poById.set(p.po_number, p);
+            }
+            const lR = await query('po_lines',
+              `?part_code=not.is.null&unit_price=gt.0&select=po_number,part_code,unit,unit_price&limit=${PO_LINES_PAGE_LIMIT}`);
+            if (!lR.ok) return err('Failed to fetch PO lines: ' + JSON.stringify(lR.data));
+            // part_code → unit → the LATEST line in that unit (latest PO wins: created_at, then
+            // po_number desc — the same tie-break store.derive_unit_costs uses).
+            // ⚠️ `pcs` lines are COLLECTED, not skipped: the function prices from the newest
+            // CONVERTIBLE line, and a pcs line is always convertible (HW-SC-23-8's newest line
+            // is pcs @0.35 — previewing its older kg line would show a price nothing writes).
+            // Only the POPULATION is non-pcs: a part every one of whose lines is pcs already
+            // has a per-piece price and has no conversion to state.
+            const seen = new Map(), hasNonPcs = new Set();
+            for (const l of lR.data || []) {
+              const po = poById.get(l.po_number);
+              if (!po) continue;                                   // not India, or cancelled
+              const u = normPurchaseUnit(l.unit);
+              if (!u) continue;
+              if (u !== 'pcs') hasNonPcs.add(l.part_code);
+              if (!seen.has(l.part_code)) seen.set(l.part_code, new Map());
+              const byUnit = seen.get(l.part_code);
+              const prev = byUnit.get(u);
+              const cand = { created_at: po.created_at, po_number: l.po_number };
+              if (prev && byNewestPo(cand, prev) >= 0) continue;   // keep the newer of the two
+              byUnit.set(u, {
+                unit: String(l.unit || '').trim(), unit_price: l.unit_price,
+                po_number: l.po_number, po_date: po.raised_date || po.created_at,
+                created_at: po.created_at,
+              });
+            }
+            // ⚠️ These codes come out of po_lines free text, so a `"` or `,` inside one would
+            // break OUT of the quoted in.() list and silently change the filter. Drop both —
+            // no real part_code contains either, and a code that did is better missing than
+            // turned into a different query.
+            const codes = [...hasNonPcs].map(c => String(c).replace(/["',]/g, '')).filter(Boolean);
+            if (!codes.length) return ok([]);
+            const mmR = await query('material_master',
+              `?part_code=in.(${codes.map(c => `"${c}"`).join(',')})&is_active=is.true` +
+              `&select=part_code,part_name,part_category,weight_per_unit_grams,purchase_uom,pieces_per_purchase_uom,unit_cost&order=part_code.asc`);
+            if (!mmR.ok) return err('Failed to fetch parts: ' + JSON.stringify(mmR.data));
+            return ok((mmR.data || []).map(m => {
+              const units = [...(seen.get(m.part_code) || new Map()).values()].sort(byNewestPo);
+              // Preview against the newest CONVERTIBLE line, which is the one derive_unit_costs
+              // will price from — not simply the newest line (see pickConvertibleLine).
+              const pick = pickConvertibleLine(units, m);
+              return {
+                ...m,
+                units_seen: units.map(({ created_at, ...u }) => u),
+                preview_per_piece: pick ? perPiecePreview(pick.line.unit_price, pick.factor) : null,
+                preview_unit: pick ? pick.line.unit : null,
+              };
+            }));
+          }
+
           case 'getVendorSuppliedItems': {
             const vendorCode = url.searchParams.get('vendor_code');
             if (!vendorCode) return err('vendor_code required');
@@ -3700,6 +3863,64 @@ export default {
             return ok({ updated: d.id });
           }
 
+          // ── Purchase units + unit_cost derivation (S385) ──
+          // The buyer states how many pieces one purchase unit holds; the cost then derives
+          // itself from PO history (decisions §"material_master.unit_cost is AUTOMATED").
+          // ⛔ The worker never computes unit_cost — store.derive_unit_costs does, with both
+          // contamination detectors. This handler only writes the conversion and re-runs it.
+          case 'setPurchaseUnit': {
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const d = body.data || {};
+            const partCode = String(d.part_code || '').trim();
+            if (!partCode) return err('part_code required', 400);
+            const uom = d.purchase_uom == null ? null : String(d.purchase_uom).trim();
+            const pieces = d.pieces_per_purchase_uom == null || d.pieces_per_purchase_uom === ''
+              ? null : Number(d.pieces_per_purchase_uom);
+            if (uom && uom.length > 20) return err('Bought-as unit must be 20 characters or fewer', 400);
+            // ⛔ `!(pieces > 0)` alone passes Infinity ('1e999' → Infinity), which JSON.stringify
+            // emits as `null` — the row would be written HALF-SET (unit stored, count blank) and
+            // convert nothing. Require a finite value inside numeric(12,4).
+            if (pieces !== null && !validPieces(pieces))
+              return err(`Pieces per unit must be a number greater than 0 and at most ${MAX_PIECES_PER_UOM}`, 400);
+            // pcs is already the piece; kg converts through weight (RULE-014). derive_unit_costs
+            // refuses both as a stored conversion, so storing one would only ever mislead.
+            if (uom && PURCHASE_UOM_RESERVED.includes(normPurchaseUnit(uom)))
+              return err('pcs and kg cannot be a purchase unit — pcs is already the piece, and kg converts through the part weight. Set the part weight instead.', 400);
+            // Both or neither: a unit with no count converts nothing, and a count with no unit
+            // can never match a line. Clearing both is how a buyer undoes a wrong conversion.
+            if ((uom ? 1 : 0) !== (pieces !== null ? 1 : 0))
+              return err('Set both the purchase unit and the pieces per unit, or clear both', 400);
+            const cur = await query('material_master', `?part_code=eq.${encodeURIComponent(partCode)}&select=part_code&limit=1`);
+            if (!cur.ok || !cur.data?.[0]) return err('Part not found', 404);
+            const upd = await update('material_master',
+              { purchase_uom: uom || null, pieces_per_purchase_uom: pieces, updated_at: new Date().toISOString() },
+              `part_code=eq.${encodeURIComponent(partCode)}`);
+            if (!upd.ok) return err('Update failed: ' + JSON.stringify(upd.data));
+            await logActivity(authResult?.fullName || postRole, postRole, 'PURCHASE_UOM_SET', 'PART', partCode,
+              uom ? `${partCode} bought as ${uom} = ${pieces} pcs` : `${partCode} purchase-unit conversion cleared`,
+              { purchase_uom: uom || null, pieces_per_purchase_uom: pieces });
+            // Re-derive this one part immediately so the buyer sees the cost their edit produced.
+            // ⚠️ v4 returns NO row for a part with no candidate PO line, so `derivation: null`
+            // means "nothing to price from", not "failed" — the page says so.
+            const dr = await rpc('derive_unit_costs', { p_part_codes: [partCode], p_apply: true });
+            if (!dr.ok) return ok({ part_code: partCode, derivation: null, derive_error: String(dr.data) });
+            const rows = Array.isArray(dr.data) ? dr.data : [];
+            return ok({ part_code: partCode, derivation: rows[0] || null, ...summariseDerivation(rows) });
+          }
+
+          case 'rederiveUnitCosts': {
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const d = body.data || {};
+            const codes = Array.isArray(d.part_codes) && d.part_codes.length
+              ? d.part_codes.map(c => String(c).trim()).filter(Boolean) : null;   // null = every part
+            const dr = await rpc('derive_unit_costs', { p_part_codes: codes, p_apply: d.apply === false ? false : true });
+            if (!dr.ok) return err('Derivation failed: ' + JSON.stringify(dr.data));
+            const rows = Array.isArray(dr.data) ? dr.data : [];
+            await logActivity(authResult?.fullName || postRole, postRole, 'UNIT_COST_REDERIVED', 'PART', null,
+              `unit_cost re-derived over ${codes ? codes.length + ' part(s)' : 'all parts'}`, summariseDerivation(rows));
+            return ok({ ...summariseDerivation(rows), rows });
+          }
+
           case 'setDefaultDeliveryAddress': {
             if (!canManageAddresses(P)) return err('No permission', 403);
             const id = body.data?.id;
@@ -3930,6 +4151,21 @@ export default {
             // refuses anything not already Accepted — so the hook lives here and only here.
             if (ctx?.waitUntil) ctx.waitUntil(notifyRequesterPoRaised({ ...po, status: 'Accepted' }, env));
             else await notifyRequesterPoRaised({ ...po, status: 'Accepted' }, env);
+            // Re-derive unit_cost for this PO's parts (S385). Accept is the terminal state of a
+            // request-raised PO (see the measurement above), so it is the moment a new price
+            // becomes real. ⛔ Strictly best-effort and OFF the response path: a derivation that
+            // fails must never fail an accept — the PO workflow is the product, the cost is a
+            // by-product. No waitUntil (local/dev) → skipped entirely rather than awaited.
+            if (ctx?.waitUntil) ctx.waitUntil((async () => {
+              try {
+                const lr = await query('po_lines',
+                  `?po_number=eq.${encodeURIComponent(d.po_number)}&part_code=not.is.null&select=part_code`);
+                const codes = [...new Set((lr.ok ? lr.data : []).map(x => x.part_code).filter(Boolean))];
+                if (!codes.length) return;
+                const dr = await rpc('derive_unit_costs', { p_part_codes: codes, p_apply: true });
+                if (!dr.ok) console.error('acceptPO derive_unit_costs failed:', d.po_number, JSON.stringify(dr.data));
+              } catch (e) { console.error('acceptPO derive_unit_costs threw:', d.po_number, e); }
+            })());
             return ok({ po_number: d.po_number, status: 'Accepted' });
           }
 

@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.21.0] - 2026-09-16
+### Added
+- Library: **Purchase Units** chapter — set bulk-unit conversions (Roll/Packet/Box) so per-piece cost derives from PO history; kg needs no entry; Re-derive all costs.
+
 ## [1.20.1] - 2026-09-11
 ### Changed
 - Sales Partners: unticking "Not GST-registered" (or entering a real GSTIN) removes the not-registered note.
