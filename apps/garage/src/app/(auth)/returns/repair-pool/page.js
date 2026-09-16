@@ -15,6 +15,21 @@ const selectStyle      = { ...inputStyle, fontFamily: 'inherit', cursor: 'pointe
 
 const LINES = ['L1', 'L2', 'L3', 'L4', 'L5'];
 
+// Issue timestamps are shown in IST (the floor's clock), day-first like the Redline repack detail.
+const IST = 'Asia/Kolkata';
+function fmtIst(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function istDay(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', year: '2-digit' });
+}
+
 export default function RepairIssuePage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
@@ -29,6 +44,8 @@ export default function RepairIssuePage() {
   const [feed, setFeed] = useState([]);
   const [issued, setIssued] = useState([]);       // "Issued so far" buckets for the selected run (L42)
   const [issuedCount, setIssuedCount] = useState(0);
+  const [openBucket, setOpenBucket] = useState(null);   // expanded 'Issued so far' bucket key (LOT list)
+  const [issuedTruncated, setIssuedTruncated] = useState(false); // worker caps the issued list at 2,000 newest
   const scanRef = useRef(null);
 
   const loadRuns = useCallback(async () => {
@@ -57,12 +74,13 @@ export default function RepairIssuePage() {
 
   // "Issued so far" into the selected run (L42) — return_units routed here (issued_at set).
   const loadIssued = useCallback(async () => {
-    if (!session || !runId) { setIssued([]); setIssuedCount(0); return; }
+    if (!session || !runId) { setIssued([]); setIssuedCount(0); setIssuedTruncated(false); return; }
     try {
       const d = await garageFetch('getRepairRunDetail', { run_id: runId }, session);
       setIssued(Array.isArray(d?.issued_buckets) ? d.issued_buckets : []);
       setIssuedCount(d?.issued_count || 0);
-    } catch { setIssued([]); setIssuedCount(0); }
+      setIssuedTruncated(!!d?.issued_truncated);
+    } catch { setIssued([]); setIssuedCount(0); setIssuedTruncated(false); }
   }, [session, runId]);
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
@@ -71,6 +89,26 @@ export default function RepairIssuePage() {
 
   const total = useMemo(() => buckets.reduce((s, b) => s + (b.count || 0), 0), [buckets]);
   const activeRun = useMemo(() => runs.find((r) => r.id === runId) || null, [runs, runId]);
+  // Timeline: units issued into the run by IST day × variant (newest day first). Built client-side
+  // from the per-unit issued_at the worker returns inside each bucket (getRepairRunDetail).
+  const issuedByDay = useMemo(() => {
+    const days = {};
+    for (const b of issued) {
+      for (const u of (b.units || [])) {
+        const day = istDay(u.issued_at);
+        const ts = u.issued_at ? new Date(u.issued_at).getTime() : 0;
+        const d = days[day] || (days[day] = { day, ts: 0, total: 0, variants: {} });
+        if (ts > d.ts) d.ts = ts;
+        d.total++;
+        const vk = [b.disposition, b.product || '—', b.model || '—', b.color || '—'].join('|');
+        const v = d.variants[vk] || (d.variants[vk] = { disposition: b.disposition, product: b.product, model: b.model, color: b.color, count: 0 });
+        v.count++;
+      }
+    }
+    return Object.values(days)
+      .sort((a, c) => c.ts - a.ts)
+      .map((d) => ({ ...d, variants: Object.values(d.variants).sort((a, c) => c.count - a.count) }));
+  }, [issued]);
 
   function pushFeed(text, ok) { setFeed((f) => [{ text, ok, t: Date.now() }, ...f].slice(0, 12)); }
 
@@ -235,6 +273,9 @@ export default function RepairIssuePage() {
             <span>Issued so far → {activeRun?.run_no || 'run'} {issuedCount > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({issuedCount})</span>}</span>
             <button style={btnSecondary} onClick={loadIssued}>↻ Refresh</button>
           </div>
+          {issuedTruncated && (
+            <div style={{ padding: '8px 14px', fontSize: 11, color: '#fbbf24', borderBottom: '1px solid var(--border)' }}>Showing the newest 2,000 issued units only — counts, LOT lists and the timeline below are cut at that point; the oldest days are missing.</div>
+          )}
           <div style={{ overflowX: 'auto' }}>
             {issued.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>Nothing issued into this run yet.</div>
@@ -246,20 +287,94 @@ export default function RepairIssuePage() {
                   <th style={tableThStyle}>Model</th>
                   <th style={tableThStyle}>Colour</th>
                   <th style={tableThStyle}>Count</th>
+                  <th style={tableThStyle}>Last issued</th>
+                  <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
                 </tr></thead>
                 <tbody>
-                  {issued.map((b, i) => (
-                    <tr key={`iss|${b.disposition}|${b.product}|${b.model}|${b.color}|${i}`}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: b.disposition === 'CXR' ? '#f2cd1a' : '#7b93ff' }}>{b.disposition}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--cond)', fontWeight: 700 }}>{b.product || '—'}</td>
-                      <td style={tableTdStyle}>{b.model || '—'}</td>
-                      <td style={tableTdStyle}>{b.color || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80' }}>{b.count}</td>
-                    </tr>
-                  ))}
+                  {issued.map((b) => {
+                    // The variant tuple is the worker's own bucket key (unique); no index — the bucket order
+                    // changes with every scan (newest-issued first) and an index-keyed row would collapse itself.
+                    const key = `iss|${b.disposition}|${b.product}|${b.model}|${b.color}`;
+                    const open = openBucket === key;
+                    const units = Array.isArray(b.units) ? b.units : [];
+                    const last = units.reduce((m, u) => (u.issued_at && (!m || u.issued_at > m) ? u.issued_at : m), null);
+                    return [
+                      <tr key={key} onClick={() => setOpenBucket(open ? null : key)} style={{ cursor: 'pointer' }} title={open ? 'Hide the LOT numbers' : 'Show the LOT numbers issued in this bucket'}>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: b.disposition === 'CXR' ? '#f2cd1a' : '#7b93ff' }}>{b.disposition}</td>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--cond)', fontWeight: 700 }}>{b.product || '—'}</td>
+                        <td style={tableTdStyle}>{b.model || '—'}</td>
+                        <td style={tableTdStyle}>{b.color || '—'}</td>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80' }}>{b.count}</td>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{fmtIst(last)}</td>
+                        <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{open ? '▾ LOTs' : '▸ LOTs'}</td>
+                      </tr>,
+                      open && (
+                        <tr key={`${key}|units`}>
+                          <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead><tr>
+                                <th style={tableThStyle}>Car UPC</th>
+                                <th style={tableThStyle}>Remote</th>
+                                <th style={tableThStyle}>Label</th>
+                                <th style={tableThStyle}>Return</th>
+                                <th style={tableThStyle}>Issued</th>
+                              </tr></thead>
+                              <tbody>
+                                {units.map((u) => (
+                                  <tr key={u.return_unit_id || `${u.car_upc}|${u.remote_upc}`}>
+                                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 600 }}>{u.car_upc || '—'}</td>
+                                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{u.remote_upc || '—'}</td>
+                                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{u.batch_label || '—'}</td>
+                                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{u.return_unit_id || '—'}</td>
+                                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{fmtIst(u.issued_at)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      ),
+                    ];
+                  })}
                 </tbody>
               </table>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Timeline — the same issued units by IST day × variant (Mrudula, 2026-09-12: "by variant + issue date") */}
+      {runId && issuedByDay.length > 0 && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Issue timeline → {activeRun?.run_no || 'run'} <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({issuedByDay.length} day{issuedByDay.length === 1 ? '' : 's'})</span></span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={tableThStyle}>Day</th>
+                <th style={tableThStyle}>Units</th>
+                <th style={tableThStyle}>By variant</th>
+              </tr></thead>
+              <tbody>
+                {issuedByDay.map((d) => (
+                  <tr key={d.day}>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 600 }}>{d.day}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80' }}>{d.total}</td>
+                    <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                      {d.variants.map((v, i) => (
+                        <span key={`${d.day}|${i}`} style={{ display: 'inline-block', marginRight: 10, marginBottom: 2 }}>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: v.disposition === 'CXR' ? '#f2cd1a' : '#7b93ff', marginRight: 4 }}>{v.disposition}</span>
+                          <span style={{ fontFamily: 'var(--cond)', fontWeight: 700 }}>{v.product || '—'}</span>
+                          <span style={{ color: 'var(--t2)' }}> {v.model || '—'} · {v.color || '—'}</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80', marginLeft: 4 }}>×{v.count}</span>
+                        </span>
+                      ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

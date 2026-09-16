@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## 1.29.0 - 2026-09-16
+
+- **Issue Repair**: documents that every row in **Issued so far** now expands (click to toggle,
+  one bucket open at a time) into the individual units issued (Car UPC, Remote, Label, Return,
+  Issued time, newest first), that a new **Last issued** column shows each bucket's most recent
+  issue time, and the new **Issue timeline** panel that lists units issued into the selected run
+  by IST day and variant once anything has been issued.
+
 ## 1.28.0 - 2026-09-11
 
 - **Damage / Scrap Ledger**: documents that search now looks across the whole ledger
