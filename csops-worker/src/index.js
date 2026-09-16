@@ -1355,15 +1355,21 @@ async function fetchDispatchInfo(upc, env) {
   // unit → product_master, dispatch_allocations, dispatch_shipments
   const [unitRes, allocRes] = await Promise.all([
     sbPublic(`/rest/v1/units?upc=eq.${encodeURIComponent(upc)}&select=upc,product,model,color,sku,current_status,production_run_id&limit=1`, env),
-    sbPublic(`/rest/v1/dispatch_allocations?unit_upc=eq.${encodeURIComponent(upc)}&select=*&order=allocated_at.desc&limit=1`, env),
+    sbPublic(`/rest/v1/dispatch_allocations?car_upc=eq.${encodeURIComponent(upc)}&select=*&order=allocated_at.desc&limit=1`, env),
   ]);
   if (!unitRes.ok || !unitRes.data?.[0]) return null;
   const unit = unitRes.data[0];
+  // A failed lookup must not read as "never allocated": the filter named a column that does not exist
+  // (unit_upc; the table's is car_upc) and every ticket got a 400 for weeks with nothing said (S384).
+  if (!allocRes.ok) console.warn('fetchDispatchInfo: allocation lookup failed', allocRes.status, upc);
   let shipment = null;
   const alloc = allocRes.data?.[0];
   if (alloc?.shipment_id) {
     const shipRes = await sbPublic(`/rest/v1/dispatch_shipments?id=eq.${alloc.shipment_id}&select=*&limit=1`, env);
-    shipment = shipRes.data?.[0] || null;
+    if (!shipRes.ok) console.warn('fetchDispatchInfo: shipment lookup failed', shipRes.status, alloc.shipment_id);
+    const row = shipRes.data?.[0];
+    // Pitstop's panel reads awb / courier; the table's columns are tracking_number / courier_partner.
+    shipment = row ? { ...row, awb: row.tracking_number || null, courier: row.courier_partner || null } : null;
   }
   return { unit, allocation: alloc || null, shipment };
 }
