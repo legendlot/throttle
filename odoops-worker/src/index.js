@@ -18,6 +18,7 @@
 // ============================================================
 
 import { WorkflowEntrypoint } from 'cloudflare:workers';
+import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -2665,14 +2666,16 @@ async function adsAutoPause(env) {
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
 const UNI_TRACK_WINDOW_MS = 6 * 3600 * 1000;
-// Page size == the per-run get cap, so one page is always fully processed and page_offset can
-// advance deterministically. Never let these diverge.
+// Page size == the per-PAGE get cap, so one page is always fully processed and page_offset can
+// advance deterministically. Never let these diverge. A RUN takes many pages — see
+// uni-track-run.mjs (one page per hourly tick left the cursor 35 h behind, 2026-09-17).
 const UNI_TRACK_PAGE = 25;
-// saleorder/get calls per run — the real cost, and the binding constraint. Uniware has no bulk
-// package endpoint (shippingPackage/search accepts only saleOrderCode, one order at a time), so
-// this is unavoidable. Run budget: 1 state + 1 search + 1 existing-lookup + <=25 gets + 1 upsert
-// + 1 state-patch = ~30, comfortably under the 50-subrequest worker ceiling.
-const UNI_TRACK_MAX_GETS  = UNI_TRACK_PAGE;
+// saleorder/get calls — the real cost. Uniware has no bulk package endpoint (shippingPackage/search
+// accepts only saleOrderCode, one order at a time), so this is unavoidable. Per page: 1 state +
+// 1 search + 1 existing-lookup + <=25 gets + 1 upsert + 1 state-patch = ~30 subrequests; a full
+// run (UNI_TRACK_RUN_BUDGET) stays far under the Paid-plan 10,000 ceiling.
+// The live edge trails `now` by this much — see trackingWindow.
+const UNI_TRACK_EDGE_LAG_MS = 2 * 60 * 1000;
 // Orders in these states have no shipping package yet, so fetching their detail is pure waste.
 // Roughly half of any recent window sits in PENDING_VERIFICATION.
 const UNI_TRACK_SKIP_STATUS = new Set(['PENDING_VERIFICATION', 'CREATED']);
@@ -2938,22 +2941,42 @@ async function refreshUniwareOrder(env, orderName) {
   return { ok: true, packages: rows.length, lifecycle: rows[0].lifecycle };
 }
 
+// One RUN = as many pages as the budget allows, until the cursor reaches the live edge. Every page
+// persists its own progress, so a run cut short resumes on the next tick with nothing lost.
 async function syncUniwareTracking(env, opts = {}) {
+  const budget = { ...UNI_TRACK_RUN_BUDGET };
+  if (Number(opts.maxPages) > 0) budget.maxPages = Math.min(Math.floor(Number(opts.maxPages)), 400);
+  if (Number(opts.maxGets) > 0) budget.maxGets = Math.min(Math.floor(Number(opts.maxGets)), 2000);
+  if (Number(opts.maxMs) > 0) budget.maxMs = Math.min(Math.max(Math.floor(Number(opts.maxMs)), 5000), UNI_TRACK_RUN_BUDGET.maxMs);
+  try {
+    return await runTrackingPages(() => syncUniwareTrackingPage(env, opts), budget);
+  } catch (e) {
+    if (e?.partial?.pages) console.warn('odoops (uniware tracking): stopped after', JSON.stringify(e.partial));
+    throw e;
+  }
+}
+
+async function syncUniwareTrackingPage(env, opts = {}) {
   const st = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true&select=*&limit=1');
-  const state = (st.ok && st.data?.[0]) || {};
+  // A failed state read must not look like a cold start (that would re-walk 3 days from scratch
+  // and, mid-run, reset the cursor) — stop the run instead.
+  if (!st.ok) throw new Error(`ecom_tracking_state read failed (${st.status})`);
+  const state = st.data?.[0] || {};
   const now = Date.now();
   // Cold start: 3 days back. Long enough to pick up in-flight parcels, short enough not to
-  // stampede the first run (the window walk catches up over subsequent ticks).
-  const cursor = Number(state.cursor_ms) || (now - 3 * 86400000);
-  const winStart = cursor;
-  // A multi-page window must keep the SAME toDate across runs: winEnd used to be recomputed as
+  // stampede the first run (the window walk catches up over subsequent pages).
+  // A multi-page window must keep the SAME toDate across pages: winEnd used to be recomputed as
   // min(cursor+6h, now) every tick, so for the current (partial) window `now` kept growing while
   // page_offset carried over — the offset then indexed into a shifting result set and could skip
   // or re-read rows. Freeze the end on the first page (win_end_ms, cleared when the window
   // completes) so pagination always walks one immutable window.
-  const frozenEnd = Number(state.win_end_ms) || 0;
-  const winEnd = frozenEnd > winStart ? frozenEnd : Math.min(cursor + UNI_TRACK_WINDOW_MS, now);
-  if (winStart >= winEnd) return { skipped: 'caught_up' };
+  const { winStart, winEnd, liveEdge, offset, empty } = trackingWindow(state, now, UNI_TRACK_WINDOW_MS, UNI_TRACK_EDGE_LAG_MS);
+  if (empty) {
+    // Caught up is the STEADY state now — keep last_run_at honest for freshness checks.
+    await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', { method: 'PATCH',
+      body: JSON.stringify({ last_run_at: new Date().toISOString(), last_error: null }) });
+    return { skipped: 'caught_up' };
+  }
 
   const token = await getUniwareToken(env);
   const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
@@ -2961,7 +2984,7 @@ async function syncUniwareTracking(env, opts = {}) {
 
   // 1. ONE page of orders changed in the window, at the stored offset. Page size == the get cap,
   // so a page is always fully processed in a single run and the offset advances deterministically.
-  const offset = Number(state.page_offset) || 0;
+  // (offset comes from trackingWindow — only honoured inside a frozen window.)
   // Backfill runs may pass a bigger page. Page size and get-cap move together — they MUST stay
   // equal or page_offset stops matching what was processed.
   const page = Math.min(Math.max(Number(opts.pageSize) || UNI_TRACK_PAGE, 1), 200);
@@ -3000,13 +3023,23 @@ async function syncUniwareTracking(env, opts = {}) {
   // 3. Fetch detail for the changed ones (the expensive leg — hard-capped).
   const gets = todo.slice(0, page);
   const rows = [];
+  let getFails = 0;
   for (const e of gets) {
     const r = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, {   // lowercase 'saleorder' — camelCase 404s
       method: 'POST', headers: H, body: JSON.stringify({ code: e.code }),
     });
     const j = await r.json().catch(() => ({}));
     const so = j?.saleOrderDTO;
-    if (!so) continue;
+    if (!so) {
+      // A skipped order is LOST until its next Uniware update (the offset moves past it). One bad
+      // order must not deadlock the feed, so a few are skipped loudly; a 429 or a run of failures
+      // is an outage — abort BEFORE the state patch so the whole page is retried next tick.
+      getFails += 1;
+      const why = `${r.status} ${JSON.stringify(j?.errors || '').slice(0, 120)}`;
+      if (r.status === 429 || getFails > UNI_TRACK_MAX_GET_FAILS) throw new Error(`uniware saleorder/get failing (${getFails} on this page; last ${e.code}: ${why})`);
+      console.warn('odoops (uniware tracking): skipped order', e.code, why);
+      continue;
+    }
     for (const p of (so.shippingPackages || [])) if (p?.code) rows.push(uniPackageRow(so, p));
   }
 
@@ -3020,7 +3053,9 @@ async function syncUniwareTracking(env, opts = {}) {
   // 4. Progress is driven by the PAGE OFFSET, not by rows written. Many orders legitimately carry
   // no shipping package (cancelled, still processing); keying progress off stored rows re-fetched
   // those forever. A short page ends the window → jump the cursor and reset the offset.
-  await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', {
+  // Checked: a run is a LOOP now, and a silently-failed patch would make every following page
+  // re-read this same one until the budget ran out.
+  const pt = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', {
     method: 'PATCH',
     body: JSON.stringify({
       cursor_ms: windowDone ? winEnd : winStart,
@@ -3031,9 +3066,11 @@ async function syncUniwareTracking(env, opts = {}) {
       packages_upserted: Number(state.packages_upserted || 0) + rows.length,
     }),
   });
+  if (!pt.ok) throw new Error(`ecom_tracking_state patch failed (${pt.status})`);
   return { window: [uniISO(winStart), uniISO(winEnd)], offset, seen: elements.length,
            candidates: candidates.length, fetched: gets.length,
-           packages: rows.length, windowDone, cursor: uniISO(windowDone ? winEnd : winStart) };
+           packages: rows.length, windowDone, caughtUp: windowDone && liveEdge,
+           cursor: uniISO(windowDone ? winEnd : winStart) };
 }
 
 // ── Ad live-status: Google + Amazon → mkt_entity_status ───────────────────────
@@ -4821,7 +4858,9 @@ export default {
               { dry_run: b.dry_run, limit: b.limit, min_age_days: b.min_age_days });
             return r.ok ? ok(r) : err(r.error, 500);
           }
-          return ok(await syncUniwareTracking(env, { pageSize: b.pageSize }));
+          // 50 s default: a probe is a held-open HTTP request, and a short run keeps the overlap with
+          // the hourly tick (same state row, no single-flight) small. Pass maxMs to go longer.
+          return ok(await syncUniwareTracking(env, { pageSize: b.pageSize, maxPages: b.maxPages, maxGets: b.maxGets, maxMs: b.maxMs || 50000 }));
         } catch (e) { return err(String(e?.message || e), 500); }
       }
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
