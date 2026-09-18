@@ -282,6 +282,20 @@ export default function LineFlushPage() {
       showToast('Enter at least one non-zero quantity to return', 'error');
       return;
     }
+    // One card per part (Piyush, #bugs 1789733246, 2026-09-18). The split rows INSIDE a card
+    // (several trays, or Unused + Damaged) stay allowed — 53% of September's flushes use them
+    // (hostile review S390), so this is a FORM rule only; the worker does not reject them.
+    // Only cards that would actually write a line count, matching the unknown-code check above.
+    const seen = new Set(); const dup = [];
+    partCards.forEach((c) => {
+      if (!c.partCode || !c.splits.some((sp) => (parseFloat(sp.qty) || 0) > 0)) return;
+      if (seen.has(c.partCode)) { if (!dup.includes(c.partCode)) dup.push(c.partCode); }
+      seen.add(c.partCode);
+    });
+    if (dup.length) {
+      showToast(`${dup.join(', ')} is on more than one card — keep one card per part and add rows inside it`, 'error');
+      return;
+    }
     const payload = {
       flush_date: flushDate,
       line_no:    flushLine,
