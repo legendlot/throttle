@@ -275,7 +275,7 @@ export default function POListPage() {
       <div className="kpi-row kpi-3">
         <Kpi label="Open value" value={kpi.openVal} sub="≈ INR, all open" tone="blue" format={(v) => inrCompact(v)} />
         <Kpi label="Open POs" value={kpi.openCount} sub="not yet closed" tone="yellow" />
-        <Kpi label="To Inward" value={pendingInward} sub="confirmed · arriving" tone="green" onClick={() => router.push('/receiving')} />
+        <Kpi label="To Inward" value={pendingInward} sub="confirmed · arriving" tone="green" onClick={() => window.location.assign('https://garage.legendoftoys.com/receiving')} />
       </div>
 
       {truncation && (
@@ -337,7 +337,7 @@ export default function POListPage() {
           <div className="info-bar" style={{ margin: '12px 16px 0', background: 'var(--accent-soft)', borderColor: 'var(--accent-bd)' }}>
             <span style={{ color: 'var(--accent)' }}>
               {pendingInward} PO{pendingInward === 1 ? '' : 's'} confirmed &amp; awaiting inward.{' '}
-              <button onClick={() => router.push('/receiving')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}>Go to Receiving</button>
+              <button onClick={() => window.location.assign('https://garage.legendoftoys.com/receiving')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}>Go to Receiving</button>
             </span>
           </div>
         )}
