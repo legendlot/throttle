@@ -526,9 +526,12 @@ function ScannerPins({ session, showToast }) {
     { key: 'store',      label: 'Store' },
     { key: 'dispatch',   label: 'Dispatch' },
     { key: 'attendance', label: 'Attendance' },
+    // Not a department: the PIN the scanner demands on every ecom/retail/export switch at the
+    // packaging station (Mrudula, 2026-09-18). Keep it with supervisors, not operators.
+    { key: 'pkg_channel', label: 'PKG Channel' },
   ];
   const [status, setStatus] = useState({});
-  const [pins, setPins]     = useState({ production: '', store: '', dispatch: '', attendance: '' });
+  const [pins, setPins]     = useState({ production: '', store: '', dispatch: '', attendance: '', pkg_channel: '' });
   const [saving, setSaving] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -551,7 +554,7 @@ function ScannerPins({ session, showToast }) {
     setSaving(dept);
     try {
       await workerFetch('setDepartmentPin', { data: { department: dept, pin } }, session);
-      showToast(`${dept[0].toUpperCase() + dept.slice(1)} PIN updated`, 'success');
+      showToast(`${(DEPTS.find(x => x.key === dept)?.label || dept)} PIN updated`, 'success');
       setPins(p => ({ ...p, [dept]: '' }));
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
@@ -565,7 +568,8 @@ function ScannerPins({ session, showToast }) {
       <div style={panelHeaderStyle}><span>Scanner Department PINs</span></div>
       <div style={panelBodyStyle}>
         <p style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)', marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
-          6-digit PINs that gate the floor scanner&apos;s Production / Store / Dispatch / Attendance departments.
+          6-digit PINs that gate the floor scanner&apos;s Production / Store / Dispatch / Attendance departments,
+          plus the PKG Channel PIN asked for on every ecom / retail / export switch at the packaging station.
           Stored hashed; the current value is never shown. Enter a new PIN to rotate it — it takes effect immediately.
         </p>
         {loading ? <Spinner /> : DEPTS.map(({ key, label }) => {
