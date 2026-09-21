@@ -235,6 +235,15 @@ export default function LineFlushPage() {
     }));
   }
 
+  // Mrudula (2026-09-21): a stray click outside the form used to wipe every entry.
+  // The backdrop no longer closes it; × / Cancel ask first when anything has been filled in.
+  function cancelNewForm() {
+    const dirty = partCards.length > 0 || flushNotes.trim() !== '' || selectedRun !== '';
+    if (dirty && !window.confirm('Discard this flush? All entries will be lost.')) return;
+    resetNewForm();
+    setShowNewFlush(false);
+  }
+
   function resetNewForm() {
     setFlushType('run');
     setFlushDate(todayStr());
@@ -453,7 +462,8 @@ export default function LineFlushPage() {
 
       <Modal
         open={showNewFlush}
-        onClose={() => { resetNewForm(); setShowNewFlush(false); }}
+        onClose={cancelNewForm}
+        dismissOnBackdrop={false}
         size="lg"
       >
         <NewFlushForm
@@ -478,7 +488,7 @@ export default function LineFlushPage() {
           updateSplit={updateSplit}
           submitFlush={submitFlush}
           submitting={submitting}
-          onCancel={() => { resetNewForm(); setShowNewFlush(false); }}
+          onCancel={cancelNewForm}
         />
       </Modal>
     </div>

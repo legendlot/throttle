@@ -13,6 +13,10 @@ export function Modal({
   // Blocks Confirm for a reason other than in-flight work (e.g. the form is invalid).
   // Additive: callers that omit it keep the old loading-only behaviour.
   confirmDisabled = false,
+  // When false, clicking the dark backdrop or pressing Escape does NOT close the modal —
+  // only the × / Cancel buttons do. Use on forms where a stray click would lose entries
+  // (Redline Line Flush, Mrudula 2026-09-21). Additive: default keeps the old behaviour.
+  dismissOnBackdrop = true,
   loading,
   error,
   size = 'md',
@@ -23,17 +27,17 @@ export function Modal({
   useEffect(() => {
     if (!open) return;
     function handleEsc(e) {
-      if (e.key === 'Escape') onClose?.();
+      if (e.key === 'Escape' && dismissOnBackdrop) onClose?.();
     }
     document.addEventListener('keydown', handleEsc);
     return () => document.removeEventListener('keydown', handleEsc);
-  }, [open, onClose]);
+  }, [open, onClose, dismissOnBackdrop]);
 
   if (!open) return null;
   const maxWidth = size === 'lg' ? 740 : 560;
   return (
     <div
-      onClick={onClose}
+      onClick={dismissOnBackdrop ? onClose : undefined}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
