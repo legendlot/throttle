@@ -219,14 +219,32 @@ function MessageRow({ m }) {
             Template · {m.template_name}
           </div>
         )}
-        {m.media_url && (
+        {/* Same shapes as the inbox (Pruthvi, #bugs 1789989107): an image shows inline, a video
+            plays inline, anything else is a named link. */}
+        {m.media_url && (m.kind === 'image' ? (
+          <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 2 }}>
+            <img src={m.media_url} alt={m.media_filename || 'image'}
+              style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block' }} />
+          </a>
+        ) : m.kind === 'video' ? (
+          <video src={m.media_url} controls preload="metadata"
+            style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block', marginBottom: m.body ? 6 : 2 }} />
+        ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11, color: 'var(--t3)' }}>
             {m.kind === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
             <a href={m.media_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{m.media_filename || 'media'}</a>
           </div>
-        )}
+        ))}
         {m.body && (
           <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{m.body}</div>
+        )}
+        {/* A message with nothing to show must still say so — a blank bubble reads as a bug. */}
+        {!m.body && !m.media_url && !isNote && m.kind !== 'template' && (
+          <div style={{ fontSize: 12, color: 'var(--t3)', fontStyle: 'italic' }}>
+            {['image', 'video', 'audio', 'document'].includes(m.kind)
+              ? `${m.kind} not available — the file was not stored`
+              : (m.kind === 'share' ? 'Shared a post — no preview' : 'Message not supported — ask the customer to resend')}
+          </div>
         )}
         <div style={{ marginTop: 4, fontSize: 10, color: 'var(--t3)', display: 'flex', gap: 8, alignItems: 'center' }}>
           <span>{fmtIstShort(ts)}</span>

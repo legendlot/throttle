@@ -5359,11 +5359,17 @@ async function getTicketThread(params, auth, env) {
   const msgsRes = await sb(
     `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(primary.id)}`
     + `&select=*&order=created_at.asc&limit=200`, env);
+  const messages = msgsRes.data || [];
+  // Inbound WhatsApp media is stored, not linked: `media_url` is NULL and the file sits at
+  // `raw_meta.media_storage_path`. The inbox signs those on read; this handler returned the raw
+  // rows, so every customer photo/video on a ticket rendered as an empty bubble (Pruthvi,
+  // #bugs 1789989107, 2026-09-21). Same signer, same 1h TTL.
+  await signInboundWaMedia(messages, env);
 
   return ok({
     thread: primary,
     threads,
-    messages: msgsRes.data || [],
+    messages,
     matched_by,
     within_customer_window: withinCustomerWindow(primary),
     hidden_other_number,
