@@ -236,14 +236,21 @@ export function ExceptionRow({ ex, compact, onClick }) {
 /* ── KpiTile — mono value + Tomorrow eyebrow + tone stripe ────
    `proj` (optional) = a month-end projection string (e.g. "~1,405"),
    rendered as a small "month proj" trend line at the top of the card. */
-export function KpiTile({ label, value, sub, tone, spark, big, proj, projTitle }) {
+export function KpiTile({ label, value, sub, tone, spark, big, proj, projTitle, onClick, hint }) {
   const toneColor = { ok: 'var(--ok-fg)', warn: 'var(--warn-fg)', bad: 'var(--bad-fg)',
     brand: 'var(--yellow)', blue: 'var(--blue-bright)' }[tone];
+  // Clickable tiles (S392): a real <button> when onClick is given, so it is keyboard- and
+  // touch-reachable on the phone tab bar layout; hover/active lift comes from .rl-kpi-btn.
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+    <Tag onClick={onClick} type={onClick ? 'button' : undefined} className={onClick ? 'rl-kpi-btn' : undefined}
+      title={onClick ? (hint || 'Tap for the breakdown') : undefined}
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 'var(--r-md)', padding: big ? '16px 18px' : '13px 15px', position: 'relative',
-      overflow: 'hidden' }}>
+      overflow: 'hidden', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit',
+      cursor: onClick ? 'pointer' : 'default' }}>
       {tone && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: toneColor }} />}
+      {onClick && <span aria-hidden style={{ position: 'absolute', right: 9, top: 9, color: 'var(--t4)', display: 'flex' }}><Icon name="chevR" size={13} /></span>}
       {proj != null && (
         <div title={projTitle || 'Projected month-end at the current pace'}
           style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 9, paddingBottom: 8,
@@ -260,7 +267,7 @@ export function KpiTile({ label, value, sub, tone, spark, big, proj, projTitle }
       <div className="num" style={{ fontSize: big ? 30 : 23, fontWeight: 700, color: 'var(--t1)',
         lineHeight: 1, marginTop: 9, whiteSpace: 'nowrap' }}>{value}</div>
       {sub && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', marginTop: 6 }}>{sub}</div>}
-    </div>
+    </Tag>
   );
 }
 
@@ -378,7 +385,7 @@ export function Drawer({ open, onClose, width = 430, children }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 40 }} />
-      <aside style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width, zIndex: 41,
+      <aside className="rl-drawer" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width, maxWidth: '100vw', zIndex: 41,
         background: 'var(--surface)', borderLeft: '1px solid var(--border-2)', boxShadow: 'var(--shadow-pop)',
         display: 'flex', flexDirection: 'column', animation: 'rl-drawer-in 220ms var(--ease)' }}>
         {children}

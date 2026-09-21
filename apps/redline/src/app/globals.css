@@ -281,10 +281,22 @@ button { font-family: inherit; }
   font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
 .rl-sheet-item.active { background: var(--yellow-dim); border-color: var(--yellow); color: var(--yellow); }
 
+/* clickable KPI tiles (S392) — a <button> that lifts on hover, presses on tap */
+.rl-kpi-btn { transition: transform var(--fast) var(--ease), border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.rl-kpi-btn:hover { border-color: var(--border-3) !important; box-shadow: var(--shadow-card); transform: translateY(-1px); }
+.rl-kpi-btn:active { transform: translateY(0); }
+.rl-kpi-btn:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+
 @media (max-width: 767px) {
   .rl-rail { display: none !important; }
   .rl-tabbar { display: flex; }
   .rl-sheetwrap { display: flex; }
+
+  /* drawers (exception drill-down, KPI drill-down) take the whole phone width and clear the notch */
+  .rl-drawer { width: 100vw !important; max-width: 100vw !important; border-left: none !important;
+    padding-top: env(safe-area-inset-top);
+    /* the fixed tab bar (z 150) paints over the drawer's bottom ~56px — keep the last rows reachable */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
 
   .rl-topbar { padding: 0 12px !important; gap: 8px !important;
     height: calc(52px + env(safe-area-inset-top)) !important; padding-top: env(safe-area-inset-top) !important; }

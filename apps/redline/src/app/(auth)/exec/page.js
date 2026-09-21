@@ -21,6 +21,8 @@ import {
   Icon, Spark, ShiftBattery, KpiTile, Panel, FilterChip, ToneBadge, Drawer,
   lineColor, lineRgb, fmt, SEV, istNow, btnPrimary, btnGhost,
 } from '../../../components/kit/index.js';
+import KpiDrilldown from '../../../components/KpiDrilldown.js';
+import { scanProductLabel } from '../../../lib/scanProducts.js';
 
 // run status → kit ToneBadge tone
 const RUN_TONE = {
@@ -272,6 +274,9 @@ export default function OverviewPage() {
   const [mp, setMp] = useState(null);
   const [runs, setRuns] = useState([]);           // open runs (for tomorrow's-runs panel)
   const [mtdDispatched, setMtdDispatched] = useState(0); // month-to-date dispatched (Σ rtr+rte)
+  const [scanProducts, setScanProducts] = useState([]); // per-line scan-derived product (lines with no run)
+  const [drill, setDrill] = useState(null);       // KPI tile drill-down: 'packed' | 'qcPass' | 'qcFail' | 'pkgOut'
+  const [tick, setTick] = useState(0);            // bumps on every loadData so an open drawer refetches with the tiles
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -307,6 +312,7 @@ export default function OverviewPage() {
         setSummary(d.summary || null);
         setHourly(d.hourly_dispatch?.length ? d.hourly_dispatch : (d.hourly_chart || []));
         setRuns(Array.isArray(d.open_runs) ? d.open_runs : []);
+        setScanProducts(Array.isArray(d.scan_products) ? d.scan_products : []);
         setError(null);
       } else {
         setError('Dashboard data unavailable');
@@ -353,6 +359,7 @@ export default function OverviewPage() {
       setLoading(false);
       setRefreshing(false);
       setLastRefreshed(new Date());
+      setTick(t => t + 1);
     }
   }, [session, setRefreshing, setLastRefreshed]);
 
@@ -419,7 +426,10 @@ export default function OverviewPage() {
       products[r.line_no] = products[r.line_no] ? `${products[r.line_no]} +` : r.product;
       runNos[r.line_no] = runNos[r.line_no] || r.run_no;
     }
-    const ids = [...new Set([...Object.keys(byLine), ...Object.keys(targets)])].sort();
+    // A line that is scanning without a run (L4/L5, 2026-09-21) has no PvA row, so it also
+    // appears from the scan-products list — still flagged "no run", but named from its scans.
+    const scanLines = (scanProducts || []).map(r => r.line).filter(Boolean);
+    const ids = [...new Set([...Object.keys(byLine), ...Object.keys(targets), ...scanLines])].sort();
     return ids.map(id => ({
       id,
       hourly: byLine[id] || {},
@@ -427,8 +437,9 @@ export default function OverviewPage() {
       target: targets[id] || 0,
       product: products[id] || '—',
       run: runNos[id] || '',
+      scan: products[id] ? null : scanProductLabel(scanProducts, id),
     }));
-  }, [hourly, pva]);
+  }, [hourly, pva, scanProducts]);
 
   /* ── exception feed — computed from live data ───────────────── */
   const exceptions = useMemo(() => {
@@ -596,13 +607,19 @@ export default function OverviewPage() {
       {/* KPI rail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 22 }}>
         <KpiTile label="Packed" value={k.dispatched} sub={k.subR} tone="ok"
-          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'packed')} />
+          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'packed')}
+          onClick={() => setDrill('packed')} hint="Which units were packed — product, variant, colour, channel" />
         <KpiTile label="QC Pass" value={k.qcPass} sub="First-pass yield" tone="brand"
-          proj={projOf(s.mtd_pass)} projTitle={projNote(s.mtd_pass, 'passed QC')} />
-        <KpiTile label="Pass Rate" value={k.passRate} sub="Target 95%" tone={k.passTone} />
-        <KpiTile label="QC Fail" value={k.qcFail} sub={k.failSub} tone={preset === 'today' && (Number(s.today_qc_fail) || 0) > 0 ? 'bad' : undefined} />
-        <KpiTile label="Repair Q" value={fmt(s.repair_queue)} sub={`Cap ${REPAIR_CAP}`} tone={(Number(s.repair_queue) || 0) > REPAIR_CAP ? 'warn' : undefined} />
-        <KpiTile label="Pkg Out" value={fmt(s.dispatch_stock)} sub="Units at RTD" tone="blue" />
+          proj={projOf(s.mtd_pass)} projTitle={projNote(s.mtd_pass, 'passed QC')}
+          onClick={() => setDrill('qcPass')} hint="Which units passed QC" />
+        <KpiTile label="Pass Rate" value={k.passRate} sub="Target 95%" tone={k.passTone}
+          onClick={() => setDrill('qcFail')} hint="The fails behind the rate" />
+        <KpiTile label="QC Fail" value={k.qcFail} sub={k.failSub} tone={preset === 'today' && (Number(s.today_qc_fail) || 0) > 0 ? 'bad' : undefined}
+          onClick={() => setDrill('qcFail')} hint="Which units failed QC" />
+        <KpiTile label="Repair Q" value={fmt(s.repair_queue)} sub={`Cap ${REPAIR_CAP}`} tone={(Number(s.repair_queue) || 0) > REPAIR_CAP ? 'warn' : undefined}
+          onClick={() => router.push('/repair-queue')} hint="Open the repair queue" />
+        <KpiTile label="Pkg Out" value={fmt(s.dispatch_stock)} sub="Units at RTD" tone="blue"
+          onClick={() => setDrill('pkgOut')} hint="Units at RTD by product, variant, colour" />
       </div>
 
       {/* manpower summary */}
@@ -641,18 +658,27 @@ export default function OverviewPage() {
           <Panel title="Shift progress" icon="activity"
             action={<span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>9:00 → 18:00</span>}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {lineData.filter(l => l.target > 0 || l.done > 0).map(line => (
+              {lineData.filter(l => l.target > 0 || l.done > 0 || l.scan).map(line => (
                 <div key={line.id} onClick={() => router.push('/lines')} style={{ cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: lineColor(line.id), flexShrink: 0 }} />
                     <span className="font-display" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--t1)', flexShrink: 0 }}>{line.id}</span>
-                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line.product}</span>
-                    <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto', whiteSpace: 'nowrap' }}>{line.run}</span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                      {line.product !== '—' ? line.product : line.scan ? (
+                        <>
+                          <span style={{ color: 'var(--t3)' }}>No run · </span>{line.scan.label}
+                          {line.scan.others > 0 && <span style={{ color: 'var(--t4)' }}> +{line.scan.others}</span>}
+                        </>
+                      ) : <span style={{ color: 'var(--t3)' }}>No run assigned</span>}
+                    </span>
+                    <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                      {line.run || (line.scan ? `${fmt(line.scan.total)} scans` : '')}
+                    </span>
                   </div>
                   <ShiftBattery lineId={line.id} done={line.done} target={line.target} segments={18} height={26} />
                 </div>
               ))}
-              {!lineData.filter(l => l.target > 0 || l.done > 0).length && (
+              {!lineData.filter(l => l.target > 0 || l.done > 0 || l.scan).length && (
                 <div style={{ padding: '18px 0', textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)' }}>
                   No line targets set for today.
                 </div>
@@ -704,6 +730,11 @@ export default function OverviewPage() {
       </div>
 
       <ExceptionDrawer ex={sel} onClose={() => setSel(null)} onAction={doAction} />
+      {drill && (
+        <KpiDrilldown drill={drill} from={rangeFor(preset).from} to={rangeFor(preset).to}
+          session={session} onClose={() => setDrill(null)} refreshKey={tick}
+          tileValue={preset === 'today' ? null : ({ packed: k.dispatched, qcPass: k.qcPass, qcFail: k.qcFail }[drill] ?? null)} />
+      )}
     </div>
   );
 }

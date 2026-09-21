@@ -18,6 +18,7 @@ import {
   Icon, ShiftBattery, Panel, SectionHead, ToneBadge,
   lineColor, lineRgb, fmt,
 } from '../../../components/kit/index.js';
+import { scanProductLabel } from '../../../lib/scanProducts.js';
 
 const FUNNEL = [
   { key: 'inw',  label: 'INW',  color: 'var(--blue-bright)' },
@@ -29,8 +30,11 @@ const FUNNEL = [
 function fpyTone(p) { return p >= 95 ? 'ok' : p >= 85 ? 'warn' : 'bad'; }
 
 // ── Per-line run card ─────────────────────────────────────────
-function LineCard({ l, crMap }) {
+function LineCard({ l, crMap, scanProducts }) {
   const pct = Number(l.completion_pct) || 0;
+  // No production run owns this line, yet it is scanning real units (L4/L5, 2026-09-21):
+  // keep the "No run assigned" flag and name the product from the scans beside it.
+  const scan = !l.product && !l.run_no ? scanProductLabel(scanProducts, l.line) : null;
   const target = Number(l.target_qty) || 0;
   const dispatched = (Number(l.rtr_count) || 0) + (Number(l.rte_count) || 0);
   // battery 'done' tracks the official completion % against target
@@ -56,11 +60,21 @@ function LineCard({ l, crMap }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--border)' }}>
         <span style={{ width: 9, height: 9, borderRadius: '50%', background: lc, flexShrink: 0 }} />
         <span className="font-display" style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--t1)' }}>{l.line || '—'}</span>
-        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
           {l.product || (l.run_no ? 'Repair run' : 'No run assigned')}
         </span>
-        <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto' }}>{l.run_no || ''}</span>
+        <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto', flexShrink: 0 }}>{l.run_no || ''}</span>
       </div>
+      {scan && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)',
+          background: 'var(--surface-2)', fontFamily: 'var(--font-ui)', fontSize: 12.5, minWidth: 0 }}>
+          <span className="eyebrow" style={{ flexShrink: 0 }}>From scans</span>
+          <span style={{ color: 'var(--t1)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{scan.label}</span>
+          <span className="num" style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 'auto', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {fmt(scan.topCount)} of {fmt(scan.total)} scans{scan.others > 0 ? ` · +${scan.others} other product${scan.others > 1 ? 's' : ''}` : ''}
+          </span>
+        </div>
+      )}
 
       <div style={{ padding: 16 }}>
         {/* completion battery */}
@@ -240,6 +254,7 @@ export default function LinesPage() {
 
   const [lines, setLines] = useState([]);
   const [crMap, setCrMap] = useState({});
+  const [scanProducts, setScanProducts] = useState([]);
   const [operators, setOperators] = useState([]);
   const [takt, setTakt] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -268,6 +283,7 @@ export default function LinesPage() {
 
       setLines(lineData.lines || []);
       setCrMap(map);
+      setScanProducts(Array.isArray(lineData.scan_products) ? lineData.scan_products : []);
       setOperators(lineData.operator_stats || []);
       if (!skipTakt && taktData) setTakt(taktData.takt || []);
       setError(null);
@@ -299,7 +315,7 @@ export default function LinesPage() {
         <SectionHead>Line performance</SectionHead>
         {cards.length ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
-            {cards.map(l => <LineCard key={l.line} l={l} crMap={crMap} />)}
+            {cards.map(l => <LineCard key={l.line} l={l} crMap={crMap} scanProducts={scanProducts} />)}
           </div>
         ) : (
           <div style={{ padding: '40px 0', textAlign: 'center' }}>
