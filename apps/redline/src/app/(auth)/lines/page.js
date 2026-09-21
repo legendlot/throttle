@@ -66,10 +66,11 @@ function LineCard({ l, crMap, scanProducts }) {
         <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto', flexShrink: 0 }}>{l.run_no || ''}</span>
       </div>
       {scan && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)',
-          background: 'var(--surface-2)', fontFamily: 'var(--font-ui)', fontSize: 12.5, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px 8px', padding: '8px 16px', borderBottom: '1px solid var(--border)',
+          background: 'var(--surface-2)', fontFamily: 'var(--font-ui)', fontSize: 12.5, minWidth: 0, flexWrap: 'wrap' }}>
           <span className="eyebrow" style={{ flexShrink: 0 }}>From scans</span>
-          <span style={{ color: 'var(--t1)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{scan.label}</span>
+          {/* the name wins the width; on a 375px phone the count wraps to its own line instead of squeezing it out */}
+          <span style={{ color: 'var(--t1)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '1 1 160px' }}>{scan.label}</span>
           <span className="num" style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 'auto', whiteSpace: 'nowrap', flexShrink: 0 }}>
             {fmt(scan.topCount)} of {fmt(scan.total)} scans{scan.others > 0 ? ` · +${scan.others} other product${scan.others > 1 ? 's' : ''}` : ''}
           </span>
