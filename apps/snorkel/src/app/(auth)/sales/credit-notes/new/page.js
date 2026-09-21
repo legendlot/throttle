@@ -126,9 +126,11 @@ function NewCreditNoteInner() {
     setSaving(true);
     try {
       const body = { order_id: orderId, reason, reason_note: reasonNote.trim() || null, cn_date: cnDate, lines: payloadLines };
+      // The worker reads every write's fields from `body.data` (same as recordSalesPayment);
+      // sending them flat made it answer "order_id required" on every save (Prarthi, 2026-09-21).
       const res = editId
-        ? await workerFetch('updateCreditNote', { id: editId, ...body }, session)
-        : await workerFetch('createCreditNote', body, session);
+        ? await workerFetch('updateCreditNote', { data: { id: editId, ...body } }, session)
+        : await workerFetch('createCreditNote', { data: body }, session);
       if (res?.ok) { showToast('Saved', 'success'); router.push(`/sales/credit-notes/detail?id=${editId || res.data.id}`); }
       else showToast(res?.error || 'Save failed', 'error');
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
