@@ -1186,6 +1186,10 @@ async function loadFulfilment(orders) {
   const ids = [...new Set(list.map(o => o.id).filter(Boolean))];
   const reqR = await queryPublic('dispatch_fulfilment_requests',
     `?sales_order_id=in.(${ids.map(encodeURIComponent).join(',')})&select=*`);
+  // `_ok` (non-enumerable) tells a caller that EVERY read succeeded. A failed read here used to
+  // look identical to "nothing dispatched" — the bulk line export would then print Shipped 0 /
+  // Pending all and call it known (hostile review S391d, finding 3).
+  let allOk = !!reqR.ok;
   const requests = reqR.ok ? reqR.data : [];
   const reqByOrder = {}; requests.forEach(r => { reqByOrder[r.sales_order_id] = r; });
   const reqIds = requests.map(r => r.id);
@@ -1193,6 +1197,7 @@ async function loadFulfilment(orders) {
   if (reqIds.length) {
     const shR = await queryPublic('dispatch_shipments',
       `?fulfilment_request_id=in.(${reqIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,tracking_status,tracking_stage_label,tracking_checkpoints,tracking_synced_at,fulfilment_request_id`);
+    allOk = allOk && !!shR.ok;
     shipments = shR.ok ? shR.data : [];
     const shIds = shipments.map(s => s.id);
     if (shIds.length) {
@@ -1206,6 +1211,7 @@ async function loadFulfilment(orders) {
       // header and the lines now agree.
       const lnR = await queryPublic('dispatch_shipment_lines',
         `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,packed_qty`);
+      allOk = allOk && !!lnR.ok;
       const byShip = {};
       (lnR.ok ? lnR.data : []).forEach(l => { byShip[l.shipment_id] = (byShip[l.shipment_id] || 0) + (Math.round(Number(l.packed_qty)) || 0); });
       shipments.forEach(s => { s._shipped_units = byShip[s.id] || 0; });
@@ -1217,9 +1223,11 @@ async function loadFulfilment(orders) {
   if (legacyIds.length) {
     const lsR = await queryPublic('dispatch_shipments',
       `?id=in.(${legacyIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,shipped_at,delivery_date`);
+    allOk = allOk && !!lsR.ok;
     (lsR.ok ? lsR.data : []).forEach(s => { legacyMap[s.id] = s; });
   }
   const out = {};
+  Object.defineProperty(out, '_ok', { value: allOk, enumerable: false });
   list.forEach(o => {
     const request = reqByOrder[o.id] || null;
     out[o.id] = request
@@ -3570,7 +3578,7 @@ export default {
               pageAll(queryPublic, 'dispatch_shipment_lines',
                 '?select=shipment_id,product,model,color,target_qty,packed_qty&order=shipment_id.asc,id.asc'),
             ]);
-            if (!allDispatch) fulfilment_known = false;
+            if (!allDispatch || ful?._ok === false) fulfilment_known = false;
             else {
               const dispByShip = {};
               for (const d of allDispatch) (dispByShip[d.shipment_id] ||= []).push(d);

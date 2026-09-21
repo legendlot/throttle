@@ -129,6 +129,7 @@ export default function SalesOrdersPage() {
     const csv = buildSoSkuSummaryCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {} });
     if (!downloadCsv(csv, `lot-sku-to-send-${todayStr()}.csv`, 'No confirmed order lines for these filters')) return;
     if (payload?.fulfilment_known === false) showToast('Dispatch data could not be read — Shipped / Pending left blank', 'error');
+    else showToast('Confirmed orders only — drafts and cancelled orders are not counted', 'success');
   }
 
   async function exportCsvWithLines() {
@@ -154,7 +155,7 @@ export default function SalesOrdersPage() {
         actions={<>
           <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
           <Btn onClick={exportCsvWithLines} disabled={!filtered.length || exportingLines}><Download size={14} /> {exportingLines ? 'Loading lines…' : 'Export + lines'}</Btn>
-          <Btn onClick={exportSkuSummary} disabled={!filtered.length || exportingLines}><Download size={14} /> SKU to send</Btn>
+          <Btn onClick={exportSkuSummary} disabled={!filtered.length || exportingLines} title="Confirmed orders only"><Download size={14} /> SKU to send</Btn>
           {canManage && <Btn kind="primary" onClick={() => router.push('/sales/orders/new')}><Plus size={14} /> New order</Btn>}
         </>} />
 

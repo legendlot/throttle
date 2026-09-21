@@ -67,13 +67,19 @@ export function buildSoSkuSummaryCsv({ filteredRows, linesByOrder }) {
   for (const o of filteredRows || []) {
     if (o.status !== 'confirmed') continue;
     for (const l of (linesByOrder?.[o.id] || [])) {
-      const k = [o.channel_key || '', l.product || '', l.model || '', l.color || '', l.sku || ''].join('\u0001');
+      // Group on the SAME key the worker allocates on (product / model / colour, whitespace- and
+      // case-insensitive) — never on sku: 91% of lines carry a blank sku and the same variant
+      // appears both blank and filled, which would split one pool over two rows (hostile review
+      // S391d, finding 4). The SKU column shows the first non-blank one seen for the variant.
+      const norm = (x) => String(x ?? '').toLowerCase().replace(/\s+/g, '');
+      const k = [o.channel_key || '', norm(l.product), norm(l.model), norm(l.color)].join('\u0001');
       let g = groups.get(k);
       if (!g) {
         g = { channel: o.channel_key || '', product: l.product || '', model: l.model || '', color: l.color || '',
-              sku: l.sku || '', orders: new Set(), ordered: 0, shipped: 0, packed: 0, pending: 0, unknown: false };
+              sku: '', orders: new Set(), ordered: 0, shipped: 0, packed: 0, pending: 0, unknown: false };
         groups.set(k, g);
       }
+      if (!g.sku && l.sku) g.sku = l.sku;
       g.orders.add(o.id);
       g.ordered += Math.round(Number(l.qty)) || 0;
       // Unknown on ANY line makes the group's sent/pending unknown — a partial sum would read

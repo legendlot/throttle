@@ -199,6 +199,9 @@ function MessageRow({ m }) {
   const isIn = m.direction === 'inbound';
   const queued = m.status === 'queued';
   const ts = m.received_at || m.sent_at || m.created_at;
+  // Email bodies live in body_html (body is blank on 3,835 of them) — same sandboxed render as
+  // the inbox; without it the empty-message line below would tell agents to ask for a resend.
+  const emailHtml = m.channel === 'email' && m.body_html ? `<base target="_blank">${m.body_html}` : null;
 
   return (
     <div style={{ display: 'flex', justifyContent: isNote ? 'center' : (isIn ? 'flex-start' : 'flex-end'), marginBottom: 8 }}>
@@ -235,15 +238,21 @@ function MessageRow({ m }) {
             <a href={m.media_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{m.media_filename || 'media'}</a>
           </div>
         ))}
-        {m.body && (
+        {emailHtml ? (
+          <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={emailHtml} title="email body"
+            style={{ width: 'min(560px, 70vw)', minHeight: 90, maxHeight: 460, border: 'none',
+              background: '#fff', borderRadius: 6, display: 'block' }} />
+        ) : m.body && (
           <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{m.body}</div>
         )}
         {/* A message with nothing to show must still say so — a blank bubble reads as a bug. */}
-        {!m.body && !m.media_url && !isNote && m.kind !== 'template' && (
+        {!m.body && !emailHtml && !m.media_url && !isNote && m.kind !== 'template' && (
           <div style={{ fontSize: 12, color: 'var(--t3)', fontStyle: 'italic' }}>
             {['image', 'video', 'audio', 'document'].includes(m.kind)
               ? `${m.kind} not available — the file was not stored`
-              : (m.kind === 'share' ? 'Shared a post — no preview' : 'Message not supported — ask the customer to resend')}
+              : m.kind === 'share' ? 'Shared a post — no preview'
+              : isIn ? 'Message not supported — ask the customer to resend'
+              : 'Sent message had no text'}
           </div>
         )}
         <div style={{ marginTop: 4, fontSize: 10, color: 'var(--t3)', display: 'flex', gap: 8, alignItems: 'center' }}>

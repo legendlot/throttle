@@ -238,7 +238,9 @@ export default function LineFlushPage() {
   // Mrudula (2026-09-21): a stray click outside the form used to wipe every entry.
   // The backdrop no longer closes it; × / Cancel ask first when anything has been filled in.
   function cancelNewForm() {
-    const dirty = partCards.length > 0 || flushNotes.trim() !== '' || selectedRun !== '';
+    // Anything resetNewForm() resets counts as dirty — the four pickers included.
+    const dirty = partCards.length > 0 || flushNotes.trim() !== '' || selectedRun !== ''
+      || flushType !== 'run' || flushDate !== todayStr() || flushLine !== 'L1' || flushShift !== 'Morning';
     if (dirty && !window.confirm('Discard this flush? All entries will be lost.')) return;
     resetNewForm();
     setShowNewFlush(false);

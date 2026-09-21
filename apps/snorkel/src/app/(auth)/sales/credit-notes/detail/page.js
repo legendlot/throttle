@@ -33,7 +33,9 @@ function CreditNoteDetailInner() {
   async function act(action, body, okMsg) {
     setBusy(true);
     try {
-      const res = await workerFetch(action, { id, ...body }, session);
+      // Worker reads every write's fields from body.data (hostile review S391d — issue / cancel /
+      // delete were failing 'id required' the same way the form's create did).
+      const res = await workerFetch(action, { data: { id, ...body } }, session);
       if (res?.ok) { showToast(okMsg, 'success'); return res; }
       showToast(res?.error || 'Action failed', 'error');
     } catch (e) { showToast(e.message || 'Action failed', 'error'); }

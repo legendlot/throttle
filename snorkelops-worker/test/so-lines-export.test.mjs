@@ -194,3 +194,16 @@ test('SKU summary: an unknown line makes the whole group blank on shipped/pendin
   assert.equal(parsed[1][skuCol('Shipped')], '');
   assert.equal(parsed[1][skuCol('Pending')], '');
 });
+
+test('SKU summary: blank and filled sku on the same variant land in ONE row, first non-blank sku shown', () => {
+  const rows = [{ id: 'a', status: 'confirmed', channel_key: 'GT' }, { id: 'b', status: 'confirmed', channel_key: 'GT' }];
+  const linesByOrder = {
+    a: [{ product: 'Knox', model: 'Explorer', color: 'Black', sku: '', qty: 3, shipped_qty: 1, packed_qty: 0, pending_qty: 2 }],
+    b: [{ product: 'Knox ', model: 'explorer', color: 'Black', sku: 'KNX-BLK', qty: 2, shipped_qty: 0, packed_qty: 0, pending_qty: 2 }],
+  };
+  const parsed = parseCsv(buildSoSkuSummaryCsv({ filteredRows: rows, linesByOrder }));
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[1][skuCol('SKU')], 'KNX-BLK');
+  assert.equal(parsed[1][skuCol('Orders')], '2');
+  assert.equal(parsed[1][skuCol('Pending')], '4');
+});
