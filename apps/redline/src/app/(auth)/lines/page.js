@@ -36,7 +36,7 @@ function LineCard({ l, crMap, scanProducts }) {
   // keep the "No run assigned" flag and name the product from the scans beside it.
   const scan = !l.product && !l.run_no ? scanProductLabel(scanProducts, l.line) : null;
   const target = Number(l.target_qty) || 0;
-  const dispatched = (Number(l.rtr_count) || 0) + (Number(l.rte_count) || 0);
+  const dispatched = (Number(l.rtr_count) || 0) + (Number(l.rte_count) || 0) + (Number(l.rtx_count) || 0);
   // battery 'done' tracks the official completion % against target
   const done = target ? Math.round((pct / 100) * target) : dispatched;
 

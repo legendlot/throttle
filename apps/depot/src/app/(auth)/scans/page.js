@@ -3,7 +3,7 @@
    DEPOT — Scan Feed. The dispatch-side equivalent of Redline's
    Scans inbox: the same scan stream + summary tiles + date
    presets + UPC search, scoped to DISPATCH scan activities
-   (RTE/RTR/DTK/ALLOC/PACK/DOUT/RTO_IN/RTD_RETURN/REPACK_*).
+   (RTE/RTR/RTX/DTK/ALLOC/PACK/DOUT/RTO_IN/RTD_RETURN/REPACK_*).
    Stream: useScans (getAllScans, activities[] allow-list) +
    getScansByUpc. Tiles: getDispatchScanSummary.
    ════════════════════════════════════════════════════════════ */
@@ -60,6 +60,7 @@ function formatDateTime(ts) {
 const ACT_COLORS = {
   RTE:        'var(--blue-bright, #60a5fa)',
   RTR:        '#818cf8',
+  RTX:        '#22c55e',
   DTK:        '#0ea5e9',
   ALLOC:      '#38bdf8',
   PACK:       '#22d3ee',
@@ -69,17 +70,17 @@ const ACT_COLORS = {
   REPACK_IN:  '#a78bfa',
   REPACK_OUT: '#c084fc',
 };
-const DISPATCH_ACTS = ['RTE','RTR','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN','REPACK_IN','REPACK_OUT'];
+const DISPATCH_ACTS = ['RTE','RTR','RTX','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN','REPACK_IN','REPACK_OUT'];
 
 const ACT_LABELS = {
-  RTE: 'RTE', RTR: 'RTR', DTK: 'DTK', ALLOC: 'Alloc', PACK: 'Pack', DOUT: 'DOut',
+  RTE: 'RTE', RTR: 'RTR', RTX: 'RTX', DTK: 'DTK', ALLOC: 'Alloc', PACK: 'Pack', DOUT: 'DOut',
   RTO_IN: 'RTO In', RTD_RETURN: 'RTD Return', REPACK_IN: 'Repack In', REPACK_OUT: 'Repack Out',
 };
 const ACTIVITY_FILTERS = [{ value: '', label: 'All' }, ...DISPATCH_ACTS.map(a => ({ value: a, label: ACT_LABELS[a] }))];
 // Headline tiles (REPACK_* stay in the stream/filter but off the tile strip).
-const SUMMARY_ACTIVITIES = ['RTE','RTR','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN'];
+const SUMMARY_ACTIVITIES = ['RTE','RTR','RTX','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN'];
 const SUMMARY_LABELS = {
-  RTE: 'RTE (ecom)', RTR: 'RTR (retail)', DTK: 'DTK', ALLOC: 'Allocated', PACK: 'Packed',
+  RTE: 'RTE (ecom)', RTR: 'RTR (retail)', RTX: 'RTX (export)', DTK: 'DTK', ALLOC: 'Allocated', PACK: 'Packed',
   DOUT: 'Dispatched', RTO_IN: 'Returns In', RTD_RETURN: 'RTD Return',
 };
 

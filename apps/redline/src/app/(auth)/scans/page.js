@@ -65,6 +65,7 @@ const ACT_COLORS = {
   RTD_RETURN: '#14b8a6',
   RTE:        'var(--blue-bright)',
   RTR:        'var(--blue-bright)',
+  RTX:        'var(--ok-fg)',
   ALLOC:      '#38bdf8',
   PACK:       '#22d3ee',
   DTK:        '#0ea5e9',
@@ -89,6 +90,7 @@ const ACTIVITY_FILTERS = [
   { value: 'REP_PASS',   label: 'Rep Pass' },
   { value: 'RTE',        label: 'RTE' },
   { value: 'RTR',        label: 'RTR' },
+  { value: 'RTX',        label: 'RTX' },
   { value: 'RTO_IN',     label: 'RTO In' },
   { value: 'RTD_RETURN', label: 'RTD Return' },
 ];

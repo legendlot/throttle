@@ -17,8 +17,8 @@ import { Icon, Drawer, lineColor, lineRgb, fmt } from './kit/index.js';
 
 export const DRILLS = {
   packed: {
-    // RTE,RTR only — the Today tile is today_rtr + today_rte (no RTX; zero RTX scans exist).
-    label: 'Packed', tone: 'ok', activities: 'RTE,RTR', channels: true,
+    // RTE,RTR,RTX — the Today tile is today_rtr + today_rte + today_rtx (export packed-out, S392c).
+    label: 'Packed', tone: 'ok', activities: 'RTE,RTR,RTX', channels: true,
     note: 'PKG-OUT scans of cars and drones. Channel is the packaging channel the unit was packed under.',
   },
   qcPass: { label: 'QC Pass', tone: 'brand', activities: 'QC_PASS', note: 'QC_PASS scans of cars and drones (remotes excluded).' },

@@ -259,7 +259,7 @@ export default function ReportingPage() {
     const byDate = {};
     const byProduct = {};
     const byLine = {};
-    let totalQc = 0, totalDispatched = 0, totalTarget = 0, totalRetail = 0, totalEcom = 0, runs = 0;
+    let totalQc = 0, totalDispatched = 0, totalTarget = 0, totalRetail = 0, totalEcom = 0, totalExport = 0, runs = 0;
 
     for (const r of pvaData) {
       const dateKey = r.run_date;
@@ -268,24 +268,26 @@ export default function ReportingPage() {
       const tgt = Number(r.target_qty) || 0;
       const ret = Number(r.actual_rtr) || 0;
       const ec  = Number(r.actual_rte) || 0;
+      const ex  = Number(r.actual_rtx) || 0; // export packed-out (RTX, S392c)
       runs++;
-      totalQc += qc; totalDispatched += dis; totalTarget += tgt; totalRetail += ret; totalEcom += ec;
+      totalQc += qc; totalDispatched += dis; totalTarget += tgt; totalRetail += ret; totalEcom += ec; totalExport += ex;
 
       if (!byDate[dateKey]) byDate[dateKey] = { date: dateKey, qcPass: 0, dispatched: 0 };
       byDate[dateKey].qcPass     += qc;
       byDate[dateKey].dispatched += dis;
 
       const pKey = r.product || '—';
-      if (!byProduct[pKey]) byProduct[pKey] = { product: pKey, runs: 0, target: 0, qcPass: 0, dispatched: 0, retail: 0, ecom: 0 };
+      if (!byProduct[pKey]) byProduct[pKey] = { product: pKey, runs: 0, target: 0, qcPass: 0, dispatched: 0, retail: 0, ecom: 0, export: 0 };
       byProduct[pKey].runs       += 1;
       byProduct[pKey].target     += tgt;
       byProduct[pKey].qcPass     += qc;
       byProduct[pKey].dispatched += dis;
       byProduct[pKey].retail     += ret;
       byProduct[pKey].ecom       += ec;
+      byProduct[pKey].export     += ex;
 
       const lKey = r.line_no || '—';
-      if (!byLine[lKey]) byLine[lKey] = { line: lKey, runs: 0, products: new Set(), target: 0, qcPass: 0, dispatched: 0, retail: 0, ecom: 0 };
+      if (!byLine[lKey]) byLine[lKey] = { line: lKey, runs: 0, products: new Set(), target: 0, qcPass: 0, dispatched: 0, retail: 0, ecom: 0, export: 0 };
       byLine[lKey].runs       += 1;
       byLine[lKey].products.add(pKey);
       byLine[lKey].target     += tgt;
@@ -293,6 +295,7 @@ export default function ReportingPage() {
       byLine[lKey].dispatched += dis;
       byLine[lKey].retail     += ret;
       byLine[lKey].ecom       += ec;
+      byLine[lKey].export     += ex;
     }
 
     // NB: no `fpy` here. A dead line used to compute totalQc / (totalQc + fail_count) and
@@ -309,7 +312,7 @@ export default function ReportingPage() {
     }));
 
     return {
-      totals: { totalQc, totalDispatched, totalTarget, totalRetail, totalEcom, runs, vsTarget },
+      totals: { totalQc, totalDispatched, totalTarget, totalRetail, totalEcom, totalExport, runs, vsTarget },
       chartRows,
       byProduct: Object.values(byProduct),
       byLine: Object.values(byLine).map(l => ({ ...l, productCount: l.products.size })),
@@ -413,8 +416,8 @@ export default function ReportingPage() {
     if (!ok) showToast('No QC data to download', 'error');
   }
   function downloadPva() {
-    const rows = pvaData.map(r => ({ run_date: r.run_date, product: r.product, line_no: r.line_no, target_qty: r.target_qty, actual_qc_pass: r.actual_qc_pass, total_dispatched: r.total_dispatched, actual_rtr: r.actual_rtr, actual_rte: r.actual_rte }));
-    const ok = downloadCsv(`plan-vs-actual-${dateFrom}-${dateTo}.csv`, rows, ['run_date','product','line_no','target_qty','actual_qc_pass','total_dispatched','actual_rtr','actual_rte']);
+    const rows = pvaData.map(r => ({ run_date: r.run_date, product: r.product, line_no: r.line_no, target_qty: r.target_qty, actual_qc_pass: r.actual_qc_pass, total_dispatched: r.total_dispatched, actual_rtr: r.actual_rtr, actual_rte: r.actual_rte, actual_rtx: r.actual_rtx }));
+    const ok = downloadCsv(`plan-vs-actual-${dateFrom}-${dateTo}.csv`, rows, ['run_date','product','line_no','target_qty','actual_qc_pass','total_dispatched','actual_rtr','actual_rte','actual_rtx']);
     if (!ok) showToast('No PVA data to download', 'error');
   }
   function downloadDefects() {
@@ -585,8 +588,8 @@ function ProductionSection({ aggs, fpyPct, fpyTone, vsTargetTone, prodView, setP
             <thead>
               <tr>
                 {prodView === 'product'
-                  ? ['Product','Runs','Target','QC Pass','Dispatched','Retail','Ecom','Done %'].map(h => <th key={h} style={thStyle}>{h}</th>)
-                  : ['Line','Runs','Products','Target','QC Pass','Dispatched','Retail','Ecom','Done %'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                  ? ['Product','Runs','Target','QC Pass','Dispatched','Retail','Ecom','Export','Done %'].map(h => <th key={h} style={thStyle}>{h}</th>)
+                  : ['Line','Runs','Products','Target','QC Pass','Dispatched','Retail','Ecom','Export','Done %'].map(h => <th key={h} style={thStyle}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -606,6 +609,7 @@ function ProductionSection({ aggs, fpyPct, fpyTone, vsTargetTone, prodView, setP
                     <td style={{ ...numTd, color: 'var(--yellow)' }}>{fmt(r.dispatched)}</td>
                     <td style={numTd}>{fmt(r.retail)}</td>
                     <td style={numTd}>{fmt(r.ecom)}</td>
+                    <td style={numTd}>{fmt(r.export)}</td>
                     <td style={{ ...numTd, color: pct == null ? 'var(--t3)' : pct >= 95 ? 'var(--ok-fg)' : pct >= 75 ? 'var(--warn-fg)' : 'var(--bad-fg)' }}>
                       {pct == null ? '—' : pct + '%'}
                     </td>

@@ -24,6 +24,9 @@ import {
 import KpiDrilldown from '../../../components/KpiDrilldown.js';
 import { scanProductLabel } from '../../../lib/scanProducts.js';
 
+// Packed sub-line: retail · ecom, plus export only once an RTX (export packed-out) scan exists (S392c).
+const packedSub = (rtr, rte, rtx) => `${fmt(rtr)} retail · ${fmt(rte)} ecom` + (Number(rtx) > 0 ? ` · ${fmt(rtx)} export` : '');
+
 // run status → kit ToneBadge tone
 const RUN_TONE = {
   Requested: 'info', Submitted: 'info', Draft: 'mute', Picking: 'warn',
@@ -319,10 +322,10 @@ export default function OverviewPage() {
       }
       setPva(pvaData.status === 'fulfilled' ? (pvaData.value || []) : []);
 
-      // Month-to-date dispatched (Σ rtr+rte) — drives the per-card monthly projection.
+      // Month-to-date dispatched (Σ rtr+rte+rtx) — drives the per-card monthly projection.
       if (monthPvaData.status === 'fulfilled' && Array.isArray(monthPvaData.value)) {
         const mtd = monthPvaData.value.reduce((sum, r) =>
-          sum + (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0), 0);
+          sum + (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0) + (Number(r.actual_rtx) || 0), 0);
         setMtdDispatched(mtd);
       }
       setScanSummary(scanData.status === 'fulfilled' ? (scanData.value || null) : null);
@@ -380,7 +383,7 @@ export default function OverviewPage() {
   const k = useMemo(() => {
     if (preset === 'today') {
       return {
-        dispatched: fmt(s.today_dispatched), subR: `${fmt(s.today_rtr)} retail · ${fmt(s.today_rte)} ecom`,
+        dispatched: fmt(s.today_dispatched), subR: packedSub(s.today_rtr, s.today_rte, s.today_rtx),
         qcPass: fmt(s.today_qc_pass), passRate: s.today_pass_rate != null ? s.today_pass_rate + '%' : '—',
         passTone: s.today_pass_rate >= 95 ? 'ok' : s.today_pass_rate != null ? 'warn' : undefined,
         qcFail: fmt(s.today_qc_fail),
@@ -388,12 +391,12 @@ export default function OverviewPage() {
       };
     }
     const agg = rangePva.reduce((a, r) => {
-      a.disp += (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0);
-      a.rtr += Number(r.actual_rtr) || 0; a.rte += Number(r.actual_rte) || 0;
+      a.disp += (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0) + (Number(r.actual_rtx) || 0);
+      a.rtr += Number(r.actual_rtr) || 0; a.rte += Number(r.actual_rte) || 0; a.rtx += Number(r.actual_rtx) || 0;
       a.pass += Number(r.actual_qc_pass) || 0;
       a.fail += Number(r.actual_qc_fail) || 0;
       return a;
-    }, { disp: 0, rtr: 0, rte: 0, pass: 0, fail: 0 });
+    }, { disp: 0, rtr: 0, rte: 0, rtx: 0, pass: 0, fail: 0 });
     const label = preset === 'week' ? 'Mon → today' : '1st → today';
     // Pass Rate + QC Fail over the range, now that get_plan_vs_actual carries actual_qc_fail
     // (previously hardcoded '—' for non-today presets). All range KPIs derive from rangePva so
@@ -401,7 +404,7 @@ export default function OverviewPage() {
     const denom = agg.pass + agg.fail;
     const rate = denom > 0 ? Math.round((agg.pass / denom) * 100) : null;
     return {
-      dispatched: fmt(agg.disp), subR: `${fmt(agg.rtr)} retail · ${fmt(agg.rte)} ecom`,
+      dispatched: fmt(agg.disp), subR: packedSub(agg.rtr, agg.rte, agg.rtx),
       qcPass: fmt(agg.pass),
       passRate: rate != null ? rate + '%' : '—',
       passTone: rate >= 95 ? 'ok' : rate != null ? 'warn' : undefined,

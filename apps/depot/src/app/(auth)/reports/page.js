@@ -29,13 +29,13 @@ const btnS  = { background: 'transparent', border: '1px solid var(--border)', bo
 const BAR   = 'var(--yellow)';
 const sectionHead = { fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 8 };
 
-const DISPATCH_ACTS = ['RTE','RTR','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN','REPACK_IN','REPACK_OUT'];
+const DISPATCH_ACTS = ['RTE','RTR','RTX','DTK','ALLOC','PACK','DOUT','RTO_IN','RTD_RETURN','REPACK_IN','REPACK_OUT'];
 const ACT_LABELS = {
-  RTE: 'Ready to Eship', RTR: 'Ready to Retail', DTK: 'Dock (handover)', ALLOC: 'Allocate',
+  RTE: 'Ready to Eship', RTR: 'Ready to Retail', RTX: 'Ready to Export', DTK: 'Dock (handover)', ALLOC: 'Allocate',
   PACK: 'Pack', DOUT: 'Dispatch out', RTO_IN: 'RTO in', RTD_RETURN: 'RTD return',
   REPACK_IN: 'Repack in', REPACK_OUT: 'Repack out',
 };
-const OP_ACT_COLS = ['PACK','DTK','ALLOC','DOUT','RTE','RTR','RTO_IN','RTD_RETURN'];
+const OP_ACT_COLS = ['PACK','DTK','ALLOC','DOUT','RTE','RTR','RTX','RTO_IN','RTD_RETURN'];
 
 function fmtISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function nf(n) { return (n == null || n === '') ? '—' : Number(n).toLocaleString('en-IN'); }
