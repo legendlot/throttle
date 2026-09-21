@@ -696,7 +696,7 @@ function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, part
           <thead>
             <tr>
               {['Part', 'Description', 'Type', 'Qty *', 'Unit', 'Unit Price', 'HSN', 'GST %', ''].map((h) => (
-                <th key={h} style={{ ...labelStyle, textAlign: 'left', padding: '4px 6px', borderBottom: '1px solid #333' }}>{h}</th>
+                <th key={h} style={{ ...labelStyle, display: 'table-cell', marginBottom: 0, textAlign: 'left', padding: '4px 6px', borderBottom: '1px solid #333', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
