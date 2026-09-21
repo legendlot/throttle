@@ -7,7 +7,7 @@
 // Run: node --test snorkelops-worker/test/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSoLinesCsv, SO_LINES_COLUMNS } from '../../apps/snorkel/src/lib/soExport.js';
+import { buildSoLinesCsv, SO_LINES_COLUMNS, buildSoSkuSummaryCsv, SO_SKU_COLUMNS } from '../../apps/snorkel/src/lib/soExport.js';
 
 // Minimal RFC-4180 parser: quoted fields, doubled quotes, commas and newlines inside quotes.
 function parseCsv(text) {
@@ -136,4 +136,61 @@ test('an order missing from the worker maps renders blank partner code/GSTIN and
   assert.equal(rows[0][col('Partner Code')], '');
   assert.equal(rows[0][col('Partner GSTIN')], '');
   assert.equal(buildSoLinesCsv({ filteredRows: [] }), SO_LINES_COLUMNS.join(','));
+});
+
+// ── Shipped / Packed / Pending + the SKU summary (Nikhil, #bugs 1789971181, 2026-09-21) ──
+const skuCol = (name) => { const i = SO_SKU_COLUMNS.indexOf(name); assert.ok(i >= 0, name); return i; };
+
+test('line export carries shipped/packed/pending; unknown stays blank, 0 stays 0', () => {
+  const rows = [{ id: 'o1', order_no: 'SO-1', status: 'confirmed', channel_key: 'GT' }];
+  const linesByOrder = { o1: [
+    { product: 'Knox', model: 'Explorer', color: 'Black', sku: 'K1', qty: 5, shipped_qty: 3, packed_qty: 0, pending_qty: 2 },
+    { product: 'Knox', model: 'Explorer', color: 'Red', sku: 'K2', qty: 2 },   // worker could not read dispatch
+  ] };
+  const parsed = parseCsv(buildSoLinesCsv({ filteredRows: rows, linesByOrder, partnerByOrder: {} }));
+  assert.equal(parsed[1][col('Shipped')], '3');
+  assert.equal(parsed[1][col('Packed')], '0');
+  assert.equal(parsed[1][col('Pending')], '2');
+  assert.equal(parsed[2][col('Shipped')], '');
+  assert.equal(parsed[2][col('Pending')], '');
+  for (const r of parsed) assert.equal(r.length, SO_LINES_COLUMNS.length);
+});
+
+test('SKU summary groups by channel × variant over CONFIRMED orders only, most pending first', () => {
+  const rows = [
+    { id: 'a', status: 'confirmed', channel_key: 'FLIPKART_MGD' },
+    { id: 'b', status: 'confirmed', channel_key: 'FLIPKART_MGD' },
+    { id: 'c', status: 'cancelled', channel_key: 'FLIPKART_MGD' },   // needs nothing sent
+    { id: 'd', status: 'confirmed', channel_key: 'AMAZON' },
+  ];
+  const line = (sku, qty, shipped, extra = {}) => ({ product: 'Flare', model: 'LE', color: sku, sku, qty, shipped_qty: shipped, packed_qty: 0, pending_qty: qty - shipped, ...extra });
+  const linesByOrder = {
+    a: [line('Black', 10, 4)],
+    b: [line('Black', 6, 6), line('Red', 3, 0)],
+    c: [line('Black', 99, 0)],
+    d: [line('Black', 1, 0)],
+  };
+  const parsed = parseCsv(buildSoSkuSummaryCsv({ filteredRows: rows, linesByOrder }));
+  assert.deepEqual(parsed[0], SO_SKU_COLUMNS);
+  assert.equal(parsed.length, 4);                                    // header + AMAZON Black + FLIPKART Black + FLIPKART Red
+  const fkBlack = parsed.find(r => r[skuCol('Channel')] === 'FLIPKART_MGD' && r[skuCol('Colour')] === 'Black');
+  assert.equal(fkBlack[skuCol('Orders')], '2');
+  assert.equal(fkBlack[skuCol('Ordered')], '16');                    // 10 + 6, the cancelled 99 excluded
+  assert.equal(fkBlack[skuCol('Shipped')], '10');
+  assert.equal(fkBlack[skuCol('Pending')], '6');
+  assert.equal(parsed[1][skuCol('Channel')], 'AMAZON');              // channels sorted
+  assert.equal(parsed[2][skuCol('Colour')], 'Black');                // 6 pending before Red's 3
+  for (const r of parsed) assert.equal(r.length, SO_SKU_COLUMNS.length);
+});
+
+test('SKU summary: an unknown line makes the whole group blank on shipped/pending, never a low number', () => {
+  const rows = [{ id: 'a', status: 'confirmed', channel_key: 'GT' }, { id: 'b', status: 'confirmed', channel_key: 'GT' }];
+  const linesByOrder = {
+    a: [{ product: 'Zipp', model: 'X', color: 'Blue', sku: 'Z', qty: 4, shipped_qty: 4, packed_qty: 0, pending_qty: 0 }],
+    b: [{ product: 'Zipp', model: 'X', color: 'Blue', sku: 'Z', qty: 4 }],
+  };
+  const parsed = parseCsv(buildSoSkuSummaryCsv({ filteredRows: rows, linesByOrder }));
+  assert.equal(parsed[1][skuCol('Ordered')], '8');
+  assert.equal(parsed[1][skuCol('Shipped')], '');
+  assert.equal(parsed[1][skuCol('Pending')], '');
 });

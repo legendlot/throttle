@@ -9,7 +9,7 @@ import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
 import { todayStr } from '@throttle/domain';
-import { buildSoLinesCsv } from '@/lib/soExport.js';
+import { buildSoLinesCsv, buildSoSkuSummaryCsv } from '@/lib/soExport.js';
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -93,31 +93,51 @@ export default function SalesOrdersPage() {
   // the PO list's "Export + lines". The lines are a second read (getSalesOrderLinesBulk, same
   // sales_view gate and same server filters as getSalesOrders); the rows are `filtered`, so the
   // search / fulfilment / overdue filters are honoured exactly like the header export.
-  async function exportCsvWithLines() {
-    if (!session) return;
-    let payload;
+  async function fetchLinesBulk() {
+    if (!session) return null;
     setExportingLines(true);
     try {
       const params = {};
       if (filters.status) params.status = filters.status;
       if (filters.channel_key) params.channel_key = filters.channel_key;
-      payload = await garageFetch('getSalesOrderLinesBulk', params, session);
+      return await garageFetch('getSalesOrderLinesBulk', params, session);
     } catch (e) {
       showToast(e.message || 'Failed to load order lines', 'error');
-      return;
+      return null;
     } finally {
       setExportingLines(false);
     }
-    const csv = buildSoLinesCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {},
-                                  partnerByOrder: payload?.partnerByOrder || {} });
+  }
+
+  function downloadCsv(csv, name, emptyMsg) {
     // Header-only file = nothing to export. (Not a `split('\n')` row count — a quoted newline
     // inside a description would inflate it.)
-    if (!csv.includes('\n')) { showToast('No order lines to export for these filters', 'error'); return; }
+    if (!csv.includes('\n')) { showToast(emptyMsg, 'error'); return false; }
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-sales-order-lines-${todayStr()}.csv`; a.click();
+    a.href = url; a.download = name; a.click();
     URL.revokeObjectURL(url);
+    return true;
+  }
+
+  // SKU-wise: one row per channel × variant with ordered / shipped / packed / pending across the
+  // confirmed orders on screen (Nikhil, #bugs 1789971181 — "which SKU we need to send").
+  async function exportSkuSummary() {
+    const payload = await fetchLinesBulk();
+    if (!payload) return;
+    const csv = buildSoSkuSummaryCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {} });
+    if (!downloadCsv(csv, `lot-sku-to-send-${todayStr()}.csv`, 'No confirmed order lines for these filters')) return;
+    if (payload?.fulfilment_known === false) showToast('Dispatch data could not be read — Shipped / Pending left blank', 'error');
+  }
+
+  async function exportCsvWithLines() {
+    const payload = await fetchLinesBulk();
+    if (!payload) return;
+    const csv = buildSoLinesCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {},
+                                  partnerByOrder: payload?.partnerByOrder || {} });
+    if (!downloadCsv(csv, `lot-sales-order-lines-${todayStr()}.csv`, 'No order lines to export for these filters')) return;
+    if (payload?.fulfilment_known === false) showToast('Dispatch data could not be read — Shipped / Pending left blank', 'error');
     // The list on screen and the line read are two moments (S376 review): an order cancelled or
     // re-filtered in between comes back with no lines and a blank partner code — say so, never
     // silently ship a file that is short.
@@ -134,6 +154,7 @@ export default function SalesOrdersPage() {
         actions={<>
           <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
           <Btn onClick={exportCsvWithLines} disabled={!filtered.length || exportingLines}><Download size={14} /> {exportingLines ? 'Loading lines…' : 'Export + lines'}</Btn>
+          <Btn onClick={exportSkuSummary} disabled={!filtered.length || exportingLines}><Download size={14} /> SKU to send</Btn>
           {canManage && <Btn kind="primary" onClick={() => router.push('/sales/orders/new')}><Plus size={14} /> New order</Btn>}
         </>} />
 

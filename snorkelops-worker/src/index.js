@@ -3530,7 +3530,7 @@ export default {
             if (!canSalesView(P)) return err('No permission', 403);
             // Same server-side filters as getSalesOrders, so the order set we return lines for
             // is the set the client list was built from.
-            let params = '?select=id,sales_partners(partner_code,gstin)&order=id.asc';
+            let params = '?select=id,dispatch_shipment_id,sales_partners(partner_code,gstin)&order=id.asc';
             const st  = url.searchParams.get('status');
             const ch  = url.searchParams.get('channel_key');
             const pid = url.searchParams.get('partner_id');
@@ -3560,7 +3560,31 @@ export default {
               if (!partnerByOrder[l.order_id]) continue;       // not in the filtered order set
               (linesByOrder[l.order_id] ||= []).push(l);
             }
-            return ok({ linesByOrder, partnerByOrder });
+            // Shipped / packed / pending per line (Nikhil, #bugs 1789971181, 2026-09-21) — the
+            // SAME allocation the order screen and the list's fulfilment value use, over the
+            // same paged dispatch read. A failed page means UNKNOWN: leave the fields off every
+            // line (the CSV prints blanks) and say so, never a zero that reads as "nothing sent".
+            let fulfilment_known = true;
+            const [ful, allDispatch] = await Promise.all([
+              loadFulfilment(heads),
+              pageAll(queryPublic, 'dispatch_shipment_lines',
+                '?select=shipment_id,product,model,color,target_qty,packed_qty&order=shipment_id.asc,id.asc'),
+            ]);
+            if (!allDispatch) fulfilment_known = false;
+            else {
+              const dispByShip = {};
+              for (const d of allDispatch) (dispByShip[d.shipment_id] ||= []).push(d);
+              for (const h of heads) {
+                const rows = linesByOrder[h.id];
+                if (!rows?.length) continue;
+                const f = ful?.[h.id];
+                const all = (f?.shipments?.length ? f.shipments : (f?.legacyShipment ? [f.legacyShipment] : []));
+                const shipments = all.filter(sh => sh.status !== 'cancelled');
+                const dispatchLines = shipments.flatMap(sh => dispByShip[sh.id] || []);
+                linesByOrder[h.id] = allocateLineFulfilment(rows, shipments, dispatchLines);
+              }
+            }
+            return ok({ linesByOrder, partnerByOrder, fulfilment_known });
           }
 
           case 'getSalesOrder': {

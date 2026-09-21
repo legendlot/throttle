@@ -14,6 +14,10 @@ export const SO_LINES_COLUMNS = [
   'Channel', 'Invoice', 'Invoice Date',
   'Line No', 'Product', 'Model', 'Colour', 'SKU', 'HSN', 'Description',
   'Qty', 'Rate', 'Discount %', 'Taxable Value', 'GST %', 'GST Amount', 'Line Total',
+  // Nikhil (#bugs 1789971181, 2026-09-21): "which SKU we still need to send". Sent / packed /
+  // pending come from the worker's allocateLineFulfilment — the SAME numbers the order screen
+  // shows — and stay BLANK (unknown) when the worker could not read every dispatch line.
+  'Shipped', 'Packed', 'Pending',
 ];
 
 // PostgREST returns numeric columns as STRINGS ("1234.50"). Normalise to a number so the file
@@ -43,8 +47,52 @@ export function buildSoLinesCsv({ filteredRows, linesByOrder, partnerByOrder }) 
         l.description || '',
         num(l.qty), num(l.rate), num(l.discount_pct), num(l.taxable_value), num(l.gst_pct),
         num(l.gst_amount), num(l.line_total),
+        num(l.shipped_qty), num(l.packed_qty), num(l.pending_qty),
       ].map(csvCell).join(','));
     });
+  }
+  return rows.join('\n');
+}
+
+// ── SKU summary: one row per channel × variant across the orders on screen ──────────────
+// Nikhil (#bugs 1789971181): "SKU-wise … to calculate which SKU we need to send". Cancelled
+// orders need nothing sent, so they are skipped even when the on-screen list includes them;
+// drafts are not yet orders and are skipped too. Sorted by channel, then most pending first.
+export const SO_SKU_COLUMNS = [
+  'Channel', 'Product', 'Model', 'Colour', 'SKU', 'Orders', 'Ordered', 'Shipped', 'Packed', 'Pending',
+];
+
+export function buildSoSkuSummaryCsv({ filteredRows, linesByOrder }) {
+  const groups = new Map();
+  for (const o of filteredRows || []) {
+    if (o.status !== 'confirmed') continue;
+    for (const l of (linesByOrder?.[o.id] || [])) {
+      const k = [o.channel_key || '', l.product || '', l.model || '', l.color || '', l.sku || ''].join('\u0001');
+      let g = groups.get(k);
+      if (!g) {
+        g = { channel: o.channel_key || '', product: l.product || '', model: l.model || '', color: l.color || '',
+              sku: l.sku || '', orders: new Set(), ordered: 0, shipped: 0, packed: 0, pending: 0, unknown: false };
+        groups.set(k, g);
+      }
+      g.orders.add(o.id);
+      g.ordered += Math.round(Number(l.qty)) || 0;
+      // Unknown on ANY line makes the group's sent/pending unknown — a partial sum would read
+      // as "fewer to send" than the truth, which is the one direction this file must not err in.
+      if (l.shipped_qty == null || l.pending_qty == null) { g.unknown = true; continue; }
+      g.shipped += Math.round(Number(l.shipped_qty)) || 0;
+      g.packed += Math.round(Number(l.packed_qty)) || 0;
+      g.pending += Math.round(Number(l.pending_qty)) || 0;
+    }
+  }
+  const list = [...groups.values()].sort((a, b) =>
+    a.channel.localeCompare(b.channel) || (b.unknown ? 0 : b.pending) - (a.unknown ? 0 : a.pending)
+    || a.product.localeCompare(b.product) || a.model.localeCompare(b.model) || a.color.localeCompare(b.color));
+  const rows = [SO_SKU_COLUMNS.join(',')];
+  for (const g of list) {
+    rows.push([
+      g.channel, g.product, g.model, g.color, g.sku, g.orders.size, g.ordered,
+      g.unknown ? '' : g.shipped, g.unknown ? '' : g.packed, g.unknown ? '' : g.pending,
+    ].map(csvCell).join(','));
   }
   return rows.join('\n');
 }
