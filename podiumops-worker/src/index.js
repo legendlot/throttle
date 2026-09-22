@@ -2342,8 +2342,10 @@ async function lockAppraisalComp(body, auth, env) {
     const a = byId[c.id];
     const pct = c.calibrated_increment_pct == null ? null : Number(c.calibrated_increment_pct);
     const bonus = c.calibrated_bonus == null ? null : Number(c.calibrated_bonus);
+    // Every row carries the same keys — PostgREST rejects a bulk insert whose objects differ (PGRST102).
     const common = { employee_id: c.employee_id, effective_date: a.cycle?.appraisal_date, currency: 'INR', appraisal_id: c.id,
-      reason: `Appraisal — ${a.cycle?.name || ''}`.trim(), approved_by: auth.userId, created_by: auth.userId };
+      reason: `Appraisal — ${a.cycle?.name || ''}`.trim(), approved_by: auth.userId, created_by: auth.userId,
+      old_ctc: null, new_ctc: null, components: null };
     if (pct != null && pct > 0) {
       const b = base[c.employee_id] || null;
       events.push({ ...common, event_type: 'increment', increment_pct: pct, amount: null,
