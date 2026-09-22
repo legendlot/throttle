@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod, defaultRange } from '../../../lib/api.js';
 import { Kpi, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 import { PageHead, PanelHead, Pill, Nil } from '../../../components/prism.js';
 import { HUE, STATUS } from '../../../lib/hues.js';
@@ -33,7 +33,7 @@ const microLbl = { fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t5)', 
 
 export default function MarketingPage() {
   const { session } = useAuth();
-  const mtd = rangePresets().find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [group, setGroup] = useState('platform');

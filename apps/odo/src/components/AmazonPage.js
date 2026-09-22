@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod, defaultRange } from '../lib/api.js';
 import { familyOf, FAMILIES, FAMILY_ORDER, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders, GST_RATE } from '../lib/segregation.js';
 import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
@@ -61,7 +61,7 @@ export default function AmazonPage() {
   const { session } = useAuth();
   const router = useRouter();
   const presets = rangePresets();
-  const mtd = presets.find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [grp, setGrp] = useState('variant');         // sellers: variant=SKU | product=Model

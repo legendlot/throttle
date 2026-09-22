@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Modal, Combobox } from '@throttle/ui';
-import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
+import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod, defaultRange, DEFAULT_RANGE_PRESET } from '../../lib/api.js';
 import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
@@ -46,8 +46,8 @@ export default function Dashboard() {
   const { session } = useAuth();
   const [channels, setChannels] = useState([]);
   const [sel, setSel] = useState([]);            // selected channel ids ([] = all)
-  const MTD = PRESETS.find(p => p.key === 'mtd');
-  const [preset, setPreset] = useState('mtd');
+  const MTD = defaultRange();
+  const [preset, setPreset] = useState(DEFAULT_RANGE_PRESET);
   const [from, setFrom] = useState(MTD.from);
   const [to, setTo] = useState(MTD.to);
   const [group, setGroup] = useState('variant'); // drill table axis

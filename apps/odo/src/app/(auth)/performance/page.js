@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { ArrowLeftRight, Sparkles, Wrench } from 'lucide-react';
-import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod, defaultRange } from '../../../lib/api.js';
 import { aggOrders } from '../../../lib/segregation.js';
 import { Kpi, Delta, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 import { PageHead, PanelHead, Swatch } from '../../../components/prism.js';
@@ -34,7 +34,7 @@ function OrderTypeTile({ icon: Icon, color, lbl, val, sub, now, prev }) {
 
 export default function PerformancePage() {
   const { session } = useAuth();
-  const mtd = rangePresets().find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [metric, setMetric] = useState('gross');   // trend: gross (Total Sales) | net (ex-GST)

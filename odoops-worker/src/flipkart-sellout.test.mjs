@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseDMY,
-         parseReportGrid, parseReportXlsx, toFsnFacts, toSkuSnapshot } from './flipkart-sellout.mjs';
+         parseReportGrid, parseReportXlsx, toFsnFacts, toSkuSnapshot, stageSelloutRows } from './flipkart-sellout.mjs';
 import { readXlsxSheet } from './xlsx-lite.mjs';
 
 const html = readFileSync(new URL('./fixtures/flipkart-report-2026-09-22.html', import.meta.url), 'utf8');
@@ -163,4 +163,124 @@ test('parseReportGrid throws when there is no TOTAL row', async () => {
   const mutated = structuredClone(rows);
   mutated.length = 36; // drop the TOTAL row entirely
   assert.throws(() => parseReportGrid(mutated), /TOTAL row not found/);
+});
+
+test('parseReportHtml reads a numeric cell that carries a <br> (strip inserts a space, which must not make it null)', () => {
+  assert.equal((html.match(/6,126/g) || []).length, 2);
+  const p = parseReportHtml(html.replace(/6,126/g, '6,<br>126'));
+  assert.equal(p.platforms.find(x => x.platform === 'national').atp_qty, 6126);
+});
+
+test('parseReportGrid throws when a D-n block title carries a date it cannot parse (the day must not vanish silently)', async () => {
+  const rows = await readXlsxSheet(xlsxBytes);
+  const mutated = structuredClone(rows);
+  const titleRow = mutated[7];
+  const col = Object.keys(titleRow).find(k => /^D-1 /.test(String(titleRow[k])));
+  assert.ok(col, 'D-1 title cell not found in row 7');
+  titleRow[col] = titleRow[col].replace(/-([A-Za-z]{3})-/, '-Sxp-');
+  assert.throws(() => parseReportGrid(mutated), /unparseable date/);
+});
+
+// ---- stageSelloutRows: the ordering rules, against an in-memory Supabase ----------------------------
+function fakeIo({ reports = [], skuMaxDate = null, failInsert = null, failPatch = false } = {}) {
+  const calls = [];
+  const db = { reports: [...reports] };
+  const io = {
+    parserVersion: 2,
+    nowISO: () => '2026-09-22T05:00:00.000Z',
+    queueUnmappedFsns: async (channelId, snap) => { calls.push(['queue', channelId, snap.length]); },
+    sbSales: async (path, init) => {
+      calls.push([init?.method || 'GET', path]);
+      if (init?.method === 'PATCH') {
+        if (failPatch) return { ok: false, data: { message: 'boom' } };
+        const rd = /report_date=eq\.([^&]+)/.exec(path)[1], me = decodeURIComponent(/message_id=neq\.([^&]+)/.exec(path)[1]);
+        for (const x of db.reports) if (x.report_date === rd && x.message_id !== me && !x.superseded_by) x.superseded_by = JSON.parse(init.body).superseded_by;
+        return { ok: true, data: [] };
+      }
+      if (path.startsWith('/rest/v1/sellout_report?')) {
+        const rd = /report_date=eq\.([^&]+)/.exec(path)[1], me = decodeURIComponent(/message_id=neq\.([^&]+)/.exec(path)[1]);
+        const hits = db.reports.filter(x => x.report_date === rd && x.message_id !== me).sort((a, b) => a.received_at < b.received_at ? 1 : -1);
+        return { ok: true, data: hits.slice(0, 1) };
+      }
+      if (path.startsWith('/rest/v1/sellout_sku?')) return { ok: true, data: skuMaxDate ? [{ report_date: skuMaxDate }] : [] };
+      throw new Error('fakeIo: unexpected read ' + path);
+    },
+    sbInsertChunked: async (path, rows) => {
+      calls.push(['INSERT', path, rows.length]);
+      if (failInsert && path.includes(failInsert)) throw new Error('fakeIo: insert failed ' + failInsert);
+      if (path.startsWith('/rest/v1/sellout_report?')) for (const x of rows) db.reports.push({ ...x });
+    },
+  };
+  return { io, calls, db };
+}
+const parsedFor = (d1, d2) => ({ d1_date: d1, d2_date: d2, mtd_label: 'Sep 2026', platforms: [
+  { platform: 'total', atp_qty: 10, mtd_units: 5, mtd_gmv: 1000, d1_units: 2, d1_gmv: 400, d2_units: 3, d2_gmv: 600 }] });
+const row = (message_id, report_date, received_at, extra = {}) => ({
+  message_id, report_date, received_at, channel_id: 'chan-1', parsed: parsedFor('2026-09-21', '2026-09-20'),
+  html_path: 'h', xlsx_path: null, sha256: 'x', xlsx: null, ...extra,
+});
+const inserts = calls => calls.filter(c => c[0] === 'INSERT').map(c => c[1].split('?')[0]);
+
+test('stageSelloutRows: a throwing fact insert leaves NO report row behind (the dedup key never exists without its facts)', async () => {
+  const { io, calls, db } = fakeIo({ failInsert: 'sellout_fact' });
+  await assert.rejects(() => stageSelloutRows([row('m1', '2026-09-22', '2026-09-22T04:00:00Z')], io), /insert failed sellout_fact/);
+  assert.equal(db.reports.length, 0);
+  assert.ok(!inserts(calls).includes('/rest/v1/sellout_report'));
+});
+
+test('stageSelloutRows: an OLDER report for a date that already has a newer one writes no facts and lands superseded', async () => {
+  const { io, calls, db } = fakeIo({ reports: [{ message_id: 'new', platform: 'total', report_date: '2026-09-22', received_at: '2026-09-22T09:00:00+00:00' }] });
+  const res = await stageSelloutRows([row('old', '2026-09-22', '2026-09-22T04:00:00Z')], io);
+  assert.deepEqual(inserts(calls), ['/rest/v1/sellout_report']);           // no sellout_fact write at all
+  assert.equal(db.reports.find(x => x.message_id === 'old').superseded_by, 'new');
+  assert.ok(!calls.some(c => c[0] === 'PATCH'));                            // the older one supersedes nothing
+  assert.ok(res.subreqs >= 2);
+});
+
+test('stageSelloutRows: arrival order does not matter — the later-received report wins and supersedes the earlier', async () => {
+  const { io, calls, db } = fakeIo();
+  await stageSelloutRows([row('later', '2026-09-22', '2026-09-22T09:00:00Z'), row('earlier', '2026-09-22', '2026-09-22T04:00:00Z')], io);
+  assert.deepEqual(inserts(calls), ['/rest/v1/sellout_fact', '/rest/v1/sellout_report', '/rest/v1/sellout_fact', '/rest/v1/sellout_report']);
+  assert.equal(db.reports.find(x => x.message_id === 'earlier').superseded_by, 'later');
+  assert.equal(db.reports.find(x => x.message_id === 'later').superseded_by, null);
+});
+
+test('stageSelloutRows: a failing supersede PATCH throws before the report row is written', async () => {
+  const { io, calls } = fakeIo({ failPatch: true });
+  await assert.rejects(() => stageSelloutRows([row('m1', '2026-09-22', '2026-09-22T04:00:00Z')], io), /supersede PATCH failed for 2026-09-22/);
+  assert.ok(!inserts(calls).includes('/rest/v1/sellout_report'));
+});
+
+test('stageSelloutRows: the FSN snapshot is only written by a report at least as new as the current one; unmapped queue follows it', async () => {
+  const xlsx = parseReportGrid(await readXlsxSheet(xlsxBytes));
+  const older = fakeIo({ skuMaxDate: '2026-09-23' });
+  await stageSelloutRows([row('m1', '2026-09-22', '2026-09-22T04:00:00Z', { xlsx })], older.io);
+  assert.ok(!inserts(older.calls).includes('/rest/v1/sellout_sku'));
+  assert.ok(!older.calls.some(c => c[0] === 'queue'));
+  assert.equal(older.calls.filter(c => c[0] === 'INSERT' && c[1].startsWith('/rest/v1/sellout_fact')).length, 2); // HTML facts + FSN facts still land
+  const same = fakeIo({ skuMaxDate: '2026-09-22' });
+  const res = await stageSelloutRows([row('m1', '2026-09-22', '2026-09-22T04:00:00Z', { xlsx })], same.io);
+  assert.ok(inserts(same.calls).includes('/rest/v1/sellout_sku'));
+  assert.deepEqual(same.calls.find(c => c[0] === 'queue'), ['queue', 'chan-1', 27]);
+  assert.ok(res.subreqs >= 8, String(res.subreqs));
+});
+
+test('stageSelloutRows: empty input is a no-op that reports zero subrequests', async () => {
+  const { io, calls } = fakeIo();
+  assert.deepEqual(await stageSelloutRows([], io), { subreqs: 0 });
+  assert.equal(calls.length, 0);
+});
+
+test('parseReportHtml returns null (not a fused number) for a cell holding two numeric tokens', () => {
+  const p = parseReportHtml(html.replace(/6,126/g, '6,126<br>7'));
+  assert.equal(p.platforms.find(x => x.platform === 'national').atp_qty, null);
+});
+
+test('parseReportGrid throws on a D-n title in an unexpected shape (D-3 21/09/2026), not just a bad month', async () => {
+  const rows = await readXlsxSheet(xlsxBytes);
+  const mutated = structuredClone(rows);
+  const titleRow = mutated[7];
+  const col = Object.keys(titleRow).find(k => /^D-3 /.test(String(titleRow[k])));
+  titleRow[col] = 'D-3 21/09/2026';
+  assert.throws(() => parseReportGrid(mutated), /unrecognised D-n block title/);
 });

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday, defaultRange } from '../lib/api.js';
 import { FAMILIES, FAMILY_ORDER, familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
 import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
@@ -38,7 +38,7 @@ export default function ChannelFamilyPage({ familyKey }) {
   const router = useRouter();
   const fam = FAMILIES[familyKey];
   const presets = rangePresets();
-  const mtd = presets.find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [metric, setMetric] = useState('gross');     // trend gross|units

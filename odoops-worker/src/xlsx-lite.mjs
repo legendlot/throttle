@@ -32,6 +32,9 @@ export async function unzipEntries(bytes) {
   const eocdOff = findEocd(view, bytes);
   const entryCount = view.getUint16(eocdOff + 10, true);
   let cenOff = view.getUint32(eocdOff + 16, true);
+  // Zip64 stores 0xFFFF / 0xFFFFFFFF sentinels here and the real values in an extra record this reader does
+  // not walk — say so instead of dereferencing the sentinel (a DataView RangeError with no context).
+  if (entryCount === 0xFFFF || cenOff === 0xFFFFFFFF) throw new Error('xlsx-lite: zip64 archives are not supported');
 
   const out = new Map();
   for (let i = 0; i < entryCount; i++) {
@@ -43,6 +46,7 @@ export async function unzipEntries(bytes) {
     const commentLen = view.getUint16(cenOff + 32, true);
     const localOff = view.getUint32(cenOff + 42, true);
     const name = dec.decode(bytes.subarray(cenOff + 46, cenOff + 46 + nameLen));
+    if (compSize === 0xFFFFFFFF || localOff === 0xFFFFFFFF) throw new Error(`xlsx-lite: zip64 archives are not supported (entry "${name}")`);
 
     if (view.getUint32(localOff, true) !== LOC_SIG) throw new Error(`xlsx-lite: local file header for "${name}" has a bad signature`);
     const locNameLen = view.getUint16(localOff + 26, true);
@@ -69,10 +73,12 @@ function decodeXmlEntities(s) {
       case 'gt': return '>';
       case 'quot': return '"';
       case 'apos': return "'";
-      default:
-        return e[1] === 'x'
-          ? String.fromCodePoint(parseInt(e.slice(2), 16))
-          : String.fromCodePoint(parseInt(e.slice(1), 10));
+      default: {
+        // Unicode ends at U+10FFFF; String.fromCodePoint throws a RangeError above it. Keep the entity text
+        // verbatim rather than fail the whole sheet on one malformed reference.
+        const cp = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        return Number.isFinite(cp) && cp <= 0x10FFFF ? String.fromCodePoint(cp) : m;
+      }
     }
   });
 }
@@ -99,13 +105,15 @@ function parseSharedStrings(xml) {
 // xl/workbook.xml sheet order -> r:id, then xl/_rels/workbook.xml.rels r:id -> worksheet path.
 function resolveSheetPath(workbookXml, relsXml, sheetIndex) {
   if (workbookXml) {
-    const sheets = [...workbookXml.matchAll(/<sheet\b[^>]*\/>/g)].map(m => m[0]);
+    // Open tags only (`<sheet …/>` or `<sheet …>`): the attributes are all that is read, and a writer that
+    // emits `<sheet …></sheet>` must not make the sheet vanish (which would silently fall back to sheet1).
+    const sheets = [...workbookXml.matchAll(/<sheet\b[^>]*>/g)].map(m => m[0]);
     const sheet = sheets[sheetIndex];
     if (sheet) {
       const ridM = /r:id="([^"]+)"/.exec(sheet);
       const rid = ridM && ridM[1];
       if (rid && relsXml) {
-        const relM = new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*\\/>`).exec(relsXml);
+        const relM = new RegExp(`<Relationship\\b[^>]*\\bId="${rid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>`).exec(relsXml);
         if (relM) {
           const targetM = /Target="([^"]+)"/.exec(relM[0]);
           if (targetM) {
@@ -151,11 +159,17 @@ export async function readXlsxSheet(bytes, sheetIndex = 0) {
   const sheetXml = dec.decode(entries.get(sheetPath));
 
   const rows = [];
-  const rowRe = /<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+  // Same two-alternative shape as the cell regex below: an empty self-closed `<row …/>` must not let the
+  // open-tag branch span into the next row. `r=` is optional in the spec — derive the row from its cells.
+  const rowRe = /<row\b([^>]*?)\/>|<row\b([^>]*?)>([\s\S]*?)<\/row>/g;
   let rowM;
   while ((rowM = rowRe.exec(sheetXml))) {
-    const r = Number(rowM[1]);
-    const rowXml = rowM[2];
+    if (rowM[1] !== undefined) continue; // self-closed: no cells
+    const rowXml = rowM[3];
+    const rAttr = /\br="(\d+)"/.exec(rowM[2]);
+    const rCell = /<c\b[^>]*\br="[A-Z]+(\d+)"/.exec(rowXml);
+    const r = Number(rAttr ? rAttr[1] : rCell ? rCell[1] : NaN);
+    if (!Number.isFinite(r)) continue; // no row number anywhere — nothing to key the cells on
     const obj = {};
     let any = false;
     // Two top-level alternatives, not a nested one: a self-closed <c .../> (no value) must not let

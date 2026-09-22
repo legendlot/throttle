@@ -22,7 +22,9 @@ export function parseReportDate(subject) {
 
 const strip = s => String(s || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const num = s => {
-  const t = strip(s).replace(/,/g, '');
+  // A `<br>` after a thousands comma becomes a space after strip — drop it with the comma; two separate numeric
+  // tokens ("1234 567") still fail Number() and return null rather than fusing into a fabricated figure.
+  const t = strip(s).replace(/,\s*/g, '');
   if (!t || t === '—' || t === '-' || t === '–') return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
@@ -140,7 +142,14 @@ export function parseReportGrid(rows) {
     const mtdM = /^Month till Date \((.+)\)$/.exec(text);
     const dM = /^D-(\d)\s+(\d{1,2}-[A-Za-z]{3}-\d{4})$/.exec(text);
     if (mtdM) { key = 'mtd'; label = mtdM[1]; }
-    else if (dM) { key = `d${dM[1]}`; date = parseDMY(dM[2]); }
+    else if (dM) {
+      key = `d${dM[1]}`; date = parseDMY(dM[2]);
+      // toFsnFacts skips a block without a date (that is how MTD stays out of the daily table) — a D-n title
+      // whose date does not parse must fail here, or its whole day would silently vanish from the facts.
+      if (!date) throw new Error(`Flipkart xlsx: block "${text}" has an unparseable date`);
+    }
+    // Any other D-n shaped title ("D-3 21/09/2026", "D-10 …") is the same silent hole — refuse it too.
+    else if (/^D-\s*\d/i.test(text)) throw new Error(`Flipkart xlsx: unrecognised D-n block title "${text}"`);
     else continue;
     if (seenKeys.has(key)) throw new Error(`Flipkart xlsx: duplicate block key "${key}"`);
     seenKeys.add(key);
@@ -265,4 +274,68 @@ export function b64urlDecode(s) {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// ---- stage (Supabase writes) ------------------------------------------------------------
+// The adapter's stage step with every side effect injected, so its ordering rules are table-tested in
+// flipkart-sellout.test.mjs (the worker file has no test harness). io:
+//   sbSales(path, init?) -> { ok, data }      sbInsertChunked(path, rows, prefer) -> throws on failure
+//   nowISO() -> ISO stamp                     queueUnmappedFsns(channelId, snap) -> Promise
+//   parserVersion -> the ingest's SELLOUT_PARSER_VERSION (written on every report row)
+// Returns { subreqs }: the Supabase calls made (a chunked insert counts one per 200 rows, the mapping queue
+// three) so executeRun can add them to the run's subrequests_used — fetch's count never saw stage's calls.
+export async function stageSelloutRows(rows, io) {
+  const { sbSales, sbInsertChunked, nowISO, queueUnmappedFsns, parserVersion } = io;
+  let subreqs = 0;
+  const insert = async (path, list, prefer) => { subreqs += Math.max(1, Math.ceil(list.length / 200)); await sbInsertChunked(path, list, prefer); };
+  if (!rows.length) return { subreqs };
+  // Oldest first so a later report for the same date supersedes the earlier one deterministically.
+  rows.sort((a, b) => a.received_at < b.received_at ? -1 : 1);
+  for (const r of rows) {
+    const reportRows = r.parsed.platforms.map(p => ({
+      message_id: r.message_id, platform: p.platform, source: 'flipkart_email', channel_id: r.channel_id,
+      report_date: r.report_date, received_at: r.received_at,
+      atp_qty: p.atp_qty, mtd_units: p.mtd_units, mtd_gmv: p.mtd_gmv,
+      d1_date: r.parsed.d1_date, d1_units: p.d1_units, d1_gmv: p.d1_gmv,
+      d2_date: r.parsed.d2_date, d2_units: p.d2_units, d2_gmv: p.d2_gmv,
+      html_path: r.html_path, xlsx_path: r.xlsx_path, sha256: r.sha256, parser_version: parserVersion,
+      raw: { mtd_label: r.parsed.mtd_label, fsn_count: r.xlsx ? r.xlsx.fsns.length : null, xlsx_blocks: r.xlsx ? r.xlsx.blocks.map(b => b.key) : null },
+    }));
+    // Newest report for this date wins, whatever the ARRIVAL order (a budget-capped run can ingest a
+    // correction before the original it corrects). Compare as epoch — PostgREST returns +00:00 offsets.
+    const newestR = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&select=message_id,received_at&order=received_at.desc&limit=1`); subreqs++;
+    if (!newestR.ok) throw new Error('flipkart_sellout: newest-report read failed ' + JSON.stringify(newestR.data).slice(0, 160));
+    const newer = newestR.data.find(x => Date.parse(x.received_at) > Date.parse(r.received_at)) || null;
+    if (!newer) {
+      // Daily observations: the LATEST-RECEIVED report asserting a sale_date owns it — across report_dates
+      // too (the 22nd's D-2 and a 21st re-send both assert the 20th; whichever arrived later is the later
+      // information). Every write is idempotent (PK merge) — the run may be retried from any point.
+      const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
+        .map(f => ({ ...f, updated_at: nowISO() }));
+      if (facts.length) await insert('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
+      if (r.xlsx) {
+        // FSN rows for D-1..D-7 (+ the '*' platform rows for the same 7 days — the xlsx reaches 5 days
+        // further back than the HTML, which is what covers a Friday from Monday's report).
+        const stamp = nowISO();
+        const fsnFacts = toFsnFacts(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id }).map(f => ({ ...f, updated_at: stamp }));
+        if (fsnFacts.length) await insert('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', fsnFacts, 'return=minimal,resolution=merge-duplicates');
+        // Latest snapshot per FSN (title / ATP / MTD) — only a report at least as new as the one that wrote it.
+        const curR = await sbSales(`/rest/v1/sellout_sku?channel_id=eq.${r.channel_id}&select=report_date&order=report_date.desc&limit=1`); subreqs++;
+        if (!curR.ok) throw new Error('flipkart_sellout: sellout_sku max-date read failed ' + JSON.stringify(curR.data).slice(0, 160));
+        const curDate = curR.data[0] ? curR.data[0].report_date : null;
+        if (!curDate || r.report_date >= curDate) {
+          const snap = toSkuSnapshot(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id, report_date: r.report_date }).map(s => ({ ...s, updated_at: stamp }));
+          if (snap.length) await insert('/rest/v1/sellout_sku?on_conflict=source,channel_id,channel_sku', snap, 'return=minimal,resolution=merge-duplicates');
+          await queueUnmappedFsns(r.channel_id, snap); subreqs += 3;
+        }
+      }
+      // Supersede every other report for the same report_date + channel (corrections / re-sends).
+      const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
+        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) }); subreqs++;
+      if (!sup.ok) throw new Error(`flipkart_sellout: supersede PATCH failed for ${r.report_date}: ${JSON.stringify(sup.data).slice(0, 160)}`);
+    }
+    // The report row LAST: it is the dedup key (`seen` in fetch), so it must never exist without its facts.
+    await insert('/rest/v1/sellout_report?on_conflict=message_id,platform', reportRows.map(x => ({ ...x, superseded_by: newer ? newer.message_id : null })), 'return=minimal,resolution=merge-duplicates');
+  }
+  return { subreqs };
 }

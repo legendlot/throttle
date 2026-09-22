@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, fmtInt, inr, rangePresets } from '../../../lib/api.js';
+import { salesGet, fmtInt, inr, rangePresets, defaultRange } from '../../../lib/api.js';
 import { RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 import { PageHead, PanelHead, Pill, Bar, Nil } from '../../../components/prism.js';
 import { HUE, hueStyle, rgb, STATUS } from '../../../lib/hues.js';
@@ -396,7 +396,7 @@ function SideStat({ hue, lbl, val, valSize = 30, valColor, sub, children }) {
 
 export default function FunnelPage() {
   const { session } = useAuth();
-  const mtd = rangePresets().find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [rows, setRows] = useState(null);

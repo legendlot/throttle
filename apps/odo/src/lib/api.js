@@ -29,6 +29,11 @@ export function istDaysAgo(days) {
 function istParts() { const d = new Date(Date.now() + 5.5 * 3600 * 1000); return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() }; }
 
 // Quick-range presets → [{ key, label, from, to }] (IST). FY = Indian fiscal year (Apr 1).
+// Odo initialises every range picker on MTD (S169, systems/odo.md §Shared UI kit) — a deliberate departure from the
+// every-picker-defaults-to-Today rule, pending Afshaan's ruling (reference/decisions.md, 2026-09-22). One constant flips it.
+export const DEFAULT_RANGE_PRESET = 'mtd';
+export function defaultRange() { const all = rangePresets(); return all.find(p => p.key === DEFAULT_RANGE_PRESET) || all[0]; }
+
 export function rangePresets() {
   const to = istToday();
   const { y, m } = istParts();

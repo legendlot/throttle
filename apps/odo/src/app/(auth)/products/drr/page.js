@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { useRouter } from 'next/navigation';
 import { Spinner } from '@throttle/ui';
-import { salesGet, inr, fmtInt, rangePresets } from '../../../../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, defaultRange } from '../../../../lib/api.js';
 import { RangePicker, SegmentedToggle } from '../../../../components/kit.js';
 import { PageHead, PanelHead, Pill, ScopeTab, Swatch } from '../../../../components/prism.js';
 import { FAMILIES, familyOf } from '../../../../lib/families.js';
@@ -37,7 +37,7 @@ export default function ProductsPage() {
   const canPnl = !!(perms && perms.salesops_super_admin);
   const router = useRouter();
   const presets = rangePresets();
-  const mtd = presets.find(p => p.key === 'mtd');
+  const mtd = defaultRange();
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [metric, setMetric] = useState('drr');        // drr | units | gross

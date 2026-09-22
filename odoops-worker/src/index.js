@@ -19,7 +19,7 @@
 
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
-import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot } from './flipkart-sellout.mjs';
+import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot, stageSelloutRows } from './flipkart-sellout.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -36,7 +36,10 @@ const CORS = {
 
 // Initial history window when a channel has no cursor yet (current FY 2026-27 + prior FY).
 const BACKFILL_START = '2025-04-01T00:00:00Z';
-// Global subrequest budget per cron tick (Cloudflare hard cap is 50; stay well under).
+// Global subrequest budget per cron tick. NOT a platform cap (Paid plan: 10,000 per invocation — CLAUDE.md; the
+// 2026-09-22 backfill instance logged 47+47+39 across its three windows without incident): it keeps one tick short and makes a budget-capped adapter
+// stop on a cursor it can resume from. Adapters count their fetch calls; executeRun adds an adapter's stage calls
+// when its stage() returns { subreqs } (flipkart_sellout does — every other adapter's stage cost is uncounted).
 const CRON_BUDGET = 45;
 
 // ── Permission gates (keys in store.salesops_roles.permissions) ──
@@ -120,6 +123,10 @@ function istDate(iso) {
 }
 const uniq = arr => [...new Set(arr.filter(Boolean))];
 const inList = arr => `(${uniq(arr).map(x => `"${String(x).replace(/"/g, '')}"`).join(',')})`; // PostgREST in.(...)
+// PostgREST `in.(...)` for values that come from the DB or a mailbox (SKUs, product codes, Gmail ids): each value
+// double-quoted (\" and \\ escaped) then URL-encoded, so a comma or paren inside a value cannot split the filter.
+// `inList` above quotes (stripping `"`) but does not URL-encode — dates, uuids and order ids only.
+const pgIn = arr => `in.(${uniq(arr).map(v => encodeURIComponent(`"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)).join(',')})`;
 // A free-text SKU field is only an IDENTIFIER when it is a slug/code (has a letter → the exact
 // `bySku` path) or a 12–14 digit EAN (→ `byEan`). A bare number like `1` is neither; treating it
 // as one silently unmaps real sales. Returns '' so callers can `||` to a better identity.
@@ -724,10 +731,10 @@ function xlsxHtmlMismatch(xlsx, parsed) {
 async function queueUnmappedFsns(channelId, snap) {
   const skus = snap.map(s => s.channel_sku).filter(Boolean);
   if (!skus.length) return;
-  const list = skus.map(encodeURIComponent).join(',');
+  const list = pgIn(skus);
   const [mapR, unR] = await Promise.all([
-    sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&channel_sku=in.(${list})&select=channel_sku`),
-    sbSales(`/rest/v1/unmapped_sku?channel_id=eq.${channelId}&channel_sku=in.(${list})&select=channel_sku,status`),
+    sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&channel_sku=${list}&select=channel_sku`),
+    sbSales(`/rest/v1/unmapped_sku?channel_id=eq.${channelId}&channel_sku=${list}&select=channel_sku,status`),
   ]);
   if (!mapR.ok || !unR.ok) throw new Error('flipkart_sellout: mapping lookup failed ' + JSON.stringify((mapR.ok ? unR : mapR).data).slice(0, 160));
   const mapped = new Set(mapR.data.map(x => x.channel_sku));
@@ -765,7 +772,7 @@ const flipkartSelloutAdapter = {
     // the query (sender/subject), the mailbox or the DWD scope is wrong — fail loudly, never stamp green.
     if (!ids.length) throw new Error(`flipkart_sellout: query matched 0 messages in ${cfg.mailbox} — check config.sender/subject and the SA's Gmail scope`);
     // Skip messages already ingested (any platform row is enough).
-    const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id,parser_version&message_id=in.(${ids.map(encodeURIComponent).join(',')})`); subreqs++;
+    const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id,parser_version&message_id=${pgIn(ids)}`); subreqs++;
     if (!seenR.ok) throw new Error('flipkart_sellout: seen lookup failed ' + JSON.stringify(seenR.data).slice(0, 160));
     const seen = new Set(seenR.data.filter(r => Number(r.parser_version) >= SELLOUT_PARSER_VERSION).map(r => r.message_id));
     const rows = []; let partial = false; let maxInternal = cursor || null;
@@ -813,56 +820,10 @@ const flipkartSelloutAdapter = {
       throw new Error(`flipkart_sellout: no new report since ${cursor.slice(0, 10)} (> ${silenceDays} days) — is Flipkart still sending to ${cfg.mailbox}?`);
     return { rows, cursorAfter: maxInternal, subreqs, partial };
   },
+  // The whole step lives in flipkart-sellout.mjs (stageSelloutRows) so its ordering rules are table-tested;
+  // this is the only place that binds it to the live Supabase helpers. Returns { subreqs } for executeRun.
   async stage(rows) {
-    if (!rows.length) return;
-    // Oldest first so a later report for the same date supersedes the earlier one deterministically.
-    rows.sort((a, b) => a.received_at < b.received_at ? -1 : 1);
-    for (const r of rows) {
-      const reportRows = r.parsed.platforms.map(p => ({
-        message_id: r.message_id, platform: p.platform, source: 'flipkart_email', channel_id: r.channel_id,
-        report_date: r.report_date, received_at: r.received_at,
-        atp_qty: p.atp_qty, mtd_units: p.mtd_units, mtd_gmv: p.mtd_gmv,
-        d1_date: r.parsed.d1_date, d1_units: p.d1_units, d1_gmv: p.d1_gmv,
-        d2_date: r.parsed.d2_date, d2_units: p.d2_units, d2_gmv: p.d2_gmv,
-        html_path: r.html_path, xlsx_path: r.xlsx_path, sha256: r.sha256, parser_version: SELLOUT_PARSER_VERSION,
-        raw: { mtd_label: r.parsed.mtd_label, fsn_count: r.xlsx ? r.xlsx.fsns.length : null, xlsx_blocks: r.xlsx ? r.xlsx.blocks.map(b => b.key) : null },
-      }));
-      // Newest report for this date wins, whatever the ARRIVAL order (a budget-capped run can ingest a
-      // correction before the original it corrects). Compare as epoch — PostgREST returns +00:00 offsets.
-      const newestR = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&select=message_id,received_at&order=received_at.desc&limit=1`);
-      if (!newestR.ok) throw new Error('flipkart_sellout: newest-report read failed ' + JSON.stringify(newestR.data).slice(0, 160));
-      const newer = newestR.data.find(x => Date.parse(x.received_at) > Date.parse(r.received_at)) || null;
-      if (!newer) {
-        // Daily observations: the LATEST-RECEIVED report asserting a sale_date owns it — across report_dates
-        // too (the 22nd's D-2 and a 21st re-send both assert the 20th; whichever arrived later is the later
-        // information). Every write is idempotent (PK merge) — the run may be retried from any point.
-        const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
-          .map(f => ({ ...f, updated_at: nowISO() }));
-        if (facts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
-        if (r.xlsx) {
-          // FSN rows for D-1..D-7 (+ the '*' platform rows for the same 7 days — the xlsx reaches 5 days
-          // further back than the HTML, which is what covers a Friday from Monday's report).
-          const stamp = nowISO();
-          const fsnFacts = toFsnFacts(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id }).map(f => ({ ...f, updated_at: stamp }));
-          if (fsnFacts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', fsnFacts, 'return=minimal,resolution=merge-duplicates');
-          // Latest snapshot per FSN (title / ATP / MTD) — only a report at least as new as the one that wrote it.
-          const curR = await sbSales(`/rest/v1/sellout_sku?channel_id=eq.${r.channel_id}&select=report_date&order=report_date.desc&limit=1`);
-          if (!curR.ok) throw new Error('flipkart_sellout: sellout_sku max-date read failed ' + JSON.stringify(curR.data).slice(0, 160));
-          const curDate = curR.data[0] ? curR.data[0].report_date : null;
-          if (!curDate || r.report_date >= curDate) {
-            const snap = toSkuSnapshot(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id, report_date: r.report_date }).map(s => ({ ...s, updated_at: stamp }));
-            if (snap.length) await sbInsertChunked('/rest/v1/sellout_sku?on_conflict=source,channel_id,channel_sku', snap, 'return=minimal,resolution=merge-duplicates');
-            await queueUnmappedFsns(r.channel_id, snap);
-          }
-        }
-        // Supersede every other report for the same report_date + channel (corrections / re-sends).
-        const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
-          { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) });
-        if (!sup.ok) throw new Error(`flipkart_sellout: supersede PATCH failed for ${r.report_date}: ${JSON.stringify(sup.data).slice(0, 160)}`);
-      }
-      // The report row LAST: it is the dedup key (`seen` in fetch), so it must never exist without its facts.
-      await sbInsertChunked('/rest/v1/sellout_report?on_conflict=message_id,platform', reportRows.map(x => ({ ...x, superseded_by: newer ? newer.message_id : null })), 'return=minimal,resolution=merge-duplicates');
-    }
+    return stageSelloutRows(rows, { sbSales, sbInsertChunked, nowISO, queueUnmappedFsns, parserVersion: SELLOUT_PARSER_VERSION });
   },
 };
 
@@ -3635,7 +3596,7 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
   }
   const skus = Object.keys(agg);
   if (!skus.length) return { mapped: 0, unmapped: 0 };
-  const existing = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&channel_sku=in.${inList(skus)}&select=channel_sku`);
+  const existing = await sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&channel_sku=${pgIn(skus)}&select=channel_sku`);
   const mapped = new Set((existing.ok ? existing.data : []).map(x => x.channel_sku));
   const unknown = skus.filter(s => !mapped.has(s));
   if (!unknown.length) return { mapped: skus.length, unmapped: 0 };
@@ -3718,8 +3679,10 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     const cname = await channelName(cfg.channel_id);
     const cursor = cursorOverride !== undefined ? cursorOverride : cfg.cursor;
     const fetched = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget, config: cfg.config });
-    const { rows, cursorAfter, subreqs, partial } = fetched;
-    await adapter.stage(rows, runId, cfg.channel_id, fetched);
+    const { rows, cursorAfter, partial } = fetched;
+    let subreqs = Number(fetched.subreqs) || 0;
+    const staged = await adapter.stage(rows, runId, cfg.channel_id, fetched);
+    if (staged && typeof staged === 'object' && Number.isFinite(staged.subreqs)) subreqs += staged.subreqs; // stage's own calls (flipkart_sellout reports them)
     // Sales adapters use sale_date + the SKU-mapping tail (default). Non-sales domains
     // (marketing/traffic) supply their own date field (datesOf) + their own recompute.
     const dates = adapter.datesOf ? adapter.datesOf(rows, fetched) : distinctDates(rows);
@@ -5264,6 +5227,7 @@ export default {
             return ok({ rows: r.data || [] });
           }
           case 'getSales': {
+            if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_sales_rollup', {
               p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
@@ -5303,6 +5267,7 @@ export default {
           }
 
           case 'getMarketing': {
+            if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_mkt_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'platform' });
             if (!r.ok) return err('Marketing rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
@@ -5822,6 +5787,7 @@ export default {
           }
 
           case 'getTraffic': {
+            if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'src' });
             if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
@@ -5834,6 +5800,7 @@ export default {
           // sales_fact, which is day-grain and cannot express an order's time. Website only: the
           // page says so, because a "live" number quietly missing Amazon reads as Amazon stalling.
           case 'getLiveSales': {
+            if (!canView(P)) return err('No permission', 403);
             const limit = Math.min(Math.max(Number(qp('limit')) || 60, 1), 200);
             // Two kinds of window, and they are NOT interchangeable. 'today' is the IST calendar
             // day from midnight — the one that lines up with the Dashboard's day-grain numbers.
@@ -5881,6 +5848,7 @@ export default {
           }
 
           case 'getSegregation': {
+            if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_order_rollup', {
               p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
@@ -5892,6 +5860,7 @@ export default {
 
           case 'getSellout': {
             // Secondary / memo layer (Flipkart daily report). Read-only; nothing here feeds revenue.
+            if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             if (!chans.length) return ok({ reports: [], daily: [], latest: null, coverage: { days: 0, reported: 0 }, skus: [], sku_summary: null });
             const isD = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
@@ -5921,11 +5890,11 @@ export default {
             for (const f of (fsnR.data || [])) { const a = (agg[f.channel_sku] ||= { units: 0, gmv: 0, days: 0 }); a.units += Number(f.units) || 0; a.gmv += Number(f.gmv) || 0; a.days++; }
             const mapBySku = Object.create(null), nameByCode = Object.create(null);
             if (snap.length) {
-              const mR = await sbSales(`/rest/v1/sku_map?channel_id=${inList}&channel_sku=in.(${snap.map(s => encodeURIComponent(s.channel_sku)).join(',')})&select=channel_sku,product_code`);
+              const mR = await sbSales(`/rest/v1/sku_map?channel_id=${inList}&channel_sku=${pgIn(snap.map(s => s.channel_sku))}&select=channel_sku,product_code`);
               (mR.ok ? mR.data : []).forEach(m => { mapBySku[m.channel_sku] = m.product_code; });
               const codes = [...new Set(Object.values(mapBySku))];
               if (codes.length) {
-                const pR = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.map(encodeURIComponent).join(',')})&select=product_code,product,model,color`);
+                const pR = await sbPublic(`/rest/v1/product_master?product_code=${pgIn(codes)}&select=product_code,product,model,color`);
                 // `product` is the family (Shadow); the variant name is family + model (unless Base) + colour.
                 (pR.ok ? pR.data : []).forEach(p => { nameByCode[p.product_code] = [p.product, p.model && p.model !== 'Base' ? p.model : null, p.color].filter(Boolean).join(' '); });
               }
@@ -5940,6 +5909,7 @@ export default {
           }
 
           case 'getSalesExport': {
+            if (!canView(P)) return err('No permission', 403);
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_sales_rollup', {
               p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
@@ -5952,6 +5922,7 @@ export default {
           }
 
           case 'getConnectorStatus': {
+            if (!canView(P)) return err('No permission', 403);
             const channels = await getChannels();
             const [cfgR, runR] = await Promise.all([
               sbSales('/rest/v1/connector_config?select=*'),
@@ -5977,16 +5948,19 @@ export default {
           }
 
           case 'getRuns': {
+            if (!canView(P)) return err('No permission', 403);
             const ch = qp('channel_id'); const f = ch ? `channel_id=eq.${ch}&` : '';
             const r = await sbSales(`/rest/v1/connector_runs?${f}order=started_at.desc&limit=200&select=*`);
             return ok({ runs: r.ok ? r.data : [] });
           }
           case 'getSkuMap': {
+            if (!canView(P)) return err('No permission', 403);
             const ch = qp('channel_id'); const f = ch ? `channel_id=eq.${ch}&` : '';
             const r = await sbSales(`/rest/v1/sku_map?${f}order=created_at.desc&limit=2000&select=*`);
             return ok({ rows: r.ok ? r.data : [] });
           }
           case 'getUnmapped': {
+            if (!canView(P)) return err('No permission', 403);
             const r = await sbSales('/rest/v1/unmapped_sku?status=eq.open&order=pending_units.desc&select=*');
             return ok({ rows: r.ok ? r.data : [] });
           }
@@ -5996,14 +5970,17 @@ export default {
           // the signal. Empty is the healthy state (0 live today) — see migration 0025 for the two
           // rejected catalogue-side designs, which warned on 39–47% of pairs and were useless.
           case 'getSiblingSkips': {
+            if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_sibling_skips', {});
             return ok({ rows: r.ok && Array.isArray(r.data) ? r.data : [] });
           }
           case 'getUploadBatches': {
+            if (!canView(P)) return err('No permission', 403);
             const r = await sbSales('/rest/v1/upload_batch?order=uploaded_at.desc&limit=100&select=*');
             return ok({ rows: r.ok ? r.data : [] });
           }
           case 'getVariants': {  // for the mapping picker
+            if (!canView(P)) return err('No permission', 403);
             const r = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,product,model,color,sku,ean&order=product.asc');
             return ok({ rows: r.ok ? r.data : [] });
           }
@@ -6383,8 +6360,10 @@ export default {
             // backfill: recompute every staged date that carried this channel_sku
             const adapterCfg = await sbSales(`/rest/v1/connector_config?channel_id=eq.${u.channel_id}&select=adapter_kind`);
             const kind = adapterCfg.ok && adapterCfg.data[0] ? adapterCfg.data[0].adapter_kind : null;
-            const stg = ADAPTERS[kind]?.stgTable || 'stg_qc';
-            const dR = await sbSales(`/rest/v1/${stg}?channel_id=eq.${u.channel_id}&channel_sku=eq.${encodeURIComponent(u.channel_sku)}&select=sale_date`);
+            // An adapter that declares stgTable: null (flipkart_sellout — memo layer, never in sales_fact) has nothing
+            // to recompute; the stg_qc fallback is only for a channel with no connector row (manual QC uploads).
+            const stg = kind && ADAPTERS[kind] ? ADAPTERS[kind].stgTable : 'stg_qc';
+            const dR = stg ? await sbSales(`/rest/v1/${stg}?channel_id=eq.${u.channel_id}&channel_sku=eq.${encodeURIComponent(u.channel_sku)}&select=sale_date`) : { ok: true, data: [] };
             const dates = uniq((dR.ok ? dR.data : []).map(x => x.sale_date));
             const facts = dates.length ? await rpcSales('recompute_facts', { p_channel: u.channel_id, p_dates: dates, p_run_id: null }) : { data: 0 };
             return ok({ id: d.id, resolved: true, dates: dates.length, facts: facts.ok ? Number(facts.data) : 0 });
