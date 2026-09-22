@@ -9,8 +9,10 @@ import { fmtINR } from '../lib/payouts.js';
 // getRazorpayxPayrollScan until a run of misses (or the id cap / a rate-limit). Each hit
 // is auto-resolved to a Podium person (persisted id, else unique name match); the rest get
 // a manual dropdown. Confirm writes gross (= salary+additions+arrears) to podium.payouts.
-const STOP_MISSES = 15;   // stop after this many consecutive empty ids past the last hit
-const ID_CAP = 300;       // hard ceiling on ids scanned
+// RazorpayX ids are NOT dense: Aug 2026 hits ran 3–107, then 201–242 (ids 108–200 empty, a
+// 93-id gap). A 15-miss stop ended the first sync at id 160 and missed 36 of 62 payslips.
+const STOP_MISSES = 150;  // stop after this many consecutive empty ids past the last hit (all chunks)
+const ID_CAP = 500;       // hard ceiling on ids scanned
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export default function RazorpayxSyncModal({ session, month, onClose, onDone }) {
@@ -29,21 +31,24 @@ export default function RazorpayxSyncModal({ session, month, onClose, onDone }) 
     setPhase('loading'); setError(null); setRows([]); setOverride({}); setWarn(null);
     try {
       const acc = [];
-      let start = 1, roster0 = [];
+      let start = 1, roster0 = [], lastHit = 0;
       for (let guard = 0; guard < 20; guard++) {   // ≤20 chunks × 40 = 800 ids max, well past cap
         let r, tries = 0;
         // Rate-limit backoff: retry the same start a few times.
         do {
           r = await podiumopsGet('getRazorpayxPayrollScan', { month, start, span: 40 }, session);
-          if (r.rate_limited) { setWarn('RazorpayX rate limit — backing off…'); await sleep(2500); tries++; }
-        } while (r.rate_limited && tries < 4);
-        if (r.rate_limited) { setWarn('Stopped early on RazorpayX rate limit — re-run to continue.'); break; }
+          if (r.rate_limited) { setWarn('RazorpayX rate limit — backing off…'); tries++; await sleep(3000 * tries); }
+        } while (r.rate_limited && tries < 6);
+        if (r.rate_limited) { setWarn(`Stopped at id ${start} on RazorpayX rate limit — payslips past it are missing; wait a minute and re-run.`); break; }
         setWarn(null);
         if (start <= 1 && Array.isArray(r.roster)) { roster0 = r.roster; setRoster(r.roster); }
         acc.push(...(r.rows || []));
         setRows([...acc]); setScannedTo(r.scanned_to);
         start = r.next_start;
-        if (r.trailing_misses >= STOP_MISSES || start > ID_CAP) break;
+        await sleep(400);   // ~10 chunks now (the scan runs past the id gap); pace them
+        // The worker's trailing_misses resets every chunk, so the gap is measured across chunks here.
+        if (r.last_hit != null) lastHit = r.last_hit;
+        if ((lastHit > 0 && r.scanned_to - lastHit >= STOP_MISSES) || start > ID_CAP) break;   // no hit yet → run to the cap
       }
       setRoster(roster0);
       setPhase('ready');
@@ -64,7 +69,7 @@ export default function RazorpayxSyncModal({ session, month, onClose, onDone }) 
     try {
       const payload = willWrite.map(r => ({ employee_id: effId(r), amount: Number(r.gross), razorpayx_employee_id: r.razorpayx_employee_id }));
       const res = await podiumopsPost('applyRazorpayxPayouts', { month, rows: payload }, session);
-      showToast(`Synced ${res.saved} payouts for ${month}`, 'success');
+      showToast(`Synced ${res.saved} payouts for ${month} · ${res.ids_persisted ?? 0}/${payload.length} RazorpayX ids linked`, 'success');
       onDone?.();
     } catch (e) { showToast(e.message || 'Apply failed', 'error'); setPhase('ready'); }
   }

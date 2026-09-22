@@ -2635,15 +2635,23 @@ async function applyRazorpayxPayouts(body, auth, env) {
 
   // Persist the confirmed RazorpayX id -> Podium employee mapping (best-effort; next
   // month resolves by persisted id, no name-match needed).
-  if (idMap.length) {
+  // PATCH per row: an upsert POST of {id, razorpayx_employee_id} is an INSERT first and fails
+  // employees' NOT NULL columns, so the S393 run persisted none of its 21 mappings.
+  let idsPersisted = 0;
+  for (const m of idMap) {
     try {
-      await sb(`/rest/v1/employees?on_conflict=id`, env, {
-        method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(idMap),
+      // The id is UNIQUE: release it from anyone else first (a corrected override must win).
+      await sb(`/rest/v1/employees?razorpayx_employee_id=eq.${encodeURIComponent(m.razorpayx_employee_id)}&id=neq.${encodeURIComponent(m.id)}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ razorpayx_employee_id: null }),
       });
+      const u = await sb(`/rest/v1/employees?id=eq.${encodeURIComponent(m.id)}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ razorpayx_employee_id: m.razorpayx_employee_id }),
+      });
+      if (u.ok) idsPersisted++;
     } catch (_e) { /* mapping re-derives from name next run; never block the write */ }
   }
   await logCompAccess(auth, 'applyRazorpayxPayouts', null, `${month}: ${clean.length} rows`, env);
-  return ok({ month, saved: clean.length });
+  return ok({ month, saved: clean.length, ids_persisted: idsPersisted });
 }
 
 // Auto-create a month's FIXED rows for active staff from current monthly_fixed.
