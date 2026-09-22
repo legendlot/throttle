@@ -60,6 +60,12 @@ const canPayRequest    = p => !!p.payment_request;
 const canPayApprove    = p => !!p.payment_approve;
 const canPayExecute    = p => !!p.payment_execute;
 const canPaySuperAdmin = p => !!p.payment_super_admin;
+// READ-ONLY sight of any payment request + its documents (Suman, #bugs 1790068793 — Finance
+// opening the export's 'Open in Snorkel' links on requests they did not raise). A ROLE key
+// (finance_manager + admin), deliberately NOT a payment_grants grant: it carries no authority
+// over money, so it does not widen the queues, the paid export, or any approve/pay/edit action.
+const canPayViewAll    = p => !!p.payment_view_all;
+const canReadAnyPaymentRequest = p => canPayApprove(p) || canPayExecute(p) || canPaySuperAdmin(p) || canPayViewAll(p);
 // Who may change a product family's tax code from an order line. HSN is a statutory
 // classification, so only Snorkel Admin + Finance — the predicate resolves to exactly
 // those two roles in store.snorkel_roles (measured 2026-09-08, S358). A viewer's stale
@@ -2290,8 +2296,7 @@ export default {
               `?id=eq.${encodeURIComponent(id)}&select=*,payee:payment_payees(*)&limit=1`);
             if (!r.ok || !r.data[0]) return err('Not found', 404);
             const req = r.data[0];
-            const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
-            if (req.requested_by_user_id !== userId && !privileged) return err('Not found', 404);
+            if (req.requested_by_user_id !== userId && !canReadAnyPaymentRequest(P)) return err('Not found', 404);
             const vendorCode = req.payee?.linked_vendor_code || null;
             const [docs, banks, tdsCands, poGst, vGst] = await Promise.all([
               query('payment_request_documents', `?request_id=eq.${encodeURIComponent(id)}&order=uploaded_at.asc&select=*`),
@@ -2449,9 +2454,8 @@ export default {
             if (!d.ok || !d.data[0]) return err('Not found', 404);
             const doc = d.data[0];
             const req = await query('payment_requests', `?id=eq.${doc.request_id}&select=requested_by_user_id&limit=1`);
-            const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
             if (!req.ok || !req.data[0]) return err('Not found', 404);
-            if (req.data[0].requested_by_user_id !== userId && !privileged) return err('Not found', 404);
+            if (req.data[0].requested_by_user_id !== userId && !canReadAnyPaymentRequest(P)) return err('Not found', 404);
             const sr = await storageFetch(`/object/sign/${PAYMENT_BUCKET}/${doc.file_path}`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ expiresIn: 3600 }),

@@ -16,6 +16,7 @@ const PERM_DEFS = [
     { key: 'po_request_accept', label: 'Accept POs — Draft → Accepted (approves the request)' },
     { key: 'po_approve',        label: 'Final approve POs — Accepted → Approved' },
     { key: 'payment_route',     label: 'Route payment + mark paid' },
+    { key: 'payment_view_all',  label: 'View any payment request + its invoices (read-only)' },
     { key: 'po_china',          label: 'China POs + new-product registration' },
   ] },
   { group: 'Masters', items: [
