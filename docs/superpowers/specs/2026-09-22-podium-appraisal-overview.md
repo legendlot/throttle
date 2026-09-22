@@ -1,6 +1,6 @@
 # Podium — Appraisal overview + calibration page (Afshaan, 2026-09-22, S396)
 
-Status: AGREED spec, not built. Replaces `/appraisals/cycle` (super admins only — `canCalibrate`).
+Status: BUILT 2026-09-22 (throttle `437a8bd5`, `0c0b22d8`; migration 0005). Replaces `/appraisals/cycle` (super admins only — `canCalibrate`).
 Context: drafts, suggested increment and the super-admin lock shipped in throttle `b9b9a03c` and `96ffe39b`
 (reviews open at `/reviews/review`, calibration at `/appraisals/detail`).
 
