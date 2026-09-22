@@ -45,6 +45,9 @@ export function Modal({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : undefined}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: '#111', border: '1px solid #333', borderRadius: 8,

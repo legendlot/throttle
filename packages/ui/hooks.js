@@ -82,17 +82,22 @@ export function useListNav(itemCount, onActivate) {
   }, [focusedIdx, itemCount, onActivate]);
 
   useEffect(() => {
-    function isTypingTarget(e) {
-      const ae = document.activeElement;
-      if (!ae) return false;
-      const tag = ae.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-      if (ae.isContentEditable) return true;
-      return false;
+    // Checks the event's own target as well as activeElement: a Combobox that commits on
+    // Enter can blur or remount its input before this document listener runs, leaving
+    // activeElement = <body> — Enter in a modal's field then opened the focused list row.
+    function isEditable(el) {
+      if (!el || !el.tagName) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     }
     function handle(e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e)) return;
+      if (e.defaultPrevented) return;
+      if (isEditable(e.target) || isEditable(document.activeElement)) return;
+      // Nothing behind an open dialog should react. (Not gated on button/a: Pitstop inbox
+      // rows ARE <button>s and a clicked row keeps focus — arrows must still move.)
+      if (e.target?.closest?.('[role="dialog"]')) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setFocusedIdx(i => (itemCount === 0 ? 0 : Math.min(itemCount - 1, i + 1)));

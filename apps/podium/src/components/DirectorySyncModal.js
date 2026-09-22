@@ -114,7 +114,7 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
   const c = data?.counts;
   return (
     <div style={overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modal}>
+      <div style={modal} role="dialog" aria-modal="true" aria-label="Sync from Google Directory">
         <div style={head}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><RefreshCw size={15} /> Sync from Google Directory</span>
           <button onClick={onClose} style={iconBtn}><X size={16} /></button>
