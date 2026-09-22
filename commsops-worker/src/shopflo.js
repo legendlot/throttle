@@ -448,6 +448,22 @@ function mapOrderCompleted(body) {
 
 // added_to_cart_ui → the existing `add_to_cart` event (cart-building signal, identity
 // from user_data). Keyed on session+timestamp so an idempotent retry dedups.
+// The add_to_cart idempotency key — see the note at its call site. Exported for the test.
+const ATC_BUCKET_MS = 6 * 60 * 60 * 1000;
+function addToCartKey(body, props) {
+  const sid = body.session_id;
+  const token = cartToken(body);
+  if (!sid) return token ? `shopflo:add_to_cart:${token}:${body.timestamp || ''}` : null;
+  const ids = String(body.cart_variant_ids ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const cart = ids.length ? [...new Set(ids)].sort().join(',').slice(0, 300) : '';
+  if (!cart) return `shopflo:add_to_cart:${sid}:${body.timestamp || ''}`;
+  const u = body.user_data || {};
+  const who = u.userId || u.phone || u.email || '';
+  const ts = Number(body.timestamp);
+  const bucket = Number.isFinite(ts) ? Math.floor(ts / ATC_BUCKET_MS) : '';
+  return `shopflo:add_to_cart:${sid}:${who}:${cart}:${bucket}`;
+}
+
 function mapAddToCart(body) {
   const identifiers = identsFromShopflo(body);
   if (!identifiers.length) return null;
@@ -537,8 +553,36 @@ function mapAddToCart(body) {
     identifiers, name: 'add_to_cart',
     occurred_at: toIso(body.timestamp),
     properties: props, source: 'shopflo',
-    idempotency_key: (body.session_id || cartToken(body))
-      ? `shopflo:add_to_cart:${body.session_id || cartToken(body)}:${body.timestamp || ''}` : null,
+    // ⛔ KEY ON (SESSION, WHO, CART, 6-H BUCKET) — NOT THE TIMESTAMP (2026-09-22, S397). Shopflo
+    // re-fires added_to_cart_ui for the SAME cart on every render of the cart drawer/page —
+    // measured over the 5 days to 2026-09-22: 52,718 events collapse to 1,612 distinct
+    // (session, cart) pairs, i.e. 97% duplicates; the worst profile logged 8,274 for one cart
+    // across three sessions, three of them 1.4 s apart. The key used to end in `body.timestamp`
+    // (ms), so every fire was "new" and the UNIQUE(idempotency_key) guard in ingest could never
+    // fire. ingest's ignore-duplicates now absorbs the repeats with no new machinery, and a
+    // deduped delivery still records consent (shopflo-webhooks.js). Each component, and why:
+    //   • session — the unit the flood happens in (longest session 1.1 h over 5 d, 3.8 h over
+    //     30 d, 2 of ~8k crossed a date). ⚠️ NO session_id → the OLD timestamp key: a Shopify
+    //     cart token persists for days, and `<token>:<cart>` would dedup a returning shopper's
+    //     unchanged cart forever (latent — 0 of 8,014 live keys were token-keyed).
+    //   • who — userId/phone/email, because a session is NOT a person: 7 of ~8k sessions in 30 d
+    //     carried two profiles, and a session-only key would swallow the second shopper's event
+    //     entirely (S397 hostile review). Costs no dedup — the flood is per person per session.
+    //   • cart — the variant ids SORTED and de-duplicated, so the same set in a different order
+    //     is the same cart (12 sessions in 30 d re-fired a set re-ordered), capped at 300 chars
+    //     so a cart cannot grow the key past the btree row limit (live max 141). The sort is
+    //     for the KEY only — `cart_link`/`cart_link_suffix` keep Shopflo's order, they are
+    //     customer-facing.
+    //   • 6-h bucket — a cart re-fired after the ATC journey's 30 min + 6 h path has run is a
+    //     new abandonment and must re-enrol; inside the window it is the same one.
+    // ⚠️ ACCEPTED COST, measured 1.39% of sessions (111 of 8,013 in 30 d): shrink the cart then
+    // restore it inside the bucket and the restore collides with its own earlier row, so
+    // `refresh_trigger_on_send` binds the SHRUNK cart's permalink. Pre-change the restore was a
+    // fresh row. A PATCH-on-dedup would fix it at the cost of a second write per flood event;
+    // not worth it at 1.4% — revisit only if a customer reports a short cart link.
+    // Falls back to the timestamp when the cart carries no variant ids (60 rows ever, latest
+    // 2026-08-03) so such an event is still stored rather than collapsed on an empty component.
+    idempotency_key: addToCartKey(body, props),
   };
 }
 
@@ -698,7 +742,7 @@ function consentRowsFrom(body, capturedAt) {
   return rows;
 }
 
-module.exports = {
+module.exports = { addToCartKey, ATC_BUCKET_MS,
   eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, cdnImage, productHandle, SHOPFLO_CHECKOUT_BASE,
   cartLink, cartLinkSuffix, STOREFRONT_BASE, variantImageIndex, pickVariantImage,

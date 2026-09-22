@@ -118,7 +118,64 @@ t('mapAddToCart emits add_to_cart from user_data', () => {
   const e = FLO.mapAddToCart(ADDED_TO_CART);
   assert.equal(e.name, 'add_to_cart');
   assert.equal(e.identifiers.find((i) => i.type === 'email').value, 'cart@gmail.com');
-  assert.equal(e.idempotency_key, 'shopflo:add_to_cart:sess-3:1779876657975');
+  // Keyed on (session, who, sorted cart, 6-h bucket), NOT the timestamp — see the flood note.
+  // 1779876657975 / 21600000 = 82401 (floor).
+  assert.equal(e.idempotency_key, 'shopflo:add_to_cart:sess-3:flo-uid-3:55589142888521:82401');
+});
+
+// THE FLOOD (measured 2026-09-22): Shopflo re-fires the same cart on every drawer render —
+// 52,718 add_to_cart in 5 days were 1,612 distinct (session, cart) pairs. The key must make
+// those collide in ingest's UNIQUE(idempotency_key) guard, and ONLY those.
+t('add_to_cart: the same cart re-fired in the same session → the SAME key (ingest dedups it)', () => {
+  const a = FLO.mapAddToCart({ ...ADDED_TO_CART, timestamp: 1779876657975 });
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, timestamp: 1779876658642 });
+  assert.equal(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: a CHANGED cart in the same session → a different key (a real new event)', () => {
+  const a = FLO.mapAddToCart(ADDED_TO_CART);
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: '55589142888521,47098891993140' });
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: a NEW session with the same cart → a different key', () => {
+  const a = FLO.mapAddToCart(ADDED_TO_CART);
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, session_id: 'sess-4' });
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: TWO profiles in one session with the same cart → different keys (a session is not a person)', () => {
+  const a = FLO.mapAddToCart(ADDED_TO_CART);
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, user_data: { userId: 'flo-uid-9', phone: '+919111111111', email: 'other@gmail.com' } });
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: the same set of variant ids in a different order → the SAME key; the customer-facing link keeps the order', () => {
+  const a = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: '55589142888521,47098891993140' });
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: '47098891993140,55589142888521' });
+  assert.equal(a.idempotency_key, b.idempotency_key);
+  assert.notEqual(a.properties.cart_link_suffix, b.properties.cart_link_suffix);
+});
+t('add_to_cart: the same cart re-fired in the NEXT 6-h bucket → a different key (a new abandonment re-enrols)', () => {
+  const a = FLO.mapAddToCart({ ...ADDED_TO_CART, timestamp: 82401 * FLO.ATC_BUCKET_MS });
+  const b = FLO.mapAddToCart({ ...ADDED_TO_CART, timestamp: 82402 * FLO.ATC_BUCKET_MS });
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: NO session_id → the old timestamp key on the cart token (a token lives for days)', () => {
+  const base = { ...ADDED_TO_CART, session_id: undefined, cart_token: 'tok-1' };
+  const a = FLO.mapAddToCart({ ...base, timestamp: 1 });
+  const b = FLO.mapAddToCart({ ...base, timestamp: 2 });
+  assert.ok(a.idempotency_key.startsWith('shopflo:add_to_cart:tok-1:'), a.idempotency_key);
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
+});
+t('add_to_cart: a 200-line cart cannot grow the key past the btree row limit', () => {
+  const ids = Array.from({ length: 200 }, (_, i) => String(40000000000000 + i)).join(',');
+  const e = FLO.mapAddToCart({ ...ADDED_TO_CART, cart_variant_ids: ids });
+  assert.ok(e.idempotency_key.length < 400, `${e.idempotency_key.length} chars`);
+});
+t('add_to_cart: no variant ids (names only) → falls back to the timestamp, never collapses on null', () => {
+  const base = { ...ADDED_TO_CART, cart_variant_ids: undefined, cart_product_ids: undefined };
+  const a = FLO.mapAddToCart({ ...base, timestamp: 1 });
+  const b = FLO.mapAddToCart({ ...base, timestamp: 2 });
+  assert.ok(a && b, 'names-only events are still mapped (the drop guard is narrower than this)');
+  assert.equal(a.idempotency_key, 'shopflo:add_to_cart:sess-3:1');
+  assert.notEqual(a.idempotency_key, b.idempotency_key);
 });
 
 // ── EVENT_MAP dispatch ──
