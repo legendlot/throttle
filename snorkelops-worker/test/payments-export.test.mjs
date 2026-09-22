@@ -5,7 +5,7 @@
 // Run: node --test snorkelops-worker/test/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPaymentsExportCsv, PAYMENTS_EXPORT_COLUMNS, istDateOf, netPaidOf, paymentDetailUrl }
+import { buildPaymentsExportCsv, PAYMENTS_EXPORT_COLUMNS, istDateOf, netPaidOf, paymentDetailUrl, paymentDetailLinkCell }
   from '../../apps/snorkel/src/lib/paymentsExport.js';
 
 // A live-shaped row: PostgREST returns numerics as STRINGS and embeds the payee as an object.
@@ -175,7 +175,9 @@ test("'Open in Snorkel' is the last column, a deep link to the request's detail 
   assert.equal(paymentDetailUrl('req-1'), 'https://snorkel.legendoftoys.com/payments/detail?id=req-1');
   const c = cells(buildPaymentsExportCsv([row({ id: 'req-42' })]).split('\n')[1]);
   assert.equal(c.length, PAYMENTS_EXPORT_COLUMNS.length);
-  assert.equal(c[col('Open in Snorkel')], 'https://snorkel.legendoftoys.com/payments/detail?id=req-42');
+  // A HYPERLINK formula, not the bare URL — Excel leaves a CSV's bare URL unclickable (Priya, #bugs 1790066373).
+  assert.equal(c[col('Open in Snorkel')], '=HYPERLINK("https://snorkel.legendoftoys.com/payments/detail?id=req-42","https://snorkel.legendoftoys.com/payments/detail?id=req-42")');
+  assert.equal(paymentDetailLinkCell('req-42'), c[col('Open in Snorkel')]);
   // Earlier columns are untouched by the append.
   assert.equal(c[col('Request No')], 'PAY-0021');
   assert.equal(c[col('Paid By')], 'Priya');

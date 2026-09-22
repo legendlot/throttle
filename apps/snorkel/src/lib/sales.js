@@ -88,6 +88,9 @@ export function amountInWords(amount) {
   return words + ' Only';
 }
 
+// ⚠️ No formula-injection neutralising here on purpose: paymentsExport.js's paymentDetailLinkCell
+// writes a deliberate `=HYPERLINK(...)` cell through this quoter. Neutralise leading `=` here and
+// that link silently turns back into text — exempt it if you add that.
 export function csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;

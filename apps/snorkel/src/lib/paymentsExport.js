@@ -43,6 +43,18 @@ export function paymentDetailUrl(id) {
   return `${SNORKEL_SITE_URL}/payments/detail?id=${encodeURIComponent(id ?? '')}`;
 }
 
+// The CELL written for 'Open in Snorkel': a HYPERLINK formula, not the bare URL. Excel shows a
+// CSV's bare URL as inert text (Priya, #bugs 1790066373 — she was adding her own HYPERLINK column
+// to click through). The formula is live when the CSV is opened directly in Excel or imported into
+// Google Sheets with formula conversion on (the default); Excel's Data → From Text/CSV and
+// LibreOffice leave it as text. The display text IS the URL, so a values-only paste or a re-save
+// as CSV still carries the link. The URL can never hold a `"` (encodeURIComponent'd id on a fixed
+// origin) and is ~90 chars, under Excel's 255-char formula-string cap; csvCell quotes the cell.
+export function paymentDetailLinkCell(id) {
+  const u = paymentDetailUrl(id);
+  return `=HYPERLINK("${u}","${u}")`;
+}
+
 // `paid_at` is a timestamptz and arrives as UTC ('2026-09-08T06:24:19.538+00:00'), but Tally is
 // keyed on the IST calendar date — a payment made at 23:00 IST is a 06-something-UTC row for the
 // NEXT day, and booking it a day late breaks the bank reconciliation this file exists for.
@@ -111,7 +123,7 @@ export function buildPaymentsExportCsv(rows) {
       r.requested_by_name || '',
       r.approved_by_name || '',
       r.paid_by_name || '',
-      paymentDetailUrl(r.id),
+      paymentDetailLinkCell(r.id),
     ].map(csvCell).join(','));
   }
   return out.join('\n');
