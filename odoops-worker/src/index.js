@@ -5925,8 +5925,9 @@ export default {
               (mR.ok ? mR.data : []).forEach(m => { mapBySku[m.channel_sku] = m.product_code; });
               const codes = [...new Set(Object.values(mapBySku))];
               if (codes.length) {
-                const pR = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.map(encodeURIComponent).join(',')})&select=product_code,product`);
-                (pR.ok ? pR.data : []).forEach(p => { nameByCode[p.product_code] = p.product; });
+                const pR = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.map(encodeURIComponent).join(',')})&select=product_code,product,model,color`);
+                // `product` is the family (Shadow); the variant name is family + model (unless Base) + colour.
+                (pR.ok ? pR.data : []).forEach(p => { nameByCode[p.product_code] = [p.product, p.model && p.model !== 'Base' ? p.model : null, p.color].filter(Boolean).join(' '); });
               }
             }
             const skus = snap.map(s => ({
