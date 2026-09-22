@@ -10,7 +10,10 @@ export const FAMILIES = {
   amazon:   { key: 'amazon',   label: 'Amazon',         color: '#4C63F0', match: /amazon/i,
               emptyReason: 'No Amazon sales in this range.' },
   flipkart: { key: 'flipkart', label: 'Flipkart',       color: '#2DA8F0', match: /flipkart/i,
-              emptyReason: 'No Flipkart sales in this range. Fed via the Uniware aggregator (Flipkart has no direct API) — widen the range if you expect data.' },
+              // `sellout` = the SECONDARY memo layer (daily emailed consumer sell-out, S397). Its presence
+              // mounts <SelloutMemo> outside the revenue gate; revenue itself stays the Snorkel PO.
+              sellout: { label: 'Flipkart report', source: 'Flipkart Category Team · daily email' },
+              emptyReason: 'No Flipkart revenue in this range. Fed from Snorkel sales orders since Jul 2026 (first-party POs); Apr–Jul history came via the Uniware aggregator — widen the range if you expect data.' },
   quickcom: { key: 'quickcom', label: 'Quick-comm',     color: '#34D27B', match: /blinkit|zepto|instamart|swiggy|quick/i,
               emptyReason: 'No quick-commerce sales in this range.' },
   gtmt:     { key: 'gtmt',     label: 'GT / MT',        color: '#F59E0B', match: /^(gt|mt)$|general trade|modern trade/i,

@@ -10,6 +10,7 @@ import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHead
 import { PageHead, PanelHead, ScopeTab, Swatch, Bar, Nil } from './prism.js';
 import { HUE } from '../lib/hues.js';
 import StackedTrendChart from './StackedTrendChart.js';
+import SelloutMemo from './SelloutMemo.js';
 
 // gross/units totals + per-channel + per-variant from f_sales_rollup (group=variant) rows.
 function aggSales(rows) {
@@ -157,7 +158,11 @@ export default function ChannelFamilyPage({ familyKey }) {
 
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
-      {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
+      {/* Secondary sell-out memo — ABOVE the revenue gate on purpose: the platform report is exactly
+          what you want to see on a range where the PO revenue is empty (Afshaan, S397). */}
+      {fam.sellout && <SelloutMemo channelIds={famIds} from={from} to={to} session={session} meta={fam.sellout} />}
+
+      {err &&<div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : !hasAnyData ? (
         <div className="so-card" style={{ padding: 40, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12.5 }}>
           {fam.emptyReason}
@@ -189,7 +194,7 @@ export default function ChannelFamilyPage({ familyKey }) {
           ) : (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
-                <Kpi dense hue={HUE.primary} lbl="Gross sales" val={inr(salesA.gross)} sub="sell-out (pre-GST n/a yet)" now={salesA.gross} prev={salesP.gross} />
+                <Kpi dense hue={HUE.primary} lbl="Gross sales" val={inr(salesA.gross)} sub={fam.sellout ? 'gross value (pre-GST n/a yet)' : 'sell-out (pre-GST n/a yet)'} now={salesA.gross} prev={salesP.gross} />
                 <Kpi dense hue={HUE.units} lbl="Units sold" val={fmtInt(salesA.units)} now={salesA.units} prev={salesP.units} />
                 <Kpi dense hue={HUE.derived} lbl="Avg selling price" val={inr(salesA.units ? salesA.gross / salesA.units : 0)} sub="gross / unit" now={salesA.units ? salesA.gross / salesA.units : 0} prev={salesP.units ? salesP.gross / salesP.units : 0} />
               </div>

@@ -19,6 +19,7 @@
 
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
+import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode } from './flipkart-sellout.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -593,16 +594,17 @@ function _pemToPkcs8(pem) {
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return buf.buffer;
 }
-let _gTokById = {};   // scope → { token, exp } — one cached token per scope
-async function googleToken(env, scope) {
+let _gTokById = {};   // `${scope}|${sub||''}` → { token, exp } — one cached token per scope × impersonated mailbox
+async function googleToken(env, scope, sub = null) {
   if (!env.GOOGLE_SA_JSON) throw new Error('Google not configured (set GOOGLE_SA_JSON secret)');
   const now = Math.floor(Date.now() / 1000);
-  const c = _gTokById[scope];
+  const cacheKey = `${scope}|${sub || ''}`;
+  const c = _gTokById[cacheKey];
   if (c && now < c.exp - 60) return c.token;
   const sa = JSON.parse(env.GOOGLE_SA_JSON);
   const header = _b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = _b64urlStr(JSON.stringify({
-    iss: sa.client_email, scope,
+    iss: sa.client_email, scope, ...(sub ? { sub } : {}),
     aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
   }));
   const signingInput = `${header}.${claim}`;
@@ -614,10 +616,13 @@ async function googleToken(env, scope) {
   });
   const t = await res.json().catch(() => ({}));
   if (!t.access_token) throw new Error('Google token failed: ' + JSON.stringify(t).slice(0, 160));
-  _gTokById[scope] = { token: t.access_token, exp: now + (Number(t.expires_in) || 3600) };
+  _gTokById[cacheKey] = { token: t.access_token, exp: now + (Number(t.expires_in) || 3600) };
   return t.access_token;
 }
 const googleSheetsToken = (env) => googleToken(env, 'https://www.googleapis.com/auth/spreadsheets.readonly');
+// Gmail via domain-wide delegation. gmail.modify is the scope already on the SA's DWD allow-list
+// (csops carecrew@ sync); this feed only READS. Mailbox comes from connector config, never a constant.
+const googleGmailToken = (env, mailbox) => googleToken(env, 'https://www.googleapis.com/auth/gmail.modify', mailbox);
 const gsheetAdapter = {
   kind: 'qc_gsheet', stgTable: 'stg_qc', sourceKind: 'qc',
   async fetch({ env, config }) {
@@ -656,6 +661,119 @@ const gsheetAdapter = {
     await sbSales(`/rest/v1/stg_qc?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
     const body = rows.map(r => ({ channel_id: channelId, upload_batch_id: batchId, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
     await sbInsertChunked('/rest/v1/stg_qc?on_conflict=upload_batch_id,row_no', body, 'return=minimal,resolution=merge-duplicates');
+  },
+};
+
+// ── Flipkart sell-out (daily email from the Flipkart Category Team) ───────────────────
+// SECONDARY / memo layer (Afshaan, S397): the PRIMARY Flipkart number is the Snorkel PO in sales_fact.
+// This adapter never writes sales_fact — datesOf() returns [] so executeRun skips mapAndUpsert.
+// Own connector identity (…c1) because connector_config is keyed by channel_id and Flipkart Managed
+// belongs to snorkel_internal. Facts are stamped with config.target_channel_id (Flipkart Managed).
+const SELLOUT_BUCKET = 'sales-sellout-reports';
+async function gmailGet(token, mailbox, path) {
+  const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(mailbox)}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error(`Gmail ${path.split('?')[0]} ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+  return r.json();
+}
+// Depth-first walk of a Gmail payload for the first part matching pred.
+function gmailPart(payload, pred) {
+  if (!payload) return null;
+  if (pred(payload)) return payload;
+  for (const p of (payload.parts || [])) { const hit = gmailPart(p, pred); if (hit) return hit; }
+  return null;
+}
+async function selloutArchive(path, bytes, contentType) {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${SELLOUT_BUCKET}/${path}`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': contentType, 'x-upsert': 'true' },
+    body: bytes });
+  if (!res.ok) { console.error('sellout archive failed', path, res.status, (await res.text()).slice(0, 160)); return null; }
+  return path;
+}
+async function sha256Hex(bytes) {
+  const d = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+const flipkartSelloutAdapter = {
+  kind: 'flipkart_sellout', stgTable: null, sourceKind: 'sellout',
+  datesOf: () => [],                       // memo layer: never enters the sales_fact recompute
+  async fetch({ env, cursor, budget, config }) {
+    const cfg = config || {};
+    for (const k of ['mailbox', 'target_channel_id', 'sender', 'subject']) if (!cfg[k]) throw new Error(`flipkart_sellout config missing ${k}`);
+    const token = await googleGmailToken(env, cfg.mailbox);
+    let subreqs = 1;
+    // Receipt-timestamp cursor with a 48 h overlap (a re-sent/corrected report arrives later than the original).
+    const sinceSec = cursor ? Math.floor((Date.parse(cursor) - 48 * 3600 * 1000) / 1000) : Math.floor((Date.now() - (Number(cfg.lookback_days) || 21) * 86400 * 1000) / 1000);
+    const q = encodeURIComponent(`from:${cfg.sender} subject:"${cfg.subject}" after:${sinceSec}`);
+    const list = await gmailGet(token, cfg.mailbox, `messages?q=${q}&maxResults=50`); subreqs++;
+    // Gmail lists NEWEST first; process oldest-first so a budget-capped partial run never advances the
+    // cursor past an unfetched older message.
+    const ids = (list.messages || []).map(m => m.id).reverse();
+    // The window always contains the last ingested message once a cursor exists, so an empty list means
+    // the query (sender/subject), the mailbox or the DWD scope is wrong — fail loudly, never stamp green.
+    if (!ids.length) throw new Error(`flipkart_sellout: query matched 0 messages in ${cfg.mailbox} — check config.sender/subject and the SA's Gmail scope`);
+    // Skip messages already ingested (any platform row is enough).
+    const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id&message_id=in.(${ids.map(encodeURIComponent).join(',')})`); subreqs++;
+    const seen = new Set((seenR.ok ? seenR.data : []).map(r => r.message_id));
+    const rows = []; let partial = false; let maxInternal = cursor || null;
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      if (subreqs + 4 > budget) { partial = true; break; }
+      const msg = await gmailGet(token, cfg.mailbox, `messages/${id}?format=full`); subreqs++;
+      const headers = Object.fromEntries((msg.payload?.headers || []).map(h => [h.name.toLowerCase(), h.value]));
+      const report_date = parseReportDate(headers.subject);
+      if (!report_date) { console.warn('flipkart_sellout: subject without a report date, skipped', id, headers.subject); continue; }
+      const htmlPart = gmailPart(msg.payload, p => p.mimeType === 'text/html' && p.body?.data);
+      if (!htmlPart) { console.warn('flipkart_sellout: no html part', id); continue; }
+      const htmlBytes = b64urlDecode(htmlPart.body.data);
+      const html = new TextDecoder().decode(htmlBytes);
+      let parsed;
+      try { parsed = parseReportHtml(html); } catch (e) { console.warn('flipkart_sellout: parse failed', id, e.message); continue; }
+      const received_at = new Date(Number(msg.internalDate)).toISOString();
+      const html_path = await selloutArchive(`${report_date}/${id}.html`, htmlBytes, 'text/html'); subreqs++;
+      let xlsx_path = null, sha256 = null;
+      const xlsxPart = gmailPart(msg.payload, p => /\.xlsx$/i.test(p.filename || '') && p.body?.attachmentId);
+      if (xlsxPart && subreqs + 2 > budget) { partial = true; break; }   // defer the whole message rather than half-archive it
+      if (xlsxPart) {
+        const att = await gmailGet(token, cfg.mailbox, `messages/${id}/attachments/${xlsxPart.body.attachmentId}`); subreqs++;
+        const bytes = b64urlDecode(att.data);
+        sha256 = await sha256Hex(bytes);
+        xlsx_path = await selloutArchive(`${report_date}/${id}.xlsx`, bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); subreqs++;
+      }
+      rows.push({ message_id: id, report_date, received_at, parsed, html_path, xlsx_path, sha256, channel_id: cfg.target_channel_id });
+      if (!maxInternal || received_at > maxInternal) maxInternal = received_at;
+    }
+    return { rows, cursorAfter: maxInternal, subreqs, partial };
+  },
+  async stage(rows) {
+    if (!rows.length) return;
+    // Oldest first so a later report for the same date supersedes the earlier one deterministically.
+    rows.sort((a, b) => a.received_at < b.received_at ? -1 : 1);
+    for (const r of rows) {
+      const reportRows = r.parsed.platforms.map(p => ({
+        message_id: r.message_id, platform: p.platform, source: 'flipkart_email', channel_id: r.channel_id,
+        report_date: r.report_date, received_at: r.received_at,
+        atp_qty: p.atp_qty, mtd_units: p.mtd_units, mtd_gmv: p.mtd_gmv,
+        d1_date: r.parsed.d1_date, d1_units: p.d1_units, d1_gmv: p.d1_gmv,
+        d2_date: r.parsed.d2_date, d2_units: p.d2_units, d2_gmv: p.d2_gmv,
+        html_path: r.html_path, xlsx_path: r.xlsx_path, sha256: r.sha256, parser_version: 1,
+        raw: { mtd_label: r.parsed.mtd_label },
+      }));
+      // Newest report for this date wins, whatever the ARRIVAL order (a budget-capped run can ingest a
+      // correction before the original it corrects). Compare as epoch — PostgREST returns +00:00 offsets.
+      const newestR = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&select=message_id,received_at&order=received_at.desc&limit=1`);
+      const newer = (newestR.ok ? newestR.data : []).find(x => Date.parse(x.received_at) > Date.parse(r.received_at)) || null;
+      await sbInsertChunked('/rest/v1/sellout_report?on_conflict=message_id,platform', reportRows.map(x => ({ ...x, superseded_by: newer ? newer.message_id : null })), 'return=minimal,resolution=merge-duplicates');
+      if (newer) continue;   // an already-ingested newer report owns this date's facts
+      // Supersede every other report for the same report_date + channel (corrections / re-sends).
+      const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
+        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) });
+      if (!sup.ok) console.error('flipkart_sellout: supersede PATCH failed', r.report_date, JSON.stringify(sup.data).slice(0, 160));
+      // Daily observations: the newest report owns D-1/D-2 for its dates (PK merge overwrites older report_ids).
+      const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
+        .map(f => ({ ...f, updated_at: nowISO() }));
+      if (facts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
+    }
   },
 };
 
@@ -3311,7 +3429,7 @@ const amazonTrafficAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, ad_status: adStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter, cashfree_payments: cashfreePaymentsAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, flipkart_sellout: flipkartSelloutAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, amazon_traffic: amazonTrafficAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, ad_status: adStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter, cashfree_payments: cashfreePaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -5683,6 +5801,30 @@ export default {
             return ok({ rows: r.data || [], channels: await getChannels() });
           }
 
+          case 'getSellout': {
+            // Secondary / memo layer (Flipkart daily report). Read-only; nothing here feeds revenue.
+            const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
+            if (!chans.length) return ok({ reports: [], daily: [], latest: null, coverage: { days: 0, reported: 0 } });
+            const isD = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+            const from = isD(qp('from')) ? qp('from') : todayISO(), to = isD(qp('to')) ? qp('to') : todayISO();
+            if (!chans.every(c => /^[0-9a-f-]{36}$/i.test(c))) return err('channel_id must be uuids', 400);
+            const inList = `in.(${chans.join(',')})`;
+            const [repR, dayR] = await Promise.all([
+              sbSales(`/rest/v1/sellout_report?channel_id=${inList}&report_date=gte.${from}&report_date=lte.${to}&superseded_by=is.null&order=report_date.desc,platform.asc`),
+              sbSales(`/rest/v1/sellout_fact?channel_id=${inList}&sale_date=gte.${from}&sale_date=lte.${to}&channel_sku=eq.*&order=sale_date.asc`),
+            ]);
+            if (!repR.ok) return err('Sell-out read failed: ' + JSON.stringify(repR.data), 502);
+            if (!dayR.ok) return err('Sell-out daily read failed: ' + JSON.stringify(dayR.data), 502);
+            const reports = repR.data || [], daily = dayR.data || [];
+            const latest = reports.length ? { report_date: reports[0].report_date, received_at: reports[0].received_at } : null;
+            // A report only asserts D-1 and D-2, so today can never be 'reported' — cap the denominator at yesterday.
+            const cap = new Date(Date.parse(todayISO()) - 86400000).toISOString().slice(0, 10);
+            const toCov = to < cap ? to : cap;
+            const days = Math.max(0, Math.round((Date.parse(toCov) - Date.parse(from)) / 86400000) + 1);
+            const reported = new Set(daily.filter(d => d.platform === 'total').map(d => d.sale_date)).size;
+            return ok({ reports, daily, latest, coverage: { days, reported } });
+          }
+
           case 'getSalesExport': {
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_sales_rollup', {
@@ -5715,7 +5857,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN, google_ads: !!(env.GOOGLE_ADS_DEVELOPER_TOKEN && env.GOOGLE_ADS_REFRESH_TOKEN), uniware: !!(env.UNIWARE_TENANT && env.UNIWARE_USERNAME && env.UNIWARE_PASSWORD) },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN, google_ads: !!(env.GOOGLE_ADS_DEVELOPER_TOKEN && env.GOOGLE_ADS_REFRESH_TOKEN), uniware: !!(env.UNIWARE_TENANT && env.UNIWARE_USERNAME && env.UNIWARE_PASSWORD), flipkart_sellout: !!env.GOOGLE_SA_JSON },
               connectors: allCh.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
