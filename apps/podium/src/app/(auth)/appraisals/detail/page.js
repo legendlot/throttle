@@ -59,7 +59,7 @@ function DetailPage() {
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts}
             vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
           <ManagerForm a={a} prompts={prompts} session={session} editable={cycleActive && !shared} onSaved={load} />
-          {a.final_rating && <FinalBlock a={a} />}
+          {a._can_calibrate ? <HrTools a={a} session={session} onSaved={load} /> : (a.final_rating && <FinalBlock a={a} />)}
         </>
       )}
 
@@ -68,12 +68,7 @@ function DetailPage() {
         <>
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts} vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
           <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at} />
-          <HrCalibrate a={a} session={session} onSaved={load} />
-          {a._can_comp && <IncrementPanel a={a} session={session} onSaved={load} />}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <a href={`/appraisals/letter/?id=${a.id}&type=appraisal`} target="_blank" rel="noreferrer" style={linkBtn}><Printer size={13} /> Appraisal letter</a>
-            {a._can_comp && a.increment && <a href={`/appraisals/letter/?id=${a.id}&type=increment`} target="_blank" rel="noreferrer" style={linkBtn}><Printer size={13} /> Increment letter</a>}
-          </div>
+          <HrTools a={a} session={session} onSaved={load} />
         </>
       )}
 
@@ -99,6 +94,21 @@ function OkrsReadonly({ okrs }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// HR calibration + increment + letters — shown on the HR view, and under the manager form when
+// the reviewing manager is also HR (the worker never marks your OWN appraisal as HR/manager).
+function HrTools({ a, session, onSaved }) {
+  return (
+    <>
+      <HrCalibrate a={a} session={session} onSaved={onSaved} />
+      {a._can_comp && <IncrementPanel a={a} session={session} onSaved={onSaved} />}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <a href={`/appraisals/letter/?id=${a.id}&type=appraisal`} target="_blank" rel="noreferrer" style={linkBtn}><Printer size={13} /> Appraisal letter</a>
+        {a._can_comp && a.increment && <a href={`/appraisals/letter/?id=${a.id}&type=increment`} target="_blank" rel="noreferrer" style={linkBtn}><Printer size={13} /> Increment letter</a>}
+      </div>
+    </>
   );
 }
 

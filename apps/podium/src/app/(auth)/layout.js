@@ -46,6 +46,7 @@ const META = {
   '/org':               { crumb: 'People',      title: 'Org Chart' },
   '/me':                { crumb: 'Performance', title: 'My Performance' },
   '/team':              { crumb: 'Performance', title: 'Team' },
+  '/reviews':           { crumb: 'Performance', title: 'Reviews' },
   '/appraisals':        { crumb: 'Performance', title: 'Appraisals' },
   '/appraisals/cycle':  { crumb: 'Performance', title: 'Appraisal Cycle' },
   '/appraisals/detail': { crumb: 'Performance', title: 'Appraisal' },

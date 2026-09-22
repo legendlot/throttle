@@ -1023,6 +1023,19 @@ async function updateSettings(body, auth, env) {
 
 async function meOf(auth, env) { return callerEmployee(await loadOrgEdges(env), auth.userId); }
 
+// True when the caller IS the appraisal's subject. canManage() short-circuits on HR before its
+// own self check, so every HR-gated appraisal write must test this first.
+function isOwnAppraisal(edges, auth, employeeId) {
+  const me = callerEmployee(edges, auth.userId);
+  return !!(me && me.id === employeeId);
+}
+// HR list views: the caller's OWN row keeps only what the subject may see until it is shared.
+function maskOwnAppraisal(row, meE) {
+  if (!meE || row.employee_id !== meE.id || row.status === 'shared' || row.status === 'acknowledged') return row;
+  const o = { ...row, final_rating: null, outcome: null, calibration_note: null, suggested_pct: null,
+    manager_overall_rating: null, manager_did_well: null, manager_improve: null, manager_focus: null, _own: true };
+  return o;
+}
 // Can the caller create/manage performance entries ABOUT employee E?
 // HR/admin, or an ancestor manager of E (not E themselves).
 function canManage(auth, edges, employeeId) {
@@ -2060,7 +2073,12 @@ async function submitManagerReview(body, auth, env) {
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=*,cycle:cycle_id(status)&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
-  if (!canManage(auth, edges, a.employee_id)) return err('forbidden — manager only', 403);
+  if (isOwnAppraisal(edges, auth, a.employee_id)) return err('forbidden — you cannot write the manager review of your own appraisal', 403);
+  // Same predicate as getAppraisal's manager role: the appraisal's own manager, or someone up the
+  // live chain who is not HR. HR is no longer a blanket bypass here.
+  const meE = callerEmployee(edges, auth.userId);
+  const mayReview = !!meE && (a.manager_id === meE.id || (!isHr(auth) && inManagerChain(edges, a.employee_id, meE.id)));
+  if (!mayReview) return err('forbidden — only the reviewing manager can write this', 403);
   if (a.cycle?.status !== 'active') return err('cycle is not open for reviews', 422);
   if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
   const patch = {
@@ -2092,6 +2110,9 @@ async function finalizeAppraisal(body, auth, env) {
   const d = body.data || body;
   const fr = clampRating(d.final_rating);
   if (!d.appraisal_id || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
+  const own = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id&limit=1`, env);
+  if (!own.data?.[0]) return err('not_found', 404);
+  if (isOwnAppraisal(await loadOrgEdges(env), auth, own.data[0].employee_id)) return err('forbidden — you cannot calibrate your own appraisal', 403);
   const s = await loadAppraisalSettings(env);
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, {
     method: 'PATCH', body: JSON.stringify({
@@ -2108,7 +2129,9 @@ async function shareAppraisal(body, auth, env) {
   const d = body.data || body;
   const ids = Array.isArray(d.appraisal_ids) ? d.appraisal_ids : (d.appraisal_id ? [d.appraisal_id] : []);
   if (!ids.length) return err('appraisal_id or appraisal_ids[] required', 400);
-  const r = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&final_rating=not.is.null&status=neq.acknowledged`, env,
+  const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
+  const notOwn = meE ? `&employee_id=neq.${meE.id}` : '';   // HR never releases their own result
+  const r = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&final_rating=not.is.null&status=neq.acknowledged${notOwn}`, env,
     { method: 'PATCH', body: JSON.stringify({ status: 'shared', shared_at: nowIso(), updated_at: nowIso() }), prefer: 'return=representation' });
   if (!r.ok) return err('share_failed: ' + JSON.stringify(r.data), 400);
   return ok({ shared: (r.data || []).length });
@@ -2119,6 +2142,7 @@ async function applyIncrement(body, auth, env) {
   if (!d.appraisal_id) return err('appraisal_id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,final_rating,cycle:cycle_id(appraisal_date)&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  if (isOwnAppraisal(await loadOrgEdges(env), auth, a.employee_id)) return err('forbidden — you cannot set your own increment', 403);
   if (!a.final_rating) return err('finalize the appraisal first', 422);
   const pct = d.increment_pct != null && d.increment_pct !== '' ? Number(d.increment_pct) : null;
   const bonus = d.bonus_amount != null && d.bonus_amount !== '' ? Number(d.bonus_amount) : null;
@@ -2140,15 +2164,20 @@ async function applyIncrement(body, auth, env) {
 // ── Reads: subject / manager / HR views ────────────────────────────────────────
 async function getMyAppraisals(url, auth, env) {
   const me = await meOf(auth, env);
-  if (!me) return ok({ employee_id: null, appraisals: [], to_review: [] });
+  // Open cycles are returned even to an unlinked login, so /reviews can say "no cycle open"
+  // vs "you have nothing in this cycle" truthfully.
+  const cr = await sb(`/rest/v1/appraisal_cycles?status=eq.active&select=id,name,appraisal_date,period_start,period_end,self_review_due,manager_review_due&order=appraisal_date.desc&limit=20`, env);
+  const active_cycles = cr.data || [];
+  if (!me) return ok({ employee_id: null, active_cycles, appraisals: [], to_review: [] });
   const [ar, tr] = await Promise.all([
-    sb(`/rest/v1/appraisals?employee_id=eq.${me.id}&select=*,cycle:cycle_id(name,appraisal_date,status,self_review_due)&order=created_at.desc&limit=200`, env),
-    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,manager_submitted_at,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
+    sb(`/rest/v1/appraisals?employee_id=eq.${me.id}&select=*,cycle:cycle_id(id,name,appraisal_date,period_end,status,self_review_due)&order=created_at.desc&limit=200`, env),
+    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,self_submitted_at,manager_submitted_at,employee:employee_id(full_name,job_title),cycle:cycle_id(id,name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
   ]);
   const appraisals = (ar.data || []).map(projectAppraisalForSubject);
   const to_review = (tr.data || []).filter(a => a.cycle?.status === 'active')
-    .map(a => ({ id: a.id, employee: a.employee, status: a.status, done: !!a.manager_submitted_at, cycle: a.cycle }));
-  return ok({ employee_id: me.id, appraisals, to_review });
+    .map(a => ({ id: a.id, employee: a.employee, status: a.status, self_submitted: !!a.self_submitted_at,
+                 done: !!a.manager_submitted_at, manager_submitted_at: a.manager_submitted_at, cycle: a.cycle }));
+  return ok({ employee_id: me.id, active_cycles, appraisals, to_review });
 }
 async function getTeamAppraisals(url, auth, env) {
   const me = await meOf(auth, env);
@@ -2157,8 +2186,8 @@ async function getTeamAppraisals(url, auth, env) {
   const cycleId = url.searchParams.get('cycle_id');
   let filter = cycleId ? `cycle_id=eq.${cycleId}` : `cycle_id=not.is.null`;
   if (!hr) filter += `&manager_id=eq.${me.id}`;
-  const ar = await sb(`/rest/v1/appraisals?${filter}&select=id,status,self_submitted_at,manager_submitted_at,final_rating,outcome,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status)&order=created_at.desc&limit=500`, env);
-  return ok({ appraisals: ar.data || [] });
+  const ar = await sb(`/rest/v1/appraisals?${filter}&select=id,employee_id,status,self_submitted_at,manager_submitted_at,final_rating,outcome,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status)&order=created_at.desc&limit=500`, env);
+  return ok({ appraisals: (ar.data || []).map(a => maskOwnAppraisal(a, me)) });
 }
 async function getAppraisal(url, auth, env) {
   const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
@@ -2166,9 +2195,16 @@ async function getAppraisal(url, auth, env) {
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
   const me = callerEmployee(edges, auth.userId);
+  // Role is decided PER APPRAISAL, not per user (S396): your own appraisal is always the
+  // subject view — even for an admin — and a report's is the manager view (with the HR tools
+  // alongside when you are also HR). Before this, admin/HR got the read-only HR view
+  // everywhere, so admins could neither self-review nor write their reports' manager reviews.
   const isSubject = !!(me && me.id === a.employee_id);
   const hr = isHr(auth);
-  const isMgr = !hr && !isSubject && canManage(auth, edges, a.employee_id);
+  // Manager = the appraisal's own manager, or (non-HR only) someone up the live chain. HR above
+  // the direct manager stays on the read-only HR view — a skip-level HR submit would overwrite the
+  // direct manager's review and close their task (hostile review S396).
+  const isMgr = !isSubject && !!me && (a.manager_id === me.id || (!hr && inManagerChain(edges, a.employee_id, me.id)));
   if (!isSubject && !isMgr && !hr) return err('forbidden', 403);
   const kr = await sb(`/rest/v1/appraisal_kpi_ratings?appraisal_id=eq.${id}&select=*&order=sort_order.asc`, env);
   const kpis = kr.data || [];
@@ -2182,8 +2218,8 @@ async function getAppraisal(url, auth, env) {
     increment = cr.data?.[0] || null;
     if (isSubject && !(a.status === 'shared' || a.status === 'acknowledged')) increment = null;
   }
-  if (hr || isMgr) {
-    const out = { ...a, kpis, okrs, increment, _role: hr ? 'hr' : 'manager', _can_calibrate: hr, _can_comp: canComp(auth) };
+  if (!isSubject && (hr || isMgr)) {
+    const out = { ...a, kpis, okrs, increment, _role: isMgr ? 'manager' : 'hr', _can_calibrate: hr, _can_comp: canComp(auth) };
     if (!hr) out.calibration_note = null; // HR-internal
     return ok(out);
   }
@@ -2205,9 +2241,11 @@ async function getAppraisals(url, auth, env) {
   ]);
   const cycle = cr.data?.[0];
   const s = await loadAppraisalSettings(env);
+  const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
   const rows = (ar.data || []).map(a => {
     const months = periodMonths(a.review_period_start, a.review_period_end);
-    return { ...a, review_period_months: months, suggested_pct: compOk ? suggestedPct(s.bands, a.final_rating || a.manager_overall_rating, months) : null };
+    const row = { ...a, review_period_months: months, suggested_pct: compOk ? suggestedPct(s.bands, a.final_rating || a.manager_overall_rating, months) : null };
+    return maskOwnAppraisal(row, meE);
   });
   return ok({ cycle, appraisals: rows, increment_bands: compOk ? s.bands : null, pip_rating_threshold: s.pipThreshold });
 }
