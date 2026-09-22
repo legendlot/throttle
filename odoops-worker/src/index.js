@@ -19,7 +19,7 @@
 
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
-import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode } from './flipkart-sellout.mjs';
+import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot } from './flipkart-sellout.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -670,6 +670,10 @@ const gsheetAdapter = {
 // Own connector identity (…c1) because connector_config is keyed by channel_id and Flipkart Managed
 // belongs to snorkel_internal. Facts are stamped with config.target_channel_id (Flipkart Managed).
 const SELLOUT_BUCKET = 'sales-sellout-reports';
+// Bump when ingest learns to extract more from a message: a report row below this version is NOT `seen`,
+// so a Backfill (cursor override) re-ingests history through the same path. v1 = HTML summary only;
+// v2 = + xlsx FSN breakup (D-1..D-7 per FSN, latest snapshot per FSN, unmapped FSNs queued for /mapping).
+const SELLOUT_PARSER_VERSION = 2;
 async function gmailGet(token, mailbox, path) {
   const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(mailbox)}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error(`Gmail ${path.split('?')[0]} ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
@@ -695,6 +699,45 @@ async function selloutArchive(path, bytes, contentType) {
 async function sha256Hex(bytes) {
   const d = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+// The xlsx TOTAL row's D-1 / D-2 (units + GMV per platform) must equal the HTML Platform Summary of the same
+// message. Returns null when they agree (or either side lacks the block), else a one-line description.
+function xlsxHtmlMismatch(xlsx, parsed) {
+  for (const [key, uk, gk] of [['d1', 'd1_units', 'd1_gmv'], ['d2', 'd2_units', 'd2_gmv']]) {
+    const t = xlsx?.total?.blocks?.[key];
+    if (!t) continue;
+    for (const p of parsed.platforms) {
+      const xu = t[`${p.platform}_units`], xg = t[`${p.platform}_gmv`];
+      if (p[uk] != null && xu != null && p[uk] !== xu) return `${key} ${p.platform} units html ${p[uk]} vs xlsx ${xu}`;
+      if (p[gk] != null && xg != null && Math.abs(p[gk] - xg) > 1) return `${key} ${p.platform} gmv html ${p[gk]} vs xlsx ${xg}`;
+    }
+  }
+  return null;
+}
+// An FSN with no sku_map row goes into the /mapping queue (status open) so the team maps it there — the
+// product_code is resolved at READ time (getSellout), never written into the memo rows. Every ingest re-upserts
+// the open rows with a fresh last_seen: reconcile_unmapped_sku() retires an open row whose last_seen is > 2 days
+// old and which is absent from v_staged — memo FSNs are never in v_staged, so without the refresh the queue would
+// self-destruct 48 h after the first ingest. 'ignored' / 'resolved' rows are never touched. pending_* stay 0:
+// these units are already revenue via the Snorkel PO, and /mapping sorts by pending_units (decisions: never
+// measure unmapped revenue from this queue). The unmapped Slack alarm reads staging tables only.
+async function queueUnmappedFsns(channelId, snap) {
+  const skus = snap.map(s => s.channel_sku).filter(Boolean);
+  if (!skus.length) return;
+  const list = skus.map(encodeURIComponent).join(',');
+  const [mapR, unR] = await Promise.all([
+    sbSales(`/rest/v1/sku_map?channel_id=eq.${channelId}&channel_sku=in.(${list})&select=channel_sku`),
+    sbSales(`/rest/v1/unmapped_sku?channel_id=eq.${channelId}&channel_sku=in.(${list})&select=channel_sku,status`),
+  ]);
+  if (!mapR.ok || !unR.ok) throw new Error('flipkart_sellout: mapping lookup failed ' + JSON.stringify((mapR.ok ? unR : mapR).data).slice(0, 160));
+  const mapped = new Set(mapR.data.map(x => x.channel_sku));
+  const closed = new Set(unR.data.filter(x => x.status && x.status !== 'open').map(x => x.channel_sku));
+  const now = nowISO();
+  // Only the payload's columns are merged on conflict — first_seen / occurrences keep their defaults or old values.
+  const rows = snap.filter(s => !mapped.has(s.channel_sku) && !closed.has(s.channel_sku)).map(s => ({
+    channel_id: channelId, channel_sku: s.channel_sku, sample_title: s.title, last_seen: now, status: 'open', pending_units: 0, pending_gross: 0,
+  }));
+  if (rows.length) await sbInsertChunked('/rest/v1/unmapped_sku?on_conflict=channel_id,channel_sku', rows, 'return=minimal,resolution=merge-duplicates');
 }
 const flipkartSelloutAdapter = {
   kind: 'flipkart_sellout', stgTable: null, sourceKind: 'sellout',
@@ -722,8 +765,9 @@ const flipkartSelloutAdapter = {
     // the query (sender/subject), the mailbox or the DWD scope is wrong — fail loudly, never stamp green.
     if (!ids.length) throw new Error(`flipkart_sellout: query matched 0 messages in ${cfg.mailbox} — check config.sender/subject and the SA's Gmail scope`);
     // Skip messages already ingested (any platform row is enough).
-    const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id&message_id=in.(${ids.map(encodeURIComponent).join(',')})`); subreqs++;
-    const seen = new Set((seenR.ok ? seenR.data : []).map(r => r.message_id));
+    const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id,parser_version&message_id=in.(${ids.map(encodeURIComponent).join(',')})`); subreqs++;
+    if (!seenR.ok) throw new Error('flipkart_sellout: seen lookup failed ' + JSON.stringify(seenR.data).slice(0, 160));
+    const seen = new Set(seenR.data.filter(r => Number(r.parser_version) >= SELLOUT_PARSER_VERSION).map(r => r.message_id));
     const rows = []; let partial = false; let maxInternal = cursor || null;
     const skipped = [];   // new messages that could not be ingested (no date / no html / parse failed)
     for (const id of ids) {
@@ -741,15 +785,22 @@ const flipkartSelloutAdapter = {
       try { parsed = parseReportHtml(html); } catch (e) { skipped.push(`${id}: ${e.message}`); continue; }
       const received_at = new Date(Number(msg.internalDate)).toISOString();
       const html_path = await selloutArchive(`${report_date}/${id}.html`, htmlBytes, 'text/html'); subreqs++;
-      let xlsx_path = null, sha256 = null;
+      let xlsx_path = null, sha256 = null, xlsx = null;
       const xlsxPart = gmailPart(msg.payload, p => /\.xlsx$/i.test(p.filename || '') && p.body?.attachmentId);
       if (xlsxPart) {
         const att = await gmailGet(token, cfg.mailbox, `messages/${id}/attachments/${xlsxPart.body.attachmentId}`); subreqs++;
         const bytes = b64urlDecode(att.data);
         sha256 = await sha256Hex(bytes);
         xlsx_path = await selloutArchive(`${report_date}/${id}.xlsx`, bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); subreqs++;
+        // The FSN breakup is half the report: a layout change here skips the message (retried within the
+        // window, loud when nothing else ingests) rather than ingesting the summary and silently freezing the FSN table.
+        try { xlsx = await parseReportXlsx(bytes); } catch (e) { skipped.push(`${id}: xlsx ${e.message}`); continue; }
+        // The two halves of one report must agree: the xlsx TOTAL row's D-1/D-2 vs the HTML summary. They land in
+        // different tables the same card renders side by side — a cut at different moments must not go in silently.
+        const mismatch = xlsxHtmlMismatch(xlsx, parsed);
+        if (mismatch) { skipped.push(`${id}: xlsx/html disagree — ${mismatch}`); continue; }
       }
-      rows.push({ message_id: id, report_date, received_at, parsed, html_path, xlsx_path, sha256, channel_id: cfg.target_channel_id });
+      rows.push({ message_id: id, report_date, received_at, parsed, xlsx, html_path, xlsx_path, sha256, channel_id: cfg.target_channel_id });
       if (!maxInternal || received_at > maxInternal) maxInternal = received_at;
     }
     if (skipped.length) console.warn('flipkart_sellout: skipped', skipped.join(' · '));
@@ -773,8 +824,8 @@ const flipkartSelloutAdapter = {
         atp_qty: p.atp_qty, mtd_units: p.mtd_units, mtd_gmv: p.mtd_gmv,
         d1_date: r.parsed.d1_date, d1_units: p.d1_units, d1_gmv: p.d1_gmv,
         d2_date: r.parsed.d2_date, d2_units: p.d2_units, d2_gmv: p.d2_gmv,
-        html_path: r.html_path, xlsx_path: r.xlsx_path, sha256: r.sha256, parser_version: 1,
-        raw: { mtd_label: r.parsed.mtd_label },
+        html_path: r.html_path, xlsx_path: r.xlsx_path, sha256: r.sha256, parser_version: SELLOUT_PARSER_VERSION,
+        raw: { mtd_label: r.parsed.mtd_label, fsn_count: r.xlsx ? r.xlsx.fsns.length : null, xlsx_blocks: r.xlsx ? r.xlsx.blocks.map(b => b.key) : null },
       }));
       // Newest report for this date wins, whatever the ARRIVAL order (a budget-capped run can ingest a
       // correction before the original it corrects). Compare as epoch — PostgREST returns +00:00 offsets.
@@ -788,6 +839,22 @@ const flipkartSelloutAdapter = {
         const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
           .map(f => ({ ...f, updated_at: nowISO() }));
         if (facts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
+        if (r.xlsx) {
+          // FSN rows for D-1..D-7 (+ the '*' platform rows for the same 7 days — the xlsx reaches 5 days
+          // further back than the HTML, which is what covers a Friday from Monday's report).
+          const stamp = nowISO();
+          const fsnFacts = toFsnFacts(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id }).map(f => ({ ...f, updated_at: stamp }));
+          if (fsnFacts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', fsnFacts, 'return=minimal,resolution=merge-duplicates');
+          // Latest snapshot per FSN (title / ATP / MTD) — only a report at least as new as the one that wrote it.
+          const curR = await sbSales(`/rest/v1/sellout_sku?channel_id=eq.${r.channel_id}&select=report_date&order=report_date.desc&limit=1`);
+          if (!curR.ok) throw new Error('flipkart_sellout: sellout_sku max-date read failed ' + JSON.stringify(curR.data).slice(0, 160));
+          const curDate = curR.data[0] ? curR.data[0].report_date : null;
+          if (!curDate || r.report_date >= curDate) {
+            const snap = toSkuSnapshot(r.xlsx, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id, report_date: r.report_date }).map(s => ({ ...s, updated_at: stamp }));
+            if (snap.length) await sbInsertChunked('/rest/v1/sellout_sku?on_conflict=source,channel_id,channel_sku', snap, 'return=minimal,resolution=merge-duplicates');
+            await queueUnmappedFsns(r.channel_id, snap);
+          }
+        }
         // Supersede every other report for the same report_date + channel (corrections / re-sends).
         const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
           { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) });
@@ -5826,25 +5893,49 @@ export default {
           case 'getSellout': {
             // Secondary / memo layer (Flipkart daily report). Read-only; nothing here feeds revenue.
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
-            if (!chans.length) return ok({ reports: [], daily: [], latest: null, coverage: { days: 0, reported: 0 } });
+            if (!chans.length) return ok({ reports: [], daily: [], latest: null, coverage: { days: 0, reported: 0 }, skus: [], sku_summary: null });
             const isD = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
             const from = isD(qp('from')) ? qp('from') : todayISO(), to = isD(qp('to')) ? qp('to') : todayISO();
             if (!chans.every(c => /^[0-9a-f-]{36}$/i.test(c))) return err('channel_id must be uuids', 400);
             const inList = `in.(${chans.join(',')})`;
-            const [repR, dayR] = await Promise.all([
+            const [repR, dayR, skuR, fsnR] = await Promise.all([
               sbSales(`/rest/v1/sellout_report?channel_id=${inList}&report_date=gte.${from}&report_date=lte.${to}&superseded_by=is.null&order=report_date.desc,platform.asc`),
               sbSales(`/rest/v1/sellout_fact?channel_id=${inList}&sale_date=gte.${from}&sale_date=lte.${to}&channel_sku=eq.*&order=sale_date.asc`),
+              sbSales(`/rest/v1/sellout_sku?channel_id=${inList}&order=mtd_gmv.desc.nullslast,channel_sku.asc&select=*`),
+              sbSales(`/rest/v1/sellout_fact?channel_id=${inList}&sale_date=gte.${from}&sale_date=lte.${to}&channel_sku=neq.*&platform=eq.total&select=channel_sku,sale_date,units,gmv`),
             ]);
             if (!repR.ok) return err('Sell-out read failed: ' + JSON.stringify(repR.data), 502);
             if (!dayR.ok) return err('Sell-out daily read failed: ' + JSON.stringify(dayR.data), 502);
+            if (!skuR.ok) return err('Sell-out FSN read failed: ' + JSON.stringify(skuR.data), 502);
+            if (!fsnR.ok) return err('Sell-out FSN daily read failed: ' + JSON.stringify(fsnR.data), 502);
             const reports = repR.data || [], daily = dayR.data || [];
             const latest = reports.length ? { report_date: reports[0].report_date, received_at: reports[0].received_at } : null;
-            // A report only asserts D-1 and D-2, so today can never be 'reported' — cap the denominator at yesterday.
+            // A report asserts past days only (D-1..D-7), so today can never be 'reported' — cap the denominator at yesterday.
             const cap = new Date(Date.parse(todayISO()) - 86400000).toISOString().slice(0, 10);
             const toCov = to < cap ? to : cap;
             const days = Math.max(0, Math.round((Date.parse(toCov) - Date.parse(from)) / 86400000) + 1);
             const reported = new Set(daily.filter(d => d.platform === 'total').map(d => d.sale_date)).size;
-            return ok({ reports, daily, latest, coverage: { days, reported } });
+            // FSN table: latest snapshot per FSN + this range's daily total, product resolved through sku_map at read time.
+            const snap = skuR.data || [];
+            const agg = Object.create(null);   // keys come from the DB — no prototype to collide with
+            for (const f of (fsnR.data || [])) { const a = (agg[f.channel_sku] ||= { units: 0, gmv: 0, days: 0 }); a.units += Number(f.units) || 0; a.gmv += Number(f.gmv) || 0; a.days++; }
+            const mapBySku = Object.create(null), nameByCode = Object.create(null);
+            if (snap.length) {
+              const mR = await sbSales(`/rest/v1/sku_map?channel_id=${inList}&channel_sku=in.(${snap.map(s => encodeURIComponent(s.channel_sku)).join(',')})&select=channel_sku,product_code`);
+              (mR.ok ? mR.data : []).forEach(m => { mapBySku[m.channel_sku] = m.product_code; });
+              const codes = [...new Set(Object.values(mapBySku))];
+              if (codes.length) {
+                const pR = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.map(encodeURIComponent).join(',')})&select=product_code,product`);
+                (pR.ok ? pR.data : []).forEach(p => { nameByCode[p.product_code] = p.product; });
+              }
+            }
+            const skus = snap.map(s => ({
+              channel_sku: s.channel_sku, title: s.title, atp_qty: s.atp_qty, mtd_units: s.mtd_units, mtd_gmv: s.mtd_gmv, mtd_label: s.mtd_label, report_date: s.report_date,
+              product_code: mapBySku[s.channel_sku] || null, product: nameByCode[mapBySku[s.channel_sku]] || null,
+              range_units: agg[s.channel_sku]?.units ?? 0, range_gmv: agg[s.channel_sku]?.gmv ?? 0, range_days: agg[s.channel_sku]?.days ?? 0,
+            }));
+            const sku_summary = snap.length ? { total: skus.length, mapped: skus.filter(s => s.product_code).length, as_of: snap.reduce((m, s) => s.report_date > m ? s.report_date : m, snap[0].report_date) } : null;
+            return ok({ reports, daily, latest, coverage: { days, reported }, skus, sku_summary });
           }
 
           case 'getSalesExport': {

@@ -1,6 +1,8 @@
 // src/flipkart-sellout.mjs — pure parsing for the Flipkart daily sell-out email (no I/O, no env).
 // The report: HTML "Platform Summary" table (National / Minutes / Total × ATP, MTD, D-1, D-2; GMV in Rs. lakhs)
-// + an xlsx (27 FSN rows, same blocks split National/Minutes/Total) — the xlsx is Phase 2.
+// + an xlsx (27 FSN rows, same blocks split National/Minutes/Total).
+
+import { readXlsxSheet } from './xlsx-lite.mjs';
 
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 
@@ -88,6 +90,173 @@ export function toDailyFacts(parsed, { source, channel_id, report_id }) {
     if (parsed.d2_date) out.push({ source, channel_id, platform: p.platform, sale_date: parsed.d2_date, channel_sku: '*', units: p.d2_units, gmv: p.d2_gmv, report_id });
   }
   return out;
+}
+
+// ---- xlsx (FSN-level breakup) --------------------------------------------------------------
+// Phase 2: the daily xlsx attachment, 27 FSN rows × (MTD + D-1..D-7) National/Minutes/Total.
+// parseReportGrid is pure/sync over the `rows` shape readXlsxSheet returns; parseReportXlsx
+// wires the xlsx reader in front of it.
+
+// Grid cells carry literal newlines inside headers ("ATP\n(Current)") — collapse those too, on
+// top of the HTML-table `strip` above (harmless no-op here since grid cells have no tags).
+const gstrip = s => strip(s).replace(/\s+/g, ' ').trim();
+
+// A..Z, AA..AZ, ... <-> 1-based column index.
+function colToIdx(letters) {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n;
+}
+function idxToCol(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+const BLOCK_SUBHEADERS = [/^National Units$/, /^Minutes Units$/, /^Total Units$/, /^National GMV/, /^Minutes GMV/, /^Total GMV/];
+
+export function parseReportGrid(rows) {
+  let h = null;
+  for (let r = 1; r < rows.length; r++) {
+    if (gstrip(rows[r]?.A) === 'FSN') { h = r; break; }
+  }
+  if (h == null) throw new Error('Flipkart xlsx: FSN header row not found');
+
+  const header = rows[h];
+  const COLS = [[/^FSN$/, 'A'], [/^Product Title$/, 'B'], [/^Brand$/, 'C'], [/^Vertical$/, 'D'], [/^ATP/, 'E']];
+  for (const [re, col] of COLS) {
+    if (!re.test(gstrip(header[col]))) {
+      throw new Error(`Flipkart xlsx: column layout changed — ${col}${h} is "${gstrip(header[col])}", expected to match ${re}`);
+    }
+  }
+
+  // Block titles live one row above the headers, one cell per 6-column block.
+  const titleRow = rows[h - 1] || {};
+  const blocks = [];
+  const seenKeys = new Set();
+  for (const [colLetter, val] of Object.entries(titleRow)) {
+    const text = gstrip(val);
+    let key = null, label = null, date = null;
+    const mtdM = /^Month till Date \((.+)\)$/.exec(text);
+    const dM = /^D-(\d)\s+(\d{1,2}-[A-Za-z]{3}-\d{4})$/.exec(text);
+    if (mtdM) { key = 'mtd'; label = mtdM[1]; }
+    else if (dM) { key = `d${dM[1]}`; date = parseDMY(dM[2]); }
+    else continue;
+    if (seenKeys.has(key)) throw new Error(`Flipkart xlsx: duplicate block key "${key}"`);
+    seenKeys.add(key);
+    const col = colToIdx(colLetter);
+    blocks.push({ key, label, date, col });
+  }
+  blocks.sort((a, b) => a.col - b.col);
+  if (!blocks.some(b => b.key === 'mtd')) throw new Error('Flipkart xlsx: "mtd" block not found');
+  if (!blocks.some(b => b.key === 'd1')) throw new Error('Flipkart xlsx: "d1" block not found');
+
+  for (const b of blocks) {
+    for (let i = 0; i < 6; i++) {
+      const col = idxToCol(b.col + i);
+      const text = gstrip(header[col]);
+      if (!BLOCK_SUBHEADERS[i].test(text)) {
+        throw new Error(`Flipkart xlsx: column layout changed — block "${b.key}" sub-header ${col}${h} is "${text}", expected to match ${BLOCK_SUBHEADERS[i]}`);
+      }
+    }
+  }
+
+  function readBlockValues(row) {
+    const out = {};
+    for (const b of blocks) {
+      const c0 = idxToCol(b.col), c1 = idxToCol(b.col + 1), c2 = idxToCol(b.col + 2);
+      const c3 = idxToCol(b.col + 3), c4 = idxToCol(b.col + 4), c5 = idxToCol(b.col + 5);
+      out[b.key] = {
+        national_units: int(row[c0]), minutes_units: int(row[c1]), total_units: int(row[c2]),
+        national_gmv: lakh(row[c3]), minutes_gmv: lakh(row[c4]), total_gmv: lakh(row[c5]),
+      };
+    }
+    return out;
+  }
+
+  const fsns = [];
+  let totalRowIdx = null, fsnCount = null;
+  for (let r = h + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const a = gstrip(row?.A);
+    if (/^TOTAL/.test(a)) {
+      totalRowIdx = r;
+      const m = /\((\d+)\s*FSNs?\)/.exec(a);
+      fsnCount = m ? Number(m[1]) : null;
+      break;
+    }
+    if (!row || !a) continue;   // a formatted spacer row (style-only cells) — the TOTAL row is still ahead
+    fsns.push({
+      fsn: a,
+      title: gstrip(row.B),
+      brand: gstrip(row.C),
+      vertical: gstrip(row.D),
+      atp_qty: int(row.E),
+      blocks: readBlockValues(row),
+    });
+  }
+  if (totalRowIdx == null) throw new Error('Flipkart xlsx: TOTAL row not found');
+  // A duplicated FSN row would collide on the sellout_sku / sellout_fact PKs inside one upsert (SQLSTATE 21000,
+  // not transient) and wedge the connector on that message — refuse it here, where the message says why.
+  const dup = fsns.map(f => f.fsn).find((x, i, arr) => arr.indexOf(x) !== i);
+  if (dup) throw new Error(`Flipkart xlsx: duplicate FSN row ${dup}`);
+
+  const total = { atp_qty: int(rows[totalRowIdx].E), blocks: readBlockValues(rows[totalRowIdx]) };
+
+  // Invariants — fail the run rather than store a silently mis-summed number.
+  for (const f of fsns) {
+    for (const b of blocks) {
+      const v = f.blocks[b.key];
+      if (v.national_units != null && v.minutes_units != null && v.total_units != null
+          && v.national_units + v.minutes_units !== v.total_units) {
+        throw new Error(`Flipkart xlsx: FSN ${f.fsn} block ${b.key} national ${v.national_units} + minutes ${v.minutes_units} != total ${v.total_units}`);
+      }
+    }
+  }
+  for (const b of blocks) {
+    const sum = fsns.reduce((acc, f) => acc + (f.blocks[b.key].total_units || 0), 0);
+    const tv = total.blocks[b.key].total_units;
+    if (tv != null && sum !== tv) {
+      throw new Error(`Flipkart xlsx: block ${b.key} sum of FSN total_units ${sum} != TOTAL row ${tv}`);
+    }
+  }
+  if (fsnCount != null && fsns.length !== fsnCount) {
+    throw new Error(`Flipkart xlsx: TOTAL row says ${fsnCount} FSNs but ${fsns.length} FSN rows were read`);
+  }
+
+  return { title: gstrip(rows[1]?.A) || null, blocks: blocks.map(({ key, label, date }) => ({ key, label, date })), fsns, total, fsn_count: fsnCount };
+}
+
+export async function parseReportXlsx(bytes) {
+  return parseReportGrid(await readXlsxSheet(bytes));
+}
+
+export function toFsnFacts(parsed, { source, channel_id, report_id }) {
+  const out = [];
+  for (const block of parsed.blocks) {
+    if (!block.date) continue; // MTD never lands in the daily facts table
+    for (const f of parsed.fsns) {
+      const v = f.blocks[block.key];
+      out.push({ source, channel_id, platform: 'national', sale_date: block.date, channel_sku: f.fsn, units: v.national_units, gmv: v.national_gmv, report_id });
+      out.push({ source, channel_id, platform: 'minutes', sale_date: block.date, channel_sku: f.fsn, units: v.minutes_units, gmv: v.minutes_gmv, report_id });
+      out.push({ source, channel_id, platform: 'total', sale_date: block.date, channel_sku: f.fsn, units: v.total_units, gmv: v.total_gmv, report_id });
+    }
+    const tv = parsed.total.blocks[block.key];
+    out.push({ source, channel_id, platform: 'national', sale_date: block.date, channel_sku: '*', units: tv.national_units, gmv: tv.national_gmv, report_id });
+    out.push({ source, channel_id, platform: 'minutes', sale_date: block.date, channel_sku: '*', units: tv.minutes_units, gmv: tv.minutes_gmv, report_id });
+    out.push({ source, channel_id, platform: 'total', sale_date: block.date, channel_sku: '*', units: tv.total_units, gmv: tv.total_gmv, report_id });
+  }
+  return out;
+}
+
+export function toSkuSnapshot(parsed, { source, channel_id, report_id, report_date }) {
+  const mtd = parsed.blocks.find(b => b.key === 'mtd');
+  return parsed.fsns.map(f => ({
+    source, channel_id, channel_sku: f.fsn,
+    title: f.title, brand: f.brand, vertical: f.vertical, atp_qty: f.atp_qty,
+    mtd_units: f.blocks.mtd.total_units, mtd_gmv: f.blocks.mtd.total_gmv, mtd_label: mtd ? mtd.label : null,
+    report_date, report_id,
+  }));
 }
 
 export function b64urlDecode(s) {

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { salesGet, inr, fmtInt } from '../lib/api.js';
 import { Kpi } from './kit.js';
 import { PanelHead, Nil } from './prism.js';
@@ -28,8 +29,12 @@ export default function SelloutMemo({ channelIds, from, to, session, meta }) {
   const latest = reports.filter(x => x.report_date === d.latest?.report_date);
   const tot = latest.find(x => x.platform === 'total');
   const cov = d.coverage || { days: 0, reported: 0 };
+  const skus = d.skus || [], sum = d.sku_summary || null;
   // Same pill shape as <SettledBadge> (kit.js) — mono 9px, --border-ctl, pill radius.
-  const badge = <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', border: '1px solid var(--border-ctl)', borderRadius: 999, padding: '1px 6px', whiteSpace: 'nowrap' }}>memo · not revenue</span>;
+  const pill = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', border: '1px solid var(--border-ctl)', borderRadius: 999, padding: '1px 6px', whiteSpace: 'nowrap' };
+  const badge = <span style={pill}>memo · not revenue</span>;
+  // Flipkart titles are long ("L.O.T CARS Ghost Remote Control Car, 20Kmph, … Street Blue"); keep the tail, which carries the colourway.
+  const trim = t => { const s = String(t || '').replace(/^L\.O\.T CARS\s*/i, ''); return s.length > 48 ? '…' + s.slice(-46) : s || '—'; };
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
@@ -38,7 +43,7 @@ export default function SelloutMemo({ channelIds, from, to, session, meta }) {
           sub={<>{badge} {tot ? `${meta.label} · MTD · latest ${fmtD(d.latest.report_date)}` : `${meta.label} · no report in this range`}</>}
           now={tot?.d1_units} prev={tot?.d2_units} deltaNote="D-1 vs D-2 units" tone="neutral" />
         <Kpi dense hue="#2DA8F0" lbl="ATP on platform" val={tot && tot.atp_qty != null ? fmtInt(tot.atp_qty) : '—'} sub="current stock at Flipkart" tone="neutral" />
-        <Kpi dense hue="#2DA8F0" lbl="Days reported" val={`${cov.reported} / ${cov.days}`} sub="days with a report · capped at yesterday · Fridays never covered (Mon–Fri emails report D-1 / D-2)" tone="neutral" />
+        <Kpi dense hue="#2DA8F0" lbl="Days reported" val={`${cov.reported} / ${cov.days}`} sub="days with a report · capped at yesterday (each report covers the last 7 days)" tone="neutral" />
       </div>
       <div className="so-card">
         <PanelHead title="Platform sell-out" qual={`${meta.source} · memo only`} />
@@ -53,6 +58,23 @@ export default function SelloutMemo({ channelIds, from, to, session, meta }) {
                 <td className="so-num">{n(x.d1_units)}</td><td className="so-num">{r(x.d1_gmv)}</td><td className="so-num">{n(x.d2_units)}</td><td className="so-num">{r(x.d2_gmv)}</td>
               </tr>) : null; })}
           </tbody></table>
+        )}
+      </div>
+      <div className="so-card">
+        <PanelHead title="FSN sell-out" qual={sum ? `as of ${fmtD(sum.as_of)} · ${sum.mapped} of ${sum.total} FSNs mapped · memo only` : `${meta.source} · memo only`} />
+        {!skus.length ? <div style={{ padding: 20, color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No FSN breakup yet — it comes from the report's xlsx attachment.</div> : (
+          <div style={{ overflowX: 'auto' }}><table className="so-table"><thead><tr>
+            <th>Product</th><th>FSN</th><th className="so-num">ATP</th><th className="so-num">MTD units</th><th className="so-num">MTD GMV</th>
+            <th className="so-num">Range units</th><th className="so-num">Range GMV</th>
+          </tr></thead><tbody>
+            {skus.map(s => (
+              <tr key={s.channel_sku}>
+                <td>{s.product ? s.product : <span title={s.title || ''}>{trim(s.title)} <Link href="/mapping" style={{ ...pill, color: 'var(--amber, #E0A030)', textDecoration: 'none' }}>unmapped · map →</Link></span>}</td>
+                <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{s.channel_sku}</td>
+                <td className="so-num">{n(s.atp_qty)}</td><td className="so-num">{n(s.mtd_units)}</td><td className="so-num">{r(s.mtd_gmv)}</td>
+                <td className="so-num">{s.range_days ? fmtInt(s.range_units) : <Nil />}</td><td className="so-num">{s.range_days ? inr(s.range_gmv) : <Nil />}</td>
+              </tr>))}
+          </tbody></table></div>
         )}
       </div>
     </>
