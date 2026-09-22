@@ -36,8 +36,20 @@ function tableRows(html) {
   return (t.match(/<tr[\s\S]*?<\/tr>/gi) || []).map(tr => (tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || []).map(td => td.replace(/^<t[dh][^>]*>/i, '').replace(/<\/t[dh]>$/i, '')));
 }
 
+// The value columns are read by POSITION (cells[1..7]); assert the two header rows still say what we
+// assume, so an upstream column insert/reorder fails the run instead of silently re-mapping ATP/MTD/D-1/D-2.
+const HEADER_1 = [/^Platform$/i, /^ATP/i, /^Month till Date/i, /^D-1 Sale/i, /^D-2 Sale/i];
+const HEADER_2 = [/^Units$/i, /^GMV/i, /^Units$/i, /^GMV/i, /^Units$/i, /^GMV/i];
+function assertLayout(rows) {
+  const h1 = (rows[0] || []).map(strip), h2 = (rows[1] || []).map(strip);
+  const ok = h1.length === HEADER_1.length && HEADER_1.every((re, i) => re.test(h1[i]))
+          && h2.length === HEADER_2.length && HEADER_2.every((re, i) => re.test(h2[i]));
+  if (!ok) throw new Error(`Flipkart report: column layout changed — header rows: [${h1.join(' | ')}] / [${h2.join(' | ')}]`);
+}
+
 export function parseReportHtml(html) {
   const rows = tableRows(html);
+  assertLayout(rows);
   const headerText = rows.slice(0, 2).flat().map(strip).join(' | ');
   const d1 = /D-1 Sale \((\d{1,2}-[A-Za-z]{3}-\d{4})\)/.exec(headerText);
   const d2 = /D-2 Sale \((\d{1,2}-[A-Za-z]{3}-\d{4})\)/.exec(headerText);
@@ -57,6 +69,15 @@ export function parseReportHtml(html) {
     });
   }
   if (!platforms.length) throw new Error('Flipkart report: summary table has no platform rows');
+  // Total = National + Minutes on every unit column (held on every live report to date). A mismatch means a
+  // shifted column or a new platform — fail the run rather than store a number the tile presents as fact.
+  const by = Object.fromEntries(platforms.map(p => [p.platform, p]));
+  if (by.national && by.minutes && by.total) {
+    for (const k of ['mtd_units', 'd1_units', 'd2_units']) {
+      const a = by.national[k], b = by.minutes[k], t = by.total[k];
+      if (a != null && b != null && t != null && a + b !== t) throw new Error(`Flipkart report: ${k} national ${a} + minutes ${b} != total ${t}`);
+    }
+  }
   return { d1_date: d1 ? parseDMY(d1[1]) : null, d2_date: d2 ? parseDMY(d2[1]) : null, mtd_label: mtd ? mtd[1].trim() : null, platforms };
 }
 

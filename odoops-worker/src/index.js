@@ -687,7 +687,9 @@ async function selloutArchive(path, bytes, contentType) {
     method: 'POST',
     headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': contentType, 'x-upsert': 'true' },
     body: bytes });
-  if (!res.ok) { console.error('sellout archive failed', path, res.status, (await res.text()).slice(0, 160)); return null; }
+  // Throw, never null: a report row written without its archive is marked seen forever (Phase 2 reads the xlsx).
+  // The upload is an upsert, so failing the run and retrying next hour is safe.
+  if (!res.ok) throw new Error(`sellout archive ${path} failed ${res.status}: ${(await res.text().catch(() => '')).slice(0, 160)}`);
   return path;
 }
 async function sha256Hex(bytes) {
@@ -705,10 +707,17 @@ const flipkartSelloutAdapter = {
     // Receipt-timestamp cursor with a 48 h overlap (a re-sent/corrected report arrives later than the original).
     const sinceSec = cursor ? Math.floor((Date.parse(cursor) - 48 * 3600 * 1000) / 1000) : Math.floor((Date.now() - (Number(cfg.lookback_days) || 21) * 86400 * 1000) / 1000);
     const q = encodeURIComponent(`from:${cfg.sender} subject:"${cfg.subject}" after:${sinceSec}`);
-    const list = await gmailGet(token, cfg.mailbox, `messages?q=${q}&maxResults=50`); subreqs++;
+    // Page the listing (≤5 pages × 50): the hourly window holds 1–3 messages, but a backfill from
+    // BACKFILL_START would otherwise be silently capped at the newest 50 reports.
+    const listed = []; let pageToken = null, pages = 0;
+    do {
+      const list = await gmailGet(token, cfg.mailbox, `messages?q=${q}&maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`); subreqs++;
+      listed.push(...(list.messages || []).map(m => m.id));
+      pageToken = list.nextPageToken || null; pages++;
+    } while (pageToken && pages < 5);
     // Gmail lists NEWEST first; process oldest-first so a budget-capped partial run never advances the
     // cursor past an unfetched older message.
-    const ids = (list.messages || []).map(m => m.id).reverse();
+    const ids = listed.reverse();
     // The window always contains the last ingested message once a cursor exists, so an empty list means
     // the query (sender/subject), the mailbox or the DWD scope is wrong — fail loudly, never stamp green.
     if (!ids.length) throw new Error(`flipkart_sellout: query matched 0 messages in ${cfg.mailbox} — check config.sender/subject and the SA's Gmail scope`);
@@ -716,24 +725,24 @@ const flipkartSelloutAdapter = {
     const seenR = await sbSales(`/rest/v1/sellout_report?select=message_id&message_id=in.(${ids.map(encodeURIComponent).join(',')})`); subreqs++;
     const seen = new Set((seenR.ok ? seenR.data : []).map(r => r.message_id));
     const rows = []; let partial = false; let maxInternal = cursor || null;
+    const skipped = [];   // new messages that could not be ingested (no date / no html / parse failed)
     for (const id of ids) {
       if (seen.has(id)) continue;
-      if (subreqs + 4 > budget) { partial = true; break; }
+      if (subreqs + 4 > budget) { partial = true; break; }   // get + html archive + attachment + xlsx archive
       const msg = await gmailGet(token, cfg.mailbox, `messages/${id}?format=full`); subreqs++;
       const headers = Object.fromEntries((msg.payload?.headers || []).map(h => [h.name.toLowerCase(), h.value]));
       const report_date = parseReportDate(headers.subject);
-      if (!report_date) { console.warn('flipkart_sellout: subject without a report date, skipped', id, headers.subject); continue; }
+      if (!report_date) { skipped.push(`${id}: subject without a report date (${String(headers.subject || '').slice(0, 60)})`); continue; }
       const htmlPart = gmailPart(msg.payload, p => p.mimeType === 'text/html' && p.body?.data);
-      if (!htmlPart) { console.warn('flipkart_sellout: no html part', id); continue; }
+      if (!htmlPart) { skipped.push(`${id}: no html part`); continue; }
       const htmlBytes = b64urlDecode(htmlPart.body.data);
       const html = new TextDecoder().decode(htmlBytes);
       let parsed;
-      try { parsed = parseReportHtml(html); } catch (e) { console.warn('flipkart_sellout: parse failed', id, e.message); continue; }
+      try { parsed = parseReportHtml(html); } catch (e) { skipped.push(`${id}: ${e.message}`); continue; }
       const received_at = new Date(Number(msg.internalDate)).toISOString();
       const html_path = await selloutArchive(`${report_date}/${id}.html`, htmlBytes, 'text/html'); subreqs++;
       let xlsx_path = null, sha256 = null;
       const xlsxPart = gmailPart(msg.payload, p => /\.xlsx$/i.test(p.filename || '') && p.body?.attachmentId);
-      if (xlsxPart && subreqs + 2 > budget) { partial = true; break; }   // defer the whole message rather than half-archive it
       if (xlsxPart) {
         const att = await gmailGet(token, cfg.mailbox, `messages/${id}/attachments/${xlsxPart.body.attachmentId}`); subreqs++;
         const bytes = b64urlDecode(att.data);
@@ -743,6 +752,14 @@ const flipkartSelloutAdapter = {
       rows.push({ message_id: id, report_date, received_at, parsed, html_path, xlsx_path, sha256, channel_id: cfg.target_channel_id });
       if (!maxInternal || received_at > maxInternal) maxInternal = received_at;
     }
+    if (skipped.length) console.warn('flipkart_sellout: skipped', skipped.join(' · '));
+    // Fail loudly rather than stamp green on nothing: (a) new mail arrived and NONE of it parsed (a template
+    // change), (b) no new report for longer than the feed's longest normal gap (Fri → Mon over a long
+    // weekend = 4 days). Both leave the tile frozen while the connector would otherwise read healthy.
+    if (!rows.length && skipped.length) throw new Error(`flipkart_sellout: ${skipped.length} new message(s), none ingested — ${skipped[0]}`);
+    const silenceDays = Number(cfg.max_silence_days) || 5;
+    if (!rows.length && !partial && cursor && Date.now() - Date.parse(cursor) > silenceDays * 86400 * 1000)
+      throw new Error(`flipkart_sellout: no new report since ${cursor.slice(0, 10)} (> ${silenceDays} days) — is Flipkart still sending to ${cfg.mailbox}?`);
     return { rows, cursorAfter: maxInternal, subreqs, partial };
   },
   async stage(rows) {
@@ -762,17 +779,22 @@ const flipkartSelloutAdapter = {
       // Newest report for this date wins, whatever the ARRIVAL order (a budget-capped run can ingest a
       // correction before the original it corrects). Compare as epoch — PostgREST returns +00:00 offsets.
       const newestR = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&select=message_id,received_at&order=received_at.desc&limit=1`);
-      const newer = (newestR.ok ? newestR.data : []).find(x => Date.parse(x.received_at) > Date.parse(r.received_at)) || null;
+      if (!newestR.ok) throw new Error('flipkart_sellout: newest-report read failed ' + JSON.stringify(newestR.data).slice(0, 160));
+      const newer = newestR.data.find(x => Date.parse(x.received_at) > Date.parse(r.received_at)) || null;
+      if (!newer) {
+        // Daily observations: the LATEST-RECEIVED report asserting a sale_date owns it — across report_dates
+        // too (the 22nd's D-2 and a 21st re-send both assert the 20th; whichever arrived later is the later
+        // information). Every write is idempotent (PK merge) — the run may be retried from any point.
+        const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
+          .map(f => ({ ...f, updated_at: nowISO() }));
+        if (facts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
+        // Supersede every other report for the same report_date + channel (corrections / re-sends).
+        const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
+          { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) });
+        if (!sup.ok) throw new Error(`flipkart_sellout: supersede PATCH failed for ${r.report_date}: ${JSON.stringify(sup.data).slice(0, 160)}`);
+      }
+      // The report row LAST: it is the dedup key (`seen` in fetch), so it must never exist without its facts.
       await sbInsertChunked('/rest/v1/sellout_report?on_conflict=message_id,platform', reportRows.map(x => ({ ...x, superseded_by: newer ? newer.message_id : null })), 'return=minimal,resolution=merge-duplicates');
-      if (newer) continue;   // an already-ingested newer report owns this date's facts
-      // Supersede every other report for the same report_date + channel (corrections / re-sends).
-      const sup = await sbSales(`/rest/v1/sellout_report?channel_id=eq.${r.channel_id}&report_date=eq.${r.report_date}&message_id=neq.${encodeURIComponent(r.message_id)}&superseded_by=is.null`,
-        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ superseded_by: r.message_id }) });
-      if (!sup.ok) console.error('flipkart_sellout: supersede PATCH failed', r.report_date, JSON.stringify(sup.data).slice(0, 160));
-      // Daily observations: the newest report owns D-1/D-2 for its dates (PK merge overwrites older report_ids).
-      const facts = toDailyFacts(r.parsed, { source: 'flipkart_email', channel_id: r.channel_id, report_id: r.message_id })
-        .map(f => ({ ...f, updated_at: nowISO() }));
-      if (facts.length) await sbInsertChunked('/rest/v1/sellout_fact?on_conflict=source,channel_id,platform,sale_date,channel_sku', facts, 'return=minimal,resolution=merge-duplicates');
     }
   },
 };

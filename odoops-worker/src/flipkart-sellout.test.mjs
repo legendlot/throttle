@@ -39,6 +39,21 @@ test('parseReportHtml throws on a body without the summary table', () => {
   assert.throws(() => parseReportHtml('<html><body>hello</body></html>'), /summary table/);
 });
 
+test('parseReportHtml throws when a column is inserted (positional read must not silently re-map)', () => {
+  // Insert a "Growth %" column after ATP in both header rows and every data row.
+  const shifted = html
+    .replace(/(<t[dh][^>]*>\s*ATP[^<]*<\/t[dh]>)/i, '$1<th>Growth %</th>')
+    .replace(/(<t[dh][^>]*>\s*Units\s*<\/t[dh]>)/i, '<th>%</th>$1');
+  assert.throws(() => parseReportHtml(shifted), /column layout changed/);
+});
+
+test('parseReportHtml throws when National + Minutes != Total on a unit column', () => {
+  // Bump the Total row's MTD units (1,810 → 1,811) so it no longer equals 1,482 + 328.
+  const bad = html.replace(/1,810/, '1,811');
+  assert.notEqual(bad, html, 'fixture must contain the total MTD units 1,810');
+  assert.throws(() => parseReportHtml(bad), /mtd_units national 1482 \+ minutes 328 != total 1811/);
+});
+
 test('toDailyFacts emits one row per platform per reported day, never MTD', () => {
   const p = parseReportHtml(html);
   const rows = toDailyFacts(p, { source: 'flipkart_email', channel_id: 'chan', report_id: 'msg1' });

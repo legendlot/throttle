@@ -162,7 +162,7 @@ export default function ChannelFamilyPage({ familyKey }) {
           what you want to see on a range where the PO revenue is empty (Afshaan, S397). */}
       {fam.sellout && <SelloutMemo channelIds={famIds} from={from} to={to} session={session} meta={fam.sellout} />}
 
-      {err &&<div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
+      {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : !hasAnyData ? (
         <div className="so-card" style={{ padding: 40, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12.5 }}>
           {fam.emptyReason}
