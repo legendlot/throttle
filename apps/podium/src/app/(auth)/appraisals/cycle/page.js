@@ -59,7 +59,7 @@ function CyclePage() {
     catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
 
-  if (perms && !perms.podium_hr) return <div style={{ color: 'var(--text-3)' }}>Requires podium_hr.</div>;
+  if (perms && !perms.podium_super_admin) return <div style={{ color: 'var(--text-3)' }}>Appraisal cycles are restricted to super admins.</div>;
   if (!info || !grid) return <Spinner />;
   const c = info.cycle, k = info.counts;
   const bands = grid.increment_bands;
@@ -74,7 +74,10 @@ function CyclePage() {
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {c.status === 'draft' && <button style={btnP} disabled={busy} onClick={() => setStatus('active')}>Activate (open reviews)</button>}
-          {c.status === 'active' && <button style={btnP} disabled={busy} onClick={() => setStatus('calibration')}>Lock → calibration</button>}
+          {c.status === 'active' && <button style={btnP} disabled={busy} onClick={() => {
+            if (k.manager_drafts && !window.confirm(`${k.manager_drafts} manager review(s) are saved as drafts and not submitted. Locking closes reviews and strands them. Lock anyway?`)) return;
+            setStatus('calibration');
+          }}>Lock → calibration</button>}
           {c.status === 'calibration' && <><button style={btnS} disabled={busy} onClick={shareAll}>Share all finalized</button><button style={btnP} disabled={busy} onClick={() => setStatus('closed')}>Close cycle</button></>}
           {c.status !== 'draft' && c.status !== 'closed' && <button style={btnS} disabled={busy} onClick={openEnroll}>Manage enrollment</button>}
           {c.status === 'draft' && <button style={btnP} disabled={busy} onClick={openEnroll}>Enroll people</button>}
@@ -83,7 +86,7 @@ function CyclePage() {
 
       {/* progress */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        {[['Enrolled', k.total], ['Self done', k.self_done], ['Mgr done', k.manager_done], ['Finalized', k.finalized], ['Shared', k.shared], ['Acknowledged', k.acknowledged], ['PIP', k.pip]].map(([l, v]) => (
+        {[['Enrolled', k.total], ['Self done', k.self_done], ['Mgr done', k.manager_done], ['Mgr drafts', k.manager_drafts || 0], ['Finalized', k.finalized], ['Shared', k.shared], ['Acknowledged', k.acknowledged], ['PIP', k.pip]].map(([l, v]) => (
           <div key={l} style={tile}><div style={{ fontSize: 20, fontWeight: 700, color: l === 'PIP' && v ? 'var(--state-error-fg)' : 'var(--text-1)' }}>{v}</div><div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{l}</div></div>
         ))}
       </div>
@@ -116,10 +119,10 @@ function CyclePage() {
           <table style={tbl}>
             <thead><tr>
               <th style={th}>Employee</th><th style={th}>Period</th><th style={th}>Self</th><th style={th}>Manager</th>
-              <th style={th}>Final</th><th style={th}>Note</th>{bands && <th style={th}>Suggested %</th>}<th style={th}></th>
+              <th style={th}>Mgr suggests</th><th style={th}>Final</th><th style={th}>Note</th>{bands && <th style={th}>Band %</th>}<th style={th}></th>
             </tr></thead>
             <tbody>
-              {(grid.appraisals || []).length === 0 && <tr><td colSpan={8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No one enrolled yet.</td></tr>}
+              {(grid.appraisals || []).length === 0 && <tr><td colSpan={9} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No one enrolled yet.</td></tr>}
               {(grid.appraisals || []).map(a => (
                 <GridRow key={a.id} a={a} session={session} canCalibrate={c.status === 'calibration'} showPct={!!bands} onSaved={load} router={router} />
               ))}
@@ -155,6 +158,7 @@ function GridRow({ a, session, canCalibrate, showPct, onSaved, router }) {
       <td style={{ ...td, fontSize: 12 }}>{fmtMonths(a.review_period_months)}</td>
       <td style={{ ...td, color: ratingColor(a.self_overall_rating), fontWeight: 700 }}>{a.self_overall_rating || '—'}</td>
       <td style={{ ...td, color: ratingColor(a.manager_overall_rating), fontWeight: 700 }}>{a.manager_overall_rating || '—'}</td>
+      <td style={{ ...td, fontSize: 12 }}>{a.manager_suggested_increment_pct != null ? `${a.manager_suggested_increment_pct}%` : '—'}</td>
       <td style={td}>
         {canCalibrate
           ? <select value={fr} onChange={e => setFr(e.target.value)} style={miniSel}><option value="">—</option>{[5, 4, 3, 2, 1].map(n => <option key={n} value={n}>{n}</option>)}</select>

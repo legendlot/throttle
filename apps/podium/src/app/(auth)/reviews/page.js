@@ -1,7 +1,8 @@
 'use client';
 // Reviews — everyone's appraisal task list for the OPEN cycle(s) (S396):
 //   1. your own self-appraisal (status + open/edit), and
-//   2. the direct reports you must review — a task drops off the list once you submit it
+//   2. the direct reports you must review — a task drops off the list once you submit it (a saved
+//      draft keeps it on the list, marked "Continue")
 //      (it stays reachable under "Submitted" and editable until HR shares the result).
 // No open cycle → says so. HR's cycle admin stays on /appraisals.
 import { useEffect, useState, useCallback } from 'react';
@@ -79,9 +80,9 @@ function CycleBlock({ c, linked, mine, reports, go }) {
           {pending.map(r => (
             <Row key={r.id} onClick={() => go(r.id)}
               title={r.employee?.full_name} sub={r.employee?.job_title}
-              note={r.self_submitted ? 'self-review in' : 'self-review not in yet'}
-              noteColor={r.self_submitted ? 'var(--state-success-fg)' : 'var(--t4)'}
-              action={<span style={{ ...btnPrimary }}>Review <ChevronRight size={13} /></span>} />
+              note={`${r.self_submitted ? 'self-review in' : 'self-review not in yet'}${r.draft_saved_at ? ` · your draft saved ${fmtDate(r.draft_saved_at)}` : ''}`}
+              noteColor={r.draft_saved_at ? 'var(--state-warning-fg)' : r.self_submitted ? 'var(--state-success-fg)' : 'var(--t4)'}
+              action={<span style={{ ...btnPrimary }}>{r.draft_saved_at ? 'Continue' : 'Review'} <ChevronRight size={13} /></span>} />
           ))}
           {done.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -91,7 +92,8 @@ function CycleBlock({ c, linked, mine, reports, go }) {
               {showDone && done.map(r => (
                 <Row key={r.id} onClick={() => go(r.id)} dim
                   title={r.employee?.full_name} sub={r.employee?.job_title}
-                  note={`submitted ${fmtDate(r.manager_submitted_at)}`} noteColor="var(--t4)"
+                  note={`submitted ${fmtDate(r.manager_submitted_at)}${r.draft_saved_at ? ' · unsubmitted changes saved' : ''}`}
+                  noteColor={r.draft_saved_at ? 'var(--state-warning-fg)' : 'var(--t4)'}
                   action={<span style={btnGhost}>Open</span>} />
               ))}
             </div>
@@ -104,14 +106,16 @@ function CycleBlock({ c, linked, mine, reports, go }) {
 
 function SelfRow({ a, go }) {
   const shared = a.status === 'shared' || a.status === 'acknowledged';
+  const draft = !shared && a.self_draft_saved_at;
   const note = shared ? 'your result is ready'
-    : a.self_submitted_at ? `submitted ${fmtDate(a.self_submitted_at)} — editable while the cycle is open`
+    : a.self_submitted_at ? `submitted ${fmtDate(a.self_submitted_at)} — editable while the cycle is open${draft ? ' · unsubmitted changes saved' : ''}`
+    : draft ? `draft saved ${fmtDate(a.self_draft_saved_at)} — not submitted yet`
     : 'not started';
   return (
     <Row onClick={() => go(a.id)} title="Self-review" sub={null} note={note}
-      noteColor={shared || a.self_submitted_at ? 'var(--state-success-fg)' : 'var(--state-warning-fg)'}
-      action={<span style={a.self_submitted_at && !shared ? btnGhost : btnPrimary}>
-        {shared ? 'View result' : a.self_submitted_at ? 'Edit' : 'Start'} <ChevronRight size={13} />
+      noteColor={draft ? 'var(--state-warning-fg)' : shared || a.self_submitted_at ? 'var(--state-success-fg)' : 'var(--state-warning-fg)'}
+      action={<span style={a.self_submitted_at && !shared && !draft ? btnGhost : btnPrimary}>
+        {shared ? 'View result' : draft ? 'Continue' : a.self_submitted_at ? 'Edit' : 'Start'} <ChevronRight size={13} />
       </span>} />
   );
 }

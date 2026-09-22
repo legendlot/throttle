@@ -48,7 +48,7 @@ export default function AppraisalsPage() {
     finally { setSaving(false); }
   }
 
-  if (perms && !perms.podium_hr) return <div style={{ color: 'var(--t3)' }}>Requires podium_hr.</div>;
+  if (perms && !perms.podium_super_admin) return <div style={{ color: 'var(--t3)' }}>Appraisal cycles are restricted to super admins.</div>;
   if (!cycles) return <Spinner />;
 
   return (

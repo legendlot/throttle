@@ -306,7 +306,9 @@ export default function AnalyticsPage() {
   const isComp = !!brandUser?.tier?.comp;
 
   const org = useSection('getAnalyticsOrg', { months: 12 }, isHrTier ? session : null);
-  const perf = useSection('getAnalyticsPerf', { cycles: 4 }, isHrTier ? session : null);
+  // Performance aggregates include unshared calibration results → super admins only (S396).
+  const isSuper = !!brandUser?.tier?.super_admin;
+  const perf = useSection('getAnalyticsPerf', { cycles: 4 }, isSuper ? session : null);
   const comp = useSection('getAnalyticsComp', { months: 12 }, isComp ? session : null);
 
   // Friendly gate for direct-URL visitors without HR/admin access (nav already hides the entry).
@@ -316,7 +318,7 @@ export default function AnalyticsPage() {
     <div>
       <Section title="Org & Headcount" state={org}>{(d) => <OrgSection d={d} />}</Section>
       {isComp && <Section title="Payroll Cost" state={comp}>{(d) => <CompSection d={d} />}</Section>}
-      <Section title="Performance" state={perf}>{(d) => <PerfSection d={d} />}</Section>
+      {isSuper && <Section title="Performance" state={perf}>{(d) => <PerfSection d={d} />}</Section>}
     </div>
   );
 }

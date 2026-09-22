@@ -23,7 +23,8 @@ export const NAV_GROUPS = [
       { id: 'reviews', label: 'Reviews', route: '/reviews', icon: ClipboardList },
       { id: 'okrs', label: 'OKRs',           route: '/okrs', icon: Target,   requires: 'podium_view' },
       { id: 'team', label: 'Team',           route: '/team', icon: Activity, requires: 'podium_view' },
-      { id: 'appraisals', label: 'Appraisals', route: '/appraisals', icon: ClipboardCheck, requires: 'podium_hr' },
+      // Cycles, the all-employees grid and calibration: super admins only (Vinay + Afshaan), S396.
+      { id: 'appraisals', label: 'Appraisals', route: '/appraisals', icon: ClipboardCheck, requires: 'podium_super_admin' },
       { id: 'analytics', label: 'Analytics', route: '/analytics', icon: TrendingUp, requires: 'podium_hr' },
     ],
   },

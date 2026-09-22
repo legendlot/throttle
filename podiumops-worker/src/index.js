@@ -385,7 +385,9 @@ async function getMe(url, auth, env) {
     email: auth.email,
     role: auth.role,
     fullName: auth.fullName,
-    permissions: auth.permissions,
+    // podium_super_admin is a DISPLAY flag for the nav/page guards only (never read server-side —
+    // hasPerm reads auth.permissions); the worker gates on canCalibrate(auth).
+    permissions: { ...(auth.permissions || {}), podium_super_admin: !!auth.isSuperAdmin },
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
     tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
@@ -1033,7 +1035,20 @@ function isOwnAppraisal(edges, auth, employeeId) {
 function maskOwnAppraisal(row, meE) {
   if (!meE || row.employee_id !== meE.id || row.status === 'shared' || row.status === 'acknowledged') return row;
   const o = { ...row, final_rating: null, outcome: null, calibration_note: null, suggested_pct: null,
-    manager_overall_rating: null, manager_did_well: null, manager_improve: null, manager_focus: null, _own: true };
+    manager_overall_rating: null, manager_did_well: null, manager_improve: null, manager_focus: null,
+    manager_suggested_increment_pct: null, _own: true };
+  return o;
+}
+// Calibration, the all-employees cycle view, share and the applied increment are locked to the
+// SUPER ADMINS (store.users_profile.role = 'super_admin' — Vinay + Afshaan), not the Podium admin
+// role, which Mohit and Priya also hold (S396, Afshaan). HR-role users are plain managers here.
+function canCalibrate(auth) { return !!auth?.isSuperAdmin; }
+function requireCalibrate(auth) { return canCalibrate(auth) ? null : err('Forbidden — appraisal calibration is super-admin only', 403); }
+// Drafts go only to their author: self_draft to the subject, manager_draft to the reviewing manager.
+function stripDrafts(row, { keepSelf = false, keepManager = false } = {}) {
+  const o = { ...row };
+  if (!keepSelf) { delete o.self_draft; delete o.self_draft_saved_at; }
+  if (!keepManager) { delete o.manager_draft; delete o.manager_draft_saved_at; }
   return o;
 }
 // Can the caller create/manage performance entries ABOUT employee E?
@@ -1851,6 +1866,24 @@ async function importDirectoryCandidates(body, auth, env) {
 // ────────────────────────────────────────────────────────────────────────────
 
 function clampRating(v) { const n = Math.round(Number(v)); return (n >= 1 && n <= 5) ? n : null; }
+function reviewText(v) { return typeof v === 'string' ? v.slice(0, 20000) : null; }
+// null = not given; NaN = given but invalid (caller 400s).
+function parseIncrementPct(v) {
+  if (v == null || (typeof v === 'string' && !v.trim())) return null;
+  if (typeof v !== 'number' && typeof v !== 'string') return NaN;
+  const n = Number(v);
+  return (Number.isFinite(n) && n >= 0 && n <= 100) ? Math.round(n * 100) / 100 : NaN;
+}
+// A saved-but-not-submitted review. Lives in <side>_draft (jsonb) so it never touches the
+// submitted columns the other side reads; KPI ratings stay in the draft until submit.
+function reviewDraft(d, side) {
+  const kpi = Array.isArray(d.kpi_ratings) ? d.kpi_ratings : [];
+  return {
+    overall_rating: clampRating(d[`${side}_overall_rating`]),
+    did_well: reviewText(d[`${side}_did_well`]), improve: reviewText(d[`${side}_improve`]), focus: reviewText(d[`${side}_focus`]),
+    kpi_ratings: kpi.slice(0, 25).filter(k => k && k.id).map(k => ({ id: String(k.id), rating: clampRating(k.rating) })),
+  };
+}
 function isoMinusMonths(dateStr, months) { const x = new Date(dateStr + 'T00:00:00Z'); x.setUTCMonth(x.getUTCMonth() - months); return x.toISOString().slice(0, 10); }
 function isoMinusDays(dateStr, days) { const x = new Date(dateStr + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() - days); return x.toISOString().slice(0, 10); }
 function periodMonths(start, end) {
@@ -1893,6 +1926,7 @@ function projectAppraisalForSubject(a) {
     review_period_start: a.review_period_start, review_period_end: a.review_period_end,
     self_overall_rating: a.self_overall_rating, self_did_well: a.self_did_well,
     self_improve: a.self_improve, self_focus: a.self_focus, self_submitted_at: a.self_submitted_at,
+    self_draft: a.self_draft ?? null, self_draft_saved_at: a.self_draft_saved_at ?? null,
   };
   if (a.status === 'shared' || a.status === 'acknowledged') {
     o.final_rating = a.final_rating; o.outcome = a.outcome;
@@ -1912,16 +1946,16 @@ async function getAppraisalConfig(url, auth, env) {
 
 // ── Cycles (HR) ───────────────────────────────────────────────────────────────
 async function getAppraisalCycles(url, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const r = await sb(`/rest/v1/appraisal_cycles?select=*&order=appraisal_date.desc&limit=100`, env);
   return ok({ cycles: r.data || [] });
 }
 async function getAppraisalCycle(url, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
   const [cr, ar] = await Promise.all([
     sb(`/rest/v1/appraisal_cycles?id=eq.${id}&select=*&limit=1`, env),
-    sb(`/rest/v1/appraisals?cycle_id=eq.${id}&select=status,self_submitted_at,manager_submitted_at,final_rating,outcome&limit=2000`, env),
+    sb(`/rest/v1/appraisals?cycle_id=eq.${id}&select=status,self_submitted_at,manager_submitted_at,manager_draft_saved_at,final_rating,outcome&limit=2000`, env),
   ]);
   const cycle = cr.data?.[0]; if (!cycle) return err('not_found', 404);
   const a = ar.data || [];
@@ -1931,6 +1965,8 @@ async function getAppraisalCycle(url, auth, env) {
       total: a.length,
       self_done: a.filter(x => x.self_submitted_at).length,
       manager_done: a.filter(x => x.manager_submitted_at).length,
+      // drafts that would be stranded if the cycle leaves 'active'
+      manager_drafts: a.filter(x => x.manager_draft_saved_at && !x.manager_submitted_at).length,
       finalized: a.filter(x => x.final_rating).length,
       shared: a.filter(x => x.status === 'shared' || x.status === 'acknowledged').length,
       acknowledged: a.filter(x => x.status === 'acknowledged').length,
@@ -1939,7 +1975,7 @@ async function getAppraisalCycle(url, auth, env) {
   });
 }
 async function createAppraisalCycle(body, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.appraisal_date) return err('appraisal_date required (e.g. an Apr 1 / Oct 1)', 400);
   const ad = d.appraisal_date;
@@ -1959,7 +1995,7 @@ async function createAppraisalCycle(body, auth, env) {
   return ok(r.data?.[0]);
 }
 async function setCycleStatus(body, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.cycle_id || !['draft', 'active', 'calibration', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
   const r = await sb(`/rest/v1/appraisal_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: d.status, updated_at: nowIso() }) });
@@ -1969,7 +2005,7 @@ async function setCycleStatus(body, auth, env) {
 
 // ── Enrollment (HR) ────────────────────────────────────────────────────────────
 async function getEnrollmentPreview(url, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
   const cr = await sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env);
   const cycle = cr.data?.[0]; if (!cycle) return err('cycle not found', 404);
@@ -2006,7 +2042,7 @@ async function getEnrollmentPreview(url, auth, env) {
   return ok({ cycle, candidates: cands });
 }
 async function enrollAppraisalCycle(body, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const cycleId = d.cycle_id, ids = Array.isArray(d.employee_ids) ? d.employee_ids : [];
   if (!cycleId || !ids.length) return err('cycle_id and employee_ids[] required', 400);
@@ -2056,10 +2092,16 @@ async function submitSelfReview(body, auth, env) {
   if (!me || me.id !== a.employee_id) return err('forbidden — your own self-review only', 403);
   if (a.cycle?.status !== 'active') return err('cycle is not open for reviews', 422);
   if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
+  if (d.draft === true) {
+    const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH',
+      body: JSON.stringify({ self_draft: reviewDraft(d, 'self'), self_draft_saved_at: nowIso(), updated_at: nowIso() }) });
+    if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
+    return ok({ id: d.appraisal_id, status: a.status, draft: true });
+  }
   const patch = {
     self_overall_rating: clampRating(d.self_overall_rating),
-    self_did_well: d.self_did_well ?? null, self_improve: d.self_improve ?? null, self_focus: d.self_focus ?? null,
-    self_submitted_at: nowIso(), updated_at: nowIso(),
+    self_did_well: reviewText(d.self_did_well), self_improve: reviewText(d.self_improve), self_focus: reviewText(d.self_focus),
+    self_submitted_at: nowIso(), self_draft: null, self_draft_saved_at: null, updated_at: nowIso(),
   };
   if (a.status === 'self_review') patch.status = 'manager_review';
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -2074,17 +2116,26 @@ async function submitManagerReview(body, auth, env) {
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   const edges = await loadOrgEdges(env);
   if (isOwnAppraisal(edges, auth, a.employee_id)) return err('forbidden — you cannot write the manager review of your own appraisal', 403);
-  // Same predicate as getAppraisal's manager role: the appraisal's own manager, or someone up the
-  // live chain who is not HR. HR is no longer a blanket bypass here.
+  // Same predicate as getAppraisal's canWriteMgr: the appraisal's own manager, or — only when it has
+  // no direct manager — someone up the live chain who is not a super admin.
   const meE = callerEmployee(edges, auth.userId);
-  const mayReview = !!meE && (a.manager_id === meE.id || (!isHr(auth) && inManagerChain(edges, a.employee_id, meE.id)));
+  const mayReview = !!meE && (a.manager_id === meE.id || (!a.manager_id && !canCalibrate(auth) && inManagerChain(edges, a.employee_id, meE.id)));
   if (!mayReview) return err('forbidden — only the reviewing manager can write this', 403);
   if (a.cycle?.status !== 'active') return err('cycle is not open for reviews', 422);
   if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
+  const pct = parseIncrementPct(d.manager_suggested_increment_pct);
+  if (Number.isNaN(pct)) return err('suggested increment must be a % between 0 and 100', 400);
+  if (d.draft === true) {
+    const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH',
+      body: JSON.stringify({ manager_draft: { ...reviewDraft(d, 'manager'), suggested_increment_pct: pct }, manager_draft_saved_at: nowIso(), updated_at: nowIso() }) });
+    if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
+    return ok({ id: d.appraisal_id, status: a.status, draft: true });
+  }
   const patch = {
     manager_overall_rating: clampRating(d.manager_overall_rating),
-    manager_did_well: d.manager_did_well ?? null, manager_improve: d.manager_improve ?? null, manager_focus: d.manager_focus ?? null,
-    manager_submitted_at: nowIso(), status: 'calibration', updated_at: nowIso(),
+    manager_did_well: reviewText(d.manager_did_well), manager_improve: reviewText(d.manager_improve), manager_focus: reviewText(d.manager_focus),
+    manager_suggested_increment_pct: pct,
+    manager_submitted_at: nowIso(), manager_draft: null, manager_draft_saved_at: null, status: 'calibration', updated_at: nowIso(),
   };
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
@@ -2106,7 +2157,7 @@ async function acknowledgeAppraisal(body, auth, env) {
 
 // ── Calibration / finalize / share (HR) ────────────────────────────────────────
 async function finalizeAppraisal(body, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const fr = clampRating(d.final_rating);
   if (!d.appraisal_id || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
@@ -2125,7 +2176,7 @@ async function finalizeAppraisal(body, auth, env) {
   return ok({ id: d.appraisal_id, final_rating: fr, outcome: fr <= s.pipThreshold ? 'pip' : 'standard' });
 }
 async function shareAppraisal(body, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   const ids = Array.isArray(d.appraisal_ids) ? d.appraisal_ids : (d.appraisal_id ? [d.appraisal_id] : []);
   if (!ids.length) return err('appraisal_id or appraisal_ids[] required', 400);
@@ -2137,7 +2188,7 @@ async function shareAppraisal(body, auth, env) {
   return ok({ shared: (r.data || []).length });
 }
 async function applyIncrement(body, auth, env) {
-  const gate = requireComp(auth); if (gate) return gate;
+  const gate = requireComp(auth) || requireCalibrate(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.appraisal_id) return err('appraisal_id required', 400);
   const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,final_rating,cycle:cycle_id(appraisal_date)&limit=1`, env);
@@ -2171,17 +2222,18 @@ async function getMyAppraisals(url, auth, env) {
   if (!me) return ok({ employee_id: null, active_cycles, appraisals: [], to_review: [] });
   const [ar, tr] = await Promise.all([
     sb(`/rest/v1/appraisals?employee_id=eq.${me.id}&select=*,cycle:cycle_id(id,name,appraisal_date,period_end,status,self_review_due)&order=created_at.desc&limit=200`, env),
-    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,self_submitted_at,manager_submitted_at,employee:employee_id(full_name,job_title),cycle:cycle_id(id,name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
+    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,self_submitted_at,manager_submitted_at,manager_draft_saved_at,employee:employee_id(full_name,job_title),cycle:cycle_id(id,name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
   ]);
   const appraisals = (ar.data || []).map(projectAppraisalForSubject);
   const to_review = (tr.data || []).filter(a => a.cycle?.status === 'active')
     .map(a => ({ id: a.id, employee: a.employee, status: a.status, self_submitted: !!a.self_submitted_at,
-                 done: !!a.manager_submitted_at, manager_submitted_at: a.manager_submitted_at, cycle: a.cycle }));
+                 done: !!a.manager_submitted_at, manager_submitted_at: a.manager_submitted_at,
+                 draft_saved_at: a.manager_draft_saved_at, cycle: a.cycle }));
   return ok({ employee_id: me.id, active_cycles, appraisals, to_review });
 }
 async function getTeamAppraisals(url, auth, env) {
   const me = await meOf(auth, env);
-  const hr = isHr(auth);
+  const hr = canCalibrate(auth);   // the all-appraisals list is super-admin only (S396)
   if (!me && !hr) return ok({ appraisals: [] });
   const cycleId = url.searchParams.get('cycle_id');
   let filter = cycleId ? `cycle_id=eq.${cycleId}` : `cycle_id=not.is.null`;
@@ -2200,11 +2252,17 @@ async function getAppraisal(url, auth, env) {
   // alongside when you are also HR). Before this, admin/HR got the read-only HR view
   // everywhere, so admins could neither self-review nor write their reports' manager reviews.
   const isSubject = !!(me && me.id === a.employee_id);
-  const hr = isHr(auth);
-  // Manager = the appraisal's own manager, or (non-HR only) someone up the live chain. HR above
-  // the direct manager stays on the read-only HR view — a skip-level HR submit would overwrite the
-  // direct manager's review and close their task (hostile review S396).
-  const isMgr = !isSubject && !!me && (a.manager_id === me.id || (!hr && inManagerChain(edges, a.employee_id, me.id)));
+  const hr = canCalibrate(auth);   // the HR/calibration view is super-admin only (S396)
+  // Manager = the appraisal's own manager, or (non-super-admin only) someone up the live chain. A
+  // super admin above the direct manager stays on the calibration view — a skip-level submit would
+  // overwrite the direct manager's review and close their task (hostile review S396).
+  const isDirect = !isSubject && !!me && a.manager_id === me.id;
+  const isChain = !isSubject && !!me && !isDirect && !hr && inManagerChain(edges, a.employee_id, me.id);
+  const isMgr = isDirect || isChain;
+  // Only the reviewing manager writes (and sees the draft + suggestion): the direct manager, or a
+  // chain manager when the appraisal has no direct manager. Any other skip-level reads the
+  // submitted review only (hostile review S396: one manager_draft column, one writer).
+  const canWriteMgr = isDirect || (isChain && !a.manager_id);
   if (!isSubject && !isMgr && !hr) return err('forbidden', 403);
   const kr = await sb(`/rest/v1/appraisal_kpi_ratings?appraisal_id=eq.${id}&select=*&order=sort_order.asc`, env);
   const kpis = kr.data || [];
@@ -2213,14 +2271,16 @@ async function getAppraisal(url, auth, env) {
   // has ≥ individual-OKR visibility, so no extra gate. Never weighted into the rating.
   const okrs = await subjectOkrsForAnchor(a.employee_id, a.cycle?.appraisal_date, env);
   let increment = null;
-  if (isSubject || canComp(auth)) {
+  if (isSubject || (hr && canComp(auth))) {
     const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type&order=created_at.desc&limit=1`, env);
     increment = cr.data?.[0] || null;
     if (isSubject && !(a.status === 'shared' || a.status === 'acknowledged')) increment = null;
   }
   if (!isSubject && (hr || isMgr)) {
-    const out = { ...a, kpis, okrs, increment, _role: isMgr ? 'manager' : 'hr', _can_calibrate: hr, _can_comp: canComp(auth) };
-    if (!hr) out.calibration_note = null; // HR-internal
+    const out = stripDrafts({ ...a, kpis, okrs, increment, _role: isMgr ? 'manager' : 'hr', _can_calibrate: hr, _can_comp: hr && canComp(auth),
+      _can_write_manager: canWriteMgr }, { keepManager: canWriteMgr });
+    if (!hr) out.calibration_note = null; // super-admin-internal
+    if (!hr && !canWriteMgr) out.manager_suggested_increment_pct = null;
     return ok(out);
   }
   // subject
@@ -2232,7 +2292,7 @@ async function getAppraisal(url, auth, env) {
   return ok(out);
 }
 async function getAppraisals(url, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
   const compOk = canComp(auth);
   const [cr, ar] = await Promise.all([
@@ -2245,7 +2305,7 @@ async function getAppraisals(url, auth, env) {
   const rows = (ar.data || []).map(a => {
     const months = periodMonths(a.review_period_start, a.review_period_end);
     const row = { ...a, review_period_months: months, suggested_pct: compOk ? suggestedPct(s.bands, a.final_rating || a.manager_overall_rating, months) : null };
-    return maskOwnAppraisal(row, meE);
+    return maskOwnAppraisal(stripDrafts(row), meE);
   });
   return ok({ cycle, appraisals: rows, increment_bands: compOk ? s.bands : null, pip_rating_threshold: s.pipThreshold });
 }
@@ -2410,7 +2470,8 @@ async function getAnalyticsComp(url, auth, env) {
 }
 
 async function getAnalyticsPerf(url, auth, env) {
-  const gate = requireHr(auth); if (gate) return gate;
+  // Rating distribution / PIP counts include unshared calibration results → super admins only (S396).
+  const gate = requireCalibrate(auth); if (gate) return gate;
   const cycles = clampInt(url.searchParams.get('cycles'), 4, 1, 10);
   const r = await sb(`/rest/v1/rpc/f_analytics_perf`, env, {
     method: 'POST', body: JSON.stringify({ p_cycles: cycles }),

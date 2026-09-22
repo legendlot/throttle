@@ -58,7 +58,7 @@ function DetailPage() {
         <>
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts}
             vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
-          <ManagerForm a={a} prompts={prompts} session={session} editable={cycleActive && !shared} onSaved={load} />
+          <ManagerForm a={a} prompts={prompts} session={session} editable={cycleActive && !shared && !!a._can_write_manager} onSaved={load} />
           {a._can_calibrate ? <HrTools a={a} session={session} onSaved={load} /> : (a.final_rating && <FinalBlock a={a} />)}
         </>
       )}
@@ -67,7 +67,8 @@ function DetailPage() {
       {a._role === 'hr' && (
         <>
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts} vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
-          <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at} />
+          <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at}
+            extra={<SuggestedPct a={a} />} />
           <HrTools a={a} session={session} onSaved={load} />
         </>
       )}
@@ -115,25 +116,26 @@ function HrTools({ a, session, onSaved }) {
 // ── Subject self-review form ──
 function SelfForm({ a, prompts, session, editable, onSaved }) {
   const { showToast } = useToast();
-  const [ov, setOv] = useState(a.self_overall_rating || '');
-  const [v, setV] = useState([a.self_did_well || '', a.self_improve || '', a.self_focus || '']);
-  const [kpis, setKpis] = useState(a.kpis || []);
+  const init = seedForm(a, 'self');
+  const [ov, setOv] = useState(init.ov);
+  const [v, setV] = useState(init.v);
+  const [kpis, setKpis] = useState(init.kpis);
   const [busy, setBusy] = useState(false);
-  async function submit() {
+  async function save(draft) {
     setBusy(true);
     try {
       await podiumopsPost('submitSelfReview', { data: {
-        appraisal_id: a.id, self_overall_rating: ov ? Number(ov) : null,
+        appraisal_id: a.id, draft, self_overall_rating: ov ? Number(ov) : null,
         self_did_well: v[0], self_improve: v[1], self_focus: v[2],
         kpi_ratings: kpis.map(k => ({ id: k.id, rating: k.self_rating })),
       } }, session);
-      showToast('Self-review submitted', 'success'); onSaved();
+      showToast(draft ? 'Draft saved — only you can see it' : 'Self-review submitted', 'success'); onSaved();
     } catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
   if (!editable) return <ReadBlock title="Your self-review" overall={a.self_overall_rating} prompts={prompts} vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />;
   return (
     <div style={card}>
-      <div style={cardHead}>Your self-review {a.self_submitted_at && <span style={{ fontSize: 11, color: 'var(--state-success-fg)' }}>submitted — editable while open</span>}</div>
+      <div style={cardHead}>Your self-review <DraftStatus submittedAt={a.self_submitted_at} draftAt={a.self_draft_saved_at} /></div>
       <div style={{ padding: 14 }}>
         <RatingPick label="Overall self-rating" value={ov} onChange={setOv} />
         {prompts.map((p, i) => (
@@ -141,7 +143,8 @@ function SelfForm({ a, prompts, session, editable, onSaved }) {
             <textarea value={v[i]} onChange={e => setV(x => x.map((y, j) => j === i ? e.target.value : y))} rows={3} style={ta} /></div>
         ))}
         {kpis.length > 0 && <KpiEditor kpis={kpis} setKpis={setKpis} side="self" />}
-        <div style={{ marginTop: 14, textAlign: 'right' }}><button style={{ ...btnP, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Submit self-review'}</button></div>
+        <FormActions busy={busy} onDraft={() => save(true)} onSubmit={() => save(false)} submitLabel="Submit self-review"
+          hint="A draft is visible only to you. Your manager sees the review once you submit." />
       </div>
     </div>
   );
@@ -150,25 +153,29 @@ function SelfForm({ a, prompts, session, editable, onSaved }) {
 // ── Manager review form ──
 function ManagerForm({ a, prompts, session, editable, onSaved }) {
   const { showToast } = useToast();
-  const [ov, setOv] = useState(a.manager_overall_rating || '');
-  const [v, setV] = useState([a.manager_did_well || '', a.manager_improve || '', a.manager_focus || '']);
-  const [kpis, setKpis] = useState(a.kpis || []);
+  const init = seedForm(a, 'manager');
+  const [ov, setOv] = useState(init.ov);
+  const [v, setV] = useState(init.v);
+  const [kpis, setKpis] = useState(init.kpis);
+  const [pct, setPct] = useState(a.manager_draft ? (a.manager_draft.suggested_increment_pct ?? '') : (a.manager_suggested_increment_pct ?? ''));
   const [busy, setBusy] = useState(false);
-  async function submit() {
+  async function save(draft) {
     setBusy(true);
     try {
       await podiumopsPost('submitManagerReview', { data: {
-        appraisal_id: a.id, manager_overall_rating: ov ? Number(ov) : null,
+        appraisal_id: a.id, draft, manager_overall_rating: ov ? Number(ov) : null,
         manager_did_well: v[0], manager_improve: v[1], manager_focus: v[2],
+        manager_suggested_increment_pct: pct === '' ? null : Number(pct),
         kpi_ratings: kpis.map(k => ({ id: k.id, rating: k.manager_rating })),
       } }, session);
-      showToast('Manager review submitted', 'success'); onSaved();
+      showToast(draft ? 'Draft saved — only you can see it' : 'Manager review submitted', 'success'); onSaved();
     } catch (e) { showToast(e.message || 'Failed', 'error'); } finally { setBusy(false); }
   }
-  if (!editable) return <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at} />;
+  if (!editable) return <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at}
+    extra={<SuggestedPct a={a} />} />;
   return (
     <div style={card}>
-      <div style={cardHead}>Manager review {a.manager_submitted_at && <span style={{ fontSize: 11, color: 'var(--state-success-fg)' }}>submitted — editable while open</span>}</div>
+      <div style={cardHead}>Manager review <DraftStatus submittedAt={a.manager_submitted_at} draftAt={a.manager_draft_saved_at} /></div>
       <div style={{ padding: 14 }}>
         <RatingPick label="Overall rating" value={ov} onChange={setOv} />
         {prompts.map((p, i) => (
@@ -176,7 +183,15 @@ function ManagerForm({ a, prompts, session, editable, onSaved }) {
             <textarea value={v[i]} onChange={e => setV(x => x.map((y, j) => j === i ? e.target.value : y))} rows={3} style={ta} /></div>
         ))}
         {kpis.length > 0 && <KpiEditor kpis={kpis} setKpis={setKpis} side="manager" />}
-        <div style={{ marginTop: 14, textAlign: 'right' }}><button style={{ ...btnP, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Submit manager review'}</button></div>
+        <div style={{ marginTop: 14 }}>
+          <span style={lbl}>Suggested increment %</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <input value={pct} onChange={e => setPct(e.target.value)} type="number" min="0" max="100" step="0.5" placeholder="e.g. 8" style={{ ...miniInput, width: 110 }} />
+            <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Your recommendation for calibration. The final increment is decided there; the employee never sees this number.</span>
+          </div>
+        </div>
+        <FormActions busy={busy} onDraft={() => save(true)} onSubmit={() => save(false)} submitLabel="Submit manager review"
+          hint="A draft is visible only to you. It goes to calibration once you submit." />
       </div>
     </div>
   );
@@ -235,6 +250,7 @@ function IncrementPanel({ a, session, onSaved }) {
     <div style={card}>
       <div style={cardHead}>Increment (compensation)</div>
       <div style={{ padding: 14 }}>
+        {a.manager_suggested_increment_pct != null && <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>Manager suggested <strong>{a.manager_suggested_increment_pct}%</strong>.</p>}
         {a.increment && <p style={{ fontSize: 12, color: 'var(--state-success-fg)', marginBottom: 8 }}>Recorded: {a.increment.increment_pct != null ? `${a.increment.increment_pct}%` : ''} {a.increment.amount ? `+ ₹${a.increment.amount} bonus` : ''} · effective {fmtDate(a.increment.effective_date)}</p>}
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div><span style={lbl}>Increment %</span><input value={pct} onChange={e => setPct(e.target.value)} type="number" style={{ ...miniInput, width: 100 }} /></div>
@@ -287,16 +303,53 @@ function FinalBlock({ a }) {
   return <div style={{ ...card, marginTop: 14 }}><div style={cardHead}>Final</div><div style={{ padding: 14, display: 'flex', alignItems: 'baseline', gap: 10 }}><span style={{ fontSize: 26, fontWeight: 800, color: ratingColor(a.final_rating) }}>{a.final_rating}</span><span style={{ color: 'var(--text-2)' }}>{RATING_LABELS[a.final_rating]}{a.outcome === 'pip' ? ' · PIP' : ''}</span></div></div>;
 }
 
-function ReadBlock({ title, overall, prompts, vals, submitted }) {
+function ReadBlock({ title, overall, prompts, vals, submitted, extra }) {
   return (
     <div style={{ ...card, marginBottom: 14 }}>
       <div style={cardHead}>{title} {submitted ? <span style={{ fontSize: 11, color: 'var(--text-3)' }}>· {fmtDate(submitted)}</span> : <span style={{ fontSize: 11, color: 'var(--state-warning-fg)' }}>· not submitted</span>}</div>
       <div style={{ padding: 14 }}>
         <div style={{ marginBottom: 10 }}><span style={lbl}>Overall</span> <span style={{ fontWeight: 700, color: ratingColor(overall) }}>{overall || '—'} {overall ? RATING_LABELS[overall] : ''}</span></div>
         {(prompts || []).map((p, i) => vals[i] && <div key={i} style={{ marginBottom: 8 }}><div style={lbl}>{p}</div><div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{vals[i]}</div></div>)}
+        {extra}
       </div>
     </div>
   );
+}
+
+// A saved draft seeds the form. Submitting clears the draft, so a draft that exists is always
+// newer than the submitted review.
+function seedForm(a, side) {
+  const d = a[`${side}_draft`];
+  const text = (k) => d ? (d[k] ?? '') : (a[`${side}_${k}`] || '');
+  const col = `${side}_rating`;
+  const kpis = (a.kpis || []).map(k => {
+    const r = d?.kpi_ratings?.find(x => x.id === k.id);
+    return r ? { ...k, [col]: r.rating } : k;
+  });
+  return { ov: d ? (d.overall_rating || '') : (a[`${side}_overall_rating`] || ''), v: [text('did_well'), text('improve'), text('focus')], kpis };
+}
+
+function DraftStatus({ submittedAt, draftAt }) {
+  const parts = [];
+  if (submittedAt) parts.push(<span key="s" style={{ color: 'var(--state-success-fg)' }}>submitted {fmtDate(submittedAt)} — editable while open</span>);
+  if (draftAt) parts.push(<span key="d" style={{ color: 'var(--state-warning-fg)' }}>{submittedAt ? 'unsubmitted changes' : 'draft'} saved {fmtDate(draftAt)}</span>);
+  if (!parts.length) return null;
+  return <span style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 6 }}>{parts.reduce((acc, p, i) => i ? [...acc, ' · ', p] : [p], [])}</span>;
+}
+
+function FormActions({ busy, onDraft, onSubmit, submitLabel, hint }) {
+  return (
+    <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <span style={{ flex: 1, minWidth: 200, fontSize: 11.5, color: 'var(--text-3)' }}>{hint}</span>
+      <button style={{ ...btnS, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={onDraft}>Save draft</button>
+      <button style={{ ...btnP, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={onSubmit}>{busy ? 'Saving…' : submitLabel}</button>
+    </div>
+  );
+}
+
+function SuggestedPct({ a }) {
+  if (a.manager_suggested_increment_pct == null) return null;
+  return <div style={{ marginTop: 6 }}><span style={lbl}>Suggested increment</span> <span style={{ fontWeight: 700 }}>{a.manager_suggested_increment_pct}%</span></div>;
 }
 
 function RatingPick({ label, value, onChange }) {
