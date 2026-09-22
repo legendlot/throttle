@@ -10,10 +10,13 @@ import { fmtDate } from '../../../../lib/format.js';
 import { ScoreBar } from '../../../../components/OkrPanels.js';
 
 export default function Page() {
-  return <Suspense fallback={<Spinner />}><DetailPage /></Suspense>;
+  return <Suspense fallback={<Spinner />}><DetailPage mode="calibrate" /></Suspense>;
 }
 
-function DetailPage() {
+// mode 'review'   — /reviews/review: self + manager forms only, never the calibration tools
+//                   (a super admin reviewing their own report is just their manager here).
+// mode 'calibrate' — /appraisals/detail: adds calibration for super admins (reached from the cycle grid).
+export function DetailPage({ mode = 'calibrate' }) {
   const sp = useSearchParams();
   const id = sp.get('id');
   const router = useRouter();
@@ -36,6 +39,7 @@ function DetailPage() {
   const prompts = cfg.appraisal_prompts || [];
   const cycleActive = a.cycle?.status === 'active';
   const shared = a.status === 'shared' || a.status === 'acknowledged';
+  const calibrate = mode === 'calibrate' && a._can_calibrate;
 
   return (
     <div style={{ maxWidth: 820 }}>
@@ -59,7 +63,7 @@ function DetailPage() {
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts}
             vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
           <ManagerForm a={a} prompts={prompts} session={session} editable={cycleActive && !shared && !!a._can_write_manager} onSaved={load} />
-          {a._can_calibrate ? <HrTools a={a} session={session} onSaved={load} /> : (a.final_rating && <FinalBlock a={a} />)}
+          {calibrate ? <HrTools a={a} session={session} onSaved={load} /> : (a.final_rating && <FinalBlock a={a} />)}
         </>
       )}
 
@@ -69,7 +73,7 @@ function DetailPage() {
           <ReadBlock title="Self-review" overall={a.self_overall_rating} prompts={prompts} vals={[a.self_did_well, a.self_improve, a.self_focus]} submitted={a.self_submitted_at} />
           <ReadBlock title="Manager review" overall={a.manager_overall_rating} prompts={prompts} vals={[a.manager_did_well, a.manager_improve, a.manager_focus]} submitted={a.manager_submitted_at}
             extra={<SuggestedPct a={a} />} />
-          <HrTools a={a} session={session} onSaved={load} />
+          {calibrate ? <HrTools a={a} session={session} onSaved={load} /> : <CalibrateLink id={a.id} />}
         </>
       )}
 
@@ -345,6 +349,10 @@ function FormActions({ busy, onDraft, onSubmit, submitLabel, hint }) {
       <button style={{ ...btnP, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={onSubmit}>{busy ? 'Saving…' : submitLabel}</button>
     </div>
   );
+}
+
+function CalibrateLink({ id }) {
+  return <div style={{ marginTop: 12 }}><a href={`/appraisals/detail/?id=${id}`} style={linkBtn}>Calibration (super admin) →</a></div>;
 }
 
 function SuggestedPct({ a }) {

@@ -80,7 +80,7 @@ function AppraisalsBanner({ session }) {
   const mine = (d.appraisals || []).filter(a => ['self_review', 'manager_review', 'shared'].includes(a.status));
   const toReview = (d.to_review || []).filter(r => !r.done);
   if (!mine.length && !toReview.length) return null;
-  const go = (id) => router.push(`/appraisals/detail/?id=${id}`);
+  const go = (id) => router.push(`/reviews/review/?id=${id}`);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>

@@ -32,7 +32,7 @@ export default function ReviewsPage() {
   const cycles = d.active_cycles || [];
   if (!cycles.length) return <Empty text="No appraisal cycle open." />;
 
-  const go = (id) => router.push(`/appraisals/detail/?id=${id}`);
+  const go = (id) => router.push(`/reviews/review/?id=${id}`);
   return (
     <div style={{ maxWidth: 820, display: 'flex', flexDirection: 'column', gap: 22 }}>
       {cycles.map(c => (
