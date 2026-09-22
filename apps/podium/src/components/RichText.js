@@ -98,7 +98,7 @@ export function RichTextView({ value, title, clamp = 180 }) {
         </button>
       )}
       <Modal open={open} onClose={() => setOpen(false)} title={title} size="lg">
-        <div style={{ fontSize: 13.5, lineHeight: 1.6, fontFamily: 'var(--font-body, inherit)', maxHeight: '70dvh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 13.5, lineHeight: 1.6, fontFamily: 'var(--font-ui)', color: 'var(--text-1, #eee)', maxHeight: '70dvh', overflowY: 'auto' }}>
           <RichBody value={value} />
         </div>
       </Modal>
