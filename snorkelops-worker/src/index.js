@@ -149,6 +149,16 @@ function gatePoLinesByPo(allowed, lines) {
 // Resolve a user's SNORKEL permissions: snorkel_user_roles(user) → role_key →
 // snorkel_roles.permissions. Returns {} when the user has no Snorkel role (they can
 // still file requests — request creation needs no permission key).
+// Money authority keys come ONLY from store.payment_grants (named individuals). A role
+// carrying one would hand it to every holder of that role, so they are stripped both when a
+// role is written and when its permissions are read.
+const PAYMENT_GRANT_KEYS = ['payment_approve', 'payment_execute', 'payment_super_admin'];
+function stripGrantKeys(perms) {
+  const out = { ...((perms && typeof perms === 'object' && !Array.isArray(perms)) ? perms : {}) };
+  for (const k of PAYMENT_GRANT_KEYS) delete out[k];
+  return out;
+}
+
 async function getSnorkelPerms(userId) {
   const [ur, gr] = await Promise.all([
     sb(`/rest/v1/snorkel_user_roles?user_id=eq.${userId}&select=role_key&limit=1`),
@@ -166,7 +176,7 @@ async function getSnorkelPerms(userId) {
   if (!ur.ok || !ur.data[0]) return { __role: null, perms: { ...grants } };
   const roleKey = ur.data[0].role_key;
   const r = await sb(`/rest/v1/snorkel_roles?role_key=eq.${encodeURIComponent(roleKey)}&select=permissions&limit=1`);
-  return { __role: roleKey, perms: { ...((r.ok && r.data[0]?.permissions) || {}), ...grants } };
+  return { __role: roleKey, perms: { ...stripGrantKeys(r.ok && r.data[0]?.permissions), ...grants } };
 }
 
 async function verifyJWT(authHeader) {
@@ -1378,6 +1388,28 @@ async function storageFetch(path, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 function assetSafeSeg(s) { return String(s || '').replace(/[^\w.\-]+/g, '_'); }
+
+// A payment document path must be EXACTLY the shape createPaymentDocUploadUrl mints for this
+// request and kind: `<request_id>/<kind>/<ms>_<safe name>`. A prefix test is not enough — fetch()
+// normalises `%2e%2e` to `..`, so `<own>/invoice/%2e%2e/%2e%2e/<other>/…` would let a requester
+// record another request's file on their own request and read it back through getPaymentDocUrl.
+// All 125 existing rows match this shape (2026-09-22).
+function paymentDocPathOk(path, requestId, kind) {
+  const esc = v => assetSafeSeg(v).replace(/\./g, '\\.');
+  return new RegExp(`^${esc(String(requestId))}/${esc(kind)}/\\d+_[\\w.\\-]+$`).test(String(path || ''));
+}
+
+// Who may put a document on a payment request — the same door as the detail page's
+// "+ Attach invoice": the requester, or Finance (execute), and never on a cancelled/rejected
+// request. Anyone else gets 404 so a guessed id reveals nothing. Returns null when allowed.
+async function paymentDocAttachRefusal(requestId, userId, P) {
+  const pr = await query('payment_requests', `?id=eq.${encodeURIComponent(requestId)}&select=requested_by_user_id,status&limit=1`);
+  if (!pr.ok || !pr.data[0]) return err('Not found', 404);
+  if (pr.data[0].requested_by_user_id !== userId && !canPayExecute(P)) return err('Not found', 404);
+  if (['cancelled', 'rejected'].includes(pr.data[0].status))
+    return err('This request is ' + pr.data[0].status + ' — documents can no longer be attached', 403);
+  return null;
+}
 
 // Append an asset_history row (best-effort; never blocks the main mutation).
 async function logAssetHistory(assetId, eventType, fromVal, toVal, note, auth) {
@@ -5465,6 +5497,10 @@ export default {
             if (!d.file_name) return err('file_name required');
             const kind = d.doc_kind || 'invoice';
             if (kind === 'payment_proof' && !canPayExecute(P)) return err('No permission', 403);
+            if (d.request_id) {
+              const refusal = await paymentDocAttachRefusal(d.request_id, userId, P);
+              if (refusal) return refusal;
+            }
             const bucketDir = d.request_id ? String(d.request_id) : `draft/${userId}`;
             const path = `${assetSafeSeg(bucketDir)}/${assetSafeSeg(kind)}/${Date.now()}_${assetSafeSeg(d.file_name)}`;
             const sr = await storageFetch(`/object/upload/sign/${PAYMENT_BUCKET}/${path}`, { method: 'POST' });
@@ -5487,6 +5523,10 @@ export default {
             if (!d.storage_path) return err('storage_path required');
             const kind = d.doc_kind || 'invoice';
             if (kind === 'payment_proof' && !canPayExecute(P)) return err('No permission', 403);
+            const refusal = await paymentDocAttachRefusal(d.request_id, userId, P);
+            if (refusal) return refusal;
+            if (!paymentDocPathOk(d.storage_path, d.request_id, kind))
+              return err('storage_path does not belong to this request', 400);
             const r = await insert('payment_request_documents', {
               request_id: d.request_id, doc_kind: kind, file_path: d.storage_path,
               file_name: d.file_name || null, mime: d.mime || null,
@@ -5595,7 +5635,7 @@ export default {
             const key = String(d.role_key).trim().toLowerCase().replace(/\s+/g, '_');
             const r = await insert('snorkel_roles', {
               role_key: key, label: d.label, description: d.description || null,
-              permissions: d.permissions || {}, is_system: false,
+              permissions: stripGrantKeys(d.permissions), is_system: false,
             });
             if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
             return ok({ role_key: key });
@@ -5608,7 +5648,7 @@ export default {
             const updates = { updated_at: new Date().toISOString() };
             if (d.label !== undefined)       updates.label = d.label;
             if (d.description !== undefined) updates.description = d.description;
-            if (d.permissions !== undefined) updates.permissions = d.permissions;
+            if (d.permissions !== undefined) updates.permissions = stripGrantKeys(d.permissions);
             const r = await update('snorkel_roles', updates, `role_key=eq.${encodeURIComponent(d.role_key)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
             return ok({ updated: d.role_key });
