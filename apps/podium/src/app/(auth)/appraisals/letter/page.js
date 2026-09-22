@@ -7,6 +7,7 @@ import { Printer } from 'lucide-react';
 import { podiumopsGet } from '../../../../lib/podiumopsFetch.js';
 import { RATING_LABELS } from '../../../../lib/appraisals.js';
 import { fmtDate } from '../../../../lib/format.js';
+import { isRich, sanitizeRich } from '../../../../lib/richText.js';
 import { todayStr } from '@throttle/domain';
 
 export default function Page() {
@@ -77,7 +78,8 @@ function LetterPage() {
 }
 
 function Section({ t, v }) {
-  return <div style={{ marginBottom: 10 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{t}</div><div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{v}</div></div>;
+  return <div style={{ marginBottom: 10 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{t}</div>
+    {isRich(v) ? <div className="letter-rich" style={{ fontSize: 13 }} dangerouslySetInnerHTML={{ __html: sanitizeRich(v) }} /> : <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{v}</div>}</div>;
 }
 
 const p = { fontSize: 13.5, lineHeight: 1.7, margin: '0 0 10px', color: '#111' };

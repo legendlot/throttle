@@ -23,7 +23,8 @@
  * Spec:  systems/podium.md ; docs/superpowers/specs/2026-06-02-podium-design.md
  */
 
-import { intParam } from './params.mjs';   // S370 — NaN-proof query-param parse, see params.mjs
+import { intParam } from './params.mjs';
+import { sanitizeRich } from './richtext.mjs';   // S396 — review-box HTML whitelist, see richtext.mjs
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 
@@ -571,7 +572,16 @@ async function getMyCompensation(url, auth, env) {
     env,
   );
   if (!r.ok) return err('db_error', 500);
-  const events = r.data || [];
+  // A locked-in appraisal increment/bonus stays hidden from its subject until the appraisal is
+  // shared (S396 hostile review) — the lock is a super-admin step, the share is the release.
+  const apprIds = [...new Set((r.data || []).map(e => e.appraisal_id).filter(Boolean))];
+  let released = new Set();
+  if (apprIds.length) {
+    const ar = await sb(`/rest/v1/appraisals?id=in.(${apprIds.join(',')})&status=in.(shared,acknowledged)&select=id`, env);
+    if (!ar.ok) return err('db_error', 500);
+    released = new Set((ar.data || []).map(x => x.id));
+  }
+  const events = (r.data || []).filter(e => !e.appraisal_id || released.has(e.appraisal_id));
   const latestCtc = events.find(e => e.event_type !== 'one_time_bonus' && e.new_ctc != null);
   return ok({ employee_id: me.id, events, current_ctc: latestCtc ? Number(latestCtc.new_ctc) : null });
 }
@@ -1032,12 +1042,15 @@ function isOwnAppraisal(edges, auth, employeeId) {
   return !!(me && me.id === employeeId);
 }
 // HR list views: the caller's OWN row keeps only what the subject may see until it is shared.
+// The internal fields (recommendation, comments, calibration) stay hidden on your own row for good;
+// the result itself is hidden until shared.
 function maskOwnAppraisal(row, meE) {
-  if (!meE || row.employee_id !== meE.id || row.status === 'shared' || row.status === 'acknowledged') return row;
-  const o = { ...row, final_rating: null, outcome: null, calibration_note: null, suggested_pct: null,
-    manager_overall_rating: null, manager_did_well: null, manager_improve: null, manager_focus: null,
-    manager_suggested_increment_pct: null, _own: true };
-  return o;
+  if (!meE || row.employee_id !== meE.id) return row;
+  const o = { ...row, calibration_note: null, suggested_pct: null, manager_overall_rating: null,
+    manager_suggested_increment_pct: null, manager_suggested_bonus: null, manager_recommendation_note: null,
+    manager_comments: null, calibrated_increment_pct: null, calibrated_bonus: null, _own: true };
+  if (row.status === 'shared' || row.status === 'acknowledged') return o;
+  return { ...o, final_rating: null, outcome: null, manager_did_well: null, manager_improve: null, manager_focus: null };
 }
 // Calibration, the all-employees cycle view, share and the applied increment are locked to the
 // SUPER ADMINS (store.users_profile.role = 'super_admin' — Vinay + Afshaan), not the Podium admin
@@ -1866,7 +1879,17 @@ async function importDirectoryCandidates(body, auth, env) {
 // ────────────────────────────────────────────────────────────────────────────
 
 function clampRating(v) { const n = Math.round(Number(v)); return (n >= 1 && n <= 5) ? n : null; }
-function reviewText(v) { return typeof v === 'string' ? v.slice(0, 20000) : null; }
+// Review boxes are rich text (S396): the editor sends HTML, stored sanitized to a tag whitelist with
+// every attribute dropped. Text outside tags has < > escaped. Legacy plain text never went through
+// this and the UI renders it as text; the editor always wraps new content in a block tag.
+function reviewText(v) { return typeof v === 'string' ? sanitizeRich(v.slice(0, 40000)) : null; }
+// ₹ amount: null = not given; NaN = given but invalid (caller 400s).
+function parseMoney(v) {
+  if (v == null || (typeof v === 'string' && !v.trim())) return null;
+  if (typeof v !== 'number' && typeof v !== 'string') return NaN;
+  const n = Number(v);
+  return (Number.isFinite(n) && n >= 0 && n <= 1e9) ? Math.round(n * 100) / 100 : NaN;
+}
 // null = not given; NaN = given but invalid (caller 400s).
 function parseIncrementPct(v) {
   if (v == null || (typeof v === 'string' && !v.trim())) return null;
@@ -2125,16 +2148,25 @@ async function submitManagerReview(body, auth, env) {
   if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
   const pct = parseIncrementPct(d.manager_suggested_increment_pct);
   if (Number.isNaN(pct)) return err('suggested increment must be a % between 0 and 100', 400);
+  const bonus = parseMoney(d.manager_suggested_bonus);
+  if (Number.isNaN(bonus)) return err('suggested one-time bonus must be a ₹ amount ≥ 0', 400);
+  // Internal-only fields (reviewing manager + super admins; never the subject).
+  const rec = { manager_comments: reviewText(d.manager_comments), manager_recommendation_note: reviewText(d.manager_recommendation_note) };
   if (d.draft === true) {
     const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH',
-      body: JSON.stringify({ manager_draft: { ...reviewDraft(d, 'manager'), suggested_increment_pct: pct }, manager_draft_saved_at: nowIso(), updated_at: nowIso() }) });
+      body: JSON.stringify({ manager_draft: { ...reviewDraft(d, 'manager'), suggested_increment_pct: pct, suggested_bonus: bonus,
+        comments: rec.manager_comments, recommendation_note: rec.manager_recommendation_note }, manager_draft_saved_at: nowIso(), updated_at: nowIso() }) });
     if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
     return ok({ id: d.appraisal_id, status: a.status, draft: true });
   }
+  // The manager reviews what the employee wrote — submit waits for the self-review unless a super
+  // admin waived it for this appraisal (a draft is always allowed). S396, Afshaan.
+  if (!a.self_submitted_at && !a.self_review_waived_at)
+    return err('the self-review is not submitted yet — save your review as a draft for now', 422);
   const patch = {
     manager_overall_rating: clampRating(d.manager_overall_rating),
     manager_did_well: reviewText(d.manager_did_well), manager_improve: reviewText(d.manager_improve), manager_focus: reviewText(d.manager_focus),
-    manager_suggested_increment_pct: pct,
+    manager_suggested_increment_pct: pct, manager_suggested_bonus: bonus, ...rec,
     manager_submitted_at: nowIso(), manager_draft: null, manager_draft_saved_at: null, status: 'calibration', updated_at: nowIso(),
   };
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -2161,8 +2193,9 @@ async function finalizeAppraisal(body, auth, env) {
   const d = body.data || body;
   const fr = clampRating(d.final_rating);
   if (!d.appraisal_id || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
-  const own = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id&limit=1`, env);
+  const own = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,comp_locked_at&limit=1`, env);
   if (!own.data?.[0]) return err('not_found', 404);
+  if (own.data[0].comp_locked_at) return err('compensation is locked in for this appraisal — the final rating can no longer change', 422);
   if (isOwnAppraisal(await loadOrgEdges(env), auth, own.data[0].employee_id)) return err('forbidden — you cannot calibrate your own appraisal', 403);
   const s = await loadAppraisalSettings(env);
   const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, {
@@ -2187,29 +2220,241 @@ async function shareAppraisal(body, auth, env) {
   if (!r.ok) return err('share_failed: ' + JSON.stringify(r.data), 400);
   return ok({ shared: (r.data || []).length });
 }
-async function applyIncrement(body, auth, env) {
-  const gate = requireComp(auth) || requireCalibrate(auth); if (gate) return gate;
+// ── Calibrated comp → lock-in (super admin + comp allow-list; spec 2026-09-22 §3) ─────────────
+function requireCalibrateComp(auth) { return requireCalibrate(auth) || requireComp(auth); }
+// Pre-appraisal annual CTC per employee: the latest non-bonus event carrying a new_ctc, ignoring the
+// events a lock-in of THESE appraisals wrote — so "before" stays put once a person is locked.
+// Returns { [employee_id]: ctc }, or with withComponents { [employee_id]: { ctc, components } }.
+async function baseCtcByEmployee(empIds, appraisalIds, env, { withComponents = false } = {}) {
+  const out = {};
+  if (!empIds.length) return out;
+  const skip = new Set(appraisalIds);
+  const r = await sb(`/rest/v1/compensation_events?employee_id=in.(${empIds.join(',')})&event_type=neq.one_time_bonus&new_ctc=not.is.null&select=employee_id,new_ctc,components,appraisal_id&order=effective_date.desc,created_at.desc&limit=20000`, env);
+  if (!r.ok) throw new Error('db_error reading CTC');
+  for (const e of (r.data || [])) {
+    if (out[e.employee_id] != null || (e.appraisal_id && skip.has(e.appraisal_id))) continue;
+    out[e.employee_id] = withComponents ? { ctc: Number(e.new_ctc), components: e.components || null } : Number(e.new_ctc);
+  }
+  return out;
+}
+// The increment event must carry salary components: payouts read monthly_fixed off the latest
+// non-bonus event (currentComponentsFor), so a bare increment would drop the person from fixed
+// payouts (S396 hostile review). Every numeric component scales by the increment; text fields stay.
+function scaleComponents(components, pct) {
+  if (!components || typeof components !== 'object') return null;
+  const f = 1 + Number(pct) / 100;
+  const out = {};
+  for (const [k, v] of Object.entries(components)) out[k] = (typeof v === 'number' && Number.isFinite(v)) ? Math.round(v * f * 100) / 100 : v;
+  return out;
+}
+function idList(d) {
+  const ids = Array.isArray(d.appraisal_ids) ? d.appraisal_ids : (d.appraisal_id ? [d.appraisal_id] : []);
+  return (ids.length && ids.length <= 1000 && ids.every(x => typeof x === 'string' && UUID_RE.test(x))) ? [...new Set(ids)] : null;
+}
+const newCtc = (base, pct) => (base == null ? null : (pct == null ? base : Math.round(base * (1 + Number(pct) / 100))));
+
+// Calibrated increment % + OTB ₹ — a DRAFT on the appraisal until lock-in. `null` clears a value.
+async function saveCalibratedComp(body, auth, env) {
+  const gate = requireCalibrateComp(auth); if (gate) return gate;
   const d = body.data || body;
   if (!d.appraisal_id) return err('appraisal_id required', 400);
-  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,final_rating,cycle:cycle_id(appraisal_date)&limit=1`, env);
+  const pct = parseIncrementPct(d.calibrated_increment_pct);
+  if (Number.isNaN(pct)) return err('increment must be a % between 0 and 100', 400);
+  const bonus = parseMoney(d.calibrated_bonus);
+  if (Number.isNaN(bonus)) return err('one-time bonus must be a ₹ amount ≥ 0', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,comp_locked_at&limit=1`, env);
   const a = ar.data?.[0]; if (!a) return err('not_found', 404);
   if (isOwnAppraisal(await loadOrgEdges(env), auth, a.employee_id)) return err('forbidden — you cannot set your own increment', 403);
-  if (!a.final_rating) return err('finalize the appraisal first', 422);
-  const pct = d.increment_pct != null && d.increment_pct !== '' ? Number(d.increment_pct) : null;
-  const bonus = d.bonus_amount != null && d.bonus_amount !== '' ? Number(d.bonus_amount) : null;
-  if (pct == null && bonus == null) return err('increment_pct or bonus_amount required', 400);
-  const row = {
-    employee_id: a.employee_id,
-    event_type: pct != null ? 'increment' : 'one_time_bonus',
-    effective_date: d.effective_date || a.cycle?.appraisal_date,
-    increment_pct: pct, amount: bonus, currency: d.currency || 'INR',
-    reason: d.reason || 'Appraisal increment', appraisal_id: d.appraisal_id,
-    approved_by: auth.userId, created_by: auth.userId,
+  if (a.comp_locked_at) return err('already locked in — correct it with a compensation event', 422);
+  // comp_locked_at=is.null in the filter: a lock racing this save wins, the save becomes a no-op.
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&comp_locked_at=is.null`, env, { method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify({ calibrated_increment_pct: pct, calibrated_bonus: bonus, updated_at: nowIso() }) });
+  if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
+  if (!(r.data || []).length) return err('already locked in', 422);
+  return ok({ id: d.appraisal_id, calibrated_increment_pct: pct, calibrated_bonus: bonus });
+}
+
+// Accept = copy the manager's recommendation into the calibrated values, for one or many unlocked
+// appraisals. One PATCH per distinct (pct, bonus) pair, not per row.
+async function acceptManagerRecommendation(body, auth, env) {
+  const gate = requireCalibrateComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  const ids = idList(d);
+  if (!ids) return err('appraisal_id or appraisal_ids[] (uuids) required', 400);
+  const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
+  const ar = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&comp_locked_at=is.null&manager_submitted_at=not.is.null&select=id,employee_id,manager_suggested_increment_pct,manager_suggested_bonus&limit=2000`, env);
+  const groups = {};
+  for (const a of (ar.data || [])) {
+    if (meE && a.employee_id === meE.id) continue;   // never your own
+    if (a.manager_suggested_increment_pct == null && a.manager_suggested_bonus == null) continue;
+    const k = `${a.manager_suggested_increment_pct ?? ''}|${a.manager_suggested_bonus ?? ''}`;
+    (groups[k] ||= { pct: a.manager_suggested_increment_pct, bonus: a.manager_suggested_bonus, ids: [] }).ids.push(a.id);
+  }
+  let accepted = 0;
+  for (const g of Object.values(groups)) {
+    const r = await sb(`/rest/v1/appraisals?id=in.(${g.ids.join(',')})&comp_locked_at=is.null`, env, { method: 'PATCH', prefer: 'return=representation',
+      body: JSON.stringify({ calibrated_increment_pct: g.pct, calibrated_bonus: g.bonus, updated_at: nowIso() }) });
+    if (!r.ok) return err('accept_failed: ' + JSON.stringify(r.data), 400);
+    accepted += (r.data || []).length;
+  }
+  return ok({ accepted, skipped: ids.length - accepted });
+}
+
+// Lock in = the permanent write. For each appraisal (all / a selection / one): an `increment` event
+// (old → new CTC) when the calibrated % > 0 and a `one_time_bonus` event when the OTB > 0, both
+// effective on the cycle's appraisal date and tied by appraisal_id; then comp_locked_at is stamped.
+// Needs a final rating; an increment needs a CTC on record. The lock is CLAIMED first (conditional
+// PATCH) so two clicks can't double-write; a failed insert releases the claim.
+async function lockAppraisalComp(body, auth, env) {
+  const gate = requireCalibrateComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  const ids = idList(d);
+  if (!ids) return err('appraisal_id or appraisal_ids[] (uuids) required', 400);
+  const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
+  const ar = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&select=id,employee_id,final_rating,calibrated_increment_pct,calibrated_bonus,comp_locked_at,employee:employee_id(full_name),cycle:cycle_id(name,appraisal_date)&limit=2000`, env);
+  if (!ar.ok) return err('db_error', 500);
+  const rows = ar.data || [];
+  const sr = await sb(`/rest/v1/settings?id=eq.1&select=comp_vault_enabled&limit=1`, env);
+  const vaultOn = !!sr.data?.[0]?.comp_vault_enabled;
+  const base = await baseCtcByEmployee([...new Set(rows.map(a => a.employee_id))], rows.map(a => a.id), env, { withComponents: true });
+  const skipped = [];
+  const ready = [];
+  for (const a of rows) {
+    const name = a.employee?.full_name || a.id;
+    const pct = a.calibrated_increment_pct == null ? null : Number(a.calibrated_increment_pct);
+    if (meE && a.employee_id === meE.id) skipped.push({ id: a.id, name, reason: 'your own appraisal' });
+    else if (a.comp_locked_at) skipped.push({ id: a.id, name, reason: 'already locked' });
+    else if (!a.final_rating) skipped.push({ id: a.id, name, reason: 'no final rating yet' });
+    else if (pct == null && a.calibrated_bonus == null) skipped.push({ id: a.id, name, reason: 'no calibrated increment / bonus' });
+    else if (vaultOn && pct > 0 && base[a.employee_id] == null) skipped.push({ id: a.id, name, reason: 'no current CTC on record' });
+    else ready.push(a.id);
+  }
+  for (const id of ids) if (!rows.some(a => a.id === id)) skipped.push({ id, name: id, reason: 'not found' });
+  if (!ready.length) return ok({ locked: 0, events: 0, skipped });
+  const stamp = nowIso();
+  const claim = await sb(`/rest/v1/appraisals?id=in.(${ready.join(',')})&comp_locked_at=is.null&final_rating=not.is.null`, env, { method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify({ comp_locked_at: stamp, comp_locked_by: auth.userId, updated_at: stamp }) });
+  if (!claim.ok) return err('lock_failed: ' + JSON.stringify(claim.data), 400);
+  const claimed = claim.data || [];   // post-claim values = the values locked
+  const byId = Object.fromEntries(rows.map(a => [a.id, a]));
+  const events = [];
+  for (const c of claimed) {
+    const a = byId[c.id];
+    const pct = c.calibrated_increment_pct == null ? null : Number(c.calibrated_increment_pct);
+    const bonus = c.calibrated_bonus == null ? null : Number(c.calibrated_bonus);
+    const common = { employee_id: c.employee_id, effective_date: a.cycle?.appraisal_date, currency: 'INR', appraisal_id: c.id,
+      reason: `Appraisal — ${a.cycle?.name || ''}`.trim(), approved_by: auth.userId, created_by: auth.userId };
+    if (pct != null && pct > 0) {
+      const b = base[c.employee_id] || null;
+      events.push({ ...common, event_type: 'increment', increment_pct: pct, amount: null,
+        ...(vaultOn && b ? { old_ctc: b.ctc, new_ctc: newCtc(b.ctc, pct), components: scaleComponents(b.components, pct) } : {}) });
+    }
+    if (bonus != null && bonus > 0) events.push({ ...common, event_type: 'one_time_bonus', increment_pct: null, amount: bonus });
+  }
+  if (events.length) {
+    const ins = await sb(`/rest/v1/compensation_events`, env, { method: 'POST', body: JSON.stringify(events), prefer: 'return=minimal' });
+    if (!ins.ok) {
+      const rb = await sb(`/rest/v1/appraisals?id=in.(${claimed.map(c => c.id).join(',')})&comp_locked_at=eq.${encodeURIComponent(stamp)}`, env,
+        { method: 'PATCH', body: JSON.stringify({ comp_locked_at: null, comp_locked_by: null }) });
+      return err(`lock_failed — no compensation written${rb.ok ? '' : `; the lock flag could NOT be released on ${claimed.length} appraisal(s), clear comp_locked_at = ${stamp}`}: ` + JSON.stringify(ins.data), 400);
+    }
+  }
+  for (const id of ready) if (!claimed.some(c => c.id === id)) skipped.push({ id, name: byId[id]?.employee?.full_name || id, reason: 'locked by someone else just now' });
+  return ok({ locked: claimed.length, events: events.length, skipped });
+}
+
+// A super admin lets the reviewing manager submit without the self-review (one appraisal).
+async function waiveSelfReview(body, auth, env) {
+  const gate = requireCalibrate(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  const waive = d.waived !== false;
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify(waive ? { self_review_waived_at: nowIso(), self_review_waived_by: auth.userId, updated_at: nowIso() }
+                               : { self_review_waived_at: null, self_review_waived_by: null, updated_at: nowIso() }) });
+  if (!r.ok) return err('waive_failed: ' + JSON.stringify(r.data), 400);
+  if (!(r.data || []).length) return err('not_found', 404);
+  return ok({ id: d.appraisal_id, waived: waive });
+}
+
+async function setCycleBudget(body, auth, env) {
+  const gate = requireCalibrateComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.cycle_id) return err('cycle_id required', 400);
+  const type = d.budget_type == null || d.budget_type === '' ? null : d.budget_type;
+  if (type != null && !['pct', 'amount'].includes(type)) return err("budget_type must be 'pct' or 'amount'", 400);
+  const value = parseMoney(d.budget_value);
+  if (Number.isNaN(value) || (type === 'pct' && value != null && value > 100)) return err('budget must be a % (0–100) or a ₹ amount ≥ 0', 400);
+  const r = await sb(`/rest/v1/appraisal_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify({ budget_type: type, budget_value: type ? value : null, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  if (!(r.data || []).length) return err('not_found', 404);
+  return ok({ cycle_id: d.cycle_id, budget_type: type, budget_value: type ? value : null });
+}
+
+// The cycle overview (spec §1): every enrolled person with their manager + department, review
+// progress, current CTC and calibrated comp, plus company-level totals against the cycle budget.
+// Totals include every row (a budget has to); rows keep the own-appraisal mask.
+async function getCycleOverview(url, auth, env) {
+  const gate = requireCalibrate(auth); if (gate) return gate;
+  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const compOk = canComp(auth);
+  const [cr, ar] = await Promise.all([
+    sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env),
+    sb(`/rest/v1/appraisals?cycle_id=eq.${cycleId}&select=id,employee_id,manager_id,status,self_overall_rating,self_submitted_at,self_draft_saved_at,self_review_waived_at,manager_overall_rating,manager_submitted_at,manager_draft_saved_at,manager_suggested_increment_pct,manager_suggested_bonus,final_rating,outcome,calibrated_increment_pct,calibrated_bonus,comp_locked_at,shared_at,employee:employee_id(full_name,job_title,employee_code,department:department_id(name)),manager:manager_id(full_name)&order=created_at.asc&limit=2000`, env),
+  ]);
+  const cycle = cr.data?.[0]; if (!cycle) return err('not_found', 404);
+  const all = ar.data || [];
+  const meE = callerEmployee(await loadOrgEdges(env), auth.userId);
+  const base = compOk ? await baseCtcByEmployee([...new Set(all.map(a => a.employee_id))], all.map(a => a.id), env) : {};
+  if (compOk) await logCompAccess(auth, 'getCycleOverview', null, cycle.name, env, { cycle_id: cycleId, employees: all.length });
+  const n = (v) => (v == null ? null : Number(v));
+  const counts = {
+    enrolled: all.length,
+    self_done: all.filter(a => a.self_submitted_at).length,
+    self_waived: all.filter(a => !a.self_submitted_at && a.self_review_waived_at).length,
+    manager_done: all.filter(a => a.manager_submitted_at).length,
+    manager_drafts: all.filter(a => a.manager_draft_saved_at && !a.manager_submitted_at).length,
+    calibrated: all.filter(a => a.final_rating).length,
+    comp_set: all.filter(a => a.calibrated_increment_pct != null || a.calibrated_bonus != null).length,
+    locked: all.filter(a => a.comp_locked_at).length,
+    shared: all.filter(a => a.status === 'shared' || a.status === 'acknowledged').length,
+    pip: all.filter(a => a.outcome === 'pip').length,
   };
-  // Vault OFF: CTC fields never accepted here (not read from input).
-  const ins = await sb(`/rest/v1/compensation_events`, env, { method: 'POST', body: JSON.stringify([row]) });
-  if (!ins.ok) return err('increment_failed: ' + JSON.stringify(ins.data), 400);
-  return ok(ins.data?.[0]);
+  let comp = null;
+  if (compOk) {
+    let before = 0, after = 0, otb = 0, recAfter = 0, recOtb = 0, withCtc = 0, pctSum = 0, pctN = 0;
+    for (const a of all) {
+      if (meE && a.employee_id === meE.id) continue;   // your own comp stays out of your totals
+      const b = base[a.employee_id];
+      const pct = n(a.calibrated_increment_pct), recPct = n(a.manager_suggested_increment_pct);
+      if (pct != null) { pctSum += pct; pctN++; }
+      otb += n(a.calibrated_bonus) || 0;
+      recOtb += n(a.manager_suggested_bonus) || 0;
+      if (b == null) continue;
+      withCtc++; before += b; after += newCtc(b, pct); recAfter += newCtc(b, recPct);
+    }
+    const budgetAmount = cycle.budget_type === 'pct' ? Math.round(before * Number(cycle.budget_value || 0) / 100)
+      : cycle.budget_type === 'amount' ? Number(cycle.budget_value || 0) : null;
+    const used = (after - before) + otb;
+    const counted = all.filter(a => !(meE && a.employee_id === meE.id)).length;
+    comp = {
+      excludes_own: counted !== all.length,
+      with_ctc: withCtc, missing_ctc: counted - withCtc,
+      ctc_before: before, ctc_after: after, increment_cost: after - before, otb_total: otb,
+      avg_increment_pct: pctN ? Math.round(pctSum / pctN * 100) / 100 : null, increment_count: pctN,
+      weighted_increment_pct: before ? Math.round((after - before) / before * 10000) / 100 : null,
+      recommended: { increment_cost: recAfter - before, otb_total: recOtb },
+      budget: { type: cycle.budget_type || null, value: n(cycle.budget_value), amount: budgetAmount, used,
+                remaining: budgetAmount == null ? null : budgetAmount - used },
+    };
+  }
+  const rows = all.map(a => {
+    const row = maskOwnAppraisal({ ...a, department: a.employee?.department?.name || null }, meE);
+    if (compOk) { row.current_ctc = base[a.employee_id] ?? null; row.new_ctc = row._own ? null : newCtc(row.current_ctc, row.calibrated_increment_pct); }
+    return row;
+  });
+  return ok({ cycle, counts, comp, appraisals: rows, can_comp: compOk });
 }
 
 // ── Reads: subject / manager / HR views ────────────────────────────────────────
@@ -2222,11 +2467,11 @@ async function getMyAppraisals(url, auth, env) {
   if (!me) return ok({ employee_id: null, active_cycles, appraisals: [], to_review: [] });
   const [ar, tr] = await Promise.all([
     sb(`/rest/v1/appraisals?employee_id=eq.${me.id}&select=*,cycle:cycle_id(id,name,appraisal_date,period_end,status,self_review_due)&order=created_at.desc&limit=200`, env),
-    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,self_submitted_at,manager_submitted_at,manager_draft_saved_at,employee:employee_id(full_name,job_title),cycle:cycle_id(id,name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
+    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,self_submitted_at,self_review_waived_at,manager_submitted_at,manager_draft_saved_at,employee:employee_id(full_name,job_title),cycle:cycle_id(id,name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
   ]);
   const appraisals = (ar.data || []).map(projectAppraisalForSubject);
   const to_review = (tr.data || []).filter(a => a.cycle?.status === 'active')
-    .map(a => ({ id: a.id, employee: a.employee, status: a.status, self_submitted: !!a.self_submitted_at,
+    .map(a => ({ id: a.id, employee: a.employee, status: a.status, self_submitted: !!a.self_submitted_at, self_waived: !a.self_submitted_at && !!a.self_review_waived_at,
                  done: !!a.manager_submitted_at, manager_submitted_at: a.manager_submitted_at,
                  draft_saved_at: a.manager_draft_saved_at, cycle: a.cycle }));
   return ok({ employee_id: me.id, active_cycles, appraisals, to_review });
@@ -2271,16 +2516,34 @@ async function getAppraisal(url, auth, env) {
   // has ≥ individual-OKR visibility, so no extra gate. Never weighted into the rating.
   const okrs = await subjectOkrsForAnchor(a.employee_id, a.cycle?.appraisal_date, env);
   let increment = null;
-  if (isSubject || (hr && canComp(auth))) {
-    const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type&order=created_at.desc&limit=1`, env);
-    increment = cr.data?.[0] || null;
+  const compView = hr && canComp(auth);
+  if (isSubject || compView) {
+    // A lock-in writes up to two events (increment + one_time_bonus); present them as one.
+    const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type,old_ctc,new_ctc&order=created_at.desc&limit=10`, env);
+    const evs = cr.data || [];
+    if (evs.length) {
+      const inc = evs.find(e => e.event_type !== 'one_time_bonus');
+      const otb = evs.find(e => e.event_type === 'one_time_bonus');
+      increment = { increment_pct: inc?.increment_pct ?? null, amount: otb?.amount ?? inc?.amount ?? null,
+        currency: (inc || otb).currency, effective_date: (inc || otb).effective_date, event_type: (inc || otb).event_type };
+      if (compView) { increment.old_ctc = inc?.old_ctc ?? null; increment.new_ctc = inc?.new_ctc ?? null; }
+    }
     if (isSubject && !(a.status === 'shared' || a.status === 'acknowledged')) increment = null;
   }
   if (!isSubject && (hr || isMgr)) {
-    const out = stripDrafts({ ...a, kpis, okrs, increment, _role: isMgr ? 'manager' : 'hr', _can_calibrate: hr, _can_comp: hr && canComp(auth),
+    const out = stripDrafts({ ...a, kpis, okrs, increment, _role: isMgr ? 'manager' : 'hr', _can_calibrate: hr, _can_comp: compView,
       _can_write_manager: canWriteMgr }, { keepManager: canWriteMgr });
-    if (!hr) out.calibration_note = null; // super-admin-internal
-    if (!hr && !canWriteMgr) out.manager_suggested_increment_pct = null;
+    if (!hr) { // super-admin-internal
+      out.calibration_note = null; out.calibrated_increment_pct = null; out.calibrated_bonus = null;
+    }
+    if (!hr && !canWriteMgr) {  // the recommendation + internal comments: its author and super admins only
+      out.manager_suggested_increment_pct = null; out.manager_suggested_bonus = null;
+      out.manager_recommendation_note = null; out.manager_comments = null;
+    }
+    if (compView) {
+      await logCompAccess(auth, 'getAppraisal', a.employee_id, a.employee?.full_name || null, env);
+      out.current_ctc = (await baseCtcByEmployee([a.employee_id], [a.id], env))[a.employee_id] ?? null;
+    }
     return ok(out);
   }
   // subject
@@ -3260,7 +3523,7 @@ const GET_ACTIONS = {
   getDirectorySyncPreview,
   // Appraisal engine
   getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
-  getAppraisals, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
+  getAppraisals, getCycleOverview, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
   // Factory cost module (compensation-tier)
   getFactoryWorkforce, getFactoryCostInputs,
   // Phase 6 — analytics
@@ -3292,7 +3555,7 @@ const POST_ACTIONS = {
   // Appraisal engine
   createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
   submitSelfReview, submitManagerReview, acknowledgeAppraisal,
-  finalizeAppraisal, shareAppraisal, applyIncrement,
+  finalizeAppraisal, shareAppraisal, saveCalibratedComp, acceptManagerRecommendation, lockAppraisalComp, waiveSelfReview, setCycleBudget,
   // Factory cost module (compensation-tier)
   setFactoryWorkforce, setFactoryPay, bulkUploadFactoryPay, setFactoryCostInput, setFactoryOtRates,
   // Phase 4 — OKRs

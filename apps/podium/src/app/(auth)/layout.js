@@ -48,7 +48,7 @@ const META = {
   '/team':              { crumb: 'Performance', title: 'Team' },
   '/reviews':           { crumb: 'Performance', title: 'Reviews' },
   '/appraisals':        { crumb: 'Performance', title: 'Appraisals' },
-  '/appraisals/cycle':  { crumb: 'Performance', title: 'Appraisal Cycle' },
+  '/appraisals/cycle':  { crumb: 'Appraisals', title: 'Cycle Overview' },
   '/appraisals/detail': { crumb: 'Appraisals', title: 'Calibration' },
   '/reviews/review':    { crumb: 'Reviews',     title: 'Review' },
   '/appraisals/letter': { crumb: 'Performance', title: 'Appraisal Letter' },

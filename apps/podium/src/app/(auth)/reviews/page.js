@@ -70,7 +70,7 @@ function CycleBlock({ c, linked, mine, reports, go }) {
       {reports.length > 0 && (
         <div style={card}>
           <div style={cardLabel}>
-            To review · {pending.length} pending{c.manager_review_due ? ` · due ${fmtDate(c.manager_review_due)}` : ''}
+            Your team · {done.length} of {reports.length} submitted · {pending.length} pending{c.manager_review_due ? ` · due ${fmtDate(c.manager_review_due)}` : ''}
           </div>
           {pending.length === 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--state-success-fg)' }}>
@@ -80,8 +80,8 @@ function CycleBlock({ c, linked, mine, reports, go }) {
           {pending.map(r => (
             <Row key={r.id} onClick={() => go(r.id)}
               title={r.employee?.full_name} sub={r.employee?.job_title}
-              note={`${r.self_submitted ? 'self-review in' : 'self-review not in yet'}${r.draft_saved_at ? ` · your draft saved ${fmtDate(r.draft_saved_at)}` : ''}`}
-              noteColor={r.draft_saved_at ? 'var(--state-warning-fg)' : r.self_submitted ? 'var(--state-success-fg)' : 'var(--t4)'}
+              note={`${r.self_submitted ? 'self-review in — ready for you' : r.self_waived ? 'self-review waived — you can submit' : 'self-review not in yet — you can save a draft'}${r.draft_saved_at ? ` · your draft saved ${fmtDate(r.draft_saved_at)}` : ''}`}
+              noteColor={r.draft_saved_at ? 'var(--state-warning-fg)' : (r.self_submitted || r.self_waived) ? 'var(--state-success-fg)' : 'var(--t4)'}
               action={<span style={{ ...btnPrimary }}>{r.draft_saved_at ? 'Continue' : 'Review'} <ChevronRight size={13} /></span>} />
           ))}
           {done.length > 0 && (
