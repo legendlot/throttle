@@ -1425,9 +1425,9 @@ export default function DispatchShipmentsPage() {
                   {!['shipped', 'cancelled'].includes(detailShipment.status) && (
                     <>
                       <input
-                        type="number" min={1}
+                        type="number" min={1} max={500}
                         value={addBoxCount}
-                        onChange={e => setAddBoxCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        onChange={e => setAddBoxCount(Math.min(500, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                         className="num" title="How many boxes to open"
                         style={{ ...inputStyle, width: 56, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
                       />

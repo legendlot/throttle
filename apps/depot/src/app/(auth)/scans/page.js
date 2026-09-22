@@ -28,6 +28,7 @@ const AWB_SHAPES = [
   /^[A-Z]{2,4}[0-9]{10,12}$/i,
   /^[0-9]{1,2}[A-Z][0-9]{8,10}$/i,
   /^[0-9]{4}_[A-Z]{2}\/[0-9]{2}-[0-9]{7}$/i,
+  /^[A-Z]{2}[0-9]{9}IN$/i,
 ];
 function looksLikeAwb(code) {
   const c = String(code || '').trim();
