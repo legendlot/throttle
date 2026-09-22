@@ -33,9 +33,9 @@ export default function SelloutMemo({ channelIds, from, to, session, meta }) {
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
-        <Kpi dense hue="#2DA8F0" lbl={`Sell-out (${meta.label})`} badge={badge}
+        <Kpi dense hue="#2DA8F0" lbl="Sell-out" badge={badge}
           val={tot && tot.mtd_units != null ? `${fmtInt(tot.mtd_units)} u · ${inr(tot.mtd_gmv)}` : '—'}
-          sub={tot ? `MTD · latest report ${fmtD(d.latest.report_date)}` : 'no report in this range'}
+          sub={tot ? `${meta.label} · MTD · latest ${fmtD(d.latest.report_date)}` : `${meta.label} · no report in this range`}
           now={tot?.d1_units} prev={tot?.d2_units} deltaNote="D-1 vs D-2 units" tone="neutral" />
         <Kpi dense hue="#2DA8F0" lbl="ATP on platform" val={tot && tot.atp_qty != null ? fmtInt(tot.atp_qty) : '—'} sub="current stock at Flipkart" tone="neutral" />
         <Kpi dense hue="#2DA8F0" lbl="Days reported" val={`${cov.reported} / ${cov.days}`} sub="days with a report · capped at yesterday (a report covers D-1 / D-2)" tone="neutral" />
