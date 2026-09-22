@@ -16,6 +16,7 @@ const WATPL = require('./wa-templates.js');
 const SEG = require('./segment-entry.js');
 const DW = require('./deliverability-window.js');   // email alert windowing + threshold (S340)
 const SQ = require('./stranded-queued.js');         // fan-out abandoned-row sweep (S340)
+const DI = require('./dead-instances.js');          // enrolments whose Workflow instance is gone (S397)
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
@@ -2696,6 +2697,15 @@ async function runScheduled(env) {
     if (sq.swept) console.log('stranded_queued_sweep', JSON.stringify(sq));
   } catch (e) { console.log('stranded_queued_sweep_error', e?.message || String(e)); }
 
+  // (J1) Dead-instance sweep: an 'active' enrolment whose Workflow instance errored, was
+  // terminated, or does not exist can only be closed from outside — the instance is the only
+  // thing that ever writes the row's next status. Runs BEFORE the max_duration mop so the row
+  // is stamped for what happened ('failed'), not for how long it sat.
+  try {
+    const di = await sweepDeadInstances(env);
+    if (di.checked) console.log('dead_instance_sweep', JSON.stringify(di));
+  } catch (e) { console.log('dead_instance_sweep_error', e?.message || String(e)); }
+
   // (J1) Lifetime cap: auto-exit enrolments older than their journey's max_duration.
   // We signal the parked instance so it ends cleanly via #park → 'expired'.
   try {
@@ -2754,6 +2764,58 @@ async function runScheduled(env) {
 // re-run — a swept row is no longer 'queued', so the next tick simply finds nothing. Alerts only
 // when the volume implies a systemic failure rather than the occasional evicted isolate; the 35
 // found on 2026-09-03 had accumulated over 23 days, i.e. ~1.5/day is the background rate.
+// Enrolments left 'active' by a Workflow instance that died or never existed (see
+// ./dead-instances.js for the two measured cohorts). One binding probe per candidate row —
+// the candidate set is small by construction (null-step > 1 h, or any step > 24 h), 29 on the
+// day this shipped and ~0 after. The verdicts live in the pure module; this is only the I/O.
+async function sweepDeadInstances(env) {
+  const r = await A.sbComms(DI.buildSweepQuery(Date.now(), A.enc), env);
+  // A refused SELECT must not look like an empty backlog — that is the one way this sweep could
+  // be dead on arrival with nothing in the tail (the `or=(and(…))` filter is the first of its
+  // shape in this worker; a PGRST100 here would otherwise be invisible).
+  if (!r.ok) { console.log('dead_instance_sweep_query_failed', r.status, JSON.stringify(r.data)); return { checked: 0, swept: 0, query_failed: true }; }
+  const rows = Array.isArray(r.data) ? r.data : [];
+  if (!rows.length) return { checked: 0, swept: 0 };
+  const probes = {};
+  for (const e of rows) probes[e.id] = await probeInstance(env, e.id);
+  const p = DI.plan(rows, probes);
+  if (DI.shouldAbort({ why: p.why, n: rows.length })) {
+    console.log('dead_instance_sweep_aborted_all_not_found', JSON.stringify({ n: rows.length, sample: probes[rows[0].id] }));
+    return { checked: rows.length, swept: 0, aborted: true, why: p.why };
+  }
+  let swept = 0;
+  for (const [to, ids] of Object.entries(p.byStatus)) {
+    // `status=eq.active` on the PATCH: if the instance ended the row between probe and write,
+    // its own status wins — this sweep never overwrites a verdict the Workflow already gave.
+    // return=representation so `swept` counts rows CHANGED, not ids sent — a 204 on 0 matches
+    // is still ok:true (the S360 class).
+    const w = await A.sbComms(`/rest/v1/enrolments?id=in.(${ids.join(',')})&status=eq.active`, env,
+      { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(DI.patchBody(to, nowIso())) });
+    A.checkWrite('dead_instance_sweep_failed', w, { to, n: ids.length });
+    if (w.ok) swept += Array.isArray(w.data) ? w.data.length : 0;
+  }
+  const out = { checked: rows.length, swept, alive: p.alive, why: p.why };
+  if (swept >= DI.ALERT_AT) {
+    const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=dead_instance_alert_at&limit=1', env);
+    const lastAlertMs = s.ok && s.data?.[0]?.dead_instance_alert_at ? new Date(s.data[0].dead_instance_alert_at).getTime() : 0;
+    if (DI.shouldAlert({ swept, lastAlertMs, nowMs: Date.now() })) {
+      await AL.alert(env, DI.alertText(out));
+      await A.sbComms('/rest/v1/settings?id=eq.1', env,
+        { method: 'PATCH', body: JSON.stringify({ dead_instance_alert_at: nowIso() }) });
+    }
+  }
+  return out;
+}
+
+// found:false carries the error text so the pure classifier can tell not-found from a blip.
+async function probeInstance(env, id) {
+  try {
+    const inst = await env.JOURNEY_WORKFLOW.get(String(id));
+    const s = await inst.status();
+    return { found: true, status: s?.status };
+  } catch (e) { return { found: false, error: e?.message || String(e) }; }
+}
+
 async function sweepStrandedQueued(env) {
   const r = await A.sbComms(SQ.buildSweepQuery(Date.now(), A.enc), env);
   const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
