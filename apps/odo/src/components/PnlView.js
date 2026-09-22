@@ -214,7 +214,9 @@ export default function PnlView({ scope }) {
                  borderColor: data.sga_meta.missing_ctc > 0 ? 'var(--amber)' : undefined }}>
               {data.sga_meta.source === 'unknown'
                 ? <strong style={{ color: 'var(--amber)' }}>SG&amp;A source could not be determined — treat this line as unverified.</strong>
-                : <><strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid</>}
+                : data.sga_meta.source === 'podium_cash'
+                  ? <SgaCashBasis m={data.sga_meta} />
+                  : <><strong>SG&amp;A source: Podium salaries</strong> · accrual on plan (CTC ÷ 12), not cash paid</>}
               {data.sga_meta.eligible ? <> · covering <strong>{data.sga_meta.counted} of {data.sga_meta.eligible}</strong> employees in {data.sga_meta.month}</> : null}
               {data.sga_meta.coverage_unavailable && (
                 <div style={{ color: 'var(--amber)', marginTop: 4 }}>
@@ -234,7 +236,7 @@ export default function PnlView({ scope }) {
 
           {isOverall ? (
             <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, lineHeight: 1.6, color: 'var(--t3)', maxWidth: 1100 }}>
-              GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. Amazon RTO + Platform Fee + Logistics auto-feed from settlement; other channels manual until connectors. RTO/Logistics/Platform here are channel rollups — edit them on each channel's P&L page. Brand Marketing = manual; SG&A = Podium salary run (non-factory CTC ÷ 12) when switched on, manual otherwise. Odo-captured channels only.
+              GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. Amazon RTO + Platform Fee + Logistics auto-feed from settlement; other channels manual until connectors. RTO/Logistics/Platform here are channel rollups — edit them on each channel's P&L page. Brand Marketing = manual; SG&A = staff salaries paid (RazorpayX payslips for the prior month, cash basis; CTC ÷ 12 estimate until that month is synced) when switched on, manual otherwise. Odo-captured channels only.
             </div>
           ) : (
             <div style={{ fontFamily: 'var(--ui)', fontSize: 11.5, lineHeight: 1.6, color: 'var(--t3)', maxWidth: 1100 }}>
@@ -244,5 +246,30 @@ export default function PnlView({ scope }) {
         </>
       )}
     </div>
+  );
+}
+
+// SG&A on the cash basis (S396). Each state says what the number is — never a confident line over
+// an estimate, a partial sync, or a failed read.
+function SgaCashBasis({ m }) {
+  const amber = { color: 'var(--amber)', marginTop: 4 };
+  if (m.basis === 'unknown') {
+    return <strong style={{ color: 'var(--amber)' }}>SG&amp;A basis could not be determined — treat this line as unverified.</strong>;
+  }
+  const mon = String(m.month).slice(0, 7);
+  const partial = m.basis === 'cash_razorpayx' && m.roster > 0 && m.payslips < 0.8 * m.roster;
+  const others = (m.fallback_months || []).filter(x => x !== mon);
+  return (
+    <>
+      {m.basis === 'cash_razorpayx'
+        ? <><strong>SG&amp;A source: salaries paid</strong> · cash basis — {m.payslips} RazorpayX payslips for {m.payroll_month}{m.roster ? <> ({m.roster} on the Podium roster)</> : null}, paid in {mon}</>
+        : <strong style={{ color: 'var(--amber)' }}>SG&amp;A for {mon} is ESTIMATED (CTC ÷ 12) — payroll for {m.payroll_month} is not synced from RazorpayX yet. Sync it in Podium → Payouts.</strong>}
+      {partial && (
+        <div style={amber}>⚠ Only {m.payslips} payslips against {m.roster} people on the roster — the sync may be incomplete, so SG&amp;A would be understated. Re-run the Podium sync for {m.payroll_month}.</div>
+      )}
+      {others.length > 0 && (
+        <div style={amber}>⚠ Estimated (CTC ÷ 12, not synced) in: {others.join(', ')}. Paid salary is payslip gross; the estimate includes the employer&apos;s share, so the two bases differ by several lakh a month.</div>
+      )}
+    </>
   );
 }

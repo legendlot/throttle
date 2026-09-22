@@ -2500,7 +2500,9 @@ async function getRazorpayxPayrollScan(url, auth, env) {
   const span = intParam(url, 'span', 40, { min: 1, max: 45 });
   await logCompAccess(auth, 'getRazorpayxPayrollScan', null, `${month} ids ${start}..${start + span - 1}`, env);
 
-  const er = await sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,razorpayx_employee_id&order=full_name.asc`, env);
+  // Leavers stay matchable for the months they were still paid: a backfill of Apr–Jul must be
+  // able to map someone who has since exited (S396 — July had 3 leavers the roster could not show).
+  const er = await sb(`/rest/v1/employees?or=(status.neq.exited,date_exited.gte.${month}-01)&select=id,employee_code,full_name,razorpayx_employee_id&order=full_name.asc`, env);
   if (!er.ok) return err('db_error', 500);
   const emps = er.data || [];
   const byPersistedId = new Map();

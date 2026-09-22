@@ -5351,7 +5351,26 @@ export default {
               } else {
                 const source = (srcR.data && srcR.data[0]) ? String(srcR.data[0].value) : 'manual';
                 sga_meta = { source };
-                if (source === 'podium' && months.length) {
+                if (source === 'podium_cash' && months.length) {
+                  // CASH basis (S396): SG&A for M = RazorpayX payslips for payroll month M−1; a month
+                  // with none synced falls back to the CTC/12 run for M−1 and MUST say so.
+                  // The basis is read for the WHOLE range: a banner describing only the last month would
+                  // call a range "cash" while earlier months are CTC estimates (hostile review S396).
+                  const last = months[months.length - 1];
+                  const bR = await rpcSales('f_pnl_sga_basis', { p_from: months[0], p_to: last });
+                  const rows = (bR.ok && Array.isArray(bR.data)) ? bR.data : [];
+                  const b = rows.length ? rows[rows.length - 1] : null;
+                  if (!b) sga_meta = { source, month: last, basis: 'unknown' };
+                  else {
+                    // Denominator for a PARTIAL sync: 5 payslips of 60 must not read as a confident cash figure.
+                    const covR = await rpcSales('f_podium_salary_coverage', { p_month: `${b.payroll_month}-01` });
+                    const c = (covR.ok && covR.data && covR.data[0]) ? covR.data[0] : null;
+                    sga_meta = { source, month: last, basis: b.basis, payroll_month: b.payroll_month,
+                      payslips: Number(b.payslips) || 0,
+                      roster: c ? (Number(c.eligible) || 0) : null,
+                      fallback_months: rows.filter(r => r.basis !== 'cash_razorpayx').map(r => String(r.month).slice(0, 7)) };
+                  }
+                } else if (source === 'podium' && months.length) {
                   // Coverage of the LAST month in range — the one the headline tiles read.
                   const last = months[months.length - 1];
                   const covR = await rpcSales('f_podium_salary_coverage', { p_month: last });
