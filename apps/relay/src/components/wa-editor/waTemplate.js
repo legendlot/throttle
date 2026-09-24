@@ -145,6 +145,18 @@ export function validateWaTemplate(content, variables = []) {
     errs.push('A button mapping slot exists but no URL button carries a {{1}} — the parameter would '
       + 'be rejected at send. Add {{1}} to the button url, or remove the slot.');
   }
+  // A tracked-link destination with its own {{1}} (…/products/{{1}}) is filled ONLY by a button
+  // slot at that index. Without one every send mints the bare page — Browse Abandonment 6hrs sent
+  // 3,612 customers to /products/ in a week (S399). Same predicate as the worker's pre-submit
+  // lint `button_target_suffix_unmapped`, repeated here because the server one runs only at submit.
+  (Array.isArray(c.buttons) ? c.buttons : []).forEach((b, i) => {
+    if (String(b.type || '').toUpperCase() !== 'URL') return;
+    if (!String(b.target_base || '').includes('{{1}}') || b.default_target) return;
+    if (btnSlots.some((s) => Number(s.index ?? 0) === i)) return;
+    errs.push(`Button ${i + 1} ("${b.text || 'untitled'}") sends people to a link that needs a value `
+      + 'from the customer (product or cart), but no button variable fills it — everyone would land '
+      + 'on a blank page. Add a button variable (product_handle, cart_link_suffix or checkout_url_suffix).');
+  });
 
   for (const m of mapping) {
     if (!m.token) errs.push('Every mapping slot needs a variable token.');

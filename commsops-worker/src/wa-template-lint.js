@@ -234,6 +234,19 @@ function lintWaTemplate(content = {}, variables) {
           + 'mapping entry and no target_base. Every send will fail to bind it. Either map a '
           + 'variable to the button, or set target_base so a tracked link is minted at send time.');
       }
+      // ⛔ …but a target_base that ITSELF carries {{1}} still needs a per-recipient suffix, and only
+      // a button mapping slot supplies one (links.js buildButtonTarget). Without it every send
+      // mints the bare base: `Browse Abandonment — WhatsApp (6hrs)` sent 3,612 links to
+      // `/products/` and `ATC — WhatsApp (6hrs)` 701 to `/cart/?storefront=true` in the 7 days to
+      // 2026-09-24, and four new abandonment drafts were copied with the same hole (S399).
+      // `default_target` is the other legitimate supplier. Slot matching mirrors the one above.
+      if (vars.length === 1 && String(b.target_base || '').includes('{{1}}') && !b.default_target
+          && !btnSlots.some((s) => Number(s.index ?? 0) === i)) {
+        err('button_target_suffix_unmapped', `URL button ${i + 1}'s destination `
+          + `("${String(b.target_base).slice(0, 60)}") has a {{1}} but no button variable fills it, so `
+          + 'every customer lands on the bare page. Map the button to the event field that completes '
+          + 'the link (product_handle, cart_link_suffix, checkout_url_suffix).');
+      }
     }
   });
 

@@ -239,5 +239,35 @@ t('the clone shape serialises a valid Meta sample url from the default suffix', 
     'a full url in `example` is the nested-sample trap and must still be refused');
 });
 
+// ── a {{1}} inside target_base needs its own supplier (S399, 2026-09-24) ────────────────
+const REDIRECT_BTN = { type: 'URL', text: 'Grab Now', url: 'https://lottoys.in/r/{{1}}',
+  target_base: 'https://www.legendoftoys.com/products/{{1}}' };
+const BODY_SLOTS = good().mapping;
+
+t('target_base with {{1}} and NO button slot is refused (the Browse 6hrs shape)', () => {
+  const r = lintWaTemplate(good({ buttons: [REDIRECT_BTN] }));
+  assert.ok(codes(r).includes('button_target_suffix_unmapped'), 'every send would mint the bare /products/');
+});
+
+t('target_base with {{1}} AND a button slot passes', () => {
+  const r = lintWaTemplate(good({ buttons: [REDIRECT_BTN], mapping: [...BODY_SLOTS,
+    { pos: 1, token: 'product_handle', example: 'ghost-rc-drift-car', component: 'button' }] }));
+  assert.ok(!codes(r).includes('button_target_suffix_unmapped'), JSON.stringify(r.errors));
+});
+
+t('target_base with {{1}} and a default_target passes', () => {
+  const r = lintWaTemplate(good({ buttons: [{ ...REDIRECT_BTN,
+    default_target: 'https://www.legendoftoys.com/collections/all' }] }));
+  assert.ok(!codes(r).includes('button_target_suffix_unmapped'));
+});
+
+t('a slot for a DIFFERENT button index does not satisfy button 2', () => {
+  const r = lintWaTemplate(good({
+    buttons: [{ type: 'URL', text: 'Track', url: 'https://lottoys.in/r/{{1}}', target_base: 'https://x.in/t/{{1}}' },
+              { ...REDIRECT_BTN }],
+    mapping: [...BODY_SLOTS, { pos: 1, index: 0, token: 'awb', example: 'SF123', component: 'button' }] }));
+  assert.ok(r.errors.some((e) => e.code === 'button_target_suffix_unmapped' && /button 2/.test(e.detail)));
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
