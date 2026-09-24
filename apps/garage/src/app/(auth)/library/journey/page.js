@@ -125,30 +125,33 @@ export default function PartJourneyPage() {
   // Filter + compute running balance ASC forward from opening_stock.
   const filteredEvents = useMemo(() => {
     if (!journey) return [];
-    const inScope = journey.events.filter(e => typeFilter.has(e.type));
-    if (!showBalance || !journey.stock) return inScope;
-    // Build balance ASC, then map back to DESC for display.
-    const asc = inScope.slice().sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
-    let bal = journey.stock.opening_stock || 0;
-    asc.forEach(e => {
-      bal += (parseFloat(e.delta) || 0);
-      e._balance_after = bal;
-    });
-    // Sort DESC again for display.
-    return asc.slice().sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+    if (showBalance && journey.stock) {
+      // Balance runs over EVERY event, then the filter hides rows. Running it over only the
+      // filtered rows made "GRN only" skip every issuance and fire the reconciliation warning
+      // below for the full issued qty (Piyush #bugs 1790229189: UNV-CB-USBC-01, +68,205).
+      const asc = journey.events.slice().sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+      let bal = journey.stock.opening_stock || 0;
+      asc.forEach(e => {
+        bal += (parseFloat(e.delta) || 0);
+        e._balance_after = bal;
+      });
+    }
+    return journey.events.filter(e => typeFilter.has(e.type))
+      .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
   }, [journey, typeFilter, showBalance]);
 
   // Reconciliation gap: balance after newest event vs stored closing_stock.
   const reconGap = useMemo(() => {
     if (!journey?.stock) return null;
-    if (!filteredEvents.length) return null;
+    if (!journey.events?.length) return null;
     if (!showBalance) return null;
-    const computed = filteredEvents[0]?._balance_after;
+    // Over ALL events, not the visible rows — the newest visible row can predate a hidden issuance.
+    const computed = journey.events.reduce((s, e) => s + (parseFloat(e.delta) || 0), journey.stock.opening_stock || 0);
     const stored   = journey.stock.closing_stock;
     if (computed == null || stored == null) return null;
     const diff = Math.round((computed - stored) * 100) / 100;
     return { computed, stored, diff };
-  }, [filteredEvents, journey, showBalance]);
+  }, [journey, showBalance]);
 
   function toggleType(id) {
     setTypeFilter(prev => {
@@ -260,7 +263,7 @@ export default function PartJourneyPage() {
                 <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 3, fontSize: 11, color: '#fbbf24' }}>
                   ⚠ Computed running balance ({fmtQty(reconGap.computed)}) differs from stored closing_stock ({fmtQty(reconGap.stored)}) by{' '}
                   <strong>{reconGap.diff > 0 ? '+' : ''}{fmtQty(reconGap.diff)}</strong>.{' '}
-                  This usually means some flush dispositions or damage events are showing as &apos;neutral&apos; but were already reflected in the ledger via the underlying issue/receipt.
+                  Some stock movement is not in this timeline — for example a receipt or issue older than the 500 most recent events, or a manual correction.
                 </div>
               )}
 
