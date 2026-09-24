@@ -10,7 +10,7 @@ import { UtmFields, UtmMarketingNote } from '@/components/utm.js';
 import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
 import WaEditor, { waPreviewProps } from '@/components/wa-editor/WaEditor.js';
 import WaPreview from '@/components/wa-editor/WaPreview.js';
-import { validateWaTemplate, WA_WABAS, normalizeMetaName } from '@/components/wa-editor/waTemplate.js';
+import { validateWaTemplate, WA_WABAS, normalizeMetaName, unfilledButtonLinks } from '@/components/wa-editor/waTemplate.js';
 import { useNewParam } from '@/lib/useNewParam.js';
 import { PURPOSES, purposeLabel } from '@/lib/purposes.js';
 import ImageLibrary from '@/components/ImageLibrary.js';
@@ -1141,6 +1141,11 @@ export default function TemplatesPage() {
         showToast('Upload the header image before saving (or switch the header type away from Image).', 'error');
         return;
       }
+      // S399: a button link that can never be completed. Blocked at SAVE with the reason spelled
+      // out — the preview list alone was easy to miss, and Submit never re-checks an approved row.
+      const dead = unfilledButtonLinks(hc);
+      // 12 s, not the 3.5 s default — this is a sentence the author has to read and act on.
+      if (dead.length) { showToast(`Not saved — ${dead[0]}`, 'error', 12000); return; }
     }
     // SMS: same narrow, save-time-only shape as the WA header guard above — block the states
     // that would reach a customer broken, and only once the author has marked the template

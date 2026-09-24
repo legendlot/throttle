@@ -57,6 +57,26 @@ function sequenceError(comp, nums) {
 // SYSTEM_FIELDS (wa-template-lint.js) rather than hard-coding the string twice.
 const SYSTEM_FIELDS = new Set(['unsubscribe_url']);
 
+// unfilledButtonLinks(content) → one plain-language message per URL button whose tracked-link
+// destination (`target_base`) carries {{1}} but has no button variable (and no default_target)
+// to fill it. Empty array = fine. Shared by the validator and the save guard.
+export function unfilledButtonLinks(c) {
+  const mapping = Array.isArray(c?.mapping) ? c.mapping : [];
+  const btnSlots = mapping.filter((m) => (m.component || 'body') === 'button');
+  const out = [];
+  (Array.isArray(c?.buttons) ? c.buttons : []).forEach((b, i) => {
+    if (String(b.type || '').toUpperCase() !== 'URL') return;
+    // A STATIC button url takes no parameter at all (links.js skips it) — same gate as the worker.
+    if (!/\{\{\d+\}\}/.test(String(b.url || ''))) return;
+    if (!String(b.target_base || '').includes('{{1}}') || b.default_target) return;
+    if (btnSlots.some((s) => Number(s.index ?? 0) === i)) return;
+    out.push(`Button ${i + 1} ("${b.text || 'untitled'}") sends people to a link that needs a value `
+      + 'from the customer (product or cart), but no button variable fills it — everyone would land '
+      + 'on a blank page. Add a button variable (product_handle, cart_link_suffix or checkout_url_suffix).');
+  });
+  return out;
+}
+
 // validateWaTemplate(content, variables[]) → string[] of blocking problems.
 // Mirrors what Meta will reject, plus the local binding rules renderWhatsapp needs at send.
 //
@@ -148,15 +168,10 @@ export function validateWaTemplate(content, variables = []) {
   // A tracked-link destination with its own {{1}} (…/products/{{1}}) is filled ONLY by a button
   // slot at that index. Without one every send mints the bare page — Browse Abandonment 6hrs sent
   // 3,612 customers to /products/ in a week (S399). Same predicate as the worker's pre-submit
-  // lint `button_target_suffix_unmapped`, repeated here because the server one runs only at submit.
-  (Array.isArray(c.buttons) ? c.buttons : []).forEach((b, i) => {
-    if (String(b.type || '').toUpperCase() !== 'URL') return;
-    if (!String(b.target_base || '').includes('{{1}}') || b.default_target) return;
-    if (btnSlots.some((s) => Number(s.index ?? 0) === i)) return;
-    errs.push(`Button ${i + 1} ("${b.text || 'untitled'}") sends people to a link that needs a value `
-      + 'from the customer (product or cart), but no button variable fills it — everyone would land '
-      + 'on a blank page. Add a button variable (product_handle, cart_link_suffix or checkout_url_suffix).');
-  });
+  // lint `button_target_suffix_unmapped`; also blocked in the SAVE UI (templates/page.js), because
+  // the submit gate never sees an already-approved template being edited. ⚠️ Client-side only —
+  // the worker's saveTemplate does not re-check it (a direct API write can still store the shape).
+  for (const msg of unfilledButtonLinks(c)) errs.push(msg);
 
   for (const m of mapping) {
     if (!m.token) errs.push('Every mapping slot needs a variable token.');
