@@ -10,6 +10,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag, ShoppingBag, Share2, Maximize2, Minimize2 } from 'lucide-react';
 import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
+import { fmtDur } from './duration.js';
 import { humanOutcome } from './labels.js';
 import { isNot } from '@/lib/journeyTrigger.js';
 
@@ -93,10 +94,10 @@ function StepNode({ data, selected }) {
   const meta = STEP_META[metaKey] || STEP_META.wait;
   const Icon = (c.type === 'send' && !isInteractive) ? (c.channel === 'whatsapp' ? MessageCircle : Mail) : meta.icon;
   const handles = handlesFor(c);
-  const sub = isInteractive ? `${(c.buttons || []).length} buttons · ${c.within || 'timeout not set'}`
+  const sub = isInteractive ? `${(c.buttons || []).length} buttons · ${fmtDur(c.within) || 'timeout not set'}`
     : c.type === 'send' ? `${c.channel || 'email'} · ${c.purpose || 'marketing'}`
-    : c.type === 'wait' ? (c.duration || 'duration not set')
-    : c.type === 'wait_response' ? `awaits ${(c.awaited || []).join(', ') || 'not set'} · ${c.within || 'duration not set'}`
+    : c.type === 'wait' ? (fmtDur(c.duration) || 'duration not set')
+    : c.type === 'wait_response' ? `awaits ${(c.awaited || []).join(', ') || 'not set'} · ${fmtDur(c.within) || 'duration not set'}`
     : c.type === 'condition' ? (
         c.check?.kind === 'event_property'
           ? `${c.check.field || '?'} ${c.check.op || 'eq'} "${c.check.value ?? ''}"`

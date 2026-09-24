@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { Trash2, Copy } from 'lucide-react';
 import { Combobox } from '@throttle/ui';
 import { eventComboOptions, normalizeEventDefs } from '@/lib/eventDefs.js';
+import { durToMinutes, splitMinutes, toDurString } from './duration.js';
 
 // Multi-value comma-separated input with a local text buffer. Committing the parsed
 // array on every keystroke (filter(Boolean) drops the trailing empty token) makes a
@@ -81,26 +82,44 @@ function SenderPicker({ config, senders, set, disabled }) {
   );
 }
 
-// Number + unit selector composing the engine's "N unit" duration string (journey-graph.js
-// durationToMs: second|minute|hour|day|week, plural optional). Free-text durations depended
-// on people typing "min/hr/days" correctly — a typo saved fine and only failed at runtime.
-const DUR_UNITS = ['minutes', 'hours', 'days'];
-function parseDur(str) {
-  const m = String(str || '').trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(second|minute|hour|day|week)s?$/);
-  return m ? { n: m[1], unit: m[2] + 's' } : { n: '', unit: 'hours' };
-}
+// Days · hours · minutes, stored as the engine's single-unit "N unit" string (see duration.js —
+// 2 h 30 m saves as "150 minutes"). Separate fields so an exact duration needs no hand
+// conversion (Pruthvi #bugs 1790246555). Free text is still gone: a typo'd unit used to save
+// fine and fail only at runtime. The three boxes keep their own state while typing, so
+// entering "90" minutes is not re-split to 1 h 30 m mid-keystroke; they resync only when the
+// saved value changes from outside (another node opened, undo, replicate).
 function DurationInput({ value, onChange, disabled }) {
-  const { n, unit } = parseDur(value);
-  const units = DUR_UNITS.includes(unit) ? DUR_UNITS : [unit, ...DUR_UNITS]; // legacy seconds/weeks round-trip
-  const emit = (nn, uu) => onChange(!nn || Number(nn) <= 0 ? '' : `${nn} ${uu}`);
+  const fromValue = (v) => {
+    const mins = durToMinutes(v);
+    if (mins == null) return { d: '', h: '', m: '' };
+    const { d, h, m } = splitMinutes(mins);
+    return { d: d ? String(d) : '', h: h ? String(h) : '', m: m ? String(m) : '' };
+  };
+  const [parts, setParts] = useState(() => fromValue(value));
+  useEffect(() => {
+    if ((value || '') !== toDurString(parts)) setParts(fromValue(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const edit = (k, raw) => {
+    // Whole numbers only, and a bad keystroke is REFUSED rather than stripped: stripping made
+    // "1.5" hrs save as 15 hrs. Text input (not type=number) so "e"/"-" can't sit in a box the
+    // browser reports as empty while the saved duration silently drops it.
+    const clean = String(raw).trim();
+    if (!/^\d{0,5}$/.test(clean)) return;
+    const next = { ...parts, [k]: clean };
+    setParts(next);
+    onChange(toDurString(next));
+  };
+  const box = (k, label) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
+      <input className="f-inp mono" type="text" inputMode="numeric" pattern="[0-9]*" value={parts[k]}
+        disabled={disabled} placeholder="0" onChange={(e) => edit(k, e.target.value)}
+        style={{ width: '100%', minWidth: 0 }} aria-label={label} />
+      <span className="dim" style={{ fontSize: 12 }}>{label}</span>
+    </label>
+  );
   return (
-    <div style={{ display: 'flex', gap: 6 }}>
-      <input className="f-inp mono" type="number" min="1" step="any" value={n} disabled={disabled}
-        onChange={(e) => emit(e.target.value, unit)} placeholder="24" style={{ width: 110, flex: '0 0 auto' }} />
-      <select className="f-inp" value={unit} disabled={disabled}
-        onChange={(e) => emit(n || '1', e.target.value)} style={{ flex: 1 }}>
-        {units.map((u) => <option key={u} value={u}>{u}</option>)}
-      </select>
+    <div style={{ display: 'flex', gap: 8 }}>
+      {box('d', 'days')}{box('h', 'hrs')}{box('m', 'min')}
     </div>
   );
 }
