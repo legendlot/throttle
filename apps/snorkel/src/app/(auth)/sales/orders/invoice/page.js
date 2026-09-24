@@ -172,7 +172,7 @@ function InvoiceInner() {
       <table className="inv-lines">
         <thead>
           <tr>
-            <th>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Taxable</th>
+            <th>#</th><th style={{ textAlign: 'left' }}>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Disc%</th><th>Taxable</th>
             {intra ? <><th>CGST</th><th>SGST</th></> : <th>IGST</th>}
             <th>Amount</th>
           </tr>
@@ -185,6 +185,8 @@ function InvoiceInner() {
               <td className="num">{l.hsn_code || '—'}</td>
               <td className="num">{l.qty}</td>
               <td className="num">{money(l.rate)}</td>
+              {/* Ram #bugs 1790228776: Rate → Taxable read as an error to customers without the discount between them. */}
+              <td className="num">{Number(Number(l.discount_pct || 0).toFixed(2))}%</td>
               <td className="num">{money(l.taxable_value)}</td>
               {intra ? (
                 <><td className="num">{Number(l.cgst_pct) || 0}%<br />{money(l.cgst_amount)}</td><td className="num">{Number(l.sgst_pct) || 0}%<br />{money(l.sgst_amount)}</td></>
