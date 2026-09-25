@@ -40,16 +40,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // concurrency: every caller takes a distinct slot at claim time, so N concurrent senders serialise
 // into an evenly spaced queue rather than all sleeping the same interval and firing together.
 async function paceResend() {
-  const now = Date.now();
-  const at = Math.max(now, nextSlotAt);
-  nextSlotAt = at + RESEND_MIN_INTERVAL_MS;
-  if (at > now) await sleep(at - now);
   // A slot claimed BEFORE a 429 landed would otherwise fire straight into the rejection window.
-  // Re-check after waking; stagger the release so the held senders do not all fire at once.
-  while (Date.now() < holdUntil) {
-    await sleep(holdUntil - Date.now() + Math.floor(Math.random() * RESEND_MIN_INTERVAL_MS));
+  // So after waking, a sender still inside the hold RE-CLAIMS a slot — and since the 429 pushed
+  // nextSlotAt to holdUntil, the re-claimed slots are spaced after the hold instead of every held
+  // sender firing in the same instant when it lifts (Codex review S400 #1).
+  for (;;) {
+    const now = Date.now();
+    const at = Math.max(now, nextSlotAt);
+    nextSlotAt = at + RESEND_MIN_INTERVAL_MS;
+    if (at > now) await sleep(at - now);
+    if (Date.now() >= holdUntil) return;
   }
 }
+
+// Resend answers 429 for its MONTHLY QUOTA too ("You have reached your monthly email sending
+// quota." — 1,652 rows on the 2026-09-25 Upshift send). That is not a rate: retrying cannot help,
+// and holding the isolate would stall every journey/transactional email behind a wall that will
+// not move today (hostile review S400 #3). Fail it at once, with Resend's own reason.
+const isQuota429 = (data) => /quota/i.test(`${data?.name || ''} ${data?.message || ''}`);
 
 // Wait after a 429. Retry-After when Resend sends one, else exponential; capped so one recipient
 // can never stall a campaign page past the invocation budget (5 retries: ≤ ~27s with Retry-After,
@@ -97,13 +105,16 @@ async function send(rendered, env) {
     // 429 is RETRYABLE and used to be recorded as a permanent failure — that is how 2,556 sends
     // became 2,556 customers who got nothing. Retry a bounded number of times, honouring
     // Retry-After when Resend sends it, then fall through and report the failure honestly.
-    if (res.status !== 429 || attempt >= RESEND_MAX_RETRIES) break;
+    if (res.status !== 429 || isQuota429(data)) break;
     const waitMs = backoffMs(attempt, res.headers.get('retry-after'));
     // Push the shared slot back too: a 429 means the CEILING is hit, not this one recipient, so
     // the other pool workers in this isolate must stop claiming slots for the same window —
-    // otherwise they fire straight into the same rejection while this one waits.
+    // otherwise they fire straight into the same rejection while this one waits. Set on EVERY
+    // rate 429, including this recipient's last one (Codex review S400 #2: the final 429 used to
+    // break out first and leave the others unwarned).
     holdUntil = Math.max(holdUntil, Date.now() + waitMs);
     nextSlotAt = Math.max(nextSlotAt, holdUntil);
+    if (attempt >= RESEND_MAX_RETRIES) break;
     await sleep(waitMs);
   }
   return {

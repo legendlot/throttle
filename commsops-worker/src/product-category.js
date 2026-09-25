@@ -104,9 +104,10 @@ function classifyTitles(titles, taxonomy, opts) {
   const list = (Array.isArray(titles) ? titles : String(titles || '').split(','))
     .map((t) => String(t || '').toLowerCase().trim()).filter(Boolean);
   // A handle alone is enough — an event with a mapped handle but no usable title still classifies.
-  if (!list.length || !Array.isArray(taxonomy) || !taxonomy.length) {
-    return matched.size ? pickCategory(matched) : null;
-  }
+  if (!list.length) return matched.size ? pickCategory(matched) : null;
+  // An empty/unreadable taxonomy only disables stages ① and ②; the title aliases (④) are loaded
+  // independently and must still run (Codex review S400 #4).
+  if (!Array.isArray(taxonomy)) taxonomy = [];
   // Distinct categories, longest first: "L.O.T Build" must be tested before a hypothetical
   // "L.O.T B", or the shorter token would claim the title. Derived from the taxonomy already
   // loaded — no second read, and a new category value is picked up for free.
@@ -163,9 +164,12 @@ async function loadHandleCategories(env) {
   // ⚠️ title_match (S400) is fetched in the SAME read as the handles. If that column ever 400s
   // (dropped/renamed, stale PostgREST cache) retry without it, so ④ degrades alone and ③ — which
   // classifies every handle-carrying House Crest view — keeps working (hostile review S400 #2).
+  let aliasReadOk = true;
   const mapRead = async () => {
     const r = await sbPublic('/rest/v1/product_handle_map?select=handle,product_code,title_match', env);
-    return r.ok ? r : sbPublic('/rest/v1/product_handle_map?select=handle,product_code', env);
+    if (r.ok) return r;
+    aliasReadOk = false;
+    return sbPublic('/rest/v1/product_handle_map?select=handle,product_code', env);
   };
   const [mapR, pmR] = await Promise.all([
     mapRead(),
@@ -183,7 +187,11 @@ async function loadHandleCategories(env) {
     if (r.handle && cat) out[String(r.handle).toLowerCase()] = cat;
     if (r.title_match && cat) aliases.push({ token: String(r.title_match), category: cat });
   }
-  _hmap = out; _aliases = aliases; _hmapExp = now + TAX_TTL_MS;
+  // On the handle-only fallback the rows carry no title_match — keep the last good aliases rather
+  // than caching "no aliases" for an hour (Codex review S400 #5), and retry the full read in 5 min.
+  _hmap = out;
+  if (aliasReadOk) _aliases = aliases;
+  _hmapExp = now + (aliasReadOk ? TAX_TTL_MS : 300_000);
   return out;
 }
 

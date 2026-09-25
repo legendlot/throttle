@@ -287,5 +287,11 @@ t('S400 ④: short/blank alias tokens are ignored (no accidental match-everythin
   assert.equal(classifyTitles('Gift Wrapping', TAX,
     { titleAliases: [{ token: ' ', category: 'L.O.T Build' }, { token: 'gi', category: 'L.O.T Build' }] }), null));
 
+t('S400 Codex #4: an EMPTY/unreadable taxonomy still lets a title alias classify', () =>
+  assert.equal(classifyTitles('Hogwarts House Crest 3D Wooden Puzzle', [],
+    { titleAliases: ALIASES }), 'L.O.T Build'));
+t('S400 Codex #4: null taxonomy + no alias → still null, never a guess', () =>
+  assert.equal(classifyTitles('Gift Wrapping', null, { titleAliases: ALIASES }), null));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
