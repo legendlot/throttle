@@ -126,11 +126,18 @@ function mapCustomer(n) {
     consent.push({ channel: 'email', purpose: 'transactional', state: 'opted_in',
       source: 'shopify_import', captured_at: n.createdAt || null });
   }
-  if (phone) {  // store SMS/WA marketing consent now for the future WhatsApp cutover
+  if (phone) {
+    // Shopify's ONE phone-marketing consent (smsMarketingConsent) is written to BOTH channels.
+    // ⛔ S400 (2026-09-25): it used to go to `whatsapp` ONLY ("for the future WhatsApp cutover"),
+    // so no Shopify customer ever had an SMS consent row — Relay could SMS 10,602 people (the
+    // Bitespeed import) out of ~75k who had opted in. The field IS the SMS opt-in; SMS is the
+    // channel it literally names. Backfilled live the same day (store.safety_consent_sms_backfill_2026_09_25).
     const ss = n.smsMarketingConsent?.marketingState;
-    consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(ss),
-      source: 'shopify_import', captured_at: n.smsMarketingConsent?.consentUpdatedAt || null,
-      ...(hasMktField(ss) ? { evidence: { shopify_state: String(ss) } } : {}) });
+    for (const channel of ['whatsapp', 'sms']) {
+      consent.push({ channel, purpose: 'marketing', state: mktState(ss),
+        source: 'shopify_import', captured_at: n.smsMarketingConsent?.consentUpdatedAt || null,
+        ...(hasMktField(ss) ? { evidence: { shopify_state: String(ss) } } : {}) });
+    }
   }
 
   return { identifiers: idents, display_name: first || full || null,
@@ -181,11 +188,14 @@ function mapCustomerRest(c) {
       source: 'shopify_webhook', captured_at: c.created_at || null });
   }
   if (phone) {
+    // Same one consent → both phone channels (S400; see mapCustomer).
     const ss = c.sms_marketing_consent?.state;
     if (hasMktField(ss)) {
-      consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(ss),
-        source: 'shopify_webhook', captured_at: c.sms_marketing_consent?.consent_updated_at || null,
-        evidence: { shopify_state: String(ss) } });
+      for (const channel of ['whatsapp', 'sms']) {
+        consent.push({ channel, purpose: 'marketing', state: mktState(ss),
+          source: 'shopify_webhook', captured_at: c.sms_marketing_consent?.consent_updated_at || null,
+          evidence: { shopify_state: String(ss) } });
+      }
     }
   }
   return { identifiers: idents, display_name: first || full || null,

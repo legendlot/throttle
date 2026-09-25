@@ -86,6 +86,28 @@ t('present sms state maps whatsapp + evidence', () => {
   assert.deepStrictEqual(row.evidence, { shopify_state: 'SUBSCRIBED' });
 });
 
+t('absent sms_marketing_consent writes NO sms row either', () => {
+  const c = mapCustomerRest({ id: 1, phone: '+919876543210' }).consent;
+  assert.strictEqual(byChannel(c, 'sms'), null);
+});
+
+t('S400: Shopify sms consent → an SMS row identical to the whatsapp one (opt-in AND opt-out)', () => {
+  for (const [st, want] of [['SUBSCRIBED', 'opted_in'], ['UNSUBSCRIBED', 'opted_out']]) {
+    const c = mapCustomerRest({ id: 1, phone: '+919876543210',
+      sms_marketing_consent: { state: st, consent_updated_at: '2026-09-01T00:00:00Z' } }).consent;
+    const sms = byChannel(c, 'sms'), wa = byChannel(c, 'whatsapp');
+    assert.strictEqual(sms.state, want);
+    assert.deepStrictEqual({ ...sms, channel: 'x' }, { ...wa, channel: 'x' });
+  }
+});
+
+t('S400: import path also writes the SMS row', () => {
+  const c = mapCustomer({ id: 'gid://shopify/Customer/1', phone: '+919876543210',
+    smsMarketingConsent: { marketingState: 'SUBSCRIBED' } }).consent;
+  assert.strictEqual(byChannel(c, 'sms').state, 'opted_in');
+  assert.strictEqual(byChannel(c, 'whatsapp').state, 'opted_in');
+});
+
 console.log('\nmapCustomer — GraphQL import path (deliberately UNCHANGED behaviour)');
 
 t('import still writes unknown when the state is unmapped', () => {

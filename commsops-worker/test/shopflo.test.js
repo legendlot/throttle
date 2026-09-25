@@ -193,16 +193,16 @@ t('EVENT_MAP covers the decision-driving events; store_page_view stays excluded'
 });
 
 // ── consent rows ──
-t('consentRowsFrom true → opted_in email + whatsapp', () => {
+t('consentRowsFrom true → opted_in email + whatsapp + sms (S400: checkout opt-in counts for SMS)', () => {
   const rows = FLO.consentRowsFrom(CHECKOUT_ABANDONED, '2026-05-27T10:06:00.000Z');
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows.map((r) => r.channel).sort(), ['email', 'whatsapp']);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((r) => r.channel).sort(), ['email', 'sms', 'whatsapp']);
   assert.ok(rows.every((r) => r.state === 'opted_in' && r.purpose === 'marketing' && r.source === 'shopflo'));
 });
 t('consentRowsFrom false → opted_out', () => {
   const b = { ...ORDER_COMPLETED, customer: { ...ORDER_COMPLETED.customer, marketing_consent: false } };
   const rows = FLO.consentRowsFrom(b, null);
-  assert.ok(rows.length === 2 && rows.every((r) => r.state === 'opted_out'));
+  assert.ok(rows.length === 3 && rows.every((r) => r.state === 'opted_out'));   // an opt-out reaches SMS too
 });
 t('consentRowsFrom absent → [] (leave gate default block)', () => {
   const b = { ...ORDER_COMPLETED, customer: { ...ORDER_COMPLETED.customer, marketing_consent: undefined } };

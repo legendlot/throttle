@@ -726,8 +726,8 @@ function lookupEvent(name) {
 }
 
 // Consent rows from `customer.marketing_consent` (true→opted_in, false→opted_out,
-// absent→[] i.e. leave the gate's default block in place). One flag → both email
-// (marketing) + whatsapp (marketing), mirroring the Shopify import's SMS→WA mapping.
+// absent→[] i.e. leave the gate's default block in place). One flag → email + whatsapp + sms
+// (marketing). SMS added S400 (2026-09-25) — Afshaan: the checkout opt-in counts for SMS too.
 // NB: Shop-Pass AUTO-identification ≠ a marketing opt-in — this trusts Shopflo's own
 // `marketing_consent` determination. Consent basis to confirm with counsel before the
 // TEST-MODE lock is lifted (see systems/relay.md Shopflo block).
@@ -738,7 +738,10 @@ function consentRowsFrom(body, capturedAt) {
   const id = pickIdentity(body);
   const rows = [];
   if (id.email) rows.push({ channel: 'email', purpose: 'marketing', state, source: 'shopflo', captured_at: capturedAt || null });
-  if (SHOP.normalizePhone(id.phone)) rows.push({ channel: 'whatsapp', purpose: 'marketing', state, source: 'shopflo', captured_at: capturedAt || null });
+  if (SHOP.normalizePhone(id.phone)) {
+    for (const channel of ['whatsapp', 'sms'])
+      rows.push({ channel, purpose: 'marketing', state, source: 'shopflo', captured_at: capturedAt || null });
+  }
   return rows;
 }
 
