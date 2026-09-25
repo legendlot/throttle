@@ -532,7 +532,12 @@ textarea.f-inp{resize:vertical;font-family:var(--body);line-height:1.5}
   font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; }
 .sn-sheet-item.active { background: var(--accent-soft); border-color: var(--accent-bd); color: var(--accent); }
 
-@media (max-width: 767px) {
+/* `screen and` is load-bearing: an A4 print area is ~680px, so a bare max-width query fired this
+   phone layout while PRINTING — `.main table { display:block }` below wrapped every print table in
+   a shrink-to-fit box: the PO's totals + "Prepared by" stopped mid-page instead of at the right margin
+   (Joseph, PO LOT/PO/202609/579, 2026-09-25), and the SO / invoice / credit-note line tables stopped
+   short of full width. Everything else in this block is already overridden by @media print above. */
+@media screen and (max-width: 767px) {
   .sb { display: none !important; }
   .sn-tabbar { display: flex; }
   .sn-sheetwrap { display: flex; }
