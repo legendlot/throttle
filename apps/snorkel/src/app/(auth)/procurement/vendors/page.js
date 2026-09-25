@@ -15,12 +15,19 @@ const VENDOR_CATEGORIES = ['Packaging', 'Para', 'Components', 'Products', 'Consu
 // What the vendor DOES to the part. A moulder makes the unpainted part, a coater paints it
 // (§S336a) — the worker refuses a painted part code on a PO to a 'moulding' vendor, so this
 // field is the thing that catches the next moulder at onboarding. Values match the
-// store.vendors.process_type CHECK exactly.
+// store.vendors.process_type CHECK exactly. The last four (S400, Afshaan) classify vendors who
+// do no process on our parts: raw stock we process ourselves, finished/CKD units (makers and
+// agents alike), assembled PCBs, and the mould-maker — tooling is NOT moulding, so it never
+// trips the §S336a guard.
 const VENDOR_PROCESS_TYPES = [
-  { value: 'moulding', label: 'Moulding' },
-  { value: 'painting', label: 'Painting' },
-  { value: 'assembly', label: 'Assembly' },
-  { value: 'other',    label: 'Other' },
+  { value: 'moulding',         label: 'Moulding' },
+  { value: 'painting',         label: 'Painting' },
+  { value: 'assembly',         label: 'Assembly' },
+  { value: 'raw_material',     label: 'Raw material' },
+  { value: 'product_supplier', label: 'Product supplier (FBU / CKD)' },
+  { value: 'pcba',             label: 'PCBA' },
+  { value: 'tooling',          label: 'Tooling / moulds' },
+  { value: 'other',            label: 'Other' },
 ];
 
 const PO_CATEGORY_KEYS = [

@@ -571,9 +571,10 @@ function duplicateMould(lines, existing) {
 // code from a moulding vendor is the defect that had Monash being sent "Painted Black
 // Asphalt Top" — one code doing both jobs. Returns [] when clean, else one
 // { part_code, unpainted_part_code } per offending line.
-// ⛔ NULL process_type is NOT a moulder: 146 of 147 vendors are unclassified (the column
-// landed 2026-09-04 and we are not forcing a bulk reclassification), so treating NULL as
-// moulding would refuse almost every PO in the system. Only an explicit 'moulding' blocks.
+// ⛔ NULL process_type is NOT a moulder: the column landed 2026-09-04 with 146 of 147 vendors
+// unclassified, and a new vendor may still be created without one (it is optional), so treating
+// NULL as moulding would refuse POs for no reason. Only an explicit 'moulding' blocks.
+// (Every existing vendor was classified 2026-09-25, S400.)
 // Every read here fails OPEN — a lookup that errors is not evidence of a violation, and a
 // PO must never be blocked by a Supabase hiccup.
 // PostgREST percent-decodes BEFORE splitting in.() on commas, so a bare
@@ -1470,7 +1471,9 @@ function err(msg, status = 400) {
 // Issuance form). ⛔ Do NOT reimplement this anywhere: two code paths minting vendor codes is the
 // duplicate-path class that keeps biting this codebase, and this one derives max+1 from LIVE DATA
 // precisely because bulk imports bypass the sequences counter.
-const VENDOR_PROCESS_TYPES = ['moulding','painting','assembly','other'];
+// Must match the store.vendors.process_type CHECK (widened S400 by snorkel_vendor_process_type_v2)
+// and the dropdown in apps/snorkel …/procurement/vendors/page.js.
+const VENDOR_PROCESS_TYPES = ['moulding','painting','assembly','raw_material','product_supplier','pcba','tooling','other'];
 
 async function createVendorRow(d, createdBy) {
   if (!d || !d.vendor_name) return { ok: false, error: 'vendor_name required' };
@@ -3856,8 +3859,8 @@ export default {
             if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.vendor_code) return err('vendor_code required');
-            // process_type stays OPTIONAL on edit — 146 vendors are unclassified and we are not
-            // forcing a bulk reclassification — but a supplied value must be a legal one.
+            // process_type stays OPTIONAL on edit (it is optional on create too), but a supplied
+            // value must be a legal one.
             if (d.process_type !== undefined && d.process_type !== null && d.process_type !== ''
                 && !VENDOR_PROCESS_TYPES.includes(d.process_type)) {
               return err(`process_type must be one of ${VENDOR_PROCESS_TYPES.join(', ')}`, 400);
