@@ -1,6 +1,6 @@
 # Relay voice channel — AI bot calls via LimeChat (design)
 
-> **Date:** 2026-09-02 (S336) · **System:** Relay (`commsops`) · **Status:** design draft, nothing built
+> **Date:** 2026-09-02 (S336) · **System:** Relay (`commsops`) · **Status:** ⭐ **BUILDING since 2026-09-25 (S400) — read §14 first; it supersedes §1.2 / §12.1 phasing (Phase 0 skipped: Relay triggers from day one).**
 > **Revised same day** after Afshaan's scope + phasing calls: voice engine ONLY (§1.1), and Phase 0 is
 > deliberately LimeChat-triggered and capture-only (§1.2, §12.1). Phase 0 blocks on Q1 alone.
 > **Origin:** Pruthvi, #bugs 2026-09-02 19:09 IST (ts `1788356379.455359`) — the entire written requirement is one paragraph, no thread, no vendor doc.
@@ -402,3 +402,85 @@ one thing we cannot design around. **Q8 and Q13** shape Phase 1 and can be answe
   control does not exist — one unscheduled prune function, `cron.job` has a single unrelated job. The
   design choice is defensible as forward-looking; the justification should not be cited as an existing
   control.
+
+---
+
+## 14. 2026-09-25 (S400) — LimeChat answered; Relay orchestrates from day one
+
+**Source:** Pruthvi, #bugs `1790255060.947059` (24 Sep 18:34 IST), `LC Q&A.pdf` (`F0C41LRLRS9`) — our 16
+questions, LimeChat's answers in red. **Afshaan, 2026-09-25:** *"LimeChat is providing us with voice agents.
+We wanted to build the control and orchestration of those agents in Pitstop and/or Relay … so that
+orchestration happens at our end and we are able to invoke the calls … We should have all the details
+regarding those calls."* That is the S336 call (Relay decides, LimeChat is the engine), now buildable.
+
+### 14.1 What the answers settle
+
+| Q | LimeChat's answer | What it means for us |
+|---|---|---|
+| 1 | Relay-initiated call via Custom Events API: **yes**; the 4 gates can live in Relay | **Phase 0 (LimeChat-triggered, capture only) is skipped.** Relay triggers from day one. §1.2's interim is dead. |
+| 2 | A requested/started signal: **yes** | Two webhooks: `call_started` + `call_ended`. "Never dialled" vs "dialled, outcome lost" is now tellable. |
+| 3 | Telephony = **Vobiz** | Not Exotel (Pruthvi said Exotel on 09-03). No overlap with Pitstop's Exotel/MyOperator `store.cs_calls`. |
+| 4–6, 8 | Call-ended is **real time, webhook, within seconds** | The timeout can be short: 20 min requested→no start, 30 min started→no end (`voice.js`). |
+| 7, 12 | **Parameters are ours to define**; "provide whatever details you want" | We wrote the contract (§14.3). Transcript + summary + recording are all available → R2/R3 below. |
+| 9–10 | Result via **webhook**; they want "the working API cURL" | §14.3 is that cURL. The receiver has existed since S352. |
+| 11 | *(not answered)* — full `call_status` list | **Moot:** Q13 = yes, so they send OUR vocabulary. We still keep their raw string (`provider_status`) and map aliases. |
+| 13 | Dispositions can map to our outcomes: **yes** | Pruthvi's v3 dispositions become the closed enum (migration 0078 CHECK). |
+| 14–15 | Compliance = "LC and telephony provider", **but "you need to send us clean numbers — we do not have filter option at our end"** | ⛔ **Our gate is the ONLY filter between a customer and a call.** Contradicts Pruthvi's 09-09 "DNC is blocked operator-side". See §14.5. |
+| 16 | Rate/retry/payload limits: **no** | None designed around. |
+
+### 14.2 Where orchestration lives
+
+- **Relay (commsops) = the engine.** Decides who/when (journeys, campaigns, manual), runs the gate, owns the
+  ledger `comms.voice_calls`, receives outcomes, emits `voice_call_ended` for journeys to branch on. Voice is a
+  channel like SMS: `adapters/voice.js` is the only LimeChat-specific outbound code.
+- **Pitstop = the human surface** (slice 3): a customer's bot-call history beside their human calls, a
+  "call with the bot" button (via the csops→commsops service binding, same `placeVoiceCall`), and the 24 h CS
+  review list Pruthvi asked for (S381). Pitstop never talks to LimeChat directly.
+
+### 14.3 The contract (ours — handed to LimeChat 2026-09-25)
+
+**We → LimeChat** (`adapters/voice.js`): `POST flow-builder.limechat.ai/api/v1/cvf-events`, headers
+`x-limechat-uat` + `x-fb-account-id` (secrets `LIMECHAT_UAT`, `LIMECHAT_ACCOUNT_ID`, **not yet held**). Body:
+`{distinct_id, phone:"+91…", event:"relay_<purpose>_call", data:{call_ref, purpose, flow, customer_name,
+items, cart_value, checkout_url, discount_pct, discount_code, order_id, order_value, language}}`. One event
+name per purpose selects their flow: `relay_abandonment_call` (Part A), `relay_cod_confirmation_call` (Part B),
+`relay_manual_call`, `relay_test_call`.
+
+**LimeChat → us** (`POST /webhooks/limechat`, `Authorization: Bearer <LIMECHAT_WEBHOOK_TOKEN>`), twice per call,
+**always echoing `call_ref`** — the echo is what lets an outcome act (S372):
+
+```json
+{"event":"call_started","call_ref":"<from data.call_ref>","call_id":"<theirs>","phone":"+919876543210","started_at":"<ISO>"}
+{"event":"call_ended","call_ref":"…","call_id":"…","phone":"+91…",
+ "call_status":"answered|no_answer|busy|failed|not_dialled",
+ "disposition":"wants_link|followup_ok|opt_out|unresolved|no_pickup   (COD: confirmed|cancelled|wants_human|unresolved)",
+ "discount_agreed":true,"drop_reason":"<why they dropped off>","summary":"…","transcript":"…",
+ "recording_url":"…","duration_seconds":74,"started_at":"<ISO>","ended_at":"<ISO>"}
+```
+
+Unknown dispositions → `null` + the **no-pickup path** (Pruthvi's own default; never the discount link). A
+payload without `call_ref` takes the S352 Phase-0 path (captured, outcome-neutral event, never acted on).
+
+### 14.4 Slices
+
+| # | Slice | State |
+|---|---|---|
+| 1 | Ledger (0078) · `voice` quiet-hours row 21:00→09:00 · gate (test lock, `voice` suppression, DNC flag, 09–21, 7-day cap — all fail closed) · LimeChat adapter (inert without secrets) · webhook → ledger + `voice_call_ended` / `voice_call_timed_out` · opt-out → DNC flag · cron sweep · `getVoiceCalls` / `getVoiceCall` / `placeVoiceCall` | **Shipped S400** |
+| 2 | Journey step `voice_call` + wait-for-outcome branch (paths `no_pickup` / `send_link` / `opt_out`), defer to 09:00 on `outside_call_window`; Part A cart + checkout journeys built as DRAFT per v3 (replace the live 30-min ones only on Pruthvi's activation). ⛔ **Must first make the 7-day cap atomic** (an RPC or advisory lock keyed on the phone): today it is check-then-insert, so a cart and a checkout journey firing together would both dial — unreachable in slice 1, whose only caller is manual/test (S400 hostile review #6). | next |
+| 3 | Relay **Calls** page (list + detail with transcript/recording) · Pitstop customer call history + "call with bot" + 24 h CS review list | after 2 |
+| 4 | Silence alert to #relay-alerts (requested/timed_out ratio) · Part B COD **only if Afshaan re-opens it** (S352: COD is off — partial payment) | later |
+
+### 14.5 Open — not ours to decide in code
+
+- **LimeChat (via Pruthvi):** the UAT token + account id; their flow listening on `relay_abandonment_call`;
+  confirm they echo `call_ref` and send both webhooks in §14.3's shape (a test against the cURL is the proof).
+- ⛔ **Afshaan — the national DND registry.** LimeChat filters nothing. Our gate checks OUR do-not-call flag
+  and `voice` suppressions only; it does **not** scrub against TRAI's NCPR. Whether an abandonment call to a
+  customer who just started a checkout needs an NCPR scrub is a legal call, and it is the one thing between
+  slice 2 and a live call.
+- **Afshaan — a WhatsApp/SMS STOP.** Today a customer who replied STOP to marketing WhatsApp can still get an
+  abandonment call (the v3 doc gates only on the call's own opt-out). One line in `voiceGate` if the answer is
+  "a STOP anywhere means don't call".
+- **R2/R3 (transcripts), decided by Afshaan's "all the details":** transcripts, summaries and recordings are
+  stored, in `comms.voice_calls` only (never `comms.events`), readable per call by `relay_view` — the list view
+  never carries them. Retention/erasure (R3) is still unbuilt.

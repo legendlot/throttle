@@ -32,6 +32,22 @@
 const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const { normalizePhone } = require('./shopify.js');
+const V = require('./voice.js');
+
+// A transcript or summary never rides into comms.events (spec §5: 1.3–5× the largest events
+// payload ever stored, and getProfile selects * over the last 50 events). The raw capture keeps
+// them whole. RECURSIVE and case-insensitive over any shape, bounded like findField (review #8).
+const FREE_TEXT_KEYS = new Set(['transcript', 'calltranscription', 'transcription', 'summary', 'callsummary']);
+function withoutTranscript(body, depth = 0) {
+  if (!body || typeof body !== 'object') return body;
+  if (depth > MAX_DEPTH) return '[depth-limited]';        // never pass an unexamined subtree through
+  if (Array.isArray(body)) return body.slice(0, 200).map((v) => withoutTranscript(v, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(body)) {
+    out[k] = FREE_TEXT_KEYS.has(normKey(k)) && v != null && v !== '' ? '[in webhook_captures]' : withoutTranscript(v, depth + 1);
+  }
+  return out;
+}
 
 // The one event we emit. Deliberately OUTCOME-NEUTRAL: it records that a call happened and
 // attaches the vendor's whole payload, without asserting what the call meant. The send rule
@@ -209,6 +225,24 @@ async function handleLimechatWebhook(env, request) {
   // found anything. The capture is the deliverable of Phase 0; the event below is a bonus.
   await capture(env, request, body, got.phone ? 'mapped' : 'no_identity');
 
+  // ⭐ RELAY-REQUESTED CALL (S400, 2026-09-25). A payload carrying our `call_ref` belongs to a call
+  // Relay placed through adapters/voice.js: it updates that comms.voice_calls row and, on call end,
+  // emits `voice_call_ended` for journeys. Everything below this block is the Phase-0 path for a
+  // payload that names no call of ours — stored, emitted outcome-neutral, and never acted on.
+  // A call_ref we do not recognise (or whose phone does not match) is NOT allowed to fall through
+  // to the Phase-0 path either: it is captured above and answered, nothing more.
+  if (V.hasCallRefKey(body)) {
+    let r;
+    try { r = await V.applyVendorEvent(env, body); }
+    catch (e) { console.log('limechat_apply_throw', e?.message || String(e)); r = { matched: false, reason: 'apply_error' }; }
+    // ⚠️ The ONE deliberate exception to "never 500": our own DB failed on a call we requested.
+    // The payload is captured, but a 200 would tell LimeChat it landed and the outcome (maybe an
+    // opt-out) would live only in webhook_captures. A 503 invites their retry (review #12).
+    if (['ledger_read_failed', 'ledger_write_failed', 'apply_error'].includes(r.reason))
+      return { ok: false, error: r.reason, status: 503 };
+    return { ok: true, captured: true, ...r };
+  }
+
   // No usable identity → nothing to attach a call to. Still a 200: the payload is safely stored
   // and the shape is now inspectable, which is the whole point of this phase.
   if (!got.phone) {
@@ -245,7 +279,7 @@ async function handleLimechatWebhook(env, request) {
     // the outcome rule can be written against real fields without a backfill or a re-send.
     properties: {
       call_id: got.call_id, status: got.status, remarks: got.remarks,
-      order_no: got.order_no, phone_raw: got.phone_raw, raw: body,
+      order_no: got.order_no, phone_raw: got.phone_raw, raw: withoutTranscript(body),
     },
   };
 
@@ -268,4 +302,4 @@ async function handleLimechatWebhook(env, request) {
   };
 }
 
-module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, bodyHash, EVENT_NAME };
+module.exports = { handleLimechatWebhook, isConfigured, tokenOk, extract, findField, bodyHash, withoutTranscript, EVENT_NAME };

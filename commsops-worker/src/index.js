@@ -46,6 +46,7 @@ const WAQ = require('./wa-quality.js');     // Meta per-number quality PULL (web
 const AB = require('./ab-stats.js');        // A/B verdict computation (S272)
 const QR = require('./queue-route.js');     // queue routing contract — unknown kinds THROW (§9.11)
 const R = require('./render.js');           // shared with send.js — the RCS→SMS fallback link contract
+const VOICE = require('./voice.js');       // voice channel — Relay decides, LimeChat dials (S400)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -280,6 +281,23 @@ async function handleGet(url, auth, env) {
       const r = await A.sbStore('/rest/v1/rpc/search_lot_users', env,
         { method: 'POST', body: JSON.stringify({ p_q: q }) });
       return r.ok ? ok({ rows: r.data || [] }) : err('search_failed', 502);
+    }
+    // ── Voice calls (S400) — the call ledger. relay_view like Contacts: it is the same PII class
+    // (phone + what the customer said). The LIST never carries summary/transcript; one call's
+    // detail does, because "we should have all the details regarding those calls" (Afshaan,
+    // 2026-09-25) is the point of owning the orchestration.
+    case 'getVoiceCalls': {
+      const r = await VOICE.listCalls(env, {
+        profileId: url.searchParams.get('profile_id'), phone: url.searchParams.get('phone'),
+        status: url.searchParams.get('status'), limit: url.searchParams.get('limit'),
+        before: url.searchParams.get('before'),
+      });
+      return r.ok ? ok({ rows: r.data || [] }) : err('db_error', 500);
+    }
+    case 'getVoiceCall': {
+      const r = await VOICE.getCall(env, url.searchParams.get('id'));
+      if (!r.ok) return err('not_found', 404);
+      return r.data?.[0] ? ok(r.data[0]) : err('not_found', 404);
     }
     case 'getRelaySettings': {
       const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
@@ -1062,6 +1080,19 @@ async function handleGet(url, auth, env) {
 // ── POST actions ─────────────────────────────────────────────────────────────
 async function handlePost(body, auth, env) {
   switch (body.action) {
+    // ── Voice (S400) — place ONE bot call now. Gated on `send_activate` (canActivate): this dials a real
+    // customer, the same weight as activating a send. Every rule (DNC, 09–21 IST, 7-day cap,
+    // test lock) is enforced inside VOICE.placeCall, not here, so journeys get the same gate.
+    case 'placeVoiceCall': {
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      const purpose = body.purpose || 'manual';
+      if (!['manual', 'test'].includes(purpose)) return err('purpose_not_manual', 400);
+      const r = await VOICE.placeCall(env, {
+        phone: body.phone, purpose, flow: body.flow,          // profile is resolved from the phone, never taken from the body
+        context: body.context, requestedBy: auth.email || auth.userId || null,
+      });
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
     // ── Links (S261) ────────────────────────────────────────────────────────────────────
     // Gated on `campaign_build`, reusing the relayops layer rather than minting a new key —
     // a link is a campaign asset. NB this is a REAL permission decision, not a formality:
@@ -2612,6 +2643,13 @@ async function runScheduled(env) {
     const r = await RESTOCKEV.emitRestockEvents(env, ingest);
     if (r?.claimed || r?.emitted || r?.failed) console.log('restock_events', JSON.stringify(r));
   } catch (e) { console.log('restock_events_error', e?.message || String(e)); }
+
+  // 0e. Voice calls that never reported back → timed_out + `voice_call_timed_out` (Pruthvi's
+  // no-pickup default, logged as its own event). Best-effort like its neighbours.
+  try {
+    const r = await VOICE.sweepTimeouts(env);
+    if (r?.timed_out) console.log('voice_timeouts', JSON.stringify(r));
+  } catch (e) { console.log('voice_timeouts_error', e?.message || String(e)); }
 
   // 1. due scheduled campaigns
   try {
