@@ -27,8 +27,11 @@ t('RC title → L.O.T Cars', () =>
 t('Build title → L.O.T Build', () =>
   assert.equal(classifyTitles('The Colosseum — Wooden Puzzle Kit', TAX), 'L.O.T Build'));
 
-t('mixed cart → Build wins', () =>
-  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, Taj Mahal Kit', TAX), 'L.O.T Build'));
+t('mixed cart → CARS wins (S400: Build journeys are for Build-only carts)', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, Taj Mahal Kit', TAX), 'L.O.T Cars'));
+
+t('Build-only cart → Build', () =>
+  assert.equal(classifyTitles('Taj Mahal Kit, The Colosseum', TAX), 'L.O.T Build'));
 
 t('add-on only ("Gift Wrapping") → null, not a wrong guess', () =>
   assert.equal(classifyTitles('Gift Wrapping', TAX), null));
@@ -50,14 +53,14 @@ t('empty taxonomy → null (never throws)', () =>
 t('DIY title → L.O.T DIY, not coerced to Cars', () =>
   assert.equal(classifyTitles('Bracey — DIY Necklace Kit (Alpha)', TAX), 'L.O.T DIY'));
 
-t('mixed DIY + Cars → DIY wins (Cars is the default voice, so the rarer one leads)', () =>
-  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, Bracey Kit', TAX), 'L.O.T DIY'));
+t('mixed DIY + Cars → Cars wins (S400)', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, Bracey Kit', TAX), 'L.O.T Cars'));
 
-t('mixed Build + DIY → Build still wins (preserves the S232 decision)', () =>
+t('mixed Build + DIY → Build wins (DIY = discontinued Bracey, ranks last)', () =>
   assert.equal(classifyTitles('Bracey Kit, The Colosseum', TAX), 'L.O.T Build'));
 
-t('mixed all three → Build wins', () =>
-  assert.equal(classifyTitles(['Shadow', 'Bracey', 'Taj Mahal'], TAX), 'L.O.T Build'));
+t('mixed all three → Cars wins (S400)', () =>
+  assert.equal(classifyTitles(['Shadow', 'Bracey', 'Taj Mahal'], TAX), 'L.O.T Cars'));
 
 t('an UNLISTED future category is returned as-is, never coerced to Cars', () => {
   const tax = [...TAX, { product: 'someday', category: 'L.O.T Whatever' }];
@@ -95,8 +98,8 @@ t('KNOWN LIMIT (pre-existing, unreachable in practice): ONE title matching two p
   assert.equal(classifyTitles('aaa and bbb', b), 'Alpha');
   assert.equal(classifyTitles('shadow colosseum', TAX), 'L.O.T Cars');   // first hit, not Build
   // A MULTI-LINE cart is the real case and it is order-independent — that is what matters:
-  assert.equal(classifyTitles(['shadow', 'colosseum'], TAX), 'L.O.T Build');
-  assert.equal(classifyTitles(['colosseum', 'shadow'], TAX), 'L.O.T Build');
+  assert.equal(classifyTitles(['shadow', 'colosseum'], TAX), 'L.O.T Cars');
+  assert.equal(classifyTitles(['colosseum', 'shadow'], TAX), 'L.O.T Cars');
 });
 
 // ── evalEventProperty ──
@@ -210,8 +213,11 @@ t('2026-08-14: an unregistered product with no category token stays null, not a 
   assert.equal(classifyTitles('Gift Wrapping', TAX), null);
 });
 
-t('2026-08-14: mixed cart still lets Build win when only the fallback placed it', () =>
-  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, L.O.T Build - Garage', TAX), 'L.O.T Build'));
+t('2026-08-14 → S400: a Build item placed only by the fallback still loses to a car in a mixed cart', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car, L.O.T Build - Garage', TAX), 'L.O.T Cars'));
+
+t('2026-08-14: a Build-only cart placed by the fallback → Build', () =>
+  assert.equal(classifyTitles('L.O.T Build - Garage, L.O.T Build - Grandstand Garage', TAX), 'L.O.T Build'));
 
 t('2026-08-14: a spare-parts title naming a car resolves by product name, unchanged', () =>
   assert.equal(classifyTitles('L.O.T Spare Parts - Set of 4 Tyres for L.O.T Cars Shadow RC Drift Car', TAX), 'L.O.T Cars'));
@@ -258,11 +264,28 @@ t('③ is purely additive — every existing answer is unchanged without opts', 
   assert.equal(classifyTitles('Gift Wrapping', TAX), null);
 });
 
-t('③ mixed set: handle and title disagree → precedence still picks Build', () =>
+t('③ mixed set: handle and title disagree → precedence picks Cars (S400)', () =>
   assert.equal(
     classifyTitles('L.O.T Cars Shadow - RC Drift Car', TAX,
       { handles: 'house-crest-edition', handleCategories: HANDLES }),
-    'L.O.T Build'));
+    'L.O.T Cars'));
+
+// ── ④ title alias (S400) — House Crest on events that carry a title but no handle ──
+const ALIASES = [{ token: 'hogwarts house crest', category: 'L.O.T Build' }];
+t('S400 ④: House Crest title with NO handle → Build via title alias', () =>
+  assert.equal(classifyTitles('Hogwarts House Crest 3D Wooden Puzzle - Gryffindor', TAX,
+    { titleAliases: ALIASES }), 'L.O.T Build'));
+t('S400 ④: without the alias it stays null (the live gap before S400)', () =>
+  assert.equal(classifyTitles('Hogwarts House Crest 3D Wooden Puzzle', TAX), null));
+t('S400 ④: alias never overrides ① — a Cars title stays Cars', () =>
+  assert.equal(classifyTitles('L.O.T Cars Shadow - RC Drift Car', TAX,
+    { titleAliases: [{ token: 'shadow', category: 'L.O.T Build' }] }), 'L.O.T Cars'));
+t('S400 ④: House Crest + a car in one cart → Cars (mixed-cart rule still applies)', () =>
+  assert.equal(classifyTitles(['Hogwarts House Crest 3D Wooden Puzzle', 'L.O.T Cars Shadow'], TAX,
+    { titleAliases: ALIASES }), 'L.O.T Cars'));
+t('S400 ④: short/blank alias tokens are ignored (no accidental match-everything)', () =>
+  assert.equal(classifyTitles('Gift Wrapping', TAX,
+    { titleAliases: [{ token: ' ', category: 'L.O.T Build' }, { token: 'gi', category: 'L.O.T Build' }] }), null));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

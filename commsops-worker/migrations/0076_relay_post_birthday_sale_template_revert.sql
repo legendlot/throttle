@@ -1,0 +1,8 @@
+-- S400 (2026-09-25) — applied live as relay_post_birthday_sale_template_revert_v1.
+-- One-shot pg_cron job 'relay-s400-post-sale-revert' at 2026-09-27 10:00 UTC (15:30 IST): reverts the
+-- six abandonment journeys' 6h nudge from the birthday-sale copy ("25th to 27th September") to the
+-- pre-sale version, guarded per journey (still on the sale version; target templates Meta-APPROVED and
+-- sale-free). Cars Browse falls back to v3 (single message) because v7's 6h template was overwritten
+-- with sale copy. Dry-run 2026-09-25 (rolled back): Build Browse 6→5, Build Cart 2→1, Build Checkout
+-- 2→1, Cars Cart 7→6, Cars Checkout 12→11, Cars Browse 8→3. The job unschedules itself.
+-- Full function body: see Supabase migration history (relay_post_birthday_sale_template_revert_v1).

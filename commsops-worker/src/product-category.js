@@ -6,8 +6,8 @@
 // product string ("L.O.T Cars Shadow - RC Drift Car" ⊃ "Shadow"). Deliberately NOT a
 // title-prefix hack — "L.O.T Aviation Wisp" and add-ons like "Gift Wrapping" would defeat
 // any prefix rule; unmatched titles resolve to null and the condition node routes them to
-// its default branch. Mixed carts: any Build item wins (Build is the rarer, more deliberate
-// purchase — a mixed cart reads better with the Build voice; revisit if data disagrees).
+// its default branch. Mixed carts: any CARS item wins (S400, 2026-09-25 — reversed from S232's
+// "Build wins"; see CATEGORY_PRECEDENCE for the data).
 const A = require('./auth.js');
 
 const sbPublic = A.sbProfile('public');
@@ -29,10 +29,13 @@ async function loadTaxonomy(env) {
   return _tax;
 }
 
-// Mixed-cart precedence, most-specific first. `L.O.T Build` winning is the S232 decision
-// (the rarer, more deliberate purchase reads better in the Build voice); `L.O.T DIY` sits
-// above `L.O.T Cars` for the same reason — Cars is the default, dominant voice, so in a
-// mixed cart the rarer category leads.
+// Mixed-cart precedence. ⭐ CARS FIRST since S400 (Afshaan, 2026-09-25) — the Build journeys
+// are for Build-ONLY carts. S232 had `L.O.T Build` first ("the rarer, more deliberate purchase
+// reads better in the Build voice; revisit if data disagrees") and the data disagreed: in the
+// 7 days to 2026-09-25, 2,666 of 2,864 Build-stamped Shopflo add_to_cart events (93%) held an
+// RC car too — mostly a Shadow/Zipp/Fang with a Grandstand Garage — so the Build cart journey
+// would have told car buyers "A Masterpiece is waiting… Unbuilt. No glue, no tools".
+// Build then outranks DIY (DIY = the discontinued Bracey kits, sell-through only).
 //
 // ⚠️ This list is a PREFERENCE ORDER, not an allow-list. A category missing from it is
 // still returned (see below). That distinction is the whole bug this replaced: the original
@@ -40,7 +43,7 @@ async function loadTaxonomy(env) {
 // `L.O.T DIY` was added to product_master on 2026-08-04 (RULE-TAXONOMY-001, S260) every DIY
 // product was silently stamped `L.O.T Cars`. Adding a 4th category to product_master must
 // stay a no-op here; add it to this list only to give it a mixed-cart rank.
-const CATEGORY_PRECEDENCE = ['L.O.T Build', 'L.O.T DIY', 'L.O.T Cars'];
+const CATEGORY_PRECEDENCE = ['L.O.T Cars', 'L.O.T Build', 'L.O.T DIY'];
 
 // Pure classifier — titles: string (comma-list) or array. Returns a category or null.
 //
@@ -88,6 +91,9 @@ function classifyTitles(titles, taxonomy, opts) {
     : String((opts && opts.handles) || '').split(','))
     .map((h) => String(h || '').toLowerCase().trim()).filter(Boolean);
   const handleCategories = (opts && opts.handleCategories) || null;
+  const titleAliases = (Array.isArray(opts && opts.titleAliases) ? opts.titleAliases : [])
+    .map((a) => ({ token: String(a.token || '').toLowerCase().trim(), category: a.category }))
+    .filter((a) => a.token.length >= 3 && a.category);
   if (handleCategories && handles.length) {
     for (const h of handles) {
       const c = handleCategories[h];
@@ -120,6 +126,17 @@ function classifyTitles(titles, taxonomy, opts) {
     if (hit) continue;
     // ② fallback — the shop named the category even though it did not name our product.
     for (const { category, token } of catTokens) {
+      if (title.includes(token)) { matched.add(category); hit = true; break; }
+    }
+    if (hit) continue;
+    // ④ TITLE ALIAS (S400) — a storefront title that names neither our product nor the
+    // category, pinned explicitly on its product_handle_map row (`title_match`). Exists for
+    // events that carry a TITLE but no handle: Shopflo add_to_cart / checkout_abandoned and the
+    // pixel's add_to_cart. ③ fixed `house-crest-edition` only where a handle rides along, so
+    // "Hogwarts House Crest 3D Wooden Puzzle" still resolved null on 942 events in the 14 days
+    // to 2026-09-25 (98 of them checkout drop-offs) and fell into the Cars journeys. Last
+    // stage, so — like ③ — no title that classifies today can change.
+    for (const { token, category } of titleAliases) {
       if (title.includes(token)) { matched.add(category); break; }
     }
   }
@@ -139,12 +156,19 @@ function pickCategory(matched) {
 // handle → category, joined in JS because public.product_master has no unique constraint on
 // product_code, so there is no FK for PostgREST to embed on. Two small reads, same 1h TTL as
 // the taxonomy: one DB round per isolate per hour, not one per event.
-let _hmap = null, _hmapExp = 0;
+let _hmap = null, _hmapExp = 0, _aliases = [];
 async function loadHandleCategories(env) {
   const now = Date.now();
   if (_hmap && now < _hmapExp) return _hmap;
+  // ⚠️ title_match (S400) is fetched in the SAME read as the handles. If that column ever 400s
+  // (dropped/renamed, stale PostgREST cache) retry without it, so ④ degrades alone and ③ — which
+  // classifies every handle-carrying House Crest view — keeps working (hostile review S400 #2).
+  const mapRead = async () => {
+    const r = await sbPublic('/rest/v1/product_handle_map?select=handle,product_code,title_match', env);
+    return r.ok ? r : sbPublic('/rest/v1/product_handle_map?select=handle,product_code', env);
+  };
   const [mapR, pmR] = await Promise.all([
-    sbPublic('/rest/v1/product_handle_map?select=handle,product_code', env),
+    mapRead(),
     sbPublic('/rest/v1/product_master?category=not.is.null&select=product_code,category', env),
   ]);
   if (!mapR.ok || !Array.isArray(mapR.data) || !pmR.ok || !Array.isArray(pmR.data)) {
@@ -153,11 +177,13 @@ async function loadHandleCategories(env) {
   const byCode = new Map();
   for (const r of pmR.data) if (r.product_code && r.category) byCode.set(String(r.product_code), r.category);
   const out = {};
+  const aliases = [];
   for (const r of mapR.data) {
     const cat = byCode.get(String(r.product_code));
     if (r.handle && cat) out[String(r.handle).toLowerCase()] = cat;
+    if (r.title_match && cat) aliases.push({ token: String(r.title_match), category: cat });
   }
-  _hmap = out; _hmapExp = now + TAX_TTL_MS;
+  _hmap = out; _aliases = aliases; _hmapExp = now + TAX_TTL_MS;
   return out;
 }
 
@@ -167,7 +193,7 @@ async function resolveCategory(env, titles, handles) {
     const [taxonomy, handleCategories] = await Promise.all([
       loadTaxonomy(env), loadHandleCategories(env),
     ]);
-    return classifyTitles(titles, taxonomy, { handles, handleCategories });
+    return classifyTitles(titles, taxonomy, { handles, handleCategories, titleAliases: _aliases });
   } catch { return null; }
 }
 
