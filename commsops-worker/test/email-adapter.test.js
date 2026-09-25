@@ -55,19 +55,7 @@ const realFetch = global.fetch;
     assert.equal(r.status, 'failed');
   });
 
-  await t('paceShare=3 spaces sends 3× wider (6 shards must not each take the full 10/s)', async () => {
-    email._resetPacing();
-    const at = [];
-    global.fetch = async () => { at.push(Date.now()); return resp(200, { id: 'e' }); };
-    await Promise.all([1, 2, 3].map(() => email.send(MSG, { RESEND_API_KEY: 'k' }, { paceShare: 3 })));
-    global.fetch = realFetch;
-    at.sort((a, b) => a - b);
-    // 120ms × 3 = 360ms per slot; allow 15ms timer slop.
-    assert.ok(at[1] - at[0] >= 345, `gap1 ${at[1] - at[0]}`);
-    assert.ok(at[2] - at[1] >= 345, `gap2 ${at[2] - at[1]}`);
-  });
-
-  await t('no paceShare → the old 120ms spacing (journeys/transactional unchanged)', async () => {
+  await t('sends are spaced 120ms apart (~8.3/s under the Resend 10/s ceiling)', async () => {
     email._resetPacing();
     const at = [];
     global.fetch = async () => { at.push(Date.now()); return resp(200, { id: 'e' }); };
@@ -76,19 +64,6 @@ const realFetch = global.fetch;
     at.sort((a, b) => a - b);
     const gap = at[1] - at[0];
     assert.ok(gap >= 105 && gap < 300, `gap ${gap}`);
-  });
-
-  await t('garbage paceShare clamps: 0/NaN → 1, 1000 → 10 (never a multi-minute stall)', async () => {
-    for (const [share, lo, hi] of [[0, 105, 300], ['x', 105, 300], [1000, 1185, 1500]]) {
-      email._resetPacing();
-      const at = [];
-      global.fetch = async () => { at.push(Date.now()); return resp(200, { id: 'e' }); };
-      await Promise.all([1, 2].map(() => email.send(MSG, { RESEND_API_KEY: 'k' }, { paceShare: share })));
-      global.fetch = realFetch;
-      at.sort((a, b) => a - b);
-      const gap = at[1] - at[0];
-      assert.ok(gap >= lo && gap < hi, `share ${share}: gap ${gap}`);
-    }
   });
 
   await t('a 429 holds back the OTHER senders in the isolate too', async () => {
@@ -119,9 +94,10 @@ const realFetch = global.fetch;
         ? resp(429, { message: 'rl' }, '0.5') : resp(200, { id: 'e' });
     };
     const t0 = Date.now();
-    // A and B start together at paceShare 3 → B claims slot t0+360 BEFORE A's 429 lands.
-    await Promise.all([email.send({ ...MSG, subject: 'A' }, { RESEND_API_KEY: 'k' }, { paceShare: 3 }),
-      email.send({ ...MSG, subject: 'B' }, { RESEND_API_KEY: 'k' }, { paceShare: 3 })]);
+    // A and B start together → B claims slot t0+120 BEFORE A's 429 lands (fetch mock is instant,
+    // so A's 429 is back at ~t0; B is already sleeping toward its slot).
+    await Promise.all([email.send({ ...MSG, subject: 'A' }, { RESEND_API_KEY: 'k' }),
+      email.send({ ...MSG, subject: 'B' }, { RESEND_API_KEY: 'k' })]);
     global.fetch = realFetch;
     const b = calls.find((c) => c.who === 'B');
     assert.ok(b.at - t0 >= 485, `B fired at +${b.at - t0}ms, inside A's 500ms Retry-After`);

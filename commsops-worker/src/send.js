@@ -624,8 +624,7 @@ async function send(env, opts) {
   }
 
   // adapter send
-  // paceShare: only the email adapter reads it (Resend's 10/s is account-wide; see adapters/email.js).
-  const res = await adapter.send(rendered, env, { paceShare: opts.paceShare });
+  const res = await adapter.send(rendered, env);
   return await finalize(env, opts, res, sender, channel, purpose, template, true);
 }
 

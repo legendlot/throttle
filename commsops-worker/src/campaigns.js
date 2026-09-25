@@ -697,8 +697,9 @@ async function processQueueMessage(env, body) {
   // been rate-limited" was true of WhatsApp and false of email: 2,556 emails were lost to 429s
   // across three campaign days in August (S337). Email is now paced + retried inside
   // `adapters/email.js`, which is where a PER-CHANNEL limit belongs — do not encode one here.
-  // (S400: the adapter's pacing is per ISOLATE, so the fan-out passes `paceShare: shardCount`
-  // below — the one fact only this file knows is how many shards are sending in parallel.)
+  // ⛔ S400: do NOT divide the email pace by shard count. Tried 2026-09-25 (throttle 660cb84c):
+  // all 6 shards of the Upshift campaign ran in ONE isolate and so already shared the adapter's
+  // single ~8.3/s pacer — splitting it 6 ways dropped the whole campaign to 1.4/s. Reverted.
   // Before raising this number, ask which channel's ceiling you have actually checked.
   const SEND_CONCURRENCY = 8;
   let pageErrors = 0;
@@ -733,9 +734,6 @@ async function processQueueMessage(env, body) {
         eventContext: camp.vars || {},
         tracking: { campaign: camp.name, utm: camp.utm },
         source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
-        // Every shard is its own isolate hitting the SAME Resend 10/s ceiling — split it N ways
-        // (S400: 6 shards each pacing to 8.3/s burst to 48/s and lost 2,403 sends to 429s).
-        paceShare: shardCount,
       });
     } catch (e) {
       // One bad recipient must not poison the page (review H3). The dedup row (Task 1) lets a
