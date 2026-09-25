@@ -17,26 +17,62 @@
 // adapter, not in a shared pool constant — which is why the fix lives here and protects EVERY
 // email path (campaigns, journeys, transactional, test sends), not just the campaign fan-out.
 //
-// Pacing is per-isolate. The broadcast consumer is max_batch_size=1 and self-chains, so campaign
-// pages run one isolate at a time and this is the dominant case; concurrent journey/transactional
-// isolates can still collectively exceed 10/s, which is what the 429 retry below is for.
+// Pacing is per-isolate — and "campaign pages run one isolate at a time" (the S337 premise) stopped
+// being true when campaigns were SHARDED (S287, up to 6 parallel chains, each its own isolate).
+// ⛔ S400, 2026-09-25: the Upshift sale email (122,955 roster, 6 shards) lost 2,403 sends to
+// "Too many requests": six isolates each pacing to 8.3/s is a 50/s ceiling, the DB round-trips
+// held the average at ~8.3/s total, and every burst over 10 (p95 14/s, max 48/s) drew 429s that
+// three ≤2s retries could not outlast. Two fixes, both here:
+//   1. `paceShare` — a caller that knows N isolates are sending in parallel (the campaign fan-out
+//      passes its shardCount) spaces ITS sends N× wider, so the whole campaign stays ≤ ~8.3/s
+//      however many shards it has — as an AVERAGE: the shards are unsynchronised, so a single
+//      second can still catch ~12 and the retries absorb that. Throughput cost is small but real:
+//      1.39/s per shard is the resume's measured mean, so fast shards now wait for slow ones.
+//   2. A 429 holds back EVERY sender in this isolate — including ones already sleeping toward a
+//      claimed slot (hostile review S400) — and the retry waits longer, with jitter so parallel
+//      isolates do not retry in lockstep.
+// Journey/transactional sends pass no share (1). ⚠️ One that lands in the SAME isolate as a
+// campaign page queues behind its claimed slots: up to ~6s, ~11s during a 429 hold. Fine for
+// marketing/order email; revisit if an OTP/login email ever rides this adapter.
 const RESEND_MIN_INTERVAL_MS = 120;      // ~8.3/s — deliberate headroom under the 10/s ceiling
-const RESEND_MAX_RETRIES = 3;
+const RESEND_MAX_RETRIES = 5;
+const MAX_PACE_SHARE = 10;               // a garbage shardCount must not stall a page for minutes
 let nextSlotAt = 0;
+let holdUntil = 0;                       // set by a 429; every sender waits it out
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Reserve the next send slot. Claiming `nextSlotAt` BEFORE awaiting is what makes this work under
 // concurrency: every caller takes a distinct slot at claim time, so N concurrent senders serialise
 // into an evenly spaced queue rather than all sleeping the same interval and firing together.
-async function paceResend() {
+async function paceResend(share = 1) {
+  const n = Math.min(MAX_PACE_SHARE, Math.max(1, Math.floor(Number(share) || 1)));
   const now = Date.now();
   const at = Math.max(now, nextSlotAt);
-  nextSlotAt = at + RESEND_MIN_INTERVAL_MS;
+  nextSlotAt = at + RESEND_MIN_INTERVAL_MS * n;
   if (at > now) await sleep(at - now);
+  // A slot claimed BEFORE a 429 landed would otherwise fire straight into the rejection window.
+  // Re-check after waking; stagger the release so the held senders do not all fire at once.
+  while (Date.now() < holdUntil) {
+    await sleep(holdUntil - Date.now() + Math.floor(Math.random() * RESEND_MIN_INTERVAL_MS * n));
+  }
 }
 
-async function send(rendered, env) {
+// Wait after a 429. Retry-After when Resend sends one, else exponential; capped so one recipient
+// can never stall a campaign page past the invocation budget (5 retries: ≤ ~27s with Retry-After,
+// ~12s without, plus pacing — a 75-recipient page stays far inside the 15-min consumer limit), plus
+// 0–300ms jitter so six shards that were rejected in the same second do not retry in the same one.
+function backoffMs(attempt, retryAfterHeader, rand = Math.random) {
+  const ra = Number(retryAfterHeader);
+  const base = Number.isFinite(ra) && ra > 0
+    ? Math.min(ra * 1000, 5000)
+    : Math.min(400 * (2 ** attempt), 4000);
+  return base + Math.floor(rand() * 300);
+}
+
+// `opts.paceShare` — how many isolates share the 10/s ceiling with this caller (see header).
+async function send(rendered, env, opts) {
+  const share = (opts && opts.paceShare) || 1;
   const body = {
     from: rendered.from,                    // "Legend of Toys <hello@comms.legendoftoys.com>"
     to: Array.isArray(rendered.to) ? rendered.to : [rendered.to],
@@ -53,7 +89,7 @@ async function send(rendered, env) {
   }
   let res, data;
   for (let attempt = 0; ; attempt++) {
-    await paceResend();
+    await paceResend(share);
     try {
       res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -71,12 +107,12 @@ async function send(rendered, env) {
     // became 2,556 customers who got nothing. Retry a bounded number of times, honouring
     // Retry-After when Resend sends it, then fall through and report the failure honestly.
     if (res.status !== 429 || attempt >= RESEND_MAX_RETRIES) break;
-    const ra = Number(res.headers.get('retry-after'));
-    // Exponential backoff when the header is absent/garbage; capped so one recipient can never
-    // stall a whole campaign page inside the invocation budget.
-    const waitMs = Number.isFinite(ra) && ra > 0
-      ? Math.min(ra * 1000, 5000)
-      : Math.min(250 * (2 ** attempt), 2000);
+    const waitMs = backoffMs(attempt, res.headers.get('retry-after'));
+    // Push the shared slot back too: a 429 means the CEILING is hit, not this one recipient, so
+    // the other pool workers in this isolate must stop claiming slots for the same window —
+    // otherwise they fire straight into the same rejection while this one waits.
+    holdUntil = Math.max(holdUntil, Date.now() + waitMs);
+    nextSlotAt = Math.max(nextSlotAt, holdUntil);
     await sleep(waitMs);
   }
   return {
@@ -151,4 +187,5 @@ function parseStatusWebhook(payload) {
   }];
 }
 
-module.exports = { send, parseStatusWebhook, bounceReason, BOUNCE_REASON };
+module.exports = { send, parseStatusWebhook, bounceReason, BOUNCE_REASON, backoffMs,
+  _resetPacing: () => { nextSlotAt = 0; holdUntil = 0; } };
