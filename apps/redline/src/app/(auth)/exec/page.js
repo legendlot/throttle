@@ -8,7 +8,7 @@
    getPlanVsActual, getScanSummary, getManpowerLog,
    getOperatorAttendance). Exceptions are computed client-side.
    ════════════════════════════════════════════════════════════ */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -25,6 +25,8 @@ import KpiDrilldown from '../../../components/KpiDrilldown.js';
 import { scanProductLabel } from '../../../lib/scanProducts.js';
 
 // Packed sub-line: retail · ecom, plus export only once an RTX (export packed-out) scan exists (S392c).
+// Packed activities — the Today tile (today_rtr+rte+rtx) and the Packed drawer use the same set.
+const PACKED_ACTS = 'RTE,RTR,RTX';
 const packedSub = (rtr, rte, rtx) => `${fmt(rtr)} retail · ${fmt(rte)} ecom` + (Number(rtx) > 0 ? ` · ${fmt(rtx)} export` : '');
 
 // run status → kit ToneBadge tone
@@ -271,12 +273,13 @@ export default function OverviewPage() {
   const [hourly, setHourly] = useState([]);
   const [pva, setPva] = useState([]);          // today — batteries + line context
   const [rangePva, setRangePva] = useState([]); // preset range — week/month KPIs
+  const [rangePacked, setRangePacked] = useState([]); // preset range — ALL packed (drawer's source), feeds the Packed tile
   const [scanSummary, setScanSummary] = useState(null);
   const [alertsOpen, setAlertsOpen] = useState(0);
   const [returnsOpen, setReturnsOpen] = useState(0);
   const [mp, setMp] = useState(null);
   const [runs, setRuns] = useState([]);           // open runs (for tomorrow's-runs panel)
-  const [mtdDispatched, setMtdDispatched] = useState(0); // month-to-date dispatched (Σ rtr+rte)
+  const [mtdDispatched, setMtdDispatched] = useState(0); // month-to-date packed — ALL RTE/RTR/RTX car/drone scans, run or no run
   const [scanProducts, setScanProducts] = useState([]); // per-line scan-derived product (lines with no run)
   const [drill, setDrill] = useState(null);       // KPI tile drill-down: 'packed' | 'qcPass' | 'qcFail' | 'pkgOut'
   const [tick, setTick] = useState(0);            // bumps on every loadData so an open drawer refetches with the tiles
@@ -302,7 +305,7 @@ export default function OverviewPage() {
       const [dashData, pvaData, monthPvaData, scanData, vioData, retData, mplData, attData] = await Promise.allSettled([
         garageFetch('getProductionDashboard', { date }, session),
         garageFetch('getPlanVsActual', { from: date, to: date }, session),
-        garageFetch('getPlanVsActual', { from: monthStart, to: date }, session),
+        garageFetch('getActivityBreakdown', { from: monthStart, to: date, activities: PACKED_ACTS }, session),
         garageFetch('getScanSummary', { date }, session),
         garageFetch('getViolations', { acknowledged: 'false' }, session),
         garageFetch('getReturnQueue', {}, session),
@@ -322,11 +325,10 @@ export default function OverviewPage() {
       }
       setPva(pvaData.status === 'fulfilled' ? (pvaData.value || []) : []);
 
-      // Month-to-date dispatched (Σ rtr+rte+rtx) — drives the per-card monthly projection.
+      // Month-to-date packed (every car/drone RTE/RTR/RTX scan, run or no run — Afshaan 2026-09-25)
+      // — drives the Packed card's monthly projection.
       if (monthPvaData.status === 'fulfilled' && Array.isArray(monthPvaData.value)) {
-        const mtd = monthPvaData.value.reduce((sum, r) =>
-          sum + (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0) + (Number(r.actual_rtx) || 0), 0);
-        setMtdDispatched(mtd);
+        setMtdDispatched(monthPvaData.value.reduce((sum, r) => sum + (Number(r.cnt) || 0), 0));
       }
       setScanSummary(scanData.status === 'fulfilled' ? (scanData.value || null) : null);
       setAlertsOpen(vioData.status === 'fulfilled' && Array.isArray(vioData.value) ? vioData.value.length : 0);
@@ -370,13 +372,21 @@ export default function OverviewPage() {
 
   // week/month KPI source — PvA over the preset range (existing API)
   const loadRange = useCallback(async (p) => {
-    if (!session || p === 'today') { setRangePva([]); return; }
+    if (!session || p === 'today') { setRangePva([]); setRangePacked([]); return; }
     const { from, to } = rangeFor(p);
-    try { setRangePva(await garageFetch('getPlanVsActual', { from, to }, session) || []); }
-    catch (_) { setRangePva([]); }
+    // Packed counts everything packed (Afshaan 2026-09-25), not just units matched to planned
+    // runs — same source as the Packed drawer, so tile and drawer agree.
+    const [pv, pk] = await Promise.allSettled([
+      garageFetch('getPlanVsActual', { from, to }, session),
+      garageFetch('getActivityBreakdown', { from, to, activities: PACKED_ACTS }, session),
+    ]);
+    setRangePva(pv.status === 'fulfilled' && Array.isArray(pv.value) ? pv.value : []);
+    setRangePacked(pk.status === 'fulfilled' && Array.isArray(pk.value) ? pk.value : null); // null = fetch failed → '—'
   }, [session]);
 
   const onPreset = (p) => { setPreset(p); loadRange(p); };
+  // Re-pull the range on every 30 s tick too — the drawer refetches on `tick`, so the tile must as well.
+  useEffect(() => { if (tick > 0 && preset !== 'today') loadRange(preset); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── KPI rail (preset-keyed; '—' where a range number isn't available) ── */
   const s = summary || {};
@@ -391,27 +401,35 @@ export default function OverviewPage() {
       };
     }
     const agg = rangePva.reduce((a, r) => {
-      a.disp += (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0) + (Number(r.actual_rtx) || 0);
-      a.rtr += Number(r.actual_rtr) || 0; a.rte += Number(r.actual_rte) || 0; a.rtx += Number(r.actual_rtx) || 0;
       a.pass += Number(r.actual_qc_pass) || 0;
       a.fail += Number(r.actual_qc_fail) || 0;
       return a;
     }, { disp: 0, rtr: 0, rte: 0, rtx: 0, pass: 0, fail: 0 });
+    // Packed = every car/drone packed scan in the range (drawer source); split by packaging channel.
+    // Split by packaging CHANNEL (the drawer's chips), not by scan activity as Today does — a stated
+    // choice (S400 review): totals are identical; ~1.4% of units sit in the other bucket per method.
+    for (const r of rangePacked || []) {
+      const n = Number(r.cnt) || 0;
+      agg.disp += n;
+      if (r.channel === 'retail') agg.rtr += n;
+      else if (r.channel === 'export') agg.rtx += n;
+      else agg.rte += n;
+    }
     const label = preset === 'week' ? 'Mon → today' : '1st → today';
     // Pass Rate + QC Fail over the range, now that get_plan_vs_actual carries actual_qc_fail
-    // (previously hardcoded '—' for non-today presets). All range KPIs derive from rangePva so
-    // the rail is internally consistent (pass, fail, rate one source).
+    // (previously hardcoded '—' for non-today presets). Pass, fail and rate derive from rangePva so
+    // they share one source; Packed alone reads rangePacked (all packed, see loadRange).
     const denom = agg.pass + agg.fail;
     const rate = denom > 0 ? Math.round((agg.pass / denom) * 100) : null;
     return {
-      dispatched: fmt(agg.disp), subR: packedSub(agg.rtr, agg.rte, agg.rtx),
+      dispatched: rangePacked ? fmt(agg.disp) : '—', subR: rangePacked ? packedSub(agg.rtr, agg.rte, agg.rtx) : label,
       qcPass: fmt(agg.pass),
       passRate: rate != null ? rate + '%' : '—',
       passTone: rate >= 95 ? 'ok' : rate != null ? 'warn' : undefined,
       qcFail: fmt(agg.fail),
       failSub: label,
     };
-  }, [preset, s, rangePva]);
+  }, [preset, s, rangePva, rangePacked]);
 
   /* ── per-line today series (batteries + pace exceptions) ────── */
   const lineData = useMemo(() => {
@@ -736,7 +754,7 @@ export default function OverviewPage() {
       {drill && (
         <KpiDrilldown drill={drill} from={rangeFor(preset).from} to={rangeFor(preset).to}
           session={session} onClose={() => setDrill(null)} refreshKey={tick}
-          tileValue={preset === 'today' ? null : ({ packed: k.dispatched, qcPass: k.qcPass, qcFail: k.qcFail }[drill] ?? null)} />
+          tileValue={preset === 'today' ? null : ({ qcPass: k.qcPass, qcFail: k.qcFail }[drill] ?? null)} />
       )}
     </div>
   );
