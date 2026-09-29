@@ -7,7 +7,7 @@ import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
-import { hybridHeadline } from '../../lib/segregation.js';
+import { hybridHeadline, netByChannel } from '../../lib/segregation.js';
 // Prism atoms — shared vocabulary, presentational only.
 import { Swatch, PanelHead, PageHead, Bar, Donut, Nil } from '../../components/prism.js';
 import { HUE, STATUS } from '../../lib/hues.js';
@@ -54,6 +54,7 @@ export default function Dashboard() {
   const [drill, setDrill] = useState(null);      // S294 — { title, params } → underlying-orders modal
   const [trendMetric, setTrendMetric] = useState('gross');
   const [variantMetric, setVariantMetric] = useState('gross');
+  const [mixMetric, setMixMetric] = useState('net');  // Channel mix: net (ex-GST) by default, gross on toggle (Afshaan S403)
   const [sellerRollup, setSellerRollup] = useState('variant'); // variant | product
   const [connectors, setConnectors] = useState([]);
   const [unmappedCount, setUnmappedCount] = useState(0);
@@ -147,7 +148,8 @@ export default function Dashboard() {
 
   // ── hybrid headline: order-grain where a channel has it (complete, sku-map-independent),
   // product-grain gross as fallback for channels without it (QC). Drives the headline TOTALS only;
-  // the mix below (channel board, variants, movers, trend, drill) stays product-grain. ──
+  // variants, movers, trend and drill stay product-grain; the Channel mix is hybrid on NET and
+  // product-grain on GROSS. ──
   const head = useMemo(() => hybridHeadline(segRows, rows), [segRows, rows]);
   const headPrev = useMemo(() => hybridHeadline(segPrevRows, prevRows), [segPrevRows, prevRows]);
   const headDaily = useMemo(() => {
@@ -171,26 +173,44 @@ export default function Dashboard() {
     return { dv, days: Object.keys(dv).sort() };
   }, [rows, chName, trendMetric]);
 
-  const channelBoard = useMemo(() => {
-    const arr = Object.entries(cur.ch).map(([id, v]) => ({
-      id, name: chName[id] || id, gk: channelGroup(chName[id] || ''),
-      gross: v.gross, units: v.units, prevGross: prev.ch[id]?.gross || 0,
-    })).sort((a, b) => b.gross - a.gross);
-    const max = Math.max(...arr.map(c => c.gross), 1);
-    return { arr, max };
-  }, [cur, prev, chName]);
+  // Channel mix NET (default) = per-channel hybrid net, which sums exactly to the Net revenue KPI
+  // (lib/segregation.js netByChannel). GROSS (toggle) stays the product-grain `cur.ch` it always was.
+  const chNet = useMemo(() => netByChannel(segRows, rows), [segRows, rows]);
+  const chNetPrev = useMemo(() => netByChannel(segPrevRows, prevRows), [segPrevRows, prevRows]);
 
-  // family roll-up of the same product-grain channel aggregate — one donut arc per family.
+  const channelBoard = useMemo(() => {
+    const onNet = mixMetric === 'net';
+    const ids = new Set([...Object.keys(cur.ch), ...(onNet ? Object.keys(chNet) : [])]);
+    const arr = [...ids].map(id => {
+      const v = cur.ch[id] || { gross: 0, units: 0 };
+      const gross = v.gross, net = chNet[id] || 0;
+      return {
+        id, name: chName[id] || id, gk: channelGroup(chName[id] || ''),
+        gross, net, units: v.units,
+        value: onNet ? net : gross,
+        prevValue: onNet ? (chNetPrev[id] || 0) : (prev.ch[id]?.gross || 0),
+      };
+    }).filter(c => c.value !== 0).sort((a, b) => b.value - a.value);
+    const max = Math.max(...arr.map(c => c.value), 1);
+    // `total` is the true net (= the KPI) and heads the donut; SHARES divide by the positive sum
+    // only, because the donut can't draw a negative arc — a channel whose returns out-ran its sales
+    // shows its (negative) ₹ with no share, rather than pushing the others past 100%.
+    const total = arr.reduce((a, c) => a + c.value, 0);
+    const posTotal = arr.reduce((a, c) => a + Math.max(0, c.value), 0);
+    return { arr, max, total, posTotal };
+  }, [cur, prev, chName, chNet, chNetPrev, mixMetric]);
+
+  // family roll-up of the channel board (net or gross, whichever is selected) — one donut arc per family.
   // Derived client-side from rows already loaded; no additional read.
   const famMix = useMemo(() => {
     const t = {};
-    for (const [id, v] of Object.entries(cur.ch)) {
-      const k = channelGroup(chName[id] || '');
+    for (const c of channelBoard.arr) {
+      const k = c.gk;
       (t[k] = t[k] || { key: k, label: GROUP_META[k].label, color: GROUP_META[k].color, value: 0 });
-      t[k].value += v.gross;
+      t[k].value += c.value;
     }
     return GROUP_ORDER.filter(k => t[k] && t[k].value > 0).map(k => t[k]);
-  }, [cur, chName]);
+  }, [channelBoard]);
 
   const variantBoard = useMemo(() => {
     const src = {};
@@ -416,18 +436,19 @@ export default function Dashboard() {
 
           {/* channel mix — one donut arc per family, then the per-channel leaderboard */}
           <div className="so-card">
-            <PanelHead title="Channel mix" qual="· gross share" />
+            <PanelHead title="Channel mix" qual={mixMetric === 'net' ? '· net share (ex-GST)' : '· gross share'}
+              right={<SegmentedToggle options={['net', 'gross']} value={mixMetric} onChange={setMixMetric} size="sm" />} />
             {channelBoard.arr.length === 0 ? <div style={EMPTY}>No sales in range.</div> : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
                 <Donut segments={famMix.map(f => ({ key: f.key, label: f.label, value: f.value, color: f.color }))}
-                  total={inr(cur.gross)} centerLabel="GROSS" />
+                  total={inr(channelBoard.total)} centerLabel={mixMetric === 'net' ? 'NET' : 'GROSS'} />
                 <div style={{ flex: 1, minWidth: 190, display: 'flex', flexDirection: 'column', gap: 9 }}>
                   {famMix.map(f => (
                     <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <Swatch color={f.color} />
                       <span style={NAME}>{f.label}</span>
-                      <span style={{ ...NUM, color: 'var(--t3)', width: 46 }}>{cur.gross ? ((f.value / cur.gross) * 100).toFixed(1) : '0.0'}%</span>
+                      <span style={{ ...NUM, color: 'var(--t3)', width: 46 }}>{channelBoard.posTotal ? ((f.value / channelBoard.posTotal) * 100).toFixed(1) : '0.0'}%</span>
                       <span style={{ ...NUM, color: 'var(--t1-cell)', width: 78 }}>{inr(f.value)}</span>
                     </div>
                   ))}
@@ -438,17 +459,17 @@ export default function Dashboard() {
                 <div className="so-eyebrow" style={{ marginBottom: 10 }}>By channel</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {channelBoard.arr.map(c => {
-                    const share = cur.gross ? (c.gross / cur.gross) * 100 : 0;
+                    const share = c.value > 0 && channelBoard.posTotal ? (c.value / channelBoard.posTotal) * 100 : null;
                     return (
                       <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <Swatch color={GROUP_META[c.gk].color} />
                           <span style={NAME}>{c.name}</span>
-                          <Delta pct={pct(c.gross, c.prevGross)} />
-                          <span style={{ ...NUM, color: 'var(--t3)', width: 38 }}>{share.toFixed(0)}%</span>
-                          <span style={{ ...NUM, color: 'var(--t1-cell)', width: 78 }}>{inr(c.gross)}</span>
+                          <Delta now={c.value} prev={c.prevValue} />
+                          <span style={{ ...NUM, color: 'var(--t3)', width: 38 }}>{share == null ? '—' : `${share.toFixed(0)}%`}</span>
+                          <span style={{ ...NUM, color: 'var(--t1-cell)', width: 78 }}>{inr(c.value)}</span>
                         </div>
-                        <Bar pct={(c.gross / channelBoard.max) * 100} color={GROUP_META[c.gk].color} />
+                        <Bar pct={Math.max(0, (c.value / channelBoard.max) * 100)} color={GROUP_META[c.gk].color} />
                       </div>
                     );
                   })}
