@@ -108,6 +108,7 @@ export default function VendorsPage() {
   const [leadTime, setLeadTime] = useState('');
   const [address, setAddress] = useState('');
   const [gstin, setGstin] = useState('');
+  const [udyam, setUdyam] = useState('');
   const [formNotes, setFormNotes] = useState('');
 
   // supplied items
@@ -153,6 +154,7 @@ export default function VendorsPage() {
     setLeadTime('');
     setAddress('');
     setGstin('');
+    setUdyam('');
     setFormNotes('');
     setSuppliedItems([]);
     setVsiType('product');
@@ -190,6 +192,7 @@ export default function VendorsPage() {
       setLeadTime(vendor.lead_time_days != null ? String(vendor.lead_time_days) : '');
       setAddress(vendor.address || '');
       setGstin(vendor.gstin || '');
+      setUdyam(vendor.udyam_number || '');
       setFormNotes(vendor.notes || '');
       loadSuppliedItems(code);
     } catch (e) {
@@ -224,6 +227,7 @@ export default function VendorsPage() {
         lead_time_days: leadTime ? parseInt(leadTime, 10) : null,
         address: address || null,
         gstin: gstin.trim() || null,
+        udyam_number: udyam.trim() || null,
         notes: formNotes || null,
       };
       const action = editingCode ? 'updateVendor' : 'postVendor';
@@ -301,7 +305,7 @@ export default function VendorsPage() {
   if (view === 'list') {
     const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const filtered = tokens.length === 0 ? vendors : vendors.filter(v => {
-      const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.process_type || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
+      const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.process_type || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''} ${v.udyam_number || ''}`.toLowerCase();
       return tokens.every(t => hay.includes(t));
     });
     const activeCount = vendors.filter(v => v.active).length;
@@ -410,6 +414,7 @@ export default function VendorsPage() {
               <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
             </div>
             <Field label="GSTIN" value={gstin} onChange={setGstin} placeholder="e.g. 29AALFA6686P1ZE" disabled={submitting} />
+            <Field label="Udyam Registration No." value={udyam} onChange={setUdyam} placeholder="e.g. UDYAM-MH-26-0123456" disabled={submitting} />
             <div style={{ gridColumn: '1 / -1' }}>
               <span style={labelStyle}>Notes</span>
               <textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} disabled={submitting} />

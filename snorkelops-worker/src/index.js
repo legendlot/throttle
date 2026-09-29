@@ -1500,8 +1500,39 @@ function err(msg, status = 400) {
 // and the dropdown in apps/snorkel …/procurement/vendors/page.js.
 const VENDOR_PROCESS_TYPES = ['moulding','painting','assembly','raw_material','product_supplier','pcba','tooling','other'];
 
+// GSTIN + Udyam (MSME registration) on the Vendor Details form — Prarthi, #bugs 1790687279 (S403).
+// ⚠️ Until S403 NEITHER createVendorRow nor updateVendor wrote `gstin`: the form's GSTIN box was
+// dropped on save (0 of the 39 vendors added in the 60 days to 2026-09-29 carry one), and a vendor
+// with no GSTIN makes the PO tax split fall back to CGST+SGST. Shared by create and edit so the two
+// cannot drift again. Returns { error } or the columns to write: a key ABSENT from `d` is left out
+// (edit = leave it alone); '' / whitespace / null clears it. Whitespace is stripped and case folded
+// before the shape check, so a pasted 'udyam - mh - 26 - 0123456' saves clean. The Udyam shape is
+// also a CHECK on store.vendors (migration snorkel_vendor_udyam_v1) — change the two together.
+const UDYAM_RE = /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/;
+// Anything but a string or null is REFUSED, not coerced: String([]) is '' and would silently clear
+// a stored value on edit (Codex review, S403).
+function vendorIdFields(d) {
+  const out = {};
+  for (const k of ['gstin', 'udyam_number']) {
+    if (d[k] !== undefined && d[k] !== null && typeof d[k] !== 'string') return { error: `${k} must be text` };
+  }
+  if (d.gstin !== undefined) {
+    const g = String(d.gstin ?? '').replace(/\s+/g, '').toUpperCase();
+    if (g && !GSTIN_RE.test(g)) return { error: 'GSTIN should be 15 characters, like 29AALFA6686P1ZE' };
+    out.gstin = g || null;
+  }
+  if (d.udyam_number !== undefined) {
+    const u = String(d.udyam_number ?? '').replace(/\s+/g, '').toUpperCase();
+    if (u && !UDYAM_RE.test(u)) return { error: 'Udyam number should look like UDYAM-MH-26-0123456' };
+    out.udyam_number = u || null;
+  }
+  return out;
+}
+
 async function createVendorRow(d, createdBy) {
   if (!d || !d.vendor_name) return { ok: false, error: 'vendor_name required' };
+  const ids = vendorIdFields(d);
+  if (ids.error) return { ok: false, error: ids.error };
   // TOLERANT of a missing value on purpose: the lotops DI bridge (/bridge/vendor) mints
   // vendors without one, and 146 live vendors are unclassified. The Snorkel form is where
   // Process is made mandatory. A value that IS supplied must be valid — the column carries
@@ -1525,7 +1556,7 @@ async function createVendorRow(d, createdBy) {
     contact_phone: d.contact_phone || null, contact_email: d.contact_email || null,
     address: d.address || null, payment_terms: d.payment_terms || null,
     currency: d.currency || 'INR', lead_time_days: d.lead_time_days || null,
-    notes: d.notes || null, active: true, created_by: createdBy,
+    notes: d.notes || null, active: true, created_by: createdBy, ...ids,
   });
   if (!r.ok) return { ok: false, error: 'Vendor insert failed: ' + JSON.stringify(r.data) };
   return { ok: true, vendor_code: code };
@@ -3903,7 +3934,9 @@ export default {
             }
             const fields = ['vendor_name','category','process_type','source_country','location','contact_name',
               'contact_phone','contact_email','address','payment_terms','currency','lead_time_days','notes','active'];
-            const updates = { updated_at: new Date().toISOString() };
+            const ids = vendorIdFields(d);
+            if (ids.error) return err(ids.error, 400);
+            const updates = { updated_at: new Date().toISOString(), ...ids };
             fields.forEach(f => { if (d[f]!==undefined) updates[f]=d[f]; });
             if (updates.process_type === '') updates.process_type = null;   // "" is not a CHECK value
             if (d.source_country) updates.country_iso = countryToISO(d.source_country);

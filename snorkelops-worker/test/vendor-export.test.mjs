@@ -22,12 +22,12 @@ test('every form field lands in its column; process shows its label', () => {
     source_country: 'India', location: 'Pune', currency: 'INR', contact_name: 'Ravi',
     contact_phone: '098452 78523', contact_email: 'a@b.in', payment_terms: 'Credit 30',
     lead_time_days: 14, address: 'Plot 4\nMIDC', gstin: '27ABCDE1234F1Z5', notes: 'said "ok"',
-    active: true, created_at: '2026-09-28T20:00:00+00:00',
+    active: true, created_at: '2026-09-28T20:00:00+00:00', udyam_number: 'UDYAM-MH-26-0123456',
   }], labels);
   const row = csv.slice(csv.indexOf('\n') + 1);
   assert.ok(row.startsWith('V010,"Acme, Ltd",Packaging,Product supplier (FBU / CKD),India,Pune,INR,Ravi,'));
   assert.ok(row.includes('"=""098452 78523"""'), 'phone kept as text');
-  assert.ok(row.includes(',Credit 30,14,"Plot 4\nMIDC",27ABCDE1234F1Z5,"said ""ok""",Yes,2026-09-29'),
+  assert.ok(row.includes(',Credit 30,14,"Plot 4\nMIDC",27ABCDE1234F1Z5,"said ""ok""",Yes,2026-09-29,UDYAM-MH-26-0123456'),
     'multi-line address quoted; created_at is the IST date (20:00 UTC = next day IST)');
 });
 

@@ -16,7 +16,7 @@ import { csvCell } from './sales.js';
 export const VENDOR_EXPORT_COLUMNS = [
   'Vendor Code', 'Vendor Name', 'Category', 'Process', 'Country', 'Location', 'Currency',
   'Contact Name', 'Contact Phone', 'Contact Email', 'Payment Terms', 'Lead Time (days)',
-  'Address', 'GSTIN', 'Notes', 'Active', 'Added On',
+  'Address', 'GSTIN', 'Notes', 'Active', 'Added On', 'Udyam Number',
 ];
 
 // ⚠️ A phone held as digits ('098452 78523', '9599083163' — 111 of 112 on file, measured
@@ -61,7 +61,7 @@ export function buildVendorsCsv(vendors, processLabels = {}) {
       t(v.payment_terms), v.lead_time_days ?? '',
       t(v.address), t(v.gstin), t(v.notes),
       v.active === false ? 'No' : 'Yes',
-      istDate(v.created_at),
+      istDate(v.created_at), t(v.udyam_number),
     ].map(csvCell).join(','));
   }
   // UTF-8 BOM: without it Excel opens the file as Windows-1252 and a '–' or '—' in a name
