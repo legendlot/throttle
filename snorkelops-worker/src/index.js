@@ -89,8 +89,7 @@ const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
 const VENDOR_VIEW_COLS = 'vendor_code,vendor_name,category,process_type,source_country,location,currency,contact_name,contact_phone,payment_terms,lead_time_days,active';
 // getPO / getPrintPOData: what the PO itself carries — the printed PO shows the vendor's name,
 // address, contact and GSTIN, and the detail page's tax split reads the GSTIN. Never email or
-// notes. These routes are NOT procurement_view-gated: a requester opens the PO linked to their
-// own request (requests/detail "Open PO →").
+// notes. Viewers without vendor_manage (store, approver, jarvis_ro) open POs, so it stays narrow.
 const PO_VENDOR_COLS = 'vendor_code,vendor_name,gstin,address,contact_name,contact_phone';
 function vendorReadQuery(p, { active = 'true', country = '', countryNot = '', code = '' } = {}) {
   if (!p || !canView(p)) return null;
@@ -3118,6 +3117,10 @@ export default {
           case 'getPO': {
             const po = url.searchParams.get('po_number');
             if (!po) return err('po_number required');
+            // Was ungated: any login could walk the sequential PO numbers and read every price
+            // and line. The PO pages have required procurement_view on screen since 2026-06-02
+            // (PODetailClient 'Access restricted'); every payment_route / asset_view role holds it.
+            if (!canView(P)) return err('No permission', 403);
             const [header, lines, revisions] = await Promise.all([
               query('purchase_orders', `?po_number=eq.${encodeURIComponent(po)}&limit=1`),
               query('po_lines', `?po_number=eq.${encodeURIComponent(po)}&order=line_no.asc`),
@@ -3251,6 +3254,10 @@ export default {
           case 'getPrintPOData': {
             const po = url.searchParams.get('po_number');
             if (!po) return err('po_number required');
+            // Was ungated: any login could walk the sequential PO numbers and read every price
+            // and line. The PO pages have required procurement_view on screen since 2026-06-02
+            // (PODetailClient 'Access restricted'); every payment_route / asset_view role holds it.
+            if (!canView(P)) return err('No permission', 403);
             const [headerR, linesR, regR] = await Promise.all([
               query('purchase_orders', `?po_number=eq.${encodeURIComponent(po)}&limit=1`),
               query('po_lines', `?po_number=eq.${encodeURIComponent(po)}&order=line_no.asc`),

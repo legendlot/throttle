@@ -204,9 +204,13 @@ function RequestDetail() {
                 <span style={{ color: 'var(--t2)', marginLeft: 10 }}>{linked.vendor_name}</span>
                 <span style={{ marginLeft: 10 }}><StatusBadge label={linked.status} tone="blue" /></span>
               </div>
-              <button style={btnSecondary} onClick={() => router.push(`/procurement/pos/detail/?po_number=${encodeURIComponent(linked.po_number)}`)}>
-                Open PO →
-              </button>
+              {/* The PO page needs procurement_view (worker + PODetailClient) — a requester
+                  without it only got "Access restricted" behind this button. */}
+              {perms?.procurement_view && (
+                <button style={btnSecondary} onClick={() => router.push(`/procurement/pos/detail/?po_number=${encodeURIComponent(linked.po_number)}`)}>
+                  Open PO →
+                </button>
+              )}
             </div>
           </div>
         </div>
