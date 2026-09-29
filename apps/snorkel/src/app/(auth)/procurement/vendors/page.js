@@ -6,7 +6,9 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { countryTone } from '@/components/format.js';
-import { Plus, ArrowRight } from 'lucide-react';
+import { Plus, ArrowRight, Download } from 'lucide-react';
+import { todayStr } from '@throttle/domain';
+import { buildVendorsCsv } from '@/lib/vendorExport.js';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_CURRENCIES = ['INR', 'USD', 'RMB'];
@@ -305,10 +307,29 @@ export default function VendorsPage() {
     const activeCount = vendors.filter(v => v.active).length;
     const chinaCount = vendors.filter(v => v.source_country === 'China').length;
     const indiaCount = vendors.filter(v => v.source_country === 'India').length;
+    // Exports what the directory shows: the search is honoured, so a cleared search = every
+    // ACTIVE vendor (getVendors reads active only) (Prarthi, #bugs 1790662998). vendor_manage
+    // only — see vendorExport.js on why. The filename carries the count and says when it
+    // is a filtered subset, since that is the part that survives the file being forwarded.
+    const exportVendors = () => {
+      const labels = Object.fromEntries(VENDOR_PROCESS_TYPES.map(p => [p.value, p.label]));
+      const blob = new Blob([buildVendorsCsv(filtered, labels)], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = tokens.length > 0
+        ? `lot-vendors-FILTERED-${filtered.length}-of-${vendors.length}-${todayStr()}.csv`
+        : `lot-vendors-${filtered.length}-${todayStr()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
     return (
       <div className="pg">
         <PageHead title="Vendors" sub="Supplier directory — drives PO auto-fill."
-          actions={perms?.vendor_manage && <Btn kind="primary" onClick={startCreate}><Plus size={14} /> New Vendor</Btn>} />
+          actions={<>
+            {perms?.vendor_manage && <Btn onClick={exportVendors} disabled={loading || !filtered.length}><Download size={14} /> Export</Btn>}
+            {perms?.vendor_manage && <Btn kind="primary" onClick={startCreate}><Plus size={14} /> New Vendor</Btn>}
+          </>} />
 
         <div className="kpi-row">
           <Kpi label="Vendors" value={vendors.length} sub="on file" tone="blue" />
