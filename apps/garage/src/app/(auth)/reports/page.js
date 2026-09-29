@@ -793,9 +793,18 @@ function LineFlushSummary({ data, loading, load }) {
 function ProcurementSummary({ data, loading, load, canViewFinance }) {
   if (!data) return <SummaryShell title="Procurement" data={data} loading={loading} load={load} />;
 
-  const statusCounts = data.status_counts || data.po_status || {};
+  // The worker (getReportSummary type=procurement) returns `by_status` and `vendor_spend` as an
+  // OBJECT { vendor_name: amount } — reading `status_counts` and calling .map on that object
+  // crashed this tab for everyone. Accept both shapes; spend sorted biggest first, zeros dropped
+  // (a vendor whose POs this viewer may not price contributes nothing — 01_worker lib/poprice.js).
+  const statusCounts = data.by_status || data.status_counts || data.po_status || {};
   const overdue = data.overdue || data.overdue_pos || [];
-  const vendorSpend = data.vendor_spend || data.spend_by_vendor || [];
+  const rawSpend = data.vendor_spend || data.spend_by_vendor || [];
+  const vendorSpend = (Array.isArray(rawSpend)
+    ? rawSpend
+    : Object.entries(rawSpend).map(([k, spend]) => ({ vendor_name: k === 'null' ? '(no vendor)' : k, spend })))
+    .filter((v) => parseFloat(v.spend || v.amount || 0) > 0)
+    .sort((a, b) => parseFloat(b.spend || b.amount || 0) - parseFloat(a.spend || a.amount || 0));
   const maxSpend = Math.max(1, ...vendorSpend.map((v) => parseFloat(v.spend || v.amount || 0)));
 
   return (
@@ -833,9 +842,17 @@ function ProcurementSummary({ data, loading, load, canViewFinance }) {
         </SummaryShell>
       </div>
 
-      {canViewFinance ? (
+      {/* The worker decides who sees spend (01_worker lib/poprice.js — store, admin, Finance); it
+          sends nothing a viewer may not price, so show whatever came back. canViewFinance
+          (reports_finance) hid it from the admin + store roles the rule is for. */}
+      {(canViewFinance || vendorSpend.length > 0) ? (
         <SummaryShell title="Vendor Spend (top 10)" data={vendorSpend} loading={loading} load={load} empty="No vendor spend data">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {data.spend_restricted && (
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>
+                Excludes POs whose prices you can&apos;t see (e.g. China POs).
+              </div>
+            )}
             {vendorSpend.slice(0, 10).map((v) => {
               const amount = parseFloat(v.spend || v.amount || 0);
               const pct = (amount / maxSpend) * 100;

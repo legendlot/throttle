@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
-import { useAuth, hasPermission } from '@throttle/auth';
+import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { EmptyState, Spinner, Combobox, Panel, Chip, StatusBadge, ProductTag } from '@throttle/ui';
 import { Search, Download } from 'lucide-react';
@@ -251,7 +251,10 @@ export default function StockPage() {
   // it, so leading with it would bury the 28 rows that actually block production.
   const [integrityPickedOnly, setIntegrityPickedOnly] = useState(true);
 
-  const showCost = hasPermission(perms, 'reports_finance');
+  // The worker decides who sees part cost (01_worker lib/poprice.js — store, admin, Finance): it
+  // REMOVES unit_cost for everyone else. So show the column when the rows carry the key, not on
+  // reports_finance, which hid it from the store team the rule is for.
+  const showCost = stockData.some(r => r && Object.prototype.hasOwnProperty.call(r, 'unit_cost'));
 
   function toggleSort(key) {
     setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
