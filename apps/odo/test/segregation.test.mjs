@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const src = await readFile(new URL('../src/lib/segregation.js', import.meta.url), 'utf8');
-const { GST_RATE, aggOrders, hybridHeadline, rowGst, TAX_AT_INGEST_ADAPTERS, netByChannel } =
+const { GST_RATE, aggOrders, hybridHeadline, rowGst, TAX_AT_INGEST_ADAPTERS, hybridByChannel } =
   await import('data:text/javascript,' + encodeURIComponent(src));
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 0.005, `${msg}: ${a} vs ${b}`);
@@ -110,7 +110,7 @@ test('hybridHeadline still composes order-grain + product-grain', () => {
   assert.equal(h.units, 3);
 });
 
-test('netByChannel sums exactly to the hybrid headline net (Channel mix ties out to the Net KPI)', () => {
+test('hybridByChannel sums exactly to the hybrid headline net AND gross (Channel mix ties out to both KPIs)', () => {
   const order = [
     { channel_id: 'web', adapter_kind: 'shopify', gross: 10000, discount: 500, tax_ingest: 1450, returns_value: 1200, orders: 5 },
     { channel_id: 'web', adapter_kind: 'shopify', gross: 3000, discount: 0, tax_ingest: 140, returns_value: 0, orders: 2 },
@@ -123,9 +123,14 @@ test('netByChannel sums exactly to the hybrid headline net (Channel mix ties out
     { channel_id: 'blinkit', gross_value: 2100, units: 2, tax_value: '' },   // absent tax → flat strip
     { channel_id: 'blinkit', gross_value: 1050, units: 1, tax_value: 50 },   // 5% Build line
   ];
-  const per = netByChannel(order, product);
+  order[1].cancelled_value = 700;   // the Gross sales KPI counts cancelled value
+  const per = hybridByChannel(order, product);
+  const head = hybridHeadline(order, product);
   assert.deepEqual(Object.keys(per).sort(), ['amz', 'blinkit', 'gt', 'web', 'zepto']);
-  near(Object.values(per).reduce((a, v) => a + v, 0), hybridHeadline(order, product).netExGst, 'Σ per-channel net');
-  assert.ok(per.amz < 0, 'returns beyond sales make a channel net negative, and it is kept, not dropped');
-  near(per.zepto, 4000 - 610, 'product-only channel nets gross less its real GST');
+  near(Object.values(per).reduce((a, v) => a + v.net, 0), head.netExGst, 'Σ per-channel net');
+  near(Object.values(per).reduce((a, v) => a + v.gross, 0), head.grossAll, 'Σ per-channel gross');
+  near(per.web.gross, 13700, 'order-grain channel gross = order gross + cancelled, product rows ignored');
+  assert.ok(per.amz.net < 0, 'returns beyond sales make a channel net negative, and it is kept, not dropped');
+  near(per.zepto.net, 4000 - 610, 'product-only channel nets gross less its real GST');
+  near(per.zepto.gross, 4000, 'product-only channel gross = product gross');
 });

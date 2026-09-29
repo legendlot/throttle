@@ -7,7 +7,7 @@ import { downloadXlsx } from '../../lib/xlsx.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
-import { hybridHeadline, netByChannel } from '../../lib/segregation.js';
+import { hybridHeadline, hybridByChannel } from '../../lib/segregation.js';
 // Prism atoms — shared vocabulary, presentational only.
 import { Swatch, PanelHead, PageHead, Bar, Donut, Nil } from '../../components/prism.js';
 import { HUE, STATUS } from '../../lib/hues.js';
@@ -148,8 +148,7 @@ export default function Dashboard() {
 
   // ── hybrid headline: order-grain where a channel has it (complete, sku-map-independent),
   // product-grain gross as fallback for channels without it (QC). Drives the headline TOTALS only;
-  // variants, movers, trend and drill stay product-grain; the Channel mix is hybrid on NET and
-  // product-grain on GROSS. ──
+  // variants, movers, trend and drill stay product-grain; the Channel mix is hybrid too. ──
   const head = useMemo(() => hybridHeadline(segRows, rows), [segRows, rows]);
   const headPrev = useMemo(() => hybridHeadline(segPrevRows, prevRows), [segPrevRows, prevRows]);
   const headDaily = useMemo(() => {
@@ -173,32 +172,28 @@ export default function Dashboard() {
     return { dv, days: Object.keys(dv).sort() };
   }, [rows, chName, trendMetric]);
 
-  // Channel mix NET (default) = per-channel hybrid net, which sums exactly to the Net revenue KPI
-  // (lib/segregation.js netByChannel). GROSS (toggle) stays the product-grain `cur.ch` it always was.
-  const chNet = useMemo(() => netByChannel(segRows, rows), [segRows, rows]);
-  const chNetPrev = useMemo(() => netByChannel(segPrevRows, prevRows), [segPrevRows, prevRows]);
+  // Channel mix = per-channel hybrid headline (lib/segregation.js hybridByChannel): NET (default)
+  // sums exactly to the Net revenue KPI, GROSS to the Gross sales KPI (Afshaan S403 — gross used to
+  // be product-grain `cur.ch`, which missed unmapped-SKU orders — Website up to ~15% on a day —
+  // and cancelled value). Like the tile, per-channel gross Δ now moves with cancellations.
+  const chHead = useMemo(() => hybridByChannel(segRows, rows), [segRows, rows]);
+  const chHeadPrev = useMemo(() => hybridByChannel(segPrevRows, prevRows), [segPrevRows, prevRows]);
 
   const channelBoard = useMemo(() => {
-    const onNet = mixMetric === 'net';
-    const ids = new Set([...Object.keys(cur.ch), ...(onNet ? Object.keys(chNet) : [])]);
-    const arr = [...ids].map(id => {
-      const v = cur.ch[id] || { gross: 0, units: 0 };
-      const gross = v.gross, net = chNet[id] || 0;
-      return {
-        id, name: chName[id] || id, gk: channelGroup(chName[id] || ''),
-        gross, net, units: v.units,
-        value: onNet ? net : gross,
-        prevValue: onNet ? (chNetPrev[id] || 0) : (prev.ch[id]?.gross || 0),
-      };
-    }).filter(c => c.value !== 0).sort((a, b) => b.value - a.value);
+    const k = mixMetric === 'net' ? 'net' : 'gross';
+    const arr = Object.entries(chHead).map(([id, h]) => ({
+      id, name: chName[id] || id, gk: channelGroup(chName[id] || ''),
+      value: h[k] || 0,
+      prevValue: chHeadPrev[id]?.[k] || 0,
+    })).filter(c => c.value !== 0).sort((a, b) => b.value - a.value);
     const max = Math.max(...arr.map(c => c.value), 1);
-    // `total` is the true net (= the KPI) and heads the donut; SHARES divide by the positive sum
+    // `total` = the selected KPI (Net revenue or Gross sales) and heads the donut; SHARES divide by the positive sum
     // only, because the donut can't draw a negative arc — a channel whose returns out-ran its sales
     // shows its (negative) ₹ with no share, rather than pushing the others past 100%.
     const total = arr.reduce((a, c) => a + c.value, 0);
     const posTotal = arr.reduce((a, c) => a + Math.max(0, c.value), 0);
     return { arr, max, total, posTotal };
-  }, [cur, prev, chName, chNet, chNetPrev, mixMetric]);
+  }, [chName, chHead, chHeadPrev, mixMetric]);
 
   // family roll-up of the channel board (net or gross, whichever is selected) — one donut arc per family.
   // Derived client-side from rows already loaded; no additional read.

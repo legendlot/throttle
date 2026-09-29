@@ -187,17 +187,21 @@ export function hybridHeadline(orderRows, productRows) {
   };
 }
 
-// Per-channel NET (ex-GST): the headline's own hybrid ladder run on ONE channel's rows (Odo
-// dashboard Channel mix, S403). Every rung of aggOrders is a per-row linear sum and the fallback is
-// decided per channel, so Σ over channels === hybridHeadline(all rows).netExGst — the mix ties out
-// to the Net revenue KPI (locked by test/segregation.test.mjs). Keyed on the UNION of both grains:
-// a channel whose orders are all unmapped SKUs has order rows and no product rows, and still
-// earned net. A value can be NEGATIVE (returns land on their own date, not the sale's).
-export function netByChannel(orderRows, productRows) {
+// Per-channel headline (Odo dashboard Channel mix, S403): the headline's own hybrid ladder run on
+// ONE channel's rows → { net: netExGst, gross: grossAll }. Every rung of aggOrders is a per-row
+// linear sum and the fallback is decided per channel, so Σ over channels === hybridHeadline(all) for
+// BOTH figures — the mix ties out to the Net revenue AND Gross sales KPIs (locked by
+// test/segregation.test.mjs). Gross here is the KPI's gross: tax-incl, INCLUDING cancelled value.
+// Keyed on the UNION of both grains: a channel whose orders are all unmapped SKUs has order rows and
+// no product rows, and still sold. Net can be NEGATIVE (returns land on their own date).
+export function hybridByChannel(orderRows, productRows) {
   const o = {}, pr = {};
   for (const r of (orderRows || [])) (o[r.channel_id] = o[r.channel_id] || []).push(r);
   for (const r of (productRows || [])) (pr[r.channel_id] = pr[r.channel_id] || []).push(r);
   const out = {};
-  for (const id of new Set([...Object.keys(o), ...Object.keys(pr)])) out[id] = hybridHeadline(o[id] || [], pr[id] || []).netExGst;
+  for (const id of new Set([...Object.keys(o), ...Object.keys(pr)])) {
+    const h = hybridHeadline(o[id] || [], pr[id] || []);
+    out[id] = { net: h.netExGst, gross: h.grossAll };
+  }
   return out;
 }
