@@ -12,12 +12,12 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, Modal } from '@throttle/ui';
 import {
-  Icon, Panel, FilterChip, ToneBadge, fmt, btnGhost, inputStyle, lineColor, lineRgb, istToday,
+  Icon, Panel, FilterChip, ToneBadge, fmt, btnGhost, inputStyle, lineColor, lineRgb, istTodayISO,
 } from '../../../components/kit/index.js';
 import { useScans } from '../../../hooks/useScans.js';
 import { useRefreshState } from '../layout.js';
 
-// ── Date helpers (IST-anchored, derived from istToday()) ──────
+// ── Date helpers (IST-anchored, derived from istTodayISO()) ──────
 // Courier-label (AWB) shapes — THE SCANNER'S OWN `looksLikeAwb()` (02_scanner/index.html), the
 // only thing that can write `dispatch_boxes.awb`; mirrored in 01_worker/lib/channel.js. Widened
 // per shape 2026-09-15 (S383, decisions §S383b), never to "any alphanumeric".
@@ -37,12 +37,12 @@ function looksLikeAwb(code) {
 function dFromISO(iso) { return new Date(iso + 'T00:00:00'); }
 function isoOf(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0]; }
 function getMondayISO() {
-  const d = dFromISO(istToday()); const day = d.getDay();
+  const d = dFromISO(istTodayISO()); const day = d.getDay();
   d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
   return isoOf(d);
 }
 function getFirstOfMonthISO() {
-  const d = dFromISO(istToday());
+  const d = dFromISO(istTodayISO());
   return isoOf(new Date(d.getFullYear(), d.getMonth(), 1));
 }
 function formatTime(ts) {
@@ -107,8 +107,8 @@ export default function ScanFeedPage() {
   const { session } = useAuth();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
 
-  const [dateFrom,        setDateFrom]        = useState(() => istToday());
-  const [dateTo,          setDateTo]          = useState(() => istToday());
+  const [dateFrom,        setDateFrom]        = useState(() => istTodayISO());
+  const [dateTo,          setDateTo]          = useState(() => istTodayISO());
   const [activityFilter,  setActivityFilter]  = useState('');
   const [showVoided,      setShowVoided]      = useState(false);
   const [upcSearch,       setUpcSearch]       = useState('');
@@ -173,15 +173,15 @@ export default function ScanFeedPage() {
 
   // ── Presets ───────────────────────────────────────────────
   function handlePreset(preset) {
-    const today = istToday();
+    const today = istTodayISO();
     if (preset === 'today') { setDateFrom(today); setDateTo(today); }
     else if (preset === 'week')  { setDateFrom(getMondayISO()); setDateTo(today); }
     else if (preset === 'month') { setDateFrom(getFirstOfMonthISO()); setDateTo(today); }
   }
   const activePreset =
-    dateFrom === istToday() && dateTo === istToday() ? 'today'
-      : dateFrom === getMondayISO() && dateTo === istToday() ? 'week'
-      : dateFrom === getFirstOfMonthISO() && dateTo === istToday() ? 'month'
+    dateFrom === istTodayISO() && dateTo === istTodayISO() ? 'today'
+      : dateFrom === getMondayISO() && dateTo === istTodayISO() ? 'week'
+      : dateFrom === getFirstOfMonthISO() && dateTo === istTodayISO() ? 'month'
       : null;
 
   // ── Display rows ──────────────────────────────────────────

@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Panel, EmptyState, Spinner, Modal } from '@throttle/ui';
-import { btnPrimary, btnGhost, inputStyle, fmt, istToday } from '../../../components/kit';
+import { btnPrimary, btnGhost, inputStyle, fmt, istTodayISO } from '../../../components/kit';
 
 const STATUS_COLOR = {
   pending: 'var(--amber)', accepted: 'var(--green)', rejected: 'var(--red)', cancelled: 'var(--t3)',
@@ -45,12 +45,7 @@ function formatDateOnly(dateStr) {
 // 'YYYY-MM-DD' sorts lexicographically, so `<` is a correct date comparison here.
 // Only `pending` and `accepted` count — rejected and cancelled are not owed to
 // anyone, and a request with no promised date is never overdue.
-// NB deliberately NOT the `istToday` imported from kit — that one returns a DISPLAY string
-// ("28 Aug 2026") for headers, which would compare as nonsense against a 'YYYY-MM-DD' column.
-// en-CA is the locale that formats as ISO.
-function istTodayISO() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
-}
+// istTodayISO (kit), NOT kit istToday — that one is a DISPLAY string for headers.
 function overdueExpected(r) {
   const d = r?.so_expected_dispatch_date;
   if (!d) return false;
@@ -137,12 +132,12 @@ export default function FulfilmentRequestsPage() {
     if (!sel?.lines?.length) return;
     // start with one shipment carrying the full requested qty
     const full = {}; sel.lines.forEach(l => { full[lineKey(l)] = Math.round(Number(l.qty)) || 0; });
-    setSplits([{ scheduled_date: istToday(), qty: full }]);
+    setSplits([{ scheduled_date: istTodayISO(), qty: full }]);
     setSplitOpen(true);
   }
   function addSplit() {
     const zero = {}; sel.lines.forEach(l => { zero[lineKey(l)] = 0; });
-    setSplits(s => [...s, { scheduled_date: istToday(), qty: zero }]);
+    setSplits(s => [...s, { scheduled_date: istTodayISO(), qty: zero }]);
   }
   function removeSplit(i) { setSplits(s => s.filter((_, idx) => idx !== i)); }
   function setSplitQty(i, key, val) {

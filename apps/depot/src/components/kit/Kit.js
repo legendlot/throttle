@@ -55,8 +55,17 @@ export function istNow() {
   if ((get('dayPeriod') || '').toLowerCase().includes('pm')) hour += 12;
   return { hour, minute: Number(get('minute')), label: `${get('hour')}:${get('minute')} ${(get('dayPeriod') || '').toUpperCase()}` };
 }
+// DISPLAY string for headers ("29 Sept 2026" — the month form follows the browser's ICU data).
+// ⚠️ Never feed it to <input type="date">, `new Date()` or a date column: use istTodayISO().
 export function istToday() {
   return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
+}
+// Today in IST as 'YYYY-MM-DD' — for date inputs, presets and API params. Built from parts, not
+// from a locale's default layout, so a browser ICU update can't change the shape.
+export function istTodayISO() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
 /* ── severity helpers ───────────────────────────────────────── */
