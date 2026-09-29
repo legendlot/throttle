@@ -77,6 +77,32 @@ const canSyncPartHsnMaster = p => canSyncHsnMaster(p) || !!(p && p.po_request_ac
 const canPayBankView   = p => !!p.payment_bank_view;
 const canPayPayeeManage = p => !!p.payment_payee_manage || !!p.payment_request;
 
+// Vendor reads (getVendors / getVendor) had no gate: any Snorkel login (requester, sales_*) could
+// pull every vendor's email, address, GSTIN and notes. Every caller sits behind procurement_view
+// (moulds, assets and PO pages; every asset_view role holds it too, measured 2026-09-29), so that
+// is the floor. The detail form (email / address / GSTIN / notes) is vendor_manage-only on screen,
+// so a viewer without it gets only what the Vendors table and the pickers read — the PO form
+// prefills terms / currency / country / lead time from it. A PO raiser also gets `gstin`: the PO
+// form's tax split reads it (poTax.computeTax — no GSTIN silently means CGST+SGST), and today every
+// po_create role holds vendor_manage anyway. Returns the PostgREST query, or null for no
+// permission. `active` is spliced into the query, so it must be exactly true|false.
+const VENDOR_VIEW_COLS = 'vendor_code,vendor_name,category,process_type,source_country,location,currency,contact_name,contact_phone,payment_terms,lead_time_days,active';
+// getPO / getPrintPOData: what the PO itself carries — the printed PO shows the vendor's name,
+// address, contact and GSTIN, and the detail page's tax split reads the GSTIN. Never email or
+// notes. These routes are NOT procurement_view-gated: a requester opens the PO linked to their
+// own request (requests/detail "Open PO →").
+const PO_VENDOR_COLS = 'vendor_code,vendor_name,gstin,address,contact_name,contact_phone';
+function vendorReadQuery(p, { active = 'true', country = '', countryNot = '', code = '' } = {}) {
+  if (!p || !canView(p)) return null;
+  const select = canManageVendors(p) ? '*' : canRaisePO(p) ? `${VENDOR_VIEW_COLS},gstin` : VENDOR_VIEW_COLS;
+  if (code) return `?select=${select}&vendor_code=eq.${encodeURIComponent(code)}&limit=1`;
+  if (active !== 'true' && active !== 'false') return { error: 'active must be true or false' };
+  let q = `?select=${select}&active=eq.${active}&order=vendor_name.asc`;
+  if (country) q += `&source_country=eq.${encodeURIComponent(country)}`;
+  if (countryNot) q += `&source_country=neq.${encodeURIComponent(countryNot)}`;
+  return q;
+}
+
 // Bank details are read-gated. A requester may WRITE them when creating a payee (they already
 // paste them into Slack today) but may never read one back — everyone without payment_bank_view
 // sees the account masked to the last 4. Gate at the query, never in the UI.
@@ -2892,13 +2918,14 @@ export default {
           }
 
           case 'getVendors': {
-            const active = url.searchParams.get('active') || 'true';
-            const country = url.searchParams.get('source_country') || '';
-            const countryNot = url.searchParams.get('source_country_not') || '';
-            let filter = `?active=eq.${active}&order=vendor_name.asc`;
-            if (country) filter += `&source_country=eq.${encodeURIComponent(country)}`;
-            if (countryNot) filter += `&source_country=neq.${encodeURIComponent(countryNot)}`;
-            const r = await query('vendors', filter);
+            const q = vendorReadQuery(P, {
+              active: url.searchParams.get('active') || 'true',
+              country: url.searchParams.get('source_country') || '',
+              countryNot: url.searchParams.get('source_country_not') || '',
+            });
+            if (!q) return err('No permission', 403);
+            if (q.error) return err(q.error);
+            const r = await query('vendors', q);
             if (!r.ok) return err(r.data);
             return ok(r.data);
           }
@@ -2906,7 +2933,9 @@ export default {
           case 'getVendor': {
             const id = url.searchParams.get('vendor_code');
             if (!id) return err('vendor_code required');
-            const r = await query('vendors', `?vendor_code=eq.${encodeURIComponent(id)}&limit=1`);
+            const q = vendorReadQuery(P, { code: id });
+            if (!q) return err('No permission', 403);
+            const r = await query('vendors', q);
             if (!r.ok || !r.data[0]) return err('Vendor not found');
             return ok(r.data[0]);
           }
@@ -3101,12 +3130,12 @@ export default {
             let vendor = null;
             if (poRow.vendor_code) {
               const vR = await query('vendors',
-                `?vendor_code=eq.${encodeURIComponent(poRow.vendor_code)}&limit=1`);
+                `?vendor_code=eq.${encodeURIComponent(poRow.vendor_code)}&select=${PO_VENDOR_COLS}&limit=1`);
               vendor = vR.data?.[0] || null;
             }
             if (!vendor && poRow.vendor_name) {
               const vR = await query('vendors',
-                `?vendor_name=ilike.${encodeURIComponent(poRow.vendor_name)}&limit=1`);
+                `?vendor_name=ilike.${encodeURIComponent(poRow.vendor_name)}&select=${PO_VENDOR_COLS}&limit=1`);
               vendor = vR.data?.[0] || null;
             }
             const detailLines = await withPartProducts(lines.data || []);
@@ -3233,12 +3262,12 @@ export default {
             let vendor = null;
             if (poRow.vendor_code) {
               const vR = await query('vendors',
-                `?vendor_code=eq.${encodeURIComponent(poRow.vendor_code)}&limit=1`);
+                `?vendor_code=eq.${encodeURIComponent(poRow.vendor_code)}&select=${PO_VENDOR_COLS}&limit=1`);
               vendor = vR.data?.[0] || null;
             }
             if (!vendor && poRow.vendor_name) {
               const vR = await query('vendors',
-                `?vendor_name=ilike.${encodeURIComponent(poRow.vendor_name)}&limit=1`);
+                `?vendor_name=ilike.${encodeURIComponent(poRow.vendor_name)}&select=${PO_VENDOR_COLS}&limit=1`);
               vendor = vR.data?.[0] || null;
             }
             let deliveryAddress = null;
