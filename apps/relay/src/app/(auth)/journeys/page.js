@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -7,7 +7,8 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, Trash2, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Switch, InfoDot, Stamp } from '@/components/ui.js';
 import { useConfirm, useChoose } from '@/components/confirm.js';
-import { humanStepId, humanStepType, humanOutcome, humanEnrolmentStatus } from '@/components/journey-canvas/labels.js';
+import { humanStepType, humanOutcome } from '@/components/journey-canvas/labels.js';
+import { stepConfigMap, describeStep, orderSteps, reasonRows, exitRuleEvents, stopLabel, statusChipLabel, dropInto } from '@/components/journey-canvas/funnel.js';
 import { fmtDateTime, inr } from '@/components/format.js';
 // Same picker + hour presets the campaign form uses — the exclusion rules are the same rules.
 import { ExcludePicker, CONTACTED_WINDOWS } from '@/components/exclusions.js';
@@ -116,6 +117,9 @@ export default function JourneysPage() {
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});   // journey_id → journey_stats_list row (campaign-style analytics)
   const [templates, setTemplates] = useState([]);
+  // id → name for EVERY template, archived included: the Funnel names send steps by template,
+  // and a journey that still sends an archived one must not lose its name there.
+  const [templateNames, setTemplateNames] = useState({});
   const [senders, setSenders] = useState([]);
   const [segments, setSegments] = useState([]);
   // Campaigns, for the "already reached by" exclusion picker (S338b). Names only — the journey
@@ -143,6 +147,10 @@ export default function JourneysPage() {
   const [togglingId, setTogglingId] = useState(null);
   const [compileErrors, setCompileErrors] = useState(null);
   const [funnel, setFunnel] = useState(null);
+  // Which version the Funnel reads: 'live' (default), 'all', or a version number. Mixing versions
+  // makes a step added later look like a cliff — Build browse: v3/v4 (5,029 enrolments) had no
+  // 6-hour follow-up, so "all versions" showed 5,493 → 1,192 at the step v5 added.
+  const [funnelVersion, setFunnelVersion] = useState('live');
   // M15 — a failed funnel fetch must not render as "no enrolments yet" (a real empty state).
   const [funnelError, setFunnelError] = useState(false);
   // canvas state — page-owned so save/drawer/canvas share one source of truth
@@ -188,11 +196,18 @@ export default function JourneysPage() {
       : [...next, prev.find((n) => n.id === TRIGGER_ID)].filter(Boolean);
   }), []);
 
-  const loadFunnel = useCallback(async (id) => {
+  // Latest-request-wins: switching version fires a new read while the old one (up to seconds on a
+  // big journey) is in flight — without this, whichever lands LAST is shown under the new label.
+  const funnelSeq = useRef(0);
+  const loadFunnel = useCallback(async (id, version = null) => {
+    const seq = ++funnelSeq.current;
     if (!id) { setFunnel(null); setFunnelError(false); return; }
     setFunnelError(false);
-    try { const f = await garageFetch('getJourneyFunnel', { id }, session); setFunnel(f || null); }
-    catch { setFunnelError(true); }
+    try {
+      const f = await garageFetch('getJourneyFunnel', version != null ? { id, version } : { id }, session);
+      if (seq === funnelSeq.current) setFunnel(f || null);
+    }
+    catch { if (seq === funnelSeq.current) setFunnelError(true); }
   }, [session]);
 
   const load = useCallback(async () => {
@@ -205,8 +220,11 @@ export default function JourneysPage() {
         // "retired, do not wire this up again". Templates already bound to an
         // existing journey keep working — the send path deliberately does not check
         // status, since silently breaking a live flow is worse than letting it send.
-        garageFetch('getTemplates', {}, session).then((r) =>
-          (Array.isArray(r) ? r : []).filter((x) => x.status !== 'archived')),
+        garageFetch('getTemplates', {}, session).then((r) => {
+          const all = Array.isArray(r) ? r : [];
+          setTemplateNames(Object.fromEntries(all.map((x) => [x.id, x.name])));
+          return all.filter((x) => x.status !== 'archived');
+        }),
         garageFetch('getSegments', {}, session),
         // Registry-backed trigger picker. loadEventDefs never rejects — it falls back to
         // FALLBACK_EVENT_DEFS internally — so a suggestion list cannot fail a page load.
@@ -321,7 +339,8 @@ export default function JourneysPage() {
     setCompileErrors(null); setFunnel(null);
     seed(r, null);
     setView('form');
-    loadFunnel(r.id);
+    setFunnelVersion('live');
+    loadFunnel(r.id, r.active_version ?? null);
     try {
       const fresh = await garageFetch('getJourney', { id: r.id }, session);
       if (fresh?.id) {
@@ -367,7 +386,8 @@ export default function JourneysPage() {
           || (fresh.versions || [])[0];
         seed(fresh, activeVer?.definition || null);
       }
-      loadFunnel(j.id);
+      loadFunnel(j.id, funnelVersion === 'all' ? null
+        : funnelVersion === 'live' ? (fresh?.active_version ?? null) : funnelVersion);
       load();
     } catch { /* non-fatal */ }
   }
@@ -516,6 +536,18 @@ export default function JourneysPage() {
 
   if (view === 'form') {
     const editable = canBuild;
+    // Funnel naming + order come from the journey's own saved definitions and exit rules
+    // (funnel.js). Plain values, not hooks — see the hook-order note above.
+    const funnelVer = funnelVersion === 'all' ? null
+      : funnelVersion === 'live' ? (j.active_version ?? null) : funnelVersion;
+    const stepDefs = stepConfigMap(j.versions, funnelVer ?? j.active_version);
+    const pickFunnelVersion = (v) => {
+      setFunnelVersion(v);
+      setFunnel(null);
+      loadFunnel(j.id, v === 'all' ? null : v === 'live' ? (j.active_version ?? null) : v);
+    };
+    const ruleEvents = exitRuleEvents(j.exit_rules);
+    const enteredById = Object.fromEntries((funnel?.steps || []).map((s) => [s.step_id, s.entered]));
     // Built ONCE and rendered in exactly ONE place: docked inside the expanded canvas, or in its
     // normal position below it. Two live copies of the same form would mean duplicate DOM ids and
     // split focus, so the render below suppresses one. ⚠️ It must be built HERE, after `editable`
@@ -917,18 +949,31 @@ export default function JourneysPage() {
         </Panel>
 
         {j.id && (
-          <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad infoWidth={340} info={<>
-          <p>Where enrolments actually went, across <b>all versions</b> of this journey.</p>
+          <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad infoWidth={340}
+            action={(j.versions || []).length > 1 && (
+              <select className="sel" value={String(funnelVersion)} aria-label="Funnel version"
+                onChange={(e) => pickFunnelVersion(e.target.value === 'live' || e.target.value === 'all' ? e.target.value : Number(e.target.value))}>
+                <option value="live">{j.status === 'active' ? 'Live' : 'Current'} version{j.active_version != null ? ` (v${j.active_version})` : ''}</option>
+                {(j.versions || []).filter((v) => v.version !== j.active_version).map((v) => (
+                  <option key={v.version} value={String(v.version)}>v{v.version}</option>
+                ))}
+                <option value="all">All versions</option>
+              </select>
+            )}
+            info={<>
+          <p>Where enrolments actually went — for the <b>live version</b> by default. Pick an
+          older version, or all of them, top right.</p>
           <p>Each row is one step: how many reached it, how many are <b>waiting there right
           now</b>, and how they split across that step&apos;s outcomes.</p>
-          <p>Step names are shown in plain English — hover one to see the engine&apos;s own id if
-          you are editing the graph.</p>
+          <p>Steps run top to bottom in the journey&apos;s own order and are named from their
+          settings — hover one for the engine&apos;s id. Under each step: <b>why</b> a message
+          was not sent, and where people <b>stopped</b> (still waiting, bought, moved on…).</p>
         </>}>
             {funnelError ? (
               <>
                 <EmptyState icon="info" title="Funnel unavailable — retry" hint="Could not load enrolment funnel data." />
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-                  <Btn onClick={() => loadFunnel(j.id)}>Retry</Btn>
+                  <Btn onClick={() => loadFunnel(j.id, funnelVer)}>Retry</Btn>
                 </div>
               </>
             ) : !funnel || funnel.total_enrolments === 0 ? (
@@ -939,9 +984,14 @@ export default function JourneysPage() {
                     strings (`pay_wait`, `wait_response`, `no_reply`) are correct in the graph
                     and unreadable in a report — this panel was a list of truncated function
                     names. The raw id stays available on hover for anyone editing the graph. */}
+                {funnelVersion === 'all' && (j.versions || []).length > 1 && (
+                  <div className="tw-note" style={{ margin: '0 0 12px' }}>All versions together: a step added in a
+                    later version shows only the people who went through that version, so the drop
+                    into it is not people leaving. Pick one version to read the path cleanly.</div>
+                )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
                   {Object.entries(funnel.enrolments || {}).map(([st, n]) => (
-                    <Badge key={st} label={`${humanEnrolmentStatus(st)}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
+                    <Badge key={st} label={`${statusChipLabel(st, ruleEvents)}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
                   ))}
                 </div>
                 {/* ONE step list, not two. This rendered the same numbers twice: a row of
@@ -950,13 +1000,35 @@ export default function JourneysPage() {
                     decreases, so the bar length just restated the number printed beside it.
                     The thing a funnel exists to show, the DROP between consecutive steps,
                     appeared nowhere. Now each step carries its own retention. */}
+                {(() => {
+                  // Enrolments that ended before any step row (no current_step): expired/failed at start.
+                  const pre = Object.entries((funnel.stopped || {})[''] || {}).sort((a, b) => b[1] - a[1]);
+                  return pre.length > 0 && (
+                    <div className="jf-why" style={{ marginTop: 0, marginBottom: 12 }}>
+                      <span className="jf-why-h">Ended before the first step</span>
+                      {pre.map(([st, n]) => (
+                        <div key={st} className="jf-why-row" title={st}>
+                          <span className="jf-why-n mono">{Number(n).toLocaleString('en-IN')}</span>
+                          <span>{stopLabel(st, ruleEvents)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 <div className="jf">
-                  {(funnel.steps || []).map((s, i, arr) => {
-                    const parked = Number((funnel.parked || {})[s.step_id] || 0);
+                  {orderSteps(funnel.steps, stepDefs.entry, stepDefs.activeSteps).map((s, i, arr) => {
+                    const why = reasonRows((funnel.reasons || {})[s.step_id]);
+                    // Where people are now / ended, biggest first. `completed` on an Exit step is
+                    // just "finished" — already the step's own count, so not repeated.
+                    const stops = Object.entries((funnel.stopped || {})[s.step_id] || {})
+                      .filter(([st]) => !(s.step_type === 'exit' && st === 'completed'))
+                      .sort((a, b) => b[1] - a[1]);
                     const branches = Object.entries(s.results || {}).filter(([k]) => k !== 'entered');
                     const entered = Number(s.entered || 0);
                     const prev = i === 0 ? null : Number(arr[i - 1].entered || 0);
-                    const lost = prev == null ? 0 : Math.max(prev - entered, 0);
+                    // Only a drop that is TRUE (funnel.js dropInto); never with versions mixed.
+                    const drop = i === 0 || funnelVersion === 'all' ? null
+                      : dropInto(s.step_id, stepDefs.activeSteps, enteredById);
                     // Two complementary readings, deliberately not the same one twice:
                     //  · the meter is CUMULATIVE from entry, so the column of bars is the
                     //    funnel's actual shape at a glance;
@@ -965,7 +1037,6 @@ export default function JourneysPage() {
                     // Making both step-over-step (the first attempt) put every bar at 80-100%
                     // and the shape disappeared.
                     const first = Number(arr[0]?.entered || 0);
-                    const kept = prev ? entered / prev : 1;
                     const cume = first ? entered / first : 1;
                     const t = STEP_TONE[s.step_type] || 'gray';
                     return (
@@ -976,7 +1047,7 @@ export default function JourneysPage() {
                         </div>
                         <div className="jf-body">
                           <div className="jf-head">
-                            <strong className="jf-name" title={`step id: ${s.step_id}`}>{humanStepId(s.step_id)}</strong>
+                            <strong className="jf-name" title={`step id: ${s.step_id}`}>{describeStep(s.step_id, stepDefs.steps[s.step_id], templateNames)}</strong>
                             <Badge label={humanStepType(s.step_type)} tone={t} />
                             <span className="jf-count">{entered.toLocaleString('en-IN')}</span>
                           </div>
@@ -988,15 +1059,43 @@ export default function JourneysPage() {
                           <div className="jf-sub">
                             {prev == null
                               ? <span className="jf-entered">entered the journey</span>
-                              : lost > 0
-                                ? <span className="jf-drop">−{lost.toLocaleString('en-IN')} ({Math.round((1 - kept) * 100)}%) did not reach this step</span>
-                                : <span className="jf-hold">everyone from the previous step reached this one</span>}
-                            {parked > 0 && <Badge label={`${parked} waiting here now`} tone="yellow" dot />}
+                              // Several paths end on one Exit, so "reached from the step above"
+                              // means nothing there — say what it is instead.
+                              : s.step_type === 'exit'
+                                ? <span className="jf-entered">every path ends here</span>
+                                : drop && drop.lost > 0
+                                  ? <span className="jf-drop">−{drop.lost.toLocaleString('en-IN')} ({drop.pct}%) did not get past &ldquo;{describeStep(drop.parent, stepDefs.steps[drop.parent], templateNames)}&rdquo; — see why there</span>
+                                  : drop
+                                    ? <span className="jf-hold">everyone from &ldquo;{describeStep(drop.parent, stepDefs.steps[drop.parent], templateNames)}&rdquo; reached this one</span>
+                                    : null}
                           </div>
                           {branches.length > 0 && (
                             <div className="jf-branches">
                               {branches.map(([k, v]) => (
                                 <Badge key={k} label={`${humanOutcome(k)}: ${v}`} tone={branchTone(k)} />
+                              ))}
+                            </div>
+                          )}
+                          {why.length > 0 && (
+                            <div className="jf-why">
+                              <span className="jf-why-h">{s.step_type === 'action' ? 'Why not done' : 'Why not sent'}</span>
+                              {why.map((w) => (
+                                <div key={`${w.status}:${w.reason}`} className="jf-why-row" title={`${w.status} · ${w.reason}`}>
+                                  <span className="jf-why-n mono">{w.n.toLocaleString('en-IN')}</span>
+                                  <span>{w.label}</span>
+                                  <span className="jf-why-k">{humanOutcome(w.status).toLowerCase()}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {stops.length > 0 && (
+                            <div className="jf-why">
+                              <span className="jf-why-h">Stopped here</span>
+                              {stops.map(([st, n]) => (
+                                <div key={st} className="jf-why-row" title={st}>
+                                  <span className="jf-why-n mono">{Number(n).toLocaleString('en-IN')}</span>
+                                  <span>{stopLabel(st, ruleEvents)}</span>
+                                </div>
                               ))}
                             </div>
                           )}

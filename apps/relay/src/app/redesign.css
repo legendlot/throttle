@@ -494,6 +494,12 @@ textarea.f-inp{resize:vertical;line-height:1.5}
 .jf-drop{color:var(--orange)}
 .jf-hold,.jf-entered{color:var(--t4)}
 .jf-branches{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+/* Why-not-sent + stopped-here breakdowns (0079): a small ranked list under the chips. */
+.jf-why{display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;row-gap:3px;margin-top:9px;font-size:11.5px;max-width:560px}
+.jf-why-h{grid-column:1/-1;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--t4)}
+.jf-why-row{display:contents;color:var(--t2)}
+.jf-why-n{text-align:right;color:var(--t1)}
+.jf-why-k{color:var(--t4)}
 
 /* Watermark impact preview (admin/settings). Was a 3px borderLeft accent — a banned
    side-stripe, and it keyed off --warn/--ok which this app's :root never defines, so it

@@ -67,6 +67,10 @@ const WORD = {
   notdone: 'not completed', noreply: 'no reply', resp: 'response', req: 'request',
 };
 
+// Own-key lookup: ids, outcomes and exit outcomes are free text typed in the canvas, and a
+// plain `MAP[key]` hands back Object.prototype members for 'constructor' / 'toString'.
+const pick = (map, k) => (Object.prototype.hasOwnProperty.call(map, k) ? map[k] : undefined);
+
 function sentenceCase(s) {
   const t = String(s || '').trim();
   if (!t) return '';
@@ -78,14 +82,14 @@ function sentenceCase(s) {
 export function humanStepId(id) {
   const raw = String(id || '').trim();
   if (!raw) return '—';
-  const words = raw.split(/[_\-.]+/).filter(Boolean).map((w) => WORD[w.toLowerCase()] || w);
+  const words = raw.split(/[_\-.]+/).filter(Boolean).map((w) => pick(WORD, w.toLowerCase()) || w);
   return sentenceCase(words.join(' '));
 }
 
 export function humanStepType(type) {
   const raw = String(type || '').trim();
   if (!raw) return '';
-  return STEP_TYPE_LABEL[raw] || sentenceCase(raw.replace(/[_\-]+/g, ' '));
+  return pick(STEP_TYPE_LABEL, raw) || sentenceCase(raw.replace(/[_\-]+/g, ' '));
 }
 
 export function humanOutcome(key) {
@@ -93,7 +97,7 @@ export function humanOutcome(key) {
   if (!raw) return '';
   // `exit:<name>` is a compound the engine builds — keep the destination visible.
   if (raw.startsWith('exit:')) return `Exit → ${humanStepId(raw.slice(5))}`;
-  const hit = OUTCOME_LABEL[raw.toLowerCase()];
+  const hit = pick(OUTCOME_LABEL, raw.toLowerCase());
   if (hit) return hit;
   return sentenceCase(raw.replace(/^branch_/, '').replace(/[_\-]+/g, ' '));
 }
@@ -103,8 +107,10 @@ const ENROLMENT_LABEL = {
   active: 'In flight', completed: 'Completed', exited: 'Exited',
   failed: 'Failed', unpaid: 'Unpaid', no_response: 'No response',
   send_failed: 'Send failed',
+  // Exit-rule outcomes (the funnel chip adds this journey's events — funnel.js statusChipLabel).
+  progressed: 'Moved on', purchased: 'Purchased', expired: 'Expired',
 };
 export function humanEnrolmentStatus(key) {
   const raw = String(key || '').trim();
-  return ENROLMENT_LABEL[raw.toLowerCase()] || sentenceCase(raw.replace(/[_\-]+/g, ' '));
+  return pick(ENROLMENT_LABEL, raw.toLowerCase()) || sentenceCase(raw.replace(/[_\-]+/g, ' '));
 }
