@@ -156,7 +156,7 @@ export default function POListPage() {
       );
       if (!ok) return;
     }
-    const canChina = !!perms?.po_china;
+    const canChina = !!(perms?.po_china || perms?.po_china_view);
     // `Raised` added with the date filter (S374) so a month's download carries the date it was
     // filtered on — the same column the table now shows. ⚠️ It is APPENDED as the LAST column,
     // not placed where the table shows it: finance reads this file by position, so every column
@@ -241,7 +241,7 @@ export default function POListPage() {
     }
     // Built from `filteredRows` so the on-screen text search is honoured, exactly like the
     // header export.
-    const csv = buildPoLinesCsv({ filteredRows, linesByPo, vendorByPo, canChina: !!perms?.po_china });
+    const csv = buildPoLinesCsv({ filteredRows, linesByPo, vendorByPo, canChina: !!(perms?.po_china || perms?.po_china_view) });
     const rowCount = csv.split('\n').length - 1;
     if (!rowCount) { showToast('No PO lines to export for these filters', 'error'); return; }
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -357,7 +357,7 @@ export default function POListPage() {
                     <td><Badge label={p.source || '—'} tone={sourceTone(p.source)} soft={false} /></td>
                     <td>{p.vendor_name || '—'}</td>
                     <td className="num mono">{p.line_count ?? p.lines ?? 0}</td>
-                    <td className="num mono">{p.source === 'China' && !perms?.po_china ? <span className="dim">Restricted</span> : money(p.currency, p.po_value)}</td>
+                    <td className="num mono">{p.source === 'China' && !(perms?.po_china || perms?.po_china_view) ? <span className="dim">Restricted</span> : money(p.currency, p.po_value)}</td>
                     <td className="mono">{fmtDateShort(poDate(p))}</td>
                     <td className="mono">{fmtDateShort(p.expected_delivery)}</td>
                     <td>{p.raised_by_name || p.raised_by || '—'}</td>

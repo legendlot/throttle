@@ -18,6 +18,7 @@ const PERM_DEFS = [
     { key: 'payment_route',     label: 'Route payment + mark paid' },
     { key: 'payment_view_all',  label: 'View any payment request + its invoices (read-only)' },
     { key: 'po_china',          label: 'China POs + new-product registration' },
+    { key: 'po_china_view',     label: 'See China PO prices (view only)' },
   ] },
   { group: 'Masters', items: [
     { key: 'vendor_manage',          label: 'Manage vendors / forwarders / supplied items' },

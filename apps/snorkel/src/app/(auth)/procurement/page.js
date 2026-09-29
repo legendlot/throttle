@@ -169,7 +169,7 @@ export default function ProcurementOverviewPage() {
                         <td className="mono accent">{p.po_number}</td>
                         <td>{p.vendor_name || '—'}</td>
                         <td><Badge label={p.source || '—'} tone={sourceTone(p.source)} soft={false} /></td>
-                        <td className="num mono">{p.source === 'China' && !perms?.po_china ? <span className="dim">Restricted</span> : money(p.currency, p.po_value)}</td>
+                        <td className="num mono">{p.source === 'China' && !(perms?.po_china || perms?.po_china_view) ? <span className="dim">Restricted</span> : money(p.currency, p.po_value)}</td>
                         <td className="mono">{fmtDateShort(p.expected_delivery)}</td>
                         <td><Badge label={p.status || '—'} tone={PO_TONES[p.status] || 'gray'} /></td>
                       </tr>

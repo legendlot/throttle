@@ -90,9 +90,10 @@ function PrintPOContent() {
   if (!data)     return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
 
   const { po, vendor, company, deliveryAddress, lines, prepared_by_name } = data;
-  // China financial-strip — worker sets _china_restricted=true when caller lacks
-  // procurement_china on a China-sourced PO. Print renders as a "Receiving Copy"
-  // with all unit_price / line_total / tax / payment_terms fields omitted.
+  // Price strip — the worker sets _china_restricted=true for ANY PO this viewer may not
+  // price (01_worker lib/poprice.js: India → store/admin/Finance, China → the China group +
+  // Finance), not only China ones. Print renders as a "Receiving Copy" with all unit_price /
+  // line_total / tax / payment_terms fields omitted.
   const chinaRestricted = !!data._china_restricted;
   const tax = chinaRestricted
     ? { showGst: false, isCgstSgst: false, halfRate: 0, fullRate: 0, taxable: 0, cgst: 0, sgst: 0, igst: 0, grand: 0 }

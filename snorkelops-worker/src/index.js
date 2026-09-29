@@ -38,7 +38,7 @@ const canRaisePO         = p => !!p.po_create;            // create / amend / ca
 const canManageVendors   = p => !!p.vendor_manage;        // vendors / forwarders / supplied-items
 const canManageAddresses = p => !!p.company_address_manage;
 const canRaiseChinaPO    = p => !!p.po_china;             // China POs + product registration
-const canViewChina       = p => !!p.po_china;             // China financial visibility (strip when false)
+const canViewChina       = p => !!p.po_china || !!p.po_china_view; // China financial visibility (strip when false). po_china_view = SEE only (Finance, Afshaan 2026-09-29: "Finance always sees everything") — raising / registering stays po_china
 const canAcceptPO        = p => !!p.po_request_accept;    // Draft → Accepted (flips linked request → approved)
 const canFinalApprove    = p => !!p.po_approve;           // Accepted → Approved (final sign-off)
 const canRoutePayment    = p => !!p.payment_route;        // route payment + mark paid

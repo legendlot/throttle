@@ -241,7 +241,7 @@ export default function PODetailPage() {
       payload.quality_hold = !!amendData.quality_hold;
       // Line prices ride the same payload — one reason, one revision bump, one history entry.
       // Only rows whose price actually changed are sent; the worker drops no-ops anyway.
-      if (isFinanceVisible) {
+      if (canEditPrices) {
         const priceEdits = lines
           .map((l) => {
             const raw = amendData.linePrices?.[String(l.id)];
@@ -382,7 +382,10 @@ export default function PODetailPage() {
   // Snorkel approval chain: Draft → Accepted → Approved → payment routing.
   // Financial fields on China POs gated by po_china (Snorkel perm).
   const isChina = po.source === 'China';
-  const isFinanceVisible = !isChina || !!perms?.po_china;
+  const isFinanceVisible = !isChina || !!(perms?.po_china || perms?.po_china_view);
+  // Editing China prices needs po_china (worker amendPO); po_china_view (Finance) is SEE-only, so
+  // the amend modal's price inputs key on this, not on isFinanceVisible.
+  const canEditPrices = !isChina || !!perms?.po_china;
   const isSoft = status === 'Soft';
   const canAccept       = status === 'Draft'    && !!perms?.po_request_accept;
   const canFinalApprove = status === 'Accepted' && !!perms?.po_approve;
@@ -591,7 +594,7 @@ export default function PODetailPage() {
           po={po}
           session={session}
           lines={lines}
-          financeVisible={isFinanceVisible}
+          financeVisible={canEditPrices}
           data={amendData}
           setData={setAmendData}
           onClose={() => !amendSubmitting && setAmendOpen(false)}

@@ -227,7 +227,7 @@ export default function POListPage() {
                     <td style={tableTdStyle}>{r.vendor_name || '—'}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.line_count ?? r.lines ?? 0}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                      {r.source === 'China' && !perms?.procurement_china
+                      {r._price_restricted  /* worker decides who may price a PO (lib/poprice.js) */
                         ? <span style={{ color: 'var(--t3)', fontStyle: 'italic' }}>Restricted</span>
                         : <>{r.currency || ''} {(r.po_value ?? 0).toLocaleString('en-IN')}</>
                       }
