@@ -1010,6 +1010,7 @@ export default function JourneysPage() {
                         <div key={st} className="jf-why-row" title={st}>
                           <span className="jf-why-n mono">{Number(n).toLocaleString('en-IN')}</span>
                           <span>{stopLabel(st, ruleEvents)}</span>
+                          <span />
                         </div>
                       ))}
                     </div>
@@ -1095,6 +1096,8 @@ export default function JourneysPage() {
                                 <div key={st} className="jf-why-row" title={st}>
                                   <span className="jf-why-n mono">{Number(n).toLocaleString('en-IN')}</span>
                                   <span>{stopLabel(st, ruleEvents)}</span>
+                                  {/* 3-column grid (count · label · status); no status here */}
+                                  <span />
                                 </div>
                               ))}
                             </div>
