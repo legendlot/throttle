@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.22.0] - 2026-09-30
+### Added
+- Payments: **All Requests** chapter (`/payments/all`) — view-only list of every payment request in every status for Finance and anyone with an approve / pay / super-admin payment grant.
+
 ## [1.21.0] - 2026-09-16
 ### Added
 - Library: **Purchase Units** chapter — set bulk-unit conversions (Roll/Packet/Box) so per-piece cost derives from PO history; kg needs no entry; Re-derive all costs.
