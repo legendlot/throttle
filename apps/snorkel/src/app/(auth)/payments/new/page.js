@@ -223,7 +223,7 @@ export default function NewPaymentRequestPage() {
           {poRequired && (
             <div style={row}>
               <label style={L}>PO number *</label>
-              <input style={I} value={f.linked_po_number} placeholder="e.g. IN-CMP-0379"
+              <input style={I} value={f.linked_po_number} placeholder="e.g. IN-CMP-0379 or LOT/PO/202609/379"
                      onChange={e => set('linked_po_number', e.target.value)} />
               {/* "How do i get one?" was the actual blocker in #payments — say where, don't just refuse. */}
               <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 6 }}>

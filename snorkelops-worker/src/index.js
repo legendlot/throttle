@@ -1214,6 +1214,22 @@ async function salesOrderFulfilmentValues(orders, ful) {
   return out;
 }
 
+// `col=in.(…)` read, CHUNKED. One GET carrying every id outgrows the request-line limit: the
+// unfiltered Sales Orders list (682 orders, ~25 KB of uuids) failed its fulfilment read outright
+// and every row fell back to "not submitted", while a channel filter (487) still fit — Ram, #bugs
+// 1790768468. Chunks run in parallel; `ok` is false if ANY chunk failed, so a partial read is never
+// passed off as complete.
+const IN_CHUNK = 150;
+async function queryPublicIn(table, col, ids, rest) {
+  const uniq = [...new Set((ids || []).filter(Boolean))];
+  if (!uniq.length) return { ok: true, data: [] };
+  const parts = [];
+  for (let i = 0; i < uniq.length; i += IN_CHUNK) parts.push(uniq.slice(i, i + IN_CHUNK));
+  const rs = await Promise.all(parts.map(p =>
+    queryPublic(table, `?${col}=in.(${p.map(encodeURIComponent).join(',')})&${rest}`)));
+  return { ok: rs.every(r => r.ok), data: rs.flatMap(r => (r.ok && Array.isArray(r.data) ? r.data : [])) };
+}
+
 // Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
 // New orders link via a fulfilment request; legacy (pre-cutover) orders link via the single
 // sales_orders.dispatch_shipment_id — both paths resolved here so historical orders keep their dates/status.
@@ -1227,8 +1243,7 @@ async function loadFulfilment(orders) {
   const list = (orders || []).filter(Boolean).map(o => (typeof o === 'string' ? { id: o } : o));
   if (!list.length) return {};
   const ids = [...new Set(list.map(o => o.id).filter(Boolean))];
-  const reqR = await queryPublic('dispatch_fulfilment_requests',
-    `?sales_order_id=in.(${ids.map(encodeURIComponent).join(',')})&select=*`);
+  const reqR = await queryPublicIn('dispatch_fulfilment_requests', 'sales_order_id', ids, 'select=*');
   // `_ok` (non-enumerable) tells a caller that EVERY read succeeded. A failed read here used to
   // look identical to "nothing dispatched" — the bulk line export would then print Shipped 0 /
   // Pending all and call it known (hostile review S391d, finding 3).
@@ -1238,8 +1253,8 @@ async function loadFulfilment(orders) {
   const reqIds = requests.map(r => r.id);
   let shipments = [];
   if (reqIds.length) {
-    const shR = await queryPublic('dispatch_shipments',
-      `?fulfilment_request_id=in.(${reqIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,tracking_status,tracking_stage_label,tracking_checkpoints,tracking_synced_at,fulfilment_request_id`);
+    const shR = await queryPublicIn('dispatch_shipments', 'fulfilment_request_id', reqIds,
+      'select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,tracking_status,tracking_stage_label,tracking_checkpoints,tracking_synced_at,fulfilment_request_id');
     allOk = allOk && !!shR.ok;
     shipments = shR.ok ? shR.data : [];
     const shIds = shipments.map(s => s.id);
@@ -1252,8 +1267,7 @@ async function loadFulfilment(orders) {
       // in total) carried a real packed shortfall and were mislabelled fully fulfilled; 0 flipped
       // to not_fulfilled. `withLineFulfilment` below already summed packed_qty; the
       // header and the lines now agree.
-      const lnR = await queryPublic('dispatch_shipment_lines',
-        `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,packed_qty`);
+      const lnR = await queryPublicIn('dispatch_shipment_lines', 'shipment_id', shIds, 'select=shipment_id,packed_qty');
       allOk = allOk && !!lnR.ok;
       const byShip = {};
       (lnR.ok ? lnR.data : []).forEach(l => { byShip[l.shipment_id] = (byShip[l.shipment_id] || 0) + (Math.round(Number(l.packed_qty)) || 0); });
@@ -1264,8 +1278,7 @@ async function loadFulfilment(orders) {
   const legacyIds = [...new Set(list.filter(o => !reqByOrder[o.id] && o.dispatch_shipment_id).map(o => o.dispatch_shipment_id))];
   const legacyMap = {};
   if (legacyIds.length) {
-    const lsR = await queryPublic('dispatch_shipments',
-      `?id=in.(${legacyIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,shipped_at,delivery_date`);
+    const lsR = await queryPublicIn('dispatch_shipments', 'id', legacyIds, 'select=id,shipment_no,status,shipped_at,delivery_date');
     allOk = allOk && !!lsR.ok;
     (lsR.ok ? lsR.data : []).forEach(s => { legacyMap[s.id] = s; });
   }
@@ -1868,6 +1881,25 @@ function poCurrencySymbol(c) {
 function poMoney(n, curr) {
   const v = Number(n) || 0;
   return `${poCurrencySymbol(curr)}${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+// The PRINTED PO number (`LOT/PO/<yyyymm>/<seq>`, poFormatNumber) → the Snorkel po_number it was
+// printed from. Vendors and invoices quote the printed form, so a payment request typed from the
+// paper used to be refused "PO not found" (Joseph, #bugs 1790765093: LOT/PO/202609/533 =
+// IN-PKG-0533). The sequence is unique across every prefix (611/611, measured 2026-09-30), and the
+// month must match raised_date, so a resolve is exact; anything else passes through untouched.
+// Returns { po_number } (resolved or as typed) or { error }.
+const PRINTED_PO_RE = /^LOT\s*\/\s*PO\s*\/\s*(?:(\d{6})\s*\/\s*)?(\d{1,6})$/i;
+async function resolvePrintedPoNumber(raw) {
+  const typed = String(raw ?? '').trim();
+  const m = typed.match(PRINTED_PO_RE);
+  if (!m) return { po_number: typed };
+  const ym = m[1] || null, seq = parseInt(m[2], 10);
+  const r = await query('purchase_orders', `?po_number=match.${encodeURIComponent(`-0*${seq}$`)}&select=po_number,raised_date&limit=20`);
+  if (!r.ok) return { error: `Could not look up PO ${typed} — try again`, status: 502 };
+  const hits = (r.data || []).filter(p => !ym || String(p.raised_date || '').replace(/-/g, '').slice(0, 6) === ym);
+  if (hits.length === 1) return { po_number: hits[0].po_number };
+  if (!hits.length) return { error: `PO ${typed} not found` };
+  return { error: `PO ${typed} matches more than one PO (${hits.map(h => h.po_number).join(', ')}) — enter the Snorkel PO number` };
 }
 function poFormatNumber(po_number, raised_date) {
   if (!po_number) return '';
@@ -3624,6 +3656,9 @@ export default {
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
             const ful = await loadFulfilment(orders);
+            // A failed fulfilment read must not render as 682 rows of "not submitted" (Ram, #bugs
+            // 1790768468) — refuse, so the page says it could not load instead of lying.
+            if (ful?._ok === false) return err('Could not load fulfilment status — please refresh', 502);
             const vals = await salesOrderFulfilmentValues(orders, ful);
             // Read-only: reject→cancel lives in reconcileRejections(), run from createSalesOrder.
             const rows = orders.map(o => {
@@ -3736,6 +3771,8 @@ export default {
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
             const ful = await loadFulfilment(orders);
+            // Due dates and overdue come from the fulfilment anchor — a failed read must not zero them (S404).
+            if (ful?._ok === false) return err('Could not load fulfilment status — please refresh', 502);
             const rows = orders
               .map(o => {
                 const f = ful[o.id];
@@ -3761,6 +3798,8 @@ export default {
               '?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name,partner_code,channel_key,partner_type)&order=id.asc');
             if (!orders) return err('Could not read every sales order — balances withheld rather than understated', 502);
             const ful = await loadFulfilment(orders);
+            // Due dates and overdue come from the fulfilment anchor — a failed read must not zero them (S404).
+            if (ful?._ok === false) return err('Could not load fulfilment status — please refresh', 502);
             const rows = orders.map(o => {
               const f = ful[o.id];
               const { anchor } = resolveFulfilment(f);
@@ -5187,6 +5226,15 @@ export default {
               `?category_key=eq.${encodeURIComponent(d.category_key)}&limit=1&select=*`);
             if (!cat.ok || !cat.data[0]) return err('Unknown category');
             let po_warning = null, po_overdrawn = null;
+            // Accept the printed PO number too (LOT/PO/202609/533 → IN-PKG-0533) — before the PO
+            // gate, so the gate, the overdraw check and the stored row all see the Snorkel number.
+            // Refuse only where a PO is REQUIRED: elsewhere the field may be hidden on the form
+            // (category switched), so a miss keeps the value as typed, as it always did.
+            if (d.linked_po_number) {
+              const rp = await resolvePrintedPoNumber(d.linked_po_number);
+              if (rp.error && cat.data[0].po_required && type === 'payment') return err(rp.error, rp.status || 400);
+              if (!rp.error) d.linked_po_number = rp.po_number;
+            }
             if (cat.data[0].po_required && type === 'payment') {
               if (!d.linked_po_number) {
                 return err(`A PO is required for ${cat.data[0].label}. Raise one under Procurement → POs, or pick a different category.`);
@@ -6196,17 +6244,23 @@ export default {
             if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
             const o = cur.data[0];
             if (!['draft', 'confirmed'].includes(o.status)) return err('Only draft/confirmed orders can be cancelled', 422);
+            // Read the fulfilment state BEFORE any write, and refuse if it failed: a failed read
+            // used to look like "no request", skipping the already-dispatched guard and cancelling
+            // anyway (S404 hostile review).
+            const ful = await loadFulfilment([{ id: d.id, dispatch_shipment_id: o.dispatch_shipment_id }]);
+            if (ful?._ok === false) return err('Could not check dispatch status — please try again', 502);
+            const fr = ful[d.id];
             // Legacy single-shipment orders (pre-fulfilment-flow).
             if (o.dispatch_shipment_id) {
               const shR = await queryPublic('dispatch_shipments', `?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}&select=status&limit=1`);
-              const shStatus = shR.ok ? shR.data?.[0]?.status : null;
+              if (!shR.ok) return err('Could not check dispatch status — please try again', 502);
+              const shStatus = shR.data?.[0]?.status ?? null;
               if (shStatus === 'shipped') return err('Goods already dispatched — handle as a return, not a cancel', 422);
               if (['draft', 'packing'].includes(shStatus))
                 await sbPublic(`/rest/v1/dispatch_shipments?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}`,
                   { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
             }
             // New fulfilment-flow orders: cancel the request + its non-shipped child shipments.
-            const fr = (await loadFulfilment([{ id: d.id, dispatch_shipment_id: o.dispatch_shipment_id }]))[d.id];
             if (fr?.request) {
               if ((fr.shipments || []).some(s => s.status === 'shipped'))
                 return err('Goods already dispatched — handle as a return, not a cancel', 422);
