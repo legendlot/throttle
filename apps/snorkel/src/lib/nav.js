@@ -31,6 +31,8 @@ export const NAV_GROUPS = [
     items: [
       { id: 'payments-new',       label: 'New Payment Request', route: '/payments/new',       icon: FileText, accent: 'orange', requires: 'payment_request' },
       { id: 'payments',           label: 'My Requests',         route: '/payments',           icon: Wallet,   requires: 'payment_request' },
+      // Read-only list of every request — same four keys as the worker's canReadAnyPaymentRequest.
+      { id: 'payments-all',       label: 'All Requests',        route: '/payments/all',       icon: ClipboardList, requiresAny: ['payment_view_all', 'payment_approve', 'payment_execute', 'payment_super_admin'] },
       { id: 'payments-approvals', label: 'Approvals',           route: '/payments/approvals', icon: Shield,   requires: 'payment_approve' },
       // requiresAny, not requires: the worker lets payment_super_admin read this too, and a page
       // reachable by URL but missing from the menu is the invisible-surface trap.

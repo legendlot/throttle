@@ -62,8 +62,9 @@ const canPayExecute    = p => !!p.payment_execute;
 const canPaySuperAdmin = p => !!p.payment_super_admin;
 // READ-ONLY sight of any payment request + its documents (Suman, #bugs 1790068793 — Finance
 // opening the export's 'Open in Snorkel' links on requests they did not raise). A ROLE key
-// (finance_manager + admin), deliberately NOT a payment_grants grant: it carries no authority
-// over money, so it does not widen the queues, the paid export, or any approve/pay/edit action.
+// (finance_manager only — admin was left off, S395d), deliberately NOT a payment_grants grant: it
+// carries no authority over money, so it does not widen the Approvals/Finance queues, the paid
+// export, or any approve/pay/edit action. Its one list use is the read-only scope=all (S404).
 const canPayViewAll    = p => !!p.payment_view_all;
 const canReadAnyPaymentRequest = p => canPayApprove(p) || canPayExecute(p) || canPaySuperAdmin(p) || canPayViewAll(p);
 // Who may change a product family's tax code from an order line. HSN is a statutory
@@ -2298,12 +2299,17 @@ export default {
             const status = url.searchParams.get('status') || '';
             // An unrecognised scope used to fall through with NEITHER the status pin NOR the owner
             // filter, handing a privileged caller every request in every status (S350 hostile review).
-            if (!['mine', 'approvals', 'finance'].includes(scope))
-              return err(`Unknown scope=${scope} — use mine | approvals | finance`, 400);
+            if (!['mine', 'approvals', 'finance', 'all'].includes(scope))
+              return err(`Unknown scope=${scope} — use mine | approvals | finance | all`, 400);
+            // `all` = every request, every status, READ-ONLY (Finance's "All Requests" list, Prarthi
+            // #bugs 1790749240). Same audience as opening one by id (canReadAnyPaymentRequest), so it
+            // widens discovery, not reach. Refused outright rather than degraded to `mine` — a list
+            // that silently shows only your own would read as "nobody else has raised anything".
+            if (scope === 'all' && !canReadAnyPaymentRequest(P)) return err('No permission', 403);
             let q = `?select=*,payee:payment_payees(id,payee_code,name,payee_type)&order=requested_at.desc&limit=${PAY_PAGE_LIMIT}`;
             // A plain requester sees only their own. Approver/executor/super-admin see the queues.
             const privileged = canPayApprove(P) || canPayExecute(P) || canPaySuperAdmin(P);
-            if (scope === 'mine' || !privileged) q += `&requested_by_user_id=eq.${userId}`;
+            if (scope === 'mine' || (scope !== 'all' && !privileged)) q += `&requested_by_user_id=eq.${userId}`;
             // ⚠️ `scope` PINS a status. An explicit `status=` used to be ANDed on top of that pin,
             // emitting TWO contradictory `status=eq.` filters — PostgREST ANDs them into an
             // always-false predicate and returns an empty list with HTTP 200 and no error. A silent

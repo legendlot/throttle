@@ -39,6 +39,9 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   // Non-null only when the worker says the read was cut short: { total, fetched, limit }.
   const [truncation, setTruncation] = useState(null);
   const [loading, setLoading] = useState(true);
+  // A failed read must not render as an empty list — on scope=all a 403 would otherwise read as
+  // "nobody has raised anything" (S404 hostile review).
+  const [loadError, setLoadError] = useState('');
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [ref, setRef] = useState('');
@@ -52,9 +55,11 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
       const s = await getValidSession();
       const data = await garageFetch('getPaymentRequests', { scope }, s);
       setRows(data?.requests || []);
+      setLoadError('');
       setTruncation(data?.truncated ? data : null);
       setSel(new Set());
     } catch (e) {
+      setLoadError(e.message || 'Failed to load');
       showToast(e.message || 'Failed to load', 'error');
     } finally { firstLoadDone.current = true; setLoading(false); }
   }, [userId, scope, showToast]);
@@ -62,7 +67,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
 
   // Status tabs (My Requests only — Approvals and Finance are status-pinned by the worker).
   // Client-side over the loaded rows, so the truncation banner must not claim they narrow the read.
-  const tabs = scope === 'mine' ? STATUS_TABS : null;
+  const tabs = scope === 'mine' || scope === 'all' ? STATUS_TABS : null;
   const visible = tabs ? filterByTab(rows, tab) : rows;
   // A cancelled or rejected request is not money anyone still owes — it must never sit in the
   // headline Value (Siddhanth, #bugs 1788853477: a cancelled ₹2,61,000 kept inflating the total).
@@ -174,7 +179,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
           <Kpi label="Requests" value={visible.length} />
           <Kpi label={(tab === 'all' ? 'Value (active)' : 'Value') + (foreign ? ' · INR only' : '')} value={total} format={v => money(v)} />
           {foreign > 0 && <Kpi label="Other currencies" value={foreign} />}
-          {scope === 'mine' && tab === 'all' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
+          {tabs && tab === 'all' && <Kpi label="Paid" value={rows.filter(r => r.status === 'paid').length} />}
         </div>
       )}
 
@@ -197,7 +202,9 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
 
       <Panel title={title} count={visible.length}>
         {visible.length === 0
-          ? <EmptyState icon="check-check" title="Nothing here" hint={rows.length ? 'No requests in this status.' : emptyHint} />
+          ? (loadError && !rows.length
+              ? <EmptyState icon="shield" title="Couldn't load requests" hint={/permission/i.test(loadError) ? "You don't have access to this list." : loadError} />
+              : <EmptyState icon="check-check" title="Nothing here" hint={rows.length ? 'No requests in this status.' : emptyHint} />)
           : (
             <div style={{ overflowX: 'auto' }}>
               <table className="dt">

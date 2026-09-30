@@ -27,11 +27,19 @@ test('payment_view_all opens any request and its documents', () => {
 });
 
 test('payment_view_all does not widen the queues, the paid export, or money actions', () => {
-  assert.doesNotMatch(caseBody('getPaymentRequests'), /canPayViewAll|canReadAnyPaymentRequest/);
+  const list = caseBody('getPaymentRequests');
+  // S404 (Prarthi #bugs 1790749240): the ONE list use is the read-only scope=all, refused (not
+  // degraded to 'mine') without the key. Approvals / Finance queues still key off `privileged`,
+  // which is grant-only.
+  assert.doesNotMatch(list, /canPayViewAll/);
+  assert.equal((list.match(/canReadAnyPaymentRequest\(P\)/g) || []).length, 1, 'only the scope=all gate');
+  assert.match(list, /if \(scope === 'all' && !canReadAnyPaymentRequest\(P\)\) return err\('No permission', 403\);/);
+  assert.match(list, /const privileged = canPayApprove\(P\) \|\| canPayExecute\(P\) \|\| canPaySuperAdmin\(P\);/);
+  assert.match(list, /if \(scope === 'mine' \|\| \(scope !== 'all' && !privileged\)\) q \+= `&requested_by_user_id=eq\.\$\{userId\}`;/);
   assert.doesNotMatch(caseBody('getPaidPaymentsExport'), /canPayViewAll|canReadAnyPaymentRequest/);
   const uses = src.match(/canPayViewAll\(/g) || [];
   assert.equal(uses.length, 1, 'canPayViewAll is used only inside canReadAnyPaymentRequest');
-  assert.equal((src.match(/canReadAnyPaymentRequest\(P\)/g) || []).length, 2, 'only the two read paths');
+  assert.equal((src.match(/canReadAnyPaymentRequest\(P\)/g) || []).length, 3, 'the two single-request reads + the scope=all list');
 });
 
 test('the role editor offers the key', () => {
