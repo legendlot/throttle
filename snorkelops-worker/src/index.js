@@ -405,6 +405,14 @@ async function nextCreditNoteNo(dateISO) {
   if (!r.ok || r.data == null) throw new Error('Credit-note seq error: ' + JSON.stringify(r.data));
   return `LOT/CN/${fy}/${String(r.data).padStart(4, '0')}`;
 }
+// The ONE payment-status rule for a sales order. Settled = receipts cover the net due (grand −
+// issued credit). An order wiped out by credit notes is settled with no receipt at all — the old
+// rule demanded recv > 0 and left 24 fully-credited orders 'unpaid' (Prarthi, SO-0024). A zero
+// order with no credit stays 'unpaid' (nothing settled it).
+function salesPaymentStatus(recv, net, credit) {
+  if (recv >= net - 0.005 && (recv > 0 || credit > 0.005)) return 'paid';
+  return recv > 0 ? 'partial' : 'unpaid';
+}
 // Roll up ISSUED credit notes onto the order, then net the payment status.
 async function recomputeOrderCredit(orderId) {
   const [oR, cR, pR] = await Promise.all([
@@ -416,7 +424,7 @@ async function recomputeOrderCredit(orderId) {
   const credit = cR.ok ? (cR.data || []).reduce((s, c) => s + (Number(c.grand_total) || 0), 0) : 0;
   const recv   = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
   const net    = +(grand - credit).toFixed(2);
-  const status = (recv > 0 && recv >= net - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
+  const status = salesPaymentStatus(recv, net, credit);
   await update('sales_orders',
     { credit_total: +credit.toFixed(2), amount_received: +recv.toFixed(2),
       payment_status: status, updated_at: new Date().toISOString() },
@@ -1404,7 +1412,7 @@ async function recomputeSalesPayment(orderId) {
   const credit = oR.ok ? Number(oR.data?.[0]?.credit_total) || 0 : 0;
   const net    = +(grand - credit).toFixed(2);
   const recv   = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
-  const status = (recv > 0 && recv >= net - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
+  const status = salesPaymentStatus(recv, net, credit);
   await update('sales_orders',
     { amount_received: +recv.toFixed(2), payment_status: status, updated_at: new Date().toISOString() },
     `id=eq.${encodeURIComponent(orderId)}`);
