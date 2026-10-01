@@ -9,14 +9,15 @@ import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { inr, csvCell, creditReasonLabel, CN_STATUS_TONES, cnStatusLabel } from '@/lib/sales';
 import { todayStr } from '@throttle/domain';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 export default function CreditNotesPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
   const [rows, setRows] = useState([]);
-  const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
+  const [status, setStatus] = useSessionState('credit-notes:status', '');
+  const [search, setSearch] = useSessionState('credit-notes:search', '');
   const [loading, setLoading] = useState(true);
 
   const canManage = !!perms?.sales_credit_note;

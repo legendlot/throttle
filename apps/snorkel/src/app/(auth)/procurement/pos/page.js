@@ -10,6 +10,7 @@ import { fmtDateShort, money, inrCompact, PO_TONES, PO_STATUSES, OPEN_PO_STATUSE
 import { csvCell } from '@/lib/sales.js';
 import { buildPoLinesCsv } from '@/lib/poExport.js';
 import { todayStr, istDateStr, istRangePresets } from '@throttle/domain';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 // Date filter (Joseph, #bugs 1789108860.383049). ⚠️ Defaults to ALL TIME, an exception to the
 // standing "range pickers default to Today" rule because this page is a worklist — an open PO
@@ -40,14 +41,20 @@ export default function POListPage() {
   // Non-null only when the worker says the read was cut short: { total, fetched, limit }.
   const [truncation, setTruncation] = useState(null);
   const [pendingInward, setPendingInward] = useState(0);
-  const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
-  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useSessionState('pos:filters', { status: '', source: '', order_type: '' });
+  const [search, setSearch] = useSessionState('pos:search', '');
   // Vendor + date are CLIENT filters over the loaded rows (getPOs has no params for them), and
   // apply through `filteredRows` — so the table, KPI tiles and both exports all follow them.
-  const [vendor, setVendor] = useState('');
+  const [vendor, setVendor] = useSessionState('pos:vendor', '');
   const presets = useMemo(datePresets, []);
-  const [range, setRange] = useState(() => {
+  // A preset is kept by NAME and its dates re-derived on return; only a hand-typed range
+  // (preset '') keeps its exact dates.
+  const [range, setRange] = useSessionState('pos:range', () => {
     const p = presets.find((x) => x.key === DEFAULT_DATE_PRESET);
+    return { preset: p.key, from: p.from, to: p.to };
+  }, (r) => {
+    if (r && !r.preset && (r.from || r.to)) return r;
+    const p = presets.find((x) => x.key === r?.preset) || presets.find((x) => x.key === DEFAULT_DATE_PRESET);
     return { preset: p.key, from: p.from, to: p.to };
   });
   const [loading, setLoading] = useState(true);

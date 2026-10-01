@@ -6,12 +6,13 @@ import { Spinner } from '@throttle/ui';
 import { Plus, ArrowRight } from 'lucide-react';
 import { listMoulds } from '@/lib/moulds';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 export default function MouldListPage() {
   const { session, perms } = useAuth();
   const router = useRouter();
   const [rows, setRows] = useState([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useSessionState('moulds:search', '');
   const [loading, setLoading] = useState(true);
 
   const canManage = !!perms?.po_create;

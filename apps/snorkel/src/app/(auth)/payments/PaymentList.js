@@ -8,6 +8,7 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js
 import { fmtDateShort } from '@/components/format.js';
 import { STATUS_TABS, isINR, filterByTab, valueRowsForTab, otherStatusRows } from '@/lib/paymentList.js';
 import { netPayable, hasTds } from '@/lib/tds.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 export const STATUS_TONE = {
   submitted: 'gray', pending_approval: 'yellow', approved: 'blue', held: 'orange',
@@ -45,7 +46,7 @@ export default function PaymentList({ scope, title, sub, bulkAction, bulkLabel, 
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [ref, setRef] = useState('');
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useSessionState(`payments:${scope}:tab`, 'all');
   const firstLoadDone = useRef(false);
 
   const load = useCallback(async () => {

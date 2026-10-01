@@ -8,6 +8,7 @@ import { Plus, Download, ArrowRight } from 'lucide-react';
 import { csvCell } from '@/lib/sales';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { todayStr } from '@throttle/domain';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 export default function SalesPartnersPage() {
   const { session, perms } = useAuth();
@@ -15,9 +16,9 @@ export default function SalesPartnersPage() {
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [channel, setChannel] = useState('');
-  const [activeOnly, setActiveOnly] = useState(true);
-  const [search, setSearch] = useState('');
+  const [channel, setChannel] = useSessionState('partners:channel', '');
+  const [activeOnly, setActiveOnly] = useSessionState('partners:active-only', true);
+  const [search, setSearch] = useSessionState('partners:search', '');
   const [loading, setLoading] = useState(true);
 
   const canManage = !!perms?.sales_partner_manage;

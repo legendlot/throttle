@@ -10,6 +10,7 @@ import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
 import { todayStr } from '@throttle/domain';
 import { buildSoLinesCsv, buildSoSkuSummaryCsv } from '@/lib/soExport.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -17,8 +18,8 @@ export default function SalesOrdersPage() {
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [filters, setFilters] = useState({ status: '', channel_key: '', fulfilment: '', overdue: false });
-  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useSessionState('sales-orders:filters', { status: '', channel_key: '', fulfilment: '', overdue: false });
+  const [search, setSearch] = useSessionState('sales-orders:search', '');
   const [loading, setLoading] = useState(true);
   const [exportingLines, setExportingLines] = useState(false);
 

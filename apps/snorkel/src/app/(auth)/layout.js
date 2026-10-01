@@ -9,6 +9,7 @@ import { Sidebar } from '../../components/chrome/Sidebar.js';
 import { ContextBar } from '../../components/chrome/ContextBar.js';
 import { GlobalSearch } from '../../components/chrome/GlobalSearch.js';
 import { useGlobalSearch } from '../../components/chrome/useGlobalSearch.js';
+import { clearSessionState } from '@/lib/useSessionState.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -68,7 +69,7 @@ function AuthLayoutInner({ children }) {
         userLabel={displayName}
         userInitial={initial}
         userRole={role || ''}
-        onLogout={signOut}
+        onLogout={() => { clearSessionState(); signOut(); }}
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
         search={search}
@@ -105,7 +106,7 @@ function AuthLayoutInner({ children }) {
         onGo={(r) => { setSheetOpen(false); onNav(r); }} onMore={() => setSheetOpen((s) => !s)} />
       {sheetOpen && (
         <MobileSheet navGroups={navGroups} pathname={pathname} onGo={onNav} onClose={() => setSheetOpen(false)}
-          userLabel={displayName} userInitial={initial} userRole={role || ''} onLogout={signOut} />
+          userLabel={displayName} userInitial={initial} userRole={role || ''} onLogout={() => { clearSessionState(); signOut(); }} />
       )}
     </div>
   );

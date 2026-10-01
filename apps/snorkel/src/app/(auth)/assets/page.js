@@ -9,6 +9,7 @@ import { ASSET_STATUSES, ACQ_TYPES, statusLabel, statusTone, acqLabel, assetExpi
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort } from '@/components/format.js';
 import { todayStr } from '@throttle/domain';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 function costCell(a) {
   if (a.acquisition_type === 'rented') {
@@ -27,9 +28,9 @@ export default function AssetListPage() {
   const [rows, setRows] = useState([]);
   const [cats, setCats] = useState([]);
   const [locs, setLocs] = useState([]);
-  const [filters, setFilters] = useState({ status: '', category_id: '', location_id: '', acquisition_type: '' });
-  const [expiringOnly, setExpiringOnly] = useState(false);
-  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useSessionState('assets:filters', { status: '', category_id: '', location_id: '', acquisition_type: '' });
+  const [expiringOnly, setExpiringOnly] = useSessionState('assets:expiring-only', false);
+  const [search, setSearch] = useSessionState('assets:search', '');
   const [loading, setLoading] = useState(true);
 
   const canManage = !!perms?.asset_manage;

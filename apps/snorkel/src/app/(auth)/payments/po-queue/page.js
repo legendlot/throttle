@@ -6,6 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, money, inrCompact } from '@/components/format.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 const PAY_TONE = { none: 'gray', requested: 'yellow', paid: 'green' };
 const PAY_LABEL = { none: 'To route', requested: 'Requested', paid: 'Paid' };
@@ -18,7 +19,7 @@ export default function PaymentsPage() {
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('to_route');
+  const [tab, setTab] = useSessionState('po-queue:tab', 'to_route');
   const [busy, setBusy] = useState(null);
 
   const load = useCallback(async () => {

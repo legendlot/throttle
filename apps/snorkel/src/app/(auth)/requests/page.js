@@ -7,6 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowRight } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inr, inrCompact, urgencyTone } from '@/components/format.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 const REQUEST_TONES = { pending: 'yellow', approved: 'green', rejected: 'red', cancelled: 'gray' };
 const STATUS_TABS = ['all', 'pending', 'approved', 'rejected', 'cancelled'];
@@ -17,7 +18,7 @@ export default function RequestsPage() {
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useSessionState('requests:tab', 'all');
 
   const load = useCallback(async () => {
     if (!session) return;

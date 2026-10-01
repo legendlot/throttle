@@ -7,6 +7,7 @@ import { Spinner, useToast, Combobox, Modal } from '@throttle/ui';
 import { PageHead, Panel, Btn, Badge } from '@/components/ui.js';
 import InvoiceUpload from '@/components/InvoiceUpload.js';
 import { parseRequesterNote, REQUESTER_NOTE_MAX } from '@/lib/requesterNote.js';
+import { clearSessionState } from '@/lib/useSessionState.js';
 
 const CURRENCIES = ['INR', 'USD', 'CNY', 'EUR', 'GBP', 'AED'];
 const todayISO = () => {
@@ -137,7 +138,7 @@ export default function NewPaymentRequestPage() {
       } catch (e) { uploadFailed = e?.message || 'upload failed'; }
       if (uploadFailed) {
         showToast(`${res.request_no} was raised, but the invoice did not attach (${uploadFailed}). Open it under My Requests and attach it there — do NOT raise it again.`, 'error');
-        router.push('/payments');
+        clearSessionState('payments:mine'); router.push('/payments');
         return;
       }
 
@@ -154,7 +155,7 @@ export default function NewPaymentRequestPage() {
             ? `${res.request_no} raised — sent for approval`
             : `${res.request_no} raised — with Finance`,
           'success');
-        router.push('/payments');
+        clearSessionState('payments:mine'); router.push('/payments');
       }
     } catch (e) {
       showToast(e.message || 'Could not raise the request', 'error');
@@ -359,7 +360,7 @@ export default function NewPaymentRequestPage() {
       )}
 
       {dupWarn && (
-        <Modal open onClose={() => { setDupWarn(null); router.push('/payments'); }} title="Raised — but check this">
+        <Modal open onClose={() => { setDupWarn(null); clearSessionState('payments:mine'); router.push('/payments'); }} title="Raised — but check this">
           <div style={{ padding: 16, maxWidth: 520 }}>
             <p style={{ marginTop: 0 }}>
               <b>{dupWarn.request_no}</b> was raised. {
@@ -414,7 +415,7 @@ export default function NewPaymentRequestPage() {
                 </p>
               </>
             )}
-            <Btn kind="primary" onClick={() => { setDupWarn(null); router.push('/payments'); }}>Got it</Btn>
+            <Btn kind="primary" onClick={() => { setDupWarn(null); clearSessionState('payments:mine'); router.push('/payments'); }}>Got it</Btn>
           </div>
         </Modal>
       )}

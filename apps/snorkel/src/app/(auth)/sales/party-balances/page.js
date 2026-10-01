@@ -15,6 +15,7 @@ import { Download } from 'lucide-react';
 import { inr, csvCell } from '@/lib/sales';
 import { PageHead, Kpi, Panel, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
+import { useSessionState } from '@/lib/useSessionState.js';
 
 // Sub-paisa noise never happens (the worker sums in paise), but a balance of exactly 0 is
 // "settled" — neither owing nor in credit.
@@ -39,9 +40,9 @@ export default function PartyBalancesPage() {
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [seg, setSeg] = useState('all');
-  const [search, setSearch] = useState('');
-  const [sortDir, setSortDir] = useState('desc');
+  const [seg, setSeg] = useSessionState('party-balances:seg', 'all');
+  const [search, setSearch] = useSessionState('party-balances:search', '');
+  const [sortDir, setSortDir] = useSessionState('party-balances:sort', 'desc');
   const firstLoadDone = useRef(false);
 
   // Keyed on userId, never on session (CORE: a token refresh hands over a new session object).
