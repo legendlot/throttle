@@ -13,7 +13,7 @@ export const STATUSES = [
   { id: 'cancelled', label: 'Cancelled', tone: 'gray'   },
 ];
 
-// ⛔ MIRRORED SERVER-SIDE in 01_worker/worker.js `DI_PURPOSES`. Adding a purpose here WITHOUT
+// ⛔ MIRRORED SERVER-SIDE in 01_worker/lib/jobwork.js `DI_PURPOSES` (a test there asserts equality). Adding a purpose here WITHOUT
 // adding it there makes the worker reject it on create with "Invalid purpose". Both or neither.
 export const PURPOSES = [
   { id: 'sample',               label: 'Sample' },
