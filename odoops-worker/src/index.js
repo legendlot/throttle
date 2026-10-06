@@ -20,6 +20,7 @@
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import { runTrackingPages, trackingWindow, UNI_TRACK_RUN_BUDGET, UNI_TRACK_MAX_GET_FAILS } from './uni-track-run.mjs';
 import { parseReportDate, parseReportHtml, toDailyFacts, b64urlDecode, parseReportXlsx, toFsnFacts, toSkuSnapshot, stageSelloutRows } from './flipkart-sellout.mjs';
+import { UNMAPPED_QUEUE_INSERT } from './unmapped-queue.mjs';
 // Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
 // connector simply continues on the next cron tick). Bounds instance lifetime.
 const MAX_WINDOWS = 24;
@@ -3656,7 +3657,8 @@ async function resolveSkus(channelId, dates, stgTable, userId) {
     else unmappedRows.push({ channel_id: channelId, channel_sku: s, sample_title: agg[s].title || null, last_seen: nowISO(), pending_units: Math.round(agg[s].units), pending_gross: agg[s].gross, status: 'open' });
   }
   if (mapInserts.length) await sbSales('/rest/v1/sku_map', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(mapInserts) });
-  if (unmappedRows.length) await sbSales('/rest/v1/unmapped_sku', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(unmappedRows) });
+  // Insert-if-absent only — see src/unmapped-queue.mjs for why this must never merge.
+  if (unmappedRows.length) await sbSales(UNMAPPED_QUEUE_INSERT.path, { method: 'POST', prefer: UNMAPPED_QUEUE_INSERT.prefer, body: JSON.stringify(unmappedRows) });
   return { mapped: skus.length - unmappedRows.length, unmapped: unmappedRows.length };
 }
 async function mapAndUpsert(channelId, dates, runId, stgTable, userId) {
