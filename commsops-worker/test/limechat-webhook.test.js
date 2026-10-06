@@ -181,9 +181,13 @@ t('empty strings and nulls are not treated as values', () => {
 });
 
 t('timestamps accept ISO, epoch seconds and epoch millis', () => {
-  assert.strictEqual(LC.extract({ updated_at: '2026-09-04T10:00:00Z' }).occurred_at, '2026-09-04T10:00:00.000Z');
-  assert.strictEqual(LC.extract({ updated_at: 1788528000 }).occurred_at, new Date(1788528000 * 1000).toISOString());
-  assert.strictEqual(LC.extract({ updated_at: 1788528000000 }).occurred_at, new Date(1788528000000).toISOString());
+  // Relative to now: extract() only accepts the last 30 days (+1 h), so a fixed date goes stale —
+  // the original 2026-09-04 fixture turned this red on 2026-10-04 (S409).
+  const secs = Math.floor(Date.now() / 1000) - 2 * 86400;
+  const iso = new Date(secs * 1000).toISOString();
+  assert.strictEqual(LC.extract({ updated_at: iso }).occurred_at, iso);
+  assert.strictEqual(LC.extract({ updated_at: secs }).occurred_at, iso);
+  assert.strictEqual(LC.extract({ updated_at: secs * 1000 }).occurred_at, iso);
 });
 
 t('an unparseable timestamp is dropped, not propagated as Invalid Date', () => {
