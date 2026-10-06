@@ -3328,12 +3328,18 @@ async function getProductPrice(url, auth, env) {
 // ── Influencer tracking links (B3 UTM auto-gen + the S312 campaign-link seam) ─────────────────
 //
 // One campaign link per deal, minted through commsops `POST /internal/campaign-link`. The UTM
-// shape is fixed by the Ignition↔Relay design doc (2026-08-17 §B3) and is what makes per-deal
-// GA4 attribution possible at all:
-//   utm_source   = influencer_code   → WHO promoted it
+// shape started from the Ignition↔Relay design doc (2026-08-17 §B3), re-cut S409 (Sulaksh DM
+// 2026-10-05, Afshaan approved) so the performance team can read GA4 by platform and product:
+//   utm_source   = platform          → instagram | youtube (the influencer's channel); 'other' when
+//                                      neither is on record, never a guess
 //   utm_medium   = 'influencer'      → a fixed namespace, so Odo can filter all influencer
 //                                      traffic in one predicate rather than enumerating people
-//   utm_campaign = engagement_no     → WHICH DEAL, so two deals with one creator stay separable
+//   utm_campaign = engagement_no     → WHICH DEAL (and so WHO — a deal has one creator); this is
+//                                      Odo's join key (`f_influencer_attribution`: upper(campaign)
+//                                      = engagement_no), which is why source was free to change
+//   utm_term     = product code      → the first product line's product_ref (the code on the list
+//                                      Sulaksh tags Meta/Google with); omitted when unpicked
+// ⚠️ Links minted before S409 keep source=<influencer_code> and no term — see the mint-only rule.
 //
 // ⚠️ MINT ONLY, and never silently re-mint. A campaign link never expires, the seam cannot
 // repoint one, and the influencer may already have posted it — so an existing utm_link is
@@ -3353,6 +3359,20 @@ const LOT_STORE_URL = 'https://www.legendoftoys.com';
 // annually: IGN-2025-00288 and IGN-2026-00288 both exist. A last-5-digits slug therefore collides
 // for any creator who gets the same number in two different years — no such pair exists today
 // (checked 2026-08-26), which is exactly what makes it a latent one rather than a visible one.
+const UTM_PLATFORMS = ['instagram', 'youtube'];
+export function dealUtm({ channelPlatform, channelPlatforms, engagementNo, productRef } = {}) {
+  const candidates = [channelPlatform, ...(Array.isArray(channelPlatforms) ? channelPlatforms : [])]
+    .map(p => String(p || '').trim().toLowerCase());
+  const platform = candidates.find(p => UTM_PLATFORMS.includes(p)) || 'other';
+  const term = String(productRef || '').trim();
+  return {
+    utm_source: platform,
+    utm_medium: 'influencer',
+    utm_campaign: String(engagementNo || '').toLowerCase(),
+    ...(term ? { utm_term: term } : {}),
+  };
+}
+
 function trackingSlug(influencerCode, engagementNo) {
   const digits = String(engagementNo || '').replace(/[^0-9]/g, '').slice(-9) || '000000000';
   const who = String(influencerCode || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
@@ -3567,7 +3587,7 @@ async function mintTrackingLink(body, auth, env) {
 async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   if (!env.COMMSOPS || !env.COMMSOPS_LINK_TOKEN) return { ok: false, error: 'link_seam_not_configured', status: 503 };
   const er = await sb(
-    `/rest/v1/engagements?id=eq.${engagementId}&select=engagement_no,utm_link,utm_source,utm_medium,utm_campaign,influencer_id&limit=1`,
+    `/rest/v1/engagements?id=eq.${engagementId}&select=engagement_no,utm_link,utm_source,utm_medium,utm_campaign,utm_term,influencer_id&limit=1`,
     env,
   );
   const eng = er.ok ? er.data?.[0] : null;
@@ -3576,18 +3596,26 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   // may already have posted, and the click history with it.
   if (eng.utm_link && !force) {
     return { ok: true, data: { url: eng.utm_link, already: true,
-      utm: { utm_source: eng.utm_source, utm_medium: eng.utm_medium, utm_campaign: eng.utm_campaign } } };
+      utm: { utm_source: eng.utm_source, utm_medium: eng.utm_medium, utm_campaign: eng.utm_campaign,
+        ...(eng.utm_term ? { utm_term: eng.utm_term } : {}) } } };
   }
 
-  const ir = eng.influencer_id
-    ? await sb(`/rest/v1/influencers?id=eq.${eng.influencer_id}&select=influencer_code&limit=1`, env)
-    : { data: [] };
-  const code = ir.data?.[0]?.influencer_code || null;
-  const utm = {
-    utm_source: (code || 'ignition').toLowerCase(),
-    utm_medium: 'influencer',
-    utm_campaign: String(eng.engagement_no || '').toLowerCase(),
-  };
+  const [ir, lr] = await Promise.all([
+    eng.influencer_id
+      ? sb(`/rest/v1/influencers?id=eq.${eng.influencer_id}&select=influencer_code,channel_platform,channel_platforms&limit=1`, env)
+      : { data: [] },
+    sb(`/rest/v1/engagement_products?engagement_id=eq.${engagementId}&select=product_ref&order=sort_order.asc&limit=1`, env)
+      .catch(() => ({ ok: false, data: [] })),
+  ]);
+  // A link is mint-only, so a read failure here would be baked in forever (source 'other', no
+  // term). Refuse and let the caller retry rather than mint a degraded link.
+  if ((eng.influencer_id && !ir.ok) || !lr.ok) return { ok: false, error: 'utm_inputs_unreadable', status: 503 };
+  const inf = ir.data?.[0] || {};
+  const code = inf.influencer_code || null;
+  let utm = dealUtm({
+    channelPlatform: inf.channel_platform, channelPlatforms: inf.channel_platforms,
+    engagementNo: eng.engagement_no, productRef: lr.data?.[0]?.product_ref,
+  });
   const targetUrl = await resolveLinkTarget(env, engagementId, target);
   let slug = trackingSlug(code, eng.engagement_no);
 
@@ -3615,6 +3643,10 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   if (res.status === 409) {
     const existing = res.body?.existing;
     if (existing && existing.title === title) {
+      // The adopted link redirects with the UTMs it was MINTED with (comms.links.utm), not the
+      // ones computed above — pre-S409 links carry source=<influencer_code> and no term. Record
+      // what the link actually appends, or the deal row would claim tags no click ever carries.
+      if (existing.utm && typeof existing.utm === 'object') utm = { ...existing.utm };
       // ⚠️ Adopting our own link does NOT repoint it, and `force` cannot make it. The commsops
       // seam is mint-only by design (repointing a campaign link is audited to a named person and
       // a service token has none), so a deal whose product changed AFTER the link was minted keeps
@@ -3636,7 +3668,7 @@ async function mintTrackingLinkFor(env, engagementId, { target, force } = {}) {
   const url = res.body.data.url;
   await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
     method: 'PATCH', prefer: 'return=minimal',
-    body: JSON.stringify({ utm_link: url, ...utm, updated_at: nowIso() }),
+    body: JSON.stringify({ utm_link: url, ...utm, utm_term: utm.utm_term ?? null, updated_at: nowIso() }),
   });
   return { ok: true, data: { url, slug, target_url: targetUrl, utm, already: false,
     ...(staleTarget ? { target_stale: true, current_target: staleTarget } : {}) } };

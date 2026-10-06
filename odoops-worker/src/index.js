@@ -1972,7 +1972,7 @@ const ga4Adapter = {
     });
 
     // (2) UTM grain → stg_ga4_utm → traffic_utm_fact (attribution lane ③, S325). Ignition's
-    // per-deal links stamp utm_medium=influencer · utm_source=<influencer_code> ·
+    // per-deal links stamp utm_medium=influencer · utm_source=<platform> (S409; <influencer_code> before) ·
     // utm_campaign=<engagement_no lowercased>, so this is what makes a deal's traffic visible.
     // ⚠️ FILTERED to medium='influencer' on purpose. Unfiltered, this is every campaign/source/
     // medium combination the site has ever seen — a large multiple of the channel-group row count
