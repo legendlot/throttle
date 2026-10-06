@@ -7,7 +7,7 @@
 // Run: node --test snorkelops-worker/test/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSoLinesCsv, SO_LINES_COLUMNS, buildSoSkuSummaryCsv, SO_SKU_COLUMNS } from '../../apps/snorkel/src/lib/soExport.js';
+import { buildSoLinesCsv, SO_LINES_COLUMNS, buildSoSkuSummaryCsv, SO_SKU_COLUMNS, soLineStatus } from '../../apps/snorkel/src/lib/soExport.js';
 
 // Minimal RFC-4180 parser: quoted fields, doubled quotes, commas and newlines inside quotes.
 function parseCsv(text) {
@@ -206,4 +206,42 @@ test('SKU summary: blank and filled sku on the same variant land in ONE row, fir
   assert.equal(parsed[1][skuCol('SKU')], 'KNX-BLK');
   assert.equal(parsed[1][skuCol('Orders')], '2');
   assert.equal(parsed[1][skuCol('Pending')], '4');
+});
+
+// Ram (#bugs 1791270130, 2026-10-06): the line export carries the order's fulfilment status and
+// each line's own state. Both columns were APPENDED — every earlier column keeps its index.
+test('fulfilment columns are the last two, after Pending — and the first 27 never moved', () => {
+  const n = SO_LINES_COLUMNS.length;
+  assert.deepEqual(SO_LINES_COLUMNS.slice(0, 27), [
+    'Order', 'Order Date', 'Status', 'Partner', 'Partner Code', 'Partner GSTIN', 'Partner PO Ref',
+    'Channel', 'Invoice', 'Invoice Date',
+    'Line No', 'Product', 'Model', 'Colour', 'SKU', 'HSN', 'Description',
+    'Qty', 'Rate', 'Discount %', 'Taxable Value', 'GST %', 'GST Amount', 'Line Total',
+    'Shipped', 'Packed', 'Pending',
+  ]);
+  assert.deepEqual(SO_LINES_COLUMNS.slice(n - 3), ['Pending', 'Order Fulfilment', 'Line Status']);
+});
+
+test('Order Fulfilment is the list badge label; Line Status reads the line', () => {
+  const o = { ...orders[0], fulfilment_status: 'partially_fulfilled' };
+  const lines = { o1: [
+    { ...linesByOrder.o1[0], qty: 12, shipped_qty: 12, packed_qty: 0, pending_qty: 0 },
+    { ...linesByOrder.o1[1], qty: 3, shipped_qty: 1, packed_qty: 0, pending_qty: 2 },
+  ] };
+  const rows = parseCsv(buildSoLinesCsv({ filteredRows: [o], linesByOrder: lines, partnerByOrder }));
+  assert.equal(rows[1][col('Order Fulfilment')], 'Partially fulfilled');
+  assert.equal(rows[1][col('Line Status')], 'Shipped');
+  assert.equal(rows[2][col('Line Status')], 'Part shipped');
+});
+
+test('soLineStatus: packed-not-shipped, nothing sent, and the blank cases', () => {
+  const c = { status: 'confirmed' };
+  assert.equal(soLineStatus(c, { qty: 4, shipped_qty: 0, packed_qty: 4, pending_qty: 0 }), 'Packed');
+  assert.equal(soLineStatus(c, { qty: 4, shipped_qty: 0, packed_qty: 1, pending_qty: 3 }), 'Part packed');
+  assert.equal(soLineStatus(c, { qty: 4, shipped_qty: '0', packed_qty: '0', pending_qty: '4' }), 'Not shipped');
+  // unknown dispatch data is blank, never a guessed "Not shipped"
+  assert.equal(soLineStatus(c, { qty: 4, shipped_qty: null, packed_qty: null, pending_qty: null }), '');
+  // a draft owes nothing yet; a cancelled order owes nothing more
+  assert.equal(soLineStatus({ status: 'draft' }, { qty: 4, shipped_qty: 0, packed_qty: 0, pending_qty: 4 }), '');
+  assert.equal(soLineStatus({ status: 'cancelled' }, { qty: 4, shipped_qty: 0, packed_qty: 0, pending_qty: 4 }), '');
 });

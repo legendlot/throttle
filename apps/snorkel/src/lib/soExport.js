@@ -4,7 +4,7 @@
 // file free of JSX/hooks.
 // Relative, NOT the `@/lib/...` alias: node --test resolves this file directly off disk with no
 // bundler, and the alias only exists inside Next.
-import { csvCell, orderStatusLabel } from './sales.js';
+import { csvCell, orderStatusLabel, fulfilmentMeta } from './sales.js';
 
 // One row PER LINE, carrying enough order header context that the file stands on its own in a
 // spreadsheet. ⚠️ Finance reads these files by POSITION: a new column always goes on the END, and
@@ -18,7 +18,25 @@ export const SO_LINES_COLUMNS = [
   // pending come from the worker's allocateLineFulfilment — the SAME numbers the order screen
   // shows — and stay BLANK (unknown) when the worker could not read every dispatch line.
   'Shipped', 'Packed', 'Pending',
+  // Ram (#bugs 1791270130, 2026-10-06): "export it along with the fulfillment status". The ORDER's
+  // status (the Fulfilment badge on the list) and this LINE's own state from the same numbers.
+  'Order Fulfilment', 'Line Status',
 ];
+
+// A line's own fulfilment state, from the worker's disjoint shipped / packed-not-shipped buckets.
+// BLANK when it cannot be stated: an unconfirmed order (a draft owes nothing, a cancelled one
+// nothing more) or dispatch data the worker could not read — never a guessed "Not shipped".
+export function soLineStatus(order, line) {
+  if (order?.status !== 'confirmed') return '';
+  if (line?.shipped_qty == null || line?.pending_qty == null) return '';
+  const qty = Math.round(Number(line.qty)) || 0;
+  const shipped = Math.round(Number(line.shipped_qty)) || 0;
+  const packed = Math.round(Number(line.packed_qty)) || 0;
+  if (qty > 0 && shipped >= qty) return 'Shipped';
+  if (shipped > 0) return 'Part shipped';
+  if (packed > 0) return packed < qty ? 'Part packed' : 'Packed';
+  return 'Not shipped';
+}
 
 // PostgREST returns numeric columns as STRINGS ("1234.50"). Normalise to a number so the file
 // is uniform whichever shape arrives — but a null/blank stays BLANK (never 0: a blank rate and a
@@ -48,6 +66,7 @@ export function buildSoLinesCsv({ filteredRows, linesByOrder, partnerByOrder }) 
         num(l.qty), num(l.rate), num(l.discount_pct), num(l.taxable_value), num(l.gst_pct),
         num(l.gst_amount), num(l.line_total),
         num(l.shipped_qty), num(l.packed_qty), num(l.pending_qty),
+        fulfilmentMeta(o.fulfilment_status).label, soLineStatus(o, l),
       ].map(csvCell).join(','));
     });
   }

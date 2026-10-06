@@ -3,6 +3,10 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.23.0] - 2026-10-06
+### Added
+- Sales Orders: order-date filter (presets + custom range, applies to table and all exports); Total PO value and Total fulfilled value tiles (confirmed orders only); Export + lines gains Order Fulfilment and Line Status columns.
+
 ## [1.22.0] - 2026-09-30
 ### Added
 - Payments: **All Requests** chapter (`/payments/all`) — view-only list of every payment request in every status for Finance and anyone with an approve / pay / super-admin payment grant.

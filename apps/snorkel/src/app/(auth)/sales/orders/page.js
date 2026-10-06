@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
@@ -8,9 +8,20 @@ import { Plus, Download } from 'lucide-react';
 import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
-import { todayStr } from '@throttle/domain';
+import { todayStr, istRangePresets } from '@throttle/domain';
 import { buildSoLinesCsv, buildSoSkuSummaryCsv } from '@/lib/soExport.js';
 import { useSessionState } from '@/lib/useSessionState.js';
+import { inDateRange, soValueTiles } from '@/lib/soDashboard.js';
+
+// Date filter (Akshay, #bugs 1790855178). ⚠️ Defaults to ALL TIME — the same worklist exception the
+// PO list takes (decisions.md §"The PO list's date filter starts on ALL TIME"): starting on Today
+// would hide every open order people act on. If Afshaan rules for Today, change this one constant.
+const DEFAULT_DATE_PRESET = 'all';
+const DATE_PRESET_KEYS = ['today', '7d', '30d', 'mtd', 'lm', 'fy'];
+function datePresets() {
+  const shared = istRangePresets().filter((p) => DATE_PRESET_KEYS.includes(p.key));
+  return [...shared, { key: 'all', label: 'All time', from: '', to: '' }];
+}
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -20,6 +31,17 @@ export default function SalesOrdersPage() {
   const [channels, setChannels] = useState([]);
   const [filters, setFilters] = useSessionState('sales-orders:filters', { status: '', channel_key: '', fulfilment: '', overdue: false });
   const [search, setSearch] = useSessionState('sales-orders:search', '');
+  const presets = useMemo(datePresets, []);
+  // A preset is kept by NAME and its dates re-derived on return; only a hand-typed range keeps
+  // its exact dates (same shape as the PO list).
+  const [range, setRange] = useSessionState('sales-orders:range', () => {
+    const p = presets.find((x) => x.key === DEFAULT_DATE_PRESET);
+    return { preset: p.key, from: p.from, to: p.to };
+  }, (r) => {
+    if (r && !r.preset && (r.from || r.to)) return r;
+    const p = presets.find((x) => x.key === r?.preset) || presets.find((x) => x.key === DEFAULT_DATE_PRESET);
+    return { preset: p.key, from: p.from, to: p.to };
+  });
   const [loading, setLoading] = useState(true);
   const [exportingLines, setExportingLines] = useState(false);
 
@@ -49,7 +71,11 @@ export default function SalesOrdersPage() {
     return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
-  let filtered = rows;
+  // The date is a CLIENT filter on order_date (getSalesOrders has no date param). `dated` is
+  // channel/status (server) + date — what the value tiles describe; `filtered` adds the on-screen
+  // search / fulfilment / overdue chips on top, and feeds the table and every export.
+  const dated = rows.filter(r => inDateRange(r, range));
+  let filtered = dated;
   if (filters.fulfilment) filtered = filtered.filter(r => r.fulfilment_status === filters.fulfilment);
   if (filters.overdue) filtered = filtered.filter(r => r.overdue);
   if (search.trim()) {
@@ -86,7 +112,7 @@ export default function SalesOrdersPage() {
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `lot-sales-orders-${todayStr()}.csv`; a.click();
+    a.href = url; a.download = `lot-sales-orders${rangeTag}-${todayStr()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -128,7 +154,7 @@ export default function SalesOrdersPage() {
     const payload = await fetchLinesBulk();
     if (!payload) return;
     const csv = buildSoSkuSummaryCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {} });
-    if (!downloadCsv(csv, `lot-sku-to-send-${todayStr()}.csv`, 'No confirmed order lines for these filters')) return;
+    if (!downloadCsv(csv, `lot-sku-to-send${rangeTag}-${todayStr()}.csv`, 'No confirmed order lines for these filters')) return;
     if (payload?.fulfilment_known === false) showToast('Dispatch data could not be read — Shipped / Pending left blank', 'error');
     else showToast('Confirmed orders only — drafts and cancelled orders are not counted', 'success');
   }
@@ -138,7 +164,7 @@ export default function SalesOrdersPage() {
     if (!payload) return;
     const csv = buildSoLinesCsv({ filteredRows: filtered, linesByOrder: payload?.linesByOrder || {},
                                   partnerByOrder: payload?.partnerByOrder || {} });
-    if (!downloadCsv(csv, `lot-sales-order-lines-${todayStr()}.csv`, 'No order lines to export for these filters')) return;
+    if (!downloadCsv(csv, `lot-sales-order-lines${rangeTag}-${todayStr()}.csv`, 'No order lines to export for these filters')) return;
     if (payload?.fulfilment_known === false) showToast('Dispatch data could not be read — Shipped / Pending left blank', 'error');
     // The list on screen and the line read are two moments (S376 review): an order cancelled or
     // re-filtered in between comes back with no lines and a blank partner code — say so, never
@@ -148,7 +174,16 @@ export default function SalesOrdersPage() {
     if (stale) showToast(`${stale} order${stale === 1 ? '' : 's'} changed since this list loaded and came out without lines — refresh and export again`, 'error');
   }
 
-  const filtersActive = search.trim() || filters.fulfilment || filters.overdue;
+  const filtersActive = search.trim() || filters.fulfilment || filters.overdue || range.from || range.to;
+  const values = soValueTiles(dated);
+  const rangeLabel = range.preset ? (presets.find(p => p.key === range.preset)?.label || '') : `${range.from || '…'} → ${range.to || '…'}`;
+  const channelLabel = filters.channel_key ? (channels.find(c => c.channel_key === filters.channel_key)?.label || filters.channel_key) : 'all channels';
+  const fulfilledPct = values.orderedValue > 0 ? Math.round(values.fulfilledValue / values.orderedValue * 100) : null;
+  // The worker reads fulfilment all-or-nothing (salesOrderFulfilmentValues returns {} on any page
+  // failure), so "unknown" is in practice every order — show "—", never a confident ₹0.
+  const fulfilledUnreadable = values.orders > 0 && values.unknown === values.orders;
+  // A remembered date range quietly narrows every export — so it rides in the filename.
+  const rangeTag = (range.from || range.to) ? `-${range.from || 'start'}_to_${range.to || todayStr()}` : '';
 
   return (
     <div className="pg">
@@ -165,6 +200,32 @@ export default function SalesOrdersPage() {
         <Kpi label="To Dispatch" value={kpi.toDispatch} sub="pending + in progress" tone="blue" format={(v) => inrCompact(v)} />
         <Kpi label="Overdue" value={kpi.overdue} sub="click to filter" tone="red" format={(v) => inrCompact(v)} onClick={() => setFilters(f => ({ ...f, overdue: !f.overdue }))} />
         <Kpi label={`FY ${thisFy} Sales`} value={kpi.fySales} sub="all channels" tone="green" format={(v) => inrCompact(v)} />
+      </div>
+
+      <div className="filters" style={{ marginBottom: 10 }}>
+        <div className="seg" style={{ marginBottom: 0, flexWrap: 'wrap' }}>
+          {presets.map((p) => (
+            <button key={p.key} className={`seg-btn ${range.preset === p.key ? 'on' : ''}`}
+              onClick={() => setRange({ preset: p.key, from: p.from, to: p.to })}>{p.label}</button>
+          ))}
+        </div>
+        <span className="dim" style={{ fontSize: 12 }}>Order date</span>
+        <input className="sel" type="date" value={range.from} max={range.to || undefined}
+          onChange={(e) => setRange((r) => ({ preset: '', from: e.target.value, to: r.to }))} />
+        <span className="dim">→</span>
+        <input className="sel" type="date" value={range.to} min={range.from || undefined}
+          onChange={(e) => setRange((r) => ({ preset: '', from: r.from, to: e.target.value }))} />
+      </div>
+
+      {/* Follow the channel + date (Akshay). Confirmed orders only — see soValueTiles. */}
+      <div className="kpi-row kpi-2">
+        <Kpi label="Total PO value" value={values.poValue} tone="blue" format={(v) => inrCompact(v)}
+          sub={`${values.orders} confirmed order${values.orders === 1 ? '' : 's'} · ${channelLabel} · ${rangeLabel}`} />
+        <Kpi label="Total fulfilled value" value={fulfilledUnreadable ? '—' : values.fulfilledValue} tone="green"
+          format={(v) => (fulfilledUnreadable ? v : inrCompact(v))}
+          sub={values.unknown
+            ? `${values.unknown} order${values.unknown === 1 ? '' : 's'} with dispatch unreadable — not counted`
+            : `despatched ₹ incl. GST${fulfilledPct == null ? '' : ` · ${fulfilledPct}% of PO value`}`} />
       </div>
 
       <Panel title="Orders" count={filtersActive ? `${filtered.length} of ${rows.length}` : rows.length}

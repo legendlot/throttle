@@ -123,6 +123,7 @@
 /* ---- KPI ---- */
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:16px}
 .kpi-3{grid-template-columns:repeat(3,1fr)}
+.kpi-2{grid-template-columns:repeat(2,1fr)}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden;transition:border-color .15s,transform .15s}
 .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--kpi-accent);opacity:.85}
 .kpi-click{cursor:pointer}
