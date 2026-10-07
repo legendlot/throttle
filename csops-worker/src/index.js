@@ -34,6 +34,7 @@ import { mapExotelStatus } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
 import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange, istBucketRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
+import { postNeedsMeta, shouldFetchPostMeta, postMetaPatch } from './social-posts.js';
 
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
@@ -8336,14 +8337,12 @@ async function handleMetaWebhook(request, env) {
         if (ev.message) await metaHandleMessage(channel, ev, env);
       }
       // ── Comments (S322) ────────────────────────────────────────────────────────────────
-      // ⚠️ DORMANT ON PURPOSE, and this is the single most important thing to know about
-      // this branch: as of 2026-08-28 the IG app is subscribed to `messages` ONLY, so Meta
-      // sends no comment events and this loop never runs. Verified, not assumed —
-      // `diagIgCommentsScope` reads `/{ig-user-id}/subscribed_apps` and reports
-      // `instagram_webhook_subscribed`. The Comments inbox is fed by the POLLER
-      // (`syncIgComments`) until someone appends `comments` to the subscription.
-      // ⚠️ When that flip happens it MUST be `subscribed_fields=comments,messages` — sending
-      // `comments` alone REPLACES the set and would silently kill live DM delivery.
+      // LIVE since the subscription flip 2026-08-28 11:00Z (`messages` → `messages,comments`);
+      // the first webhook-created post landed 11:42Z. (This said "DORMANT ON PURPOSE" until
+      // 2026-10-07.) `diagIgCommentsScope` reads `/{ig-user-id}/subscribed_apps` to confirm.
+      // The webhook carries only the media id — `findOrCreateSocialPost` fetches the caption.
+      // ⚠️ Any further field change MUST go through `subscribeIgComments` — `subscribed_fields`
+      // REPLACES the set, so sending `comments` alone would silently kill live DM delivery.
       // Both paths converge on `upsertPostComment`, which is idempotent on
       // `platform_comment_id`, so running both at once double-writes nothing.
       for (const ch of (entry.changes || [])) {
@@ -8389,11 +8388,41 @@ async function upsertPostComments(rows, env) {
   return Array.isArray(r.data) ? r.data : [];
 }
 
+// One IG media's display fields, or null. The webhook carries only the media id, so without this a
+// webhook-first post is stored BARE and the inbox can show nothing but a number (Bhavani #bugs
+// 1791362733, measured 2026-10-07: 220 of 247 posts bare). Ads (`media_product_type: AD`) never
+// appear in the poller's /me/media window at all, so this is their ONLY source of a caption.
+async function igMediaMeta(mediaId, env) {
+  const token = await metaToken('instagram', env);
+  if (!token) return null;
+  try {
+    const r = await fetch(`${metaGraphBase('instagram')}/${encodeURIComponent(mediaId)}`
+      + `?fields=caption,permalink,media_type,media_url&access_token=${token}`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error('[ig-media] read failed', mediaId, d?.error?.message); return null; }
+    return d;
+  } catch (e) { console.error('[ig-media] read threw', mediaId, String(e)); return null; }
+}
+
+// ⚠️ A FOUND row is not a finished row. It used to be returned as-is, so a post the webhook created
+// bare stayed bare forever — the poller's own meta was thrown away on every later sweep. A row
+// without a permalink is filled from `meta` (poller) or from Meta directly (webhook, IG only);
+// a failed read leaves it bare and the next comment on that post tries again.
 async function findOrCreateSocialPost(channel, platformPostId, meta, env) {
   if (!platformPostId) return null;
   const found = await sb(
     `/rest/v1/cs_social_posts?channel=eq.${channel}&platform_post_id=eq.${encodeURIComponent(platformPostId)}&select=*&limit=1`, env);
-  if (found.data?.[0]) return found.data[0];
+  const row = found.data?.[0];
+  if (row && !postNeedsMeta(row)) return row;
+  if (shouldFetchPostMeta(channel, meta)) meta = await igMediaMeta(platformPostId, env);
+  if (row) {
+    const patch = postMetaPatch(meta);
+    if (!Object.keys(patch).length) return row;
+    const u = await sb(`/rest/v1/cs_social_posts?id=eq.${row.id}`, env, {
+      method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch),
+    });
+    return u.data?.[0] || row;
+  }
   const ins = await sb('/rest/v1/cs_social_posts?on_conflict=channel,platform_post_id', env, {
     method: 'POST',
     headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
@@ -8809,6 +8838,7 @@ async function diagIgRecipient(body, auth, env) {
 // compromise, and it is a KNOWN, DELIBERATE hole: a comment on post number 26 will not be seen.
 // The count is logged every run so the hole is visible rather than assumed empty.
 const IG_COMMENT_MEDIA_LOOKBACK = 25;
+const IG_POST_HYDRATE_PER_RUN = 25;
 // Instagram's per-comment character cap.
 const IG_COMMENT_MAX_CHARS = 2200;
 
@@ -8939,7 +8969,20 @@ async function syncIgComments(env) {
       body: JSON.stringify({ last_comment_at: new Date().toISOString(), comment_count: flat.length }),
     }).catch(() => {});
   }
-  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_sent: sent, rows_returned: written, lookback: IG_COMMENT_MEDIA_LOOKBACK, not_fetched: truncated };
+
+  // Self-heal posts stored BARE (webhook-first, or a Graph blip at creation): fill up to
+  // IG_POST_HYDRATE_PER_RUN per sweep, most recently commented first. Bounded so a backlog (220 on
+  // 2026-10-07, 147 of them ads the /me/media window never lists) drains over a few sweeps rather
+  // than one burst. Sequential on purpose — at most 25 Graph reads, gentle on Meta's rate limit.
+  // A post Meta will not describe stays bare and is retried next sweep; `posts_bare` stuck at the
+  // cap is the signal that such posts are crowding the rest out.
+  const bare = await sb(`/rest/v1/cs_social_posts?channel=eq.instagram&permalink=is.null`
+    + `&select=platform_post_id&order=last_comment_at.desc.nullslast&limit=${IG_POST_HYDRATE_PER_RUN}`, env);
+  let hydrated = 0;
+  for (const p of (bare.data || [])) {
+    if ((await findOrCreateSocialPost('instagram', p.platform_post_id, null, env))?.permalink) hydrated++;
+  }
+  return { posts_returned: posts.length, posts_with_comments: scanned, comments_seen: seen, rows_sent: sent, rows_returned: written, lookback: IG_COMMENT_MEDIA_LOOKBACK, not_fetched: truncated, posts_bare: (bare.data || []).length, posts_hydrated: hydrated };
 }
 
 // ── Comments inbox: reads ────────────────────────────────────────────────────────────────────
