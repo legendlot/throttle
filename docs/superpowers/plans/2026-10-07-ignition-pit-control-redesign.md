@@ -207,14 +207,21 @@ Until each W ships, its element is **omitted**, never faked.
   IgRail; `apps/ignition/DESIGN.md` tokens are replaced.
 
 ## Decisions — status after the 2026-10-07 scope ruling
-D1–D6, D8 and W1–W10 are resolved in §Scope ruling. **Still open:**
-- **D7 New Deal payment fields.** Today the page shows payment amount + terms for every deal type
-  (default `on_release`). The modal hides them unless the deal is paid (default `advance`). The
-  design draws the modal's rule (`—` when n/a). Options: the modal's rule on both (rec.) / keep each
-  surface exactly as it is today.
-- **Rollout.** Incremental to main, one page per commit, smoked live (rec.). Plus a
-  `#system-updates` heads-up to Reann's team before Phase 1 (the whole app changes colour and the
-  sidebar becomes a rail).
+**ALL RESOLVED (Afshaan, 2026-10-07, "take your recommendations"):**
+- **D7 → the modal's rule on both surfaces.** Payment amount + terms show only for paid /
+  paid+affiliate (`—` otherwise), default terms `advance`, affiliate % only for affiliate types.
+  `useDealForm` (P0.3) implements it once. This is the B4 fix.
+- **Rollout → incremental to main, one page per commit, each smoked live.** A `#system-updates`
+  heads-up to Reann's team goes out **before the Phase 1 push** (new colours, sidebar becomes a
+  collapsible rail, New Deal moves to the top bar). Draft it at the Phase 1 item; it is not sent yet.
+
+## ▶ Resume here (next session)
+1. P0.1: B1 `setRating` notes (worker + deploy) → B2 `?search=` on /engagements → B3 IST month
+   (dashboard, targets, worker payments summary) → B4 rides with P0.3.
+2. P0.2: split engagement detail into components (no visual change; verify with an identical build plus a smoke).
+3. P0.3: `useDealForm` shared by the page + modal (D7 rule).
+4. P0.4: missing CSS vars.
+5. Phase 1 (send the heads-up first) → Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
 
 **Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
 the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
