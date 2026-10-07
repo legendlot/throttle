@@ -6,6 +6,35 @@
 > **Rule for the whole build: presentation changes only, unless an item below is explicitly marked
 > WORKER or DECISION. Every page keeps its current worker calls, state, gates and keyboard nav.**
 
+## ⭐ Scope ruling (Afshaan, 2026-10-07): reskin what exists; quick builds in, large builds out
+
+> "No new functionality needed as such, avoid large builds. If it's a reformat of something we
+> already have, or a quick build, take it; otherwise drop." → `reference/decisions.md` §S411-IgnitionRedesignScope.
+> **A dropped element is left out of the page entirely.** No placeholder, no fake value, no
+> "coming soon".
+
+| Item | Ruling | What ships |
+|---|---|---|
+| D1 UGC Daily ROAS chart | **DROP** | Nothing. The UGC detail keeps its existing cards. |
+| D2 Campaign brief text + tags | **DROP the new fields** | The existing brief-file card, restyled. |
+| D3 Import | **RESKIN** | The current instruction stub, restyled. No dropzone, no sheet progress cards. |
+| D4 Manual | **RESKIN** | The shared `Manual` via Ignition tokens (it reads `--accent`, `--bg`, `--surface`, `--t*`). No local renderer. |
+| D5 Connects status pill | **REFORMAT** | new→New, working→Replied, promoted→Linked, closed→Closed. No "Returned". |
+| D6 Reports range | **REFORMAT** | Presets 30d/90d/YTD/All on the existing from/to. **Default stays YTD.** CSV export stays. |
+| D8 Per-deal Verdict (influencer detail, roster strip) | **DROP** | The column and strip are omitted. |
+| W1 Dashboard pipeline: stage counts + ₹ committed + Video/UGC/All | **TAKE (quick)** | `getKpis` already scans every spend-bearing engagement in one query (`index.js:1366`). Add `stage` to that select, count per stage per type, and sum committed in the same loop (~15 lines + an ignitionops deploy). The toggle filters the pipeline and totals from that payload. |
+| W2 Sparklines, ▲% deltas, "+n this week" | **DROP** | The KPI tiles show the current value only. |
+| W3 "Approved {date} · by {name}", note author, history actor | **TAKE (quick)** | Resolve the uuids → `users_profile.full_name` in `getEngagement`. This copies the existing `unlocked_by_name` pattern (`index.js:827`) as one batched lookup. |
+| W4 Engagements tab counts | **TAKE only if free** | Show W1's per-stage counts on the tabs. If they can't match the tab filters exactly, the tabs ship with no counts. |
+| W5 B-List "Move to master" | **TAKE (quick)** | Front-end only: the existing `updateInfluencer{list_status:'master'}`, gated `canManage`. |
+| W6 Connects unread | **PARTIAL** | "{n} new" on the Connects page (client-side `status==='new'`). **DROP the rail badge**, which would need a fetch on every page. |
+| W7 Roster stats | **PARTIAL** | Tiles + List views with Reach and Videos (= today's engagement count). Rating counts come client-side from the already-fetched rows. **DROP CPM and the verdict strip.** |
+| W8 Campaign Spent vs Committed | **DROP** | One budget bar on the existing `rollup.spend`, labelled Consumed as today. |
+| W9 New Deal "last deal Nd ago" | **DROP** | The selected card shows type · reach · location · rating. |
+| W9b Dashboard **Re-book** | **TAKE (quick)** | `/engagements/new?influencer=<id>` preselects the influencer (the modal already supports `presetInfluencer`). |
+| W10 "team avg CPM" hint | **DROP** | The Blended CPM tile has no hint. |
+| Existing bugs B1–B3 | **TAKE** | Phase 0 fixes. |
+
 ## 0. What the gap map found (7 read-only passes, 2 judgements spot-checked each)
 
 The README says "data model, routes, permissions, worker calls don't change". **That holds for
@@ -177,21 +206,18 @@ Until each W ships, its element is **omitted**, never faked.
 - `systems/ignition.md`: the mobile-shell paragraph (`.sb-wrap`) and the shell description move to
   IgRail; `apps/ignition/DESIGN.md` tokens are replaced.
 
-## Decisions for Afshaan (D1–D7)
-- **D1** UGC detail "Daily ROAS · last 14 days" has no data source (no daily table; Meta pulls
-  lifetime totals only). Options: drop the chart (rec.) / build a daily Meta table.
-- **D2** Campaign "brief text + tag pills" has no fields; the brief is an uploaded file. Options:
-  show the file card (rec.) / add schema.
-- **D3** Import is a stub that tells you to run a Python script. Options: restyle the instructions
-  (rec.) / build a real importer (L).
-- **D4** Manual: re-skin the shared `Manual` renderer via tokens; it already reads `--accent`
-  (rec.) / write a local renderer to match the prototype exactly.
-- **D5** Connects statuses are new/working/promoted/closed, while the design shows
-  New/Replied/Linked/Returned (a returned thread leaves the list). Map working→Replied,
-  promoted→Linked, keep Closed; no Returned (rec.).
-- **D6** Reports default range: keep YTD (rec., no behaviour change) / the design's implied 90d.
-- **D7** New Deal payment fields: the modal's rule (hide unless paid, default `advance`) on both
-  surfaces (rec.) / the page's rule.
-- Also: the design drops the per-deal **Verdict** (influencer detail + roster strip), and there is
-  **no per-deal rating storage** (`quality_rating` is one overwritten value per influencer). It is
-  omitted unless we add a column, which is a separate build.
+## Decisions — status after the 2026-10-07 scope ruling
+D1–D6, D8 and W1–W10 are resolved in §Scope ruling. **Still open:**
+- **D7 New Deal payment fields.** Today the page shows payment amount + terms for every deal type
+  (default `on_release`). The modal hides them unless the deal is paid (default `advance`). The
+  design draws the modal's rule (`—` when n/a). Options: the modal's rule on both (rec.) / keep each
+  surface exactly as it is today.
+- **Rollout.** Incremental to main, one page per commit, smoked live (rec.). Plus a
+  `#system-updates` heads-up to Reann's team before Phase 1 (the whole app changes colour and the
+  sidebar becomes a rail).
+
+**Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
+the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
+Cmd/Ctrl+Enter, the 24h lock and the Send-back confirm; the Dashboard's dropped tiles (Ghosted,
+likes/shares, UGC summary, Non-compliant) stay reachable through the Video/UGC/All toggle and
+Reports, per README §1.
