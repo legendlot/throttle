@@ -30,7 +30,7 @@ import { botOutboundRows, botThreadPatch, declinedTurnPatch, railLive, BOT_RAIL_
 import { isUniqueViolation, adoptNumberlessThread } from './thread-adopt.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
-import { mapExotelStatus } from './telephony/exotel-adapter.js';
+import { mapExotelStatus, hookDialTarget, hookAction, hookAttempt } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
 import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange, istBucketRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
@@ -4307,14 +4307,12 @@ async function handleExotelAgent(request, url, env, ctx) {
   if (!exotelWebhookAuthed(url, env)) return err('Unauthorized', 401);
 
   const sid = url.searchParams.get('CallSid') || url.searchParams.get('sid');
-  // Exotel's parameter naming here is not pinned down in the docs, and the observed
-  // call payload used `To` for the agent leg. Accept the plausible spellings rather
-  // than guess one; unknown values simply fail to match the roster and get logged.
-  const agentRef = url.searchParams.get('AgentId')
-    || url.searchParams.get('AgentSipId')
-    || url.searchParams.get('CurrentAgent')
-    || url.searchParams.get('To')
-    || url.searchParams.get('DialWhomNumber');
+  // Who is being rung, and which moment of the call this fire is — shape observed live
+  // 2026-10-07 (S410), see hookDialTarget. Before then this read `To` first, which on this
+  // hook is always OUR ExoPhone, so no agent ever matched.
+  const target = hookDialTarget(url.searchParams);
+  const action = hookAction(target);
+  const agentRef = target.ref;
 
   const customerRaw = url.searchParams.get('CallFrom') || url.searchParams.get('From');
   const dirRaw = url.searchParams.get('Direction') || 'incoming';
@@ -4328,6 +4326,31 @@ async function handleExotelAgent(request, url, env, ctx) {
       console.log(`[exotel:agent] sid=${sid} params=${JSON.stringify(
         Object.fromEntries([...url.searchParams.entries()].filter(([k]) => k !== 'token')))}`);
       if (!sid) return;
+
+      // Durable "who was rung" — the poller's record of an unanswered call names nobody,
+      // and raw_meta is last-writer-wins. Appended atomically in SQL so a Dial and a
+      // Terminal for the same call, or an Exotel retry, cannot drop each other.
+      // sb() never throws on a non-2xx, so a dropped write is logged here or not at all.
+      const appendAttempt = async (end) => {
+        const r = await sb(`/rest/v1/rpc/cs_call_append_dial_attempt`, env, {
+          method: 'POST',
+          body: JSON.stringify({ p_sid: sid, p_attempt: hookAttempt(target, new Date().toISOString()), p_end: end }),
+        });
+        if (!r.ok || r.data === 0) {
+          console.error(`[exotel:agent] dial_attempts append ${r.ok ? 'matched 0 rows' : `failed ${r.status}`} `
+            + `sid=${sid} event=${target.event || 'none'}`);
+        }
+      };
+
+      // ⚠️ Only a ring may go through upsertCall — see hookAction. 'end' also closes the
+      // row's live state (ended_at, and the hook's own agent stamp on a row still
+      // in_progress), so the pop clears at hang-up and the settled record's agent stays
+      // the poller's alone.
+      if (action !== 'ring') {
+        await appendAttempt(action === 'end');
+        console.log(`[exotel:agent] sid=${sid} ${action} event=${target.event} agent=${target.ref || 'none'}`);
+        return;
+      }
 
       const pipe = callPipeline(env);
       const direction = normaliseDirection(dirRaw, 'exotel') || 'incoming';
@@ -4355,11 +4378,15 @@ async function handleExotelAgent(request, url, env, ctx) {
         raw_meta: { last_event: 'agent', provider: 'exotel' },
       });
 
-      // Attribute, so the pop lands on the right agent's screen.
+      // Attribute, so the pop lands on the right agent's screen. The append runs beside
+      // the roster read rather than ahead of it — it must not delay the pop.
       let matched = null;
+      const [, roster] = await Promise.all([
+        row?.id ? appendAttempt(false) : null,
+        agentRef ? sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
+          + `&select=user_id,sip_id,agent_phone&limit=500`, env) : null,
+      ]);
       if (agentRef) {
-        const roster = await sb(`/rest/v1/cs_telephony_agents?is_active=is.true`
-          + `&select=user_id,sip_id,agent_phone&limit=500`, env);
         const wantSip = String(agentRef).toLowerCase();
         const wantTel = toE164(agentRef);
         matched = (roster.data || []).find(a =>

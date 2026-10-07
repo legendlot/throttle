@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mapExotelStatus, needsCallback, exotelToNormalised, exotelCallPatch, isSettled,
+  mapExotelStatus, needsCallback, exotelToNormalised, exotelCallPatch, isSettled, hookDialTarget, hookAction, hookAttempt,
 } from './exotel-adapter.js';
 import { toIstNaive, fromIstNaive, unwrapCalls, nextCursorOf } from './exotel-client.js';
 
@@ -231,4 +231,40 @@ test('a matched SIP id resolves to the right agent', async () => {
   assert.equal(matchAgent(['07022269161'], roster, e164)?.id, 'u-dhiraj');
   assert.equal(matchAgent(['sip:nobody'], roster, e164), null);
   assert.equal(matchAgent([], roster, e164), null);
+});
+
+// ── agent-passthru hook — who Exotel is dialling ─────────────────────────────
+
+test('the hook agent is DialWhomNumber, never To (To is our own ExoPhone)', () => {
+  // Shape observed live 2026-10-07 (S410).
+  const p = new URLSearchParams({
+    CallSid: 'x', CallFrom: '09072290640', CallTo: '08044656833', To: '08044656833',
+    DialWhomNumber: 'sip:sunithab17b95f7f', Status: 'busy', EventType: 'Dial',
+    AgentEmail: 'Sunitha@legendoftoys.com',
+  });
+  assert.deepEqual(hookDialTarget(p), {
+    ref: 'sip:sunithab17b95f7f', email: 'Sunitha@legendoftoys.com', status: 'busy', event: 'dial',
+  });
+  // With no agent field at all, To is NOT used as a fallback.
+  assert.equal(hookDialTarget(new URLSearchParams({ To: '08044656833' })).ref, null);
+});
+
+test('only a Dial (or no EventType) may upsert; Terminal ends; anything else is recorded only', () => {
+  const act = (e) => hookAction(hookDialTarget(new URLSearchParams(e === undefined ? {} : { EventType: e })));
+  assert.equal(act('Dial'), 'ring');
+  assert.equal(act(undefined), 'ring');
+  assert.equal(act(''), 'ring');
+  assert.equal(act('Terminal'), 'end');
+  assert.equal(act('Hangup'), 'record');   // an unknown word must never reach upsertCall
+});
+
+test('the dial_attempts element carries who, what and when — and nothing from To', () => {
+  const t = hookDialTarget(new URLSearchParams({
+    To: '08044656833', DialWhomNumber: 'sip:mariakfad3213a', Status: 'free',
+    EventType: 'Terminal', AgentEmail: 'maria@legendoftoys.com',
+  }));
+  assert.deepEqual(hookAttempt(t, '2026-10-07T13:18:33.000Z'), {
+    event: 'terminal', agent: 'sip:mariakfad3213a', email: 'maria@legendoftoys.com',
+    status: 'free', at: '2026-10-07T13:18:33.000Z',
+  });
 });

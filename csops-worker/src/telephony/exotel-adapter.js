@@ -236,3 +236,53 @@ export function matchAgent(candidates, roster, toE164) {
   }
   return null;
 }
+
+/**
+ * What the Connect applet's `agent-passthru-url` hook is reporting: which agent, and which
+ * moment of the call.
+ *
+ * ⚠️ OBSERVED LIVE 2026-10-07 (S410, `wrangler tail`), not from the docs. One call fires it
+ * once per agent rung, then once more when the call ends:
+ *     EventType=Dial      DialWhomNumber=sip:sunithab17b95f7f  Status=busy  (her phone rings)
+ *     EventType=Terminal  DialWhomNumber=sip:sunithab17b95f7f  Status=free  (call over)
+ * `Status` is the AGENT's line state, so `busy` on a Dial means "now ringing for this call",
+ * not "skipped" (that 18:46 call was answered by her). `To`/`CallTo` are OUR ExoPhone on
+ * every fire — the hook used to read `To` before `DialWhomNumber`, so it never matched an
+ * agent: the "Open call" row upgrade and the pop for tel-device agents never fired. (SIP
+ * agents still got a pop from the browser-phone SDK, apps/pitstop callEvents.js.) `To` is
+ * deliberately not a fallback now.
+ */
+export function hookDialTarget(params) {
+  const get = (k) => {
+    const v = params.get(k);
+    return v === null || v === undefined || String(v).trim() === '' ? null : String(v).trim();
+  };
+  const ref = get('DialWhomNumber') || get('AgentId') || get('AgentSipId') || get('CurrentAgent');
+  return {
+    ref,
+    email: get('AgentEmail'),
+    status: get('Status') ? get('Status').toLowerCase() : null,
+    event: get('EventType') ? get('EventType').toLowerCase() : null,
+  };
+}
+
+/**
+ * What the hook does with one fire.
+ *   'ring'   — Dial (or no EventType at all, the pre-S410 shape): create/upsert the row,
+ *              stamp the agent for the live pop, warm the context.
+ *   'end'    — Terminal: record it, close the row's live state, touch nothing else.
+ *   'record' — any other EventType: record it only.
+ * ⚠️ Only 'ring' may reach upsertCall. That PATCHes status='in_progress' and a fresh
+ * started_at, so an after-the-fact fire routed there un-settles a call the poller finished.
+ * An unknown word is recorded in dial_attempts and logged, so a new vocabulary shows up.
+ */
+export function hookAction(target) {
+  if (!target.event || target.event === 'dial') return 'ring';
+  if (target.event === 'terminal') return 'end';
+  return 'record';
+}
+
+/** The dial_attempts element for one fire. */
+export function hookAttempt(target, at) {
+  return { event: target.event, agent: target.ref, email: target.email, status: target.status, at };
+}
