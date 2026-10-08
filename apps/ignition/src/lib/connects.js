@@ -31,10 +31,11 @@ export const CHANNEL_PALETTE = {
 
 export const STATUS_VALUES = ['new', 'working', 'promoted', 'closed'];
 
+// D5 (redesign, S412): display labels only — the stored values stay new/working/promoted/closed.
 export const STATUS_LABELS = {
   new:      'New',
-  working:  'Working',
-  promoted: 'Promoted',
+  working:  'Replied',
+  promoted: 'Linked',
   closed:   'Closed',
 };
 

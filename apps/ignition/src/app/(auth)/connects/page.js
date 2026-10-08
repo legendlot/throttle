@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav } from '@throttle/ui';
+import { Spinner, useListNav } from '@throttle/ui';
+import { Segmented, FilterSelect, Avatar, Banner } from '../../../components/ui/index.js';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import {
   CHANNEL_LABELS, CHANNEL_ICONS, CHANNEL_PALETTE,
-  STATUS_LABELS, STATUS_PALETTE, STATUS_VALUES,
+  STATUS_LABELS, STATUS_VALUES,
 } from '../../../lib/connects.js';
 
 const CHANNEL_TABS = [
@@ -31,29 +32,22 @@ function relTime(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
-function ChannelBadge({ channel }) {
-  const Icon = CHANNEL_ICONS[channel];
-  const pal = CHANNEL_PALETTE[channel] || { fg: 'var(--text-3)', bg: 'var(--surface-2)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '2px 8px', borderRadius: 999, background: pal.bg, color: pal.fg,
-      fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
-    }}>
-      {Icon && <Icon size={11} />} {CHANNEL_LABELS[channel] || channel}
-    </span>
-  );
-}
+// Pill colours; the D5 labels come from lib/connects.js STATUS_LABELS (shared with the detail page).
+const STATUS_PILL = {
+  new:      { fg: '#F2CD1A',   bg: 'rgba(242,205,26,.14)' },
+  working:  { fg: '#8ea2ff',   bg: 'rgba(33,60,226,.22)' },
+  promoted: { fg: '#4ade80',   bg: 'rgba(34,197,94,.14)' },
+  closed:   { fg: 'var(--text-3)', bg: 'var(--surface-2)' },
+};
 
 function StatusBadge({ status }) {
-  const pal = STATUS_PALETTE[status] || { fg: 'var(--text-3)', bg: 'var(--surface-2)' };
+  const pal = { label: STATUS_LABELS[status] || status, ...(STATUS_PILL[status] || { fg: 'var(--text-3)', bg: 'var(--surface-2)' }) };
   return (
     <span style={{
-      padding: '2px 8px', borderRadius: 999, background: pal.bg, color: pal.fg,
-      fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
-      textTransform: 'uppercase', letterSpacing: '0.04em',
+      justifySelf: 'start', fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 99,
+      color: pal.fg, background: pal.bg, whiteSpace: 'nowrap',
     }}>
-      {STATUS_LABELS[status] || status}
+      {pal.label}
     </span>
   );
 }
@@ -80,117 +74,96 @@ export default function ConnectsPage() {
       .finally(() => setLoading(false));
   }, [channel, status, session]);
 
+  // W6 (partial): client-side count over the rows currently loaded (current channel/status filter).
+  const newCount = rows.filter(r => r.status === 'new').length;
+
   return (
-    <div>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          Connects
-        </h1>
-      </header>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        {CHANNEL_TABS.map(t => (
-          <Chip key={t.id} active={channel === t.id} onClick={() => setChannel(t.id)}>{t.label}</Chip>
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <select value={status} onChange={e => setStatus(e.target.value)} style={inputStyle(160)}>
-          <option value="all">All statuses</option>
-          {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-        </select>
-      </div>
-
-      {error && (
-        <div style={{
-          background: 'var(--state-error-bg, rgba(220,38,38,0.1))', color: 'var(--state-error-fg, #dc2626)',
-          border: '1px solid var(--state-error-fg, #dc2626)', borderRadius: 'var(--radius-sm)',
-          padding: '10px 12px', marginBottom: 12, fontSize: 13,
-        }}>
-          Couldn’t load Connects: {error}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-4)' }}>
+            Work · Transferred from Pitstop CS
+          </div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6, color: 'var(--text-1)' }}>
+            Connects
+            {!loading && newCount > 0 && (
+              <span title="Counted over the conversations loaded below" style={{ fontSize: 18, color: '#F2CD1A', verticalAlign: 'middle', marginLeft: 10 }}>
+                {/* the bridge returns the latest 200 threads — don't present a partial count as the total */}
+                {newCount} new{rows.length >= 200 ? ` in latest ${rows.length}` : ''}
+              </span>
+            )}
+          </h1>
         </div>
-      )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <FilterSelect value={status} onChange={e => setStatus(e.target.value)} width={160}>
+            <option value="all">All statuses</option>
+            {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}
+          </FilterSelect>
+          <Segmented options={CHANNEL_TABS.map(t => ({ value: t.id, label: t.label }))} value={channel} onChange={setChannel} />
+        </div>
+      </div>
+
+      {error && <Banner tone="error" lead="Couldn’t load Connects:">{error}</Banner>}
 
       {loading ? <Spinner /> : (
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)', overflow: 'hidden',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Customer</th>
-                <th style={th}>Channel</th>
-                <th style={th}>Last message</th>
-                <th style={th}>Transferred</th>
-                <th style={th}>Status</th>
-                <th style={th}>Influencer</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={6} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No transferred conversations</td></tr>
-              )}
-              {rows.map((r, i) => {
-                const who = r.customer_handle || r.customer_phone || r.customer_email || '—';
-                const preview = r.last_message?.body || (r.subject ? r.subject : '');
-                return (
-                  <tr key={r.thread_id}
-                    onClick={() => router.push(`/connects/detail/?thread_id=${r.thread_id}`)}
-                    style={{
-                      cursor: 'pointer', borderTop: '1px solid var(--border)',
-                      background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                      outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
-                    }}
-                    onMouseEnter={() => setFocusedIdx(i)}
-                  >
-                    <td style={td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontWeight: 600 }}>{who}</span>
-                        {r.awaiting_reply && (
-                          <span style={{
-                            padding: '1px 6px', borderRadius: 999, fontSize: 10, fontWeight: 700,
-                            background: 'rgba(255,107,0,0.15)', color: '#FF6B00',
-                            textTransform: 'uppercase', letterSpacing: '0.04em',
-                          }}>Awaiting reply</span>
-                        )}
-                      </div>
-                      {r.subject && r.channel === 'email' && (
-                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{r.subject}</div>
-                      )}
-                    </td>
-                    <td style={td}><ChannelBadge channel={r.channel} /></td>
-                    <td style={{ ...td, maxWidth: 320 }}>
-                      <div style={{ color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
-                        {preview || <span style={{ color: 'var(--text-3)' }}>—</span>}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{relTime(r.last_message_at)}</div>
-                    </td>
-                    <td style={td}>{relTime(r.transferred_at)}</td>
-                    <td style={td}><StatusBadge status={r.status} /></td>
-                    <td style={td}>
-                      {r.influencer
-                        ? <span style={{ color: 'var(--state-success-fg)', fontWeight: 600 }}>{r.influencer.influencer_code}</span>
-                        : <span style={{ color: 'var(--text-3)' }}>—</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14 }}>
+              No transferred conversations
+            </div>
+          )}
+          {rows.map((r, i) => {
+            const who = r.customer_handle || r.customer_phone || r.customer_email || '—';
+            const preview = r.last_message?.body || (r.subject ? r.subject : '');
+            const Icon = CHANNEL_ICONS[r.channel];
+            const pal = CHANNEL_PALETTE[r.channel];
+            return (
+              <div key={r.thread_id}
+                className={`ig-row${focusedIdx === i ? ' ig-row-focus' : ''}`}
+                onClick={() => router.push(`/connects/detail/?thread_id=${r.thread_id}`)}
+                onMouseEnter={() => setFocusedIdx(i)}
+                style={{
+                  display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 14px', cursor: 'pointer',
+                  padding: '12px 18px 12px 0', background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 14, overflow: 'hidden',
+                }}
+              >
+                <span style={{ width: 6, height: 42, borderRadius: '0 4px 4px 0', flexShrink: 0, background: r.status === 'new' ? '#F2CD1A' : 'transparent' }} />
+                <Avatar name={who} seed={r.thread_id} size={42} />
+                <span style={{ flex: '1 1 180px', minWidth: 0 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-1)' }}>{who}</span>
+                    {r.awaiting_reply && (
+                      <span style={{
+                        padding: '1px 6px', borderRadius: 999, fontSize: 10, fontWeight: 700,
+                        background: 'rgba(255,107,0,0.15)', color: '#FF6B00',
+                        textTransform: 'uppercase', letterSpacing: '0.04em',
+                      }}>Awaiting reply</span>
+                    )}
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: pal?.fg || 'var(--text-3)' }}>
+                    {Icon && <Icon size={11} />} {CHANNEL_LABELS[r.channel] || r.channel}
+                    {r.transferred_at && <span style={{ color: 'var(--text-4)' }}>· transferred {relTime(r.transferred_at)}</span>}
+                  </span>
+                </span>
+                <span style={{ flex: '2 1 220px', minWidth: 0 }}>
+                  <div style={{ color: 'var(--text-2)', fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {preview || <span style={{ color: 'var(--text-4)' }}>—</span>}
+                  </div>
+                  {r.subject && r.channel === 'email' && r.last_message?.body && (
+                    <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.subject}</div>
+                  )}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-4)', minWidth: 80 }}>{relTime(r.last_message_at)}</span>
+                <span style={{ minWidth: 80, display: 'grid' }}><StatusBadge status={r.status} /></span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, minWidth: 80, color: r.influencer ? '#ff8a33' : 'var(--text-5)' }}>
+                  {r.influencer ? r.influencer.influencer_code : 'Not linked'}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
-}
-
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
-function inputStyle(w) {
-  return {
-    background: 'var(--surface-2)', color: 'var(--text-1)',
-    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-    padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13,
-    width: w,
-  };
 }
