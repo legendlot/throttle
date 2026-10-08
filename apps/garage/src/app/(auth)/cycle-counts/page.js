@@ -423,7 +423,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   }
 
   // The row checkboxes now select for Remove as well as Recount. Recount only applies to
-  // counted lines (requestRecount itself does not check status), so it sends just those.
+  // counted lines (requestRecount also refuses anything else, with a 409), so it sends just those.
   const isRemovable = l => !['reconciled', 'cancelled'].includes(l.status) && l.adjustment_id == null;
   const selectedLines = lines.filter(l => recountSel.has(l.id));
   const recountIds = selectedLines.filter(l => l.status === 'counted').map(l => l.id);
@@ -432,10 +432,19 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     if (recountIds.length === 0) return;
     const reason = recountReason.trim();
     if (!reason) { toast('Reason required', 'error'); return; }
-    const r = await workerFetch('requestRecount', {
-      data: { line_ids: recountIds, reason },
-    }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+    let r;
+    try {
+      r = await workerFetch('requestRecount', {
+        data: { line_ids: recountIds, reason },
+      }, session);
+    } catch (e) {
+      // workerFetch throws on any non-2xx — e.g. the 409 when another user already reconciled
+      // or re-flagged these lines. Reload so the table shows their real status.
+      toast(e.message || 'Failed', 'error');
+      onReload();
+      return;
+    }
+    if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
     toast(`${r.data.flagged} line(s) flagged for recount`, 'success');
     setRecountSel(new Set());
     setRecountReason('');
