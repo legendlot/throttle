@@ -4,12 +4,12 @@ import { Card, KV } from './shared.js';
 export function LogisticsCard({ e }) {
   return (
     <Card title="Logistics">
-      <KV label="Shipping order" value={e.shipping_order_id || '—'} />
-      <KV label="Tracking" value={e.tracking_id || '—'} />
+      <KV label="Shipping order" value={e.shipping_order_id ? <span style={mono}>{e.shipping_order_id}</span> : '—'} />
+      <KV label="Tracking" value={e.tracking_id ? <span style={mono}>{e.tracking_id}</span> : '—'} />
       <KV label="Shipping date" value={e.shipping_date || '—'} />
-      <KV label="Delivered" value={e.delivered_date || '—'} />
+      <KV label="Delivered" value={e.delivered_date ? <span style={{ color: 'var(--state-success-fg)' }}>{e.delivered_date}</span> : '—'} />
       <ShipmentRows shipment={e.shipment} orderId={e.shipping_order_id} />
-      {e.cs_ticket_no && <KV label="Pitstop ticket" value={<span style={{ color: 'var(--state-error-fg)' }}>{e.cs_ticket_no}</span>} />}
+      {e.cs_ticket_no && <KV label="Pitstop ticket" value={<span style={{ ...mono, color: 'var(--state-error-fg)' }}>{e.cs_ticket_no}</span>} />}
     </Card>
   );
 }
@@ -51,6 +51,7 @@ function courierText(raw) {
 // Courier stamps are IST, always — pinned rather than left to the viewer's machine clock
 // (same form as the `Approved` stamp above). A parcel time read in the wrong zone is a
 // wrong answer that looks right.
+const mono = { fontFamily: 'var(--font-mono)' };
 const istStamp = ts => new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
 // `courier` and `shipping_provider` are two Uniware fields that usually say the SAME thing:
@@ -106,10 +107,10 @@ function LifecycleBadge({ lifecycle }) {
   const p = LIFECYCLE_PALETTE[lifecycle] || LIFECYCLE_PALETTE.unknown;
   return (
     <span style={{
-      display: 'inline-flex', alignItems: 'center', padding: '2px 8px', fontSize: 11,
+      display: 'inline-flex', alignItems: 'center', padding: '3px 8px', fontSize: 11,
       fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
       textTransform: 'uppercase', color: p.fg, background: p.bg,
-      border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap',
+      border: '1px solid currentColor', borderRadius: 'var(--r-deal)', whiteSpace: 'nowrap',
     }}>
       {LIFECYCLE_LABELS[lifecycle] || lifecycle || 'Unknown'}
     </span>
@@ -122,12 +123,12 @@ function ShipmentRows({ shipment, orderId }) {
   // Neither of these is an error: an id we have not seen yet is usually days old, and a courier
   // NAME typed into the order field is a real hand-delivery record. Muted, never red.
   if (shipment.state === 'pending_sync') {
-    return <KV label="Courier" value={<span style={{ color: 'var(--text-3)' }}>Awaiting courier sync</span>} />;
+    return <KV label="Courier" value={<span style={{ color: 'var(--text-4)' }}>Awaiting courier sync</span>} />;
   }
   if (shipment.state === 'other_courier') {
     return (
       <KV label="Courier" value={
-        <span style={{ color: 'var(--text-3)' }}>Sent via {courierText(orderId)} — no tracking</span>
+        <span style={{ color: 'var(--text-4)' }}>Sent via {courierText(orderId)} — no tracking</span>
       } />
     );
   }
@@ -136,24 +137,24 @@ function ShipmentRows({ shipment, orderId }) {
   return (
     <>
       <KV label="Courier" value={
-        <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <LifecycleBadge lifecycle={shipment.lifecycle} />
           {name && <span>{name}</span>}
           {/* A prefix match came off the leading LOT token of a typed id like "#LOT43838 Complete".
               It is right often enough to show, and a guess often enough to say so. */}
           {shipment.match === 'prefix' && (
-            <span style={{ color: 'var(--text-3)', fontSize: 11 }}>matched by order prefix</span>
+            <span style={{ color: 'var(--text-4)', fontSize: 12 }}>matched by order prefix</span>
           )}
         </span>
       } />
       {shipment.tracking_number && (() => {
         const url = trackingUrlFor(shipment);
         return <KV label="AWB" value={url
-          ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--state-info-fg)' }}>{shipment.tracking_number}</a>
-          : shipment.tracking_number} />;
+          ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ ...mono, color: 'var(--state-info-fg)', borderBottom: '1px dotted currentColor' }}>{shipment.tracking_number}<span aria-hidden="true" style={{ userSelect: 'none' }}> ↗</span></a>
+          : <span style={mono}>{shipment.tracking_number}</span>} />;
       })()}
-      {shipment.dispatched_at && <KV label="Dispatched" value={istStamp(shipment.dispatched_at)} />}
-      {shipment.delivered_at && <KV label="Delivered (courier)" value={istStamp(shipment.delivered_at)} />}
+      {shipment.dispatched_at && <KV label="Dispatched" value={<span style={{ ...mono, fontSize: 13 }}>{istStamp(shipment.dispatched_at)}</span>} />}
+      {shipment.delivered_at && <KV label="Delivered (courier)" value={<span style={{ ...mono, fontSize: 13 }}>{istStamp(shipment.delivered_at)}</span>} />}
     </>
   );
 }
