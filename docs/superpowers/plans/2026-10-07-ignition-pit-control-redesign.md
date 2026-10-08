@@ -243,7 +243,17 @@ clip (New Deal) · old hexes on detail pages. Backlog bugs filed: getRoster limi
 "All" shows 168 of 438), getReports UTC bounds, getSchedule out-of-month rows.
 2. ~~Phase 1~~ done. Was: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
    + IgTopbar). One coherent visual switch; check at 375px.
-3. ~~Phase 2~~ done. **NEXT: Phase 3 detail pages** (§4 order; Engagement detail last, one card per commit) with W3 + W9b alongside.
+3. ~~Phase 2~~ done.
+**Phase 3 DONE (S412):** W3 `ec73f626` (ignitionops 7e94ad2b: approved_by_name, actor_name on history/notes) ·
+Campaign detail `8c42ba8f` · Connect detail `440e1b6e` · UGC detail `c6b7e2a7` · Influencer detail `9162f0f2` ·
+New Deal + W9b Re-book `6de48b35`-range (Re-book gated ignition_manage; `?influencer=` preselects) ·
+Engagement detail: 20 commits, one per card, ending `9cc3730c` (AdvanceModal = stage grid step 1 + inputs
+step 2, constraint 1 kept). Each hostile-reviewed; batch 1 smoked live PASS (6/6, 375px on all).
+Dropped on review: Payments "Balance due" (the payments ledger is mostly unfilled — ₹2,000 recorded vs
+₹1.68L agreed on live deals, so it would read wrong almost everywhere).
+4. **NEXT: close-out (§7)** — manual-builder refresh (incl. `data/manual.json` Payments "Final"/"no undo"),
+`systems/ignition.md` shell paragraph, `apps/ignition/DESIGN.md` tokens. Optional: W4 tab counts from
+`stage_counts` (only if exact), `discount-codes` page tokens.
 
 **Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
 the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
