@@ -10,7 +10,16 @@
 **S1 DONE (S412):** `searchTerm` + shared or-group builders + `searchAll` (ignitionops 799fafb2), 101/101 tests,
 hostile-reviewed (no-ship on stripping `:` → fixed: or-breakers become `_`, `:` kept). Live-checked from the
 signed-in app: `searchAll?q=petrol` → 2 influencers + 2 deals; `a,b)` / `x)*` / a pasted IG link → 200 with rows.
-Global search includes B-List influencers (not archived). **NEXT: S2** — `Typeahead` primitive + `useTypeahead`.
+Global search includes B-List influencers (not archived).
+**S2 + S3 DONE (S412, one commit):** `lib/typeahead.js` (pure runner: debounce/abort/stale guard, highlight,
+wrap) + `lib/useTypeahead.js` + `components/ui/Typeahead.js` + `lib/globalSearch.js` + `components/shell/GlobalSearch.js`;
+48 app tests. Deviations from the S3 row, on purpose: the **"Search this page" button is removed** (two search
+fields side by side; `/` still reaches the page box), and the phone sheet lives in `GlobalSearch.js`, not
+`layout.js`. Hostile review fixes: Enter while loading waits for that query's rows (never opens a previous
+query's top row); the 4 detail pages are keyed by id (⌘K from deal A to deal B no longer carries A's open
+edit form / typed note over); 16px sheet input (iOS zoom); sheet closes on route change; Safari IME Enter;
+Enter retries on error; manual Navigation paragraph rewritten (PDF regenerates in S7).
+**NEXT: S4** — `/engagements` + `/influencers` page boxes (controlled `Typeahead`, `onSubmit` = today's filter).
 
 ## 0. What exists today (the facts the plan rests on)
 
@@ -107,9 +116,9 @@ that's already loaded, so it has no race and needs no debounce.
 
 | # | Slice | Repo / files | Size | Notes |
 |---|---|---|---|---|
-| S1 | **Worker: safe search term + `searchAll`** | `ignitionops-worker/src/index.js`, new test | ~60k | `searchTerm(q)`: trim, cap 64 chars, strip PostgREST reserved `, ( ) * " \ :`; used by `getInfluencers` and `getEngagements` (fixes §0 ⚠️). New `searchAll?q=` (gate `ignition_view`, min 2) returns `{influencers ≤5, engagements ≤5, campaigns ≤3}` in one round trip, reusing the existing filter builders with small limits, plus a `name.ilike` on campaigns. Tests: the sanitiser (commas, parens, `*`, empty after strip) and the result shape. Deploy ignitionops. |
-| S2 | **`Typeahead` primitive + `useTypeahead` hook** | `apps/ignition/src/components/ui/Typeahead.js`, `lib/useTypeahead.js`, test | ~60k | Ignition-local (`packages/ui` untouched). Props: `fetchResults(q, signal) → [{group, items:[{id, primary, secondary, meta, tone, href}]}]`, `onPick(item)`, `onSubmit(q)`, `minChars`, `debounceMs`, `placeholder`, `primary` (sets `data-search-primary`), `value`/`onChange` (controlled, so the list pages keep their state). Pure helpers unit-tested in `node --test`: the debounce/stale guard, match highlighting, keyboard index wrap. |
-| S3 | **Global search in the top bar** | `components/shell/IgTopbar.js`, `app/(auth)/layout.js` (mobile sheet) | ~40k | `searchAll` via `Typeahead`; `⌘/Ctrl+K` rebinds here; the "Search this page" button stays for pages with a box. |
+| S1 | **Worker: safe search term + `searchAll`** ✅ | `ignitionops-worker/src/index.js`, new test | ~60k | `searchTerm(q)`: trim, cap 64 chars, strip PostgREST reserved `, ( ) * " \ :`; used by `getInfluencers` and `getEngagements` (fixes §0 ⚠️). New `searchAll?q=` (gate `ignition_view`, min 2) returns `{influencers ≤5, engagements ≤5, campaigns ≤3}` in one round trip, reusing the existing filter builders with small limits, plus a `name.ilike` on campaigns. Tests: the sanitiser (commas, parens, `*`, empty after strip) and the result shape. Deploy ignitionops. |
+| S2 | **`Typeahead` primitive + `useTypeahead` hook** ✅ | `apps/ignition/src/components/ui/Typeahead.js`, `lib/useTypeahead.js`, test | ~60k | Ignition-local (`packages/ui` untouched). Props: `fetchResults(q, signal) → [{group, items:[{id, primary, secondary, meta, tone, href}]}]`, `onPick(item)`, `onSubmit(q)`, `minChars`, `debounceMs`, `placeholder`, `primary` (sets `data-search-primary`), `value`/`onChange` (controlled, so the list pages keep their state). Pure helpers unit-tested in `node --test`: the debounce/stale guard, match highlighting, keyboard index wrap. |
+| S3 | **Global search in the top bar** ✅ | `components/shell/IgTopbar.js`, `components/shell/GlobalSearch.js` (field + phone sheet) | ~40k | `searchAll` via `Typeahead`; `⌘/Ctrl+K` rebinds here. **Built differently:** the "Search this page" button was removed (`/` keeps the page box). |
 | S4 | **List pages, worker-backed:** `/engagements`, `/influencers` | the two `page.js` | ~40k | Swap `SearchField` for `Typeahead` in controlled mode; the list fetch, paging, sessionStorage, `useListNav` untouched. |
 | S5 | **List pages, client-side:** `/connects`, `/campaigns`, `/payments`, `/roster`, `/admin/users` | the five `page.js` | ~50k | `fetchResults` filters the rows already in state (no worker call); Enter filters the visible list. Connects matches the fields the list rows already carry (name, handle, channel, last message preview); confirm what the row has before wiring. |
 | S6 | **Pickers** | `lib/useDealForm.js`, `NewDealModal.js`, `engagements/new/page.js`, `NewPaymentModal.js`, `campaigns/detail/page.js` (Link deal) | ~40k | Same component; keeps each picker's limit, min chars and its pick handler; adds debounce and the stale guard. The New-deal preset (`?influencer=`) is unchanged. |

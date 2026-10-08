@@ -9,6 +9,7 @@ export { RatingDot, RATING_COLORS } from './RatingDot.js';
 export { Tile } from './Tile.js';
 export { FilterSelect } from './FilterSelect.js';
 export { SearchField } from './SearchField.js';
+export { Typeahead } from './Typeahead.js';
 export { TableCard, Row, NumCell } from './TableCard.js';
 export { Avatar, AVATAR_TINTS } from './Avatar.js';
 export { Modal } from './Modal.js';

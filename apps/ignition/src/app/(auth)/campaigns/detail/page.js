@@ -13,7 +13,15 @@ import { productLabel, titleish } from '../../../../lib/productLabel.js';
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 function num(n) { return n == null || isNaN(n) ? 0 : Number(n); }
 
+// Keyed by the record id: global search (⌘K) can move from one record to another on this same route,
+// and Next keeps the page mounted across a ?id= change — without the key, open edit forms, typed
+// notes and the loaded record would carry over to the next record (typeahead S3 review).
 export default function CampaignDetailPage() {
+  const sp = useSearchParams();
+  return <CampaignDetailPageBody key={sp.get('id') || ''} />;
+}
+
+function CampaignDetailPageBody() {
   const params = useSearchParams();
   const id = params.get('id');
   const { session, perms } = useAuth();

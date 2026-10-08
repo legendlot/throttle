@@ -23,7 +23,15 @@ const SPEND_EXCLUDED_STAGES = new Set(['cancelled']);
 // Engagements grid. No per-deal Verdict column — dropped by §S411-IgnitionRedesignScope (D8).
 const ENG_COLS = '150px 70px 130px 120px 100px 70px minmax(90px, 1fr)';
 
+// Keyed by the record id: global search (⌘K) can move from one record to another on this same route,
+// and Next keeps the page mounted across a ?id= change — without the key, open edit forms, typed
+// notes and the loaded record would carry over to the next record (typeahead S3 review).
 export default function InfluencerDetailPage() {
+  const sp = useSearchParams();
+  return <InfluencerDetailPageBody key={sp.get('id') || `code:${sp.get('code') || ''}`} />;
+}
+
+function InfluencerDetailPageBody() {
   const sp = useSearchParams();
   const router = useRouter();
   const id = sp.get('id');

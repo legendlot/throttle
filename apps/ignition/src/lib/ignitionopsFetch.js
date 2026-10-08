@@ -12,11 +12,13 @@ function token(session) {
 
 const IGN_URL = process.env.NEXT_PUBLIC_IGNITIONOPS_URL || 'https://ignitionops.afshaan.workers.dev';
 
-export async function ignitionopsGet(action, params = {}, session) {
+// opts.signal: an AbortSignal (typeahead aborts the previous keystroke's call).
+export async function ignitionopsGet(action, params = {}, session, opts = {}) {
   const qs = new URLSearchParams({ action, ...params }).toString();
   const res = await fetch(`${IGN_URL}/?${qs}`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token(session)}` },
+    signal: opts.signal,
   });
   const data = await res.json();
   if (!res.ok || data.ok === false) throw new Error(data.error || `ignitionopsGet ${action} failed (${res.status})`);

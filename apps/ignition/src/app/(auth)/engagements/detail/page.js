@@ -24,7 +24,15 @@ import { NotesCard } from './components/NotesCard.js';
 import { HistoryCard } from './components/HistoryCard.js';
 import { Card, KV } from './components/shared.js';
 
+// Keyed by the record id: global search (⌘K) can move from one record to another on this same route,
+// and Next keeps the page mounted across a ?id= change — without the key, open edit forms, typed
+// notes and the loaded record would carry over to the next record (typeahead S3 review).
 export default function EngagementDetailPage() {
+  const sp = useSearchParams();
+  return <EngagementDetailPageBody key={sp.get('id') || `no:${sp.get('engagement_no') || ''}`} />;
+}
+
+function EngagementDetailPageBody() {
   const sp = useSearchParams();
   const router = useRouter();
   const id = sp.get('id');
