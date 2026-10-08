@@ -1,16 +1,30 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal } from './ui/Modal.js';
-import { STAGE_LABELS, allowedTransitions, HAPPY_PATH } from '../lib/stages.js';
-import { UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_HAPPY_PATH } from '../lib/ugcStages.js';
+import { Banner } from './ui/Banner.js';
+import { StagePill } from './ui/StagePill.js';
+import { RATING_COLORS } from './ui/RatingDot.js';
+import { STAGE_LABELS, STAGE_PALETTE, allowedTransitions, HAPPY_PATH } from '../lib/stages.js';
+import { UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, UGC_HAPPY_PATH } from '../lib/ugcStages.js';
 
 const fieldStyle = {
-  width: '100%', marginTop: 6, padding: '8px 10px',
-  background: 'var(--surface-2)', color: 'var(--text-1)',
-  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-  fontFamily: 'var(--font-mono)', fontSize: 13,
+  width: '100%', marginTop: 6, height: 40, padding: '0 12px',
+  background: 'var(--input)', color: 'var(--text-1)',
+  border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)',
+  fontFamily: 'var(--font-ui)', fontSize: 14,
 };
-const lblStyle = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' };
+const lblStyle = { fontSize: 12, fontWeight: 600, color: 'var(--text-3)' };
+const errLine = { fontSize: 12, color: 'var(--state-error-fg)', marginTop: 4 };
+const hintLine = { fontSize: 12, color: 'var(--text-4)', marginTop: 4 };
+const ghostBtn = { height: 40, padding: '0 16px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, cursor: 'pointer' };
+const primaryBtn = { height: 40, padding: '0 18px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700 };
+const choiceBtn = (on, color) => ({
+  flex: 1, height: 40, padding: '0 10px', cursor: 'pointer',
+  background: on ? `${color}22` : 'transparent',
+  color: on ? color : 'var(--text-2)',
+  border: `1px solid ${on ? color : 'var(--border-3)'}`,
+  borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: on ? 700 : 600,
+});
 
 export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const [target, setTarget] = useState('');
@@ -25,6 +39,9 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const [trackUrl, setTrackUrl] = useState('');              // C1 #2 — required for shipped (UGC)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // Step 1 = the stage grid; step 2 = the per-stage input panel, only for a stage that needs one.
+  const [step, setStep] = useState(1);
+  useEffect(() => { if (open) setStep(1); }, [open]);
   if (!engagement) return null;
 
   const isUgc          = engagement.engagement_type === 'ugc';
@@ -35,6 +52,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   // and stage filter from UGC_STAGE_VALUES. The worker now refuses those transitions too — this
   // is the convenience half of the fix, not the gate. (S317 hostile review.)
   const stageLabels = isUgc ? UGC_STAGE_LABELS : STAGE_LABELS;
+  const stagePalette = isUgc ? UGC_STAGE_PALETTE : STAGE_PALETTE;
   const happyPath   = isUgc ? UGC_HAPPY_PATH : HAPPY_PATH;
   const options = isUgc
     ? UGC_STAGE_VALUES.filter(s => s !== engagement.stage)
@@ -77,6 +95,11 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const missingRating   = needsRating && !rating;
   const missingOrderId  = needsOrderId && !shipOrderId.trim();
   const missingTrackUrl = needsTrackUrl && !trackUrl.trim();
+  // Every per-stage prompt lives on step 2; a stage with none advances straight from step 1.
+  const needsInputs = needsVideoLink || needsPostDate || needsRating || needsOrderId || needsTrackUrl || isSchedule;
+  // An unapproved proposal can only be closed (ghosted/dropped/cancelled) — the worker 422s approval_required.
+  const awaitingApproval = engagement.stage === 'proposed' && !engagement.approved_at;
+  const nextStage = awaitingApproval ? undefined : _fromIdx >= 0 ? happyPath[_fromIdx + 1] : undefined;
   const canSubmit = !!target && !busy && !missingVideo && !missingPostDate && !missingRevised && !missingRating && !missingOrderId && !missingTrackUrl;
 
   async function submit() {
@@ -108,7 +131,8 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
       // Surface the worker's guard reasons inline so the operator can fill in
       // the missing field and resubmit (mirrors the video-link prompt).
       const m = e?.message || '';
-      if (/rating_required_for_live/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this live.');
+      if (/approval_required/.test(m)) setErr('This deal needs approval before it can move forward.');
+      else if (/rating_required_for_live/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this live.');
       else if (/post_date_required_for_live/.test(m)) setErr('A video posting date is required to mark this live.');
       else if (/shipping_order_id_required_for_shipped/.test(m)) setErr('A Shopify order ID is required to mark this shipped.');
       else if (/tracking_url_required_for_shipped/.test(m)) setErr('A tracking link is required to mark this shipped.');
@@ -117,187 +141,196 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
     } finally { setBusy(false); }
   }
 
+  const curPal = stagePalette[engagement.stage] || { fg: 'var(--text-1)' };
+
+  // B11 — soft nudge when skipping happy-path stages (still allowed)
+  const skipBanner = skipped.length > 0 && (
+    <Banner tone="warning" lead={`⚠ Skipping ${skipped.map(s => stageLabels[s] || s).join(', ')}.`}>
+      You can still advance if that&apos;s intended.
+    </Banner>
+  );
+  const errLineEl = err && <div style={{ fontSize: 13, color: 'var(--state-error-fg)' }}>{err}</div>;
+
   return (
-    <Modal open={open} onClose={onClose} title={`Advance ${engagement.engagement_no}`}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 360 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          Current stage: <strong style={{ color: 'var(--text-1)' }}>{stageLabels[engagement.stage] || engagement.stage}</strong>
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Move to
-          </label>
-          <select
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            style={{
-              width: '100%', marginTop: 6, padding: '8px 10px',
-              background: 'var(--surface-2)', color: 'var(--text-1)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: 13,
-            }}
-          >
-            <option value="">— select —</option>
-            {options.map(s => <option key={s} value={s}>{stageLabels[s] || s}</option>)}
-          </select>
+    <Modal open={open} onClose={onClose} title="Move to…">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+        <div style={{ fontSize: 14, color: 'var(--text-3)', marginTop: -12 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-hi)' }}>{engagement.engagement_no}</span>
+          {' · '}Currently <span style={{ color: curPal.fg, fontWeight: 600 }}>{stageLabels[engagement.stage] || engagement.stage}</span>. {awaitingApproval ? 'Needs approval before it can move forward.' : 'Any stage is allowed.'}
         </div>
 
-        {/* B11 — soft nudge when skipping happy-path stages (still allowed) */}
-        {skipped.length > 0 && (
-          <div style={{ fontSize: 12, color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid #fbbf24', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
-            ⚠ Skipping {skipped.map(s => stageLabels[s] || s).join(', ')}. You can still advance if that&apos;s intended.
-          </div>
-        )}
-
-        {/* #4 — going live requires a video link */}
-        {needsVideoLink && (
-          <div>
-            <label style={lblStyle}>Video link *</label>
-            <input
-              value={videoLink || existingLink}
-              onChange={(e) => setVideoLink(e.target.value)}
-              placeholder="https://…"
-              style={fieldStyle}
-            />
-            {missingVideo && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live</div>}
-          </div>
-        )}
-
-        {/* ② — going live requires the video posting date (feeds the monthly target) */}
-        {needsPostDate && (
-          <div>
-            <label style={lblStyle}>Video posting date *</label>
-            <input type="date" value={postDate} onChange={(e) => setPostDate(e.target.value)} style={fieldStyle} />
-            {missingPostDate
-              ? <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live — views count toward this month&apos;s target</div>
-              : <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>Views attribute to the month the video posted.</div>}
-          </div>
-        )}
-
-        {/* ⑤ — going live requires a colour rating if not already rated */}
-        {needsRating && (
-          <div>
-            <label style={lblStyle}>Rating *</label>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              {[['green', 'Green'], ['yellow', 'Yellow'], ['red', 'Red']].map(([v, label]) => {
-                const on = rating === v;
-                const color = v === 'green' ? '#4ade80' : v === 'yellow' ? '#fbbf24' : '#ff7070';
+        {step === 1 && (
+          <>
+            <div role="radiogroup" aria-label="Move to" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+              {options.map(s => {
+                const on = target === s;
+                const isNext = s === nextStage;
                 return (
-                  <button type="button" key={v} onClick={() => setRating(v)}
+                  <button type="button" role="radio" aria-checked={on} key={s} onClick={() => setTarget(s)}
                     style={{
-                      flex: 1, padding: '8px 10px', cursor: 'pointer',
-                      background: on ? `${color}22` : 'var(--surface-2)',
-                      color: on ? color : 'var(--text-2)',
-                      border: `1px solid ${on ? color : 'var(--border)'}`,
-                      borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: on ? 700 : 600,
-                    }}>{label}</button>
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '11px 12px', minWidth: 0,
+                      borderRadius: 12, cursor: 'pointer', textAlign: 'left',
+                      border: `1px solid ${on || isNext ? 'var(--accent)' : 'var(--border-2)'}`,
+                      background: on ? 'var(--accent-bg)' : isNext ? 'var(--accent-bg-soft)' : 'transparent',
+                      boxShadow: on ? 'inset 0 0 0 1px var(--accent)' : 'none',
+                      color: 'var(--text-1)', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600,
+                      transition: 'border-color 140ms, background 140ms',
+                    }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: (stagePalette[s] || {}).fg || 'var(--text-4)' }} />
+                    <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{stageLabels[s] || s}</span>
+                    {isNext && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent-hi)', fontFamily: 'var(--font-mono)' }}>NEXT</span>}
+                  </button>
                 );
               })}
             </div>
-            {missingRating && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live</div>}
-            <input
-              value={ratingNotes}
-              onChange={(e) => setRatingNotes(e.target.value)}
-              placeholder="Rating notes (optional)"
-              style={{ ...fieldStyle, marginTop: 8 }}
-            />
-          </div>
-        )}
 
-        {/* #7 — marking shipped requires a Shopify order ID if none on the deal */}
-        {needsOrderId && (
-          <div>
-            <label style={lblStyle}>Shopify order ID *</label>
-            <input
-              value={shipOrderId}
-              onChange={(e) => setShipOrderId(e.target.value)}
-              placeholder="e.g. #1234 or 1234"
-              style={fieldStyle}
-            />
-            {missingOrderId && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark shipped</div>}
-          </div>
-        )}
+            {skipBanner}
 
-        {/* C1 #2 — a UGC deal is marked shipped against a tracking link, not an order id */}
-        {needsTrackUrl && (
-          <div>
-            <label style={lblStyle}>Tracking link *</label>
-            <input
-              value={trackUrl}
-              onChange={(e) => setTrackUrl(e.target.value)}
-              placeholder="https://…"
-              style={fieldStyle}
-            />
-            {missingTrackUrl && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark shipped</div>}
-          </div>
-        )}
-
-        {/* #10 — scheduling: confirm on-track vs delayed */}
-        {isSchedule && (
-          <div>
-            <label style={lblStyle}>Is it on track?</label>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              {[['on_track', 'On track'], ['delayed', 'Delayed']].map(([v, label]) => {
-                const on = trackChoice === v;
-                return (
-                  <button type="button" key={v} onClick={() => setTrackChoice(v)}
-                    style={{
-                      flex: 1, padding: '8px 10px', cursor: 'pointer',
-                      background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)',
-                      color: on ? '#FF6B00' : 'var(--text-2)',
-                      border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`,
-                      borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12,
-                    }}>{label}</button>
-                );
-              })}
+            <div>
+              <label style={lblStyle}>Note (optional)</label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                style={{ ...fieldStyle, height: 'auto', padding: '10px 12px', resize: 'vertical' }}
+              />
             </div>
-            {isDelayed && (
-              <div style={{ marginTop: 10 }}>
-                <label style={lblStyle}>Revised post date *</label>
-                <input type="date" value={revisedDate} onChange={(e) => setRevisedDate(e.target.value)} style={fieldStyle} />
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>Moves the deal to <strong>Delayed</strong>; original date kept in history.</div>
+            {errLineEl}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={onClose} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+              {needsInputs ? (
+                <button type="button" onClick={() => setStep(2)} disabled={!target}
+                  className={target ? 'ig-cta' : undefined}
+                  style={{ ...primaryBtn, cursor: target ? 'pointer' : 'not-allowed', opacity: target ? 1 : 0.5 }}
+                >Continue →</button>
+              ) : (
+                <button type="button" onClick={submit} disabled={!canSubmit}
+                  className={canSubmit ? 'ig-cta' : undefined}
+                  style={{ ...primaryBtn, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: canSubmit ? 1 : 0.5 }}
+                >{busy ? 'Advancing…' : 'Advance'}</button>
+              )}
+            </div>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--text-3)' }}>Moving to</span>
+              <StagePill stage={target} ugc={isUgc} />
+            </div>
+
+            {skipBanner}
+
+            {/* #4 — going live requires a video link */}
+            {needsVideoLink && (
+              <div>
+                <label style={lblStyle}>Video link *</label>
+                <input
+                  value={videoLink || existingLink}
+                  onChange={(e) => setVideoLink(e.target.value)}
+                  placeholder="https://…"
+                  style={fieldStyle}
+                />
+                {missingVideo && <div style={errLine}>Required to mark live</div>}
               </div>
             )}
-          </div>
-        )}
 
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Note (optional)
-          </label>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            rows={3}
-            style={{
-              width: '100%', marginTop: 6, padding: '8px 10px',
-              background: 'var(--surface-2)', color: 'var(--text-1)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: 13, resize: 'vertical',
-            }}
-          />
-        </div>
-        {err && <div style={{ fontSize: 12, color: 'var(--state-error-fg)' }}>{err}</div>}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '8px 14px', background: 'transparent', color: 'var(--text-2)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer',
-            }}
-          >Cancel</button>
-          <button
-            onClick={submit}
-            disabled={!canSubmit}
-            style={{
-              padding: '8px 14px', background: '#FF6B00', color: '#fff',
-              border: 'none', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-              cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: canSubmit ? 1 : 0.5,
-            }}
-          >{busy ? 'Advancing…' : 'Advance'}</button>
-        </div>
+            {/* ② — going live requires the video posting date (feeds the monthly target) */}
+            {needsPostDate && (
+              <div>
+                <label style={lblStyle}>Video posting date *</label>
+                <input type="date" value={postDate} onChange={(e) => setPostDate(e.target.value)} style={fieldStyle} />
+                {missingPostDate
+                  ? <div style={errLine}>Required to mark live — views count toward this month&apos;s target</div>
+                  : <div style={hintLine}>Views attribute to the month the video posted.</div>}
+              </div>
+            )}
+
+            {/* ⑤ — going live requires a colour rating if not already rated */}
+            {needsRating && (
+              <div>
+                <label style={lblStyle}>Rating *</label>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  {[['green', 'Green'], ['yellow', 'Yellow'], ['red', 'Red']].map(([v, label]) => (
+                    <button type="button" key={v} onClick={() => setRating(v)} style={choiceBtn(rating === v, RATING_COLORS[v])}>{label}</button>
+                  ))}
+                </div>
+                {missingRating && <div style={errLine}>Required to mark live</div>}
+                <input
+                  value={ratingNotes}
+                  onChange={(e) => setRatingNotes(e.target.value)}
+                  placeholder="Rating notes (optional)"
+                  style={{ ...fieldStyle, marginTop: 8 }}
+                />
+              </div>
+            )}
+
+            {/* #7 — marking shipped requires a Shopify order ID if none on the deal */}
+            {needsOrderId && (
+              <div>
+                <label style={lblStyle}>Shopify order ID *</label>
+                <input
+                  value={shipOrderId}
+                  onChange={(e) => setShipOrderId(e.target.value)}
+                  placeholder="e.g. #1234 or 1234"
+                  style={fieldStyle}
+                />
+                {missingOrderId && <div style={errLine}>Required to mark shipped</div>}
+              </div>
+            )}
+
+            {/* C1 #2 — a UGC deal is marked shipped against a tracking link, not an order id */}
+            {needsTrackUrl && (
+              <div>
+                <label style={lblStyle}>Tracking link *</label>
+                <input
+                  value={trackUrl}
+                  onChange={(e) => setTrackUrl(e.target.value)}
+                  placeholder="https://…"
+                  style={fieldStyle}
+                />
+                {missingTrackUrl && <div style={errLine}>Required to mark shipped</div>}
+              </div>
+            )}
+
+            {/* #10 — scheduling: confirm on-track vs delayed */}
+            {isSchedule && (
+              <div>
+                <label style={lblStyle}>Is it on track?</label>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  {[['on_track', 'On track'], ['delayed', 'Delayed']].map(([v, label]) => (
+                    <button type="button" key={v} onClick={() => setTrackChoice(v)} style={choiceBtn(trackChoice === v, '#FF6B00')}>{label}</button>
+                  ))}
+                </div>
+                {isDelayed && (
+                  <div style={{ marginTop: 10 }}>
+                    <label style={lblStyle}>Revised post date *</label>
+                    <input type="date" value={revisedDate} onChange={(e) => setRevisedDate(e.target.value)} style={fieldStyle} />
+                    <div style={hintLine}>Moves the deal to <strong style={{ color: 'var(--text-2)' }}>Delayed</strong>; original date kept in history.</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {note.trim() && (
+              <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                Note: <span style={{ color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>{note}</span>
+              </div>
+            )}
+            {errLineEl}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => setStep(1)} disabled={busy} className="ig-ghost-btn" style={ghostBtn}>← Back</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={onClose} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+                <button type="button" onClick={submit} disabled={!canSubmit}
+                  className={canSubmit ? 'ig-cta' : undefined}
+                  style={{ ...primaryBtn, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: canSubmit ? 1 : 0.5 }}
+                >{busy ? 'Advancing…' : 'Advance'}</button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );
