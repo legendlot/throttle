@@ -1,12 +1,14 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav, useToast } from '@throttle/ui';
-import { Plus, ChevronDown } from 'lucide-react';
+import { Spinner, useListNav, useToast } from '@throttle/ui';
+import { Plus, ChevronDown, Link2Off } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../../../lib/channelLink.js';
-import RatingBadge from '../../../components/RatingBadge.js';
+import {
+  Segmented, Menu, SearchField, FilterSelect, TableCard, Row, NumCell, Avatar, RatingDot, Banner,
+} from '../../../components/ui/index.js';
 import { NewInfluencerModal } from '../../../components/NewInfluencerModal.js';
 import { NewDealModal } from '../../../components/NewDealModal.js';
 
@@ -65,6 +67,8 @@ export default function InfluencersPage() {
   const [catalogs, setCatalogs] = useState(null);
   const [modal, setModal] = useState(null);     // 'influencer' | 'deal' | null
   const [menuOpen, setMenuOpen] = useState(false);
+  const newBtnRef = useRef(null);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/influencers/detail/?id=${r.id}`);
   });
@@ -139,176 +143,162 @@ export default function InfluencersPage() {
   ].filter(c => c.always || (c.count || 0) > 0);
 
   return (
-    <div>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{
-          fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700,
-          letterSpacing: '0.04em', textTransform: 'uppercase',
-        }}>Influencers</h1>
-        <div style={{ position: 'relative' }}>
-          <button onClick={() => setMenuOpen(o => !o)} style={newBtn}>
-            <Plus size={15} strokeWidth={2.25} /> New <ChevronDown size={14} />
-          </button>
-          {menuOpen && (
-            <>
-              <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
-              <div style={menuStyle}>
-                <button style={menuItem} onClick={() => { setMenuOpen(false); setModal('influencer'); }}>Add Influencer</button>
-                <button style={menuItem} onClick={() => { setMenuOpen(false); setModal('deal'); }}>Add Deal</button>
-              </div>
-            </>
-          )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <header className="ig-up" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', color: 'var(--text-4)' }}>WORK · MASTER DATA</div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>Influencers</h1>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Segmented
+            options={TABS.map(t => ({ value: t.id, label: t.label }))}
+            value={tab}
+            onChange={setTab}
+          />
+          <div style={{ position: 'relative', marginLeft: 'auto' }}>
+            <button ref={newBtnRef} onClick={() => setMenuOpen(o => !o)} style={newBtn}>
+              <Plus size={15} strokeWidth={2.25} /> New <ChevronDown size={14} />
+            </button>
+            <Menu
+              open={menuOpen}
+              onClose={closeMenu}
+              anchorRef={newBtnRef}
+              width={200}
+              items={[
+                { label: 'Add influencer', onClick: () => setModal('influencer') },
+                { label: 'Add deal',       onClick: () => setModal('deal') },
+              ]}
+            />
+          </div>
         </div>
       </header>
 
       <BrokenLinksPanel session={session} />
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        {TABS.map(t => (
-          <Chip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</Chip>
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div className="ig-up" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, animationDelay: '80ms' }}>
         {cardDefs.map(c => {
           const active = type === c.id;
           return (
             <button
               key={c.id || 'all'}
               type="button"
+              className="ig-card-hover"
               onClick={() => (c.id === '' ? setType('') : toggleType(c.id))}
               style={{
-                flex: '1 1 120px', minWidth: 110, textAlign: 'left', cursor: 'pointer',
-                background: active ? 'rgba(255,107,0,0.08)' : 'var(--surface)',
+                ...typeCard,
+                cursor: 'pointer',
+                background: active ? 'rgba(255,107,0,.1)' : 'var(--surface)',
                 border: `1px solid ${active ? '#FF6B00' : 'var(--border)'}`,
-                borderRadius: 'var(--radius-md)', padding: '12px 14px',
               }}
             >
-              <div style={{ fontSize: 11, color: active ? '#FF6B00' : 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: active ? 'var(--accent-hi)' : 'var(--text-3)' }}>
                 {c.label}
               </div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'var(--font-cond)', marginTop: 2 }}>
-                {c.count == null ? '–' : c.count.toLocaleString()}
+              <div style={typeCardValue}>
+                {c.count == null ? '–' : Number(c.count).toLocaleString()}
               </div>
             </button>
           );
         })}
         <div
-          style={{
-            flex: '1 1 120px', minWidth: 110, textAlign: 'left',
-            background: 'var(--surface)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)', padding: '12px 14px',
-          }}
-          title={counts?.total_reach != null ? `${counts.total_reach.toLocaleString()} total reach` : undefined}
+          style={typeCard}
+          title={counts?.total_reach != null ? `${Number(counts.total_reach).toLocaleString()} total reach` : undefined}
         >
-          <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
-            Total reach
-          </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'var(--font-cond)', marginTop: 2 }}>
-            {counts?.total_reach == null ? '–' : fmtReach(counts.total_reach)}
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>Total reach</div>
+          <div style={typeCardValue}>
+            {counts?.total_reach == null ? '–' : fmtReach(Number(counts.total_reach))}
           </div>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-        <input
-          data-search-primary
+      <div className="ig-up" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', animationDelay: '120ms' }}>
+        <SearchField
           placeholder="Search code, handle, name, phone, email…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={inputStyle(280)}
         />
-        <select value={rating} onChange={e => setRating(e.target.value)} style={inputStyle(140)}>
+        <FilterSelect value={rating} onChange={e => setRating(e.target.value)}>
           <option value="">All ratings</option>
           <option value="green">Green</option>
           <option value="yellow">Yellow</option>
           <option value="red">Red</option>
           <option value="unrated">Unrated</option>
-        </select>
-        <select value={reach} onChange={e => setReach(e.target.value)} style={inputStyle(150)}>
+        </FilterSelect>
+        <FilterSelect value={reach} onChange={e => setReach(e.target.value)}>
           {REACH_BUCKETS.map(b => <option key={b.id || 'all'} value={b.id}>{b.label}</option>)}
-        </select>
-        <select value={location} onChange={e => setLocation(e.target.value)} style={inputStyle(170)}>
+        </FilterSelect>
+        <FilterSelect value={location} onChange={e => setLocation(e.target.value)}>
           <option value="">All locations</option>
           {locations.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <select value={niche} onChange={e => setNiche(e.target.value)} style={inputStyle(160)}>
+        </FilterSelect>
+        <FilterSelect value={niche} onChange={e => setNiche(e.target.value)}>
           <option value="">All niches</option>
           {(catalogs?.category_options?.niche || []).map(n => <option key={n} value={n}>{n}</option>)}
-        </select>
-        <select value={ageRange} onChange={e => setAgeRange(e.target.value)} style={inputStyle(130)}>
+        </FilterSelect>
+        <FilterSelect value={ageRange} onChange={e => setAgeRange(e.target.value)}>
           <option value="">All ages</option>
           {(catalogs?.age_ranges || []).map(a => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select value={gender} onChange={e => setGender(e.target.value)} style={inputStyle(150)}>
+        </FilterSelect>
+        <FilterSelect value={gender} onChange={e => setGender(e.target.value)}>
           <option value="">All genders</option>
           {(catalogs?.gender_majorities || []).map(g => <option key={g} value={g}>{GENDER_LABELS[g] || g}</option>)}
-        </select>
-        <select value={sort} onChange={e => setSort(e.target.value)} style={inputStyle(180)}>
+        </FilterSelect>
+        <FilterSelect value={sort} onChange={e => setSort(e.target.value)}>
           {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-        </select>
+        </FilterSelect>
       </div>
 
       {loading ? <Spinner /> : (
         <>
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)', overflow: 'hidden',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Code</th>
-                <th style={th}>Channel</th>
-                <th style={th}>Type</th>
-                <th style={th}>Category</th>
-                <th style={th}>Reach</th>
-                <th style={th}>Location</th>
-                <th style={th}>Rating</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={7} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No results</td></tr>
-              )}
-              {rows.map((r, i) => (
-                <tr
-                  key={r.id}
-                  onClick={() => router.push(`/influencers/detail/?id=${r.id}`)}
-                  style={{
-                    cursor: 'pointer', borderTop: '1px solid var(--border)',
-                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                    outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
-                  }}
-                  onMouseEnter={() => setFocusedIdx(i)}
-                >
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.influencer_code}</span></td>
-                  <td style={td}>
-                    <div>{r.channel_name || '—'}</div>
-                    {r.person_name && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.person_name}</div>}
-                  </td>
-                  <td style={td}>{r.influencer_type || '—'}</td>
-                  <td style={td}>{(r.categories || []).join(', ') || '—'}</td>
-                  <td style={td}>{r.reach?.toLocaleString() || '—'}</td>
-                  <td style={td}>{r.location || '—'}</td>
-                  <td style={td}><RatingBadge rating={r.quality_rating} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, gap: 12 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+        <TableCard
+          columns={COLS}
+          minWidth={1000}
+          head={['Code', 'Channel', 'Type', 'Category', { label: 'Reach', align: 'right' }, 'Location', 'Rating']}
+          style={{ animation: 'igUp 500ms 160ms var(--ease-out) backwards' }}
+        >
+          {rows.length === 0 && (
+            <div style={{ padding: '18px', color: 'var(--text-3)', textAlign: 'center', fontSize: 14 }}>No results</div>
+          )}
+          {rows.map((r, i) => (
+            <Row
+              key={r.id}
+              columns={COLS}
+              index={i}
+              animate
+              focused={focusedIdx === i}
+              onClick={() => router.push(`/influencers/detail/?id=${r.id}`)}
+              onMouseEnter={() => setFocusedIdx(i)}
+              style={{ padding: '10px 18px' }}
+            >
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent-hi)' }}>{r.influencer_code}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                <Avatar name={r.channel_name || r.person_name || r.influencer_code} seed={r.id} size={34} />
+                <span style={{ minWidth: 0 }}>
+                  <span style={ellipsis}>{r.channel_name || '—'}</span>
+                  {r.person_name && <span style={{ display: 'block', fontSize: 12, color: 'var(--text-4)' }}>{r.person_name}</span>}
+                </span>
+              </span>
+              <span>
+                {r.influencer_type
+                  ? <span style={typePill}>{r.influencer_type}</span>
+                  : <span style={{ color: 'var(--text-4)' }}>—</span>}
+              </span>
+              <span style={{ ...ellipsis, fontWeight: 400, color: 'var(--text-2)' }}>{(r.categories || []).join(', ') || '—'}</span>
+              <NumCell>{r.reach != null ? Number(r.reach).toLocaleString() : '—'}</NumCell>
+              <span style={{ color: 'var(--text-2)', minWidth: 0 }}>{r.location || '—'}</span>
+              <RatingDot rating={r.quality_rating} size={9} />
+            </Row>
+          ))}
+        </TableCard>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', fontSize: 13, color: 'var(--text-4)' }}>
+          <span>
             {counts?.total != null
-              ? `Showing ${rows.length.toLocaleString()} of ${counts.total.toLocaleString()}`
+              ? `Showing ${rows.length.toLocaleString()} of ${Number(counts.total).toLocaleString()}`
               : `Showing ${rows.length.toLocaleString()}`}
           </span>
           {counts?.total != null && rows.length < counts.total && (
-            <button onClick={loadMore} disabled={loadingMore} style={{
-              background: 'var(--surface-2)', color: 'var(--text-1)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-              padding: '8px 16px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-              letterSpacing: '0.06em', textTransform: 'uppercase',
+            <button onClick={loadMore} disabled={loadingMore} className="ig-ghost-btn" style={{
+              ...ghostBtn,
               cursor: loadingMore ? 'default' : 'pointer', opacity: loadingMore ? 0.6 : 1,
             }}>
               {loadingMore ? 'Loading…' : 'Load more'}
@@ -324,32 +314,26 @@ export default function InfluencersPage() {
   );
 }
 
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
+// Table grid (prototype: 90 | 2fr | 90 | 1.4fr | 100 | 1fr | 100).
+const COLS = '90px minmax(220px,2fr) 90px minmax(160px,1.4fr) 100px minmax(120px,1fr) 100px';
+const ellipsis = { display: 'block', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+const typePill = {
+  display: 'inline-block', fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 8,
+  background: 'var(--chip-neutral)', color: 'var(--text-2)', textTransform: 'capitalize',
+};
+const typeCard = {
+  textAlign: 'left', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)',
+  borderRadius: 'var(--r-tile)', padding: '14px 16px', color: 'var(--text-1)', font: 'inherit',
+};
+const typeCardValue = { fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, marginTop: 4, color: 'var(--text-1)' };
 const newBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, background: '#FF6B00', color: '#fff',
-  border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px',
-  fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-  letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6, height: 42, padding: '0 16px', background: 'var(--text-1)', color: 'var(--bg, #0e1015)',
+  border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer',
 };
-const menuStyle = {
-  position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 21,
-  background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-  minWidth: 180, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+const ghostBtn = {
+  background: 'transparent', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 10,
+  padding: '9px 16px', fontSize: 13, fontWeight: 600,
 };
-const menuItem = {
-  display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
-  color: 'var(--text-1)', border: 'none', borderBottom: '1px solid var(--border)',
-  padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 13, cursor: 'pointer',
-};
-function inputStyle(w) {
-  return {
-    background: 'var(--surface-2)', color: 'var(--text-1)',
-    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-    padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13,
-    width: w,
-  };
-}
 
 // Broken profile links worklist (S313, Reann approved 2026-08-26). `channel_link` had been
 // collecting browser tab titles pasted instead of URLs — "(9) Instagram". The source forms now
@@ -400,32 +384,36 @@ function BrokenLinksPanel({ session }) {
 
   if (!data || !data.count) return null;
   return (
-    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
-      <button onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
-        <span style={{ color: '#FF6B00', fontWeight: 700 }}>{data.count}</span>
-        <span>profiles have no usable channel link</span>
-        <span style={{ color: 'var(--text-3)' }}>
-          · {data.suggestable} can be confirmed in one click{data.manual ? ` · ${data.manual} need typing` : ''}
-        </span>
-        <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{open ? 'hide' : 'fix these'}</span>
-      </button>
+    <div className="ig-up" style={{ animationDelay: '40ms' }}>
+      <Banner
+        tone="warning"
+        icon={<Link2Off size={16} strokeWidth={1.75} />}
+        lead={`${data.count} broken channel link${data.count === 1 ? '' : 's'}.`}
+        action={open ? 'Hide' : 'Review →'}
+        onAction={() => setOpen(o => !o)}
+      >
+        These profiles can't be opened from a deal until fixed.
+      </Banner>
       {open && (
-        <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto' }}>
+        <div style={{ marginTop: 8, border: '1px solid var(--border)', borderRadius: 'var(--r-row)', background: 'var(--surface)', overflow: 'hidden' }}>
+          <div style={{ padding: '10px 16px', fontSize: 13, color: 'var(--text-3)', borderBottom: '1px solid var(--border)' }}>
+            {data.suggestable} can be confirmed in one click{data.manual ? ` · ${data.manual} need typing` : ''}
+          </div>
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
           {data.rows.map(r => (
-            <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, flexWrap: 'wrap' }}>
-              <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)', minWidth: 62 }}>{r.influencer_code}</span>
+            <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 16px', borderTop: '1px solid var(--row-divider)', fontSize: 13, flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--accent-hi)', fontFamily: 'var(--font-mono)', fontWeight: 600, minWidth: 62 }}>{r.influencer_code}</span>
               <span style={{ color: 'var(--text-1)', minWidth: 140 }}>{r.channel_name || r.person_name || '—'}</span>
               <span style={{ color: 'var(--text-3)', minWidth: 70 }}>{r.platform || '—'}</span>
-              <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }} title="What is stored now">
+              <span style={{ color: 'var(--text-3)', fontStyle: 'italic', minWidth: 0, overflowWrap: 'anywhere' }} title="What is stored now">
                 {r.blank ? '(blank)' : `“${r.current}”`}
               </span>
-              <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
                 {r.suggested ? (
                   <>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{r.suggested.replace('https://', '')}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', overflowWrap: 'anywhere' }}>{r.suggested.replace('https://', '')}</span>
                     <button disabled={busy === r.id} onClick={() => save(r, r.suggested)}
-                      style={{ padding: '3px 9px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                      style={{ padding: '4px 10px', background: '#FF6B00', color: '#0a0a0a', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
                       {busy === r.id ? '…' : 'Use'}
                     </button>
                   </>
@@ -433,9 +421,10 @@ function BrokenLinksPanel({ session }) {
                   <>
                     <input placeholder="paste the profile URL"
                       value={drafts[r.id] || ''} onChange={e => setDrafts(d => ({ ...d, [r.id]: e.target.value }))}
-                      style={{ width: 230, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }} />
+                      style={{ width: 230, maxWidth: '100%', height: 30, background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '0 10px', fontFamily: 'var(--font-mono)', fontSize: 12 }} />
                     <button disabled={busy === r.id || !(drafts[r.id] || '').trim()} onClick={() => save(r, drafts[r.id])}
-                      style={{ padding: '3px 9px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>
+                      className="ig-ghost-btn"
+                      style={{ padding: '4px 10px', background: 'transparent', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                       {busy === r.id ? '…' : 'Save'}
                     </button>
                   </>
@@ -443,6 +432,7 @@ function BrokenLinksPanel({ session }) {
               </span>
             </div>
           ))}
+          </div>
         </div>
       )}
     </div>

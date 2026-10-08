@@ -5,11 +5,16 @@ import { useEffect, useRef } from 'react';
 // Positioned absolutely — wrap the trigger + <Menu> in a position:relative element.
 // items: [{ label, onClick, icon?, danger?, disabled?, active? }]. Closes on outside mousedown,
 // on Escape, and after an item is picked.
-export function Menu({ open, onClose, items = [], align = 'right', width = 220, style, children }) {
+// `anchorRef`: the trigger element. A mousedown on it is NOT "outside" — otherwise the trigger's own
+// toggle would reopen the menu the listener just closed (React's listener and this one share `document`).
+export function Menu({ open, onClose, anchorRef, items = [], align = 'right', width = 220, style, children }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
-    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose?.(); };
+    const onDown = (e) => {
+      if (anchorRef?.current?.contains(e.target)) return;
+      if (ref.current && !ref.current.contains(e.target)) onClose?.();
+    };
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     // deferred so the click that opened the menu does not immediately close it
     const t = setTimeout(() => document.addEventListener('mousedown', onDown), 0);
@@ -19,7 +24,7 @@ export function Menu({ open, onClose, items = [], align = 'right', width = 220, 
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, onClose]);
+  }, [open, onClose, anchorRef]);
 
   if (!open) return null;
   return (
