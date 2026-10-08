@@ -16,9 +16,13 @@ export function useTypeahead({ query, fetchResults, minChars = 2, debounceMs = 2
   const runner = useMemo(() => createSearchRunner({
     fetchResults: (q, signal) => fetchRef.current(q, signal),
     // groupsQ = the query the rows on screen answer (bold matches use it, not the new text).
-    onState: (s) => setState((prev) => s.status === 'loading'
-      ? { ...prev, status: 'loading', q: s.q, error: null }
-      : { groups: [], error: null, ...s, groupsQ: s.status === 'done' ? s.q : '' }),
+    // An idle/short report that changes nothing keeps the same state object (no re-render), so a
+    // refreshKey that changes on a closed box can never spin a render loop.
+    onState: (s) => setState((prev) => {
+      if (s.status === 'loading') return { ...prev, status: 'loading', q: s.q, error: null };
+      if ((s.status === 'idle' || s.status === 'short') && prev.status === s.status && prev.q === s.q) return prev;
+      return { groups: [], error: null, ...s, groupsQ: s.status === 'done' ? s.q : '' };
+    }),
     minChars,
     debounceMs,
   }), [minChars, debounceMs]);

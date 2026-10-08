@@ -25,7 +25,12 @@ jump; the list is the filter); a pick opens `/engagements/detail` like the list 
 dropdown = `getInfluencers {tab, search, limit 6}`; rows show name · code · type · rating (no reach — §1B
 said reach; dropped, the list shows it). Typeahead now fetches only while focused. Row look shared in
 `components/ui/searchRows.js`. Esc = close dropdown, second Esc clears (was one native Esc).
-**NEXT: S5** — client-side boxes: `/connects`, `/campaigns`, `/payments`, `/roster`, `/admin/users`.
+**S5 DONE (S412):** client-side boxes on `/connects`, `/campaigns`, `/payments`, `/roster`, `/admin/users` —
+`matchRows` (every word must match some field) filters the loaded rows as you type; headline counts/tiles stay
+whole. Picks: connect thread, campaign, roster profile, payment → its deal, user → narrows the table (status-
+filtered list, named users only). Roster/Payments empty states say "loaded" (Roster search covers only the
+rows `getRoster` returns — the filed limit bug). Bold matching is now per word.
+**NEXT: S6** — pickers: `lib/useDealForm.js`, `NewDealModal.js`, `engagements/new/page.js`, `NewPaymentModal.js`, campaign "Link deal".
 
 ## 0. What exists today (the facts the plan rests on)
 
@@ -126,7 +131,7 @@ that's already loaded, so it has no race and needs no debounce.
 | S2 | **`Typeahead` primitive + `useTypeahead` hook** ✅ | `apps/ignition/src/components/ui/Typeahead.js`, `lib/useTypeahead.js`, test | ~60k | Ignition-local (`packages/ui` untouched). Props: `fetchResults(q, signal) → [{group, items:[{id, primary, secondary, meta, tone, href}]}]`, `onPick(item)`, `onSubmit(q)`, `minChars`, `debounceMs`, `placeholder`, `primary` (sets `data-search-primary`), `value`/`onChange` (controlled, so the list pages keep their state). Pure helpers unit-tested in `node --test`: the debounce/stale guard, match highlighting, keyboard index wrap. |
 | S3 | **Global search in the top bar** ✅ | `components/shell/IgTopbar.js`, `components/shell/GlobalSearch.js` (field + phone sheet) | ~40k | `searchAll` via `Typeahead`; `⌘/Ctrl+K` rebinds here. **Built differently:** the "Search this page" button was removed (`/` keeps the page box). |
 | S4 | **List pages, worker-backed:** `/engagements`, `/influencers` ✅ | the two `page.js` | ~40k | Swap `SearchField` for `Typeahead` in controlled mode; the list fetch, paging, sessionStorage, `useListNav` untouched. |
-| S5 | **List pages, client-side:** `/connects`, `/campaigns`, `/payments`, `/roster`, `/admin/users` | the five `page.js` | ~50k | `fetchResults` filters the rows already in state (no worker call); Enter filters the visible list. Connects matches the fields the list rows already carry (name, handle, channel, last message preview); confirm what the row has before wiring. |
+| S5 | **List pages, client-side:** `/connects`, `/campaigns`, `/payments`, `/roster`, `/admin/users` ✅ | the five `page.js` | ~50k | `fetchResults` filters the rows already in state (no worker call); Enter filters the visible list. Connects matches the fields the list rows already carry (name, handle, channel, last message preview); confirm what the row has before wiring. |
 | S6 | **Pickers** | `lib/useDealForm.js`, `NewDealModal.js`, `engagements/new/page.js`, `NewPaymentModal.js`, `campaigns/detail/page.js` (Link deal) | ~40k | Same component; keeps each picker's limit, min chars and its pick handler; adds debounce and the stale guard. The New-deal preset (`?influencer=`) is unchanged. |
 | S7 | **Close-out** | manual (Navigation chapter: ⌘K global search, `/` page search; each list chapter one line) · `DESIGN.md` (Typeahead in the primitives list) · `systems/ignition.md` one line | ~30k | manual-builder, version bump. |
 

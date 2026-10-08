@@ -4,7 +4,8 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast, Combobox } from '@throttle/ui';
 import { ShieldCheck } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
-import { Card, Segmented, SearchField, TableCard, Row, Avatar } from '../../../../components/ui/index.js';
+import { Card, Segmented, Typeahead, TableCard, Row, Avatar } from '../../../../components/ui/index.js';
+import { matchRows } from '../../../../lib/typeahead.js';
 
 // Role colours per the Pit Control spec; any other role_key falls back to the neutral style.
 const ROLE_STYLE = {
@@ -89,10 +90,9 @@ export default function AdminUsersPage() {
     .map((u) => ({ value: u.id, label: u.full_name, hint: u.role || '' }));
 
   const activeCount = users.filter((u) => u.active).length;
-  const ql = q.trim().toLowerCase();
-  const rows = users.filter((u) =>
-    (status === 'all' || (status === 'active' ? u.active : !u.active)) &&
-    (!ql || `${u.full_name || ''} ${roleLabel(u.role_key)} ${u.global_role || ''}`.toLowerCase().includes(ql)));
+  const userFields = (u) => [u.full_name, roleLabel(u.role_key), u.global_role];
+  const byStatus = users.filter((u) => status === 'all' || (status === 'active' ? u.active : !u.active));
+  const rows = matchRows(byStatus, q, userFields);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -169,7 +169,25 @@ export default function AdminUsersPage() {
             Who has access <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-4)', fontWeight: 500, marginLeft: 6 }}>{activeCount} active</span>
           </span>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <SearchField value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people, role…" width={280} />
+            {/* No per-user page: a pick narrows the table to that person (plan 2026-10-08 S5). */}
+            <Typeahead
+              value={q}
+              onChange={setQ}
+              placeholder="Search people, role…"
+              width={280}
+              quiet
+              debounceMs={0}
+              refreshKey={data}
+              // From the status-filtered list, so a pick is always a row the table can show.
+              fetchResults={async (text) => matchRows(byStatus.filter((u) => u.full_name), text, userFields).slice(0, 6).map((u) => ({
+                id: u.user_id,
+                primary: u.full_name,
+                secondary: [roleLabel(u.role_key), u.active ? 'Active' : 'Revoked'].join(' · '),
+                lead: <Avatar name={u.full_name || '?'} seed={u.user_id} size={28} />,
+              }))}
+              onPick={(it) => setQ(it.primary)}
+              onSubmit={() => {}}
+            />
             <Segmented
               value={status}
               onChange={setStatus}

@@ -4,7 +4,10 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, useListNav } from '@throttle/ui';
 import { Modal } from '../../../components/ui/Modal.js';
-import { Card, ProgressBar, budgetTone } from '../../../components/ui/index.js';
+import { Card, ProgressBar, budgetTone, Typeahead } from '../../../components/ui/index.js';
+import { matchRows } from '../../../lib/typeahead.js';
+
+const campaignFields = c => [c.name, c.campaign_no, c.status];
 import { Plus, Trash2 } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 
@@ -17,9 +20,11 @@ export default function CampaignsPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [q, setQ] = useState('');
   const canManage = !!perms?.ignition_manage;
-  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
-    const c = rows[i]; if (c) router.push(`/campaigns/detail/?id=${c.id}`);
+  const shown = matchRows(rows, q, campaignFields);
+  const { focusedIdx, setFocusedIdx } = useListNav(shown.length, (i) => {
+    const c = shown[i]; if (c) router.push(`/campaigns/detail/?id=${c.id}`);
   });
 
   const [delTarget, setDelTarget] = useState(null);
@@ -63,18 +68,40 @@ export default function CampaignsPage() {
             Multi-video deal groupings. Each campaign rolls up its linked engagements.
           </div>
         </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typeahead
+            placeholder="Search campaign name or number…"
+            value={q}
+            onChange={setQ}
+            quiet
+            debounceMs={0}
+            refreshKey={rows}
+            width={280}
+            fetchResults={async (text) => matchRows(rows, text, campaignFields).slice(0, 6).map(c => ({
+              id: c.id,
+              href: `/campaigns/detail/?id=${encodeURIComponent(c.id)}`,
+              primary: c.name || c.campaign_no,
+              secondary: c.name ? c.campaign_no : '',
+              meta: c.status ? <StatusPill status={c.status} /> : null,
+            }))}
+            onPick={it => router.push(it.href)}
+            onSubmit={() => {}}
+          />
         {canManage && (
           <button onClick={() => setShowNew(true)} style={btnPrimary}>
             <Plus size={16} strokeWidth={2.5} style={{ marginRight: 6, verticalAlign: '-3px' }} />New campaign
           </button>
         )}
+        </div>
       </header>
 
-      {loading ? <Spinner /> : rows.length === 0 ? (
-        <Card style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: 13 }}>No campaigns yet.</Card>
+      {loading ? <Spinner /> : shown.length === 0 ? (
+        <Card style={{ color: 'var(--text-3)', textAlign: 'center', fontSize: 13 }}>
+          {rows.length ? <>No campaign matches &ldquo;{q.trim()}&rdquo;</> : 'No campaigns yet.'}
+        </Card>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))', gap: 12 }}>
-          {rows.map((c, i) => {
+          {shown.map((c, i) => {
             const budget = c.budget_amount != null ? Number(c.budget_amount) : null;
             const spend = Number(c.rollup?.spend) || 0;
             const pct = budget > 0 ? (spend / budget) * 100 : null;

@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useListNav } from '@throttle/ui';
-import { Segmented, FilterSelect, Avatar, Banner } from '../../../components/ui/index.js';
+import { Segmented, FilterSelect, Avatar, Banner, Typeahead } from '../../../components/ui/index.js';
+import { matchRows } from '../../../lib/typeahead.js';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import {
   CHANNEL_LABELS, CHANNEL_ICONS, CHANNEL_PALETTE,
@@ -40,6 +41,15 @@ const STATUS_PILL = {
   closed:   { fg: 'var(--text-3)', bg: 'var(--surface-2)' },
 };
 
+// Client-side search over the threads already loaded (plan 2026-10-08 S5): Connects rows carry no name
+// server-side (the bridge resolves it), so the box matches what each row on screen shows.
+const connectWho = r => r.customer_handle || r.customer_phone || r.customer_email || '';
+const connectFields = r => [
+  r.customer_handle, r.customer_phone, r.customer_email, r.subject, r.last_message?.body,
+  CHANNEL_LABELS[r.channel] || r.channel, STATUS_LABELS[r.status] || r.status,
+  r.influencer?.influencer_code, r.influencer?.channel_name,
+];
+
 function StatusBadge({ status }) {
   const pal = { label: STATUS_LABELS[status] || status, ...(STATUS_PILL[status] || { fg: 'var(--text-3)', bg: 'var(--surface-2)' }) };
   return (
@@ -60,8 +70,10 @@ export default function ConnectsPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
-    const r = rows[i]; if (r) router.push(`/connects/detail/?thread_id=${r.thread_id}`);
+  const [q, setQ] = useState('');
+  const shown = matchRows(rows, q, connectFields);
+  const { focusedIdx, setFocusedIdx } = useListNav(shown.length, (i) => {
+    const r = shown[i]; if (r) router.push(`/connects/detail/?thread_id=${r.thread_id}`);
   });
 
   useEffect(() => {
@@ -95,6 +107,23 @@ export default function ConnectsPage() {
           </h1>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typeahead
+            placeholder="Search name, handle, phone, message…"
+            value={q}
+            onChange={setQ}
+            quiet
+            debounceMs={0}
+            refreshKey={rows}
+            fetchResults={async (text) => matchRows(rows, text, connectFields).slice(0, 6).map(r => ({
+              id: r.thread_id,
+              href: `/connects/detail/?thread_id=${encodeURIComponent(r.thread_id)}`,
+              primary: connectWho(r) || r.subject || CHANNEL_LABELS[r.channel] || r.channel,
+              secondary: [CHANNEL_LABELS[r.channel] || r.channel, STATUS_LABELS[r.status] || r.status].filter(Boolean).join(' · '),
+              lead: <Avatar name={connectWho(r)} seed={r.thread_id} size={28} />,
+            }))}
+            onPick={it => router.push(it.href)}
+            onSubmit={() => {}}
+          />
           <FilterSelect value={status} onChange={e => setStatus(e.target.value)} width={160}>
             <option value="all">All statuses</option>
             {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}
@@ -107,12 +136,12 @@ export default function ConnectsPage() {
 
       {loading ? <Spinner /> : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.length === 0 && (
+          {shown.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14 }}>
-              No transferred conversations
+              {rows.length && q.trim() ? <>No loaded conversation matches &ldquo;{q.trim()}&rdquo;</> : 'No transferred conversations'}
             </div>
           )}
-          {rows.map((r, i) => {
+          {shown.map((r, i) => {
             const who = r.customer_handle || r.customer_phone || r.customer_email || '—';
             const preview = r.last_message?.body || (r.subject ? r.subject : '');
             const Icon = CHANNEL_ICONS[r.channel];

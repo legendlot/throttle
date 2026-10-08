@@ -32,14 +32,14 @@ export function moveIndex(i, delta, n) {
   return ((i + delta) % n + n) % n;
 }
 
-// Split `text` into [{ text, hit }] around every case-insensitive occurrence of the query, for bold
-// matches. A regex (not indexOf on lower-cased copies) so characters whose lower case has a different
-// length cannot shift the slices.
+// Split `text` into [{ text, hit }] around every case-insensitive occurrence of each query word (the
+// list boxes match word by word — matchRows — so "petrol 575" bolds both). A regex (not indexOf on
+// lower-cased copies) so characters whose lower case has a different length cannot shift the slices.
 export function highlightParts(text, q) {
   const s = String(text ?? '');
-  const needle = normQuery(q);
-  if (!s || !needle) return [{ text: s, hit: false }];
-  const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  const toks = normQuery(q).split(' ').filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!s || !toks.length) return [{ text: s, hit: false }];
+  const re = new RegExp(toks.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
   const out = [];
   let last = 0;
   let m;
@@ -101,4 +101,17 @@ export function createSearchRunner({ fetchResults, onState, minChars = 2, deboun
     // Unmount / close: drop the pending call and ignore anything still in flight.
     cancel() { stop(); seq++; },
   };
+}
+
+// Client-side search over rows a page already holds (Connects, Campaigns, Payments, Roster, Users).
+// Every word of the query must appear in one of the row's fields (case-insensitive), so "petrol 575"
+// finds petrol_hunter IN575. fieldsOf(row) → array of values; null / '' are skipped.
+export function matchRows(rows, q, fieldsOf) {
+  const list = Array.isArray(rows) ? rows : [];
+  const toks = normQuery(q).toLowerCase().split(' ').filter(Boolean);
+  if (!toks.length) return list;
+  return list.filter((r) => {
+    const hay = (fieldsOf(r) || []).filter((v) => v != null && v !== '').map(String).join(' \u0001 ').toLowerCase();
+    return toks.every((t) => hay.includes(t));
+  });
 }

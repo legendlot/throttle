@@ -128,3 +128,25 @@ test('runner: cancel() drops an in-flight response', async () => {
   await f;
   assert.deepEqual(states.map(s => s.status), ['loading']);
 });
+
+test('matchRows: every word must match some field, case-insensitive; empty query returns all', async () => {
+  const { matchRows } = await import('../src/lib/typeahead.js');
+  const rows = [
+    { name: 'petrol_hunter', code: 'IN575' },
+    { name: 'petrol_hunter', code: 'IN1368' },
+    { name: 'Asha', code: null },
+  ];
+  const f = r => [r.name, r.code];
+  assert.deepEqual(matchRows(rows, 'PETROL 575', f).map(r => r.code), ['IN575']);
+  assert.equal(matchRows(rows, '  ', f).length, 3);
+  assert.deepEqual(matchRows(rows, 'asha', f).map(r => r.name), ['Asha']);
+  assert.deepEqual(matchRows(rows, 'null', f), []);           // a null field is not the text "null"
+  assert.deepEqual(matchRows(rows, 'hunter in13', f).map(r => r.code), ['IN1368']);
+  assert.deepEqual(matchRows(null, 'x', f), []);
+});
+
+test('highlightParts bolds each word of a multi-word query', () => {
+  assert.deepEqual(highlightParts('petrol_hunter · IN575', 'petrol 575'), [
+    { text: 'petrol', hit: true }, { text: '_hunter · IN', hit: false }, { text: '575', hit: true },
+  ]);
+});

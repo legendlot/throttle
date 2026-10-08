@@ -7,6 +7,15 @@ import { Plus, Trash2, Paperclip } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { NewPaymentModal } from '../../../components/NewPaymentModal.js';
 import { paymentKindLabel } from '../../../lib/paymentKinds.js';
+import { Typeahead } from '../../../components/ui/index.js';
+import { matchRows } from '../../../lib/typeahead.js';
+
+// Client-side search over the loaded payments (plan 2026-10-08 S5). The tiles stay whole-ledger totals.
+const payInfName = p => p.influencer ? (p.influencer.channel_name || p.influencer.person_name || p.influencer.influencer_code || '') : '';
+const paymentFields = p => [
+  p.influencer?.influencer_code, p.influencer?.channel_name, p.influencer?.person_name,
+  p.engagement?.engagement_no, p.engagement?.product_code, paymentKindLabel(p.kind), p.note, p.paid_on,
+];
 
 const rupee = n => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
@@ -17,6 +26,7 @@ export default function PaymentsPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState(false);
+  const [q, setQ] = useState('');
   const canManage = !!session;
 
   function load() {
@@ -44,6 +54,7 @@ export default function PaymentsPage() {
 
   const s = data?.summary;
   const payments = data?.payments || [];
+  const shown = matchRows(payments, q, paymentFields);
 
   return (
     <div style={{ maxWidth: 1100, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -62,6 +73,31 @@ export default function PaymentsPage() {
         <PayTile label="All time" tile={s?.all} d={210} muted />
       </div>
 
+      {payments.length > 0 && (
+        <Typeahead
+          placeholder="Search influencer, deal #, kind, note…"
+          value={q}
+          onChange={setQ}
+          quiet
+          debounceMs={0}
+          refreshKey={payments}
+          fetchResults={async (text) => matchRows(payments, text, paymentFields).slice(0, 6).map(p => ({
+            id: p.id,
+            engagement_id: p.engagement_id,
+            influencerName: payInfName(p),
+            primary: payInfName(p) || p.engagement?.engagement_no || paymentKindLabel(p.kind),
+            secondary: [p.paid_on, p.engagement?.engagement_no, paymentKindLabel(p.kind)].filter(Boolean).join(' · '),
+            meta: <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{rupee(p.amount)}</span>,
+          }))}
+          // A payment has no page of its own: a pick opens its deal, or narrows the table to that influencer.
+          onPick={it => {
+            if (it.engagement_id) router.push(`/engagements/detail/?id=${encodeURIComponent(it.engagement_id)}`);
+            else if (it.influencerName) setQ(it.influencerName);
+          }}
+          onSubmit={() => {}}
+        />
+      )}
+
       {loading ? <Spinner /> : (
         <div className="ig-up" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', overflowX: 'auto', animationDelay: '220ms' }}>
           <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 14 }}>
@@ -72,10 +108,12 @@ export default function PaymentsPage() {
               </tr>
             </thead>
             <tbody>
-              {payments.length === 0 && (
-                <tr><td colSpan={8} style={{ ...td, color: 'var(--text-4)', textAlign: 'center' }}>No payments recorded yet</td></tr>
+              {shown.length === 0 && (
+                <tr><td colSpan={8} style={{ ...td, color: 'var(--text-4)', textAlign: 'center' }}>
+                  {payments.length ? <>No loaded payment matches &ldquo;{q.trim()}&rdquo;</> : 'No payments recorded yet'}
+                </td></tr>
               )}
-              {payments.map(p => (
+              {shown.map(p => (
                 <tr key={p.id} className="ig-row" style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ ...td, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)' }}>{p.paid_on}</td>
                   <td style={td}>

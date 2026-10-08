@@ -1,10 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
-import { Segmented, RatingDot, RATING_COLORS, Avatar } from '../../../components/ui/index.js';
+import { Segmented, RatingDot, RATING_COLORS, Avatar, Typeahead } from '../../../components/ui/index.js';
+import { matchRows } from '../../../lib/typeahead.js';
 
 const FILTERS = [
   { id: 'all', label: 'All', value: '' },
@@ -20,6 +22,8 @@ const ratingKey = r => (RATING_COLORS[r?.quality_rating] ? r.quality_rating : 'u
 const reachOf = r => Number(r.reach) || 0;
 const fmt = n => (n == null || n === '' ? '—' : Number(n).toLocaleString());
 const href = r => `/influencers/detail/?id=${r.id}`;
+// Client-side search over the loaded roster (plan 2026-10-08 S5) — inherits the getRoster limit bug.
+const rosterFields = r => [r.channel_name, r.person_name, r.influencer_code, r.channel_link, r.influencer_type];
 
 export default function RosterPage() {
   const { session } = useAuth();
@@ -27,6 +31,9 @@ export default function RosterPage() {
   const [view, setView] = useState('tiles');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState('');
+  const router = useRouter();
+  const shown = matchRows(rows, q, rosterFields);
 
   useEffect(() => {
     if (!session) return;
@@ -61,21 +68,45 @@ export default function RosterPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typeahead
+            placeholder="Search name, handle, code…"
+            value={q}
+            onChange={setQ}
+            quiet
+            debounceMs={0}
+            refreshKey={rows}
+            width={260}
+            fetchResults={async (text) => matchRows(rows, text, rosterFields).slice(0, 6).map(r => {
+              const name = r.channel_name || r.person_name || r.influencer_code || '';
+              return {
+                id: r.id, href: href(r), primary: name,
+                secondary: [r.person_name && r.person_name !== name ? r.person_name : null, r.influencer_code !== name ? r.influencer_code : null].filter(Boolean).join(' · '),
+                lead: <Avatar name={name} seed={r.id} size={28} />,
+                meta: <RatingDot rating={ratingKey(r)} showLabel={false} />,
+              };
+            })}
+            onPick={it => router.push(it.href)}
+            onSubmit={() => {}}
+          />
           <Segmented options={VIEWS} value={view} onChange={setView} />
           <Segmented options={filterOptions} value={rating} onChange={setRating} />
         </div>
       </div>
 
-      {!loading && rows.length > 0 && (
+      {!loading && shown.length > 0 && (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-          {rows.length.toLocaleString()} influencer{rows.length === 1 ? '' : 's'} shown
+          {shown.length.toLocaleString()} influencer{shown.length === 1 ? '' : 's'} shown
           {' · '}
-          {rows.reduce((a, r) => a + reachOf(r), 0).toLocaleString()} total reach (of those shown)
+          {shown.reduce((a, r) => a + reachOf(r), 0).toLocaleString()} total reach (of those shown)
         </div>
       )}
 
-      {loading ? <Spinner /> : rows.length === 0 ? (
-        <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: 24, fontSize: 13 }}>No influencers in roster.</div>
+      {loading ? <Spinner /> : shown.length === 0 ? (
+        <div style={{ color: 'var(--text-3)', textAlign: 'center', padding: 24, fontSize: 13 }}>
+          {rows.length
+            ? <>No loaded influencer matches &ldquo;{q.trim()}&rdquo; &mdash; search covers the {rows.length} shown on this page, not the whole roster.</>
+            : 'No influencers in roster.'}
+        </div>
       ) : view === 'list' ? (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', overflowX: 'auto' }}>
           <div style={{ minWidth: 770 }}>
@@ -83,7 +114,7 @@ export default function RosterPage() {
               <span>Code</span><span>Channel</span><span>Type</span>
               <span style={{ textAlign: 'right' }}>Reach</span><span style={{ textAlign: 'right' }}>Videos</span><span>Rating</span>
             </div>
-            {rows.map((r, i) => {
+            {shown.map((r, i) => {
               const name = r.channel_name || r.person_name || '—';
               return (
                 <Link key={r.id} href={href(r)} prefetch={false} className="ig-row"
@@ -104,7 +135,7 @@ export default function RosterPage() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))', gap: 12 }}>
-          {rows.map((r, i) => {
+          {shown.map((r, i) => {
             const name = r.channel_name || r.person_name || '—';
             const rk = ratingKey(r);
             return (
