@@ -113,6 +113,7 @@
   --radius-full: 9999px;
 
   --font-ui:   'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body: var(--font-ui);   /* read by the shared @throttle/ui Manual (D4: reskin via tokens) */
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-cond: 'Tomorrow', system-ui, sans-serif;
 
