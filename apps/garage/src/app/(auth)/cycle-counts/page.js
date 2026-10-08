@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState, buildCycleCountSheetHtml, printWindow } from '@throttle/ui';
+import { useProducts } from '../../../hooks/useProducts.js';
 
 const STATUS_TABS = [
   { id: 'in_progress', label: 'In Progress',  tone: 'yellow' },
@@ -191,6 +192,11 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
   const [counterName, setCounterName] = useState('');
   const [notes,       setNotes]       = useState('');
   const [creating,    setCreating]    = useState(false);
+  // 'due' = pick from the due schedule (as before) · 'product' = every active BOM part of one
+  // product, resolved by the worker from bom_register (Piyush, #bugs 1791365201.610259).
+  const [scope,       setScope]       = useState('due');
+  const [product,     setProduct]     = useState('');
+  const { PRODUCTS, loading: productsLoading } = useProducts();
 
   useEffect(() => {
     (async () => {
@@ -230,28 +236,66 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
   }
 
   async function submit() {
-    if (selected.size === 0) { toast('Select at least one part', 'error'); return; }
+    const byProduct = scope === 'product';
+    if (byProduct && !product) { toast('Pick a product', 'error'); return; }
+    if (!byProduct && selected.size === 0) { toast('Select at least one part', 'error'); return; }
     setCreating(true);
     try {
       const r = await workerFetch('createCycleCount', {
         data: {
-          part_codes: [...selected],
-          count_type: 'scheduled',
+          // Product mode sends no part list — the worker resolves the product's BOM itself.
+          ...(byProduct ? { product, count_type: 'ad_hoc' } : { part_codes: [...selected], count_type: 'scheduled' }),
           area:       area.trim() || null,
           notes:      counterName ? `Counter: ${counterName.trim()}${notes ? ' · ' + notes.trim() : ''}` : (notes.trim() || null),
         },
       }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Create failed', 'error'); return; }
-      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines`, 'success');
+      const skipped = (r.data.skipped_not_in_ledger?.length || 0) + (r.data.skipped_retired?.length || 0);
+      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines${skipped ? ` · ${skipped} skipped (retired / not in stock ledger)` : ''}`, 'success');
       onCreated(r.data.count_no);
     } finally { setCreating(false); }
   }
 
   return (
     <Modal open onClose={onClose} size="lg" title="New cycle count"
-           confirmLabel={creating ? 'CREATING…' : `CREATE COUNT · ${selected.size} part${selected.size === 1 ? '' : 's'}`}
+           confirmLabel={creating ? 'CREATING…' : scope === 'product'
+             ? `CREATE COUNT · ${product || 'pick a product'}`
+             : `CREATE COUNT · ${selected.size} part${selected.size === 1 ? '' : 's'}`}
            onConfirm={submit} loading={creating}>
-      {loading ? <Spinner /> : !schedule ? <EmptyState message="No schedule available" /> : (
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {[['due', 'Due parts'], ['product', 'By product']].map(([id, label]) => (
+          <button key={id} onClick={() => setScope(id)} style={{ ...btnS, ...(scope === id ? { background: 'rgba(33,60,226,.2)', color: '#7b93ff', borderColor: 'rgba(33,60,226,.35)', fontWeight: 700 } : {}) }}>{label.toUpperCase()}</button>
+        ))}
+      </div>
+      {scope === 'product' ? (
+        <>
+          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
+            Counts every active BOM part of one product, including shared screws and universal parts on its BOM.
+            Retired parts and parts with no stock-ledger row are left out.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+            <div>
+              <label style={lbl}>Product</label>
+              <select value={product} onChange={e => setProduct(e.target.value)} style={{ ...input, width: '100%' }} disabled={productsLoading}>
+                <option value="">{productsLoading ? 'Loading…' : 'Pick a product'}</option>
+                {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Area / Zone</label>
+              <input value={area} onChange={e => setArea(e.target.value)} placeholder="optional" style={{ ...input, width: '100%' }} />
+            </div>
+            <div>
+              <label style={lbl}>Counter Name</label>
+              <input value={counterName} onChange={e => setCounterName(e.target.value)} placeholder="written on count sheet" style={{ ...input, width: '100%' }} />
+            </div>
+            <div>
+              <label style={lbl}>Notes</label>
+              <input value={notes} onChange={e => setNotes(e.target.value)} style={{ ...input, width: '100%' }} />
+            </div>
+          </div>
+        </>
+      ) : loading ? <Spinner /> : !schedule ? <EmptyState message="No schedule available" /> : (
         <>
           <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
             <strong>{schedule.total}</strong> part{schedule.total === 1 ? '' : 's'} due ·
@@ -334,6 +378,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   const [recountOpen, setRecountOpen] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [removing,   setRemoving]   = useState(false);
 
   const isInProgress = header.status === 'in_progress';
   const isBlind      = isInProgress; // server already redacted
@@ -377,12 +422,18 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     } finally { setSavingPart(null); }
   }
 
+  // The row checkboxes now select for Remove as well as Recount. Recount only applies to
+  // counted lines (requestRecount itself does not check status), so it sends just those.
+  const isRemovable = l => !['reconciled', 'cancelled'].includes(l.status) && l.adjustment_id == null;
+  const selectedLines = lines.filter(l => recountSel.has(l.id));
+  const recountIds = selectedLines.filter(l => l.status === 'counted').map(l => l.id);
+
   async function flagRecount() {
-    if (recountSel.size === 0) return;
+    if (recountIds.length === 0) return;
     const reason = recountReason.trim();
     if (!reason) { toast('Reason required', 'error'); return; }
     const r = await workerFetch('requestRecount', {
-      data: { line_ids: [...recountSel], reason },
+      data: { line_ids: recountIds, reason },
     }, session);
     if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
     toast(`${r.data.flagged} line(s) flagged for recount`, 'success');
@@ -392,6 +443,24 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     onReload();
   }
 
+  // Take parts off the count (e.g. only partly scanned) so the rest can complete. Removed
+  // lines are not adjusted; their scans stay on record (worker removeCycleCountLines).
+  async function removeLines(target) {
+    if (!target.length) return;
+    const names = target.map(l => l.part_code).join(', ');
+    if (!confirm(`Remove ${target.length} part${target.length === 1 ? '' : 's'} from ${header.count_no}?\n\n${names}\n\nRemoved parts will NOT be adjusted — no stock change is proposed for them. Bags already scanned stay on record, and a later scan of these parts is ignored on this count. To count them, finish this count first, then start a new one.`)) return;
+    setRemoving(true);
+    try {
+      const r = await workerFetch('removeCycleCountLines', {
+        data: { count_no: header.count_no, line_ids: target.map(l => l.id) },
+      }, session);
+      if (!r?.ok) { toast(r?.data?.error || 'Remove failed', 'error'); return; }
+      toast(`Removed ${r.data.removed.length} part(s) from ${header.count_no}${r.data.warning ? ` — ${r.data.warning}` : ''}`, r.data.warning ? 'warning' : 'success');
+      setRecountSel(new Set());
+      onReload();
+    } finally { setRemoving(false); }
+  }
+
   async function complete() {
     if (!confirm(`Complete ${header.count_no}? This proposes adjustments for any variance.`)) return;
     setCompleting(true);
@@ -399,7 +468,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       const r = await workerFetch('completeCycleCount', { data: { count_no: header.count_no } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Complete failed', 'error'); return; }
       const d = r.data;
-      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}`, 'success');
+      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}${d.warning ? ` — ${d.warning}` : ''}`, d.warning ? 'warning' : 'success');
       onReload();
     } finally { setCompleting(false); }
   }
@@ -417,17 +486,19 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   }
 
   function printSheet() {
-    printWindow(buildCycleCountSheetHtml(header, lines));
+    printWindow(buildCycleCountSheetHtml(header, lines.filter(l => l.status !== 'cancelled')));
   }
 
   const stats = useMemo(() => ({
-    total:     lines.length,
+    total:     lines.filter(l => l.status !== 'cancelled').length,
+    removed:   lines.filter(l => l.status === 'cancelled').length,
     pending:   lines.filter(l => l.status === 'pending_count').length,
     counted:   lines.filter(l => l.status === 'counted').length,
     recount:   lines.filter(l => l.status === 'recount_required').length,
     reconciled: lines.filter(l => l.status === 'reconciled').length,
-    variance_lines: lines.filter(l => l.variance != null && Math.abs(parseFloat(l.variance)) > 0.001).length,
-    total_variance_value: lines.reduce((s, l) => s + Math.abs(parseFloat(l.variance_value) || 0), 0),
+    // Removed (cancelled) lines are never adjusted, so their variance is not a finding.
+    variance_lines: lines.filter(l => l.status !== 'cancelled' && l.variance != null && Math.abs(parseFloat(l.variance)) > 0.001).length,
+    total_variance_value: lines.filter(l => l.status !== 'cancelled').reduce((s, l) => s + Math.abs(parseFloat(l.variance_value) || 0), 0),
   }), [lines]);
 
   return (
@@ -442,8 +513,11 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button onClick={printSheet} style={btnS}>🖨 PRINT SHEET</button>
-            {canRecord && isInProgress && stats.counted > 0 && recountSel.size > 0 && (
-              <button onClick={() => setRecountOpen(true)} style={btnS}>⤿ FLAG {recountSel.size} FOR RECOUNT</button>
+            {canRecord && isInProgress && recountIds.length > 0 && (
+              <button onClick={() => setRecountOpen(true)} style={btnS}>⤿ FLAG {recountIds.length} FOR RECOUNT</button>
+            )}
+            {canRecord && isInProgress && selectedLines.length > 0 && (
+              <button onClick={() => removeLines(selectedLines)} disabled={removing} style={{ ...btnS, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>{removing ? 'REMOVING…' : `✕ REMOVE ${selectedLines.length}`}</button>
             )}
             {canRecord && isInProgress && stats.pending === 0 && (
               <button onClick={complete} disabled={completing} style={{ ...btnP, opacity: completing ? 0.6 : 1 }}>{completing ? 'COMPLETING…' : '✓ COMPLETE COUNT'}</button>
@@ -461,6 +535,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
             <KpiTile label="Counted" value={stats.counted} tone="blue" />
             <KpiTile label="Recount" value={stats.recount} tone="orange" />
             <KpiTile label="Reconciled" value={stats.reconciled} tone="green" />
+            {stats.removed > 0 && <KpiTile label="Removed" value={stats.removed} />}
             {!isBlind && stats.variance_lines > 0 && <KpiTile label="With Variance" value={stats.variance_lines} tone="red" />}
             <KpiTile label="Bags Scanned" value={totalScans} tone={totalScans > 0 ? 'green' : 'gray'} />
           </div>
@@ -511,7 +586,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
                     <tr key={l.id} style={{ background: recountSel.has(l.id) ? 'rgba(245,158,11,.08)' : 'transparent' }}>
                       {isInProgress && (
                         <td style={td}>
-                          {l.status === 'counted' && (
+                          {isRemovable(l) && (
                             <input type="checkbox" checked={recountSel.has(l.id)} onChange={() => {
                               setRecountSel(prev => {
                                 const next = new Set(prev);
@@ -561,7 +636,12 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
                       <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--mono)', color: l.variance_value == null ? 'var(--t3)' : Math.abs(parseFloat(l.variance_value)) < 0.001 ? 'var(--t3)' : '#ff7070' }}>
                         {l.variance_value == null ? '—' : fmtNum(l.variance_value)}
                       </td>
-                      <td style={td}><StatusBadge status={l.status === 'pending_count' ? 'in_progress' : l.status === 'counted' ? 'counted' : l.status === 'recount_required' ? 'in_progress' : l.status === 'reconciled' ? 'reconciled' : 'cancelled'} /></td>
+                      <td style={td}>
+                        <StatusBadge status={l.status === 'pending_count' ? 'in_progress' : l.status === 'counted' ? 'counted' : l.status === 'recount_required' ? 'in_progress' : l.status === 'reconciled' ? 'reconciled' : 'cancelled'} />
+                        {canRecord && isInProgress && isRemovable(l) && (
+                          <button onClick={() => removeLines([l])} disabled={removing} title="Remove this part from the count — it will not be adjusted" style={{ ...btnS, padding: '2px 6px', fontSize: 10, marginLeft: 6, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }}>✕</button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -572,7 +652,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
       </div>
 
       {recountOpen && (
-        <Modal open onClose={() => setRecountOpen(false)} size="md" title={`Flag ${recountSel.size} line(s) for recount`}
+        <Modal open onClose={() => setRecountOpen(false)} size="md" title={`Flag ${recountIds.length} line(s) for recount`}
                confirmLabel="FLAG FOR RECOUNT" onConfirm={flagRecount}>
           <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--t2)' }}>
             Flagged lines stay on this count but get marked as <code>recount_required</code>. Create a fresh count
