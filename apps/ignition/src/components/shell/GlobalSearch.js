@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
-import { Typeahead, Avatar, RatingDot, StagePill } from '../ui/index.js';
+import { Typeahead } from '../ui/index.js';
+import { decorateSearchGroups } from '../ui/searchRows.js';
 import { ignitionopsGet } from '../../lib/ignitionopsFetch.js';
 import { searchAllGroups } from '../../lib/globalSearch.js';
 import { isTypingTarget } from './IgRail.js';
@@ -12,31 +13,6 @@ import { isTypingTarget } from './IgRail.js';
 // campaigns from the worker's searchAll; a pick opens the record. ⌘/Ctrl+K focuses it from any page
 // (`/` still focuses the page's own box). ≤767px: a search icon opens a full-screen sheet instead.
 // Connects are deliberately not here (no server-side name to match on — decided 2026-10-08).
-
-// ignition.campaigns.status CHECK: active | completed | cancelled (same tones as the Campaigns grid).
-const CAMPAIGN_TONE = { active: 'var(--state-success-fg)', completed: '#8ea2ff', cancelled: 'var(--text-3)' };
-
-function decorate(groups) {
-  return groups.map((g) => (g.error ? g : {
-    ...g,
-    items: g.items.map((it) => {
-      if (it.kind === 'influencer') {
-        return { ...it, lead: <Avatar name={it.primary} seed={it.id} size={28} />,
-          meta: it.rating ? <RatingDot rating={it.rating} showLabel={false} /> : null };
-      }
-      if (it.kind === 'deal') {
-        return { ...it, meta: <>
-          {it.ugc && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '.06em' }}>UGC</span>}
-          <StagePill stage={it.stage} ugc={it.ugc} />
-        </> };
-      }
-      return { ...it, meta: it.status ? (
-        <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'capitalize',
-          color: CAMPAIGN_TONE[it.status] || 'var(--text-3)' }}>{it.status}</span>
-      ) : null };
-    }),
-  }));
-}
 
 export default function GlobalSearch() {
   const router = useRouter();
@@ -61,7 +37,7 @@ export default function GlobalSearch() {
 
   const fetchResults = useCallback(async (q, signal) => {
     const d = await ignitionopsGet('searchAll', { q }, sessionRef.current, { signal });
-    return decorate(searchAllGroups(d));
+    return decorateSearchGroups(searchAllGroups(d));
   }, []);
 
   const onPick = useCallback((it) => {

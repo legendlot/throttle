@@ -1,5 +1,5 @@
 // Global search (top bar) — maps the worker's searchAll response to Typeahead groups. Pure, so the
-// shape is unit-tested (test/globalSearch.test.mjs). components/shell/GlobalSearch.js adds the avatars/pills.
+// shape is unit-tested (test/globalSearch.test.mjs). components/ui/searchRows.js adds the avatars/pills.
 // A group the worker failed to read arrives as null → { error: true } ("Couldn't load deals"), never
 // silently empty. A row with nothing to show as its name is dropped (no placeholder names — plan §2.8).
 

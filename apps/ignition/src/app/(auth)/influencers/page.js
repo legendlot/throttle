@@ -7,9 +7,11 @@ import { Plus, ChevronDown, Link2Off } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../../../lib/channelLink.js';
 import {
-  Segmented, Menu, SearchField, FilterSelect, TableCard, Row, NumCell, Avatar, RatingDot, Banner,
+  Segmented, Menu, Typeahead, FilterSelect, TableCard, Row, NumCell, Avatar, RatingDot, Banner,
 } from '../../../components/ui/index.js';
 import { NewInfluencerModal } from '../../../components/NewInfluencerModal.js';
+import { decorateSearchGroups } from '../../../components/ui/searchRows.js';
+import { searchAllGroups } from '../../../lib/globalSearch.js';
 import { NewDealModal } from '../../../components/NewDealModal.js';
 
 const TABS = [
@@ -218,10 +220,20 @@ export default function InfluencersPage() {
       </div>
 
       <div className="ig-up" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', animationDelay: '120ms' }}>
-        <SearchField
+        {/* Typeahead (plan 2026-10-08 S4): the list still filters as you type; the dropdown is extra —
+            the first 6 matches on the current tab, to open a profile directly. */}
+        <Typeahead
           placeholder="Search code, handle, name, phone, email…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={setSearch}
+          refreshKey={tab}
+          fetchResults={async (q, signal) => {
+            const d = await ignitionopsGet('getInfluencers', { tab, search: q, limit: 6 }, session, { signal });
+            return decorateSearchGroups(searchAllGroups({ influencers: d?.influencers }).map(g => ({ ...g, group: '' })));
+          }}
+          onPick={it => router.push(it.href)}
+          onSubmit={() => {}}
+          quiet
         />
         <FilterSelect value={rating} onChange={e => setRating(e.target.value)}>
           <option value="">All ratings</option>

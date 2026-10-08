@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Combobox, useListNav, useToast } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
-import { Segmented, StagePill, DealPill, Tile, FilterSelect, SearchField, TableCard, Row, NumCell } from '../../../components/ui/index.js';
+import { Segmented, StagePill, DealPill, Tile, FilterSelect, Typeahead, TableCard, Row, NumCell } from '../../../components/ui/index.js';
+import { decorateSearchGroups } from '../../../components/ui/searchRows.js';
+import { searchAllGroups } from '../../../lib/globalSearch.js';
 import { STAGE_VALUES, STAGE_LABELS, STAGE_PALETTE } from '../../../lib/stages.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
@@ -372,10 +374,22 @@ export default function EngagementsPage() {
       </header>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <SearchField
+        {/* Typeahead (plan 2026-10-08 S4): the list still filters as you type (same `search` filter,
+            same sessionStorage); the dropdown is extra — up to 5 matching deals from searchAll (a light
+            select; getEngagements' search reads full rows) to open one directly. It matches ANY deal,
+            not just the current tab/type — it is a jump, the list below is the filter. A pick opens the
+            same page the list row does (UGC deals included). */}
+        <Typeahead
           placeholder="Search engagement #, link, tracking, order…"
           value={search}
-          onChange={e => set({ search: e.target.value })}
+          onChange={t => set({ search: t })}
+          fetchResults={async (q, signal) => {
+            const d = await ignitionopsGet('searchAll', { q }, session, { signal });
+            return decorateSearchGroups(searchAllGroups({ engagements: d?.engagements }).map(g => ({ ...g, group: '' })));
+          }}
+          onPick={it => { rememberScroll(); router.push(`/engagements/detail/?id=${encodeURIComponent(it.id)}`); }}
+          onSubmit={() => {}}
+          quiet
         />
         <FilterSelect value={type} onChange={e => set({ type: e.target.value })}>
           <option value="all">All types</option>

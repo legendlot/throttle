@@ -15,12 +15,16 @@ import { flatItems, highlightParts, moveIndex } from '../../lib/typeahead.js';
 // shortcut target) — at most one per page. `size`: 'md' (40px page box) | 'lg' (46px top bar).
 // `persistent`: the list stays shown while there is text, even after blur (the phone search sheet —
 // dismissing the soft keyboard blurs the input and must not hide the results).
+// `quiet`: list pages whose list already filters as you type — no popover for "Type 2+ characters" or
+// "No matches" (the list below says it), only rows, a spinner-only wait, or an error.
+// Requests run only while the box is focused (or `persistent`): a search restored into a list page's box
+// after Back costs nothing until someone clicks into it.
 export function Typeahead({
   value, onChange, fetchResults, onPick, onSubmit,
   minChars = 2, debounceMs = 200, placeholder = 'Search', primary = true,
   autoHighlight = false, clearOnPick = false, size = 'md', width = 300,
   ariaLabel, autoFocus, inputRef: inputRefProp, trailing, refreshKey,
-  onFocus, onBlur, onKeyDown, style, dropdownStyle, emptyText, persistent = false,
+  onFocus, onBlur, onKeyDown, style, dropdownStyle, emptyText, persistent = false, quiet = false,
 }) {
   const [inner, setInner] = useState('');
   const text = value !== undefined ? value : inner;
@@ -35,7 +39,7 @@ export function Typeahead({
 
   const [open, setOpen] = useState(false);
   const [focused, setFocused] = useState(false);
-  const res = useTypeahead({ query: text, fetchResults, minChars, debounceMs, refreshKey });
+  const res = useTypeahead({ query: text, fetchResults, minChars, debounceMs, refreshKey, enabled: focused || persistent });
   const items = flatItems(res.groups);
   const [active, setActive] = useState(-1);
 
@@ -66,7 +70,9 @@ export function Typeahead({
     document.getElementById(optId(active))?.scrollIntoView?.({ block: 'nearest' });
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const showList = (open || persistent) && res.status !== 'idle';
+  const hasRows = res.groups.length > 0;
+  const showList = (open || persistent) && res.status !== 'idle'
+    && (!quiet || hasRows || res.status === 'error');
 
   function pick(it, e) {
     if (!it) return;
