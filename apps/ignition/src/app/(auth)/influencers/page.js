@@ -68,6 +68,12 @@ export default function InfluencersPage() {
   const [modal, setModal] = useState(null);     // 'influencer' | 'deal' | null
   const [menuOpen, setMenuOpen] = useState(false);
   const newBtnRef = useRef(null);
+  // counts are scoped by every filter EXCEPT the type card, so a selected type's own count is the
+  // denominator (was the all-types total: "Showing 100 of 1,683" on Micro).
+  const shownOf = !counts ? null
+    : !type ? counts.total
+    : type === '__untyped__' ? counts.untyped
+    : counts.counts?.[type];
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/influencers/detail/?id=${r.id}`);
@@ -292,11 +298,11 @@ export default function InfluencersPage() {
         </TableCard>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', fontSize: 13, color: 'var(--text-4)' }}>
           <span>
-            {counts?.total != null
-              ? `Showing ${rows.length.toLocaleString()} of ${Number(counts.total).toLocaleString()}`
+            {shownOf != null
+              ? `Showing ${rows.length.toLocaleString()} of ${Number(shownOf).toLocaleString()}`
               : `Showing ${rows.length.toLocaleString()}`}
           </span>
-          {counts?.total != null && rows.length < counts.total && (
+          {shownOf != null && rows.length < Number(shownOf) && (
             <button onClick={loadMore} disabled={loadingMore} className="ig-ghost-btn" style={{
               ...ghostBtn,
               cursor: loadingMore ? 'default' : 'pointer', opacity: loadingMore ? 0.6 : 1,
