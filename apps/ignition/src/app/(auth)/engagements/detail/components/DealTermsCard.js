@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../../lib/ignitionopsFetch.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS, PAYMENT_TERMS, PAYMENT_TERMS_LABELS } from '../../../../../lib/dealTypes.js';
-import { LockedNote, KV } from './shared.js';
+import { Card, LockedNote, KV } from './shared.js';
 import { CostEdit } from './CostsCard.js';
 
 // Deal Terms — editable since S309 (Reann, #bugs 2026-08-18 batch, items 2 + 3).
@@ -89,14 +89,7 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
   const done = agreed > 0 && paid >= agreed;
 
   return (
-    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Deal Terms</h2>
-        {canEdit && !locked && !editing && (
-          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
-        )}
-      </div>
-
+    <Card title="Deal terms" action={canEdit && !locked && !editing ? 'Edit' : null} onAction={startEdit}>
       {/* Engagement type stays read-only: video vs UGC drives a different pipeline
           (ugc_briefs, the /ugc board), so flipping it here would strand a deal. */}
       {locked && <LockedNote />}
@@ -122,41 +115,41 @@ export function DealTermsCard({ e, paidTotal, canEdit, locked, session, onSaved 
                 options={[{ value: '', label: '— Not set —' }, ...AD_RIGHTS_DURATIONS.map(d => ({ value: d, label: d }))]} />
             </>
           )}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+            <button onClick={save} disabled={busy} className={busy ? undefined : 'ig-cta'} style={{ ...primaryBtn, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </>
       ) : (
         <>
           <KV label="Deal type" value={DEAL_TYPE_LABELS[e.deal_type] || e.deal_type} />
           <KV label="Payment terms" value={PAYMENT_TERMS_LABELS[e.payment_terms] || e.payment_terms || '—'} />
-          <KV label="Payment amount" value={`₹${agreed.toLocaleString()}`} />
+          <KV label="Payment amount" value={<span style={mono}>₹{agreed.toLocaleString()}</span>} />
           <KV label="Paid" value={
-            <span style={{ color: done ? '#27c93f' : paid > 0 ? '#F2CD1A' : 'var(--text-3)', fontWeight: 600 }}>
+            <span style={{ ...mono, color: done ? 'var(--state-success-fg)' : paid > 0 ? 'var(--state-warning-fg)' : 'var(--text-4)', fontWeight: 600 }}>
               ₹{paid.toLocaleString()} of ₹{agreed.toLocaleString()}{done ? ' ✓' : ''}
             </span>
           } />
-          {e.affiliate_pct != null && <KV label="Affiliate %" value={`${e.affiliate_pct}%`} />}
-          {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
-          <KV label="Campaign" value={campaignName || <span style={{ color: 'var(--text-3)' }}>—</span>} />
+          {e.affiliate_pct != null && <KV label="Affiliate %" value={<span style={mono}>{e.affiliate_pct}%</span>} />}
+          {e.commission_amount != null && <KV label="Commission" value={<span style={mono}>₹{Number(e.commission_amount).toLocaleString()}</span>} />}
+          <KV label="Campaign" value={campaignName || <span style={{ color: 'var(--text-4)' }}>—</span>} />
           <KV label="Ad rights" value={
             e.ad_rights == null
               // "—" not "No": nobody has answered the question on this deal yet.
-              ? <span style={{ color: 'var(--text-3)' }}>—</span>
+              ? <span style={{ color: 'var(--text-4)' }}>—</span>
               : e.ad_rights
-                ? <span style={{ color: '#27c93f', fontWeight: 600 }}>Yes</span>
+                ? <span style={{ color: 'var(--state-success-fg)', fontWeight: 600 }}>Yes</span>
                 : <span style={{ color: 'var(--text-3)' }}>No</span>
           } />
           {e.ad_rights && (
             <>
-              <KV label="Ad rights ₹ (outside budget)" value={e.ad_rights_amount != null ? `₹${Number(e.ad_rights_amount).toLocaleString('en-IN')}` : '—'} />
+              <KV label="Ad rights ₹ (outside budget)" value={e.ad_rights_amount != null ? <span style={mono}>₹{Number(e.ad_rights_amount).toLocaleString('en-IN')}</span> : '—'} />
               <KV label="Ad duration" value={e.ad_rights_duration || '—'} />
             </>
           )}
         </>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -169,12 +162,16 @@ const AD_RIGHTS_DURATIONS = ['1 month', '3 months', '6 months', '12 months', 'Pe
 
 function SelectEdit({ label, value, onChange, options }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center' }}>
-      <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', alignItems: 'center', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
+      <span style={{ flexShrink: 0, color: 'var(--text-3)' }}>{label}</span>
       <select value={value} onChange={ev => onChange(ev.target.value)}
-        style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13, width: '100%', boxSizing: 'border-box' }}>
+        style={{ width: '100%', maxWidth: 220, minWidth: 0, background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '7px 10px', fontFamily: 'var(--font-ui)', fontSize: 13, boxSizing: 'border-box' }}>
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
   );
 }
+
+const mono = { fontFamily: 'var(--font-mono)' };
+const ghostBtn = { height: 36, padding: '0 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
+const primaryBtn = { height: 36, padding: '0 16px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700 };
