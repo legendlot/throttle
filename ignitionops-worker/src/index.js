@@ -1335,6 +1335,35 @@ async function getIgnitionUsers(_url, auth, env) {
   return ok({ users: (ur.ok ? ur.data || [] : []).filter(u => u.full_name) });
 }
 
+// Dashboard Pipeline card (Pit Control redesign W1). Pure, so the bucket split is testable.
+// Buckets: 'ugc' = engagement_type 'ugc'; 'video' = everything else (video_tracking today, and
+// any null/legacy type — the dashboard's Video toggle is "not UGC"); 'all' = both.
+// stage_counts: rows per stage per bucket. Only stages that occur appear — a stage with no rows is
+//   simply absent, and the page reads it as 0. Rows with no stage are not counted.
+// committed: spend (spendOf — total_cost, else payment + commission, never ad_spend) of every row
+//   the caller passes. The caller's scan is EXCLUDE_NON_SPEND (drops cancelled only), so this is
+//   the SAME figure as the Engagements "Total cost" tile — deliberately not a third money total
+//   (SPEND_EXCLUDED_STAGES: two screens quoting different spend is a known failure; S412 review).
+//   Rounded to whole rupees.
+export function kpiPipeline(rows, spendOf) {
+  const stage_counts = { video: {}, ugc: {}, all: {} };
+  const committed = { video: 0, ugc: 0, all: 0 };
+  for (const e of rows || []) {
+    const b = e.engagement_type === 'ugc' ? 'ugc' : 'video';
+    if (e.stage) {
+      stage_counts[b][e.stage] = (stage_counts[b][e.stage] || 0) + 1;
+      stage_counts.all[e.stage] = (stage_counts.all[e.stage] || 0) + 1;
+    }
+    const s = spendOf(e);
+    committed[b] += s; committed.all += s;
+  }
+  for (const k of Object.keys(committed)) committed[k] = Math.round(committed[k]);
+  return { stage_counts, committed };
+}
+
+// ~600 rows today (2026-10-08); the scan is one page, so getKpis flags `truncated` if it fills.
+const KPI_SCAN_LIMIT = 5000;
+
 async function getKpis(url, auth, env) {
   // Header tile counts. Three quick queries via Prefer: count.
   async function count(filter) {
@@ -1372,11 +1401,19 @@ async function getKpis(url, auth, env) {
   let engagement_totals = { views: 0, paid_views: 0, likes: 0, shares: 0 };
   const ugc_summary = { deals: 0, views: 0, paid_views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
   const aggR = await sb(
-    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=engagement_type,views,paid_views,likes,shares,orders,conversions_value,total_cost,payment_amount,commission_amount&limit=5000`,
+    `/rest/v1/engagements?${EXCLUDE_NON_SPEND}&select=engagement_type,stage,views,paid_views,likes,shares,orders,conversions_value,total_cost,payment_amount,commission_amount&limit=${KPI_SCAN_LIMIT}`,
     env,
   );
+  let pipeline = {};
   if (aggR.ok) {
-    for (const e of (aggR.data || [])) {
+    const rows = aggR.data || [];
+    pipeline = kpiPipeline(rows, spendOf);
+    // Not silent: a full page means the scan hit its cap and every total here is short.
+    if (rows.length >= KPI_SCAN_LIMIT) {
+      pipeline.truncated = true;
+      console.warn(`getKpis: scan hit limit=${KPI_SCAN_LIMIT}; totals and stage_counts are truncated`);
+    }
+    for (const e of rows) {
       const v = organicViews(e.views, e.paid_views) ?? 0, pv = num(e.paid_views), l = num(e.likes), s = num(e.shares);
       engagement_totals.views += v; engagement_totals.paid_views += pv; engagement_totals.likes += l; engagement_totals.shares += s;
       if (e.engagement_type === 'ugc') {
@@ -1389,7 +1426,7 @@ async function getKpis(url, auth, env) {
     ugc_summary.conversions_value = Math.round(ugc_summary.conversions_value);
   }
 
-  return ok({ active, live, ghosted, overdue, engagement_totals, ugc_summary });
+  return ok({ active, live, ghosted, overdue, engagement_totals, ugc_summary, ...pipeline });
 }
 
 // ── Overdue-post detection (auto-rating signal) ──────────────────────────────
