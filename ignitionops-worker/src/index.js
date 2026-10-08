@@ -587,6 +587,8 @@ async function getInfluencer(url, auth, env) {
   const id = url.searchParams.get('id');
   const code = url.searchParams.get('code');
   if (!id && !code) return err('id or code required', 400);
+  // A non-uuid id can't match a row — say not_found rather than letting PostgREST 500 on the cast.
+  if (id && !UUID_RE.test(id)) return err('not_found', 404);
   // Encoded: `id` arrives from a URL (?influencer= on New Deal), so it must not add query params.
   const filter = id ? `id=eq.${encodeURIComponent(id)}` : `influencer_code=eq.${encodeURIComponent(code)}`;
   const r = await sb(`/rest/v1/influencers?${filter}&select=*&limit=1`, env);
