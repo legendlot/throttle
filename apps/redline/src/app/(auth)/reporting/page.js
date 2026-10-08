@@ -323,14 +323,23 @@ export default function ReportingPage() {
   const defectAggs = useMemo(() => {
     const heatmap = qcData?.heatmap || [];
     const breakdown = qcData?.defect_breakdown || [];
+    // ⚠️ Both RPCs return `defect_code` + `defect_count` (not code/count — reading those kept
+    // this tab at "No defect data" for every period, S412). Count from `defect_breakdown`:
+    // it is grouped per product (the heatmap is per LINE, no product) and sums to the same
+    // total (measured 1,401 = 1,401, 1 Sep–8 Oct). The heatmap only lends `category`.
+    const categoryByCode = {};
+    for (const row of heatmap) if (row.defect_code && row.category) categoryByCode[row.defect_code] = row.category;
     let total = 0;
     const codeMap = {};
     const productMap = {};
-    for (const row of heatmap) {
-      const cnt = Number(row.count) || Number(row.fail_count) || 0;
+    // The worker sends [] when get_defect_breakdown fails while the heatmap loaded — fall back to
+    // the heatmap's rows (same counts, no product) rather than claim "No defect data".
+    const source = breakdown.length ? breakdown : heatmap;
+    for (const row of source) {
+      const cnt = Number(row.defect_count) || 0;
       total += cnt;
-      const code = row.error_code || row.code || '—';
-      if (!codeMap[code]) codeMap[code] = { code, issue: row.issue || '', category: row.category || '', severity: (row.severity || 'minor').toLowerCase(), count: 0 };
+      const code = row.defect_code || '—';
+      if (!codeMap[code]) codeMap[code] = { code, issue: row.issue || '', category: categoryByCode[code] || '', severity: (row.severity || 'minor').toLowerCase(), count: 0 };
       codeMap[code].count += cnt;
       const product = row.product || '—';
       const sev = (row.severity || 'minor').toLowerCase();
@@ -340,7 +349,10 @@ export default function ReportingPage() {
       else if (sev === 'major') productMap[product].major += cnt;
       else if (sev === 'cosmetic') productMap[product].cosmetic += cnt;
       else productMap[product].minor += cnt;
-      if (cnt > productMap[product].top.count) productMap[product].top = { code, count: cnt };
+      // A product can carry the same code on several rows (component_type / severity), so sum first.
+      const pc = productMap[product].codes || (productMap[product].codes = {});
+      pc[code] = (pc[code] || 0) + cnt;
+      if (pc[code] > productMap[product].top.count) productMap[product].top = { code, count: pc[code] };
     }
     const codeList = Object.values(codeMap).sort((a, b) => b.count - a.count);
     const top = codeList[0];
@@ -411,7 +423,9 @@ export default function ReportingPage() {
 
   // ── CSV downloads ────────────────────────────────────────
   function downloadQc() {
-    const rows = (qcData?.heatmap || []).map(r => ({ product: r.product || '', code: r.error_code || '', issue: r.issue || '', category: r.category || '', severity: r.severity || '', count: r.count || r.fail_count || 0 }));
+    const categoryByCode = {};
+    for (const r of qcData?.heatmap || []) if (r.defect_code && r.category) categoryByCode[r.defect_code] = r.category;
+    const rows = (qcData?.defect_breakdown || []).map(r => ({ product: r.product || '', code: r.defect_code || '', issue: r.issue || '', category: categoryByCode[r.defect_code] || '', severity: r.severity || '', count: Number(r.defect_count) || 0 }));
     const ok = downloadCsv(`qc-view-${dateFrom}-${dateTo}.csv`, rows, ['product','code','issue','category','severity','count']);
     if (!ok) showToast('No QC data to download', 'error');
   }
