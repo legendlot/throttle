@@ -3,6 +3,22 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.15.0] - 2026-10-08
+### Added
+- Connects chapter: list, statuses (New / Replied / Linked / Closed), replying with
+  Cmd/Ctrl+Enter, "Create influencer" (always a new record) and Send back to Pitstop.
+### Changed
+- Pit Control redesign (shipped 8 Oct 2026). Signing In: icon rail (collapsible, `[`),
+  "Search this page" top bar (not a command palette), phone bottom tab bar.
+- Payments: kinds are Advance / Balance / Other (was Final); deleting asks to confirm.
+- Engagement detail: Advance is a "Move to..." stage grid then per-stage inputs (Live,
+  Shipped, Scheduled on track/delayed); "Approved {date} by {name}"; notes and history
+  show names.
+- New deal: three numbered sections, deal-type cards, starts at Proposed, Re-book preselect.
+- Influencers: "+ New" menu. B-List: "Move to master". Dashboard rewritten (Video / UGC /
+  All pipeline with stage counts and committed rupees, Re-book). Reports rewritten (live
+  report with 30d / 90d / YTD / All presets, default YTD).
+
 ## [1.14.0] - 2026-09-11
 ### Added
 - Engagement detail: documented the COMPLETE-deal lock (Deal Terms, Costs, Post-live,

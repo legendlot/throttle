@@ -2,8 +2,8 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.14.0",
-  "date": "2026-09-11",
+  "version": "1.15.0",
+  "date": "2026-10-08",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -69,6 +69,17 @@
           "title": "Dashboard",
           "route": "/dashboard",
           "file": "work-dashboard.html",
+          "roles": [
+            "mkt",
+            "lead",
+            "adm"
+          ]
+        },
+        {
+          "id": "connects",
+          "title": "Connects",
+          "route": "/connects",
+          "file": "work-connects.html",
           "roles": [
             "mkt",
             "lead",
