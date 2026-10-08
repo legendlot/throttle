@@ -102,7 +102,7 @@ every page and is the larger risk.
 | P0.1 | Fix B1–B3 (+ B4 after D7) | Separate commits, worker deploy for B1 (pass existing notes through, or have `setRating` leave notes alone when absent). |
 | P0.2 | **Split `engagements/detail/page.js` (110 KB, 1,868 lines)** into `engagements/detail/components/*`: DetailHeader, PipelineCard + 4 banners (approval/lock/unlocked/data-warning), Products, DealTerms, Costs, PostLive + TrackingLinkRow, Performance + DealTotals, Codes + CodeRow, Compliance, Payments, Influencer, Logistics (+ shipment helpers 1698–1837), Notes, History, BriefPreviewButton, CompletenessPill | A pure move, so the build output is visually identical. Restyling one card at a time is reviewable afterwards; restyling 110 KB in place is not. |
 | P0.3 | Extract a shared `useDealForm` used by `engagements/new/page.js` **and** `NewDealModal.js` (keeps `presetInfluencer`, `onCreated`, payload field-dropping, `productsValid && linesAreValid`) | Both get the new look from one source and can't drift. |
-| P0.4 | Add the missing CSS variables the shared components already read and Ignition never defined: `--t4`, `--border-3`, `--r-full`, `--font-ui` | Chip's radius and border are broken today and the restyle depends on them. |
+| P0.4 | Add the missing CSS variables the shared components already read and Ignition never defined: `--t4`, `--border-3`, `--r-full`, `--font-ui` | The restyle depends on them. (S412: no current Ignition render reads them — shared Chip/KpiCard use them only in their redesign modes — so this is groundwork, not a fix.) |
 
 ## 3. Phase 1 — foundation + shell (one coherent visual switch)
 
@@ -216,12 +216,16 @@ Until each W ships, its element is **omitted**, never faked.
   collapsible rail, New Deal moves to the top bar). Draft it at the Phase 1 item; it is not sent yet.
 
 ## ▶ Resume here (next session)
-1. P0.1: B1 `setRating` notes (worker + deploy) → B2 `?search=` on /engagements → B3 IST month
-   (dashboard, targets, worker payments summary) → B4 rides with P0.3.
-2. P0.2: split engagement detail into components (no visual change; verify with an identical build plus a smoke).
-3. P0.3: `useDealForm` shared by the page + modal (D7 rule).
-4. P0.4: missing CSS vars.
-5. Phase 1 (send the heads-up first) → Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
+**Phase 0 DONE (S412, 2026-10-08):** B1 `17a53bb1` · B2 `38ad7acd` · B3 `26a3ea8a` (ignitionops
+3b4cd118; B1–B3 smoked live) · P0.2 `015f8dce` (detail → `engagements/detail/components/*`) · P0.3
+`d78bf52e` (`lib/useDealForm.js` + `lib/dealPayload.js`, D7/B4) · P0.4 `33c068a8`. Each one was
+hostile-reviewed before its commit.
+1. **Phase 1, step 0:** draft the `#system-updates` heads-up to Reann's team (it covers the new colours,
+   the sidebar becoming a collapsible rail and New Deal moving to the top bar), get Afshaan's OK and
+   send it BEFORE the Phase 1 push.
+2. Phase 1: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
+   + IgTopbar). One coherent visual switch; check at 375px.
+3. Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
 
 **Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
 the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
