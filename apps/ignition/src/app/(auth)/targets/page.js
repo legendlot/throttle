@@ -4,12 +4,18 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast } from '@throttle/ui';
 import { Target } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
-import { istMonth } from '../../../lib/istDate.js';
+import { istMonth, istToday } from '../../../lib/istDate.js';
+import { Card, ProgressBar, viewsTone, spendTone } from '../../../components/ui/index.js';
 
-const ORANGE = '#FF6B00';
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 function num(n) { return n == null || isNaN(n) ? '—' : Number(n).toLocaleString('en-IN'); }
 function curMonth() { return istMonth(); }
+// Whole days from today (IST) to the end of the current month, today included.
+function daysLeft() {
+  const t = istToday();
+  const [y, m, d] = t.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate() - d + 1;
+}
 function monthLabel(m) {
   if (!m) return '—';
   const [y, mo] = m.split('-');
@@ -17,21 +23,41 @@ function monthLabel(m) {
   return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
 }
 
-// Progress bar: views fill greens as it approaches/exceeds target; spend goes
-// amber/red as it approaches/exceeds budget. Cosmetic only.
-function Bar({ pct, kind }) {
-  if (pct == null) return <span style={{ color: 'var(--text-3)', fontSize: 12 }}>—</span>;
-  const w = Math.min(100, Math.max(0, pct));
-  let color = ORANGE;
-  if (kind === 'spend') color = pct > 100 ? '#ff7070' : pct > 85 ? '#fbbf24' : '#4ade80';
-  else color = pct >= 100 ? '#4ade80' : pct >= 70 ? '#fbbf24' : ORANGE;
+// Inline progress cell: "actual / target" + pct, over a 6px bar. pct null → no bar (no target set).
+function Gauge({ actual, target, pct, tone, fmt, delay }) {
+  if (pct == null) return <span style={{ color: 'var(--text-4)', fontSize: 12 }}>{actual != null ? fmt(actual) : '—'}</span>;
+  const color = tone(pct);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{ flex: 1, height: 6, background: 'var(--surface-2)', borderRadius: 3, overflow: 'hidden', minWidth: 60 }}>
-        <div style={{ width: `${w}%`, height: '100%', background: color }} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+        <span>{fmt(actual)} <span style={{ color: 'var(--text-4)' }}>/ {fmt(target)}</span></span>
+        <span style={{ color }}>{pct}%</span>
       </div>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color, minWidth: 38, textAlign: 'right' }}>{pct}%</span>
+      <ProgressBar pct={pct} color={color} height={6} delay={delay} />
     </div>
+  );
+}
+
+// Ring gauge for the current month (120px, r=40, 10px stroke on a --border-2 track).
+function Ring({ pct, color, label, value, sub, delay }) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  return (
+    <Card style={{ display: 'flex', alignItems: 'center', gap: 18, animation: `igUp 500ms ${delay}ms both` }}>
+      <div style={{ position: 'relative', width: 120, height: 120, flexShrink: 0 }}>
+        <svg width="120" height="120" viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)' }}>
+          <circle cx="50" cy="50" r="40" fill="none" stroke="var(--border-2)" strokeWidth="10" />
+          <circle cx="50" cy="50" r="40" fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
+            strokeDasharray="251" strokeDashoffset={251 - (251 * p) / 100}
+            style={{ animation: `igDash 1.2s ${delay + 140}ms cubic-bezier(.22,1,.36,1) both` }} />
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700 }}>{pct}%</div>
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>{label}</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-4)' }}>{sub}</div>
+      </div>
+    </Card>
   );
 }
 
@@ -98,96 +124,97 @@ export default function TargetsPage() {
 
   if (!canView) return <EmptyState icon={Target} title="Access denied" message="You don't have the ignition_view permission." />;
 
+  const cur = (rows || []).find(r => r.month === curMonth());
+  const showViewsRing = cur && cur.views_pct != null;
+  const showSpendRing = cur && cur.spend_pct != null;
+  const showRings = showViewsRing || showSpendRing;
+
   return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Monthly Targets &amp; Budgets</h1>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ animation: 'igUp 500ms cubic-bezier(.22,1,.36,1) both' }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-4)' }}>Analyze · Monthly</div>
+        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>Targets &amp; budgets</h1>
         <p style={{ color: 'var(--text-3)', fontSize: 13, marginTop: 4 }}>Set a views target and a budget for each month, then track actuals against them.</p>
       </div>
 
-      {error && <div style={{ padding: 12, marginBottom: 12, background: 'var(--state-error-bg)', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)' }}>{error}</div>}
+      {error && <div style={{ padding: 12, background: 'var(--state-error-bg)', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)' }}>{error}</div>}
 
-      {canManage && (
-        <Panel title="Set / update a month">
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Labeled label="Month"><input type="month" value={month} onChange={e => setMonth(e.target.value)} style={input} /></Labeled>
-            <Labeled label="Target views"><input type="number" min="0" value={targetViews} onChange={e => setTargetViews(e.target.value)} placeholder="e.g. 5000000" style={input} /></Labeled>
-            <Labeled label="Budget (₹)"><input type="number" min="0" value={budget} onChange={e => setBudget(e.target.value)} placeholder="e.g. 500000" style={input} /></Labeled>
-            <Labeled label="Note (optional)"><input value={note} onChange={e => setNote(e.target.value)} style={{ ...input, minWidth: 200 }} /></Labeled>
-            <button onClick={save} disabled={saving} style={btnPrimary}>{saving ? 'Saving…' : 'Save'}</button>
-          </div>
-        </Panel>
+      {(showRings || canManage) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
+          {showViewsRing && (
+            <Ring delay={60} pct={cur.views_pct} color={viewsTone(cur.views_pct)}
+              label={`${monthLabel(cur.month).split(' ')[0]} · organic views`} value={num(cur.actual_views)}
+              sub={`of ${num(cur.target_views)} · ${daysLeft()} days left`} />
+          )}
+          {showSpendRing && (
+            <Ring delay={120} pct={cur.spend_pct} color={spendTone(cur.spend_pct)}
+              label={`${monthLabel(cur.month).split(' ')[0]} · spend`} value={inr(cur.actual_spend)}
+              sub={`of ${inr(cur.budget_amount)} budget`} />
+          )}
+          {canManage && (
+            <Card style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '18px 20px', animation: 'igUp 500ms 180ms both' }}>
+              <div style={{ fontFamily: 'var(--font-cond)', fontSize: 15, fontWeight: 700 }}>Set / update a month</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 8 }}>
+                <Labeled label="Month"><input type="month" value={month} onChange={e => setMonth(e.target.value)} style={input} /></Labeled>
+                <Labeled label="Target views"><input type="number" min="0" value={targetViews} onChange={e => setTargetViews(e.target.value)} placeholder="e.g. 5000000" style={input} /></Labeled>
+                <Labeled label="Budget (₹)"><input type="number" min="0" value={budget} onChange={e => setBudget(e.target.value)} placeholder="e.g. 500000" style={input} /></Labeled>
+                <Labeled label="Note (optional)"><input value={note} onChange={e => setNote(e.target.value)} style={{ ...input, fontFamily: 'inherit' }} /></Labeled>
+              </div>
+              <button onClick={save} disabled={saving} style={btnPrimary}>{saving ? 'Saving…' : 'Save'}</button>
+            </Card>
+          )}
+        </div>
       )}
 
-      <Panel title="Tracking">
-        {rows == null ? <Spinner /> : rows.length === 0 ? (
-          <EmptyState icon={Target} title="No targets yet" message={canManage ? 'Set one above to start tracking.' : 'No targets have been set.'} />
+      <Card padding="0" style={{ overflowX: 'auto', animation: 'igUp 500ms 240ms both' }}>
+        <div style={{ padding: '16px 20px', fontFamily: 'var(--font-cond)', fontSize: 15, fontWeight: 700 }}>Tracking</div>
+        {rows == null ? <div style={{ padding: '0 20px 20px' }}><Spinner /></div> : rows.length === 0 ? (
+          <div style={{ padding: '0 20px 20px' }}><EmptyState icon={Target} title="No targets yet" message={canManage ? 'Set one above to start tracking.' : 'No targets have been set.'} /></div>
         ) : (
-          <table style={tableStyle}>
+          <table style={{ ...tableStyle, minWidth: 900 }}>
             <thead>
               <tr>
-                {['', 'Month', 'Target views', 'Organic views', 'Views %', 'Budget', 'Spent', 'Spend %', 'Note'].map((h, i) => (
-                  <th key={h || 'exp'} style={{ ...thr, width: i === 0 ? 28 : undefined, textAlign: i === 0 || i === 1 || i === 8 ? 'left' : (i === 4 || i === 7 ? 'left' : 'right') }}>{h}</th>
+                {['', 'Month', 'Organic views vs target', 'Spend vs budget', 'Note'].map((h, i) => (
+                  <th key={h || 'exp'} style={{ ...thr, width: i === 0 ? 28 : i === 1 ? 110 : undefined }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {unalloc && unalloc.deals > 0 && (
                 <Fragment key="unallocated">
-                  <tr style={{ borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-                    <td style={{ ...tdl, width: 28 }}>
-                      <button onClick={() => toggle('unallocated')} title="Show each unallocated spend"
-                        style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 12, padding: 0 }}>
-                        {open === 'unallocated' ? '▾' : '▸'}
-                      </button>
+                  <tr className="ig-row" onClick={() => toggle('unallocated')} style={{ borderTop: '1px solid var(--border)', background: 'var(--surface-sunk)', cursor: 'pointer' }}>
+                    <td style={{ ...tdl, width: 28 }}><Chevron open={open === 'unallocated'} title="Show each unallocated spend" /></td>
+                    <td style={{ ...tdl, fontWeight: 600, color: 'var(--text-1)' }}>Unallocated</td>
+                    <td style={{ ...tdl, color: 'var(--text-4)', fontSize: 12 }}>
+                      {unalloc.deals} deal{unalloc.deals === 1 ? '' : 's'} · not yet posted
                     </td>
-                    <td style={{ ...tdl, fontWeight: 600 }}>
-                      Unallocated
-                      <span style={{ color: 'var(--text-3)', fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
-                        {unalloc.deals} deal{unalloc.deals === 1 ? '' : 's'} · not yet posted
-                      </span>
-                    </td>
-                    <td style={tdr}>—</td>
-                    <td style={tdr}>—</td>
-                    <td style={tdl} />
-                    <td style={tdr}>—</td>
-                    <td style={{ ...tdr, fontWeight: 600 }}>{inr(unalloc.spend)}</td>
-                    <td style={tdl} />
-                    <td style={{ ...tdl, color: 'var(--text-3)', fontSize: 11 }}>Shipped, awaiting post</td>
+                    <td style={{ ...tdl, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{inr(unalloc.spend)}</td>
+                    <td style={{ ...tdl, color: 'var(--text-4)', fontSize: 12 }}>Shipped, awaiting post</td>
                   </tr>
                   {open === 'unallocated' && (
                     <tr>
-                      <td colSpan={9} style={{ padding: 0, background: 'var(--surface-2)' }}>
+                      <td colSpan={5} style={{ padding: 0, background: 'var(--surface-sunk)' }}>
                         <MonthBreakdown month="unallocated" data={detail['unallocated']} />
                       </td>
                     </tr>
                   )}
                 </Fragment>
               )}
-              {rows.map(r => (
+              {rows.map((r, i) => (
                 <Fragment key={r.month}>
-                  <tr style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={{ ...tdl, width: 28 }}>
-                      <button onClick={() => toggle(r.month)} title="Show the individual spends and posts behind this month"
-                        style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 12, padding: 0 }}>
-                        {open === r.month ? '▾' : '▸'}
-                      </button>
+                  <tr className="ig-row" style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ ...tdl, width: 28 }}><Chevron open={open === r.month} onClick={() => toggle(r.month)} title="Show the individual spends and posts behind this month" /></td>
+                    <td onClick={() => canManage && editRow(r)} title={canManage ? 'Click to edit this month' : undefined} style={{ ...tdl, fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, cursor: canManage ? 'pointer' : 'default', color: r.month === curMonth() ? 'var(--accent)' : 'var(--text-1)' }}>{monthLabel(r.month)}{r.month === curMonth() ? ' ·' : ''}</td>
+                    <td style={{ ...tdl, minWidth: 240 }}>
+                      <Gauge actual={r.actual_views} target={r.target_views} pct={r.views_pct} tone={viewsTone} fmt={num} delay={300 + i * 60} />
+                      {Number(r.actual_paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3 }}>+ {num(r.actual_paid_views)} paid</div>}
                     </td>
-                    <td onClick={() => canManage && editRow(r)} style={{ ...tdl, fontWeight: 600, cursor: canManage ? 'pointer' : 'default', color: r.month === curMonth() ? ORANGE : 'var(--text-1)' }}>{monthLabel(r.month)}{r.month === curMonth() ? ' ·' : ''}</td>
-                    <td style={tdr}>{num(r.target_views)}</td>
-                    <td style={tdr}>
-                      {num(r.actual_views)}
-                      {Number(r.actual_paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>+ {num(r.actual_paid_views)} paid</div>}
-                    </td>
-                    <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.views_pct} kind="views" /></td>
-                    <td style={{ ...tdr, color: ORANGE }}>{inr(r.budget_amount)}</td>
-                    <td style={tdr}>{inr(r.actual_spend)}</td>
-                    <td style={{ ...tdl, minWidth: 130 }}><Bar pct={r.spend_pct} kind="spend" /></td>
-                    <td style={tdl}>{r.note || '—'}</td>
+                    <td style={{ ...tdl, minWidth: 240 }}><Gauge actual={r.actual_spend} target={r.budget_amount} pct={r.spend_pct} tone={spendTone} fmt={inr} delay={300 + i * 60} /></td>
+                    <td style={{ ...tdl, color: 'var(--text-2)', fontSize: 13 }}>{r.note || '—'}</td>
                   </tr>
                   {open === r.month && (
                     <tr>
-                      <td colSpan={9} style={{ padding: 0, background: 'var(--surface-2)' }}>
+                      <td colSpan={5} style={{ padding: 0, background: 'var(--surface-sunk)' }}>
                         <MonthBreakdown month={r.month} data={detail[r.month]} />
                       </td>
                     </tr>
@@ -197,8 +224,8 @@ export default function TargetsPage() {
             </tbody>
           </table>
         )}
-        {canManage && rows && rows.length > 0 && <p style={{ color: 'var(--text-3)', fontSize: 11, marginTop: 8 }}>Tip: click a month name to edit it above, or the arrow to see what makes up the numbers.</p>}
-      </Panel>
+        {canManage && rows && rows.length > 0 && <p style={{ color: 'var(--text-4)', fontSize: 11, padding: '10px 20px 14px' }}>Tip: click a month name to edit it above, or the arrow to see what makes up the numbers.</p>}
+      </Card>
     </div>
   );
 }
@@ -211,11 +238,11 @@ function MonthBreakdown({ month, data }) {
   const t = data.totals || {};
   const isUnalloc = month === 'unallocated';
   const cell = { padding: '5px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' };
-  const head = { ...cell, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, borderBottom: '1px solid var(--border)' };
+  const head = { ...cell, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, borderBottom: '1px solid var(--border)' };
   const who = (r) => (
     <>
       <span style={{ color: 'var(--text-1)' }}>{r.influencer_name || r.influencer_code || '—'}</span>
-      {r.campaign_tag && <span style={{ marginLeft: 6, padding: '1px 5px', background: 'var(--surface-3)', borderRadius: 3, fontSize: 9 }}>{r.campaign_tag}</span>}
+      {r.campaign_tag && <span style={{ marginLeft: 6, padding: '1px 5px', background: 'var(--border-2)', borderRadius: 3, fontSize: 9 }}>{r.campaign_tag}</span>}
     </>
   );
 
@@ -234,7 +261,7 @@ function MonthBreakdown({ month, data }) {
   );
 
   return (
-    <div style={{ padding: 14, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+    <div style={{ padding: '4px 20px 14px 64px', display: 'flex', gap: 24, flexWrap: 'wrap' }}>
       <Section
         title={`Spend — ₹${(t.spend || 0).toLocaleString()} across ${t.spend_lines || 0}`}
         empty={isUnalloc ? 'Nothing unallocated — every deal with spend has posted.' : 'No spend recorded this month.'} rows={data.spend || []}
@@ -280,27 +307,25 @@ function MonthBreakdown({ month, data }) {
   );
 }
 
+function Chevron({ open, onClick, title }) {
+  return (
+    <button onClick={onClick} title={title} aria-expanded={open}
+      style={{ background: 'transparent', border: 'none', color: 'var(--text-4)', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1,
+        transition: 'transform 200ms', transform: open ? 'rotate(90deg)' : 'none' }}>›</button>
+  );
+}
+
 function Labeled({ label, children }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)' }}>{label}</span>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)' }}>{label}</span>
       {children}
-    </div>
+    </label>
   );
 }
 
-function Panel({ title, children }) {
-  return (
-    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 12 }}>
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-2)' }}>{title}</div>
-      <div style={{ padding: 14 }}>{children}</div>
-    </section>
-  );
-}
-
-const input = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13 };
-const btnPrimary = { padding: '8px 18px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer' };
-const tableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 13 };
-const thr = { padding: '7px 10px', fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700, fontFamily: 'var(--font-mono)' };
-const tdl = { padding: '8px 10px', textAlign: 'left', color: 'var(--text-2)' };
-const tdr = { padding: '8px 10px', textAlign: 'right', color: 'var(--text-2)', fontFamily: 'var(--font-mono)', fontSize: 12.5 };
+const input = { height: 38, padding: '0 10px', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 10, fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none', width: '100%', minWidth: 0 };
+const btnPrimary = { alignSelf: 'flex-end', padding: '9px 18px', background: 'var(--accent)', color: '#0a0a0a', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' };
+const tableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 14 };
+const thr = { padding: '10px 20px', fontSize: 12, color: 'var(--text-4)', fontWeight: 600, textAlign: 'left' };
+const tdl = { padding: '12px 20px', textAlign: 'left', color: 'var(--text-2)', verticalAlign: 'middle' };
