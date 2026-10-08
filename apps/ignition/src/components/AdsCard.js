@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { Modal } from './ui/Modal.js';
+import { Card, SectionTitle, Banner } from './ui/index.js';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
 
@@ -23,7 +24,8 @@ const PROOF_BUCKET = 'ignition-payment-proofs';
 const PLATFORMS = [['instagram', 'Instagram'], ['facebook', 'Facebook'], ['both', 'Instagram + Facebook']];
 const RUN_STATUSES = [['not_started', 'Not started'], ['running', 'Running'], ['ended', 'Ended']];
 const APPROVAL_LABEL = { pending: 'Pending approval', approved: 'Approved', rejected: 'Rejected' };
-const APPROVAL_COLOUR = { pending: 'var(--text-3)', approved: '#27c93f', rejected: 'var(--state-error-fg)' };
+const APPROVAL_COLOUR = { pending: 'var(--text-3)', approved: 'var(--state-success-fg)', rejected: 'var(--state-error-fg)' };
+const APPROVAL_BG = { pending: 'var(--surface-2)', approved: 'var(--state-success-bg)', rejected: 'var(--state-error-bg)' };
 const STALE_SYNC_MS = 36 * 3600 * 1000;   // daily cron + slack; older than this means it stopped
 
 const inr = (n) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
@@ -124,21 +126,21 @@ export default function AdsCard({ engagement, videos, ads, adPayments, canManage
   };
 
   return (
-    <section style={{ gridColumn: '1 / -1', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Ads</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
+    <Card style={{ gridColumn: '1 / -1' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <SectionTitle size={15} style={{ marginBottom: 0 }}>Ads</SectionTitle>
+        <div style={{ display: 'flex', gap: 16 }}>
           {canManage && hasMeta && (
-            <button onClick={refreshMeta} disabled={busy} style={btn}>{busy ? 'Working…' : 'Refresh from Meta'}</button>
+            <button type="button" onClick={refreshMeta} disabled={busy} className="ig-card-action">{busy ? 'Working…' : 'Refresh from Meta'}</button>
           )}
           {canManage && editing !== 'new' && (
-            <button onClick={() => setEditing('new')} disabled={busy} style={btn}>+ Add ad</button>
+            <button type="button" onClick={() => setEditing('new')} disabled={busy} className="ig-card-action">+ Add ad</button>
           )}
         </div>
       </div>
 
-      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
-        <strong style={{ color: 'var(--text-2)' }}>Ad total {inr(payPending + payPaid + metaSpend)}</strong>
+      <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.5 }}>
+        <strong style={{ color: 'var(--text-1)' }}>Ad total <span style={{ fontFamily: 'var(--font-mono)' }}>{inr(payPending + payPaid + metaSpend)}</span></strong>
         {' '}= ad payments {inr(payPending + payPaid)} + Meta spend {inr(metaSpend)} — outside the influencer budget, not in this deal&apos;s total cost.
         {Number(engagement?.ad_rights_amount) > 0 && (
           <> Agreed ad-rights fee (Deal Terms) {inr(Number(engagement.ad_rights_amount))} — paid {inr(payPaid)} so far.</>
@@ -146,17 +148,15 @@ export default function AdsCard({ engagement, videos, ads, adPayments, canManage
       </div>
 
       {syncMsg && (
-        <div style={{ marginBottom: 10, padding: '8px 10px', fontSize: 12, borderRadius: 'var(--radius-sm)', lineHeight: 1.5,
-          background: syncMsg.kind === 'error' ? 'var(--state-error-bg)' : 'var(--surface-2)',
-          border: `1px solid ${syncMsg.kind === 'error' ? 'var(--state-error-fg)' : 'var(--border)'}`, color: 'var(--text-1)' }}>
+        <Banner tone={syncMsg.kind === 'error' ? 'error' : 'success'} style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
           {syncMsg.text}
-        </div>
+        </Banner>
       )}
 
       {ads === null ? (
         <div style={{ color: 'var(--state-error-fg)', fontSize: 13 }}>Could not load this deal&apos;s ads — reload the page.</div>
       ) : list.length === 0 && editing !== 'new' ? (
-        <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No ads on this deal.</div>
+        <div style={{ color: 'var(--text-4)', fontSize: 13 }}>No ads on this deal.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {list.map(ad => editing === ad.id ? (
@@ -175,32 +175,32 @@ export default function AdsCard({ engagement, videos, ads, adPayments, canManage
       )}
 
       {/* Ad payments — modelled on the deal's Payments card, but a separate table and total. */}
-      <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Ad payments</div>
-          {canManage && <button onClick={() => setPayModal({ mode: 'new' })} disabled={busy} style={btn}>+ Record</button>}
+      <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+          <div style={eyebrow}>Ad payments</div>
+          {canManage && <button type="button" onClick={() => setPayModal({ mode: 'new' })} disabled={busy} className="ig-card-action">+ Record</button>}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>
-          Pending <strong>{inr(payPending)}</strong> · Paid <strong style={{ color: '#27c93f' }}>{inr(payPaid)}</strong>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 4 }}>
+          Pending <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--state-warning-fg)' }}>{inr(payPending)}</strong> · Paid <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--state-success-fg)' }}>{inr(payPaid)}</strong>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>Outside the influencer budget</div>
+        <div style={{ fontSize: 12, color: 'var(--text-4)', marginBottom: 8 }}>Outside the influencer budget</div>
         {adPayments === null ? (
           <div style={{ color: 'var(--state-error-fg)', fontSize: 13 }}>Could not load ad payments — reload the page.</div>
         ) : pays.length === 0 ? (
-          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Nothing recorded yet.</div>
+          <div style={{ color: 'var(--text-4)', fontSize: 13 }}>Nothing recorded yet.</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
             {pays.map(p => (
-              <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13, flexWrap: 'wrap' }}>
+              <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 14, flexWrap: 'wrap', padding: '7px 0', borderTop: '1px solid var(--row-divider)' }}>
                 <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inr(p.amount)}</span>
-                <span style={{ fontSize: 11, textTransform: 'uppercase', color: p.status === 'paid' ? '#27c93f' : '#F2CD1A' }}>{p.status === 'paid' ? 'Paid' : 'Pending'}</span>
-                <span style={{ color: 'var(--text-3)' }}>{p.status === 'paid' ? (p.paid_on || '—') : ''}</span>
-                {p.ad_id && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{adLabel(p.ad_id) || 'ad'}</span>}
-                {p.note && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{p.note}</span>}
-                <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: p.status === 'paid' ? 'var(--state-success-fg)' : 'var(--state-warning-fg)' }}>{p.status === 'paid' ? 'Paid' : 'Pending'}</span>
+                <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{p.status === 'paid' ? (p.paid_on || '—') : ''}</span>
+                {p.ad_id && <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{adLabel(p.ad_id) || 'ad'}</span>}
+                {p.note && <span style={{ color: 'var(--text-4)', fontSize: 12 }}>{p.note}</span>}
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
                   {p.proof_path
-                    ? <button onClick={() => viewProof(p.id)} title={p.proof_name || 'View screenshot'} style={linkBtn}>screenshot</button>
-                    : <span style={{ color: 'var(--text-3)', fontSize: 11 }}>no proof</span>}
+                    ? <button onClick={() => viewProof(p.id)} title={p.proof_name || 'View screenshot'} style={linkBtn}>screenshot ↗</button>
+                    : <span style={{ color: 'var(--text-4)', fontSize: 12 }}>no proof</span>}
                   {canManage && p.status !== 'paid' && <button onClick={() => setPayModal({ mode: 'paid', payment: p })} disabled={busy} style={linkBtn}>mark paid</button>}
                   {canManage && p.status === 'paid' && <button onClick={() => backToPending(p)} disabled={busy} style={linkBtn}>back to pending</button>}
                   {canManage && <button onClick={() => removePayment(p)} disabled={busy} style={{ ...linkBtn, color: 'var(--state-error-fg)' }}>delete</button>}
@@ -213,7 +213,7 @@ export default function AdsCard({ engagement, videos, ads, adPayments, canManage
 
       <AdPaymentModal state={payModal} onClose={() => setPayModal(null)} engagement={engagement} ads={list}
         adLabel={adLabel} session={session} onSaved={onSaved} />
-    </section>
+    </Card>
   );
 }
 
@@ -223,55 +223,55 @@ function AdRow({ ad, take, canManage, canApprove, busy, onEdit, onDelete, onDeci
   const synced = ad.meta_synced_at ? Date.parse(ad.meta_synced_at) : NaN;
   const stale = ad.meta_ad_id && (!Number.isFinite(synced) || Date.now() - synced > STALE_SYNC_MS);
   return (
-    <div style={{ padding: 10, background: 'var(--surface-2)', border: `1px solid ${runningUnapproved ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)' }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 13 }}>
-        <strong>{takeLabel(take)}</strong>
+    <div style={{ padding: '12px 14px', background: 'var(--bg)', border: `1px solid ${runningUnapproved ? 'var(--state-error-fg)' : 'var(--border-2)'}`, borderRadius: 'var(--r-row)' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14 }}>
+        <strong style={{ fontWeight: 600 }}>{takeLabel(take)}</strong>
         <span style={{ color: 'var(--text-2)' }}>{(PLATFORMS.find(p => p[0] === ad.platform) || [, ad.platform])[1]}</span>
-        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: APPROVAL_COLOUR[ad.approval_status] || 'var(--text-3)' }}>
+        <span style={{ ...pill, color: APPROVAL_COLOUR[ad.approval_status] || 'var(--text-3)', background: APPROVAL_BG[ad.approval_status] || 'var(--surface-2)' }}>
           {APPROVAL_LABEL[ad.approval_status] || ad.approval_status}
         </span>
-        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-2)' }}>
+        <span style={{ ...pill, color: 'var(--text-2)', background: 'var(--surface-2)' }}>
           {(RUN_STATUSES.find(r => r[0] === ad.run_status) || [, ad.run_status])[1]}
         </span>
         {runningUnapproved && (
-          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--state-error-fg)', textTransform: 'uppercase' }}>⚠ running without approval</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--state-error-fg)' }}>⚠ Running without approval</span>
         )}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {canApprove && ad.approval_status !== 'approved' && (
             <button onClick={() => onDecide('approved')} disabled={busy || !gate.ok} title={gate.ok ? undefined : gate.message}
-              style={{ ...btn, background: gate.ok ? '#27c93f' : 'var(--surface-3)', color: gate.ok ? '#04140a' : 'var(--text-3)', cursor: (busy || !gate.ok) ? 'not-allowed' : 'pointer' }}>Approve</button>
+              style={{ ...btn, background: gate.ok ? 'var(--state-success)' : 'var(--surface-3)', border: '1px solid transparent', color: gate.ok ? '#04140a' : 'var(--text-3)', fontWeight: 700, cursor: (busy || !gate.ok) ? 'not-allowed' : 'pointer' }}>Approve</button>
           )}
-          {canApprove && ad.approval_status !== 'rejected' && <button onClick={() => onDecide('rejected')} disabled={busy} style={btn}>Reject</button>}
-          {canApprove && ad.approval_status !== 'pending' && <button onClick={() => onDecide('pending')} disabled={busy} style={btn}>Back to pending</button>}
-          {canManage && <button onClick={onEdit} disabled={busy} style={btn}>Edit</button>}
-          {canManage && <button onClick={onDelete} disabled={busy} style={{ ...btn, color: 'var(--state-error-fg)' }}>Delete</button>}
+          {canApprove && ad.approval_status !== 'rejected' && <button onClick={() => onDecide('rejected')} disabled={busy} className="ig-ghost-btn" style={btn}>Reject</button>}
+          {canApprove && ad.approval_status !== 'pending' && <button onClick={() => onDecide('pending')} disabled={busy} className="ig-ghost-btn" style={btn}>Back to pending</button>}
+          {canManage && <button onClick={onEdit} disabled={busy} className="ig-ghost-btn" style={btn}>Edit</button>}
+          {canManage && <button onClick={onDelete} disabled={busy} style={{ ...btn, color: 'var(--state-error-fg)', border: '1px solid rgba(255,123,123,.3)' }}>Delete</button>}
         </span>
       </div>
       {ad.approval_status !== 'approved' && !gate.ok && (
-        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>Approval: {gate.message}</div>
+        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-4)', fontFamily: 'var(--font-mono)' }}>Approval: {gate.message}</div>
       )}
-      <div style={{ marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-2)' }}>
-        <span>Start {ad.start_date || '—'}</span>
-        <span>End {ad.end_date || '—'}</span>
-        <span>Meta ad {ad.meta_ad_id || '—'}</span>
-        {ad.decided_at && <span style={{ color: 'var(--text-3)' }}>Decided {istStamp(ad.decided_at)}{ad.decision_note ? ` — ${ad.decision_note}` : ''}</span>}
+      <div style={{ marginTop: 8, display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-3)' }}>
+        <span>Start <span style={monoV}>{ad.start_date || '—'}</span></span>
+        <span>End <span style={monoV}>{ad.end_date || '—'}</span></span>
+        <span>Meta ad <span style={monoV}>{ad.meta_ad_id || '—'}</span></span>
+        {ad.decided_at && <span style={{ color: 'var(--text-4)' }}>Decided {istStamp(ad.decided_at)}{ad.decision_note ? ` — ${ad.decision_note}` : ''}</span>}
       </div>
       {ad.meta_ad_id && (
-        <div style={{ marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-2)' }}>
+        <div style={{ marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-3)' }}>
           {ad.meta_synced_at ? (
             <>
-              <span>Meta {ad.meta_status || '—'}</span>
-              <span>Spend {inr(ad.meta_spend)}</span>
-              <span>Views {Number(ad.meta_views || 0).toLocaleString('en-IN')}</span>
-              <span>Impressions {Number(ad.meta_impressions || 0).toLocaleString('en-IN')}</span>
-              <span style={{ color: stale ? 'var(--state-error-fg)' : 'var(--text-3)' }}>Synced {istStamp(ad.meta_synced_at)}{stale ? ' — stale, the daily sync has not reached it' : ''}</span>
+              <span>Meta <span style={monoV}>{ad.meta_status || '—'}</span></span>
+              <span>Spend <span style={monoV}>{inr(ad.meta_spend)}</span></span>
+              <span>Views <span style={monoV}>{Number(ad.meta_views || 0).toLocaleString('en-IN')}</span></span>
+              <span>Impressions <span style={monoV}>{Number(ad.meta_impressions || 0).toLocaleString('en-IN')}</span></span>
+              <span style={{ color: stale ? 'var(--state-error-fg)' : 'var(--text-4)' }}>Synced {istStamp(ad.meta_synced_at)}{stale ? ' — stale, the daily sync has not reached it' : ''}</span>
             </>
           ) : (
             <span style={{ color: 'var(--state-error-fg)' }}>Not synced from Meta yet — press Refresh from Meta.</span>
           )}
         </div>
       )}
-      {ad.note && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-3)' }}>{ad.note}</div>}
+      {ad.note && <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-3)' }}>{ad.note}</div>}
     </div>
   );
 }
@@ -302,7 +302,7 @@ function AdForm({ ad, takes, session, busy, setBusy, onCancel, onSaved }) {
   }
 
   return (
-    <div style={{ padding: 10, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+    <div style={{ padding: '14px 16px', background: 'var(--bg)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-row)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
       <Field label="Take">
         <select value={f.video_id} onChange={e => set('video_id', e.target.value)} style={inp}>
           <option value="">Pick the take this ad boosts…</option>
@@ -330,7 +330,7 @@ function AdForm({ ad, takes, session, busy, setBusy, onCancel, onSaved }) {
         <Field label="Note"><input value={f.note} onChange={e => set('note', e.target.value)} placeholder="optional" style={inp} /></Field>
       </div>
       <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={ghost}>Cancel</button>
+        <button onClick={onCancel} className="ig-ghost-btn" style={ghost}>Cancel</button>
         <button onClick={save} disabled={busy} style={{ ...primary, opacity: busy ? 0.5 : 1, cursor: busy ? 'not-allowed' : 'pointer' }}>{busy ? 'Saving…' : 'Save ad'}</button>
       </div>
     </div>
@@ -421,7 +421,7 @@ function AdPaymentModal({ state, onClose, engagement, ads, adLabel, session, onS
           <div style={lbl}>Payment screenshot *</div>
           <input type="file" accept="image/*,application/pdf" onChange={e => setProofFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: 'var(--text-2)' }} />
           {proofFile && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-3)' }}>{proofFile.name}</span>}
-          {paid && !form.paid_on && <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>Paid on defaults to today (IST).</div>}
+          {paid && !form.paid_on && <div style={{ fontSize: 12, color: 'var(--text-4)', marginTop: 6 }}>Paid on defaults to today (IST).</div>}
         </div>
       )}
     </Modal>
@@ -431,9 +431,12 @@ function AdPaymentModal({ state, onClose, engagement, ads, adLabel, session, onS
 function Field({ label, children }) {
   return <div><div style={lbl}>{label}</div>{children}</div>;
 }
-const lbl = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
-const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 9px', fontFamily: 'var(--font-mono)', fontSize: 13 };
-const btn = { padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' };
-const ghost = { padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' };
-const primary = { padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700 };
-const linkBtn = { background: 'transparent', border: 'none', color: '#FF6B00', cursor: 'pointer', padding: 0, fontSize: 12, textDecoration: 'underline' };
+const lbl = { fontSize: 12, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6 };
+const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '8px 10px', fontFamily: 'var(--font-ui)', fontSize: 14 };
+const btn = { height: 30, padding: '0 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600, cursor: 'pointer' };
+const ghost = { height: 36, padding: '0 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
+const primary = { height: 36, padding: '0 16px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700 };
+const linkBtn = { background: 'transparent', border: 'none', color: 'var(--accent-hi)', cursor: 'pointer', padding: 0, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600 };
+const pill = { fontSize: 12, fontWeight: 600, borderRadius: 'var(--r-deal)', padding: '3px 9px' };
+const monoV = { fontFamily: 'var(--font-mono)', color: 'var(--text-2)' };
+const eyebrow = { fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-4)' };
