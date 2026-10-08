@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { ignitionopsPost } from '../../../../../lib/ignitionopsFetch.js';
 import { deriveMetrics, isMetricApplicable, unexplainedGaps, GAP_REASONS, REQUIRED_METRICS, missingRequiredMetrics, organicViews } from '../../../../../lib/metrics.js';
+import { Card, SectionTitle, Segmented, Tile } from '../../../../../components/ui/index.js';
 import { KV } from './shared.js';
 
 // #13 — editable performance stats once the deal is live/completed.
@@ -35,8 +36,12 @@ const VIEW_SPLIT_FIELDS = new Set(['paid_views']);
 // "Organic views" line under Paid views, wherever a take or the deal totals are shown.
 const organicLabel = (row) => {
   const o = organicViews(row.views, row.paid_views);
-  return o == null ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span> : o.toLocaleString();
+  return o == null ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>—</span> : <span style={{ fontFamily: 'var(--font-mono)' }}>{o.toLocaleString()}</span>;
 };
+// Headline tiles (prototype: Views · Likes · Comments · Shares · Orders · Conv. value), off the
+// deal-level rollup / deal columns already on `e`. [key, label, isMoney]
+const TILE_FIELDS = [['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
+  ['orders', 'Orders'], ['conversions_value', 'Conv. value', true]];
 const MAX_VIDEOS = 6;   // engagement_videos.seq CHECK (1..6) — the 7th insert 23514s; refuse here first
 
 export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, platform, gapReasons }) {
@@ -141,47 +146,64 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
     finally { setBusy(false); }
   }
 
-  const tabStyle = (active) => ({
-    padding: '4px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
-    background: active ? 'var(--surface-3)' : 'transparent', color: active ? 'var(--text-1)' : 'var(--text-3)',
-    border: '1px solid', borderColor: active ? 'var(--border-2)' : 'var(--border)', borderRadius: 'var(--radius-sm)',
-  });
+  const isLive = e.stage === 'live' || e.stage === 'completed';
+  const tiles = TILE_FIELDS.filter(applicable);
+  const allBlank = tiles.every(([k]) => e[k] == null || e[k] === '');
+  const paidViews = Number(e.paid_views) || 0;
 
   return (
-    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Performance</h2>
-        <div role="tablist" aria-label="Video takes" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {takes.map(t => (
-            <button key={t.seq} role="tab" aria-selected={Number(t.seq) === Number(tab)} style={tabStyle(Number(t.seq) === Number(tab))}
-              onClick={() => { setTab(t.seq); setEditing(false); }}>Video #{t.seq}</button>
-          ))}
-          {canEdit && takes.length < MAX_VIDEOS && (
-            <button onClick={addTake} disabled={busy} style={tabStyle(false)} title="Add another take of this video">+ Add video</button>
-          )}
-        </div>
-        {canEdit && current && !editing && (
-          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 10 }}>
+        <SectionTitle size={15} style={{ marginBottom: 0 }}>Performance</SectionTitle>
+        {canEdit && current && !editing
+          ? <button type="button" onClick={startEdit} className="ig-card-action">Edit</button>
+          : !isLive && allBlank && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Fills when stage is Live</span>}
+      </div>
+
+      {/* The deal's rolled-up headline numbers. A blank one sits in a dashed tile reading "—" —
+          the prototype's not-yet-live look — and never as a zero. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 14 }}>
+        {tiles.map(([k, label, isMoney]) => {
+          const raw = e[k];
+          const blank = raw == null || raw === '';
+          return (
+            <Tile key={k} label={label} size={20}
+              value={blank ? '—' : (isMoney ? `₹${Number(raw).toLocaleString('en-IN')}` : Number(raw).toLocaleString('en-IN'))}
+              hint={k === 'views' && !blank && paidViews > 0 ? `${paidViews.toLocaleString('en-IN')} paid` : undefined}
+              color={blank ? 'var(--text-5)' : undefined}
+              style={{ background: 'var(--bg)', borderRadius: 12, padding: '12px 14px', border: blank ? '1px dashed var(--border-3)' : '1px solid var(--border)' }} />
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        {takes.length > 0 && (
+          <Segmented size="sm" aria-label="Video takes" value={Number(tab)}
+            options={takes.map(t => ({ value: Number(t.seq), label: `Video #${t.seq}` }))}
+            onChange={(v) => { setTab(v); setEditing(false); }} />
+        )}
+        {canEdit && takes.length < MAX_VIDEOS && (
+          <button type="button" onClick={addTake} disabled={busy} className="ig-card-action" title="Add another take of this video">+ Add video</button>
         )}
       </div>
 
-      {!current && <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No video on this deal yet.</div>}
+      {!current && <div style={{ color: 'var(--text-4)', fontSize: 13 }}>No video on this deal yet.</div>}
 
       {current && !editing && (
         <>
           <KV label="Link" value={current.video_link
-            ? <a href={current.video_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{current.video_link}</a>
+            ? <a href={current.video_link} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-hi)', wordBreak: 'break-all' }}>{current.video_link}</a>
             : '—'} />
-          <KV label="Posted" value={current.post_date || '—'} />
+          <KV label="Posted" value={current.post_date ? <span style={mono}>{current.post_date}</span> : '—'} />
           {shown.map(([k, label]) => {
             const raw = current[k];
             const reason = (current.metric_gaps || {})[k];
             const val = (raw == null || raw === '')
-              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
-              : Number(raw).toLocaleString();
+              ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
+              : <span style={mono}>{Number(raw).toLocaleString()}</span>;
             if (k === 'paid_views') return [
               <KV key={k} label={label} value={paidFromMeta
-                ? <span>{val} <span style={{ color: 'var(--text-3)', fontSize: 11 }}>from Meta</span></span>
+                ? <span>{val} <span style={{ color: 'var(--text-4)', fontSize: 11 }}>from Meta</span></span>
                 : val} />,
               <KV key="organic" label="Organic views" value={organicLabel(current)} />,
             ];
@@ -191,23 +213,21 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
       )}
 
       {current && editing && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Link</span>
-            <input value={form.video_link} onChange={ev => setForm(f => ({ ...f, video_link: ev.target.value }))}
-              style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={editRow}>
+            <span style={editLabel}>Link</span>
+            <input value={form.video_link} onChange={ev => setForm(f => ({ ...f, video_link: ev.target.value }))} style={inp} />
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Posted</span>
-            <input type="date" value={form.post_date} onChange={ev => setForm(f => ({ ...f, post_date: ev.target.value }))}
-              style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+          <div style={editRow}>
+            <span style={editLabel}>Posted</span>
+            <input type="date" value={form.post_date} onChange={ev => setForm(f => ({ ...f, post_date: ev.target.value }))} style={inp} />
           </div>
           {shown.map(([k, label]) => {
           const required = REQUIRED_METRICS.includes(k);
           const blankRequired = required && missingRequired.includes(k);
           return (
-            <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ width: 130, color: blankRequired ? 'var(--state-error-fg)' : 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div key={k} style={editRow}>
+              <span style={{ ...editLabel, color: blankRequired ? 'var(--state-error-fg)' : 'var(--text-3)' }}>
                 {label}{required && <span style={{ color: 'var(--state-error-fg)' }}> *</span>}
               </span>
               {/* The required field is edited right here, in the same card — a hard stop that sent
@@ -216,19 +236,19 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
                 autoFocus={blankRequired}
                 readOnly={k === 'paid_views' && paidFromMeta}
                 title={k === 'paid_views' && paidFromMeta ? 'Synced from Meta for the ad on this video — refreshed on every sync' : undefined}
-                style={{ flex: 1, background: 'var(--surface-2)', color: (k === 'paid_views' && paidFromMeta) ? 'var(--text-3)' : 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+                style={{ ...inp, color: (k === 'paid_views' && paidFromMeta) ? 'var(--text-3)' : 'var(--text-1)', border: `1px solid ${blankRequired ? 'var(--state-error-fg)' : 'var(--border-3)'}` }} />
               {/* A blank number gets a "why" picker — that is what separates a real 0 from unknown.
                   A REQUIRED metric gets none: it is not backfillable, so a reason would just record
                   that the number is lost. Capture it now or the deal has no ratios, ever. */}
               {!required && !VIEW_SPLIT_FIELDS.has(k) && (form[k] === '' || form[k] == null) && (
                 <select value={gaps[k] || ''} onChange={ev => setGaps(g => ({ ...g, [k]: ev.target.value }))}
-                  style={{ width: 150, background: 'var(--surface-2)', color: gaps[k] ? 'var(--text-1)' : 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                  style={{ ...inp, flex: '0 1 150px', fontSize: 12, color: gaps[k] ? 'var(--text-1)' : 'var(--text-3)' }}>
                   <option value="">why blank?</option>
                   {(gapReasons || []).map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
               )}
               {k === 'paid_views' && (
-                <span style={{ width: 150, fontSize: 11, color: paidOverViews ? 'var(--state-error-fg)' : 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                <span style={{ flex: '0 1 150px', fontSize: 11, color: paidOverViews ? 'var(--state-error-fg)' : 'var(--text-4)', fontFamily: 'var(--font-mono)' }}>
                   {paidOverViews ? 'more than views'
                     : `${paidFromMeta ? 'from Meta · ' : ''}organic ${organicViews(form.views, form.paid_views)?.toLocaleString() ?? '—'}`}
                 </span>
@@ -237,28 +257,28 @@ export function PerformanceCard({ e, videos, ads, canEdit, session, onSaved, pla
           );
           })}
           {missingRequired.length > 0 && (
-            <div style={{ padding: '8px 10px', background: 'var(--state-error-bg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--text-1)', lineHeight: 1.5 }}>
+            <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--state-error-bg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--r-ctl)', fontSize: 13, color: 'var(--text-1)', lineHeight: 1.5 }}>
               <strong>{requiredLabels.join(', ')} is required.</strong> This cannot be saved without it,
               and &ldquo;why blank?&rdquo; does not apply — the count on the day this posted cannot be
               recovered later, and every ratio on the deal depends on it. Enter it above.
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, flexWrap: 'wrap' }}>
             {Number(current.seq) !== 1 && (
               <button onClick={removeTake} disabled={busy}
-                style={{ marginRight: 'auto', padding: '6px 12px', background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Remove video #{current.seq}</button>
+                style={{ ...ghostBtn, marginRight: 'auto', color: 'var(--state-error-fg)', border: '1px solid rgba(255,123,123,.3)' }}>Remove video #{current.seq}</button>
             )}
-            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
             <button onClick={saveTake} disabled={busy || missingRequired.length > 0 || paidOverViews}
               title={missingRequired.length > 0 ? `${requiredLabels.join(', ')} is required` : paidOverViews ? 'Paid views cannot be more than views' : undefined}
-              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: (busy || missingRequired.length > 0 || paidOverViews) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0 || paidOverViews) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
+              style={{ ...primaryBtn, cursor: (busy || missingRequired.length > 0 || paidOverViews) ? 'not-allowed' : 'pointer', opacity: (busy || missingRequired.length > 0 || paidOverViews) ? 0.5 : 1 }}>{busy ? 'Saving…' : `Save video #${current.seq}`}</button>
           </div>
         </div>
       )}
 
       <DealTotals e={e} derived={derived} unexplained={unexplained} takes={takes}
         canEdit={canEdit} session={session} onSaved={onSaved} platform={platform} />
-    </section>
+    </Card>
   );
 }
 
@@ -295,17 +315,17 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
   }
 
   const value = (raw, reason, isMoney) => (raw == null || raw === '')
-    ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
-    : (isMoney ? `₹${Number(raw).toLocaleString()}` : Number(raw).toLocaleString());
+    ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>{reason ? (GAP_REASONS[reason] || reason) : '—'}</span>
+    : <span style={mono}>{isMoney ? `₹${Number(raw).toLocaleString()}` : Number(raw).toLocaleString()}</span>;
 
   return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+    <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6, gap: 8 }}>
+        <div style={eyebrow}>
           Deal totals ({takes.length} video{takes.length === 1 ? '' : 's'})
         </div>
         {canEdit && !editing && (
-          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit totals</button>
+          <button type="button" onClick={startEdit} className="ig-card-action">Edit totals</button>
         )}
       </div>
 
@@ -315,18 +335,17 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
         : <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], false)} />)}
 
       {editing ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
           {shownDeal.map(([k, label]) => (
-            <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-              <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
-                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+            <div key={k} style={editRow}>
+              <span style={editLabel}>{label}</span>
+              <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))} style={inp} />
             </div>
           ))}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
             <button onClick={save} disabled={busy}
-              style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+              style={{ ...primaryBtn, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
@@ -334,17 +353,15 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
           {shownDeal.map(([k, label]) => (
             <KV key={k} label={label} value={value(e[k], (e.metric_gaps || {})[k], k === 'conversions_value')} />
           ))}
-          {e.actual_roas != null && <KV label="Actual ROAS" value={Number(e.actual_roas).toFixed(2)} />}
+          {e.actual_roas != null && <KV label="Actual ROAS" value={<span style={mono}>{Number(e.actual_roas).toFixed(2)}</span>} />}
         </>
       )}
 
       {/* Engagement ratios — every one divides by followers at post date (the seq-1 take's). */}
-      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-          Engagement ratios
-        </div>
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+        <div style={{ ...eyebrow, marginBottom: 6 }}>Engagement ratios</div>
         {derived.missingDenominator ? (
-          <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-3)', lineHeight: 1.5 }}>
             Needs <strong style={{ color: 'var(--text-2)' }}>followers at post date</strong> before any
             ratio can be worked out. It is the follower count on the day this posted, not today&apos;s —
             using today&apos;s would understate a creator who has grown since. Add it on video #1 above.
@@ -353,26 +370,24 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
           derived.ratios.map(r => (
             <KV key={r.key} label={r.label}
               value={r.value == null
-                ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
-                : (r.unit === 'x' ? `${r.value}x` : `${r.value}%`)} />
+                ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>—</span>
+                : <span style={mono}>{r.unit === 'x' ? `${r.value}x` : `${r.value}%`}</span>} />
           ))
         )}
       </div>
 
-      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
-          Business
-        </div>
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+        <div style={{ ...eyebrow, marginBottom: 6 }}>Business</div>
         {derived.business.map(b => (
           <KV key={b.key} label={b.label}
             value={b.value == null
-              ? <span style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>—</span>
-              : `₹${Number(b.value).toLocaleString()}`} />
+              ? <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>—</span>
+              : <span style={mono}>₹{Number(b.value).toLocaleString()}</span>} />
         ))}
       </div>
 
       {unexplained.length > 0 && (
-        <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+        <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
           {unexplained.length} metric{unexplained.length > 1 ? 's' : ''} blank with no reason recorded.
           Edit a video above and pick why, so a gap can be told apart from a genuine zero.
         </div>
@@ -380,3 +395,11 @@ function DealTotals({ e, derived, unexplained, takes, canEdit, session, onSaved,
     </div>
   );
 }
+
+const mono = { fontFamily: 'var(--font-mono)' };
+const eyebrow = { fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-4)' };
+const editRow = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '7px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14 };
+const editLabel = { flex: '0 0 150px', color: 'var(--text-3)' };
+const inp = { flex: '1 1 140px', minWidth: 0, boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '7px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
+const primaryBtn = { height: 36, padding: '0 16px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700 };
+const ghostBtn = { height: 36, padding: '0 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
