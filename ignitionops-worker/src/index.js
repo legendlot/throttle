@@ -941,7 +941,7 @@ const VIDEO_MAX_SEQ = 6;   // engagement_videos.seq CHECK (seq BETWEEN 1 AND 6) 
 // VIDEO_NUMERIC minus the base itself and minus paid/organic views (S373): those split the views
 // figure, they are not ratios over followers, and a paid figure typed (or synced from Meta) on a
 // take with no follower base must not be refused. Mirrors the client gate in
-// apps/ignition/src/app/(auth)/engagements/detail/page.js (PerformanceCard).
+// apps/ignition/src/app/(auth)/engagements/detail/components/PerformanceCard.js.
 const VIEW_SPLIT_FIELDS = ['paid_views', 'organic_views'];
 export const VIDEO_METRICS_NEEDING_BASE = VIDEO_NUMERIC.filter(k => k !== 'follower_count_at_post' && !VIEW_SPLIT_FIELDS.includes(k));
 

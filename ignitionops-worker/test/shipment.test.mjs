@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { shipKey, shipmentFor } from '../src/index.js';
 
 // ── The two courier-display helpers are COPIED from
-// `apps/ignition/src/app/(auth)/engagements/detail/page.js` — that file is JSX and node:test
+// `apps/ignition/src/app/(auth)/engagements/detail/components/LogisticsCard.js` — that file is JSX and node:test
 // cannot import it, and both functions are pure. Change one, change the other (the page carries
 // the same note). They are here because both shipped a wrong answer that LOOKED right:
 // "D.T.D.C. · Ress", and a Delhivery URL for a Shiprocket parcel.

@@ -95,7 +95,7 @@ test('isLocked: an incomplete deal is never locked — clearing a metric release
 // Mirrors the guard exactly: refuse = lockedFieldsIn(patch) is non-empty AND isLocked(row).
 const refused = (row, patch, now = NOW) => W.lockedFieldsIn(patch).length > 0 && W.isLocked(row, now);
 
-// The payloads each deal-page card actually sends (apps/ignition/src/app/(auth)/engagements/detail/page.js).
+// The payloads each deal-page card actually sends (apps/ignition/src/app/(auth)/engagements/detail/components/*Card.js).
 const CARD_PAYLOADS = {
   DealTermsCard: { deal_type: 'paid', payment_terms: null, payment_amount: 5000, affiliate_pct: null,
     commission_amount: null, campaign_id: null, ad_rights: null, ad_rights_amount: null, ad_rights_duration: null },
