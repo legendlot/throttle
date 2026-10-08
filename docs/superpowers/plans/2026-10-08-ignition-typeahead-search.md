@@ -6,6 +6,12 @@
 > Built on the two read-only maps from S412 (page search inventory + worker search endpoints); every
 > claim below was spot-checked against the code.
 
+## ▶ Resume here
+**S1 DONE (S412):** `searchTerm` + shared or-group builders + `searchAll` (ignitionops 799fafb2), 101/101 tests,
+hostile-reviewed (no-ship on stripping `:` → fixed: or-breakers become `_`, `:` kept). Live-checked from the
+signed-in app: `searchAll?q=petrol` → 2 influencers + 2 deals; `a,b)` / `x)*` / a pasted IG link → 200 with rows.
+Global search includes B-List influencers (not archived). **NEXT: S2** — `Typeahead` primitive + `useTypeahead`.
+
 ## 0. What exists today (the facts the plan rests on)
 
 - **Only 4 routes have a search box**: `/engagements`, `/influencers` (both worker-side `search`),
