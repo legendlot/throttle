@@ -233,7 +233,7 @@ function ChasingList({ session, router }) {
         <div style={{ borderTop: '1px solid var(--border)', maxHeight: 320, overflowY: 'auto' }}>
           {data.due.map(d => (
             <div key={d.engagement_no}
-              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
@@ -259,7 +259,7 @@ function ChasingList({ session, router }) {
         <div style={{ borderTop: '1px solid var(--state-warning)' }}>
           {stuck.map(d => (
             <div key={d.engagement_no}
-              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-warning)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: 'var(--state-warning-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
@@ -282,7 +282,7 @@ function ChasingList({ session, router }) {
         <div style={{ borderTop: '1px solid var(--state-error)' }}>
           {returned.map(d => (
             <div key={d.engagement_no}
-              onClick={() => router.push(`/engagements/?search=${encodeURIComponent(d.engagement_no)}`)}
+              onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-error)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: 'var(--state-error-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
