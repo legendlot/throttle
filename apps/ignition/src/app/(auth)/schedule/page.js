@@ -273,7 +273,7 @@ function ChasingList({ session, router }) {
     {data.count > 0 && (
     <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--r-card)', background: 'var(--surface)' }}>
       <button onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
+        style={{ width: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
         <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{data.count}</span>
         <span>waiting to post 10+ days after delivery</span>
         {data.unreachable > 0 && (
@@ -286,7 +286,7 @@ function ChasingList({ session, router }) {
           {data.due.map(d => (
             <div key={d.engagement_no}
               onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
-              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
+              style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
               <span style={{ color: 'var(--text-3)' }}>{clockLabel(d)}</span>
@@ -304,7 +304,7 @@ function ChasingList({ session, router }) {
         parcel sat in transit for 50 days with nobody looking. Amber, not red: it is not lost yet. */}
     {stuck.length > 0 && (
       <div style={{ marginBottom: 12, border: '1px solid var(--state-warning)', borderRadius: 'var(--r-card)', background: 'var(--state-warning-bg)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
           <span style={{ color: 'var(--state-warning-fg)', fontWeight: 700 }}>{stuck.length}</span>
           <span>parcel{stuck.length === 1 ? '' : 's'} still in flight after 14+ days — chase the courier, not the creator</span>
         </div>
@@ -312,7 +312,7 @@ function ChasingList({ session, router }) {
           {stuck.map(d => (
             <div key={d.engagement_no}
               onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
-              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-warning)', fontSize: 12, cursor: 'pointer' }}>
+              style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-warning)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: 'var(--state-warning-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
               <span style={{ color: 'var(--state-warning-fg)' }}>{d.lifecycle === 'out_for_delivery' ? 'out for delivery' : String(d.lifecycle || '').replace('_', ' ')}</span>
@@ -327,7 +327,7 @@ function ChasingList({ session, router }) {
 
     {returned.length > 0 && (
       <div style={{ marginBottom: 12, border: '1px solid var(--state-error)', borderRadius: 'var(--r-card)', background: 'var(--state-error-bg)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
           <span style={{ color: 'var(--state-error-fg)', fontWeight: 700 }}>{returned.length}</span>
           <span>parcel{returned.length === 1 ? '' : 's'} came back — the creator never received the product, so do not chase</span>
         </div>
@@ -335,7 +335,7 @@ function ChasingList({ session, router }) {
           {returned.map(d => (
             <div key={d.engagement_no}
               onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
-              style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-error)', fontSize: 12, cursor: 'pointer' }}>
+              style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px', alignItems: 'baseline', padding: '7px 12px', borderTop: '1px solid var(--state-error)', fontSize: 12, cursor: 'pointer' }}>
               <span style={{ color: 'var(--state-error-fg)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
               <span style={{ color: 'var(--state-error-fg)' }}>{d.lifecycle === 'cancelled' ? 'cancelled' : 'returned to origin'}</span>
