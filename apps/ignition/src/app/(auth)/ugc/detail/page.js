@@ -4,15 +4,15 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { Modal } from '../../../../components/ui/Modal.js';
+import { Card, Tile, StagePill, Avatar } from '../../../../components/ui/index.js';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import ProductLinesEditor, { linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
 import {
-  UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, UGC_HAPPY_PATH,
+  UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, UGC_HAPPY_PATH, UGC_TERMINAL,
   roasTone, roasToneColor,
 } from '../../../../lib/ugcStages.js';
 import { titleish } from '../../../../lib/productLabel.js';
 
-const ORANGE = '#FF6B00';
 function inr(n) { return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 function num(n) { return n == null || n === '' ? null : Number(n); }
 function computeRoas(spend, rev) {
@@ -37,6 +37,7 @@ export default function UgcDetailPage() {
   const [err, setErr] = useState(null);
   const [stageModal, setStageModal] = useState(null); // { to_stage }
   const [briefBusy, setBriefBusy] = useState(false);
+  const [moving, setMoving] = useState(false);
   const canManage = !!perms?.ignition_manage;
 
   function reload() {
@@ -52,6 +53,8 @@ export default function UgcDetailPage() {
   }
 
   async function doAdvance(to_stage, extra = {}) {
+    if (moving) return;
+    setMoving(true);
     try {
       await ignitionopsPost('advanceStage', { engagement_id: data.engagement.id, to_stage, ...extra }, session);
       toast(`Moved to ${UGC_STAGE_LABELS[to_stage] || to_stage}`, 'success');
@@ -62,6 +65,8 @@ export default function UgcDetailPage() {
       if (/tracking_url_required_for_shipped/.test(m)) { setStageModal({ to_stage, need: 'tracking_url' }); return; }
       if (/video_link_required_for_live/.test(m)) { setStageModal({ to_stage, need: 'video_link' }); return; }
       toast(m || 'Could not move', 'error');
+    } finally {
+      setMoving(false);
     }
   }
 
@@ -93,67 +98,110 @@ export default function UgcDetailPage() {
   const igHandle = inf.channel_name || inf.ig_handle || null;
   const igLink = inf.channel_link || inf.profile_url || null;
 
+  // Header shortcuts route through clickStage, so they get the same tracking/video prompts as the stepper.
+  const hpIdx = UGC_HAPPY_PATH.indexOf(e.stage);
+  // An unapproved proposal can't advance (the worker 422s approval_required; Approve lives on the deal page).
+  const nextStage = hpIdx >= 0 ? UGC_HAPPY_PATH[hpIdx + 1] : (e.stage === 'proposed' && e.approved_at) ? UGC_HAPPY_PATH[0] : null;
+  // Vault from a closed deal would reopen it (the worker clears closed_at/closed_reason) — the stepper still can.
+  const canVault = e.stage !== 'vault' && !UGC_TERMINAL.has(e.stage);
+  function vaultFromHeader() {
+    if (e.stage === 'live' && !confirm('Move this live deal to the vault? Its affiliate window closes today.')) return;
+    clickStage('vault');
+  }
+  const roasColor = roas == null ? 'var(--text-1)' : roasToneColor(roasTone(roas));
+  const displayName = inf.channel_name || inf.person_name || '—';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 900 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+      <button type="button" onClick={() => router.push('/ugc')} className="ig-card-action"
+        style={{ fontSize: 13, color: 'var(--text-3)', width: 'max-content' }}>← UGC</button>
+
       {/* Header */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ color: ORANGE, fontWeight: 700, fontSize: 18 }}>{e.engagement_no}</span>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          {inf.channel_name || inf.person_name || '—'}
-        </h1>
-        <UgcStageBadge stage={e.stage} />
-        <button onClick={() => router.push('/ugc')} style={{ marginLeft: 'auto', ...ghostBtn }}>← Pipeline</button>
+      <div className="ig-up" style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Avatar name={displayName} seed={inf.id || displayName} size={56} square />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: 'var(--accent-hi)', overflowWrap: 'anywhere' }}>
+            {e.engagement_no}
+            {igHandle && <span style={{ color: 'var(--text-4)', fontWeight: 400 }}> · {igHandle}</span>}
+          </div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, lineHeight: 1.15, marginTop: 6, overflowWrap: 'anywhere' }}>
+            {displayName}
+          </h1>
+        </div>
+        <StagePill stage={e.stage} ugc size="lg" />
+        {canManage && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canVault && (
+              <button type="button" disabled={moving} onClick={vaultFromHeader} className="ig-ghost-btn" style={ghostBtnLg}>Move to vault</button>
+            )}
+            {nextStage && (
+              <button type="button" disabled={moving} onClick={() => clickStage(nextStage)} className="ig-cta" style={primaryBtnLg}>Advance →</button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stepper */}
-      <Card title="Pipeline">
+      <Card title="Pipeline" hero className="ig-up" style={{ animationDelay: '60ms' }}>
         <UgcStepper stage={e.stage} onPick={clickStage} canManage={canManage} />
-        {canManage && <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8 }}>Click a stage to move the deal. Tracking link required at Shipped; video link required at Live.</div>}
+        {canManage && <div style={{ fontSize: 12, color: 'var(--text-4)', marginTop: 12 }}>Click a stage to move the deal. Tracking link required at Shipped; video link required at Live.</div>}
       </Card>
 
-      {/* Creator */}
-      <Card title="Creator">
-        <KV label="Name" value={inf.person_name || inf.channel_name || '—'} />
-        <KV label="IG handle" value={igHandle ? (igLink ? <a href={igLink} target="_blank" rel="noreferrer" style={{ color: ORANGE }}>{igHandle}</a> : igHandle) : '—'} />
-        <KV label="Phone" value={inf.contact_number || '—'} />
-        <KV label="Platform" value={inf.channel_platform || '—'} />
-        <KV label="Followers" value={inf.follower_count != null ? Number(inf.follower_count).toLocaleString() : '—'} />
-      </Card>
+      {/* KPI tiles — every value already on the engagement row. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+        <Tile size={22} label="Ad spend" value={inr(e.ad_spend)} />
+        <Tile size={22} label="Revenue" value={inr(e.conversions_value)} />
+        <Tile size={22} label="ROAS" value={roas == null ? '—' : `${roas.toFixed(2)}×`} color={roasColor} />
+        <Tile size={22} label="Orders" value={e.purchases != null && e.purchases !== '' ? Number(e.purchases).toLocaleString() : '—'} />
+        <Tile size={22} label="Commission owed" value={inr(Math.max(commOut, 0))} color={commOut > 0 ? 'var(--accent-hi)' : undefined} />
+      </div>
 
-      {/* Deal */}
-      <Card title="Deal">
-        <KV label="Creator fee" value={inr(e.payment_amount)} />
-        <KV label="Commission rate" value={e.commission_rate != null && e.commission_rate !== '' ? `${Number(e.commission_rate)}%` : '—'} />
-        <KV label="Barter" value={e.is_barter ? 'Yes' : 'No'} />
-        <KV label="Amount owed" value={<strong style={{ color: amountOwed(e) > 0 ? ORANGE : 'var(--text-1)' }}>{inr(amountOwed(e))}</strong>} />
-      </Card>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
+        {/* Creator */}
+        <Card title="Creator">
+          <KV label="Name" value={inf.person_name || inf.channel_name || '—'} />
+          <KV label="IG handle" value={igHandle ? (igLink ? <a href={igLink} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{igHandle}</a> : igHandle) : '—'} />
+          <KV label="Phone" value={inf.contact_number || '—'} />
+          <KV label="Platform" value={inf.channel_platform || '—'} />
+          <KV label="Followers" value={inf.follower_count != null ? Number(inf.follower_count).toLocaleString() : '—'} />
+        </Card>
 
-      {/* Product */}
-      <ProductsCard products={data.products || []} engagementId={e.id} canEdit={canManage} session={session} onSaved={reload} />
+        {/* Deal */}
+        <Card title="Deal">
+          <KV label="Creator fee" value={inr(e.payment_amount)} />
+          <KV label="Commission rate" value={e.commission_rate != null && e.commission_rate !== '' ? `${Number(e.commission_rate)}%` : '—'} />
+          <KV label="Barter" value={e.is_barter ? 'Yes' : 'No'} />
+          <KV label="Amount owed" value={<strong style={{ color: amountOwed(e) > 0 ? 'var(--accent-hi)' : 'var(--text-1)' }}>{inr(amountOwed(e))}</strong>} />
+        </Card>
 
-      {/* Hook */}
-      <HookCard e={e} canEdit={canManage} onSave={save} />
+        {/* Product */}
+        <ProductsCard products={data.products || []} engagementId={e.id} canEdit={canManage} session={session} onSaved={reload} />
 
-      {/* Ad performance */}
-      <AdPerfCard e={e} roas={roas} canEdit={canManage} onSave={save} session={session} onRefreshed={reload} />
+        {/* Hook */}
+        <HookCard e={e} canEdit={canManage} onSave={save} />
 
-      {/* Payment */}
-      <PaymentCard e={e} commOut={commOut} canEdit={canManage} onSave={save} />
+        {/* Ad performance */}
+        <AdPerfCard e={e} roas={roas} canEdit={canManage} onSave={save} session={session} onRefreshed={reload} />
+
+        {/* Payment */}
+        <PaymentCard e={e} commOut={commOut} canEdit={canManage} onSave={save} />
+      </div>
 
       {/* Brief */}
       <Card title="UGC brief / contract"
-        action={canManage ? <button onClick={generateBrief} disabled={briefBusy} style={primaryBtnSm}>{briefBusy ? 'Generating…' : 'Generate brief'}</button> : null}>
+        action={canManage ? (briefBusy ? 'Generating…' : 'Generate brief') : null}
+        onAction={canManage && !briefBusy ? generateBrief : undefined}>
         {(data.ugc_briefs || []).length === 0 ? (
           <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No briefs generated yet. Generate one to log a timestamped paper trail.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {data.ugc_briefs.map((b, i) => (
-              <div key={b.id || i} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                <div style={{ padding: '6px 10px', background: 'var(--surface-2)', fontSize: 11, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{i === 0 ? 'Latest' : `Version ${data.ugc_briefs.length - i}`}</span>
-                  <span>{b.created_at ? new Date(b.created_at).toLocaleString() : ''}</span>
+              <div key={b.id || i} style={{ background: 'var(--surface-sunk)', border: '1px solid var(--border)', borderRadius: 'var(--r-row)', overflow: 'hidden' }}>
+                <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--row-divider)', fontSize: 12, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, color: i === 0 ? 'var(--accent-hi)' : 'var(--text-3)' }}>{i === 0 ? 'Latest' : `Version ${data.ugc_briefs.length - i}`}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)' }}>{b.created_at ? new Date(b.created_at).toLocaleString() : ''}</span>
                 </div>
-                <pre style={{ margin: 0, padding: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-1)', lineHeight: 1.5 }}>{b.body || '(empty)'}</pre>
+                <pre style={{ margin: 0, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-1)', lineHeight: 1.5 }}>{b.body || '(empty)'}</pre>
               </div>
             ))}
           </div>
@@ -163,23 +211,29 @@ export default function UgcDetailPage() {
       {/* History */}
       {data.history && (
         <Card title="History">
-          {data.history.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No history yet.</div> : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead><tr style={{ background: 'var(--surface-2)' }}>
-                <th style={th}>When</th><th style={th}>Action</th><th style={th}>From</th><th style={th}>To</th><th style={th}>Note</th>
-              </tr></thead>
-              <tbody>
-                {data.history.map(h => (
-                  <tr key={h.id} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={tdc}>{new Date(h.created_at).toLocaleString()}</td>
-                    <td style={tdc}>{h.action}</td>
-                    <td style={tdc}>{h.stage_from || '—'}</td>
-                    <td style={tdc}>{h.stage_to || '—'}</td>
-                    <td style={tdc}>{h.note || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {data.history.length === 0 ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No history yet.</div> : (
+            <div>
+              {data.history.map(h => {
+                const moved = h.stage_from || h.stage_to;
+                const dot = (UGC_STAGE_PALETTE[h.stage_to] || {}).fg || 'var(--text-4)';
+                return (
+                  <div key={h.id} style={{ display: 'grid', gridTemplateColumns: '14px minmax(0,1fr) auto', gap: 10, padding: '8px 0', borderTop: '1px solid var(--row-divider)' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', marginTop: 6, background: dot }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14, color: 'var(--text-1)', overflowWrap: 'anywhere' }}>
+                        {moved ? `${UGC_STAGE_LABELS[h.stage_from] || h.stage_from || '—'} → ${UGC_STAGE_LABELS[h.stage_to] || h.stage_to || '—'}` : h.action}
+                      </div>
+                      {(moved && h.action || h.note) && (
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2, overflowWrap: 'anywhere' }}>
+                          {[moved ? h.action : null, h.note].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)', whiteSpace: 'nowrap' }}>{new Date(h.created_at).toLocaleString()}</span>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Card>
       )}
@@ -197,48 +251,62 @@ export default function UgcDetailPage() {
   );
 }
 
-function UgcStageBadge({ stage }) {
-  if (!stage) return null;
-  const pal = UGC_STAGE_PALETTE[stage] || { fg: 'var(--text-2)', bg: 'var(--surface-2)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', padding: '4px 10px', fontSize: 12,
-      fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
-      color: pal.fg, background: pal.bg, border: '1px solid currentColor', borderRadius: 'var(--radius-sm)',
-    }}>{UGC_STAGE_LABELS[stage] || stage}</span>
-  );
-}
-
-// Stepper with clickable stages (happy path inline + off-path holds/exits below).
+// Clickable stepper (happy path as Stepper-style nodes + off-path holds/exits as pills below).
+// The shared `Stepper` primitive renders static nodes, so it can't carry the click-to-move; this
+// mirrors its look (28px nodes, 3px track, orange fill, igRing on current) with each node a button.
 function UgcStepper({ stage, onPick, canManage }) {
   const currentIdx = UGC_HAPPY_PATH.indexOf(stage);
   const offPath = UGC_STAGE_VALUES.filter(s => !UGC_HAPPY_PATH.includes(s));
-  function chip(s) {
-    const idx = UGC_HAPPY_PATH.indexOf(s);
-    const done = currentIdx >= 0 && idx >= 0 && idx <= currentIdx;
-    const current = s === stage;
-    const pal = UGC_STAGE_PALETTE[s] || {};
-    const onPathColor = current ? ORANGE : done ? 'var(--text-1)' : 'var(--text-3)';
-    return (
-      <button key={s} type="button" onClick={() => onPick(s)} disabled={!canManage}
-        style={{
-          padding: '4px 10px', fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: current ? 700 : 500,
-          letterSpacing: '0.04em', textTransform: 'uppercase',
-          color: current ? ORANGE : (UGC_HAPPY_PATH.includes(s) ? onPathColor : (pal.fg || 'var(--text-3)')),
-          background: current ? 'rgba(255,107,0,0.12)' : 'transparent',
-          border: `1px solid ${current ? ORANGE : done ? 'var(--border-2)' : 'var(--border)'}`,
-          borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap', cursor: canManage ? 'pointer' : 'default',
-        }}>{UGC_STAGE_LABELS[s]}</button>
-    );
-  }
+  const n = UGC_HAPPY_PATH.length;
+  const inset = 50 / n;
+  const fill = currentIdx <= 0 ? 0 : (currentIdx / (n - 1)) * (100 - 2 * inset);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
-        {UGC_HAPPY_PATH.map(chip)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${n}, minmax(0,1fr))`, position: 'relative' }}>
+        <div style={{ position: 'absolute', left: `${inset}%`, right: `${inset}%`, top: 13, height: 3, background: 'var(--border-2)', borderRadius: 2 }} />
+        <div style={{ position: 'absolute', left: `${inset}%`, top: 13, height: 3, width: `${fill}%`, background: 'var(--accent)',
+          borderRadius: 2, transition: 'width 700ms var(--ease-out)' }} />
+        {UGC_HAPPY_PATH.map((s, i) => {
+          const done = currentIdx >= 0 && i < currentIdx;
+          const now = s === stage;
+          return (
+            <button key={s} type="button" onClick={() => onPick(s)} disabled={!canManage}
+              title={canManage && !now ? `Move to ${UGC_STAGE_LABELS[s]}` : undefined}
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, position: 'relative', minWidth: 0,
+                background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit',
+                cursor: canManage && !now ? 'pointer' : 'default',
+              }}>
+              <span style={{
+                width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
+                background: done ? 'var(--accent)' : now ? 'var(--bg)' : 'var(--surface)',
+                color: done ? 'var(--accent-fg)' : now ? 'var(--accent)' : 'var(--text-5)',
+                border: `2px solid ${done || now ? 'var(--accent)' : 'var(--border-3)'}`,
+                animation: now ? 'igRing 1.8s infinite' : undefined,
+                transition: 'background 400ms, border-color 400ms, color 400ms',
+              }}>{done ? '✓' : i + 1}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, textAlign: 'center', maxWidth: '100%', overflowWrap: 'anywhere',
+                color: now ? 'var(--text-1)' : done ? 'var(--text-2)' : 'var(--text-5)' }}>{UGC_STAGE_LABELS[s]}</span>
+            </button>
+          );
+        })}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 4 }}>Holds / exit</span>
-        {offPath.map(chip)}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-4)', marginRight: 4 }}>Holds / exits</span>
+        {offPath.map(s => {
+          const now = s === stage;
+          const pal = UGC_STAGE_PALETTE[s] || { fg: 'var(--text-2)', bg: 'var(--chip-neutral)' };
+          return (
+            <button key={s} type="button" onClick={() => onPick(s)} disabled={!canManage}
+              className={canManage && !now ? 'ig-ghost-btn' : undefined}
+              style={{
+                padding: '4px 11px', borderRadius: 99, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: now ? 700 : 600,
+                whiteSpace: 'nowrap', color: now ? pal.fg : 'var(--text-3)', background: now ? pal.bg : 'transparent',
+                border: `1px solid ${now ? pal.fg : 'var(--border-3)'}`, cursor: canManage && !now ? 'pointer' : 'default',
+              }}>{UGC_STAGE_LABELS[s]}</button>
+          );
+        })}
       </div>
     </div>
   );
@@ -269,25 +337,25 @@ function ProductsCard({ products, engagementId, canEdit, session, onSaved }) {
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   return (
-    <Card title="Product" action={canEdit && !editing ? <button onClick={startEdit} style={editBtn}>Edit</button> : null}>
+    <Card title="Product" action={canEdit && !editing ? 'Edit' : null} onAction={startEdit}>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ProductLinesEditor value={lines} onChange={setLines} session={session} onValidityChange={setProductsValid} />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setEditing(false)} style={ghostBtn}>Cancel</button>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
             <button onClick={saveLines} disabled={busy || !productsValid} style={{ ...primaryBtn, opacity: (busy || !productsValid) ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (products || []).length === 0 ? (
         <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No products.</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
           {products.map((p, i) => (
-            <div key={p.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
+            <div key={p.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 14, padding: '8px 0', borderTop: i ? '1px solid var(--row-divider)' : 'none' }}>
               <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{titleish(p.product_code) || '—'}</span>
               {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{titleish(p.product_variant)}</span>}
               {Number(p.quantity) > 1 && <span style={{ color: 'var(--text-3)' }}>×{p.quantity}</span>}
-              {p.goodies_cost != null && <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>{inr(p.goodies_cost)}</span>}
+              {p.goodies_cost != null && <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-3)' }}>{inr(p.goodies_cost)}</span>}
             </div>
           ))}
         </div>
@@ -308,14 +376,14 @@ function HookCard({ e, canEdit, onSave }) {
     catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   return (
-    <Card title="Hook" action={canEdit && !editing ? <button onClick={start} style={editBtn}>Edit</button> : null}>
+    <Card title="Hook" action={canEdit && !editing ? 'Edit' : null} onAction={start}>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <Field label="Version (A/B/C)"><input value={form.hook_version} onChange={ev => setForm(f => ({ ...f, hook_version: ev.target.value }))} style={inp} /></Field>
           <Field label="Script"><textarea rows={4} value={form.hook_script} onChange={ev => setForm(f => ({ ...f, hook_script: ev.target.value }))} style={{ ...inp, resize: 'vertical' }} /></Field>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setEditing(false)} style={ghostBtn}>Cancel</button>
-            <button onClick={save} disabled={busy} style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+            <button onClick={save} disabled={busy} className="ig-cta" style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
@@ -367,7 +435,7 @@ function AdPerfCard({ e, roas, canEdit, onSave, session, onRefreshed }) {
   }
   const tone = roasTone(roas);
   return (
-    <Card title="Ad performance" action={canEdit && !editing ? <button onClick={start} style={editBtn}>Edit</button> : null}>
+    <Card title="Ad performance" action={canEdit && !editing ? 'Edit' : null} onAction={start}>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {AD_FIELDS.map(([k, label, type]) => (
@@ -377,8 +445,8 @@ function AdPerfCard({ e, roas, canEdit, onSave, session, onRefreshed }) {
             </Field>
           ))}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setEditing(false)} style={ghostBtn}>Cancel</button>
-            <button onClick={save} disabled={busy} style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+            <button onClick={save} disabled={busy} className="ig-cta" style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
@@ -393,16 +461,16 @@ function AdPerfCard({ e, roas, canEdit, onSave, session, onRefreshed }) {
         </>
       )}
       {canEdit && !editing && (
-        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <button onClick={refreshMeta} disabled={refreshing || !e.meta_ad_id} style={ghostBtn}>
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={refreshMeta} disabled={refreshing || !e.meta_ad_id} className="ig-ghost-btn" style={ghostBtn}>
             {refreshing ? 'Refreshing…' : 'Refresh from Meta'}
           </button>
-          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)' }}>
             {e.meta_synced_at ? `Last synced ${new Date(e.meta_synced_at).toLocaleString('en-IN')}` : 'Never synced'}
           </span>
         </div>
       )}
-      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-3)', fontStyle: 'italic' }}>
+      <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-4)' }}>
         Auto-pulls daily from Meta per the deal's Meta ad ID. Editable manually too.
       </div>
     </Card>
@@ -440,7 +508,7 @@ function PaymentCard({ e, commOut, canEdit, onSave }) {
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   return (
-    <Card title="Payment" action={canEdit && !editing ? <button onClick={start} style={editBtn}>Edit</button> : null}>
+    <Card title="Payment" action={canEdit && !editing ? 'Edit' : null} onAction={start}>
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Field label="Creator fee status">
@@ -459,8 +527,8 @@ function PaymentCard({ e, commOut, canEdit, onSave }) {
           <Field label="Commission earned ₹"><input type="number" value={form.commission_earned} onChange={ev => setForm(f => ({ ...f, commission_earned: ev.target.value }))} style={inp} /></Field>
           <Field label="Commission paid ₹"><input type="number" value={form.commission_paid} onChange={ev => setForm(f => ({ ...f, commission_paid: ev.target.value }))} style={inp} /></Field>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setEditing(false)} style={ghostBtn}>Cancel</button>
-            <button onClick={save} disabled={busy} style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={() => setEditing(false)} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
+            <button onClick={save} disabled={busy} className="ig-cta" style={primaryBtn}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : (
@@ -471,7 +539,7 @@ function PaymentCard({ e, commOut, canEdit, onSave }) {
           <KV label="Commission rate" value={e.commission_rate != null && e.commission_rate !== '' ? `${Number(e.commission_rate)}%` : '—'} />
           <KV label="Commission earned" value={inr(e.commission_earned)} />
           <KV label="Commission paid" value={inr(e.commission_paid)} />
-          <KV label="Outstanding" value={<strong style={{ color: commOut > 0 ? ORANGE : 'var(--text-1)' }}>{inr(Math.max(commOut, 0))}</strong>} />
+          <KV label="Outstanding" value={<strong style={{ color: commOut > 0 ? 'var(--accent-hi)' : 'var(--text-1)' }}>{inr(Math.max(commOut, 0))}</strong>} />
         </>
       )}
     </Card>
@@ -492,17 +560,17 @@ function StagePromptModal({ toStage, need, engagement, onClose, onConfirm }) {
   }
   return (
     <Modal open title={`Move to ${UGC_STAGE_LABELS[toStage] || toStage}`} onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 360 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
           {isTrack ? 'A shipping tracking link is required to mark this shipped.' : 'A video link is required to mark this live.'}
         </div>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label} *</label>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>{label} *</label>
           <input value={val} onChange={ev => setVal(ev.target.value)} placeholder="https://…"
             style={{ ...inp, marginTop: 6 }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onClose} style={ghostBtn}>Cancel</button>
+          <button onClick={onClose} className="ig-ghost-btn" style={ghostBtn}>Cancel</button>
           <button onClick={submit} disabled={busy || !val.trim()} style={{ ...primaryBtn, opacity: busy || !val.trim() ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Confirm'}</button>
         </div>
       </div>
@@ -510,40 +578,26 @@ function StagePromptModal({ toStage, need, engagement, onClose, onConfirm }) {
   );
 }
 
-function Card({ title, action, children }) {
-  return (
-    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function KV({ label, value }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '3px 0' }}>
-      <span style={{ width: 140, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      <span style={{ color: 'var(--text-1)', fontSize: 13, flex: 1 }}>{value}</span>
+    <div style={{ display: 'flex', gap: 12, padding: '7px 0', borderTop: '1px solid var(--row-divider)', alignItems: 'baseline' }}>
+      <span style={{ width: 132, flexShrink: 0, color: 'var(--text-3)', fontSize: 13 }}>{label}</span>
+      <span style={{ color: 'var(--text-1)', fontSize: 14, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{value}</span>
     </div>
   );
 }
 
 function Field({ label, children }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>{label}</span>
       {children}
     </div>
   );
 }
 
-const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
-const primaryBtn = { padding: '6px 12px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: 'pointer' };
-const primaryBtnSm = { padding: '4px 12px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'pointer' };
-const ghostBtn = { padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' };
-const editBtn = { padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' };
-const th = { padding: '6px 10px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, fontFamily: 'var(--font-mono)', textAlign: 'left' };
-const tdc = { padding: '6px 10px', color: 'var(--text-2)' };
+const inp = { width: '100%', boxSizing: 'border-box', background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', padding: '9px 12px', fontFamily: 'var(--font-ui)', fontSize: 14 };
+const primaryBtn = { height: 36, padding: '0 16px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700, cursor: 'pointer' };
+const ghostBtn = { height: 36, padding: '0 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
+const primaryBtnLg = { ...primaryBtn, height: 40, padding: '0 18px', fontSize: 14 };
+const ghostBtnLg = { ...ghostBtn, height: 40, color: 'var(--text-1)' };
