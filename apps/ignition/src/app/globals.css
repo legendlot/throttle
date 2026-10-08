@@ -235,8 +235,10 @@ button { font-family: inherit; }
 .ig-cta:hover { transform: translateY(-1px); box-shadow: var(--shadow-cta) !important; }
 
 /* rail (components/shell/IgRail.js) */
-.ig-rail { scrollbar-width: none; }
-.ig-rail::-webkit-scrollbar { display: none; }
+.ig-rail, .ig-rail-nav { scrollbar-width: none; }
+.ig-rail::-webkit-scrollbar, .ig-rail-nav::-webkit-scrollbar { display: none; }
+/* the nav clips overflow, so the global 2px-offset focus ring would be cut off — draw it inside */
+.ig-rail-item:focus-visible { outline-offset: -2px; }
 .ig-rail-item { transition: width 240ms var(--ease-out), background 140ms, color 140ms; }
 .ig-rail-item:not(.on):hover { background: var(--surface-raised) !important; color: #fff !important; }
 .ig-rail-user { transition: background 140ms; }

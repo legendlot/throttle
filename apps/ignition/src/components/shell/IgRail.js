@@ -82,7 +82,7 @@ export default function IgRail({ navGroups, pathname, onNavigate, userLabel, use
     <aside className="ig-rail" style={{
       width: ex ? 232 : 68, height: '100%', flexShrink: 0, background: 'var(--rail)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-      padding: '16px 12px 14px', gap: 4, overflowX: 'hidden', overflowY: 'auto', transition: widthT,
+      padding: '16px 12px 14px', gap: 4, overflow: 'hidden', transition: widthT,
       fontFamily: 'var(--font-ui)',
     }}>
       {/* header: mark + wordmark + toggle (toggle at the TOP so it never scrolls away) */}
@@ -110,7 +110,12 @@ export default function IgRail({ navGroups, pathname, onNavigate, userLabel, use
         </button>
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }} aria-label="Ignition">
+      {/* Only the nav scrolls, so the user row stays pinned on short screens (at 768px tall the
+          collapsed rail is ~880px of content; it used to push the footer below the fold). */}
+      <nav className="ig-rail-nav" style={{
+        display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 auto', minHeight: 0,
+        overflowY: 'auto', overflowX: 'hidden',
+      }} aria-label="Ignition">
         {sections.map((sec, si) => (
           <div key={sec.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{
