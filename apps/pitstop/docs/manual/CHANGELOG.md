@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.29.0] - 2026-10-08
+### Changed
+- **WhatsApp Templates** — rewritten: the page no longer creates or edits templates (the old
+  editor saved local drafts never registered with Meta, so they could never send). It now explains
+  that templates are made in Relay on the Support WhatsApp account (WABA 1350960337019398), category
+  Utility (any other account cannot send from the support number), gives the rule that the Meta name
+  must start with `lot_support`,
+  and lists "Sendable now" (approved templates, read-only: name, Meta name, wording).
+
 ## [1.25.0] - 2026-09-07
 ### Changed
 - **Work ticket (conversation panel)** — the panel now shows support-number WhatsApp

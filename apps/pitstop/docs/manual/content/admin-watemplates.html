@@ -1,16 +1,30 @@
-<p class="lead">WhatsApp Templates manages the library of pre-approved messages agents use to start a conversation or message a customer outside the 24-hour reply window. Open it to add or edit a template&rsquo;s wording, label, category and language.</p>
+<p class="lead">WhatsApp Templates shows the pre-approved messages agents can send from the inbox. You do not create or edit templates on this page: they are made in Relay, and this page simply lists the ones that are ready to use.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The approved-message library.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: create / edit / toggle.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">See which templates agents can send.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only, with a link to Relay.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Categories</div><div class="g-val">Utility · Marketing · Authentication.</div></div>
+  <div class="g-cell"><div class="g-lbl">Made in</div><div class="g-val">Relay &rarr; Templates.</div></div>
 </div>
 
-<h2 class="sec">Managing templates</h2>
-<p>Each row shows the template <strong>name</strong> (the Meta-approved name), the <strong>label</strong> agents see, its category, language, how many <strong>placeholders</strong> (<span class="mono">&#123;&#123;1&#125;&#125;</span>, <span class="mono">&#123;&#123;2&#125;&#125;</span>&hellip;) the body has, and an Active toggle. <strong>Add Template</strong> or <strong>Edit</strong> opens a form for the name, display label, category, language and body; the placeholder count is counted from the body automatically as you type.</p>
+<h2 class="sec">Adding a template</h2>
+<p>The page opens with a short &ldquo;To add a template&rdquo; box and an <strong>Open Relay &rarr; Templates</strong> link (it opens Relay in a new tab). To add one:</p>
+<ol class="steps">
+  <li>Open Relay &rarr; Templates and create a WhatsApp template on the <strong>Support</strong> WhatsApp account (WABA <span class="mono">1350960337019398</span>), category <strong>Utility</strong>. A template on any other account cannot send from the support number.</li>
+  <li>Give it a Meta name that <strong>starts with</strong> <span class="mono">lot_support</span>.</li>
+  <li>Submit it to Meta. Once Meta <strong>approves</strong> it (and it is active), it shows up in the inbox&rsquo;s <strong>WhatsApp Template</strong> button.</li>
+</ol>
 
 <div class="callout danger">
-  <div class="c-title">&#9940; The name must match Meta exactly</div>
-  <p>A template&rsquo;s <strong>name</strong> must match the name approved in Meta Business Manager, or it will not send; and the name is locked after creation (fix a wrong one by making a new template). Today this screen <em>records</em> templates and composes wording; the actual WhatsApp send is a later phase, so saving a template here does not yet deliver a message on its own.</p>
+  <div class="c-title">&#9940; The name must start with lot_support</div>
+  <p>A template with any other name is treated as a journey template and will not appear here or in the inbox. Templates are no longer created on this page: the old editor saved drafts that were never registered with Meta, so they could never send.</p>
+</div>
+
+<h2 class="sec">Sendable now</h2>
+<p>Below the box, the heading <strong>Sendable now &middot; N</strong> counts the approved <span class="mono">lot_support</span> templates agents can send today. Each one is a card showing its <strong>name</strong>, its <strong>Meta name</strong> (the exact name registered with WhatsApp) and its <strong>message wording</strong>. Nothing on these cards can be changed here.</p>
+<p>If the list is empty it reads &ldquo;No approved lot_support templates yet.&rdquo; If it cannot load, a red error line appears instead of the count.</p>
+
+<div class="callout tip">
+  <div class="c-title">Template not showing?</div>
+  <p>Check in Relay that Meta has approved it, that it is active, and that its Meta name starts with <span class="mono">lot_support</span>. A template still waiting for Meta will not appear until approved.</p>
 </div>
