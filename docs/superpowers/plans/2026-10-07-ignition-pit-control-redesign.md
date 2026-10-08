@@ -201,8 +201,7 @@ Until each W ships, its element is **omitted**, never faked.
 ## 7. Close-out
 - System manual: `manual-builder` refreshes screenshots and copy (the `data/manual.json` + PDF version
   bump), last.
-- Tell the floor: a `#system-updates` note to Reann's team before Phase 1 lands (the whole app
-  changes colour and the sidebar becomes a rail).
+- ~~Tell the floor before Phase 1~~ — **DROPPED by Afshaan 2026-10-08: no `#system-updates` post.**
 - `systems/ignition.md`: the mobile-shell paragraph (`.sb-wrap`) and the shell description move to
   IgRail; `apps/ignition/DESIGN.md` tokens are replaced.
 
@@ -212,7 +211,7 @@ Until each W ships, its element is **omitted**, never faked.
   paid+affiliate (`—` otherwise), default terms `advance`, affiliate % only for affiliate types.
   `useDealForm` (P0.3) implements it once. This is the B4 fix.
 - **Rollout → incremental to main, one page per commit, each smoked live.** A `#system-updates`
-  heads-up to Reann's team goes out **before the Phase 1 push** (new colours, sidebar becomes a
+  heads-up ~~goes out before the Phase 1 push~~ — **dropped by Afshaan 2026-10-08, no post** (new colours, sidebar becomes a
   collapsible rail, New Deal moves to the top bar). Draft it at the Phase 1 item; it is not sent yet.
 
 ## ▶ Resume here (next session)
@@ -220,9 +219,7 @@ Until each W ships, its element is **omitted**, never faked.
 3b4cd118; B1–B3 smoked live) · P0.2 `015f8dce` (detail → `engagements/detail/components/*`) · P0.3
 `d78bf52e` (`lib/useDealForm.js` + `lib/dealPayload.js`, D7/B4) · P0.4 `33c068a8`. Each one was
 hostile-reviewed before its commit.
-1. **Phase 1, step 0:** draft the `#system-updates` heads-up to Reann's team (it covers the new colours,
-   the sidebar becoming a collapsible rail and New Deal moving to the top bar), get Afshaan's OK and
-   send it BEFORE the Phase 1 push.
+1. ~~Phase 1 heads-up~~ — dropped by Afshaan 2026-10-08 (no `#system-updates` post). Push Phase 1 once it is reviewed.
 2. Phase 1: tokens → fonts → primitives (`src/components/ui/`, Ignition-local Modal) → shell (IgRail
    + IgTopbar). One coherent visual switch; check at 375px.
 3. Phase 2 list pages → Phase 3 detail pages → W1/W3/W5/W9b quick builds alongside their page.
