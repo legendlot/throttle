@@ -1,7 +1,7 @@
 'use client';
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink, Trash2, Plus } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, Plus, ChevronDown } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
@@ -9,9 +9,19 @@ import { channelLinkError, normalizeChannelLink } from '../../../../lib/channelL
 import { NewDealModal } from '../../../../components/NewDealModal.js';
 import LocationInput from '../../../../components/LocationInput.js';
 import { canonicalLocation } from '../../../../lib/locations.js';
-import RatingBadge from '../../../../components/RatingBadge.js';
-import StageBadge from '../../../../components/StageBadge.js';
-import DealTypeBadge from '../../../../components/DealTypeBadge.js';
+import { organicViews } from '../../../../lib/metrics.js';
+import { STAGE_LABELS } from '../../../../lib/stages.js';
+import {
+  Card, SectionTitle, Segmented, StagePill, DealPill, RatingDot, RATING_COLORS, Tile, FilterSelect, Row, Avatar,
+} from '../../../../components/ui/index.js';
+
+// Mirrors SPEND_EXCLUDED_STAGES on the Engagements list and in ignitionops: a CANCELLED deal was
+// called off before anything was spent, so it stays out of the spend, views and CPM tiles. The
+// deal COUNT still includes it.
+const SPEND_EXCLUDED_STAGES = new Set(['cancelled']);
+
+// Engagements grid. No per-deal Verdict column — dropped by §S411-IgnitionRedesignScope (D8).
+const ENG_COLS = '150px 70px 130px 120px 100px 70px minmax(90px, 1fr)';
 
 export default function InfluencerDetailPage() {
   const sp = useSearchParams();
@@ -58,6 +68,8 @@ export default function InfluencerDetailPage() {
     } catch (e) { toast(e.message, 'error'); return null; }
   }
 
+  // Sends NO rating_notes on purpose: since B1 (S412) the worker only touches the stored notes when
+  // the caller sends the key, so a colour click keeps the reason intact (except the overdue auto-flag note, cleared on leaving red).
   async function setRating(rating) {
     try {
       await ignitionopsPost('setRating', { influencer_id: data.influencer.id, rating }, session);
@@ -141,41 +153,90 @@ export default function InfluencerDetailPage() {
     finally { setSaving(false); }
   }
 
+  // Summary tiles — from the engagements getInfluencer already returns; same rules as the
+  // Engagements list tiles (organic views = views − paid; CPM only over deals with views).
+  const summary = useMemo(() => {
+    const engs = data?.engagements || [];
+    let cost = 0, views = 0, costOfViewed = 0, cancelled = 0;
+    const byStage = {};
+    for (const e of engs) {
+      byStage[e.stage] = (byStage[e.stage] || 0) + 1;
+      if (SPEND_EXCLUDED_STAGES.has(e.stage)) { cancelled += 1; continue; }
+      cost += Number(e.total_cost || 0);
+      const v = organicViews(e.views, e.paid_views) ?? 0;
+      views += v;
+      if (v > 0) costOfViewed += Number(e.total_cost || 0);
+    }
+    const breakdown = Object.entries(byStage)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([s, n]) => `${n} ${(STAGE_LABELS[s] || s || '—').toLowerCase()}`)
+      .join(' · ');
+    return { deals: engs.length, breakdown, cost, views, cpm: views > 0 ? (costOfViewed / views) * 1000 : null, cancelled };
+  }, [data]);
+
   if (err) return <div style={{ color: 'var(--state-error-fg)', padding: 16 }}>Error: {err}</div>;
   if (!data) return <Spinner />;
   const inf = data.influencer;
+  const rating = RATING_COLORS[inf.quality_rating] ? inf.quality_rating : 'unrated';
+  const name = inf.channel_name || inf.person_name || '(no name)';
+  const subline = [inf.person_name && inf.person_name !== name ? inf.person_name : null, inf.influencer_type, inf.location]
+    .filter(Boolean).join(' · ');
 
   return (
-    <div style={{ maxWidth: 1400 }}>
-      <button onClick={() => router.back()} style={backBtn}>
+    <div style={{ maxWidth: 1400, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <button onClick={() => router.back()} className="ig-card-action" style={{ ...backBtn, fontSize: 13 }}>
         <ArrowLeft size={14} strokeWidth={2} /> Back
       </button>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-        <span style={{ color: '#FF6B00', fontWeight: 700, fontSize: 18 }}>{inf.influencer_code}</span>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          {inf.channel_name || inf.person_name || '(no name)'}
-        </h1>
-        <RatingBadge rating={inf.quality_rating} />
-        {inf.do_not_ship && (
-          <span title={inf.do_not_ship_reason || 'Do not ship'} style={{ fontSize: 11, color: 'var(--state-error-fg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Do not ship</span>
-        )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          {['green','yellow','red','unrated'].map(r => (
-            <button key={r} onClick={() => setRating(r)} style={ratingBtn}>{r}</button>
-          ))}
+      <header className="ig-up" style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <Avatar name={name} seed={inf.influencer_code} size={64} ring={RATING_COLORS[rating]} />
+        <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', fontWeight: 700, color: 'var(--accent-hi)' }}>{inf.influencer_code}</span>
+            {inf.channel_link && (
+              <a href={inf.channel_link} target="_blank" rel="noreferrer"
+                style={{ fontSize: 12, color: 'var(--accent-hi)', borderBottom: '1px dotted var(--accent-hi)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {inf.channel_link.replace(/^https?:\/\/(www\.)?/, '')} ↗
+              </a>
+            )}
+          </div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6, lineHeight: 1.15, overflowWrap: 'anywhere' }}>
+            {name}
+          </h1>
+          {subline && <div style={{ fontSize: 14, color: 'var(--text-3)', marginTop: 2 }}>{subline}</div>}
+          {inf.do_not_ship && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+              <span title={inf.do_not_ship_reason || 'Do not ship'} style={{ fontSize: 12, fontWeight: 700, color: 'var(--state-error-fg)', border: '1px solid var(--state-error-fg)', borderRadius: 99, padding: '3px 10px' }}>Do not ship</span>
+              {inf.do_not_ship_reason && <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{inf.do_not_ship_reason}</span>}
+            </div>
+          )}
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {canManage ? (
+            <Segmented
+              value={rating}
+              onChange={setRating}
+              options={['green', 'yellow', 'red', 'unrated'].map(r => ({
+                value: r,
+                label: <RatingDot rating={r} style={{ color: 'inherit', fontSize: 13, textTransform: 'capitalize' }} />,
+              }))}
+            />
+          ) : (
+            <RatingDot rating={rating} />
+          )}
           {canManage && (
-            <button onClick={() => setShowDeal(true)} title="Create a deal for this influencer" style={newDealBtn}>
-              <Plus size={13} strokeWidth={2.4} /> New deal
+            <button onClick={() => setShowDeal(true)} title="Create a deal for this influencer" className="ig-cta" style={newDealBtn}>
+              <Plus size={15} strokeWidth={2.4} /> New deal
             </button>
           )}
           {canManage && (
             <button onClick={removeInfluencer} title="Delete influencer" style={deleteBtn}>
-              <Trash2 size={13} strokeWidth={2} /> Delete
+              <Trash2 size={14} strokeWidth={2} /> Delete
             </button>
           )}
         </div>
-      </div>
+      </header>
 
       {canManage && (
         <NewDealModal
@@ -187,18 +248,29 @@ export default function InfluencerDetailPage() {
         />
       )}
 
-      {/* Two-column: narrow left (identity/contact), wide right (engagements/shopify).
+      <div className="ig-up" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(170px, 100%), 1fr))', gap: 12, animationDelay: '60ms' }}>
+        <Tile label="Deals" value={summary.deals.toLocaleString('en-IN')} hint={summary.breakdown || undefined} />
+        <Tile label="Lifetime spend" color="var(--accent-hi)" value={`₹${Math.round(summary.cost).toLocaleString('en-IN')}`}
+          hint={summary.cancelled ? `${summary.cancelled} cancelled deal${summary.cancelled === 1 ? '' : 's'} excluded` : undefined} />
+        <Tile label="Organic views" value={summary.views.toLocaleString('en-IN')} />
+        {/* No "team avg" hint — dropped by §S411-IgnitionRedesignScope (W10). */}
+        <Tile label="Blended CPM" value={summary.cpm == null ? '—' : `₹${summary.cpm.toFixed(0)}`} />
+      </div>
+
+      {/* Two-column: narrow left (identity/contact), wide right (engagements/reach/shopify).
           flex-wrap stacks them on narrow viewports so it never breaks on a laptop. */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <div style={{ flex: '1 1 300px', minWidth: 280, maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card title="Identity" action={
-            editing
-              ? <span style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={saveEdit} disabled={saving} style={saveBtn}>{saving ? 'Saving…' : 'Save'}</button>
-                  <button onClick={() => setEditing(false)} disabled={saving} style={editBtn}>Cancel</button>
-                </span>
-              : (canManage ? <button onClick={startEdit} style={editBtn}>Edit</button> : null)
-          }>
+        <div style={{ flex: '1 1 300px', minWidth: 'min(280px, 100%)', maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Card className="ig-up" style={{ animationDelay: '100ms' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+              <SectionTitle size={15} style={{ marginBottom: 0 }}>Identity</SectionTitle>
+              {editing
+                ? <span style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={saveEdit} disabled={saving} style={saveBtn}>{saving ? 'Saving…' : 'Save'}</button>
+                    <button onClick={() => setEditing(false)} disabled={saving} className="ig-ghost-btn" style={editBtn}>Cancel</button>
+                  </span>
+                : (canManage ? <button type="button" onClick={startEdit} className="ig-card-action">Edit</button> : null)}
+            </div>
             {editing ? (
               <>
                 <Field label="Name"><input style={editInput} value={form.channel_name} onChange={e => setF('channel_name', e.target.value)} placeholder="Channel name" /></Field>
@@ -211,30 +283,30 @@ export default function InfluencerDetailPage() {
                       return (
                         <button type="button" key={o}
                           onClick={() => setF('channel_platforms', on ? form.channel_platforms.filter(x => x !== o) : [...(form.channel_platforms || []), o])}
-                          style={{ padding: '4px 10px', cursor: 'pointer', background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)', color: on ? '#FF6B00' : 'var(--text-2)', border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{o}</button>
+                          style={chip(on)}>{o}</button>
                       );
                     })}
                   </div>
                 </Field>
-                <Field label="Type"><select style={editInput} value={form.influencer_type} onChange={e => setF('influencer_type', e.target.value)}><option value="">—</option>{['nano', 'micro', 'macro', 'brand', 'store'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="Type"><FilterSelect width="100%" value={form.influencer_type} onChange={e => setF('influencer_type', e.target.value)}><option value="">—</option>{['nano', 'micro', 'macro', 'brand', 'store'].map(o => <option key={o} value={o}>{o}</option>)}</FilterSelect></Field>
                 <Field label="Content tags"><TagPicker options={catalogs?.category_options?.format || []} value={form.categories || []} onChange={v => setF('categories', v)} onAdd={lbl => addCatOption('format', lbl)} /></Field>
                 <Field label="Audience niche"><TagPicker options={catalogs?.category_options?.niche || []} value={form.audience_niches || []} onChange={v => setF('audience_niches', v)} onAdd={lbl => addCatOption('niche', lbl)} /></Field>
                 <Field label="Reach"><input style={editInput} type="number" value={form.reach} onChange={e => setF('reach', e.target.value)} /></Field>
                 <Field label="Follower count"><input style={editInput} type="number" value={form.follower_count} onChange={e => setF('follower_count', e.target.value)} /></Field>
                 <Field label="Audience notes"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} placeholder="free-form notes" /></Field>
-                <Field label="Audience age"><select style={editInput} value={form.age_range} onChange={e => setF('age_range', e.target.value)}><option value="">—</option>{(catalogs?.age_ranges || []).map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
-                <Field label="Gender majority"><select style={editInput} value={form.gender_majority} onChange={e => setF('gender_majority', e.target.value)}><option value="">—</option>{(catalogs?.gender_majorities || []).map(o => <option key={o} value={o}>{GENDER_LABELS[o] || o}</option>)}</select></Field>
+                <Field label="Audience age"><FilterSelect width="100%" value={form.age_range} onChange={e => setF('age_range', e.target.value)}><option value="">—</option>{(catalogs?.age_ranges || []).map(o => <option key={o} value={o}>{o}</option>)}</FilterSelect></Field>
+                <Field label="Gender majority"><FilterSelect width="100%" value={form.gender_majority} onChange={e => setF('gender_majority', e.target.value)}><option value="">—</option>{(catalogs?.gender_majorities || []).map(o => <option key={o} value={o}>{GENDER_LABELS[o] || o}</option>)}</FilterSelect></Field>
                 <Field label="Location"><LocationInput style={editInput} value={form.location} onChange={v => setF('location', v)} /></Field>
               </>
             ) : (
               <>
-                <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
+                <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-hi)', overflowWrap: 'anywhere' }}>{inf.channel_link}</a> : '—'} />
                 <KV label="Platforms" value={(inf.channel_platforms?.length ? inf.channel_platforms.join(', ') : inf.channel_platform) || '—'} />
                 <KV label="Type" value={inf.influencer_type || '—'} />
                 <KV label="Content tags" value={(inf.categories || []).join(', ') || '—'} />
                 <KV label="Audience niche" value={(inf.audience_niches || []).join(', ') || '—'} />
-                <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
-                <KV label="Followers" value={inf.follower_count?.toLocaleString() || '—'} />
+                <KV label="Reach" value={inf.reach != null ? Number(inf.reach).toLocaleString() : '—'} />
+                <KV label="Followers" value={inf.follower_count != null ? Number(inf.follower_count).toLocaleString() : '—'} />
                 <KV label="Audience age" value={inf.age_range || '—'} />
                 <KV label="Gender" value={inf.gender_majority ? (GENDER_LABELS[inf.gender_majority] || inf.gender_majority) : '—'} />
                 <KV label="Audience notes" value={inf.audience || '—'} />
@@ -247,10 +319,11 @@ export default function InfluencerDetailPage() {
             )}
           </Card>
 
-          <Card title="Contact">
+          <Card className="ig-up" style={{ animationDelay: '150ms' }}>
+            <SectionTitle size={15} style={{ marginBottom: 8 }}>Contact</SectionTitle>
             {editing ? (
               <>
-                <Field label="POC type"><select style={editInput} value={form.contact_poc_type} onChange={e => setF('contact_poc_type', e.target.value)}><option value="">—</option>{['manager', 'influencer', 'agency'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="POC type"><FilterSelect width="100%" value={form.contact_poc_type} onChange={e => setF('contact_poc_type', e.target.value)}><option value="">—</option>{['manager', 'influencer', 'agency'].map(o => <option key={o} value={o}>{o}</option>)}</FilterSelect></Field>
                 <Field label="POC name"><input style={editInput} value={form.contact_poc_name} onChange={e => setF('contact_poc_name', e.target.value)} /></Field>
                 <Field label="Phone"><input style={editInput} value={form.contact_number} onChange={e => setF('contact_number', e.target.value)} /></Field>
                 <Field label="Email"><input style={editInput} value={form.email} onChange={e => setF('email', e.target.value)} /></Field>
@@ -269,51 +342,54 @@ export default function InfluencerDetailPage() {
           </Card>
 
           {inf.rating_notes && (
-            <Card title="Rating notes">
-              <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)' }}>{inf.rating_notes}</div>
+            <Card className="ig-up" style={{ animationDelay: '200ms' }}>
+              <SectionTitle size={15} style={{ marginBottom: 8 }}>Rating notes</SectionTitle>
+              <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)', fontSize: 14, borderTop: '1px solid var(--row-divider)', paddingTop: 8 }}>{inf.rating_notes}</div>
             </Card>
           )}
 
           <AttributionCard inf={inf} session={session} />
         </div>
 
-        <div style={{ flex: '3 1 460px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card title={`Engagements (${data.engagements.length})`}>
+        <div style={{ flex: '3 1 460px', minWidth: 'min(320px, 100%)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Card className="ig-up" padding="0" style={{ overflow: 'hidden', animationDelay: '140ms' }}>
+            <SectionTitle size={15} style={{ padding: '16px 20px 0', marginBottom: 12 }}>{`Engagements (${data.engagements.length})`}</SectionTitle>
             {data.engagements.length === 0 ? (
-              <div style={{ color: 'var(--text-3)' }}>No engagements yet.</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 14, padding: '0 20px 18px' }}>No engagements yet.</div>
             ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                    <th style={th}>Engagement #</th><th style={th}>Type</th><th style={th}>Stage</th>
-                    <th style={th}>Deal</th><th style={th}>Post date</th><th style={th}>Post</th><th style={th}>Total cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.engagements.map(e => (
-                    <tr key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
-                      style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
-                      <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
-                      <td style={td}>{e.engagement_type}</td>
-                      <td style={td}><StageBadge stage={e.stage} /></td>
-                      <td style={td}><DealTypeBadge dealType={e.deal_type} /></td>
-                      <td style={td}>{e.post_date || (e.expected_post_date ? <span style={{ color: 'var(--text-3)' }}>{`~${e.expected_post_date}`}</span> : '—')}</td>
-                      <td style={td}>
+              <div style={{ overflowX: 'auto' }}>
+                <div style={{ minWidth: 860 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: ENG_COLS, gap: 12, padding: '10px 20px', fontSize: 12, fontWeight: 600, color: 'var(--text-4)', borderTop: '1px solid var(--border)' }}>
+                    <span>Engagement #</span><span>Type</span><span>Stage</span><span>Deal</span><span>Post date</span><span>Post</span><span style={{ textAlign: 'right' }}>Total cost</span>
+                  </div>
+                  {data.engagements.map((e, i) => (
+                    <Row key={e.id} columns={ENG_COLS} index={i} animate
+                      onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
+                      style={{ padding: '10px 20px' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent-hi)' }}>{e.engagement_no}</span>
+                      <span style={{ color: 'var(--text-2)' }}>{e.engagement_type}</span>
+                      <span><StagePill stage={e.stage} /></span>
+                      <span><DealPill type={e.deal_type} /></span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)' }}>
+                        {e.post_date || (e.expected_post_date ? <span style={{ color: 'var(--text-4)' }}>{`~${e.expected_post_date}`}</span> : '—')}
+                      </span>
+                      <span>
                         {e.video_link
-                          ? <a href={e.video_link} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ color: '#FF6B00', display: 'inline-flex', alignItems: 'center', gap: 3 }}>View <ExternalLink size={12} strokeWidth={2} /></a>
-                          : <span style={{ color: 'var(--text-3)' }}>—</span>}
-                      </td>
-                      <td style={td}>₹{Number(e.total_cost || 0).toLocaleString()}</td>
-                    </tr>
+                          ? <a href={e.video_link} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ color: 'var(--accent-hi)', display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 13 }}>View <ExternalLink size={12} strokeWidth={2} /></a>
+                          : <span style={{ color: 'var(--text-4)' }}>—</span>}
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, textAlign: 'right' }}>₹{Number(e.total_cost || 0).toLocaleString()}</span>
+                    </Row>
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </div>
             )}
           </Card>
 
-          <GrowthCard inf={inf} session={session} canManage={canManage} onChanged={reload} />
-
-          <ShopifyCard inf={inf} session={session} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 14, alignItems: 'start' }}>
+            <GrowthCard inf={inf} session={session} canManage={canManage} onChanged={reload} />
+            <ShopifyCard inf={inf} session={session} />
+          </div>
         </div>
       </div>
     </div>
@@ -340,20 +416,23 @@ function AttributionCard({ inf, session }) {
   }, [inf?.id, session]);
   if (!att || (att.codes || 0) === 0) return null;
   return (
-    <Card title="Business driven">
-      <KV label="Net revenue" value={<strong style={{ color: '#FF6B00' }}>₹{Number(att.net_revenue || 0).toLocaleString()}</strong>} />
-      <KV label="Redemptions" value={(att.redemptions || 0).toLocaleString()} />
+    <Card className="ig-up" style={{ animationDelay: '250ms' }}>
+      <SectionTitle size={15} style={{ marginBottom: 8 }}>Business driven</SectionTitle>
+      <KV label="Net revenue" value={<strong style={{ color: 'var(--accent-hi)', fontFamily: 'var(--font-mono)' }}>₹{Number(att.net_revenue || 0).toLocaleString()}</strong>} />
+      <KV label="Redemptions" value={Number(att.redemptions || 0).toLocaleString()} />
       <KV label="Affiliate codes" value={att.codes || 0} />
     </Card>
   );
 }
 
-// Slice C — manual reach/growth history. Sparkline + dated snapshots + add form.
+// Slice C — manual reach/growth history. Bar chart up top; the dated snapshots, per-row delete and
+// the add form sit in a disclosure (collapsed by default — "+ Log reach" opens it).
 function GrowthCard({ inf, session, canManage, onChanged }) {
   const { showToast: toast } = useToast();
   const [metrics, setMetrics] = useState(null);
   const [form, setForm] = useState({ captured_on: '', reach: '', note: '' });
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
 
   function load() {
     if (!session || !inf?.id) return;
@@ -392,99 +471,117 @@ function GrowthCard({ inf, session, canManage, onChanged }) {
 
   const rows = metrics || [];
   const withReach = rows.filter(m => m.reach != null);
-  const first = withReach[0]?.reach;
-  const last = withReach[withReach.length - 1]?.reach;
+  const first = withReach.length ? Number(withReach[0].reach) : null;
+  const last = withReach.length ? Number(withReach[withReach.length - 1].reach) : null;
   const growthPct = (first != null && last != null && first > 0) ? Math.round(((last - first) / first) * 100) : null;
+  const delta = (first != null && last != null) ? last - first : null;
+  // The chart shows the latest 12 snapshots; the full list stays in the disclosure.
+  const bars = withReach.slice(-12).map(m => ({ ...m, reach: Number(m.reach) }));
+  const lo = bars.length ? Math.min(...bars.map(b => b.reach)) : 0;
+  const hi = bars.length ? Math.max(...bars.map(b => b.reach)) : 0;
+  const barH = (v) => hi === lo ? 100 : 15 + ((v - lo) / (hi - lo)) * 85;   // floor so the lowest bar still shows
+  const monthOf = (d) => { const t = d ? new Date(`${d}T00:00:00`) : null; return t && !isNaN(t) ? t.toLocaleString('en-IN', { month: 'short' }) : ''; };
+  const sinceLabel = withReach[0]?.captured_on ? (() => {
+    const t = new Date(`${withReach[0].captured_on}T00:00:00`);
+    return isNaN(t) ? withReach[0].captured_on : t.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+  })() : '';
 
   return (
-    <Card title="Growth (reach over time)">
+    <Card className="ig-up" style={{ animationDelay: '200ms' }}>
+      <SectionTitle size={15} action={canManage ? '+ Log reach' : undefined} onAction={() => setOpen(true)}>Reach history</SectionTitle>
       {metrics == null ? (
         <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>
       ) : (
         <>
           {withReach.length >= 2 ? (
             <>
-              <Sparkline points={withReach.map(m => Number(m.reach))} />
-              <div style={{ display: 'flex', gap: 16, margin: '8px 0 4px', fontSize: 12, color: 'var(--text-3)' }}>
-                <span>From <b style={{ color: 'var(--text-1)' }}>{first.toLocaleString()}</b> → <b style={{ color: 'var(--text-1)' }}>{last.toLocaleString()}</b></span>
-                {growthPct != null && (
-                  <span style={{ color: growthPct >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)', fontWeight: 700 }}>
-                    {growthPct >= 0 ? '▲' : '▼'} {Math.abs(growthPct)}%
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 96 }}>
+                {bars.map((b, i) => (
+                  <div key={b.id} title={`${b.captured_on} · ${b.reach.toLocaleString()}`}
+                    style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%', justifyContent: 'flex-end' }}>
+                    <div className="ig-growy" style={{
+                      width: '100%', height: `${barH(b.reach)}%`, borderRadius: '6px 6px 2px 2px',
+                      background: i === bars.length - 1 ? 'var(--accent)' : 'var(--border-2)', animationDelay: `${260 + i * 40}ms`,
+                    }} />
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-4)' }}>{monthOf(b.captured_on).slice(0, 1)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginTop: 12, fontSize: 13 }}>
+                <span style={{ color: 'var(--text-3)' }}>Now <b style={{ color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>{last.toLocaleString()}</b></span>
+                {delta != null && (
+                  <span style={{ fontFamily: 'var(--font-mono)', color: delta >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)' }}>
+                    {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toLocaleString()}{growthPct != null ? ` (${Math.abs(growthPct)}%)` : ''} since {sinceLabel}
                   </span>
                 )}
               </div>
             </>
           ) : (
-            <div style={{ color: 'var(--text-3)', fontSize: 13, marginBottom: 8 }}>
+            <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
               {withReach.length === 1 ? 'One snapshot so far — add another to see the trend.' : 'No snapshots yet.'}
             </div>
           )}
 
-          {rows.length > 0 && (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
-              <thead>
-                <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                  <th style={th}>Date</th><th style={{ ...th, textAlign: 'right' }}>Reach</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Δ</th><th style={th}>Note</th><th style={th} />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((m, i) => {
-                  const prev = i > 0 ? rows[i - 1].reach : null;
-                  const delta = (m.reach != null && prev != null) ? m.reach - prev : null;
-                  return (
-                    <tr key={m.id} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{m.captured_on}</td>
-                      <td style={{ ...td, textAlign: 'right' }}>{m.reach != null ? m.reach.toLocaleString() : '—'}</td>
-                      <td style={{ ...td, textAlign: 'right', color: delta == null ? 'var(--text-3)' : delta >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)' }}>
-                        {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toLocaleString()}`}
-                      </td>
-                      <td style={{ ...td, color: 'var(--text-3)' }}>{m.note || '—'}</td>
-                      <td style={{ ...td, textAlign: 'right' }}>
-                        {canManage && (
-                          <button onClick={() => remove(m.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
+          {(rows.length > 0 || canManage) && (
+            <div style={{ marginTop: 14, borderTop: '1px solid var(--row-divider)', paddingTop: 10 }}>
+              <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} className="ig-card-action"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <ChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }} />
+                {`Snapshots (${rows.length})`}
+              </button>
+              {open && (
+                <div className="ig-fade" style={{ marginTop: 10 }}>
+                  {rows.length > 0 && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ textAlign: 'left' }}>
+                            <th style={th}>Date</th><th style={{ ...th, textAlign: 'right' }}>Reach</th>
+                            <th style={{ ...th, textAlign: 'right' }}>Δ</th><th style={th}>Note</th><th style={th} />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((m, i) => {
+                            const prev = i > 0 ? rows[i - 1].reach : null;
+                            const d = (m.reach != null && prev != null) ? Number(m.reach) - Number(prev) : null;
+                            return (
+                              <tr key={m.id} style={{ borderTop: '1px solid var(--row-divider)' }}>
+                                <td style={{ ...td, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{m.captured_on}</td>
+                                <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{m.reach != null ? Number(m.reach).toLocaleString() : '—'}</td>
+                                <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)', color: d == null ? 'var(--text-4)' : d >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)' }}>
+                                  {d == null ? '—' : `${d >= 0 ? '+' : ''}${d.toLocaleString()}`}
+                                </td>
+                                <td style={{ ...td, color: 'var(--text-3)' }}>{m.note || '—'}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>
+                                  {canManage && (
+                                    <button onClick={() => remove(m.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
+                                      <Trash2 size={13} />
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
-          {canManage && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-              <input type="date" value={form.captured_on} onChange={e => setForm(f => ({ ...f, captured_on: e.target.value }))} style={growthInp(140)} title="Snapshot date" />
-              <input type="number" placeholder="Reach" value={form.reach} onChange={e => setForm(f => ({ ...f, reach: e.target.value }))} style={growthInp(110)} />
-              <input placeholder="Note (optional)" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} style={growthInp(150)} />
-              <button onClick={add} disabled={busy} style={saveBtn}>{busy ? 'Saving…' : 'Add snapshot'}</button>
+                  {canManage && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                      <input type="date" value={form.captured_on} onChange={e => setForm(f => ({ ...f, captured_on: e.target.value }))} style={growthInp(140)} title="Snapshot date" />
+                      <input type="number" placeholder="Reach" value={form.reach} onChange={e => setForm(f => ({ ...f, reach: e.target.value }))} style={growthInp(110)} />
+                      <input placeholder="Note (optional)" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} style={growthInp(150)} />
+                      <button onClick={add} disabled={busy} style={saveBtn}>{busy ? 'Saving…' : 'Add snapshot'}</button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>
       )}
     </Card>
-  );
-}
-
-// Minimal hand-rolled SVG line chart (no chart lib) for the reach series.
-function Sparkline({ points }) {
-  const W = 320, H = 48, pad = 4;
-  const min = Math.min(...points), max = Math.max(...points);
-  const span = max - min || 1;
-  const stepX = points.length > 1 ? (W - pad * 2) / (points.length - 1) : 0;
-  const coords = points.map((v, i) => {
-    const x = pad + i * stepX;
-    const y = H - pad - ((v - min) / span) * (H - pad * 2);
-    return [x, y];
-  });
-  const line = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <path d={line} fill="none" stroke="#FF6B00" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-      {coords.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="2.5" fill="#FF6B00" />)}
-    </svg>
   );
 }
 
@@ -511,7 +608,8 @@ function ShopifyCard({ inf, session }) {
   const noContact = !inf.contact_number && !inf.email;
 
   return (
-    <Card title="Shopify">
+    <Card className="ig-up" style={{ animationDelay: '240ms' }}>
+      <SectionTitle size={15} style={{ marginBottom: 8 }}>Shopify orders</SectionTitle>
       {loading && <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Looking up customer…</div>}
       {!loading && state?.error && (
         <div style={{ color: 'var(--state-error-fg)', fontSize: 13 }}>{state.error}</div>
@@ -528,10 +626,10 @@ function ShopifyCard({ inf, session }) {
       )}
       {!loading && state?.found && (
         <div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
             <span style={{ color: 'var(--text-1)', fontSize: 15, fontWeight: 700 }}>{state.customer.name || '(no name)'}</span>
             {state.matched_by && (
-              <span style={{ fontSize: 10, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-deal)', padding: '2px 8px' }}>
                 matched by {state.matched_by}
               </span>
             )}
@@ -545,72 +643,47 @@ function ShopifyCard({ inf, session }) {
               : '—'
           } />
           {state.recent_orders?.length > 0 && (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
-              <thead>
-                <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                  <th style={th}>Order</th><th style={th}>Date</th><th style={th}>Status</th><th style={th}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.recent_orders.map(o => (
-                  <Fragment key={o.order_no}>
-                    <tr style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{o.order_no}</span></td>
-                      <td style={td}>{o.created_at ? new Date(o.created_at).toLocaleDateString() : '—'}</td>
-                      <td style={td}>{o.financial}/{o.fulfillment}</td>
-                      <td style={td}>{o.total != null ? `${Number(o.total).toLocaleString()} ${o.currency || ''}`.trim() : '—'}</td>
-                    </tr>
-                    {o.line_items?.length > 0 && (
-                      <tr>
-                        <td style={{ padding: '0 10px 8px 10px' }} colSpan={4}>
-                          {o.line_items.map((li, i) => (
-                            <div key={i} style={{ color: 'var(--text-2)', fontSize: 12, paddingLeft: 12 }}>
-                              <span style={{ color: 'var(--text-3)' }}>{li.quantity} ×</span>{' '}
-                              {li.title}
-                              {li.variant && li.variant !== 'Default Title' ? ` — ${li.variant}` : ''}
-                              {li.sku ? <span style={{ color: 'var(--text-3)' }}>{`  (${li.sku})`}</span> : ''}
-                            </div>
-                          ))}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ marginTop: 10 }}>
+              {state.recent_orders.map(o => (
+                <Fragment key={o.order_no}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 12, padding: '8px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14, alignItems: 'center' }}>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent-hi)' }}>{o.order_no}</span>{' '}
+                      <span style={{ color: 'var(--text-4)', fontSize: 12 }}>{o.created_at ? new Date(o.created_at).toLocaleDateString() : '—'}</span>
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: String(o.fulfillment || '').toUpperCase() === 'FULFILLED' ? 'var(--state-success-fg)' : 'var(--text-3)' }}>{o.financial}/{o.fulfillment}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{o.total != null ? `${Number(o.total).toLocaleString()} ${o.currency || ''}`.trim() : '—'}</span>
+                  </div>
+                  {o.line_items?.length > 0 && (
+                    <div style={{ padding: '0 0 8px 12px' }}>
+                      {o.line_items.map((li, i) => (
+                        <div key={i} style={{ color: 'var(--text-2)', fontSize: 12 }}>
+                          <span style={{ color: 'var(--text-4)' }}>{li.quantity} ×</span>{' '}
+                          {li.title}
+                          {li.variant && li.variant !== 'Default Title' ? ` — ${li.variant}` : ''}
+                          {li.sku ? <span style={{ color: 'var(--text-4)' }}>{`  (${li.sku})`}</span> : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Fragment>
+              ))}
+            </div>
           )}
         </div>
       )}
       {!loading && !state && (
-        <button type="button" onClick={lookup} style={ratingBtn}>Look up Shopify</button>
+        <button type="button" onClick={lookup} className="ig-ghost-btn" style={editBtn}>Look up Shopify</button>
       )}
     </Card>
   );
 }
 
-function Card({ title, children, action }) {
-  return (
-    <section style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-md)', padding: 16,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
-        <h2 style={{
-          fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em',
-          textTransform: 'uppercase', margin: 0,
-        }}>{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function Field({ label, children }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '4px 0', alignItems: 'center' }}>
-      <span style={{ width: 140, color: 'var(--text-3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      <span style={{ flex: 1 }}>{children}</span>
+    <div style={{ display: 'flex', gap: 8, padding: '6px 0', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--row-divider)' }}>
+      <span style={{ width: 120, flexShrink: 0, color: 'var(--text-3)', fontSize: 13 }}>{label}</span>
+      <span style={{ flex: '1 1 160px', minWidth: 0 }}>{children}</span>
     </div>
   );
 }
@@ -638,59 +711,47 @@ function TagPicker({ options, value, onChange, onAdd }) {
       {all.map(o => {
         const on = sel.includes(o);
         return (
-          <button type="button" key={o} onClick={() => toggle(o)}
-            style={{ padding: '4px 10px', cursor: 'pointer', background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)', color: on ? '#FF6B00' : 'var(--text-2)', border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{o}</button>
+          <button type="button" key={o} onClick={() => toggle(o)} style={chip(on)}>{o}</button>
         );
       })}
       <input value={adding} onChange={e => setAdding(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitAdd(); } }}
         onBlur={commitAdd} placeholder="+ add"
-        style={{ ...editInput, width: 80, padding: '4px 8px' }} />
+        style={{ ...editInput, width: 80, height: 30, padding: '4px 8px' }} />
     </div>
   );
 }
 
-const editInput = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
-const editBtn = { padding: '4px 10px', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const saveBtn = { ...editBtn, background: '#FF6B00', color: '#fff', border: '1px solid #FF6B00' };
+// Inputs styled like the Filter select (40px, --input, --border-2, radius --r-ctl).
+const editInput = { width: '100%', height: 40, background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', padding: '0 12px', fontSize: 14, fontFamily: 'inherit', boxSizing: 'border-box' };
+const editBtn = { padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
+const saveBtn = { ...editBtn, background: 'var(--accent)', color: 'var(--accent-fg)', border: '1px solid var(--accent)', fontWeight: 700 };
+const chip = (on) => ({
+  padding: '4px 10px', cursor: 'pointer', background: on ? 'var(--accent-bg)' : 'var(--chip-neutral)',
+  color: on ? 'var(--accent-hi)' : 'var(--text-2)', border: `1px solid ${on ? 'var(--accent)' : 'var(--border-2)'}`,
+  borderRadius: 'var(--r-deal)', fontSize: 12, fontWeight: 600,
+});
 
 function KV({ label, value }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '4px 0' }}>
-      <span style={{ width: 140, color: 'var(--text-3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {label}
-      </span>
-      <span style={{ color: 'var(--text-1)', fontSize: 13, flex: 1 }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
+      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{label}</span>
+      <span style={{ color: 'var(--text-1)', textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere' }}>{value}</span>
     </div>
   );
 }
 
-const backBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14,
-  background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-sm)', padding: '6px 12px',
-  fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer',
-};
-const ratingBtn = {
-  padding: '4px 8px', background: 'transparent', color: 'var(--text-2)',
-  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-  fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
-  textTransform: 'uppercase', letterSpacing: '0.04em',
-};
+const backBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, width: 'max-content' };
 const deleteBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 8,
-  padding: '4px 10px', background: 'transparent', color: 'var(--state-error-fg, #e5484d)',
-  border: '1px solid var(--state-error-fg, #e5484d)', borderRadius: 'var(--radius-sm)',
-  fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
-  textTransform: 'uppercase', letterSpacing: '0.04em',
+  display: 'inline-flex', alignItems: 'center', gap: 6, height: 42, padding: '0 14px',
+  background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid rgba(255,123,123,.4)',
+  borderRadius: 'var(--r-btn)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
 };
 const newDealBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 8,
-  padding: '4px 12px', background: '#FF6B00', color: '#fff',
-  border: 'none', borderRadius: 'var(--radius-sm)',
-  fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'pointer',
-  textTransform: 'uppercase', letterSpacing: '0.04em',
+  display: 'inline-flex', alignItems: 'center', gap: 6, height: 42, padding: '0 16px',
+  background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--r-btn)',
+  fontSize: 14, fontWeight: 700, cursor: 'pointer',
 };
-const th = { padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
+const th = { padding: '8px 10px', fontSize: 12, color: 'var(--text-4)', fontWeight: 600 };
 const td = { padding: '8px 10px' };
-const growthInp = (w) => ({ background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w, boxSizing: 'border-box' });
+const growthInp = (w) => ({ height: 36, background: 'var(--input)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', padding: '0 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w, boxSizing: 'border-box' });
