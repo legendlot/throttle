@@ -1,32 +1,37 @@
 'use client';
+import { Card as IgCard } from '../../../../../components/ui/Card.js';
+import { SectionTitle } from '../../../../../components/ui/SectionTitle.js';
 
 // One line, one wording, on every card the COMPLETE-deal lock freezes (S373).
 export function LockedNote() {
   return (
-    <div style={{ marginBottom: 10, fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+    <div style={{ marginBottom: 10, fontSize: 12, color: 'var(--text-4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
       🔒 Locked — deal is complete
     </div>
   );
 }
 
-export function Card({ title, children }) {
+// Deal-page section card (Pit Control): the shared Ignition Card with the 15px Tomorrow title the
+// detail grid uses. Props API unchanged ({ title, children }); `action`/`onAction` pass through to
+// the header row and anything else (style, className) to the card.
+export function Card({ title, action, onAction, actionHref, children, ...rest }) {
   return (
-    <section style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-md)', padding: 16,
-    }}>
-      <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 12 }}>{title}</h2>
+    <IgCard {...rest}>
+      {title != null && (
+        <SectionTitle size={15} action={action} onAction={onAction} actionHref={actionHref} style={{ marginBottom: 8 }}>{title}</SectionTitle>
+      )}
       {children}
-    </section>
+    </IgCard>
   );
 }
 
+// Label left in --text-3, value right; a hairline between rows (prototype card rows).
 export function KV({ label, value }) {
   return (
-    <div style={{ display: 'flex', gap: 8, padding: '3px 0' }}>
-      <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      <span style={{ color: 'var(--text-1)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderTop: '1px solid var(--row-divider)', fontSize: 14 }}>
+      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{label}</span>
+      <span style={{ color: 'var(--text-1)', textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere' }}>{value}</span>
     </div>
   );
 }
-export const miniBtn = { padding: '4px 10px', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' };
+export const miniBtn = { height: 30, padding: '0 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-3)', borderRadius: 'var(--r-ctl)', fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600, cursor: 'pointer' };

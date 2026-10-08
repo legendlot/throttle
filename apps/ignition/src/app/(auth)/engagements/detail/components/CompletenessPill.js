@@ -1,7 +1,7 @@
 'use client';
 
-/** Derived-completion pill for the deal header. Styled like DealTypeBadge (the free-text badge
- *  shape in this header) rather than a new component, since it carries no stage vocabulary.
+/** Derived-completion pill for the deal header. Pill-shaped like StagePill (radius 99, 12/600)
+ *  rather than a new primitive, since it carries no stage vocabulary.
  *  Green = complete; muted = live but still missing numbers, named in `missing` order so the
  *  reader knows what to go and enter. Nothing at all before the deal is live. */
 export function CompletenessPill({ completeness }) {
@@ -12,7 +12,7 @@ export function CompletenessPill({ completeness }) {
   if (!live) return null;
   const p = complete
     ? { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' }
-    : { fg: 'var(--text-3)',           bg: 'var(--surface-2)' };
+    : { fg: 'var(--text-3)',           bg: 'var(--chip-neutral)' };
   return (
     <span
       title={complete
@@ -22,16 +22,16 @@ export function CompletenessPill({ completeness }) {
         : `Missing: ${missing.join(', ')}`}
       style={{
         display: 'inline-flex',
-        padding: '2px 8px',
-        fontSize: 11,
-        fontFamily: 'var(--font-mono)',
+        alignItems: 'center',
+        padding: '3px 10px',
+        fontSize: 12,
+        fontFamily: 'var(--font-ui)',
         fontWeight: 600,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
         color: p.fg,
         background: p.bg,
-        border: '1px solid currentColor',
-        borderRadius: 'var(--radius-sm)',
+        borderRadius: 99,
+        maxWidth: '100%',
+        overflowWrap: 'anywhere',
       }}
     >
       {complete
