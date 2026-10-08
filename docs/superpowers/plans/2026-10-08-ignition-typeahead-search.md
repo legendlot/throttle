@@ -140,7 +140,11 @@ Order: S1 → S2 → S3 (global search is the biggest win and proves the compone
   NewPaymentModal picks then loads the deals; Link deal links.
 - Injection: a search for `a,b)` or `x)*` returns normal results (no error, no widened match).
 
-## 6. Decisions for Afshaan before S1
+## 6. Decisions — DECIDED (Afshaan, 2026-10-08: "go with your recommendations on all 3")
+
+→ ⌘/Ctrl+K = global search (`/` keeps the page box) · Connects stay out of global search · no B-List / UGC boxes yet.
+
+### The options as asked
 
 1. **⌘/Ctrl+K → global search** (recommended; `/` keeps the page box), or keep ⌘K on the page box
    and open global search from the top-bar field only.
