@@ -252,8 +252,10 @@ step 2, constraint 1 kept). Each hostile-reviewed; batch 1 smoked live PASS (6/6
 Dropped on review: Payments "Balance due" (the payments ledger is mostly unfilled — ₹2,000 recorded vs
 ₹1.68L agreed on live deals, so it would read wrong almost everywhere).
 4. **NEXT: close-out (§7)** — manual-builder refresh (incl. `data/manual.json` Payments "Final"/"no undo"),
-`systems/ignition.md` shell paragraph, `apps/ignition/DESIGN.md` tokens. Optional: W4 tab counts from
-`stage_counts` (only if exact), `discount-codes` page tokens.
+`systems/ignition.md` shell paragraph (done, root `f32ed755`), `apps/ignition/DESIGN.md` tokens.
+**W4 DROPPED (S412):** `stage_counts` comes from getKpis' spend scan (`EXCLUDE_NON_SPEND`) and ignores the
+page's type / date / search filters, so tab counts would disagree whenever a filter is set — not exact,
+so tabs ship with no counts per the scope ruling. Optional still: `discount-codes` page tokens.
 
 **Deviations from the design taken without asking** (they protect live behaviour, constraints 1–2):
 the Advance modal gets a second step for the inputs the worker requires; the Connects composer keeps
