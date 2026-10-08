@@ -2807,7 +2807,9 @@ async function advanceStage(body, auth, env) {
       if (!rated && ['green', 'yellow', 'red'].includes(body.rating)) {
         await sb(`/rest/v1/influencers?id=eq.${infId}`, env, {
           method: 'PATCH', prefer: 'return=minimal',
-          body: JSON.stringify({ quality_rating: body.rating, rating_notes: body.rating_notes || null, updated_at: nowIso() }),
+          body: JSON.stringify(ratingPatch(String(body.rating_notes ?? '').trim()
+            ? { rating: body.rating, rating_notes: body.rating_notes }
+            : { rating: body.rating })),
         });
         rated = true;
       }
@@ -2880,6 +2882,19 @@ async function closeEngagement(body, auth, env) {
   return advanceStage(body, auth, env);
 }
 
+// S412 (B1) — a rating click sends no notes, and used to write `rating_notes: null`, wiping the
+// reason on every colour change. Notes are written only when the caller sends the key; an explicit
+// empty string still clears them.
+export const AUTO_FLAG_NOTE_PREFIX = 'Auto-flagged red';
+
+export function ratingPatch(body, now = nowIso()) {
+  const patch = { quality_rating: body.rating, updated_at: now };
+  if (Object.prototype.hasOwnProperty.call(body, 'rating_notes')) {
+    patch.rating_notes = String(body.rating_notes ?? '').trim() || null;
+  }
+  return patch;
+}
+
 async function setRating(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.influencer_id) return err('influencer_id required', 400);
@@ -2887,13 +2902,16 @@ async function setRating(body, auth, env) {
 
   const r = await sb(`/rest/v1/influencers?id=eq.${body.influencer_id}`, env, {
     method: 'PATCH',
-    body: JSON.stringify({
-      quality_rating: body.rating,
-      rating_notes: body.rating_notes || null,
-      updated_at: nowIso(),
-    }),
+    body: JSON.stringify(ratingPatch(body)),
   });
   if (!r.ok) return err('db_error', 400);
+  // The overdue auto-flag (flagOverdueRatings) writes its own note. Once someone re-rates off red
+  // that note is false, and no screen can clear it — so it, and only it, goes with the red.
+  if (body.rating !== 'red' && !Object.prototype.hasOwnProperty.call(body, 'rating_notes')) {
+    await sb(`/rest/v1/influencers?id=eq.${body.influencer_id}&rating_notes=like.${encodeURIComponent(`${AUTO_FLAG_NOTE_PREFIX}*`)}`, env, {
+      method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ rating_notes: null }),
+    });
+  }
   return ok(r.data?.[0]);
 }
 
@@ -4238,7 +4256,7 @@ async function flagOverdueRatings(body, auth, env) {
   )];
   if (ids.length === 0) return ok({ flagged: 0, influencer_ids: [] });
 
-  const note = `Auto-flagged red — post overdue >${Number(days) || OVERDUE_DEFAULT_DAYS}d past expected date (${nowIso().slice(0, 10)})`;
+  const note = `${AUTO_FLAG_NOTE_PREFIX} — post overdue >${Number(days) || OVERDUE_DEFAULT_DAYS}d past expected date (${nowIso().slice(0, 10)})`;
   const pr = await sb(
     `/rest/v1/influencers?id=in.(${ids.join(',')})&quality_rating=in.(unrated,green)`, env, {
     method: 'PATCH',
