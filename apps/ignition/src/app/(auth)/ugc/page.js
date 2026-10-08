@@ -2,37 +2,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, KpiCard } from '@throttle/ui';
+import { Spinner } from '@throttle/ui';
+import { Tile, StagePill, FilterSelect, TableCard, Row, NumCell } from '../../../components/ui/index.js';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import {
-  UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_STAGE_PALETTE, roasTone, roasToneColor,
+  UGC_STAGE_VALUES, UGC_STAGE_LABELS, roasTone, roasToneColor,
 } from '../../../lib/ugcStages.js';
 
-const ORANGE = '#FF6B00';
 function inr(n) {
   const v = Number(n || 0);
   return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
-function UgcStageBadge({ stage }) {
-  if (!stage) return null;
-  const label = UGC_STAGE_LABELS[stage] || stage;
-  const pal = UGC_STAGE_PALETTE[stage] || { fg: 'var(--text-2)', bg: 'var(--surface-2)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', padding: '2px 8px', fontSize: 11,
-      fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
-      textTransform: 'uppercase', color: pal.fg, background: pal.bg,
-      border: '1px solid currentColor', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap',
-    }}>{label}</span>
-  );
-}
+const COLS = 'minmax(180px,1.4fr) 150px 110px 150px 100px 100px 90px 110px';
 
 function RoasCell({ roas }) {
-  if (roas == null) return <span style={{ color: 'var(--text-3)' }}>—</span>;
-  const tone = roasTone(roas);
-  const color = roasToneColor(tone);
-  return <span style={{ color, fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{Number(roas).toFixed(2)}×</span>;
+  if (roas == null) return <span style={{ color: 'var(--text-4)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>—</span>;
+  const color = roasToneColor(roasTone(roas));
+  const pct = Math.max(0, Math.min(100, (Number(roas) / 6) * 100));
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color, width: 52 }}>{Number(roas).toFixed(2)}×</span>
+      <span style={{ flex: 1, height: 6, background: 'var(--border-3)', borderRadius: 3, overflow: 'hidden' }}>
+        <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: color }} />
+      </span>
+    </span>
+  );
 }
 
 export default function UgcPage() {
@@ -66,27 +61,25 @@ export default function UgcPage() {
   const blendedTone = roasTone(summary.blended_roas);
 
   return (
-    <div>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          UGC Pipeline
-        </h1>
-        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-          Commission-based UGC creators with ad-spend + ROAS tracking.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <header>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-4)' }}>
+          Lists · Commission creators
         </div>
+        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>UGC</h1>
       </header>
 
-      {error && <div style={{ padding: 12, marginBottom: 12, background: 'var(--state-error-bg)', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)' }}>{error}</div>}
+      {error && <div style={{ padding: 12, background: 'var(--state-error-bg)', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)' }}>{error}</div>}
 
       {loading || !data ? <Spinner /> : (
         <>
-          {/* Dashboard cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 12 }}>
-            <KpiCard label="Active creatives" value={Number(summary.active_creatives || 0).toLocaleString()} />
-            <KpiCard label="Ad spend (mo)" value={inr(summary.month_ad_spend)} accent={ORANGE} />
-            <KpiCard label="Blended ROAS" value={summary.blended_roas != null ? `${Number(summary.blended_roas).toFixed(2)}×` : '—'} accent={blendedTone ? roasToneColor(blendedTone) : undefined} />
-            <KpiCard label="Revenue (mo)" value={inr(summary.month_revenue)} />
-            <KpiCard label="Commissions owed" value={inr(summary.commissions_owed)} accent={ORANGE} />
+          {/* Dashboard tiles */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <Tile size={26} label="Active creatives" value={Number(summary.active_creatives || 0).toLocaleString()} />
+            <Tile size={26} label="Ad spend (mo)" value={inr(summary.month_ad_spend)} color="var(--accent-hi)" />
+            <Tile size={26} label="Blended ROAS" value={summary.blended_roas != null ? `${Number(summary.blended_roas).toFixed(2)}×` : '—'} color={blendedTone ? roasToneColor(blendedTone) : undefined} />
+            <Tile size={26} label="Revenue (mo)" value={inr(summary.month_revenue)} />
+            <Tile size={26} label="Commissions owed" value={inr(summary.commissions_owed)} color="var(--accent-hi)" />
           </div>
 
           {/* Per-stage count chips.
@@ -97,92 +90,61 @@ export default function UgcPage() {
               missing. The modal and the worker both refuse those transitions now (S317), so this
               should always be empty; it renders LOUDLY rather than silently if it ever is not,
               because silence is what made the original bug survive. */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {Object.keys(byStage)
               .filter(s => byStage[s] && !UGC_STAGE_VALUES.includes(s))
               .map(s => (
                 <span key={s} title="Not a UGC stage — this deal cannot be filtered to. Report it."
                   style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px',
-                    fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
-                    textTransform: 'uppercase', color: 'var(--state-error-fg)', background: 'var(--state-error-bg)',
-                    border: '1px solid currentColor', borderRadius: 'var(--radius-sm)',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+                    fontSize: 12, fontWeight: 600, color: 'var(--state-error-fg)', background: 'var(--state-error-bg)',
+                    border: '1px solid currentColor', borderRadius: 99,
                   }}>
-                  ⚠ {s} <strong style={{ color: 'inherit' }}>{byStage[s]}</strong>
+                  ⚠ {s} <strong style={{ color: 'inherit', fontFamily: 'var(--font-mono)' }}>{byStage[s]}</strong>
                 </span>
               ))}
-            {UGC_STAGE_VALUES.filter(s => byStage[s]).map(s => {
-              const pal = UGC_STAGE_PALETTE[s] || { fg: 'var(--text-2)', bg: 'var(--surface-2)' };
-              return (
-                <span key={s} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px',
-                  fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
-                  textTransform: 'uppercase', color: pal.fg, background: pal.bg,
-                  border: '1px solid currentColor', borderRadius: 'var(--radius-sm)',
-                }}>
-                  {UGC_STAGE_LABELS[s]}
-                  <strong style={{ color: 'inherit' }}>{byStage[s]}</strong>
-                </span>
-              );
-            })}
+            {UGC_STAGE_VALUES.filter(s => byStage[s]).map(s => (
+              <StagePill key={s} stage={s} ugc dot label={`${UGC_STAGE_LABELS[s]} ${byStage[s]}`} />
+            ))}
           </div>
 
           {/* Stage filter */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)' }}>Stage</span>
-            <select value={stageFilter} onChange={e => setStageFilter(e.target.value)}
-              style={{ background: 'var(--surface)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <FilterSelect value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Stage">
               <option value="all">All stages</option>
               {UGC_STAGE_VALUES.map(s => <option key={s} value={s}>{UGC_STAGE_LABELS[s]}</option>)}
-            </select>
-            <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{filtered.length} deal{filtered.length === 1 ? '' : 's'}</span>
+            </FilterSelect>
+            <span style={{ fontSize: 13, color: 'var(--text-4)' }}>{filtered.length} deal{filtered.length === 1 ? '' : 's'}</span>
           </div>
 
           {/* Pipeline table */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: 'var(--surface-2)' }}>
-                <th style={th}>Creator</th>
-                <th style={th}>IG handle</th>
-                <th style={th}>Stage</th>
-                <th style={{ ...th, textAlign: 'right' }}>ROAS</th>
-                <th style={{ ...th, textAlign: 'right' }}>Ad spend</th>
-                <th style={{ ...th, textAlign: 'right' }}>Revenue</th>
-                <th style={{ ...th, textAlign: 'right' }}>Days active</th>
-                <th style={{ ...th, textAlign: 'right' }}>Amount owed</th>
-              </tr></thead>
-              <tbody>
-                {filtered.length === 0 && <tr><td colSpan={8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No UGC deals.</td></tr>}
-                {filtered.map(r => (
-                  <tr key={r.id} onClick={() => router.push(`/ugc/detail/?id=${r.id}`)}
-                    style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
-                    <td style={td}>
-                      <div style={{ color: 'var(--text-1)', fontWeight: 600 }}>{r.creator_name || '—'}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.engagement_no}</div>
-                    </td>
-                    <td style={td}>
-                      {r.ig_handle
-                        ? (r.channel_link
-                          ? <a href={r.channel_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: ORANGE }}>{r.ig_handle}</a>
-                          : <span>{r.ig_handle}</span>)
-                        : <span style={{ color: 'var(--text-3)' }}>—</span>}
-                    </td>
-                    <td style={td}><UgcStageBadge stage={r.stage} /></td>
-                    <td style={{ ...td, textAlign: 'right' }}><RoasCell roas={r.roas} /></td>
-                    <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{inr(r.ad_spend)}</td>
-                    <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{inr(r.revenue)}</td>
-                    <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{r.days_active != null ? r.days_active : '—'}</td>
-                    <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono)', color: Number(r.amount_owed) > 0 ? ORANGE : 'var(--text-2)' }}>{inr(r.amount_owed)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <TableCard columns={COLS} minWidth={1110}
+            head={['Creator', 'IG handle', 'Stage', 'ROAS', { label: 'Ad spend', align: 'right' }, { label: 'Revenue', align: 'right' }, { label: 'Days active', align: 'right' }, { label: 'Amount owed', align: 'right' }]}>
+            {filtered.length === 0 && <div style={{ padding: 18, color: 'var(--text-4)', textAlign: 'center', fontSize: 14 }}>No UGC deals.</div>}
+            {filtered.map((r, i) => (
+              <Row key={r.id} columns={COLS} index={i} animate onClick={() => router.push(`/ugc/detail/?id=${r.id}`)}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: 'var(--text-1)', fontWeight: 600 }}>{r.creator_name || '—'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-4)' }}>{r.engagement_no}</div>
+                </div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {r.ig_handle
+                    ? (r.channel_link
+                      ? <a href={r.channel_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: 'var(--accent-hi)' }}>{r.ig_handle}</a>
+                      : <span>{r.ig_handle}</span>)
+                    : <span style={{ color: 'var(--text-4)' }}>—</span>}
+                </div>
+                <div><StagePill stage={r.stage} ugc /></div>
+                <RoasCell roas={r.roas} />
+                <NumCell>{inr(r.ad_spend)}</NumCell>
+                <NumCell>{inr(r.revenue)}</NumCell>
+                <NumCell color="var(--text-2)">{r.days_active != null ? r.days_active : '—'}</NumCell>
+                <NumCell color={Number(r.amount_owed) > 0 ? 'var(--accent-hi)' : 'var(--text-4)'} style={{ fontWeight: 700 }}>{inr(r.amount_owed)}</NumCell>
+              </Row>
+            ))}
+          </TableCard>
         </>
       )}
     </div>
   );
 }
-
-const th = { padding: '9px 12px', fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 700, fontFamily: 'var(--font-mono)', textAlign: 'left' };
-const td = { padding: '9px 12px', color: 'var(--text-2)' };
