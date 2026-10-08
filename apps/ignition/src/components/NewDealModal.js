@@ -2,8 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal, useToast } from '@throttle/ui';
-import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
-import ProductLinesEditor, { emptyLine, linesToPayload, linesAreValid } from './ProductLinesEditor.js';
+import ProductLinesEditor from './ProductLinesEditor.js';
+import { useDealForm } from '../lib/useDealForm.js';
 import PocSelect from './PocSelect.js';
 import SelectedInfluencerCard from './SelectedInfluencerCard.js';
 
@@ -14,66 +14,29 @@ import SelectedInfluencerCard from './SelectedInfluencerCard.js';
 export function NewDealModal({ open, onClose, session, presetInfluencer, onCreated }) {
   const { showToast: toast } = useToast();
   const router = useRouter();
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState([]);
-  const [selected, setSelected] = useState(presetInfluencer || null);
-  const [lines, setLines] = useState([emptyLine()]);
-  const [productsValid, setProductsValid] = useState(true);
-  const [form, setForm] = useState({
-    engagement_type: 'video_tracking', deal_type: 'paid',
-    expected_post_date: '',
-    campaign_id: '',
-    payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
-    poc_user_id: null, poc_name: null,
-  });
-  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const isPaid      = form.deal_type === 'paid' || form.deal_type === 'paid_plus_affiliate';
-  const isAffiliate = form.deal_type === 'affiliate' || form.deal_type === 'paid_plus_affiliate';
+  // P0.3 (S412) — state, search, campaigns, payload and create are shared with the New Deal page.
+  // `active: open` keeps the campaign list unfetched until the modal is opened.
+  const deal = useDealForm({ session, active: !!open, presetInfluencer });
+  const {
+    form, setForm, setField, isPaid, isAffiliate,
+    selected, setSelected, search, setSearch, results, pick,
+    lines, setLines, productsValid, setProductsValid,
+    campaigns, busy,
+  } = deal;
 
   useEffect(() => { setSelected(presetInfluencer || null); }, [presetInfluencer, open]);
 
-  // Campaign list for the picker (Reann #3). Loaded once the modal opens rather than on mount,
-  // so a page that never opens it pays nothing.
-  const [campaigns, setCampaigns] = useState([]);
-  useEffect(() => {
-    if (!session || !open) return;
-    ignitionopsGet('getCampaigns', { status: 'active' }, session)
-      .then(r => setCampaigns(r.campaigns || []))
-      .catch(() => setCampaigns([]));
-  }, [session, open]);
-
-  useEffect(() => {
-    if (!session || search.length < 2) { setResults([]); return; }
-    ignitionopsGet('getInfluencers', { search, limit: 8 }, session)
-      .then(r => setResults(r.influencers || []))
-      .catch(() => setResults([]));
-  }, [search, session]);
-
   async function submit() {
-    if (!selected) { setErr('Pick an influencer first'); return; }
-    // Every product line must resolve to a real catalogue product (2026-09-04). Confirm is
-    // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
-    if (!productsValid || !linesAreValid(lines)) { setErr('Pick a product from the list for every line'); return; }
-    setBusy(true); setErr(null);
+    const why = deal.problem();
+    if (why) { setErr(why); return; }
+    setErr(null);
     try {
-      const payload = { influencer_id: selected.id, ...form };
-      if (!payload.expected_post_date) delete payload.expected_post_date;
-      if (!payload.campaign_id) delete payload.campaign_id;
-      // Compensation only applies to paid deals; affiliate % only to affiliate deals.
-      if (isPaid && payload.payment_amount !== '') payload.payment_amount = Number(payload.payment_amount);
-      else { delete payload.payment_amount; delete payload.payment_terms; }
-      if (isAffiliate && payload.affiliate_pct !== '') payload.affiliate_pct = Number(payload.affiliate_pct);
-      else delete payload.affiliate_pct;
-      const products = linesToPayload(lines);
-      if (products.length) payload.products = products;
-      const res = await ignitionopsPost('createEngagement', payload, session);
+      const res = await deal.create();
       toast(`Created ${res.engagement_no}`, 'success');
       onClose?.();
       onCreated ? onCreated(res) : router.push(`/engagements/detail/?id=${res.id}`);
     } catch (e) { setErr(e.message); }
-    finally { setBusy(false); }
   }
 
   return (
@@ -93,7 +56,7 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
             {results.length > 0 && (
               <div style={{ marginTop: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', maxHeight: 180, overflowY: 'auto' }}>
                 {results.map(r => (
-                  <div key={r.id} onClick={() => { setSelected(r); setSearch(''); setResults([]); }}
+                  <div key={r.id} onClick={() => pick(r)}
                     style={{ padding: 9, cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
                     <span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.influencer_code}</span>
                     <span style={{ marginLeft: 8 }}>{r.channel_name || r.person_name || '—'}</span>

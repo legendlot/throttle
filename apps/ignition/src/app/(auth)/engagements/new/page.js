@@ -1,10 +1,11 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { useToast, Spinner } from '@throttle/ui';
-import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
-import ProductLinesEditor, { emptyLine, linesToPayload, linesAreValid } from '../../../../components/ProductLinesEditor.js';
+import { ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import ProductLinesEditor from '../../../../components/ProductLinesEditor.js';
+import { useDealForm } from '../../../../lib/useDealForm.js';
 import PocSelect from '../../../../components/PocSelect.js';
 import SelectedInfluencerCard from '../../../../components/SelectedInfluencerCard.js';
 
@@ -12,36 +13,17 @@ export default function NewEngagementPage() {
   const { session } = useAuth();
   const { showToast: toast } = useToast();
   const router = useRouter();
-  const [influencerSearch, setInfluencerSearch] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [lines, setLines] = useState([emptyLine()]);
-  const [productsValid, setProductsValid] = useState(true);
-  const [form, setForm] = useState({
-    engagement_type: 'video_tracking',
-    deal_type: 'paid',
-    payment_terms: 'on_release',
-    payment_amount: 0,
-    directed_to: 'website',
-    campaign_id: '',
-    expected_post_date: '',
-    poc_user_id: null,
-    poc_name: null,
-  });
+  // P0.3 (S412) — state, search, campaigns, payload and create are shared with NewDealModal.
+  const deal = useDealForm({ session, initial: { directed_to: 'website' } });
+  const {
+    form, setForm, setField, isPaid, isAffiliate,
+    selected, setSelected, search: influencerSearch, setSearch: setInfluencerSearch, results: searchResults, pick,
+    lines, setLines, productsValid, setProductsValid,
+    campaigns: campaignOpts, loadCampaigns, busy,
+  } = deal;
 
-  // Reann #3 (S273) — real campaigns replace the free-text tag AND the category_options
-  // 'campaign' axis that backed its suggestions (that axis is retired; it never had any rows).
-  const [campaignOpts, setCampaignOpts] = useState([]);
   const [newCampaign, setNewCampaign] = useState('');
   const [creatingCampaign, setCreatingCampaign] = useState(false);
-  function loadCampaigns() {
-    if (!session) return;
-    ignitionopsGet('getCampaigns', { status: 'active' }, session)
-      .then(r => setCampaignOpts(r.campaigns || []))
-      .catch(() => setCampaignOpts([]));
-  }
-  useEffect(loadCampaigns, [session]);
 
   // Deal-time creation is kept on purpose: the field this replaced was free text precisely so a
   // campaign could be named as the deal is struck. Forcing a trip to /campaigns first is what
@@ -59,36 +41,14 @@ export default function NewEngagementPage() {
     finally { setCreatingCampaign(false); }
   }
 
-  useEffect(() => {
-    if (!session || influencerSearch.length < 2) { setSearchResults([]); return; }
-    ignitionopsGet('getInfluencers', { search: influencerSearch, limit: 8 }, session)
-      .then(r => setSearchResults(r.influencers || []))
-      .catch(() => setSearchResults([]));
-  }, [influencerSearch, session]);
-
-  function setField(k, v) { setForm(f => ({ ...f, [k]: v })); }
-
   async function submit() {
-    if (!selected) { toast('Pick an influencer', 'error'); return; }
-    // Every product line must resolve to a real catalogue product (2026-09-04). The button is
-    // disabled too — this is the guard that holds if a blur lands in the same tick as the click.
-    if (!productsValid || !linesAreValid(lines)) { toast('Pick a product from the list for every line', 'error'); return; }
-    setBusy(true);
+    const why = deal.problem();
+    if (why) { toast(why, 'error'); return; }
     try {
-      const products = linesToPayload(lines);
-      const payload = {
-        influencer_id: selected.id,
-        ...form,
-        payment_amount: Number(form.payment_amount) || 0,
-        ...(products.length ? { products } : {}),
-      };
-      if (!payload.expected_post_date) delete payload.expected_post_date;
-      if (!payload.campaign_id) delete payload.campaign_id;
-      const res = await ignitionopsPost('createEngagement', payload, session);
+      const res = await deal.create();
       toast(`Created ${res.engagement_no}`, 'success');
       router.push(`/engagements/detail/?id=${res.id}`);
     } catch (e) { toast(e.message, 'error'); }
-    finally { setBusy(false); }
   }
 
   return (
@@ -113,7 +73,7 @@ export default function NewEngagementPage() {
             {searchResults.length > 0 && (
               <div style={{ marginTop: 8, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
                 {searchResults.map(r => (
-                  <div key={r.id} onClick={() => { setSelected(r); setInfluencerSearch(''); setSearchResults([]); }}
+                  <div key={r.id} onClick={() => pick(r)}
                     style={{ padding: 10, cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
                     <span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.influencer_code}</span>
                     <span style={{ marginLeft: 10 }}>{r.channel_name || r.person_name || '—'}</span>
@@ -143,17 +103,29 @@ export default function NewEngagementPage() {
               <option value="paid_plus_affiliate">Paid + Affiliate</option>
             </select>
           </Field>
-          <Field label="Payment terms">
-            <select value={form.payment_terms} onChange={e => setField('payment_terms', e.target.value)} style={inputStyle('100%')}>
-              <option value="advance">Advance</option>
-              <option value="on_draft">On Draft</option>
-              <option value="on_release">On Release</option>
-              <option value="n_a">N/A</option>
-            </select>
-          </Field>
-          <Field label="Payment amount (₹)">
-            <input type="number" value={form.payment_amount} onChange={e => setField('payment_amount', e.target.value)} style={inputStyle('100%')} />
-          </Field>
+          {/* D7 (S412): the modal's rule — payment only for paid deals, affiliate % only for
+              affiliate deals. This page used to show payment on every type, defaulting to on_release. */}
+          {isPaid && (
+            <>
+              <Field label="Payment terms">
+                <select value={form.payment_terms} onChange={e => setField('payment_terms', e.target.value)} style={inputStyle('100%')}>
+                  <option value="advance">Advance</option>
+                  <option value="on_draft">On Draft</option>
+                  <option value="on_release">On Release</option>
+                  <option value="n_a">N/A</option>
+                </select>
+              </Field>
+              <Field label="Payment amount (₹)">
+                <input type="number" min="0" value={form.payment_amount} onChange={e => setField('payment_amount', e.target.value)} placeholder="e.g. 5000" style={inputStyle('100%')} />
+              </Field>
+            </>
+          )}
+          {isAffiliate && (
+            <Field label="Affiliate % agreed">
+              <input type="number" min="0" max="100" step="0.1" value={form.affiliate_pct}
+                onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={inputStyle('100%')} />
+            </Field>
+          )}
           <Field label="Directed to">
             <select value={form.directed_to} onChange={e => setField('directed_to', e.target.value)} style={inputStyle('100%')}>
               <option value="website">Website</option>
