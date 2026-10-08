@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Modal, useToast } from '@throttle/ui';
+import { useToast } from '@throttle/ui';
+import { Modal } from './ui/Modal.js';
 import { ignitionopsPost } from '../lib/ignitionopsFetch.js';
 import { channelLinkError, normalizeChannelLink } from '../lib/channelLink.js';
 import LocationInput from './LocationInput.js';

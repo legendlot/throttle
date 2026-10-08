@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { Modal, useToast } from '@throttle/ui';
+import { useToast } from '@throttle/ui';
+import { Modal } from '../../../../../components/ui/Modal.js';
 import { ignitionopsGet } from '../../../../../lib/ignitionopsFetch.js';
 
 // Deal brief — DRAFT ONLY (S313). Shows exactly what would go to the creator so the wording can

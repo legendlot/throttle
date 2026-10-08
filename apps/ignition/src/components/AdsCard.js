@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Modal, useToast } from '@throttle/ui';
+import { useToast } from '@throttle/ui';
+import { Modal } from './ui/Modal.js';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
 

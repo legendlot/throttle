@@ -6,17 +6,18 @@ export const metadata = { title: 'Ignition · Influencer Marketing', manifest: '
 
 // Mobile: real device width, notch-safe (viewport-fit) and a canvas-coloured
 // browser chrome. Desktop reads none of this.
-export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#1f1f1f' };
+export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#0e1015' };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <head>
+        {/* The ONLY font load (globals.css no longer @imports): Tomorrow 900 stays for /login. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
           rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap"
+          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&family=Hanken+Grotesk:wght@400;500;600;700&display=swap"
         />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="icon" href="/favicon.png" sizes="any" />

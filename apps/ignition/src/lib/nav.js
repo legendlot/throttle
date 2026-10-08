@@ -1,20 +1,22 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
-  Settings, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet, Target,
-  BookOpen,
+  Settings, Layers, FileSpreadsheet, CircleUser, CalendarDays, Wallet, Target,
+  BookOpen, Gauge, Megaphone,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
     id: 'work', label: 'WORK', icon: Inbox,
     items: [
-      { id: 'dashboard',   label: 'Dashboard',    route: '/dashboard',    icon: BarChart3 },
+      { id: 'dashboard',   label: 'Dashboard',    route: '/dashboard',    icon: Gauge },
       { id: 'connects',    label: 'Connects',     route: '/connects',     icon: Inbox, requires: 'ignition_connects' },
       { id: 'influencers', label: 'Influencers',  route: '/influencers',  icon: Users },
       { id: 'engagements', label: 'Engagements',  route: '/engagements',  icon: ListChecks },
       { id: 'schedule',    label: 'Schedule',     route: '/schedule',     icon: CalendarDays },
       { id: 'payments',    label: 'Payments',     route: '/payments',     icon: Wallet },
-      { id: 'new',         label: 'New Deal',     route: '/engagements/new', icon: Plus, accent: 'orange' },
+      // rail: false — New Deal lives in the top bar CTA on desktop (IgRail skips it); the route,
+      // its `requires` gating and the mobile More sheet entry are unchanged.
+      { id: 'new',         label: 'New Deal',     route: '/engagements/new', icon: Plus, accent: 'orange', rail: false },
     ],
   },
   {
@@ -23,7 +25,7 @@ export const NAV_GROUPS = [
       { id: 'roster',         label: 'Roster',        route: '/roster',         icon: Star },
       { id: 'blist',          label: 'B-List',        route: '/blist',          icon: Layers },
       { id: 'ugc',            label: 'UGC',           route: '/ugc',            icon: Flame },
-      { id: 'campaigns',      label: 'Campaigns',     route: '/campaigns',      icon: Layers },
+      { id: 'campaigns',      label: 'Campaigns',     route: '/campaigns',      icon: Megaphone },
       // Legacy pre-minted code pool retired from nav (S214 ⑧) — deals now use
       // Issue Gift/Affiliate codes on the engagement. Route + data kept for history.
     ],
@@ -41,7 +43,7 @@ export const NAV_GROUPS = [
   {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
-      { id: 'users',  label: 'Users',  route: '/admin/users',  icon: UserCircle,      requires: 'ignition_admin' },
+      { id: 'users',  label: 'Users',  route: '/admin/users',  icon: CircleUser,      requires: 'ignition_admin' },
       { id: 'import', label: 'Import', route: '/admin/import', icon: FileSpreadsheet, requires: 'ignition_admin' },
     ],
   },

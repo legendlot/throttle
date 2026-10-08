@@ -1,23 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700&display=swap');
-
 *, *::before, *::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+/* Fonts load ONCE, via the <link> in app/layout.js (Tomorrow · JetBrains Mono · Hanken Grotesk).
+   Pit Control tokens (Phase 1 of the 2026-10-07 redesign). Every legacy name below is kept and
+   remapped onto the new palette so pages not yet restyled render coherently in it. */
 :root {
-  --bg:         #1f1f1f;
-  --surface:    #2a2a2a;
-  --surface-2:  #333333;
-  --surface-3:  #3c3c3c;
-  --border:     #404040;
-  --border-2:   #4a4a4a;
+  /* ── surfaces ── */
+  --bg:             #0e1015;
+  --rail:           #0a0c10;
+  --surface:        #13161e;
+  --surface-hover:  #171a23;
+  --surface-raised: #171a22;
+  --input:          #151821;
+  --surface-sunk:   #10131a;
+  --chip-neutral:   #1b1f2a;
+  --menu:           #171a23;
+  --menu-hover:     #20242f;
+  --surface-2:      var(--chip-neutral);
+  --surface-3:      var(--menu-hover);
 
-  --text-1:     #f5f5f5;
-  --text-2:     #b0b0b0;
-  --text-3:     #888888;
-  --text-4:     #666666;
+  /* ── borders ── */
+  --border:              #1d212b;
+  --border-2:            #232838;
+  --border-3:            #2b3142;
+  --border-hover:        #2e3446;
+  --border-input-hover:  #3a4156;
+  --row-divider:         #181b24;
+
+  /* ── text ── */
+  --text-1:     #eef0f4;
+  --text-2:     #a9b0c2;
+  --text-3:     #8b93a7;
+  --text-4:     #6b7385;
+  --text-5:     #5a6278;
 
   --brand-yellow:      #F2CD1A;
   --brand-yellow-deep: #d4b200;
@@ -32,20 +50,30 @@
 
   --state-warning:    #fbbf24;
   --state-warning-fg: #fbbf24;
-  --state-warning-bg: rgba(251, 191, 36, 0.12);
+  --state-warning-bg: rgba(251, 191, 36, 0.14);
   --state-error:      #DE2A2A;
-  --state-error-fg:   #ff7070;
-  --state-error-bg:   rgba(222, 42, 42, 0.15);
+  --state-error-fg:   #ff7b7b;
+  --state-error-bg:   rgba(222, 42, 42, 0.16);
   --state-success:    #22c55e;
   --state-success-fg: #4ade80;
-  --state-success-bg: rgba(34, 197, 94, 0.12);
-  --state-info:       #7b93ff;
-  --state-info-fg:    #7b93ff;
-  --state-info-bg:    rgba(33, 60, 226, 0.20);
+  --state-success-bg: rgba(34, 197, 94, 0.14);
+  --state-info:       #4f6bff;
+  --state-info-fg:    #8ea2ff;
+  --state-info-bg:    rgba(33, 60, 226, 0.22);
+  --info-bar:         #4f6bff;
+  --info-bar-2:       #7b93ff;
 
   --accent:    var(--ignition-orange);
+  --accent-hi: #ff8a33;
   --accent-fg: #0a0a0a;
-  --accent-bg: rgba(255, 107, 0, 0.08);
+  --accent-bg: rgba(255, 107, 0, 0.14);
+  --accent-bg-soft: rgba(255, 107, 0, 0.08);
+
+  --scrim:        rgba(5, 6, 9, 0.66);
+  --sticky-bar:   rgba(14, 16, 21, 0.92);
+  --shadow-menu:  0 16px 40px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.5);
+  --shadow-cta:   0 6px 18px rgba(255, 107, 0, 0.25);
 
   --text-2xs:  11px;
   --text-xs:   12px;
@@ -60,6 +88,7 @@
   --tracking-tight:  0.04em;
   --tracking-mid:    0.06em;
   --tracking-wide:   0.08em;
+  --tracking-eyebrow: 0.14em;
 
   --space-1:  4px;
   --space-2:  8px;
@@ -70,17 +99,26 @@
   --space-8:  32px;
   --space-10: 40px;
 
-  --radius-sm:   3px;
-  --radius-md:   4px;
-  --radius-lg:   8px;
+  /* radii — Pit Control scale; the legacy sm/md/lg step up onto it */
+  --r-card:  18px;
+  --r-tile:  16px;
+  --r-row:   14px;
+  --r-btn:   12px;
+  --r-ctl:   10px;
+  --r-seg:    9px;
+  --r-deal:   8px;
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
   --radius-full: 9999px;
 
+  --font-ui:   'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-cond: 'Tomorrow', system-ui, sans-serif;
 
-  --duration-fast:    120ms;
-  --duration-default: 180ms;
-  --duration-slow:    260ms;
+  --duration-fast:    140ms;
+  --duration-default: 160ms;
+  --duration-slow:    240ms;
   --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
 
   /* Legacy aliases (so any shared UI primitives using --yellow/etc still work) */
@@ -90,6 +128,7 @@
   --t1:       var(--text-1);
   --t2:       var(--text-2);
   --t3:       var(--text-3);
+  --t4:       var(--text-4);
   --yellow:   var(--brand-yellow);
   --yellow2:  var(--brand-yellow-deep);
   --blue:     var(--brand-blue);
@@ -98,20 +137,13 @@
   --orange:   var(--ignition-orange);
   --mono:     var(--font-mono);
   --cond:     var(--font-cond);
-
-  /* S412 (P0.4) — read by shared @throttle/ui in its redesign modes (Chip `pill`, KpiCard,
-     ProgressBar, ProductTag) and never defined here. No current Ignition render reads them; they
-     are defined ahead of Phase 1, whose token swap remaps them with the rest. */
-  --t4:       var(--text-4);
-  --border-3: #565656;
   --r-full:   var(--radius-full);
-  --font-ui:  var(--font-mono);
 }
 
 html, body {
   background: var(--bg);
   color: var(--text-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: var(--text-base);
   line-height: 1.45;
   height: 100%;
@@ -137,22 +169,86 @@ button { font-family: inherit; }
 
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-3); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+
+/* ── Pit Control motion. Entrance animations use fill-mode BACKWARDS (never `both`): a `both`
+   fill pins the last keyframe and overrides inline opacity/transform set by state. ── */
+@keyframes igUp    { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes igSlide { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+@keyframes igGrowX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes igGrowY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes igFuse  { from { background-position: 0 0; } to { background-position: 28px 0; } }
+@keyframes igPulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.55); } 70% { box-shadow: 0 0 0 7px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+@keyframes igRing  { 0% { box-shadow: 0 0 0 0 rgba(255,107,0,.6); } 70% { box-shadow: 0 0 0 9px rgba(255,107,0,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,0,0); } }
+@keyframes igPop   { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes igFade  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes igDash  { from { stroke-dashoffset: 251; } }
+@keyframes igBlink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+.ig-up    { animation: igUp 500ms var(--ease-out) backwards; }
+.ig-slide { animation: igSlide 380ms var(--ease-out) backwards; }
+.ig-pop   { animation: igPop 240ms var(--ease-out) backwards; }
+.ig-fade  { animation: igFade 160ms ease backwards; }
+.ig-growx { transform-origin: left;   animation: igGrowX 800ms var(--ease-out) backwards; }
+.ig-growy { transform-origin: bottom; animation: igGrowY 600ms var(--ease-out) backwards; }
+.ig-fuse  { background-image: repeating-linear-gradient(90deg, #FF6B00 0 10px, #ff8a33 10px 14px);
+  background-size: 28px 100%; animation: igFuse 1.2s linear infinite; }
+.ig-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex-shrink: 0;
+  animation: igPulse 2s infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  /* infinite loops (fuse, pulse, ring) stop at rest rather than flashing one cycle */
+  .ig-fuse, .ig-live-dot { animation: none !important; }
 }
+
+/* ── Pit Control primitives (components/ui/*, components/shell/*) — the hover/focus states inline
+   styles cannot express. Colours come from the tokens above. Hover rules are !important because
+   the components set the resting background/colour inline, and inline beats a plain :hover. ── */
+.ig-card-hover { transition: border-color 160ms, transform 160ms; }
+.ig-card-hover:hover { border-color: var(--border-hover) !important; transform: translateY(-2px); }
+.ig-card-action { background: none; border: none; padding: 0; cursor: pointer; font: inherit;
+  font-size: 12px; font-weight: 600; color: var(--text-3); transition: color 140ms; }
+.ig-card-action:hover { color: var(--text-1) !important; }
+.ig-row { transition: background 140ms; }
+.ig-row:hover { background: var(--surface-hover) !important; }
+.ig-row.ig-row-focus { outline: 2px solid #FF6B00; outline-offset: -2px; border-radius: 12px; }
+.ig-seg-pill { transition: background 160ms, color 160ms; }
+.ig-seg-pill:not(.on):hover { color: var(--text-1) !important; }
+.ig-ctl { transition: border-color 140ms, color 140ms; }
+.ig-ctl:hover { border-color: var(--border-input-hover) !important; color: var(--text-1) !important; }
+.ig-ctl:focus-within { border-color: var(--accent) !important; }
+.ig-ctl select, .ig-ctl input { outline: none; }
+.ig-menu-item { transition: background 140ms; }
+.ig-menu-item:hover { background: var(--menu-hover) !important; }
+.ig-ghost-btn { transition: background 140ms, color 140ms, border-color 140ms; }
+.ig-ghost-btn:hover { background: var(--surface-raised) !important; color: var(--text-1) !important; border-color: var(--border-input-hover) !important; }
+.ig-cta { transition: transform 160ms, box-shadow 160ms; }
+.ig-cta:hover { transform: translateY(-1px); box-shadow: var(--shadow-cta) !important; }
+
+/* rail (components/shell/IgRail.js) */
+.ig-rail { scrollbar-width: none; }
+.ig-rail::-webkit-scrollbar { display: none; }
+.ig-rail-item { transition: width 240ms var(--ease-out), background 140ms, color 140ms; }
+.ig-rail-item:not(.on):hover { background: var(--surface-raised) !important; color: #fff !important; }
+.ig-rail-user { transition: background 140ms; }
+.ig-rail-user:hover { background: var(--surface-raised) !important; }
+.ig-topbar-search { transition: border-color 160ms; }
+.ig-topbar-search:hover, .ig-topbar-search:focus-visible { border-color: var(--accent) !important; }
+.ig-launcher-wrap { transition: background 140ms; }
+.ig-launcher-wrap:hover { background: var(--surface-raised) !important; }
 
 /* ══════════════════════════════════════════════════════════
    MOBILE APP SHELL (S304 family — mirrors the other LOT apps)
-   ≤767px: the shared @throttle/ui rail (.sb-wrap) hides behind a
+   ≤767px: the Ignition rail (.ig-rail) hides behind a
    fixed bottom tab bar (Dashboard · Influencers · Engagements ·
    Schedule · More) + a "More" bottom sheet with the full nav.
    Desktop untouched — everything sits behind the media query.
@@ -180,9 +276,12 @@ button { font-family: inherit; }
 .ig-sheet-item.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
 
 @media (max-width: 767px) {
-  /* the shared @throttle/ui Sidebar self-styles via an injected <style>; hiding its
-     root from THIS app's stylesheet affects only Ignition */
-  .sb-wrap { display: none !important; }
+  /* the Ignition rail (components/shell/IgRail.js) hides behind the tab bar */
+  .ig-rail { display: none !important; }
+  /* the top bar keeps search + launcher; the live chip and the New-deal CTA sit in the tab
+     bar's world on a phone (New Deal stays reachable from the More sheet) */
+  .ig-topbar { height: 60px !important; padding: 0 12px !important; gap: 10px !important; }
+  .ig-topbar-live, .ig-topbar-cta, .ig-topbar-kbd { display: none !important; }
   .ig-tabbar { display: flex; }
   .ig-sheetwrap { display: flex; }
 
@@ -199,3 +298,7 @@ button { font-family: inherit; }
   .ig-main input:not([type="date"]):not([type="checkbox"]):not([type="radio"]),
   .ig-main select, .ig-main textarea { font-size: 16px !important; }
 }
+
+/* S412 review — the body font is now proportional (Hanken Grotesk, was mono); keep digits in
+   right-aligned number columns lining up. */
+td, th, .num { font-variant-numeric: tabular-nums; }

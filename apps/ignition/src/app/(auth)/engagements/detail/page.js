@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Modal, useToast } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
+import { Modal } from '../../../../components/ui/Modal.js';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import { liveDataWarnings, metricsCompleteness, isLocked, unlockActive } from '../../../../lib/metrics.js';

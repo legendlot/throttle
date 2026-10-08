@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Modal, useToast } from '@throttle/ui';
+import { useToast } from '@throttle/ui';
+import { Modal } from './ui/Modal.js';
 import ProductLinesEditor from './ProductLinesEditor.js';
 import { useDealForm } from '../lib/useDealForm.js';
 import PocSelect from './PocSelect.js';

@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { Modal, useToast } from '@throttle/ui';
+import { useToast } from '@throttle/ui';
+import { Modal } from './ui/Modal.js';
 import { useAuth } from '@throttle/auth';
 import { ignitionopsPost } from '../lib/ignitionopsFetch.js';
 

@@ -37,22 +37,23 @@ export const STAGE_LABELS = {
   cancelled: 'Cancelled',
 };
 
+// Pit Control hexes (2026-10-07 redesign, Phase 1). Labels + stage lists unchanged.
 export const STAGE_PALETTE = {
-  proposed:  { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
-  planning:  { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
-  agreed:    { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
-  shipped:   { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
-  delivered: { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' },
-  scheduled: { fg: 'var(--state-info-fg)',    bg: 'var(--state-info-bg)' },
-  posting:   { fg: '#FF6B00',                 bg: 'rgba(255,107,0,0.12)' },
-  live:      { fg: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' },
-  delayed:   { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
-  on_hold:   { fg: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
-  ghosted:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
-  dropped:   { fg: 'var(--state-error-fg)',   bg: 'var(--state-error-bg)' },
+  proposed:  { fg: '#fbbf24', bg: 'rgba(251,191,36,.14)' },
+  planning:  { fg: '#a9b0c2', bg: '#1b1f2a' },
+  agreed:    { fg: '#8ea2ff', bg: 'rgba(33,60,226,.22)' },
+  shipped:   { fg: '#8ea2ff', bg: 'rgba(33,60,226,.22)' },
+  delivered: { fg: '#4ade80', bg: 'rgba(34,197,94,.14)' },
+  scheduled: { fg: '#8ea2ff', bg: 'rgba(33,60,226,.22)' },
+  posting:   { fg: '#ff8a33', bg: 'rgba(255,107,0,.14)' },
+  live:      { fg: '#4ade80', bg: 'rgba(34,197,94,.14)' },
+  delayed:   { fg: '#fbbf24', bg: 'rgba(251,191,36,.14)' },
+  on_hold:   { fg: '#fbbf24', bg: 'rgba(251,191,36,.14)' },
+  ghosted:   { fg: '#ff7b7b', bg: 'rgba(222,42,42,.16)' },
+  dropped:   { fg: '#ff7b7b', bg: 'rgba(222,42,42,.16)' },
   // Neutral grey, deliberately NOT the error red the other two exits wear: a cancelled deal
   // is not a failure, it is a deal that stopped costing anything.
-  cancelled: { fg: 'var(--text-3)',           bg: 'var(--surface-2)' },
+  cancelled: { fg: '#8b93a7', bg: '#1b1f2a' },
 };
 
 // Free model: from any stage you may move to any other.

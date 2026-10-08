@@ -2,9 +2,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut, AppLauncher } from '@throttle/ui';
+import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { Menu, X, LogOut } from 'lucide-react';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
+import IgRail from '../../components/shell/IgRail.js';
+import IgTopbar from '../../components/shell/IgTopbar.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -40,7 +42,6 @@ function AuthLayoutInner({ children }) {
   const pathname  = usePathname();
   const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   // ── mobile "More" bottom sheet (≤767px chrome; closes itself on navigation) ─
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -52,6 +53,11 @@ function AuthLayoutInner({ children }) {
     () => filterNavByPerms(NAV_GROUPS, perms || {}),
     [perms]
   );
+  // The top-bar "+ New deal" CTA shows exactly when the New Deal nav item survives its `requires`.
+  const canNewDeal = useMemo(
+    () => navGroups.some((g) => (g.items || []).some((it) => it.id === 'new')),
+    [navGroups]
+  );
 
   if (loading && !user) return <Spinner />;
 
@@ -60,31 +66,23 @@ function AuthLayoutInner({ children }) {
 
   return (
     <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
-      <Sidebar
-        groups={navGroups}
-        activeTab={pathname}
-        onTabSelect={(item) => router.push(item.route)}
+      <IgRail
+        navGroups={navGroups}
+        pathname={pathname}
+        onNavigate={(route) => router.push(route)}
         userLabel={displayName}
         userInitial={initial}
         userRole={role || ''}
         onLogout={signOut}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="IGNITION"
-        appShortLabel="IG"
-        appIcon={<img src="/favicon.svg" alt="Ignition" style={{ height: 20, width: 'auto', display: 'block' }} />}
       />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar
-          navGroups={navGroups}
-          pathname={pathname}
-          onTabSelect={(item) => router.push(item.route)}
+      <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <IgTopbar
           refreshing={refreshing}
           lastRefreshed={lastRefreshed}
-        >
-          <AppLauncher current="ignition" />
-        </Topbar>
-        <main className="ig-main" style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
+          showNewDeal={canNewDeal}
+          onNewDeal={() => router.push('/engagements/new')}
+        />
+        <main className="ig-main" style={{ flex:1, overflowY:'auto', padding:'8px 32px 40px' }}>
           {children}
         </main>
       </div>

@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, KpiCard, Modal, useToast } from '@throttle/ui';
+import { Spinner, KpiCard, useToast } from '@throttle/ui';
+import { Modal } from '../../../../components/ui/Modal.js';
 import { Plus, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';

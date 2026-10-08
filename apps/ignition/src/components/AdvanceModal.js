@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Modal } from '@throttle/ui';
+import { Modal } from './ui/Modal.js';
 import { STAGE_LABELS, allowedTransitions, HAPPY_PATH } from '../lib/stages.js';
 import { UGC_STAGE_VALUES, UGC_STAGE_LABELS, UGC_HAPPY_PATH } from '../lib/ugcStages.js';
 

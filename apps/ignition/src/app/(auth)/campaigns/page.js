@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Modal, useToast, useListNav } from '@throttle/ui';
+import { Spinner, useToast, useListNav } from '@throttle/ui';
+import { Modal } from '../../../components/ui/Modal.js';
 import { Plus, Trash2 } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 
