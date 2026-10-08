@@ -587,7 +587,8 @@ async function getInfluencer(url, auth, env) {
   const id = url.searchParams.get('id');
   const code = url.searchParams.get('code');
   if (!id && !code) return err('id or code required', 400);
-  const filter = id ? `id=eq.${id}` : `influencer_code=eq.${encodeURIComponent(code)}`;
+  // Encoded: `id` arrives from a URL (?influencer= on New Deal), so it must not add query params.
+  const filter = id ? `id=eq.${encodeURIComponent(id)}` : `influencer_code=eq.${encodeURIComponent(code)}`;
   const r = await sb(`/rest/v1/influencers?${filter}&select=*&limit=1`, env);
   if (!r.ok) return err('db_error', 500);
   const inf = r.data?.[0];
@@ -792,7 +793,7 @@ async function getEngagement(url, auth, env) {
   const id = url.searchParams.get('id');
   const eno = url.searchParams.get('engagement_no');
   if (!id && !eno) return err('id or engagement_no required', 400);
-  const filter = id ? `id=eq.${id}` : `engagement_no=eq.${encodeURIComponent(eno)}`;
+  const filter = id ? `id=eq.${encodeURIComponent(id)}` : `engagement_no=eq.${encodeURIComponent(eno)}`;
   const r = await sb(
     // campaign is embedded (S309) so the deal page can SHOW which campaign a deal is
     // on without fetching the whole campaign list just to resolve one name. The picker
