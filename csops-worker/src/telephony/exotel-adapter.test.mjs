@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mapExotelStatus, needsCallback, exotelToNormalised, exotelCallPatch, isSettled, hookDialTarget, hookAction, hookAttempt,
+  mapExotelStatus, exotelConnected, needsCallback, exotelToNormalised, exotelCallPatch, isSettled, hookDialTarget, hookAction, hookAttempt,
 } from './exotel-adapter.js';
 import { toIstNaive, fromIstNaive, unwrapCalls, nextCursorOf } from './exotel-client.js';
 
@@ -268,3 +268,36 @@ test('the dial_attempts element carries who, what and when — and nothing from 
     status: 'free', at: '2026-10-07T13:18:33.000Z',
   });
 });
+
+test('mapExotelStatus: an ENDED call with no Status maps like completed, marked ended-no-status', () => {
+  assert.deepEqual(mapExotelStatus('', 0, true),    { status: 'abandoned', dial_status: 'ended-no-status' });
+  assert.deepEqual(mapExotelStatus(null, 0, true),  { status: 'abandoned', dial_status: 'ended-no-status' });
+  assert.deepEqual(mapExotelStatus(' ', 42, true),  { status: 'answered',  dial_status: 'ended-no-status' });
+  // not ended → still open, exactly as before
+  assert.equal(mapExotelStatus('', 0, false).status, 'in_progress');
+  assert.equal(mapExotelStatus('', 0).status, 'in_progress');
+  // a real status always wins over the ended flag
+  assert.deepEqual(mapExotelStatus('completed', 5, true), { status: 'answered', dial_status: 'completed' });
+  assert.equal(mapExotelStatus('weird', 0, true).status, 'in_progress');
+});
+
+test('exotelToNormalised: ended call with no Status is settled, not left in_progress', () => {
+  const norm = exotelToNormalised({ Sid: 'x1', Direction: 'inbound', From: '+919999999999', Status: '',
+    StartTime: '2026-09-30 14:25:00', EndTime: '2026-09-30 14:25:39', Duration: '39',
+    Details: { ConversationDuration: 0 } });
+  assert.equal(norm.status, 'abandoned');
+  assert.equal(norm.dial_status, 'ended-no-status');
+  assert.equal(isSettled(norm), true);
+});
+
+test('mapExotelStatus: ended, no Status, talk 0 but CONNECTED → answered (Exotel leaves talk 0 on these)', () => {
+  assert.deepEqual(mapExotelStatus('', 0, true, true), { status: 'answered', dial_status: 'ended-no-status' });
+});
+
+test('exotelConnected: recording or a later leg on-call counts; first leg alone does not', () => {
+  assert.equal(exotelConnected({ RecordingUrl: 'https://r' }), true);
+  assert.equal(exotelConnected({ Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 272 } }, { Leg: { Id: 2, OnCallDuration: 264 } }] } }), true);
+  assert.equal(exotelConnected({ Details: { Legs: [{ Leg: { Id: 1, OnCallDuration: 38 } }, { Leg: { Id: 2, OnCallDuration: 0 } }] } }), false);
+  assert.equal(exotelConnected({}), false);
+});
+

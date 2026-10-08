@@ -23,9 +23,20 @@ import { fromIstNaive } from './exotel-client.js';
  * us Details.ConversationDuration for exactly this; MyOperator never did, which is why
  * ~30% of inbound (1–15s) was landing as `answered` with no agent.
  */
-export function mapExotelStatus(rawStatus, talkSeconds) {
+export function mapExotelStatus(rawStatus, talkSeconds, ended = false, connected = false) {
   const s = String(rawStatus || '').toLowerCase().trim();
   const talk = Number(talkSeconds) || 0;
+  // ⚠️ Exotel sometimes finalises a call with NO Status at all — EndTime set, legs timed
+  // (29 outgoing calls on 2026-09-30 sat at in_progress forever because the default below
+  // keeps unknowns open). An ENDED call cannot be in progress, so map it the way `completed`
+  // is mapped (Afshaan, S412), marked in dial_status so it stays distinguishable.
+  // ⚠️ On those rows ConversationDuration is 0 EVEN WHEN THE CALL CONNECTED (22 of the 29 had a
+  // recording and a second leg on-call 4–264 s), so talk alone would file real conversations
+  // as abandoned. `connected` = a recording exists or a non-first leg was on the call.
+  if (!s && ended) {
+    console.log(`[exotel] call ended with no Status (talk=${talk}, connected=${connected}) — mapped as completed`);
+    return { status: (talk > 0 || connected) ? 'answered' : 'abandoned', dial_status: 'ended-no-status' };
+  }
   switch (s) {
     case 'completed':
       return { status: talk > 0 ? 'answered' : 'abandoned', dial_status: 'completed' };
@@ -73,6 +84,17 @@ const num = (v) => {
  * `PhoneNumber` carries the virtual number when Exotel supplies it; fall back to the
  * direction-derived value.
  */
+/**
+ * Did the call actually connect, judged WITHOUT ConversationDuration (which Exotel leaves 0 on
+ * calls it finalises with no Status)? A recording, or any leg after the first with on-call time.
+ * Legs are nested under `Leg` (observed shape, see collectAgentIdentifiers).
+ */
+export function exotelConnected(call) {
+  if (call?.RecordingUrl) return true;
+  const legs = Array.isArray(call?.Details?.Legs) ? call.Details.Legs : [];
+  return legs.slice(1).some((l) => (Number((l && l.Leg) ? l.Leg.OnCallDuration : l?.OnCallDuration) || 0) > 0);
+}
+
 export function exotelToNormalised(call, { departmentId = null } = {}) {
   const direction = normaliseDirection(call.Direction, 'exotel');
   const inbound = direction === 'incoming';
@@ -80,7 +102,7 @@ export function exotelToNormalised(call, { departmentId = null } = {}) {
   const details = call.Details || {};
   const talk = num(details.ConversationDuration);
   const legDuration = num(call.Duration);
-  const { status, dial_status } = mapExotelStatus(call.Status, talk);
+  const { status, dial_status } = mapExotelStatus(call.Status, talk, Boolean(call.EndTime), exotelConnected(call));
 
   // ⚠️ OBSERVED 2026-08-20 from a live inbound call — the field names are not what
   // the shape suggests, and one of them was mapped wrongly on the first pass:

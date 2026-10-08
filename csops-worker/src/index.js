@@ -30,7 +30,7 @@ import { botOutboundRows, botThreadPatch, declinedTurnPatch, railLive, BOT_RAIL_
 import { isUniqueViolation, adoptNumberlessThread } from './thread-adopt.js';
 import { makeCallContext } from './telephony/call-context.js';
 import { makeSoftphone } from './telephony/softphone.js';
-import { mapExotelStatus, hookDialTarget, hookAction, hookAttempt } from './telephony/exotel-adapter.js';
+import { mapExotelStatus, exotelConnected, hookDialTarget, hookAction, hookAttempt } from './telephony/exotel-adapter.js';
 import { fromIstNaive } from './telephony/exotel-client.js';
 import { SUPPORT_CHANNEL_LABELS, analyticsDims, ANALYTICS_DIM_KEYS, trendBucket, rollingAverage, formatTicketNotes, maskPhoneForExport, dailySeries, DAILY_METRICS, istDayRange, istBucketRange } from './analytics.js';
 import { splitMulti } from './multiselect.js';
@@ -4598,7 +4598,7 @@ async function handleExotelStatus(request, url, env, ctx) {
       const sid = call.Sid || call.CallSid;
       if (!sid) return;
       const talk = Number(call.Details?.ConversationDuration ?? call.ConversationDuration);
-      const { status, dial_status } = mapExotelStatus(call.Status, talk);
+      const { status, dial_status } = mapExotelStatus(call.Status, talk, Boolean(call.EndTime), exotelConnected(call));
       const patch = { status, dial_status, raw_meta: { last_event: 'status', provider: 'exotel' } };
       if (Number.isFinite(talk)) patch.talk_duration_seconds = talk;
       if (call.Duration != null) patch.duration_seconds = Number(call.Duration);
