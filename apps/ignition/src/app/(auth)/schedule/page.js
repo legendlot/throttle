@@ -2,34 +2,70 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip } from '@throttle/ui';
-import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
+import { Spinner } from '@throttle/ui';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
-import StageBadge from '../../../components/StageBadge.js';
 import { titleish } from '../../../lib/productLabel.js';
+import { istToday, istMonth } from '../../../lib/istDate.js';
+import { STAGE_LABELS, STAGE_PALETTE, TERMINAL_FAIL } from '../../../lib/stages.js';
+import { Segmented, StagePill, TableCard, Row } from '../../../components/ui/index.js';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const WEEKDAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const pad = n => String(n).padStart(2, '0');
 const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const LIST_COLS = '100px 150px minmax(150px,1.3fr) minmax(130px,1fr) 130px 110px 80px';
+const DAY_MS = 86400000;
 
 function influencerLabel(e) {
   const i = e.influencer || {};
   return i.channel_name || i.person_name || i.influencer_code || '—';
 }
 
+// Overdue mirrors the worker's rule (getOverdueEngagements: POSTED_OR_TERMINAL + post_date null), minus
+// its grace days — this is a calendar tint, not the rating signal. Draft received, on hold and delayed
+// are deliberately NOT late; a deal with a post_date has posted whatever its stage (S412 review).
+const NOT_OVERDUE = new Set(['posting', 'live', 'on_hold', 'delayed', ...TERMINAL_FAIL]);
+const PAUSED = new Set(['on_hold', 'delayed']);
+const CALLED_OFF = { fg: 'var(--text-3)', bg: 'var(--chip-neutral)' };
+function isOverdue(e, today) {
+  return !!e.effective_date && e.is_planned && e.effective_date < today && !NOT_OVERDUE.has(e.stage);
+}
+// Calendar-chip colour: overdue red, live green, draft received orange, paused amber, called off
+// neutral, everything else the scheduled blue. From the app-wide stage palette.
+function tone(e, today) {
+  if (isOverdue(e, today)) return { fg: 'var(--state-error-fg)', bg: 'var(--state-error-bg)' };
+  if (TERMINAL_FAIL.has(e.stage)) return CALLED_OFF;
+  const p = STAGE_PALETTE[e.stage === 'live' || e.stage === 'posting' || PAUSED.has(e.stage) ? e.stage : 'scheduled'];
+  return { fg: p.fg, bg: p.bg };
+}
+function whenLabel(e, today) {
+  if (TERMINAL_FAIL.has(e.stage)) return { text: STAGE_LABELS[e.stage] || e.stage, color: 'var(--text-4)' };
+  if (isOverdue(e, today)) {
+    const late = Math.round((Date.parse(today) - Date.parse(e.effective_date)) / DAY_MS);
+    return { text: `${late}d late`, color: 'var(--state-error-fg)' };
+  }
+  if (!e.is_planned) return { text: 'Posted', color: 'var(--state-success-fg)' };   // worker: post_date set
+  const diff = Math.round((Date.parse(e.effective_date) - Date.parse(today)) / DAY_MS);
+  if (diff < 0) return { text: STAGE_LABELS[e.stage] || e.stage, color: 'var(--text-2)' };   // paused / draft in
+  if (diff === 0) return { text: 'Today', color: 'var(--state-success-fg)' };
+  return { text: `in ${diff}d`, color: 'var(--text-2)' };
+}
+// Month anchor in IST (not the browser's zone) so "Today" never opens the previous month.
+function istAnchor() { const [yy, mm] = istMonth().split('-').map(Number); return new Date(yy, mm - 1, 1); }
+
 export default function SchedulePage() {
   const { session } = useAuth();
   const router = useRouter();
   const [view, setView] = useState('calendar');
-  const [anchor, setAnchor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [anchor, setAnchor] = useState(istAnchor);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
   const y = anchor.getFullYear(), m = anchor.getMonth();
   const from = fmt(new Date(y, m, 1));
   const to = fmt(new Date(y, m + 1, 0));
-  const todayStr = fmt(new Date());
+  const todayStr = istToday();
 
   useEffect(() => {
     if (!session) return;
@@ -46,115 +82,131 @@ export default function SchedulePage() {
     return map;
   }, [rows]);
 
-  // Calendar grid cells: leading blanks for the first weekday + each day of month.
+  // Calendar grid cells (Monday first): out-of-month filler days from the neighbouring months
+  // ({ n, out: true }) around each day of the month. Fillers carry no deals — only this month is fetched.
   const cells = useMemo(() => {
-    const firstWeekday = new Date(y, m, 1).getDay();
+    const lead = (new Date(y, m, 1).getDay() + 6) % 7;
     const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const prevDays = new Date(y, m, 0).getDate();
     const arr = [];
-    for (let i = 0; i < firstWeekday; i++) arr.push(null);
-    for (let d = 1; d <= daysInMonth; d++) arr.push(d);
+    for (let i = lead; i > 0; i--) arr.push({ n: prevDays - i + 1, out: true });
+    for (let d = 1; d <= daysInMonth; d++) arr.push({ n: d });
+    for (let d = 1; arr.length % 7 !== 0; d++) arr.push({ n: d, out: true });
     return arr;
   }, [y, m]);
 
   function goMonth(delta) { setAnchor(new Date(y, m + delta, 1)); }
-  function goToday() { const d = new Date(); setAnchor(new Date(d.getFullYear(), d.getMonth(), 1)); }
+  function goToday() { setAnchor(istAnchor()); }
+
+  const legend = [
+    ['Scheduled', STAGE_PALETTE.scheduled.fg], ['Draft received', STAGE_PALETTE.posting.fg],
+    ['Live', STAGE_PALETTE.live.fg], ['On hold / delayed', STAGE_PALETTE.on_hold.fg],
+    ['Called off', CALLED_OFF.fg], ['Overdue', 'var(--state-error-fg)'],
+  ];
 
   return (
-    <div style={{ maxWidth: 1280 }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Schedule</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button onClick={() => goMonth(-1)} style={navBtn} aria-label="Previous month"><ChevronLeft size={16} /></button>
-          <span style={{ minWidth: 130, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-1)' }}>{MONTHS[m]} {y}</span>
-          <button onClick={() => goMonth(1)} style={navBtn} aria-label="Next month"><ChevronRight size={16} /></button>
-          <button onClick={goToday} style={{ ...navBtn, width: 'auto', padding: '0 10px', fontSize: 12 }}>Today</button>
+    <div style={{ maxWidth: 1280, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', animation: 'igUp 500ms cubic-bezier(.22,1,.36,1) both' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-4)' }}>Work · Post dates</div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>Schedule</h1>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <Chip active={view === 'calendar'} onClick={() => setView('calendar')}>Calendar</Chip>
-          <Chip active={view === 'list'} onClick={() => setView('list')}>List</Chip>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button onClick={() => goMonth(-1)} className="ig-row" style={navBtn} aria-label="Previous month"><ChevronLeft size={16} /></button>
+            <span style={{ minWidth: 130, textAlign: 'center', padding: '0 10px', fontFamily: 'var(--font-cond)', fontSize: 17, fontWeight: 700, color: 'var(--text-1)' }}>{MONTHS[m]} {y}</span>
+            <button onClick={() => goMonth(1)} className="ig-row" style={navBtn} aria-label="Next month"><ChevronRight size={16} /></button>
+            <button onClick={goToday} className="ig-row" style={{ ...navBtn, width: 'auto', padding: '0 12px', fontSize: 13, fontFamily: 'var(--font-ui)', fontWeight: 600 }}>Today</button>
+          </div>
+          <Segmented value={view} onChange={setView} options={[{ value: 'calendar', label: 'Calendar' }, { value: 'list', label: 'List' }]} />
         </div>
       </header>
 
-      <div style={{ display: 'flex', gap: 14, marginBottom: 10, fontSize: 12, color: 'var(--text-3)' }}>
-        <span><span style={dot('#FF6B00')} /> Posted</span>
-        <span><span style={{ ...dot('transparent'), border: '1px solid var(--text-3)' }} /> Planned (expected)</span>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 13, color: 'var(--text-3)', animation: 'igUp 500ms 40ms both' }}>
+        {legend.map(([label, c]) => (
+          <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: c }} />{label}
+          </span>
+        ))}
         <span style={{ marginLeft: 'auto', color: 'var(--text-2)' }}>{rows.length} in {MONTHS[m]}</span>
       </div>
 
       <ChasingList session={session} router={router} />
 
       {loading ? <Spinner /> : view === 'calendar' ? (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
-            {WEEKDAYS.map(w => (
-              <div key={w} style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'var(--surface-2)', textAlign: 'left', fontWeight: 600 }}>{w}</div>
-            ))}
-            {cells.map((d, i) => {
-              if (d === null) return <div key={`b${i}`} style={{ minHeight: 96, borderTop: '1px solid var(--border)', borderRight: (i % 7 !== 6) ? '1px solid var(--border)' : 'none', background: 'var(--surface-2)', opacity: 0.4 }} />;
-              const key = `${y}-${pad(m + 1)}-${pad(d)}`;
-              const items = byDay[key] || [];
-              const isToday = key === todayStr;
-              return (
-                <div key={key} style={{ minHeight: 96, padding: 6, borderTop: '1px solid var(--border)', borderRight: (i % 7 !== 6) ? '1px solid var(--border)' : 'none', background: isToday ? 'rgba(255,107,0,0.06)' : 'transparent' }}>
-                  <div style={{ fontSize: 11, color: isToday ? '#FF6B00' : 'var(--text-3)', fontWeight: isToday ? 700 : 500, marginBottom: 4 }}>{d}</div>
-                  {items.slice(0, 4).map(e => (
-                    <div key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
-                      title={`${e.engagement_no} · ${influencerLabel(e)}${e.product_code ? ` · ${titleish(e.product_code)}` : ''}`}
-                      style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 11, color: 'var(--text-1)', padding: '2px 4px', borderRadius: 4, marginBottom: 2, background: 'var(--surface-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      <span style={dot(e.is_planned ? 'transparent' : '#FF6B00', e.is_planned)} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{influencerLabel(e)}</span>
-                    </div>
-                  ))}
-                  {items.length > 4 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>+{items.length - 4} more</div>}
-                </div>
-              );
-            })}
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', overflowX: 'auto', animation: 'igUp 500ms 80ms cubic-bezier(.22,1,.36,1) both' }}>
+          <div style={{ minWidth: 640 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', borderBottom: '1px solid var(--border)' }}>
+              {WEEKDAYS.map(w => (
+                <span key={w} style={{ padding: '10px 12px', fontSize: 12, fontWeight: 600, color: 'var(--text-4)' }}>{w}</span>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gridAutoRows: 'minmax(118px, auto)', gap: 1, background: 'var(--border)' }}>
+              {cells.map((c, i) => {
+                if (c.out) return (
+                  <div key={`o${i}`} style={{ background: 'var(--surface-sunk)', padding: 8, minWidth: 0 }}>
+                    <span style={dayNum(false, true)}>{c.n}</span>
+                  </div>
+                );
+                const key = `${y}-${pad(m + 1)}-${pad(c.n)}`;
+                const items = byDay[key] || [];
+                const isToday = key === todayStr;
+                return (
+                  <div key={key} style={{ background: 'var(--surface)', padding: 8, display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                    <span style={dayNum(isToday, false)}>{c.n}</span>
+                    {items.slice(0, 4).map(e => {
+                      const t = tone(e, todayStr);
+                      return (
+                        <div key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
+                          title={`${e.engagement_no} · ${influencerLabel(e)}${e.product_code ? ` · ${titleish(e.product_code)}` : ''}`}
+                          style={{ display: 'block', cursor: 'pointer', padding: '4px 7px', borderRadius: 7, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: t.fg, background: t.bg, borderLeft: `3px solid ${t.fg}` }}>
+                          {influencerLabel(e)}
+                        </div>
+                      );
+                    })}
+                    {items.length > 4 && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>+{items.length - 4} more</div>}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Date</th><th style={th}>Deal</th><th style={th}>Influencer</th>
-                <th style={th}>Product</th><th style={th}>Stage</th><th style={th}>When</th><th style={th}>Post</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>Nothing scheduled in {MONTHS[m]} {y}</td></tr>}
-              {rows.map(e => (
-                <tr key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)} style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
-                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{e.effective_date}</td>
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
-                  <td style={td}>{influencerLabel(e)}</td>
-                  <td style={td}>{titleish(e.product_code) || '—'}</td>
-                  <td style={td}><StageBadge stage={e.stage} /></td>
-                  <td style={td}><span style={dot(e.is_planned ? 'transparent' : '#FF6B00', e.is_planned)} />{e.is_planned ? 'Planned' : 'Posted'}</td>
-                  <td style={td}>
-                    {e.video_link
-                      ? <a href={e.video_link} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ color: '#FF6B00', display: 'inline-flex', alignItems: 'center', gap: 3 }}>View <ExternalLink size={12} /></a>
-                      : <span style={{ color: 'var(--text-3)' }}>—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TableCard columns={LIST_COLS} minWidth={760} head={['Date', 'Deal', 'Influencer', 'Product', 'Stage', 'When', 'Post']}>
+          {rows.length === 0 && <div style={{ padding: '14px 18px', color: 'var(--text-3)', textAlign: 'center', fontSize: 14 }}>Nothing scheduled in {MONTHS[m]} {y}</div>}
+          {rows.map((e, i) => {
+            const w = e.effective_date ? whenLabel(e, todayStr) : null;
+            return (
+              <Row key={e.id} columns={LIST_COLS} index={i} animate onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, whiteSpace: 'nowrap' }}>{e.effective_date}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-hi)', fontWeight: 600 }}>{e.engagement_no}</span>
+                <span style={{ fontWeight: 600, minWidth: 0 }}>{influencerLabel(e)}</span>
+                <span style={{ color: 'var(--text-2)', minWidth: 0 }}>{titleish(e.product_code) || '—'}</span>
+                <span style={{ justifySelf: 'start' }}><StagePill stage={e.stage} /></span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: w ? w.color : 'var(--text-3)' }}>{w ? w.text : '—'}</span>
+                <span>
+                  {e.video_link
+                    ? <a href={e.video_link} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ color: 'var(--accent)' }}>Watch ↗</a>
+                    : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                </span>
+              </Row>
+            );
+          })}
+        </TableCard>
       )}
     </div>
   );
 }
 
-function dot(bg, planned) {
+function dayNum(today, out) {
   return {
-    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-    background: bg, marginRight: 6, verticalAlign: 'middle', flexShrink: 0,
-    border: planned ? '1px solid var(--text-3)' : 'none',
+    alignSelf: 'flex-start', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 24, height: 24, borderRadius: '50%', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
+    color: today ? 'var(--accent-fg)' : out ? 'var(--text-5)' : 'var(--text-2)',
+    background: today ? 'var(--accent)' : 'transparent',
   };
 }
-const navBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 28, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontFamily: 'var(--font-mono)' };
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
+const navBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border-2)', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-mono)' };
 
 // "Who is overdue to post" — the chasing list (S313). Merges Reann's two separate asks: the
 // 10-day-no-post reminder (Batch B5) and the Delhivery-delivered follow-up. They are one nudge
@@ -205,7 +257,7 @@ function ChasingList({ session, router }) {
     : degraded ? 'Some deals could not be dated and are missing from the list below — treat it as incomplete.'
     : null;
   const Notice = () => (
-    <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', fontFamily: 'var(--font-mono)', fontSize: 12, color: '#FF6B00' }}>
+    <div style={{ marginBottom: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--r-card)', background: 'var(--surface)', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent)' }}>
       {notice}
     </div>
   );
@@ -219,10 +271,10 @@ function ChasingList({ session, router }) {
     <>
     {notice && <Notice />}
     {data.count > 0 && (
-    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)' }}>
+    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 'var(--r-card)', background: 'var(--surface)' }}>
       <button onClick={() => setOpen(o => !o)}
         style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 12, textAlign: 'left' }}>
-        <span style={{ color: '#FF6B00', fontWeight: 700 }}>{data.count}</span>
+        <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{data.count}</span>
         <span>waiting to post 10+ days after delivery</span>
         {data.unreachable > 0 && (
           <span style={{ color: 'var(--text-3)' }}>· {data.unreachable} with no email on record</span>
@@ -235,7 +287,7 @@ function ChasingList({ session, router }) {
             <div key={d.engagement_no}
               onClick={() => router.push(`/engagements/detail/?engagement_no=${encodeURIComponent(d.engagement_no)}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, cursor: 'pointer' }}>
-              <span style={{ color: '#FF6B00', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
+              <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{d.engagement_no}</span>
               <span style={{ color: 'var(--text-1)' }}>{d.influencer}</span>
               <span style={{ color: 'var(--text-3)' }}>{clockLabel(d)}</span>
               {!d.email && <span style={{ color: 'var(--state-error-fg)' }}>no email</span>}
@@ -251,7 +303,7 @@ function ChasingList({ session, router }) {
         chasing list (rightly — the creator has nothing yet), and excluding them SILENTLY is how a
         parcel sat in transit for 50 days with nobody looking. Amber, not red: it is not lost yet. */}
     {stuck.length > 0 && (
-      <div style={{ marginBottom: 12, border: '1px solid var(--state-warning)', borderRadius: 'var(--radius-md)', background: 'var(--state-warning-bg)' }}>
+      <div style={{ marginBottom: 12, border: '1px solid var(--state-warning)', borderRadius: 'var(--r-card)', background: 'var(--state-warning-bg)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
           <span style={{ color: 'var(--state-warning-fg)', fontWeight: 700 }}>{stuck.length}</span>
           <span>parcel{stuck.length === 1 ? '' : 's'} still in flight after 14+ days — chase the courier, not the creator</span>
@@ -274,7 +326,7 @@ function ChasingList({ session, router }) {
     )}
 
     {returned.length > 0 && (
-      <div style={{ marginBottom: 12, border: '1px solid var(--state-error)', borderRadius: 'var(--radius-md)', background: 'var(--state-error-bg)' }}>
+      <div style={{ marginBottom: 12, border: '1px solid var(--state-error)', borderRadius: 'var(--r-card)', background: 'var(--state-error-bg)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-1)' }}>
           <span style={{ color: 'var(--state-error-fg)', fontWeight: 700 }}>{returned.length}</span>
           <span>parcel{returned.length === 1 ? '' : 's'} came back — the creator never received the product, so do not chase</span>
