@@ -2,11 +2,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, Combobox, useListNav, useToast } from '@throttle/ui';
+import { Spinner, Combobox, useListNav, useToast } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
-import StageBadge from '../../../components/StageBadge.js';
-import DealTypeBadge from '../../../components/DealTypeBadge.js';
-import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
+import { Segmented, StagePill, DealPill, Tile, FilterSelect, SearchField, TableCard, Row, NumCell } from '../../../components/ui/index.js';
+import { STAGE_VALUES, STAGE_LABELS, STAGE_PALETTE } from '../../../lib/stages.js';
 import { DEAL_TYPE_VALUES, DEAL_TYPE_LABELS } from '../../../lib/dealTypes.js';
 import { productLabel, titleish, productKey } from '../../../lib/productLabel.js';
 import { metricsCompleteness, organicViews } from '../../../lib/metrics.js';
@@ -345,44 +344,48 @@ export default function EngagementsPage() {
     || dateMode !== 'any';
 
   return (
-    <div ref={listRef}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          Engagements
-        </h1>
-        <button
-          onClick={() => router.push('/engagements/new/')}
-          style={{
-            padding: '8px 14px', background: '#FF6B00', color: '#fff',
-            border: 'none', borderRadius: 'var(--radius-sm)',
-            fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
-            letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-          }}
-        >+ New Deal</button>
+    <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <header className="ig-up" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, letterSpacing: '.14em', color: 'var(--text-4)', textTransform: 'uppercase' }}>
+            Work · one row per video deal
+          </div>
+          <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 32, fontWeight: 700, marginTop: 6 }}>Engagements</h1>
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* No per-tab counts: the only source would be the loaded (paged, server-filtered) set,
+              which is wrong for every tab but the active one. Counts wait for a real source. */}
+          <Segmented
+            options={TABS.map(t => ({ value: t.id, label: t.label }))}
+            value={tab}
+            onChange={(id) => set({ tab: id })}
+          />
+          <button
+            onClick={() => router.push('/engagements/new/')}
+            style={{
+              height: 42, padding: '0 18px', background: 'var(--text-1)', color: 'var(--bg)',
+              border: 'none', borderRadius: 12, fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700,
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >+ New deal</button>
+        </div>
       </header>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        {TABS.map(t => <Chip key={t.id} active={tab === t.id} onClick={() => set({ tab: t.id })}>{t.label}</Chip>)}
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          data-search-primary
-          placeholder="Search engagement #, video link, tracking, order…"
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <SearchField
+          placeholder="Search engagement #, link, tracking, order…"
           value={search}
           onChange={e => set({ search: e.target.value })}
-          style={inputStyle(280)}
         />
-        <select value={type} onChange={e => set({ type: e.target.value })} style={inputStyle(140)}>
+        <FilterSelect value={type} onChange={e => set({ type: e.target.value })}>
           <option value="all">All types</option>
           <option value="video_tracking">Video</option>
           <option value="ugc">UGC</option>
-        </select>
+        </FilterSelect>
 
         {/* Reann #9 — Paid / Barter. Reads `deal_type`, not `is_barter`; see DEAL_TYPE_FILTERS. */}
-        <select value={dealType} onChange={e => set({ dealType: e.target.value })} style={inputStyle(150)}>
-          {DEAL_TYPE_FILTERS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-        </select>
+        <FilterSelect value={dealType} onChange={e => set({ dealType: e.target.value })}
+          options={DEAL_TYPE_FILTERS.map(d => ({ value: d.id, label: d.label }))} />
 
         {/* Reann #3 (single) → #9 (multi) — product filter. Options are the products actually
             on deals. A Combobox, not a <select multiple>: every product picker in the fleet is
@@ -402,63 +405,73 @@ export default function EngagementsPage() {
           allowClear={false}
           portal
           style={{ width: 190 }}
-          inputStyle={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}
+          inputStyle={ctlInput}
         />
         {products.map(k => (
-          <Chip key={k} active onClick={() => removeProduct(k)}>
+          <button key={k} type="button" onClick={() => removeProduct(k)} title="Remove this product filter" style={pickChip}>
             {productOptions.find(o => o.key === k)?.label || titleish(k)} ×
-          </Chip>
+          </button>
         ))}
 
         {/* Reann #9 — campaign filter. campaign_id, never the DEPRECATED campaign_tag. */}
-        <select value={campaign} onChange={e => set({ campaign: e.target.value })} style={inputStyle(190)}>
+        <FilterSelect value={campaign} onChange={e => set({ campaign: e.target.value })}>
           <option value="all">All campaigns</option>
           {campaignOptions.map(o => (
             <option key={o.id} value={o.id}>{o.label} ({o.count})</option>
           ))}
-        </select>
+        </FilterSelect>
 
         {/* Afshaan 2026-09-04 — completion filter; see COMPLETION_FILTERS. */}
-        <select value={completion} onChange={e => set({ completion: e.target.value })} style={inputStyle(160)}>
-          {COMPLETION_FILTERS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-        </select>
+        <FilterSelect value={completion} onChange={e => set({ completion: e.target.value })}
+          options={COMPLETION_FILTERS.map(c => ({ value: c.id, label: c.label }))} />
 
         {/* Reann #5 — posting-date filter. */}
-        <select value={dateMode} onChange={e => set({ dateMode: e.target.value })} style={inputStyle(140)}>
-          {DATE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
+        <FilterSelect value={dateMode} onChange={e => set({ dateMode: e.target.value })}
+          options={DATE_MODES.map(m => ({ value: m.id, label: m.label }))} />
         {dateMode === 'range' && (
           <>
-            <input type="date" value={dateFrom} onChange={e => set({ dateFrom: e.target.value })} style={inputStyle(150)} />
-            <span style={{ color: 'var(--text-3)', fontSize: 12 }}>to</span>
-            <input type="date" value={dateTo} onChange={e => set({ dateTo: e.target.value })} style={inputStyle(150)} />
+            <input type="date" value={dateFrom} onChange={e => set({ dateFrom: e.target.value })} className="ig-ctl" style={dateInput} />
+            <span style={{ color: 'var(--text-3)', fontSize: 13 }}>to</span>
+            <input type="date" value={dateTo} onChange={e => set({ dateTo: e.target.value })} className="ig-ctl" style={dateInput} />
           </>
         )}
 
         {filtersActive && (
           <button onClick={clearAll} style={{
-            padding: '6px 10px', background: 'transparent', color: 'var(--text-3)',
-            border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-            fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
-          }}>clear all filters</button>
+            padding: '0 8px', background: 'transparent', color: 'var(--text-3)', border: 'none',
+            fontFamily: 'var(--font-ui)', fontSize: 13, cursor: 'pointer',
+            textDecoration: 'underline', textUnderlineOffset: 3,
+          }}>Clear filters</button>
         )}
       </div>
 
       {tab === 'all' && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          {STAGE_VALUES.map(s => (
-            <Chip key={s} active={stages.includes(s)} onClick={() => toggleStage(s)}>{STAGE_LABELS[s]}</Chip>
-          ))}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {STAGE_VALUES.map(s => {
+            const on = stages.includes(s);
+            const pal = STAGE_PALETTE[s] || { fg: 'var(--text-2)', bg: 'var(--chip-neutral)' };
+            return (
+              <button key={s} type="button" aria-pressed={on} onClick={() => toggleStage(s)} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 99,
+                fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${on ? pal.fg : 'var(--border-2)'}`,
+                background: on ? pal.bg : 'transparent', color: on ? pal.fg : 'var(--text-2)',
+                transition: 'background 140ms, border-color 140ms, color 140ms',
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: pal.fg }} />
+                {STAGE_LABELS[s]}
+              </button>
+            );
+          })}
           {stages.length > 0 && (
-            <button onClick={() => set({ stages: [] })} style={{ marginLeft: 4, padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: 'none', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>clear</button>
+            <button onClick={() => set({ stages: [] })} style={{ marginLeft: 4, padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: 'none', fontFamily: 'var(--font-ui)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 3 }}>clear</button>
           )}
         </div>
       )}
 
       {!loading && (
         <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 12, marginBottom: 12,
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: 12,
         }}>
           <Tile
             label={filtersActive ? 'Deals (filtered)' : 'Deals'}
@@ -467,6 +480,7 @@ export default function EngagementsPage() {
           />
           <Tile
             label="Total cost"
+            color="var(--accent-hi)"
             value={`₹${Math.round(summary.cost).toLocaleString('en-IN')}`}
             // Say so on the tile rather than leaving someone to wonder why the costs do not add
             // up to the deals — a total that quietly omits rows is how mistrust starts.
@@ -483,133 +497,98 @@ export default function EngagementsPage() {
       )}
 
       {loading ? <Spinner /> : (
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)', overflowX: 'auto',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Engagement #</th>
-                <th style={th}>Influencer</th>
-                <th style={th}>Type</th>
-                <th style={th}>Stage</th>
-                <th style={th}>Deal</th>
-                <th style={th}>Product</th>
-                <th style={th}>Expected post</th>
-                <th style={th}>Post date</th>
-                <th style={thNum}>Views</th>
-                <th style={thNum}>CPM</th>
-                <th style={thNum}>Total cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.length === 0 && (
-                <tr><td colSpan={11} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No engagements</td></tr>
-              )}
-              {visible.map((r, i) => {
-                const label = productLabel(r.product_code, r.product_variant);
-                return (
-                  <tr key={r.id}
-                    onClick={() => openDeal(r)}
-                    style={{
-                      cursor: 'pointer', borderTop: '1px solid var(--border)',
-                      background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                      outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
-                    }}
-                    onMouseEnter={() => setFocusedIdx(i)}
-                  >
-                    {/* A deal with no campaign cannot be rolled up into campaign performance, so it
-                        is flagged for audit (Reann item 12). Read `campaign_id` — `campaign_tag` is
-                        deprecated and set on 5 rows, so flagging on it would mark almost everything.
-                        ⚠️ A glyph, deliberately NOT a StageBadge-style pill: roughly a QUARTER of deals
-                        carry no campaign, and a pill on that many rows is noise rather than a
-                        signal. ⛔ No count is quoted here on purpose — it moves every day as deals
-                        are created (113/411 → 114/413 inside one afternoon). Re-derive it. The CAMPAIGN filter already offers a
-                        "No campaign" option with the live count — this is the at-a-glance companion
-                        to it, in the column the eye scans first. */}
-                    <td style={td}>
-                      <span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.engagement_no}</span>
-                      {!r.campaign_id && (
-                        <span
-                          title="No campaign — this deal is not attributed to any campaign"
-                          role="img"
-                          aria-label="No campaign"
-                          style={{
-                            marginLeft: 6, color: 'var(--state-warning-fg)',
-                            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'help',
-                          }}
-                        >⚑</span>
-                      )}
-                      {/* Afshaan 2026-09-04 — Complete = live + all four metrics entered
-                          (metricsCompleteness). Same glyph treatment as the ⚑ above and for the
-                          same reason: this is the at-a-glance companion to the COMPLETION filter,
-                          not a pill. ⛔ Nothing is rendered for an INCOMPLETE row on purpose —
-                          most rows are not live, so a "missing" marker here would paint the whole
-                          table; the filter is where you go looking for those. */}
-                      {metricsCompleteness(r).complete && (
-                        <span
-                          title={completenessTitle(r)}
-                          role="img"
-                          aria-label={completenessTitle(r)}
-                          style={{
-                            marginLeft: 6, color: 'var(--state-success-fg)',
-                            fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'help',
-                          }}
-                        >✓</span>
-                      )}
-                    </td>
-                    <td style={td}>
-                      <div>{r.influencer?.channel_name || '—'}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.influencer?.influencer_code}</div>
-                    </td>
-                    <td style={td}>{r.engagement_type === 'ugc' ? 'UGC' : 'Video'}</td>
-                    <td style={td}><StageBadge stage={r.stage} /></td>
-                    <td style={td}><DealTypeBadge dealType={r.deal_type} /></td>
-                    <td style={td}>{label || '—'}</td>
-                    <td style={{ ...td, color: r.post_date ? 'var(--text-3)' : 'var(--text-1)' }}>
-                      {r.expected_post_date || '—'}
-                    </td>
-                    <td style={td}>{r.post_date || '—'}</td>
-                    <td style={tdNum}>
-                      {r.views ? Number(r.views).toLocaleString('en-IN') : '—'}
-                      {Number(r.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{Number(r.paid_views).toLocaleString('en-IN')} paid</div>}
-                    </td>
-                    <td style={tdNum}>{r.cpm ? `₹${Number(r.cpm).toFixed(0)}` : '—'}</td>
-                    <td style={tdNum}>₹{Number(r.total_cost || 0).toLocaleString('en-IN')}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <TableCard columns={COLS} minWidth={1100} head={HEAD}>
+          {visible.length === 0 && (
+            // sticky + viewport-capped so it stays on screen inside the 1100px-wide scroll area at 375px
+            <div style={{ position: 'sticky', left: 0, width: 'min(100%, calc(100vw - 24px))', padding: 48, textAlign: 'center', color: 'var(--text-4)', fontSize: 14 }}>
+              {filtersActive ? 'No engagements match these filters.' : 'No engagements'}
+            </div>
+          )}
+          {visible.map((r, i) => {
+            const label = productLabel(r.product_code, r.product_variant);
+            return (
+              <Row key={r.id} columns={COLS} index={i} animate
+                focused={focusedIdx === i}
+                onClick={() => openDeal(r)}
+                onMouseEnter={() => setFocusedIdx(i)}
+              >
+                {/* A deal with no campaign cannot be rolled up into campaign performance, so it
+                    is flagged for audit (Reann item 12). Read `campaign_id` — `campaign_tag` is
+                    deprecated and set on 5 rows, so flagging on it would mark almost everything.
+                    ⚠️ A glyph, deliberately NOT a StageBadge-style pill: roughly a QUARTER of deals
+                    carry no campaign, and a pill on that many rows is noise rather than a
+                    signal. ⛔ No count is quoted here on purpose — it moves every day as deals
+                    are created (113/411 → 114/413 inside one afternoon). Re-derive it. The CAMPAIGN filter already offers a
+                    "No campaign" option with the live count — this is the at-a-glance companion
+                    to it, in the column the eye scans first. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent-hi)', minWidth: 0 }}>
+                  {r.engagement_no}
+                  {!r.campaign_id && (
+                    <span
+                      title="No campaign — this deal is not attributed to any campaign"
+                      role="img"
+                      aria-label="No campaign"
+                      style={{ color: 'var(--state-warning-fg)', fontSize: 12, fontWeight: 700, cursor: 'help' }}
+                    >⚑</span>
+                  )}
+                  {/* Afshaan 2026-09-04 — Complete = live + all four metrics entered
+                      (metricsCompleteness). Same glyph treatment as the ⚑ above and for the
+                      same reason: this is the at-a-glance companion to the COMPLETION filter,
+                      not a pill. ⛔ Nothing is rendered for an INCOMPLETE row on purpose —
+                      most rows are not live, so a "missing" marker here would paint the whole
+                      table; the filter is where you go looking for those. */}
+                  {metricsCompleteness(r).complete && (
+                    <span
+                      title={completenessTitle(r)}
+                      role="img"
+                      aria-label={completenessTitle(r)}
+                      style={{ color: 'var(--state-success-fg)', fontSize: 12, fontWeight: 700, cursor: 'help' }}
+                    >✓</span>
+                  )}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.influencer?.channel_name || '—'}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-4)' }}>{r.influencer?.influencer_code}</div>
+                </div>
+                <div style={{ color: 'var(--text-2)' }}>{r.engagement_type === 'ugc' ? 'UGC' : 'Video'}</div>
+                <div><StagePill stage={r.stage} /></div>
+                <div><DealPill type={r.deal_type} /></div>
+                <div style={{ color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }} title={label || undefined}>{label || '—'}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: r.post_date ? 'var(--text-4)' : 'var(--text-1)' }}>
+                  {r.expected_post_date || '—'}
+                </div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-2)' }}>{r.post_date || '—'}</div>
+                <NumCell>
+                  {r.views ? Number(r.views).toLocaleString('en-IN') : '—'}
+                  {Number(r.paid_views) > 0 && <div style={{ fontSize: 10, color: 'var(--text-4)' }}>{Number(r.paid_views).toLocaleString('en-IN')} paid</div>}
+                </NumCell>
+                <NumCell color="var(--text-2)">{r.cpm ? `₹${Number(r.cpm).toFixed(0)}` : '—'}</NumCell>
+                <NumCell style={{ fontWeight: 600 }}>₹{Number(r.total_cost || 0).toLocaleString('en-IN')}</NumCell>
+              </Row>
+            );
+          })}
+        </TableCard>
       )}
     </div>
   );
 }
 
-function Tile({ label, value, hint }) {
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-md)', padding: '10px 14px',
-    }}>
-      <div style={{ fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
-      {hint && <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{hint}</div>}
-    </div>
-  );
-}
-
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap' };
-const thNum = { ...th, textAlign: 'right' };
-const td = { padding: '10px 12px' };
-const tdNum = { ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' };
-function inputStyle(w) {
-  return {
-    background: 'var(--surface-2)', color: 'var(--text-1)',
-    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-    padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13,
-    width: w,
-  };
-}
+// Column grid shared by the header and every row (prototype widths). It must not start with
+// "1fr 1fr": globals.css collapses any `columns: 1fr 1fr` inline grid to one column on a phone.
+const COLS = '170px minmax(160px,1.4fr) 64px 130px 120px minmax(140px,1.2fr) 100px 100px 90px 70px 100px';
+const HEAD = [
+  'Engagement #', 'Influencer', 'Type', 'Stage', 'Deal', 'Product', 'Expected', 'Posted',
+  { label: 'Views', align: 'right' }, { label: 'CPM', align: 'right' }, { label: 'Total cost', align: 'right' },
+];
+// Same box as FilterSelect / SearchField so the Combobox and date inputs line up in the bar.
+const ctlInput = {
+  height: 40, boxSizing: 'border-box', padding: '0 12px', background: 'var(--input)',
+  border: '1px solid var(--border-2)', borderRadius: 'var(--r-ctl)', color: 'var(--text-1)',
+  fontFamily: 'var(--font-ui)', fontSize: 14,
+};
+const dateInput = { ...ctlInput, width: 150, colorScheme: 'dark' };
+const pickChip = {
+  display: 'inline-flex', alignItems: 'center', padding: '5px 11px', borderRadius: 99,
+  border: '1px solid var(--accent)', background: 'var(--accent-bg)', color: 'var(--accent-hi)',
+  fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+};
