@@ -468,6 +468,33 @@ async function writeHistory(env, engagement_id, action, from, to, note, actor) {
 // GET ACTIONS
 // ────────────────────────────────────────────────────────────────────────────
 
+// Search term made safe for a PostgREST `or=(…)` group. `encodeURIComponent` alone leaves `( )`
+// and PostgREST decodes %2C back to a comma before parsing, so a term with `,` or `)` could end the
+// group early or add conditions. Those (and `( " \`) become `_` — the LIKE single-char wildcard — so
+// "Chanda(kid" still matches its row instead of being split; `*` (PostgREST's `%`) is dropped. `:` is
+// KEPT: it is not special inside a value, and every pasted link carries one (S412 review). Capped at 64
+// code points (never splitting a surrogate pair, which would make encodeURIComponent throw). Returns ''
+// when nothing searchable is left (callers treat that as no search).
+export function searchTerm(q) {
+  const t = Array.from(
+    String(q ?? '')
+      .replace(/\*/g, ' ')
+      .replace(/[,()"\\]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  ).slice(0, 64).join('').trim();
+  return t.replace(/[_\s]/g, '') ? t : '';
+}
+
+// The or-groups each search uses — ONE definition, shared by the list reads and searchAll, so a
+// column added to a list search reaches global search too. `s` = encodeURIComponent(searchTerm(q)).
+export const infSearchOr = s =>
+  `or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,email.ilike.*${s}*,contact_number.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`;
+export const engSearchOwnOr = s =>
+  `or=(engagement_no.ilike.*${s}*,video_link.ilike.*${s}*,tracking_id.ilike.*${s}*,shipping_order_id.ilike.*${s}*)`;
+export const engSearchInfOr = s =>
+  `influencer.or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`;
+
 const INFLUENCER_TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
 
 // Scope filters shared by getInfluencers + getInfluencerCounts — everything
@@ -481,7 +508,7 @@ function influencerScopeFilters(url) {
   const gender = url.searchParams.get('gender');
   const location = url.searchParams.get('location');
   const rating = url.searchParams.get('rating');
-  const search = (url.searchParams.get('search') || '').trim();
+  const search = searchTerm(url.searchParams.get('search'));
   const reachMin = url.searchParams.get('reach_min');
   const reachMax = url.searchParams.get('reach_max');
 
@@ -501,7 +528,7 @@ function influencerScopeFilters(url) {
     const s = encodeURIComponent(search);
     // channel_link included so a search by the raw IG handle (e.g. "homelyshark")
     // matches the profile URL even when channel_name is a spaced display name.
-    filters.push(`or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,email.ilike.*${s}*,contact_number.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`);
+    filters.push(infSearchOr(s));
   }
   return filters;
 }
@@ -712,7 +739,7 @@ async function getEngagements(url, auth, env) {
   const dealType = url.searchParams.get('deal_type');
   const dateFrom = url.searchParams.get('date_from');
   const dateTo = url.searchParams.get('date_to');
-  const search = (url.searchParams.get('search') || '').trim();
+  const search = searchTerm(url.searchParams.get('search'));
   const limit = intParam(url, 'limit', 50, { min: 1, max: 200 });
   const offset = intParam(url, 'offset', 0);
 
@@ -745,8 +772,8 @@ async function getEngagements(url, auth, env) {
   // change surfaces as a logged truncation rather than a quietly short answer.
   if (search) {
     const s = encodeURIComponent(search);
-    const own = `or=(engagement_no.ilike.*${s}*,video_link.ilike.*${s}*,tracking_id.ilike.*${s}*,shipping_order_id.ilike.*${s}*)`;
-    const viaInf = `influencer.or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`;
+    const own = engSearchOwnOr(s);
+    const viaInf = engSearchInfOr(s);
     const base = qsFrom(filters);
     const [a, b] = await Promise.all([
       sb(`/rest/v1/engagements?${base}${own}&select=${SELECT}&order=${LIST_ORDER}&limit=${SEARCH_SCAN_MAX}`, env,
@@ -784,6 +811,49 @@ async function getEngagements(url, auth, env) {
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   return ok({ engagements: r.data || [], offset, limit, total: rangeTotal(r.range) });
+}
+
+// Global search (top bar): one round trip, three small groups. A failed sub-read returns that
+// group as null (not []) so the UI can say it failed rather than show "no matches".
+async function searchAll(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const term = searchTerm(url.searchParams.get('q'));
+  if (term.length < 2) return ok({ q: term, influencers: [], engagements: [], campaigns: [] });
+  const s = encodeURIComponent(term);
+  const group = async (fn) => { try { return await fn(); } catch { return null; } };
+  const rows = r => (r && r.ok && Array.isArray(r.data)) ? r.data : null;
+
+  const [influencers, engagements, campaigns] = await Promise.all([
+    group(async () => rows(await sb(
+      `/rest/v1/influencers?list_status=neq.archived&${infSearchOr(s)}`
+      + `&select=id,influencer_code,channel_name,person_name,influencer_type,reach,quality_rating,list_status&order=reach.desc.nullslast&limit=5`,
+      env,
+    ))),
+    group(async () => {
+      const SEL = 'id,engagement_no,engagement_type,stage,created_at,influencer:influencer_id(id,channel_name,person_name,influencer_code)';
+      const SEL_INNER = 'id,engagement_no,engagement_type,stage,created_at,influencer:influencer_id!inner(id,channel_name,person_name,influencer_code)';
+      const own = engSearchOwnOr(s);
+      const viaInf = engSearchInfOr(s);
+      const [a, b] = await Promise.all([
+        sb(`/rest/v1/engagements?${own}&select=${SEL}&order=${LIST_ORDER}&limit=5`, env),
+        sb(`/rest/v1/engagements?${viaInf}&select=${SEL_INNER}&order=${LIST_ORDER}&limit=5`, env),
+      ]);
+      const ra = rows(a), rb = rows(b);
+      if (!ra || !rb) return null;
+      const byId = new Map();
+      for (const row of [...ra, ...rb]) if (row && row.id) byId.set(row.id, row);
+      return [...byId.values()]
+        .sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || ''))
+          || String(y.id || '').localeCompare(String(x.id || '')))
+        .slice(0, 5)
+        .map(({ created_at, ...rest }) => rest);
+    }),
+    group(async () => rows(await sb(
+      `/rest/v1/campaigns?name=ilike.*${s}*&select=id,name,status&order=created_at.desc&limit=3`,
+      env,
+    ))),
+  ]);
+  return ok({ q: term, influencers, engagements, campaigns });
 }
 
 // Filters joined for direct concatenation with the next query param — '' or 'a=1&b=2&'.
@@ -5232,6 +5302,7 @@ const GET_ACTIONS = {
   getIgnitionAccess,
   getGrantableUsers,
   getInfluencers,
+  searchAll,
   getInfluencerCounts,
   getInfluencer,
   getEngagements,
