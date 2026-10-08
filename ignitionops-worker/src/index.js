@@ -822,13 +822,25 @@ async function getEngagement(url, auth, env) {
   const shipment = shipmentFor(eng.shipping_order_id, ship || {});
   if (shipment) eng.shipment = shipment;
 
-  // COMPLETE-deal lock (S373). Computed here with the worker's clock so the page and the guard in
-  // updateEngagement agree; the unlocker's name is only fetched while a window is actually open.
-  let unlocked_by_name = null;
-  if (eng.unlocked_by && unlockActive(eng)) {
-    const ur = await sbStore(`/rest/v1/users_profile?id=eq.${eng.unlocked_by}&select=full_name&limit=1`, env);
-    unlocked_by_name = (ur.ok && ur.data?.[0]?.full_name) || null;
+  // People named on the page (W3, redesign): the approver, every note author and history actor,
+  // and — only while a window is actually open — the COMPLETE-deal unlocker (S373; the lock itself
+  // is computed with the worker's clock so the page and updateEngagement agree). One batched read,
+  // no `active` filter: a revoked user still wrote the note. A failed read leaves names null.
+  const history = hr.data || [];
+  const notes = nr.data || [];
+  const unlockOpen = !!eng.unlocked_by && unlockActive(eng);
+  const ids = actorIds(eng, history, notes, { unlockOpen });
+  const nameOf = {};
+  if (ids.length) {
+    try {
+      const ur = await sbStore(`/rest/v1/users_profile?id=in.(${ids.join(',')})&select=id,full_name`, env);
+      if (ur.ok) for (const u of ur.data || []) if (u.full_name) nameOf[u.id] = u.full_name;
+    } catch (e) {
+      console.error(`[getEngagement] name lookup failed: ${e?.message || e}`);
+    }
   }
+  const unlocked_by_name = unlockOpen ? (nameOf[eng.unlocked_by] || null) : null;
+  const approved_by_name = eng.approved_by ? (nameOf[eng.approved_by] || null) : null;
 
   const payments = pr.data || [];
   const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
@@ -853,20 +865,35 @@ async function getEngagement(url, auth, env) {
     // the deal-level metrics on `engagement` are still the ones the app writes and totals.
     videos: vr.data || [],
     ugc_briefs: ubr.data || [],
-    history: hr.data || [],
-    notes: nr.data || [],
+    history: history.map(h => ({ ...h, actor_name: h.actor ? (nameOf[h.actor] || null) : null })),
+    notes: notes.map(n => ({ ...n, actor_name: n.actor ? (nameOf[n.actor] || null) : null })),
     attachments: ar.data || [],
     payments,
     paid_total: Math.round(paid_total),
     allowed_next: allowedTransitions(eng.stage, eng.engagement_type === 'ugc'),
     locked: isLocked(eng),
     unlocked_by_name,
+    approved_by_name,
     // Ads (S373) — NOT under the COMPLETE-deal lock: ads run after the video posts. `approve_gate`
     // is computed with the worker's clock so the card greys Approve on the same rule the server
     // enforces in decideEngagementAd. A failed read is said, not rendered as "no ads".
     ads: adr.ok ? (adr.data || []).map(a => ({ ...a, approve_gate: adApprovalGate(adTake(a, vr.data || [])) })) : null,
     ad_payments: apr.ok ? (apr.data || []) : null,
   });
+}
+
+// Distinct, uuid-shaped user ids named on an engagement page (W3). The unlocker counts only while
+// the unlock window is open — the page shows no unlocker otherwise. The shape check keeps a stray
+// non-uuid out of the `in.(…)` filter, where it would fail the whole read.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function actorIds(eng, history = [], notes = [], { unlockOpen = false } = {}) {
+  const out = new Set();
+  const add = v => { if (typeof v === 'string' && UUID_RE.test(v)) out.add(v); };
+  add(eng?.approved_by);
+  if (unlockOpen) add(eng?.unlocked_by);
+  for (const h of history) add(h?.actor);
+  for (const n of notes) add(n?.actor);
+  return [...out];
 }
 
 // ── Multiple videos per deal (Reann #10) — slice 3: the ROLLUP RULE ─────────────────────────
