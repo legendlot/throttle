@@ -1406,7 +1406,7 @@ const POSTED_OR_TERMINAL = ['posting', 'live', 'ghosted', 'dropped', 'cancelled'
 
 function overdueCutoffDate(days) {
   const n = Number(days) || OVERDUE_DEFAULT_DAYS;
-  return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  return addDaysIso(istToday(), -n);   // IST day (S412) — was UTC, a day behind before 05:30 IST
 }
 function overdueFilter(days) {
   const cutoff = overdueCutoffDate(days);
@@ -1420,7 +1420,7 @@ async function getOverdueEngagements(url, auth, env) {
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const rows = (r.data || []).map(e => ({
     ...e,
     days_overdue: e.expected_post_date
@@ -1478,7 +1478,9 @@ async function addPayment(body, auth, env) {
     influencer_id: er.data[0].influencer_id,
     kind,
     amount: Math.round(amount * 100) / 100,
-    paid_on: body.paid_on || undefined,   // omit → DB default current_date
+    // S412 (B3 review): the DB default current_date is UTC, so a blank date logged 00:00–05:29 IST
+    // landed on yesterday and missed the IST Payments tiles. Same IST day as addAdPayment.
+    paid_on: body.paid_on || istToday(),
     note: body.note || null,
     proof_path: body.proof_path || null,  // payment screenshot (Reann #4)
     proof_name: body.proof_name || null,
@@ -1969,6 +1971,17 @@ async function deleteMetricSnapshot(body, auth, env) {
   return ok({ deleted: body.id });
 }
 
+// S412 (B3) — the Payments tiles bucket `paid_on` (an IST calendar date) into today / week / month.
+// The bounds were UTC, so from 00:00 to 05:29 IST "today" was yesterday, and on the 1st (or a
+// Monday) the month (or week) still read the previous one. Bounds are IST calendar dates now.
+export function paymentBuckets(now = Date.now()) {
+  const todayStr = istToday(now);
+  const monthStart = `${todayStr.slice(0, 7)}-01`;
+  const dow = (new Date(`${todayStr}T00:00:00Z`).getUTCDay() + 6) % 7;   // 0 = Monday
+  const weekStart = addDaysIso(todayStr, -dow);
+  return { todayStr, weekStart, monthStart };
+}
+
 async function getPayments(url, auth, env) {
   const r = await sb(
     `/rest/v1/payments?select=*,influencer:influencer_id(influencer_code,channel_name,person_name),engagement:engagement_id(engagement_no,product_code)&order=paid_on.desc,created_at.desc&limit=2000`,
@@ -1977,13 +1990,7 @@ async function getPayments(url, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   const rows = r.data || [];
 
-  const now = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  const todayStr = now.toISOString().slice(0, 10);
-  const monthStart = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-01`;
-  const dow = (now.getUTCDay() + 6) % 7;                 // 0 = Monday
-  const ws = new Date(now); ws.setUTCDate(now.getUTCDate() - dow);
-  const weekStart = ws.toISOString().slice(0, 10);
+  const { todayStr, weekStart, monthStart } = paymentBuckets();
 
   const tally = (pred) => {
     let amount = 0, count = 0; const infs = new Set();
@@ -3786,7 +3793,7 @@ const ANCHOR_CHUNK = 100;   // ids per engagement_history `in.(…)` read — se
 
 async function getPostReminderDue(url, auth, env) {
   const days = intParam(url, 'days', 10, { min: 1, max: 365 });   // max: ?days=1e9 made new Date() throw RangeError (S369 review)
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const cutoff = addDaysIso(istToday(), -days);   // IST day (S412)
   // Deliberately narrow: a nudge is only fair if we know they HAVE the goods, they have not
   // posted, and nobody has already written the deal off.
   const r = await sb(

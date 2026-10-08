@@ -7,6 +7,7 @@ import { AlertTriangle } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { STAGE_LABELS } from '../../../lib/stages.js';
 import { productLabel } from '../../../lib/productLabel.js';
+import { istMonth } from '../../../lib/istDate.js';
 
 const OVERDUE_DAYS = 7;
 
@@ -28,7 +29,7 @@ export default function DashboardPage() {
     ignitionopsGet('getOverdueEngagements', { days: OVERDUE_DAYS }, session)
       .then(r => setOverdue(r.overdue || [])).catch(() => setOverdue([]));
     ignitionopsGet('getQualityFlags', {}, session).then(setQuality).catch(() => setQuality(null));
-    const cm = new Date().toISOString().slice(0, 7);
+    const cm = istMonth();
     ignitionopsGet('getMonthlyTargets', {}, session)
       .then(r => setMonthRow((r.months || []).find(m => m.month === cm) || null))
       .catch(() => setMonthRow(null));

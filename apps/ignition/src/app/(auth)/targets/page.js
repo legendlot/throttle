@@ -4,11 +4,12 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast } from '@throttle/ui';
 import { Target } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
+import { istMonth } from '../../../lib/istDate.js';
 
 const ORANGE = '#FF6B00';
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 function num(n) { return n == null || isNaN(n) ? '—' : Number(n).toLocaleString('en-IN'); }
-function curMonth() { return new Date().toISOString().slice(0, 7); }
+function curMonth() { return istMonth(); }
 function monthLabel(m) {
   if (!m) return '—';
   const [y, mo] = m.split('-');
