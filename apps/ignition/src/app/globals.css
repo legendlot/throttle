@@ -98,6 +98,14 @@
   --orange:   var(--ignition-orange);
   --mono:     var(--font-mono);
   --cond:     var(--font-cond);
+
+  /* S412 (P0.4) — read by shared @throttle/ui in its redesign modes (Chip `pill`, KpiCard,
+     ProgressBar, ProductTag) and never defined here. No current Ignition render reads them; they
+     are defined ahead of Phase 1, whose token swap remaps them with the rest. */
+  --t4:       var(--text-4);
+  --border-3: #565656;
+  --r-full:   var(--radius-full);
+  --font-ui:  var(--font-mono);
 }
 
 html, body {
